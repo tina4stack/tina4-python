@@ -4,12 +4,15 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 __version__ = '0.1.0'
+
 from http.server import HTTPServer
 from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
 
+
 def initialize():
-    print ("Load all things")
+    print("Load all things")
+
 
 def webserver(port):
     host_name = "localhost"
@@ -24,4 +27,3 @@ def webserver(port):
 
     web_server.server_close()
     print("Server stopped.")
-
