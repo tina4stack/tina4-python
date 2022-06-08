@@ -8,6 +8,8 @@ __version__ = '0.1.0'
 from http.server import HTTPServer
 from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
+import sys
+import jurigged
 
 
 def initialize():
@@ -27,3 +29,18 @@ def webserver(port):
 
     web_server.server_close()
     print("Server stopped.")
+
+
+def main(in_port=7145):
+    print("Starting webserver on", in_port)
+    initialize()
+    webserver(in_port)
+
+jurigged.watch("./src")
+
+if __name__ == '__main__':
+    # Start up a webserver based on params passed on the command line
+    PORT = 7145
+    if len(sys.argv) > 1 and sys.argv[1]:
+        PORT = sys.argv[1]
+    main(PORT)
