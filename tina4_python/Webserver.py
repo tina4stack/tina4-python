@@ -5,13 +5,16 @@
 #
 from tina4_python.Debug import Debug
 from http.server import BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qsl
 import cgi
 
 
 class Webserver(BaseHTTPRequestHandler):
 
     def get_response(self, method):
-        response = self.server.router_handler.resolve(method, self.path, self.request, self.headers)
+        params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
+        request = {"params": params, "raw": self.request}
+        response = self.server.router_handler.resolve(method, self.path, request, self.headers)
         self.send_response(response["http_code"])
         self.send_header("Content-type", response["content_type"])
         self.end_headers()

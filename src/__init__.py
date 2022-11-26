@@ -11,11 +11,13 @@ from tina4_python.Router import response
 
 @get("/test|/andre")
 def main_page(request):
+    print("Params", request["params"])
     return response('<h1>Hello 111</h1>', Constant.HTTP_OK, Constant.TEXT_HTML)
 
 
 @get("/hello/{one}")
 def main_page_2(one, request):
+    print("Params", request["params"], one)
     return response('<h1>Hello</h1>' + one, Constant.HTTP_OK, Constant.TEXT_HTML)
 
 

@@ -9,7 +9,7 @@ import os
 import urllib.parse
 import tina4_python
 from pathlib import Path
-from jinja2 import Environment, select_autoescape, FileSystemLoader
+from jinja2 import Environment, select_autoescape, FileSystemLoader, TemplateNotFound
 from tina4_python import Constant
 from tina4_python.Debug import Debug
 
@@ -46,12 +46,14 @@ class Router:
                 if match_route.group() != "" and str(url_matches[i].group()).find('{') != -1:
                     variables.append(urllib.parse.unquote(match_route.group().strip("/")))
                 elif route_matches[i].group() != "":
-                    if match_route.group() != route_matches[i].group():
+                    print("Matching",match_route.group(), url_matches[i].group())
+                    if match_route.group() != url_matches[i].group():
                         matching = False
                         break
                 elif route_matches[i].group() == "" and i > 1:
                     matching = False
                     break
+
         else:
             matching = False
 
@@ -78,9 +80,12 @@ class Router:
             twig_file = "index"
         else:
             twig_file = url
-        if twig.get_template(twig_file + ".twig"):
-            template = twig.get_template(twig_file + ".twig")
-            return {"content": template.render(), "http_code": Constant.HTTP_OK, "content_type": Constant.TEXT_HTML}
+        try:
+            if twig.get_template(twig_file + ".twig"):
+                template = twig.get_template(twig_file + ".twig")
+                return {"content": template.render(), "http_code": Constant.HTTP_OK, "content_type": Constant.TEXT_HTML}
+        except TemplateNotFound:
+            Debug("Could not render " + twig_file)
 
         # serve routes
         result = response('', Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
@@ -130,7 +135,7 @@ class Router:
 
     @staticmethod
     def init_twig(path):
-        if Router.twig:
+        if hasattr(Router, "twig"):
             Debug("Twig found on " + path)
             return Router.twig
         Debug("Initializing twig on " + path)
