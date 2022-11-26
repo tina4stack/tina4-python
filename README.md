@@ -4,16 +4,39 @@ Tina4Python - This is not a framework for Python
 
 Running the system
 
+Requirements
+
+```
+pip install poetry
+```
+
+Windows
+```
+(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | py -
+```
+Add to path %APPDATA%\pypoetry\venv\Scripts 
+
 Install
-    ``poetry install tina4_python``
+
+```
+poetry install tina4_python
+```
+
 Normal "production" server on port 7145
-    ``poetry run``
+```
+poetry run
+```
 
 Server with hot reloading
-    ``poetry run jurigged main.py``
+```
+poetry run jurigged main.py
+```
 
 Server with own port
-    ``poetry run main.py 7777``
+
+```
+poetry run main.py 7777
+```
 
 Todo:
  - localization

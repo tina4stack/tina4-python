@@ -7,10 +7,11 @@ authors = ["Andre van Zuydam <andrevanzuydam@gmail.com>"]
 [tool.poetry.dependencies]
 python = "^3.9"
 Jinja2 = "^3.0.3"
+mypy = "^0.991"
 
 [tool.poetry.dev-dependencies]
-pytest = "^5.2"
-jurigged = "^0.4.1"
+pytest = "^7.2.0"
+jurigged = "^0.5.3"
 
 [tool.poetry.scripts]
 run = "main:main"

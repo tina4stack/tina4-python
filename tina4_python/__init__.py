@@ -6,10 +6,17 @@
 __version__ = '0.1.0'
 
 from http.server import HTTPServer
+
+from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
-from tina4_python.Router import Router
+from tina4_python.Router import Router, response, get
 import sys
 import jurigged
+
+# define the variable to be used for global routes
+tina4_routes = []
+
+from src import *
 
 
 def initialize():
@@ -33,12 +40,15 @@ def webserver(port):
 
 def main(in_port=7145):
     print("Starting webserver on", in_port)
+    load_env()
     initialize()
     webserver(in_port)
 
+
 jurigged.watch("./src")
 
-if __name__ == '__main__':
+print("Entry point name ...", __name__)
+if __name__ == '__main__' or __name__ == 'tina4_python':
     # Start up a webserver based on params passed on the command line
     PORT = 7145
     if len(sys.argv) > 1 and sys.argv[1]:
