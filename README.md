@@ -19,7 +19,22 @@ Add to path %APPDATA%\pypoetry\venv\Scripts
 Install
 
 ```
-poetry install tina4_python
+poetry init
+poetry add tina4_python
+poetry add jurigged
+```
+
+or 
+
+```
+pip install tina4_python
+pip install jurigged
+```
+
+#### Create a starting app.py file to start with
+
+```
+from tina4_python import *
 ```
 
 Normal "production" server on port 7145
@@ -38,21 +53,29 @@ Server with own port
 poetry run main.py 7777
 ```
 
+Done:
+ - python pip package
+ - basic env file handling
+ - basic routing
+
 Todo:
  - localization
- - routing
+ - routing - partially done, supports get & post
  - template handling
  - open api - swagger
- -
 
 Building:
-
-    python3 -m pip install --upgrade build
-    python3 -m build
-    python3 -m pip install --upgrade twine
-    python3 -m twine upload dist/*
-
+```
+python3 -m pip install --upgrade build
+python3 -m build
+python3 -m pip install --upgrade twine
+python3 -m twine upload dist/*
+```
+    
 OR
     
-    poetry build
-    poetry publish
+```
+poetry build
+poetry publish
+```
+    

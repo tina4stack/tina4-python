@@ -5,6 +5,7 @@
 #
 from tina4_python.Debug import Debug
 from http.server import BaseHTTPRequestHandler
+import cgi
 
 
 class Webserver(BaseHTTPRequestHandler):
@@ -14,7 +15,10 @@ class Webserver(BaseHTTPRequestHandler):
         self.send_response(response["http_code"])
         self.send_header("Content-type", response["content_type"])
         self.end_headers()
-        self.wfile.write(bytes(response["content"], "utf-8"))
+        if type(response["content"]) == str:
+            self.wfile.write(bytes(response["content"], "utf-8"))
+        else:
+            self.wfile.write(bytes(response["content"]))
 
     def do_GET(self):
         Debug("GET " + self.path)

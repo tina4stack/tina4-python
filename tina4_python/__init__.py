@@ -11,10 +11,31 @@ from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router, response, get
 import sys
+import os
 import jurigged
 
 # define the variable to be used for global routes
 tina4_routes = []
+
+root_path = os.path.dirname(os.path.realpath(__file__))
+
+# hack for local development
+if root_path.count("tina4_python") > 0:
+    root_path = root_path.split("tina4_python")[0][:-1]
+
+
+# Make the beginning files for the tina4stack
+if not os.path.exists(root_path + os.sep + "src"):
+    os.makedirs(root_path + os.sep + "src")
+    with open(root_path + os.sep + "src" + os.sep + "__init__.py", 'w') as init_file:
+        init_file.write('# Start your project here')
+        init_file.write('\n')
+    if not os.path.isfile(root_path + os.sep + "app.py") and not os.path.isdir(root_path + os.sep + "tina4_python"):
+        with open(root_path + os.sep + "app.py", 'w') as app_file:
+            app_file.write('# Starting point for tina4_python, you shouldn''t need to change anything here')
+            app_file.write('\n')
+            app_file.write('from tina4_python import *')
+            app_file.write('\n')
 
 from src import *
 

@@ -3,9 +3,13 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+import mimetypes
 import re
+import os
 import urllib.parse
 import tina4_python
+from pathlib import Path
+from jinja2 import Environment, select_autoescape, FileSystemLoader
 from tina4_python import Constant
 from tina4_python.Debug import Debug
 
@@ -57,9 +61,26 @@ class Router:
 
     @staticmethod
     def render(url, method, request, headers):
+        Debug("Root Path " + tina4_python.root_path + " " + url)
+
         # serve statics
+        static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
+        print("Looking for", static_file)
+        if os.path.isfile(static_file):
+            mime_type = mimetypes.guess_type(url)[0]
+            print("Guessed ", mime_type)
+            with open(static_file, 'rb') as file:
+                return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
         # serve templates
+        twig = Router.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
+        if url == "/":
+            twig_file = "index"
+        else:
+            twig_file = url
+        if twig.get_template(twig_file + ".twig"):
+            template = twig.get_template(twig_file + ".twig")
+            return {"content": template.render(), "http_code": Constant.HTTP_OK, "content_type": Constant.TEXT_HTML}
 
         # serve routes
         result = response('', Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
@@ -89,15 +110,33 @@ class Router:
         :param headers:
         """
         # render templates or routes ???
+
+        url = Router.clean_url(url)
+
         Debug("Rendering " + url)
         html_response = Router.render(url, method, request, headers)
         return dict(http_code=html_response["http_code"], content_type=html_response["content_type"],
                     content=html_response["content"])
 
     @staticmethod
+    def clean_url(url):
+        url_parts = url.split('?')
+        return url_parts[0].replace('//', '/')
+
+    @staticmethod
     def add(method, route, callback):
         Debug("Adding a route " + route, debug_level=Constant.DEBUG_DEBUG)
         tina4_python.tina4_routes.append({"route": route, "callback": callback, "method": method})
+
+    @staticmethod
+    def init_twig(path):
+        if Router.twig:
+            Debug("Twig found on " + path)
+            return Router.twig
+        Debug("Initializing twig on " + path)
+        twig_path = Path(path)
+        Router.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
+        return Router.twig
 
 
 class response:

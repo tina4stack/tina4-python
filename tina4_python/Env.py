@@ -7,10 +7,11 @@ import os
 
 
 def load_env(path: str = '.env'):
+    env_vars = []
     with open(path, 'r') as f:
         for line in f.readlines():
             if not line.startswith('#'):
                 key_value = line.replace('\n', '').split('=')
                 env_vars = dict([key_value])
-
-    os.environ.update(env_vars)
+    if len(env_vars) > 0:
+        os.environ.update(env_vars)
