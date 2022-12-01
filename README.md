@@ -63,6 +63,7 @@ Todo:
  - routing - partially done, supports get & post
  - template handling
  - open api - swagger
+ - add jwt form token
 
 Building:
 ```
