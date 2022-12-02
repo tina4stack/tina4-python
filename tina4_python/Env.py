@@ -15,7 +15,7 @@ def load_env(path: str = '.env'):
 
     with open(path, 'r') as f:
         for line in f.readlines():
-            if not line.startswith('#'):
+            if not line.startswith('#') and not line.startswith("["):
                 key_value = line.replace('\n', '').split('=')
                 env_vars = dict([key_value])
     if len(env_vars) > 0:
