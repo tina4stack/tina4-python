@@ -10,23 +10,32 @@ from http.server import HTTPServer
 from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router, response, get
+import importlib
 import sys
 import os
-import jurigged
+import shutil
+
+if importlib.util.find_spec("jurigged"):
+    import jurigged
 
 # define the variable to be used for global routes
 tina4_routes = []
 
-root_path = os.path.dirname(os.path.realpath(__file__))
+library_path = os.path.dirname(os.path.realpath(__file__))
+
+root_path = os.path.realpath(os.getcwd())
+print("Assuming root path:", root_path, "library path:", library_path)
 
 # hack for local development
 if root_path.count("tina4_python") > 0:
     root_path = root_path.split("tina4_python")[0][:-1]
 
-
 # Make the beginning files for the tina4stack
 if not os.path.exists(root_path + os.sep + "src"):
-    os.makedirs(root_path + os.sep + "src")
+    source_dir = library_path + os.sep + "public"
+    destination_dir = root_path + os.sep + "src" + os.sep + "public"
+    shutil.copytree(source_dir, destination_dir)
+    os.makedirs(root_path + os.sep + "src" + os.sep + "templates")
     with open(root_path + os.sep + "src" + os.sep + "__init__.py", 'w') as init_file:
         init_file.write('# Start your project here')
         init_file.write('\n')
@@ -66,7 +75,8 @@ def main(in_port=7145):
     webserver(in_port)
 
 
-jurigged.watch("./src")
+if importlib.util.find_spec("jurigged"):
+    jurigged.watch("./src")
 
 print("Entry point name ...", __name__)
 if __name__ == '__main__' or __name__ == 'tina4_python':

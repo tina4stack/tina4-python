@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tina4-python"
-version = "0.1.6"
+version = "0.1.8"
 description = "Tina4Python - This is not another framework for Python"
 authors = ["Andre van Zuydam <andrevanzuydam@gmail.com>"]
 
