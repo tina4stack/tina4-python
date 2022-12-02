@@ -8,6 +8,11 @@ import os
 
 def load_env(path: str = '.env'):
     env_vars = []
+    if not os.path.isfile(path):
+        with open(path, 'w') as f:
+            f.write("[Project]")
+            f.write("\n")
+
     with open(path, 'r') as f:
         for line in f.readlines():
             if not line.startswith('#'):
