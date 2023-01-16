@@ -7,20 +7,22 @@ from tina4_python import Constant
 from tina4_python.Router import get
 from tina4_python.Router import post
 from tina4_python.Router import response
+import asyncio
 
 
-@get("/test|/andre")
-def main_page(request):
+@get("/andre|/test")
+async def get_main_page(request):
     print("Params", request["params"])
+    await asyncio.sleep(10)
     return response('<h1>Hello 111</h1>', Constant.HTTP_OK, Constant.TEXT_HTML)
 
 
 @get("/hello/{one}")
-def main_page_2(one, request):
+async def main_page_2(one, request):
     print("Params", request["params"], one)
     return response('<h1>Hello</h1>' + one, Constant.HTTP_OK, Constant.TEXT_HTML)
 
 
 @post("/test")
-def post_me(request):
+async def post_me(request):
     return response('<h2>Testing22333222</h2>')

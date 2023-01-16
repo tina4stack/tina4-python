@@ -5,8 +5,6 @@
 #
 __version__ = '0.1.0'
 
-from http.server import HTTPServer
-
 from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router, response, get
@@ -55,7 +53,7 @@ def initialize():
 
 def webserver(port):
     host_name = "localhost"
-    web_server = HTTPServer((host_name, int(port)), Webserver)
+    web_server = Webserver(host_name, int(port)) #HTTPServer((host_name, int(port)), Webserver)
     web_server.router_handler = Router()
     print("Server started http://%s:%s" % (host_name, port))
 

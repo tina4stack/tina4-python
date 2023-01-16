@@ -62,7 +62,7 @@ class Router:
         return matching
 
     @staticmethod
-    def render(url, method, request, headers):
+    async def render(url, method, request, headers):
         Debug("Root Path " + tina4_python.root_path + " " + url)
 
         # serve statics
@@ -100,13 +100,13 @@ class Router:
                 params = Router.variables
                 params.append(request)
 
-                result = router_response(*params)
+                result = await router_response(*params)
                 break
 
         return {"content": result.content, "http_code": result.http_code, "content_type": result.content_type}
 
     @staticmethod
-    def resolve(method, url, request, headers):
+    async def resolve(method, url, request, headers):
         """
         Resolve the route and return a html answer
         :param method:
@@ -119,7 +119,7 @@ class Router:
         url = Router.clean_url(url)
 
         Debug("Rendering " + url)
-        html_response = Router.render(url, method, request, headers)
+        html_response = await Router.render(url, method, request, headers)
         return dict(http_code=html_response["http_code"], content_type=html_response["content_type"],
                     content=html_response["content"])
 

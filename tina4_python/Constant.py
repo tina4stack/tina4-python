@@ -22,6 +22,10 @@ HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_NOT_FOUND = 404
 
+LOOKUP_HTTP_CODE = {HTTP_OK: "OK", HTTP_CREATED: "Created", HTTP_BAD_REQUEST: "Bad Request",
+                    HTTP_PARTIAL_CONTENT: "Partial Content", HTTP_UNAUTHORIZED: "Unauthorized",
+                    HTTP_FORBIDDEN: "Forbidden", HTTP_NOT_FOUND: "Not Found", HTTP_NO_CONTENT: "No Content"}
+
 TEXT_HTML = "text/html"
 TEXT_PLAIN = "text/plain"
 APPLICATION_JSON = "application/json"
