@@ -16,9 +16,13 @@ class Webserver:
         params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
         request = {"params": params, "raw": self.request}
         response = await self.router_handler.resolve(method, self.path, request, self.headers)
-        print("Response", response)
+
         headers = []
-        self.send_header("Content-type", response["content_type"], headers)
+        self.send_header("Content-Type", response["content_type"], headers)
+        self.send_header("Content-Length", str(len(response["content"])), headers)
+        self.send_header("Connection", "Keep-Alive", headers)
+        self.send_header("Keep-Alive", "timeout=5, max=30", headers)
+
         headers = await self.get_headers(headers, self.response_protocol, response["http_code"])
         if type(response["content"]) == str:
             return headers + response["content"].encode()
@@ -35,7 +39,8 @@ class Webserver:
         headers = response_protocol + " " + str(response_code) + " " + LOOKUP_HTTP_CODE[
             response_code] + "\n"
         for header in response_headers:
-            headers += header + "\n\n"
+            headers += header + "\n"
+        headers += "\n"
         print("Headers", headers)
         return headers.encode()
 
@@ -66,6 +71,7 @@ class Webserver:
 
         self.headers = request.split("\n")
         response = await self.get_response(self.method)
+
         await loop.sock_sendall(client, response)
         client.close()
 
