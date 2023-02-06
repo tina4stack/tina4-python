@@ -6,6 +6,7 @@
 from tina4_python.Constant import LOOKUP_HTTP_CODE
 from tina4_python.Debug import Debug
 from http.server import BaseHTTPRequestHandler
+from tina4_python.Constant import  *
 from urllib.parse import urlparse, parse_qsl
 import socket
 import asyncio
@@ -66,13 +67,24 @@ class Webserver:
         # Decode the request
 
         self.request = request.strip()
-        self.path = request.split(" ")[1].strip("\r")
+
+        self.path = request.split(" ")
+
+        if len(self.path) > 1:
+            self.path = request.split(" ")[1].strip("\r")
+
         self.method = request.split(" ")[0].strip("\r")
 
         self.headers = request.split("\n")
-        response = await self.get_response(self.method)
 
-        await loop.sock_sendall(client, response)
+        method_list = [TINA4_GET, TINA4_ANY, TINA4_POST, TINA4_PATCH]
+
+        contains_method = [ele for ele in method_list if(ele in self.method)]
+
+        if self.method != "" and contains_method:
+            response = await self.get_response(self.method)
+            await loop.sock_sendall(client, response)
+
         client.close()
 
     def __init__(self, host_name, port):
