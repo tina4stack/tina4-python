@@ -51,8 +51,7 @@ def initialize():
     print("Load all things")
 
 
-def webserver(port):
-    host_name = "localhost"
+def webserver(host_name, port):
     web_server = Webserver(host_name, int(port)) #HTTPServer((host_name, int(port)), Webserver)
     web_server.router_handler = Router()
     print("Server started http://%s:%s" % (host_name, port))
@@ -66,11 +65,11 @@ def webserver(port):
     print("Server stopped.")
 
 
-def main(in_port=7145):
+def main(in_hostname="localhost",in_port=7145):
     print("Starting webserver on", in_port)
     load_env()
     initialize()
-    webserver(in_port)
+    webserver(in_hostname, in_port)
 
 
 if importlib.util.find_spec("jurigged"):
@@ -79,7 +78,13 @@ if importlib.util.find_spec("jurigged"):
 print("Entry point name ...", __name__)
 if __name__ == '__main__' or __name__ == 'tina4_python':
     # Start up a webserver based on params passed on the command line
+    HOSTNAME = "localhost"
     PORT = 7145
     if len(sys.argv) > 1 and sys.argv[1]:
         PORT = sys.argv[1]
-    main(PORT)
+        if ":" in PORT:
+            SERVER_CONFIG = PORT.split(":")
+            HOSTNAME = SERVER_CONFIG[0]
+            PORT = SERVER_CONFIG[1]
+
+    main(HOSTNAME, PORT)
