@@ -18,6 +18,10 @@ class Webserver:
     async def get_content_body(self):
         # get lines of content where at the end of the request
         content = self.request.split("\n\n")
+
+        # get the content length
+        content_length_index = self.request.find("Content-Length: ")
+
         if len(content) == 2:
             content = content[1]
 
@@ -72,12 +76,23 @@ class Webserver:
             client, _ = await loop.sock_accept(self.server_socket)
             loop.create_task(self.handle_client(client))
 
+    async def get_data(self, client):
+        loop = asyncio.get_event_loop()
+        # https://stackoverflow.com/questions/17667903/python-socket-receive-large-amount-of-data
+
+        fragments = []
+        while True:
+            fragment = (await loop.sock_recv(client, 4096)).decode('utf8')
+            fragments.append(fragment)
+            if len(fragment) < 4096:
+                break
+        return "".join(fragments)
+
     async def handle_client(self, client):
         loop = asyncio.get_event_loop()
-        request = None
 
         # Get the client request
-        request = (await loop.sock_recv(client, 1024)).decode('utf8')
+        request = (await self.get_data(client))
         # Decode the request
 
         self.request = request.replace("\r", "")

@@ -26,5 +26,5 @@ async def main_page_2(one, request):
 
 @post("/api/generate")
 async def post_me(request):
-
+    #print("Params", request)
     return response(request["body"])
