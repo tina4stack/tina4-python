@@ -18,13 +18,14 @@ async def get_main_page(request):
     return response('<h1>Hello 111</h1>', Constant.HTTP_OK, Constant.TEXT_HTML)
 
 
-@get("/hello/{one}")
-async def main_page_2(one, request):
-    print("Params", request["params"], one)
-    return response('<h1>Hello</h1>' + one, Constant.HTTP_OK, Constant.TEXT_HTML)
+@get("/api/generate/get-models")
+async def main_page_2(request):
+    # print("Params", request["params"], one)
+    return response({"models": ["one", "two"]})
 
 
 @post("/api/generate")
 async def post_me(request):
     #print("Params", request)
+
     return response(request["body"])
