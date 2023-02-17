@@ -10,6 +10,7 @@ from tina4_python.Router import response
 import asyncio
 
 
+
 @get("/andre|/test")
 async def get_main_page(request):
     print("Params", request["params"])
@@ -23,6 +24,7 @@ async def main_page_2(one, request):
     return response('<h1>Hello</h1>' + one, Constant.HTTP_OK, Constant.TEXT_HTML)
 
 
-@post("/test")
+@post("/api/generate")
 async def post_me(request):
-    return response('<h2>Testing22333222</h2>')
+
+    return response(request["body"])

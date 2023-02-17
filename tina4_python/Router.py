@@ -6,6 +6,7 @@
 import mimetypes
 import re
 import os
+import json
 import urllib.parse
 import tina4_python
 from pathlib import Path
@@ -42,11 +43,11 @@ class Router:
 
         if len(route_matches) == len(url_matches):
             for i, match_route in enumerate(route_matches):
-                print("Comparing", str(url_matches[i].group()), match_route.group())
+                # print("Comparing", str(url_matches[i].group()), match_route.group())
                 if match_route.group() != "" and str(url_matches[i].group()).find('{') != -1:
                     variables.append(urllib.parse.unquote(match_route.group().strip("/")))
                 elif route_matches[i].group() != "":
-                    print("Matching",match_route.group(), url_matches[i].group())
+                    # print("Matching",match_route.group(), url_matches[i].group())
                     if match_route.group() != url_matches[i].group():
                         matching = False
                         break
@@ -58,7 +59,7 @@ class Router:
             matching = False
 
         Router.variables = variables
-        print("matching", url_matches, route_matches, variables, matching)
+        # print("matching", url_matches, route_matches, variables, matching)
         return matching
 
     @staticmethod
@@ -67,10 +68,10 @@ class Router:
 
         # serve statics
         static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
-        print("Looking for", static_file)
+        # print("Looking for", static_file)
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
-            print("Guessed ", mime_type)
+            # print("Guessed ", mime_type)
             with open(static_file, 'rb') as file:
                 return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
@@ -153,6 +154,9 @@ class response:
     """
 
     def __init__(self, content='', http_code=Constant.HTTP_OK, content_type=Constant.TEXT_HTML):
+        if type(content) is dict or type(content) is list:
+            content = json.dumps(content)
+            content_type = Constant.APPLICATION_JSON
         self.content = content
         self.http_code = http_code
         self.content_type = content_type

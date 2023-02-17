@@ -8,6 +8,7 @@ Requirements
 
 ```
 pip install poetry
+pip install jurigged
 ```
 
 Windows

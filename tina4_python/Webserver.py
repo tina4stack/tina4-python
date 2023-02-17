@@ -6,16 +6,28 @@
 from tina4_python.Constant import LOOKUP_HTTP_CODE
 from tina4_python.Debug import Debug
 from http.server import BaseHTTPRequestHandler
-from tina4_python.Constant import  *
+from tina4_python.Constant import *
 from urllib.parse import urlparse, parse_qsl
 import socket
 import asyncio
+import json
 
 
 class Webserver:
+
+    async def get_content_body(self):
+        # get lines of content where at the end of the request
+        content = self.request.split("\n\n")
+        if len(content) == 2:
+            content = content[1]
+
+        content = json.loads(content)
+        return content
+
     async def get_response(self, method):
         params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
-        request = {"params": params, "raw": self.request}
+        body = await self.get_content_body()
+        request = {"params": params, "body": body, "raw": self.request}
         response = await self.router_handler.resolve(method, self.path, request, self.headers)
 
         headers = []
@@ -32,7 +44,6 @@ class Webserver:
 
     @staticmethod
     def send_header(header, value, headers):
-        print("Header", header, value)
         headers.append(header + ": " + value)
 
     @staticmethod
@@ -42,7 +53,6 @@ class Webserver:
         for header in response_headers:
             headers += header + "\n"
         headers += "\n"
-        print("Headers", headers)
         return headers.encode()
 
     async def run_server(self):
@@ -66,20 +76,22 @@ class Webserver:
         request = (await loop.sock_recv(client, 1024)).decode('utf8')
         # Decode the request
 
-        self.request = request.strip()
+        self.request = request.replace("\r", "")
 
         self.path = request.split(" ")
 
         if len(self.path) > 1:
-            self.path = request.split(" ")[1].strip("\r")
+            self.path = self.request.split(" ")[1]
 
-        self.method = request.split(" ")[0].strip("\r")
+        self.method = self.request.split(" ")[0]
 
-        self.headers = request.split("\n")
+        initial = self.request.split("\n\n")[0]
+
+        self.headers = initial.split("\n")
 
         method_list = [TINA4_GET, TINA4_ANY, TINA4_POST, TINA4_PATCH]
 
-        contains_method = [ele for ele in method_list if(ele in self.method)]
+        contains_method = [ele for ele in method_list if (ele in self.method)]
 
         if self.method != "" and contains_method:
             response = await self.get_response(self.method)
