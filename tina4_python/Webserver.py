@@ -21,7 +21,11 @@ class Webserver:
         if len(content) == 2:
             content = content[1]
 
-        content = json.loads(content)
+        try:
+            content = json.loads(content)
+        except Exception as e:
+            content = ""
+
         return content
 
     async def get_response(self, method):
