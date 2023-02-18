@@ -15,15 +15,17 @@ import json
 
 class Webserver:
 
-    async def get_content_body(self):
-        # get lines of content where at the end of the request
-
+    async def get_content_length(self):
         content_length = 0
         # get the content length
         for header in self.headers:
             if header.find("Content-Length:") != -1:
                 value = header.split(":")
                 content_length = int(value[1].strip())
+        return content_length
+
+    async def get_content_body(self, content_length):
+        # get lines of content where at the end of the request
 
         content = self.request_raw[-content_length:]
 
@@ -36,7 +38,8 @@ class Webserver:
 
     async def get_response(self, method):
         params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
-        body = await self.get_content_body()
+        content_length = await self.get_content_length()
+        body = await self.get_content_body(content_length)
         request = {"params": params, "body": body, "raw": self.request}
         response = await self.router_handler.resolve(method, self.path, request, self.headers)
 
@@ -69,31 +72,36 @@ class Webserver:
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.bind((self.host_name, self.port))
-        self.server_socket.listen(8)
+        self.server_socket.listen(80)
         self.server_socket.setblocking(False)
         self.running = True
 
         loop = asyncio.get_event_loop()
         while True:
             client, _ = await loop.sock_accept(self.server_socket)
-            loop.create_task(self.handle_client(client))
+            await loop.create_task(self.handle_client(client))
 
     async def get_data(self, client):
         loop = asyncio.get_event_loop()
         # https://stackoverflow.com/questions/17667903/python-socket-receive-large-amount-of-data
-
-        client.setblocking(True)
         fragments = []
-        while True:
-            fragment = (await loop.sock_recv(client, 128)).decode('utf8')
+        found_length = False
+        content_length = 999999999999
+        while len("".join(fragments)) < content_length:
+            fragment = (await loop.sock_recv(client, 1024)).decode('utf8')
+            if not found_length:
+                i = fragment.find('Content-Length:')
+                e = fragment.find('\r\n', i)
+                value = fragment[i:e].split(":")
+                content_length = int(value[1].strip())
+                found_length = True
+
             fragments.append(fragment)
-            if len(fragment) < 128:
-                break
+
         return "".join(fragments)
 
     async def handle_client(self, client):
         loop = asyncio.get_event_loop()
-
         # Get the client request
         request = (await self.get_data(client))
         # Decode the request
