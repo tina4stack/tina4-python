@@ -97,8 +97,6 @@ class Webserver:
         # Get the client request
         request = (await self.get_data(client))
         # Decode the request
-
-        print('CLIENT', request)
         self.request_raw = request
 
         self.request = request.replace("\r", "")
