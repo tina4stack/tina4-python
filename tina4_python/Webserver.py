@@ -11,6 +11,7 @@ from urllib.parse import urlparse, parse_qsl
 import socket
 import asyncio
 import json
+import time
 
 
 class Webserver:
@@ -87,8 +88,9 @@ class Webserver:
         fragments = []
         found_length = False
         content_length = 999999999999
-        while len("".join(fragments)) < content_length:
+        while True:
             fragment = (await loop.sock_recv(client, 1024)).decode('utf8')
+            fragments.append(fragment)
             if not found_length:
                 i = "".join(fragments).find('Content-Length:')
                 e = "".join(fragments).find('\n', i)
@@ -97,10 +99,11 @@ class Webserver:
                     if len(value) > 1:
                         content_length = int(value[1].strip())
                         found_length = True
-            fragments.append(fragment)
+
             if not found_length and fragment.find('GET') != -1 and len(fragment) < 1024:
                 content_length = len("".join(fragments))
-
+            if len("".join(fragments)) > content_length or len("".join(fragments)) == 0:
+                break
         return "".join(fragments)
 
     async def handle_client(self, client):
