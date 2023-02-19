@@ -102,7 +102,8 @@ class Webserver:
 
             if not found_length and fragment.find('GET') != -1 and len(fragment) < 1024:
                 content_length = len("".join(fragments))
-            if len("".join(fragments)) > content_length or len("".join(fragments)) == 0:
+
+            if len("".join(fragments)) >= content_length or len("".join(fragments)) == 0:
                 break
         return "".join(fragments)
 
