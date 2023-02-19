@@ -91,12 +91,15 @@ class Webserver:
             fragment = (await loop.sock_recv(client, 1024)).decode('utf8')
             if not found_length:
                 i = fragment.find('Content-Length:')
-                e = fragment.find('\r\n', i)
-                value = fragment[i:e].split(":")
-                content_length = int(value[1].strip())
-                found_length = True
-
+                e = fragment.find('\n', i)
+                if not i == -1 and not e == -1:
+                    value = fragment[i:e].replace("\r", "").split(":")
+                    if len(value) > 1:
+                        content_length = int(value[1].strip())
+                        found_length = True
             fragments.append(fragment)
+            if not found_length and fragment.find(TINA4_GET) != -1 and len(fragment) < 1024:
+                content_length = len("".join(fragments))
 
         return "".join(fragments)
 
