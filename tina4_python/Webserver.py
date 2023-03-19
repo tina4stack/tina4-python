@@ -89,7 +89,7 @@ class Webserver:
         found_length = False
         content_length = 999999999999
         while True:
-            fragment = (await loop.sock_recv(client, 1024)).decode('utf8')
+            fragment = (await loop.sock_recv(client, 4096)).decode('utf8')
             fragments.append(fragment)
             if not found_length:
                 i = "".join(fragments).find('Content-Length:')
@@ -100,7 +100,7 @@ class Webserver:
                         content_length = int(value[1].strip())
                         found_length = True
 
-            if not found_length and fragment.find('GET') != -1 and len(fragment) < 1024:
+            if not found_length and fragment.find('GET') != -1 and len(fragment) < 4096:
                 content_length = len("".join(fragments))
 
             if len("".join(fragments)) >= content_length or len("".join(fragments)) == 0:

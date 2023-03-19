@@ -20,6 +20,7 @@ async def get_main_page(request):
 
 @get("/api/generate/get-models")
 async def main_page_2(request):
+    #hello
     # print("Params", request["params"], one)
     return response({"models": ["one", "two"]})
 
