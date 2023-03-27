@@ -12,10 +12,9 @@ import socket
 import asyncio
 import json
 import time
-
+import random
 
 class Webserver:
-
     async def get_content_length(self):
         content_length = 0
         # get the content length
@@ -27,7 +26,6 @@ class Webserver:
 
     async def get_content_body(self, content_length):
         # get lines of content where at the end of the request
-
         content = self.request_raw[-content_length:]
 
         try:
@@ -38,24 +36,33 @@ class Webserver:
         return content
 
     async def get_response(self, method):
-        params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
-        content_length = await self.get_content_length()
-        body = await self.get_content_body(content_length)
-        request = {"params": params, "body": body, "raw": self.request}
-        response = await self.router_handler.resolve(method, self.path, request, self.headers)
-
         headers = []
         if method == "OPTIONS":
             self.send_header("Access-Control-Allow-Origin", "*", headers)
+            self.send_header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
+            self.send_header("Access-Control-Allow-Credentials", "True", headers)
+
             headers = await self.get_headers(headers, self.response_protocol, HTTP_OK)
             return headers
 
+        params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
+
+        content_length = await self.get_content_length()
+        body = await self.get_content_body(content_length)
+        request = {"params": params, "body": body, "raw": self.request}
+
+        response = await self.router_handler.resolve(method, self.path, request, self.headers)
+
+        self.send_header("Access-Control-Allow-Origin", "*", headers)
+        self.send_header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
+        self.send_header("Access-Control-Allow-Credentials", "True", headers)
         self.send_header("Content-Type", response["content_type"], headers)
         self.send_header("Content-Length", str(len(response["content"])), headers)
         self.send_header("Connection", "Keep-Alive", headers)
         self.send_header("Keep-Alive", "timeout=5, max=30", headers)
 
         headers = await self.get_headers(headers, self.response_protocol, response["http_code"])
+
         if type(response["content"]) == str:
             return headers + response["content"].encode()
         else:
@@ -75,47 +82,45 @@ class Webserver:
         return headers.encode()
 
     async def run_server(self):
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.server_socket.bind((self.host_name, self.port))
-        self.server_socket.listen(80)
-        self.server_socket.setblocking(False)
-        self.running = True
+        server = await asyncio.start_server(self.handle_client, self.host_name, self.port)
+        async with server:
+            await server.serve_forever()
 
-        loop = asyncio.get_event_loop()
-        while True:
-            client, _ = await loop.sock_accept(self.server_socket)
-            await loop.create_task(self.handle_client(client))
-
-    async def get_data(self, client):
+    async def get_data(self, reader):
         loop = asyncio.get_event_loop()
         # https://stackoverflow.com/questions/17667903/python-socket-receive-large-amount-of-data
-        fragments = []
+        chunks = []
+        data = None
+        i = random.randrange(1000,9999)
         found_length = False
-        content_length = 999999999999
+        content_length = 0
+        count = 0
         while True:
-            fragment = (await loop.sock_recv(client, 4096)).decode('utf8')
-            fragments.append(fragment)
+            data = (await reader.read(4096)).decode("utf-8")
+            chunks.append(data)
+
             if not found_length:
-                i = "".join(fragments).find('Content-Length:')
-                e = "".join(fragments).find('\n', i)
+                i = "".join(chunks).find('Content-Length:')
+                e = "".join(chunks).find('\n', i)
                 if not i == -1 and not e == -1:
-                    value = "".join(fragments)[i:e].replace("\r", "").split(":")
+                    value = "".join(chunks)[i:e].replace("\r", "").split(":")
                     if len(value) > 1:
                         content_length = int(value[1].strip())
                         found_length = True
 
-            if not found_length and (fragment.find('GET') != -1 or fragment.find('OPTIONS') != -1) and len(fragment) < 4096:
-                content_length = len("".join(fragments))
+            if not found_length and (data.find('GET') != -1 or data.find('OPTIONS') != -1) and len(data) < 4096:
+                content_length = len("".join(chunks))
 
-            if len("".join(fragments)) >= content_length or len("".join(fragments)) == 0:
+            if len("".join(chunks)) >= content_length or len("".join(chunks)) == 0:
                 break
-        return "".join(fragments)
+        return "".join(chunks)
 
-    async def handle_client(self, client):
+
+    async def handle_client(self, reader, writer):
         loop = asyncio.get_event_loop()
         # Get the client request
-        request = (await self.get_data(client))
+        request = await self.get_data(reader)
+
         # Decode the request
         self.request_raw = request
 
@@ -137,10 +142,11 @@ class Webserver:
         contains_method = [ele for ele in method_list if (ele in self.method)]
 
         if self.method != "" and contains_method:
-            response = await self.get_response(self.method)
-            await loop.sock_sendall(client, response)
+            response = await (self.get_response(self.method))
+            writer.write(response)
+            await writer.drain()
 
-        client.close()
+        writer.close()
 
     def __init__(self, host_name, port):
         self.method = None
