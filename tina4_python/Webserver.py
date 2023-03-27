@@ -45,6 +45,11 @@ class Webserver:
         response = await self.router_handler.resolve(method, self.path, request, self.headers)
 
         headers = []
+        if method == "OPTIONS":
+            self.send_header("Access-Control-Allow-Origin", "*", headers)
+            headers = await self.get_headers(headers, self.response_protocol, HTTP_OK)
+            return headers
+
         self.send_header("Content-Type", response["content_type"], headers)
         self.send_header("Content-Length", str(len(response["content"])), headers)
         self.send_header("Connection", "Keep-Alive", headers)
@@ -100,7 +105,7 @@ class Webserver:
                         content_length = int(value[1].strip())
                         found_length = True
 
-            if not found_length and fragment.find('GET') != -1 and len(fragment) < 4096:
+            if not found_length and (fragment.find('GET') != -1 or fragment.find('OPTIONS') != -1) and len(fragment) < 4096:
                 content_length = len("".join(fragments))
 
             if len("".join(fragments)) >= content_length or len("".join(fragments)) == 0:
@@ -127,7 +132,7 @@ class Webserver:
 
         self.headers = initial.split("\n")
 
-        method_list = [TINA4_GET, TINA4_ANY, TINA4_POST, TINA4_PATCH]
+        method_list = [TINA4_GET, TINA4_ANY, TINA4_POST, TINA4_PATCH, TINA4_OPTIONS]
 
         contains_method = [ele for ele in method_list if (ele in self.method)]
 
