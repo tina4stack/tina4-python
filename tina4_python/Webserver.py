@@ -95,8 +95,9 @@ class Webserver:
         found_length = False
         content_length = 0
         count = 0
+        header_offset = 0
         while True:
-            data = (await reader.read(4096)).decode("utf-8")
+            data = (await reader.read(2048)).decode("utf-8")
             chunks.append(data)
 
             if not found_length:
@@ -108,10 +109,15 @@ class Webserver:
                         content_length = int(value[1].strip())
                         found_length = True
 
-            if not found_length and (data.find('GET') != -1 or data.find('OPTIONS') != -1) and len(data) < 4096:
+            if header_offset == 0:
+                i = "".join(chunks).replace("\r", "").find("\n\n")
+                if not i == -1:
+                    header_offset = i
+
+            if not found_length and (data.find('GET') != -1 or data.find('OPTIONS') != -1) and len(data) < header_offset:
                 content_length = len("".join(chunks))
 
-            if len("".join(chunks)) >= content_length or len("".join(chunks)) == 0:
+            if len("".join(chunks)) >= content_length+header_offset or len("".join(chunks)) == header_offset or len("".join(chunks)) == 0:
                 break
         return "".join(chunks)
 
