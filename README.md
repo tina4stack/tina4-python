@@ -1,4 +1,4 @@
-### Tina4Python - This is not a frameowork for Python
+### Tina4Python - This is not a framework for Python
 
 Tina4Python is a light-weight routing and twig based templating system based on the [Tina4](https://github.com/tina4stack/tina4-php) stack which allows you to write websites and API applications very quickly.
 .
