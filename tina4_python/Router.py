@@ -1,8 +1,3 @@
-#
-# Tina4 - This is not a 4ramework.
-# Copy-right 2007 - current Tina4
-# License: MIT https://opensource.org/licenses/MIT
-#
 import mimetypes
 import re
 import os
@@ -20,46 +15,25 @@ class Router:
 
     @staticmethod
     def match(url, route_path):
-        url += "/"
-        route_path += "/"
+        matching = False
+        variables = {}
 
-        matching = True
-        variables = []
+        url_segments = url.strip('/').split('/')
+        route_segments = route_path.strip('/').split('/')
 
-        match_regex = r"/([a-zA-Z0-9\%\ \!\-\.\_\ }\{]*)"
-
-        url_matches_regex = re.finditer(match_regex, url, re.MULTILINE)
-        route_matches_regex = re.finditer(match_regex, route_path, re.MULTILINE)
-
-        url_matches = []
-        route_matches = []
-        for matchNum, match in enumerate(route_matches_regex, start=1):
-            url_matches.append(match)
-        for matchNum, match in enumerate(url_matches_regex, start=1):
-            route_matches.append(match)
-
-        if url != route_path and len(url_matches) == len(route_matches) and len(url_matches) == 2:
-            return False
-
-        if len(route_matches) == len(url_matches):
-            for i, match_route in enumerate(route_matches):
-                # print("Comparing", str(url_matches[i].group()), match_route.group())
-                if match_route.group() != "" and str(url_matches[i].group()).find('{') != -1:
-                    variables.append(urllib.parse.unquote(match_route.group().strip("/")))
-                elif route_matches[i].group() != "":
-                    # print("Matching",match_route.group(), url_matches[i].group())
-                    if match_route.group() != url_matches[i].group():
-                        matching = False
-                        break
-                elif route_matches[i].group() == "" and i > 1:
+        if len(url_segments) == len(route_segments):
+            matching = True
+            for i, segment in enumerate(route_segments):
+                if '{' in segment:  # parameter part of the url
+                    param_name = re.search(r'{(.*?)}', segment).group(1)
+                    variables[param_name] = url_segments[i]
+                elif segment != url_segments[i]:  # non parameter part
                     matching = False
                     break
 
-        else:
-            matching = False
-
         Router.variables = variables
-        # print("matching", url_matches, route_matches, variables, matching)
+        Debug("Variables: " + str(variables))
+        Debug("Matching: " + str(matching))
         return matching
 
     @staticmethod
@@ -68,10 +42,9 @@ class Router:
 
         # serve statics
         static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
-        # print("Looking for", static_file)
+        Debug("Attempting to serve static file: " + static_file)
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
-            # print("Guessed ", mime_type)
             with open(static_file, 'rb') as file:
                 return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
@@ -94,32 +67,23 @@ class Router:
         for route in tina4_python.tina4_routes:
             if route["method"] != method:
                 continue
-            Debug("matching route " + route['route'] + " to " + url)
+            Debug("Matching route " + route['route'] + " to " + url)
             if Router.match(url, route['route']):
                 router_response = route["callback"]
 
                 params = Router.variables
-                params.append(request)
+                params['request'] = request  # Add the request object
 
-                result = await router_response(*params)
+                result = await router_response(**params)
                 break
 
         return {"content": result.content, "http_code": result.http_code, "content_type": result.content_type}
 
     @staticmethod
     async def resolve(method, url, request, headers):
-        """
-        Resolve the route and return a html answer
-        :param method:
-        :param url:
-        :param request
-        :param headers:
-        """
-        # render templates or routes ???
-
         url = Router.clean_url(url)
 
-        Debug("Rendering " + url)
+        Debug("Rendering URL: " + url)
         html_response = await Router.render(url, method, request, headers)
         return dict(http_code=html_response["http_code"], content_type=html_response["content_type"],
                     content=html_response["content"])
@@ -131,15 +95,18 @@ class Router:
 
     @staticmethod
     def add(method, route, callback):
-        Debug("Adding a route " + route, debug_level=Constant.DEBUG_DEBUG)
+        Debug("Adding a route: " + route)
         tina4_python.tina4_routes.append({"route": route, "callback": callback, "method": method})
+        if '{' in route:  # store the parameters if the route contains parameters
+            route_variables = re.findall(r'{(.*?)}', route)
+            tina4_python.tina4_routes[-1]["params"] = route_variables
 
     @staticmethod
     def init_twig(path):
         if hasattr(Router, "twig"):
             Debug("Twig found on " + path)
             return Router.twig
-        Debug("Initializing twig on " + path)
+        Debug("Initializing Twig on " + path)
         twig_path = Path(path)
         Router.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
         return Router.twig
@@ -168,7 +135,6 @@ def get(*arguments):
             route_paths = arguments[0].split('|')
             for route_path in route_paths:
                 Router.add(Constant.TINA4_GET, route_path, param)
-
     return actual_get
 
 
@@ -178,5 +144,4 @@ def post(*arguments):
             route_paths = arguments[0].split('|')
             for route_path in route_paths:
                 Router.add(Constant.TINA4_POST, route_path, param)
-
     return actual_post

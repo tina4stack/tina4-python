@@ -4,6 +4,7 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 from tina4_python import Constant
+from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
 from tina4_python.Router import response
@@ -18,8 +19,16 @@ import asyncio
 # This will be available at http://localhost:8080/example
 
 @get("/example")
-async def example(request):
+async def example(**kwargs):
     # Add your code here
 
     message = "This is an example of a GET request"
     return response(message)
+
+
+# This is an example of parameterized routing
+@get("/names/{name}/{surname}")
+async def example(**params):
+
+    message = "Hello " + params['name'] + " " + params['surname']
+    return response(f"<h1>{message}<h1>")
