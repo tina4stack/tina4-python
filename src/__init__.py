@@ -14,4 +14,7 @@ import asyncio
 
 @get("/example")
 async def example(request):
-    return response("This is an example of a GET request")
+    # Add your code here
+
+    message = "This is an example of a GET request"
+    return response(message)
