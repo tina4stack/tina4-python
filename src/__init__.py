@@ -9,24 +9,17 @@ from tina4_python.Router import post
 from tina4_python.Router import response
 import asyncio
 
+# Define your routes here
 
 
-@get("/andre|/test")
-async def get_main_page(request):
-    print("Params", request["params"])
-    await asyncio.sleep(10)
-    return response('<h1>Hello 111</h1>', Constant.HTTP_OK, Constant.TEXT_HTML)
 
 
-@get("/api/generate/get-models")
-async def main_page_2(request):
-    #hello
-    # print("Params", request["params"], one)
-    return response({"models": ["one", "two"]})
+# This is a simple example of a GET request
+# This will be available at http://localhost:8080/example
 
+@get("/example")
+async def example(request):
+    # Add your code here
 
-@post("/api/generate")
-async def post_me(request):
-    print("Params", request)
-
-    return response(request["body"])
+    message = "This is an example of a GET request"
+    return response(message)

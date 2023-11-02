@@ -1,83 +1,140 @@
-================
-Tina4Python - This is not a framework for Python
-================
+### Tina4Python - This is not a framework for Python
 
-Running the system
+Tina4Python is a light-weight routing and twig based templating system based on the [Tina4](https://github.com/tina4stack/tina4-php) stack which allows you to write websites and API applications very quickly.
+.
+### System Requirements
 
-Requirements
+- Install Poetry:
+  ```bash
+  pip install poetry
+  ```
 
-```
-pip install poetry
-pip install jurigged
-```
+- Install Jurigged (Enables Hot Reloading):
+  ```bash
+  pip install jurigged
+  ```
 
-Windows
-```
-(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | py -
-```
-Add to path %APPDATA%\pypoetry\venv\Scripts 
+### Installation
 
-Install
+#### Windows
 
-```
-poetry init
-poetry add tina4_python
-poetry add jurigged
-```
+1. Install Poetry:
+    ```powershell
+    (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | py -
+    ```
 
-or 
+2. Add the following path to the system PATH:
+   ```
+   %APPDATA%\pypoetry\venv\Scripts
+   ```
 
-```
-pip install tina4_python
-pip install jurigged
-```
+3. Install Tina4Python and Jurigged:
+   ```bash
+   poetry add tina4_python
+   poetry add jurigged
+   ```
 
-#### Create a starting app.py file to start with
+   **or**
 
-```
-from tina4_python import *
-```
+   ```bash
+   pip install tina4_python
+   pip install jurigged
+   ```
 
-Normal "production" server on port 7145
-```
-poetry run
-```
+### Usage
 
-Server with hot reloading
-```
-poetry run jurigged main.py
-```
+After defining templates and routes, run the Tina4Python server:
 
-Server with own port
+- **Normal Server**:
+  ```bash
+  poetry run
+  ```
 
-```
-poetry run main.py 7777
-```
+- **Server with Hot Reloading**:
+  ```bash
+  poetry run jurigged main.py
+  ```
 
-Done:
- - python pip package
- - basic env file handling
- - basic routing
+- **Server on a Specific Port**:
+  ```bash
+  poetry run main.py 7777
+  ```
 
-Todo:
- - localization
- - routing - partially done, supports get & post
- - template handling
- - open api - swagger
- - add jwt form token
+### Templating
 
-Building:
-```
-python3 -m pip install --upgrade build
-python3 -m build
-python3 -m pip install --upgrade twine
-python3 -m twine upload dist/*
-```
-    
-OR
-    
-```
-poetry build
-poetry publish
-```
-    
+
+Tina4 uses [Twig](https://twig.symfony.com/) templating to provide a simple and efficient way to create web pages.
+
+1. **Twig Files**: Add your Twig files within the `src/templates` folder. For instance, you might create files like `index.twig`, `base.twig`, etc., containing your HTML structure with Twig templating syntax for dynamic content.
+
+2. **Using Twig**: In these Twig files, you can use Twig syntax to embed dynamic content, control structures, variables, and more. For example:
+
+   ```twig
+   <!-- index.twig -->
+   <!DOCTYPE html>
+   <html>
+   <head>
+       <title>Welcome</title>
+   </head>
+   <body>
+       <h1>Hello, {{ name }}!</h1>
+   </body>
+   </html>
+   ```
+
+### Defining Routes
+
+
+The routing in Tina4Python can be defined in the `__init__.py` file or any file used as an entry point to your application. Tina4Python provides decorators to define routes easily.
+
+1. **Creating Routes**: Define routes using decorators from Tina4Python to handle HTTP requests.
+
+    Example:
+    ```python
+
+   from tina4_python.Router import get
+   from tina4_python.Router import response
+   import asyncio
+
+    @get("/hello")
+    async def hello():
+        return response("Hello, World!")
+    ```
+
+    This code creates a route for a GET request to `/hello`, responding with "Hello, World!".
+
+
+
+### Features
+| Completed                | To Do                            |
+|--------------------------|----------------------------------|
+| Python pip package       | Localization                     |
+| Basic environment handling | Enhanced routing                 |
+| Basic routing            | Template handling                |
+|                          | OpenAPI (Swagger)                |
+|                          | Implement JWT for token handling |
+
+
+### Building and Deployment
+
+#### Using Python
+
+1. Building the package:
+    ```bash
+    python3 -m pip install --upgrade build
+    python3 -m build
+    python3 -m pip install --upgrade twine
+    python3 -m twine upload dist/*
+    ```
+
+#### Using Poetry
+
+1. Building the package:
+    ```bash
+    poetry build
+    ```
+
+2. Publishing the package:
+    ```bash
+    poetry publish
+    ```
