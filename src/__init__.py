@@ -9,6 +9,11 @@ from tina4_python.Router import post
 from tina4_python.Router import response
 import asyncio
 
+# Define your routes here
+
+
+
+
 # This is a simple example of a GET request
 # This will be available at http://localhost:8080/example
 
