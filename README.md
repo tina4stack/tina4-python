@@ -106,13 +106,13 @@ The routing in Tina4Python can be defined in the `__init__.py` file or any file 
 
 
 ### Features
-| Completed                | To Do                            |
-|--------------------------|----------------------------------|
-| Python pip package       | Localization                     |
-| Basic environment handling | Enhanced routing                 |
-| Basic routing            | Template handling                |
-|                          | OpenAPI (Swagger)                |
-|                          | Implement JWT for token handling |
+| Completed                  | To Do                            |
+|----------------------------|----------------------------------|
+| Python pip package         | Localization                     |
+| Basic environment handling | Template handling                |
+| Basic routing              | OpenAPI (Swagger)                |
+| Enhanced routing           | Implement JWT for token handling |
+|                            |                                  |
 
 
 ### Building and Deployment

@@ -16,10 +16,10 @@ import asyncio
 
 
 # This is a simple example of a GET request
-# This will be available at http://localhost:8080/example
+# This will be available at http://localhost:port/example
 
 @get("/example")
-async def example(**kwargs):
+async def example(**params):
     # Add your code here
 
     message = "This is an example of a GET request"
@@ -27,8 +27,9 @@ async def example(**kwargs):
 
 
 # This is an example of parameterized routing
+# This will be available at http://localhost:port/example
 @get("/names/{name}/{surname}")
 async def example(**params):
 
-    message = "Hello " + params['name'] + " " + params['surname']
+    message = f"Hello {params['name']} {params['surname']}"
     return response(f"<h1>{message}<h1>")
