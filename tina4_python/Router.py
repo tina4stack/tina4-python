@@ -19,7 +19,7 @@ class Router:
         variables = {}
 
         # splitting url and route into segments and putting into lists
-        # e.g. /user/1/ = ['user', '1']
+        # /user/1/ = ['user', '1']
         url_segments = url.strip('/').split('/')
         route_segments = route_path.strip('/').split('/')
 
