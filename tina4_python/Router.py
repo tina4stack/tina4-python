@@ -18,11 +18,14 @@ class Router:
         matching = False
         variables = {}
 
+        # splitting url and route into segments and putting into lists
+        # e.g. /user/1/ = ['user', '1']
         url_segments = url.strip('/').split('/')
         route_segments = route_path.strip('/').split('/')
 
         if len(url_segments) == len(route_segments):
             matching = True
+
             for i, segment in enumerate(route_segments):
                 if '{' in segment:  # parameter part of the url
                     param_name = re.search(r'{(.*?)}', segment).group(1)
@@ -93,11 +96,12 @@ class Router:
         url_parts = url.split('?')
         return url_parts[0].replace('//', '/')
 
+    # adds a route to the router
     @staticmethod
     def add(method, route, callback):
         Debug("Adding a route: " + route)
         tina4_python.tina4_routes.append({"route": route, "callback": callback, "method": method})
-        if '{' in route:  # store the parameters if the route contains parameters
+        if '{' in route:  # store the parameters if needed
             route_variables = re.findall(r'{(.*?)}', route)
             tina4_python.tina4_routes[-1]["params"] = route_variables
 
@@ -128,7 +132,7 @@ class response:
         self.http_code = http_code
         self.content_type = content_type
 
-
+# decorators for the router
 def get(*arguments):
     def actual_get(param):
         if len(arguments) > 0:
