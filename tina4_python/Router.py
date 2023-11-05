@@ -49,6 +49,17 @@ class Router:
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
             with open(static_file, 'rb') as file:
+                if mime_type == 'text/css':  # Handle CSS files separately
+                    return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
+                else:
+                    return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
+
+        # serve stylesheets from the 'src/styles' folder
+        css_file = tina4_python.root_path + os.sep + "src" + os.sep + url.replace("/", os.sep)
+        Debug("Attempting to serve CSS file: " + css_file)
+        if os.path.isfile(css_file):
+            mime_type = 'text/css'
+            with open(css_file, 'rb') as file:
                 return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
         # serve templates

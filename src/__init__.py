@@ -3,15 +3,13 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+import os
+
 from tina4_python import Constant
 from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
 from tina4_python.Router import response
-import asyncio
-
-# Define your routes here
-
 
 
 
