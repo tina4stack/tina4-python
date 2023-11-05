@@ -13,12 +13,14 @@ from tina4_python.Debug import Debug
 class Router:
     variables = None
 
+    # matches the url to the route and returns true or false
+    # also stores the variables in the router for GET functions
     @staticmethod
     def match(url, route_path):
         matching = False
         variables = {}
 
-        # splitting url and route into segments and putting into lists
+        # splitting url and route and putting into lists to compare
         # /user/1/ = ['user', '1']
         url_segments = url.strip('/').split('/')
         route_segments = route_path.strip('/').split('/')
@@ -39,6 +41,10 @@ class Router:
         Debug("Matching: " + str(matching))
         return matching
 
+
+    # Figures out what is being requested and returns the content
+    # some stuff could be improved, like route-handling could be better
+    # also template handling, need to work on that fr
     @staticmethod
     async def render(url, method, request, headers):
         Debug("Root Path " + tina4_python.root_path + " " + url)
@@ -49,9 +55,32 @@ class Router:
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
             with open(static_file, 'rb') as file:
+                if mime_type == 'text/css':
+                    return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
+                else:
+                    return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
+
+
+        # serve Css from the src
+        # Sass support needs to be added
+        css_file = tina4_python.root_path + os.sep + "src" + os.sep + url.replace("/", os.sep)
+        Debug("Attempting to serve CSS file: " + css_file)
+        if os.path.isfile(css_file):
+            mime_type = 'text/css'
+            with open(css_file, 'rb') as file:
                 return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
-        # serve templates
+        # serve images from src
+        image_file = tina4_python.root_path + os.sep + "src" + os.sep + url.replace("/", os.sep)
+        Debug("Attempting to serve image file: " + image_file)
+        if os.path.isfile(image_file):
+            mime_type = mimetypes.guess_type(url)[0]
+            with open(image_file, 'rb') as file:
+                if mime_type and mime_type.startswith('image'):
+                    return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
+
+        # serve twigs
+        # need to add support for twig template variables
         twig = Router.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
         if url == "/":
             twig_file = "index"
@@ -82,6 +111,11 @@ class Router:
 
         return {"content": result.content, "http_code": result.http_code, "content_type": result.content_type}
 
+
+
+
+
+
     @staticmethod
     async def resolve(method, url, request, headers):
         url = Router.clean_url(url)
@@ -91,10 +125,19 @@ class Router:
         return dict(http_code=html_response["http_code"], content_type=html_response["content_type"],
                     content=html_response["content"])
 
+
+
+
+
+    # cleans the url of double slashes
     @staticmethod
     def clean_url(url):
         url_parts = url.split('?')
         return url_parts[0].replace('//', '/')
+
+
+
+
 
     # adds a route to the router
     @staticmethod
@@ -105,6 +148,10 @@ class Router:
             route_variables = re.findall(r'{(.*?)}', route)
             tina4_python.tina4_routes[-1]["params"] = route_variables
 
+
+
+
+    # initializes the twig template engine
     @staticmethod
     def init_twig(path):
         if hasattr(Router, "twig"):
@@ -114,7 +161,6 @@ class Router:
         twig_path = Path(path)
         Router.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
         return Router.twig
-
 
 class response:
     """
@@ -132,7 +178,7 @@ class response:
         self.http_code = http_code
         self.content_type = content_type
 
-# decorators for the router
+
 def get(*arguments):
     def actual_get(param):
         if len(arguments) > 0:
