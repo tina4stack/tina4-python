@@ -115,7 +115,7 @@ The routing in Tina4Python can be defined in the `__init__.py` file or any file 
     @get("/hello/{name}")
     async def greet(**params):
    
-        name = params.get("name")
+        name = params['name']
    
         return response(f"Hello, {name}!")
     ```
