@@ -94,7 +94,7 @@ The routing in Tina4Python can be defined in the `__init__.py` file or any file 
 
    from tina4_python.Router import get
    from tina4_python.Router import response
-   import asyncio
+
 
     @get("/hello")
     async def hello():
@@ -134,7 +134,8 @@ The routing in Tina4Python can be defined in the `__init__.py` file or any file 
 | Basic environment handling | Template handling                |
 | Basic routing              | OpenAPI (Swagger)                |
 | Enhanced routing           | Implement JWT for token handling |
-|                            | CSS Support                      |
+| CSS Support                | Error Pages                      |
+| Image Support              |                                  |
 
 
 ### Building and Deployment

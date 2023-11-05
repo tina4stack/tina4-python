@@ -12,3 +12,9 @@ p {
     font-size: 1.2em;
     margin-bottom: 10px;
 }
+
+img {
+    max-width: 40%;
+    max-height: 40%;
+    height: auto;
+}
