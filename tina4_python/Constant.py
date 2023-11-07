@@ -28,10 +28,9 @@ LOOKUP_HTTP_CODE = {HTTP_OK: "OK", HTTP_CREATED: "Created", HTTP_BAD_REQUEST: "B
                     HTTP_FORBIDDEN: "Forbidden", HTTP_NOT_FOUND: "Not Found", HTTP_NO_CONTENT: "No Content"}
 
 TEXT_HTML = "text/html"
+TEXT_CSS = "text/css"
 TEXT_PLAIN = "text/plain"
 APPLICATION_JSON = "application/json"
 APPLICATION_XML = "application/xml"
-
-
 
 

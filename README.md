@@ -94,7 +94,7 @@ The routing in Tina4Python can be defined in the `__init__.py` file or any file 
 
    from tina4_python.Router import get
    from tina4_python.Router import response
-   import asyncio
+
 
     @get("/hello")
     async def hello():
@@ -105,14 +105,37 @@ The routing in Tina4Python can be defined in the `__init__.py` file or any file 
 
 
 
+2. **Route Parameters**: You can define route parameters by enclosing variables with curly braces {   }. The parameters are passed to the function as arguments.
+
+    Example:
+    ```python
+    from tina4_python.Router import get
+    from tina4_python.Router import response
+
+    @get("/hello/{name}")
+    async def greet(**params):
+   
+        name = params['name']
+   
+        return response(f"Hello, {name}!")
+    ```
+
+    This code creates a route for a GET request to `/hello/{name}`, where `name` is a parameter in the URL. The function `greet` accepts this parameter and responds with a personalized greeting.
+
+    Example:
+    - Visiting `/hello/John` will respond with "Hello, John!"
+    - Visiting `/hello/Alice` will respond with "Hello, Alice!"
+   
+
 ### Features
-| Completed                | To Do                            |
-|--------------------------|----------------------------------|
-| Python pip package       | Localization                     |
-| Basic environment handling | Enhanced routing                 |
-| Basic routing            | Template handling                |
-|                          | OpenAPI (Swagger)                |
-|                          | Implement JWT for token handling |
+| Completed                  | To Do                            |
+|----------------------------|----------------------------------|
+| Python pip package         | Localization                     |
+| Basic environment handling | Template handling                |
+| Basic routing              | OpenAPI (Swagger)                |
+| Enhanced routing           | Implement JWT for token handling |
+| CSS Support                | Error Pages                      |
+| Image Support              |                                  |
 
 
 ### Building and Deployment
