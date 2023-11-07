@@ -27,7 +27,8 @@ async def example(**params):
 # This is an example of parameterized routing
 # This will be available at http://localhost:port/YOURNAME/YOURSURNAME
 @get("/names/{name}/{surname}")
-async def example(**params):
+async def example(request):
 
-    message = f"Hello {params['name']} {params['surname']}"
+    message = f"Hello {request.params['name']} {request.params['surname']}"
     return response(f"<h1>{message}<h1>")
+

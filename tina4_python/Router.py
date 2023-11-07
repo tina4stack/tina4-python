@@ -8,7 +8,7 @@ from pathlib import Path
 from jinja2 import Environment, select_autoescape, FileSystemLoader, TemplateNotFound
 from tina4_python import Constant
 from tina4_python.Debug import Debug
-
+from tina4_python import Request
 
 class Router:
     variables = None
@@ -103,10 +103,10 @@ class Router:
             if Router.match(url, route['route']):
                 router_response = route["callback"]
 
-                params = Router.variables
-                params['request'] = request  # Add the request object
-
-                result = await router_response(**params)
+                Request.params = Router.variables
+                Request.request = request  # Add the request object
+                Request.headers = headers  # Add the headers
+                result = await router_response(Request)
                 break
 
         return {"content": result.content, "http_code": result.http_code, "content_type": result.content_type}
