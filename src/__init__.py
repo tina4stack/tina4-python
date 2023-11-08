@@ -25,10 +25,13 @@ async def example(**params):
 
 
 # This is an example of parameterized routing
-# This will be available at http://localhost:port/YOURNAME/YOURSURNAME
+# This will be available at http://localhost:port/YOURNAME/YOURSURNAME?id=YOURID
 @get("/names/{name}/{surname}")
 async def example(request):
 
-    message = f"Hello {request.params['name']} {request.params['surname']}"
-    return response(f"<h1>{message}<h1>")
+    name = request.params['name']
+    surname = request.params['surname']
+    id = request.queries['id']
 
+    message = f"Hello {name} {surname} with id {id}"
+    return response(f"<h1>{message}<h1>")

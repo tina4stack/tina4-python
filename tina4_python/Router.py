@@ -10,18 +10,17 @@ from tina4_python import Constant
 from tina4_python.Debug import Debug
 from tina4_python import Request
 
+
 class Router:
     variables = None
 
-    # matches the url to the route and returns true or false
-    # also stores the variables in the router for GET functions
+    # matches the URL to the route and extracts the parameters
     @staticmethod
     def match(url, route_path):
         matching = False
         variables = {}
 
-        # splitting url and route and putting into lists to compare
-        # /user/1/ = ['user', '1']
+        # splitting URL and route and putting them into lists to compare
         url_segments = url.strip('/').split('/')
         route_segments = route_path.strip('/').split('/')
 
@@ -29,10 +28,10 @@ class Router:
             matching = True
 
             for i, segment in enumerate(route_segments):
-                if '{' in segment:  # parameter part of the url
+                if '{' in segment:  # parameter part
                     param_name = re.search(r'{(.*?)}', segment).group(1)
                     variables[param_name] = url_segments[i]
-                elif segment != url_segments[i]:  # non parameter part
+                elif segment != url_segments[i]:  # non-parameter part
                     matching = False
                     break
 
@@ -41,15 +40,23 @@ class Router:
         Debug("Matching: " + str(matching))
         return matching
 
-
-    # Figures out what is being requested and returns the content
-    # some stuff could be improved, like route-handling could be better
-    # also template handling, need to work on that fr
     @staticmethod
     async def render(url, method, request, headers):
         Debug("Root Path " + tina4_python.root_path + " " + url)
 
-        # serve statics
+        # split URL and extract query string
+        url_parts = url.split('?')
+        url = url_parts[0]
+        query_string = url_parts[1] if len(url_parts) > 1 else ''
+
+        Debug("Query String: " + query_string)
+
+        # parse query string into a dictionary
+        query_parameters = urllib.parse.parse_qs(query_string)
+        Debug("Query Parameters: " + str(query_parameters))
+
+        # TODO Refactor serving stuff
+        # Serve statics
         static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
         Debug("Attempting to serve static file: " + static_file)
         if os.path.isfile(static_file):
@@ -60,9 +67,7 @@ class Router:
                 else:
                     return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
-
-        # serve Css from the src
-        # Sass support needs to be added
+        # Serve CSS from the src
         css_file = tina4_python.root_path + os.sep + "src" + os.sep + url.replace("/", os.sep)
         Debug("Attempting to serve CSS file: " + css_file)
         if os.path.isfile(css_file):
@@ -70,7 +75,7 @@ class Router:
             with open(css_file, 'rb') as file:
                 return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
-        # serve images from src
+        # Serve images from src
         image_file = tina4_python.root_path + os.sep + "src" + os.sep + url.replace("/", os.sep)
         Debug("Attempting to serve image file: " + image_file)
         if os.path.isfile(image_file):
@@ -79,8 +84,7 @@ class Router:
                 if mime_type and mime_type.startswith('image'):
                     return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
-        # serve twigs
-        # need to add support for twig template variables
+        # Serve twigs
         twig = Router.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
         if url == "/":
             twig_file = "index"
@@ -93,7 +97,7 @@ class Router:
         except TemplateNotFound:
             Debug("Could not render " + twig_file)
 
-        # serve routes
+        # Serve routes
         result = response('', Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
 
         for route in tina4_python.tina4_routes:
@@ -106,15 +110,21 @@ class Router:
                 Request.params = Router.variables
                 Request.request = request  # Add the request object
                 Request.headers = headers  # Add the headers
+
+                # convert the query parameters to a dictionary
+                for key, value in query_parameters.items():
+                    if isinstance(value, list) and len(value) == 1:
+                        query_parameters[key] = value[0]
+
+                Request.queries = query_parameters
+
+                # print out request object
+                # Debug(f"Request object for {url}: {Request.__dict__}")
+
                 result = await router_response(Request)
                 break
 
         return {"content": result.content, "http_code": result.http_code, "content_type": result.content_type}
-
-
-
-
-
 
     @staticmethod
     async def resolve(method, url, request, headers):
@@ -125,19 +135,10 @@ class Router:
         return dict(http_code=html_response["http_code"], content_type=html_response["content_type"],
                     content=html_response["content"])
 
-
-
-
-
     # cleans the url of double slashes
     @staticmethod
     def clean_url(url):
-        url_parts = url.split('?')
-        return url_parts[0].replace('//', '/')
-
-
-
-
+        return url.replace('//', '/')
 
     # adds a route to the router
     @staticmethod
@@ -147,9 +148,6 @@ class Router:
         if '{' in route:  # store the parameters if needed
             route_variables = re.findall(r'{(.*?)}', route)
             tina4_python.tina4_routes[-1]["params"] = route_variables
-
-
-
 
     # initializes the twig template engine
     @staticmethod
@@ -161,6 +159,7 @@ class Router:
         twig_path = Path(path)
         Router.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
         return Router.twig
+
 
 class response:
     """
@@ -185,6 +184,7 @@ def get(*arguments):
             route_paths = arguments[0].split('|')
             for route_path in route_paths:
                 Router.add(Constant.TINA4_GET, route_path, param)
+
     return actual_get
 
 
@@ -194,4 +194,5 @@ def post(*arguments):
             route_paths = arguments[0].split('|')
             for route_path in route_paths:
                 Router.add(Constant.TINA4_POST, route_path, param)
+
     return actual_post
