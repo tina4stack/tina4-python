@@ -14,7 +14,7 @@ from tina4_python import Request
 class Router:
     variables = None
 
-    # matches the URL to the route and extracts the parameters
+    # Matches the URL to the route and extracts the parameters
     @staticmethod
     def match(url, route_path):
         matching = False
@@ -40,6 +40,7 @@ class Router:
         Debug("Matching: " + str(matching))
         return matching
 
+    # Renders the URL and returns the content
     @staticmethod
     async def render(url, method, request, headers):
         Debug("Root Path " + tina4_python.root_path + " " + url)
@@ -117,9 +118,7 @@ class Router:
                         query_parameters[key] = value[0]
 
                 Request.queries = query_parameters
-
-                # print out request object
-                # Debug(f"Request object for {url}: {Request.__dict__}")
+                Request.body = request["body"] if "body" in request else None
 
                 result = await router_response(Request)
                 break
