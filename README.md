@@ -59,6 +59,11 @@ After defining templates and routes, run the Tina4Python server:
   ```bash
   poetry run main.py 7777
   ```
+  
+- **Server with custom language** (for example fr = French):
+  ```bash
+  poetry run main.py fr
+  ```
 
 ### Templating
 
@@ -130,13 +135,13 @@ The routing in Tina4Python can be defined in the `__init__.py` file or any file 
 ### Features
 | Completed                  | To Do                            |
 |----------------------------|----------------------------------|
-| Python pip package         | Localization                     |
+| Python pip package         | Error Pages                      |
 | Basic environment handling | Template handling                |
 | Basic routing              | OpenAPI (Swagger)                |
 | Enhanced routing           | Implement JWT for token handling |
-| CSS Support                | Error Pages                      |
+| CSS Support                |                                  |
 | Image Support              |                                  |
-
+| Localization               |                                  |
 
 ### Building and Deployment
 
