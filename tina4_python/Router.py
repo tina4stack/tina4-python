@@ -48,12 +48,9 @@ class Router:
         # split URL and extract query string
         url_parts = url.split('?')
         url = url_parts[0]
-        query_string = url_parts[1] if len(url_parts) > 1 else ''
-
-        Debug("Query String: " + query_string)
 
         # parse query string into a dictionary
-        query_parameters = urllib.parse.parse_qs(query_string)
+        query_parameters = request["queries"] if "queries" in request else {}
         Debug("Query Parameters: " + str(query_parameters))
 
         # TODO Refactor serving stuff
@@ -111,12 +108,6 @@ class Router:
                 Request.params = Router.variables
                 Request.request = request  # Add the request object
                 Request.headers = headers  # Add the headers
-
-                # convert the query parameters to a dictionary
-                for key, value in query_parameters.items():
-                    if isinstance(value, list) and len(value) == 1:
-                        query_parameters[key] = value[0]
-
                 Request.queries = query_parameters
                 Request.body = request["body"] if "body" in request else None
 
