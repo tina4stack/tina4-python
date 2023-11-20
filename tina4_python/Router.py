@@ -82,6 +82,17 @@ class Router:
                 if mime_type and mime_type.startswith('image'):
                     return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
+        # Serve images for other stuff eg; tina4_python/public/images/404.png
+        if url.startswith("/images"):
+            image_file = tina4_python.root_path + os.sep + "tina4_python" + os.sep + "public" + url.replace("/",
+                                                                                                             os.sep)
+            Debug("Attempting to serve image file: " + image_file)
+            if os.path.isfile(image_file):
+                mime_type = mimetypes.guess_type(url)[0]
+                with open(image_file, 'rb') as file:
+                    if mime_type and mime_type.startswith('image'):
+                        return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
+
         # Serve twigs
         twig = Router.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
         if url == "/":
@@ -94,6 +105,7 @@ class Router:
                 return {"content": template.render(), "http_code": Constant.HTTP_OK, "content_type": Constant.TEXT_HTML}
         except TemplateNotFound:
             Debug("Could not render " + twig_file)
+            # Continue to the next section to serve 404 if no route is found
 
         # Serve routes
         result = response('', Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
@@ -101,7 +113,7 @@ class Router:
         for route in tina4_python.tina4_routes:
             if route["method"] != method:
                 continue
-            Debug("Matching route " + route['route'] + " to " + url)
+            print("Matching route " + route['route'] + " to " + url)
             if Router.match(url, route['route']):
                 router_response = route["callback"]
 
@@ -113,6 +125,14 @@ class Router:
 
                 result = await router_response(Request)
                 break
+
+        # If no route is matched, serve 404
+        if result.http_code == Constant.HTTP_NOT_FOUND:
+            print("Not found")
+            NOTFOUND = tina4_python.root_path + os.sep + "tina4_python" + os.sep + "public" + os.sep + "errors" + os.sep + "404.html"
+
+            return {"content": open(NOTFOUND, 'rb').read(), "http_code": Constant.HTTP_NOT_FOUND,
+                    "content_type": Constant.TEXT_HTML}
 
         return {"content": result.content, "http_code": result.http_code, "content_type": result.content_type}
 
