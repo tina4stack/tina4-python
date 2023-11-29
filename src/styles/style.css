@@ -17,4 +17,6 @@ img {
     max-width: 40%;
     max-height: 40%;
     height: auto;
+    border-radius: 10px;
+
 }

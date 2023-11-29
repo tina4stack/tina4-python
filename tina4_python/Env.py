@@ -5,7 +5,7 @@
 #
 import os
 
-
+# check .env for information
 def load_env(path: str = '.env'):
     env_vars = []
     if not os.path.isfile(path):
@@ -20,3 +20,5 @@ def load_env(path: str = '.env'):
                 env_vars = dict([key_value])
     if len(env_vars) > 0:
         os.environ.update(env_vars)
+        print("Loaded environment variables from .env file")
+        print(env_vars)
