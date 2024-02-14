@@ -11,6 +11,11 @@ pip install Babel
 ```
 
 ### 2. Extract Messages
+First cd into the tina4_python directory
+    
+    ```bash
+    cd tina4_python
+    ```
 
 Use the following command to extract messages from your Python files and generate a POT file:
 
@@ -18,7 +23,7 @@ Use the following command to extract messages from your Python files and generat
 pybabel extract -o messages.pot .
 ```
 
-This will create a `messages.pot` file in the project directory.
+This will create a `messages.pot` file in the tina4_python directory.
 
 ### 3. Initialize Translations
 
@@ -53,7 +58,7 @@ pybabel update -i messages.pot -d translations
 
 ### 7. Run the Application in a Different Language
 
-Run your Tina4 Python application with the desired language. For example, to run it in French:
+Run your Tina4_Python application with the desired language. For example, to run it in French:
 
 ```bash
 poetry run main.py fr

@@ -8,8 +8,19 @@ from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
 from tina4_python.Localization import localize
 import tina4_python.Messages
+from dotenv import load_dotenv, find_dotenv
 
-load_env()
+_ = gettext.gettext
+
+# Server startup messages
+MSG_ASSUMING_ROOT_PATH = _('Assuming root path: {root_path}, library path: {library_path}')
+MSG_LOAD_ALL_THINGS = _('Load all things')
+MSG_SERVER_STARTED = _('Server started http://{host_name}:{port}')
+MSG_SERVER_STOPPED = _('Server stopped.')
+MSG_STARTING_WEBSERVER = _('Starting webserver on {port}')
+MSG_ENTRY_POINT_NAME = _('Entry point name ... {name}')
+
+load_dotenv()
 localize()
 
 if importlib.util.find_spec("jurigged"):
