@@ -40,27 +40,23 @@ class Webserver:
         headers = []
         if method == "OPTIONS":
             self.send_header("Access-Control-Allow-Origin", "*", headers)
-            self.send_header("Access-Control-Allow-Headers",
-                             "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
+            self.send_header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
             self.send_header("Access-Control-Allow-Credentials", "True", headers)
 
             headers = await self.get_headers(headers, self.response_protocol, HTTP_OK)
             return headers
 
-        # parse query string into dictionary
-        # for example: /api?name=John&surname=Doe
-        queries = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
+        params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
 
         content_length = await self.get_content_length()
         body = await self.get_content_body(content_length)
+        request = {"params": params, "body": body, "raw": self.request}
 
-        request = {"queries": queries, "body": body, "raw": self.request}
 
         response = await self.router_handler.resolve(method, self.path, request, self.headers)
 
         self.send_header("Access-Control-Allow-Origin", "*", headers)
-        self.send_header("Access-Control-Allow-Headers",
-                         "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
+        self.send_header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
         self.send_header("Access-Control-Allow-Credentials", "True", headers)
         self.send_header("Content-Type", response["content_type"], headers)
         self.send_header("Content-Length", str(len(response["content"])), headers)
@@ -120,14 +116,13 @@ class Webserver:
                 if not i == -1:
                     header_offset = i
 
-            if not found_length and (data.find('GET') != -1 or data.find('OPTIONS') != -1) and len(
-                    data) < header_offset:
+            if not found_length and (data.find('GET') != -1 or data.find('OPTIONS') != -1) and len(data) < header_offset:
                 content_length = len("".join(chunks))
 
-            if len("".join(chunks)) >= content_length + header_offset or len("".join(chunks)) == header_offset or len(
-                    "".join(chunks)) == 0:
+            if len("".join(chunks)) >= content_length+header_offset or len("".join(chunks)) == header_offset or len("".join(chunks)) == 0:
                 break
         return "".join(chunks)
+
 
     async def handle_client(self, reader, writer):
         loop = asyncio.get_event_loop()
