@@ -6,7 +6,7 @@
 #
 from tina4_python import *
 from tina4_python.Debug import Debug
-from tina4_python.Router import response, get
+from tina4_python.Router import Response, get
 import os
 
 
@@ -17,4 +17,4 @@ async def env(request):
     Debug("Api GET")
     env_variables = str(os.environ)
     Debug(str(os.environ))
-    return response(env_variables)
+    return Response(env_variables)

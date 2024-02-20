@@ -60,6 +60,7 @@ if not os.path.exists(root_path + os.sep + "src"):
 def initialize():
     print(Messages.MSG_LOAD_ALL_THINGS)
 
+
 def webserver(host_name, port):
     web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
     web_server.router_handler = Router()
@@ -73,10 +74,12 @@ def webserver(host_name, port):
     web_server.server_close()
     print(Messages.MSG_SERVER_STOPPED)
 
+
 def main(in_hostname="localhost", in_port=7145):
     print(Messages.MSG_STARTING_WEBSERVER.format(port=in_port))
     initialize()
     webserver(in_hostname, in_port)
+
 
 if importlib.util.find_spec("jurigged"):
     jurigged.watch("./src")
@@ -96,3 +99,4 @@ if __name__ == '__main__' or __name__ == 'tina4_python':
                 PORT = SERVER_CONFIG[1]
 
     main(HOSTNAME, PORT)
+

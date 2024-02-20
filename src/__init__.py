@@ -6,7 +6,7 @@
 from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
-from tina4_python.Router import response
+from tina4_python.Router import Response
 
 
 # This is a simple example of a GET request
@@ -16,7 +16,7 @@ from tina4_python.Router import response
 async def example(request):
     # Add your code here
     message = "This is an example of a GET request"
-    return response(message)
+    return Response(message)
 
 
 # This is an example of parameterized routing
@@ -34,7 +34,7 @@ async def example(request):
         id = "No id provided"
 
     message = f"Hello {name} {surname} with id {id}"
-    return response(f"{message}")
+    return Response(f"{message}")
 
 
 # This is an example of a POST request
@@ -48,4 +48,4 @@ async def post_me(request):
         req = str(request.body)
 
     Debug(f"POST: {req}")
-    return response(f"Api POST: {req}")
+    return Response(f"Api POST: {req}")

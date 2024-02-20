@@ -100,31 +100,31 @@ The routing in Tina4Python can be defined in the `__init__.py` file or any file 
     ```python
 
    from tina4_python.Router import get
-   from tina4_python.Router import response
+   from tina4_python.Router import Response
 
 
     @get("/hello")
     async def hello():
-        return response("Hello, World!")
+        return Response("Hello, World!")
     ```
 
     This code creates a route for a GET request to `/hello`, responding with "Hello, World!".
 
 
 
-2. **Route Parameters**: You can define route parameters by enclosing variables with curly braces {   }. The parameters are passed to the function as arguments.
+2. **Route Parameters**: You can define route parameters by enclosing variables with curly braces { }. The parameters are passed to the function as arguments.
 
     Example:
     ```python
     from tina4_python.Router import get
-    from tina4_python.Router import response
+    from tina4_python.Router import Response
 
     @get("/hello/{name}")
     async def greet(**params):
    
         name = params['name']
    
-        return response(f"Hello, {name}!")
+        return Response(f"Hello, {name}!")
     ```
 
     This code creates a route for a GET request to `/hello/{name}`, where `name` is a parameter in the URL. The function `greet` accepts this parameter and responds with a personalized greeting.
