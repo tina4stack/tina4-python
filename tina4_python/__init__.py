@@ -8,8 +8,19 @@ from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
 from tina4_python.Localization import localize
 import tina4_python.Messages
+from dotenv import load_dotenv, find_dotenv
 
-load_env()
+_ = gettext.gettext
+
+# Server startup messages
+MSG_ASSUMING_ROOT_PATH = _('Assuming root path: {root_path}, library path: {library_path}')
+MSG_LOAD_ALL_THINGS = _('Load all things')
+MSG_SERVER_STARTED = _('Server started http://{host_name}:{port}')
+MSG_SERVER_STOPPED = _('Server stopped.')
+MSG_STARTING_WEBSERVER = _('Starting webserver on {port}')
+MSG_ENTRY_POINT_NAME = _('Entry point name ... {name}')
+
+load_dotenv()
 localize()
 
 if importlib.util.find_spec("jurigged"):
@@ -49,6 +60,7 @@ if not os.path.exists(root_path + os.sep + "src"):
 def initialize():
     print(Messages.MSG_LOAD_ALL_THINGS)
 
+
 def webserver(host_name, port):
     web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
     web_server.router_handler = Router()
@@ -62,10 +74,12 @@ def webserver(host_name, port):
     web_server.server_close()
     print(Messages.MSG_SERVER_STOPPED)
 
+
 def main(in_hostname="localhost", in_port=7145):
     print(Messages.MSG_STARTING_WEBSERVER.format(port=in_port))
     initialize()
     webserver(in_hostname, in_port)
+
 
 if importlib.util.find_spec("jurigged"):
     jurigged.watch("./src")
@@ -85,3 +99,4 @@ if __name__ == '__main__' or __name__ == 'tina4_python':
                 PORT = SERVER_CONFIG[1]
 
     main(HOSTNAME, PORT)
+

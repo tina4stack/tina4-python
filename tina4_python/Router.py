@@ -129,9 +129,9 @@ class Router:
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
             print("Not found")
-            NOTFOUND = tina4_python.root_path + os.sep + "tina4_python" + os.sep + "public" + os.sep + "errors" + os.sep + "404.html"
+            notfound = tina4_python.root_path + os.sep + "tina4_python" + os.sep + "public" + os.sep + "errors" + os.sep + "404.html"
 
-            return {"content": open(NOTFOUND, 'rb').read(), "http_code": Constant.HTTP_NOT_FOUND,
+            return {"content": open(notfound, 'rb').read(), "http_code": Constant.HTTP_NOT_FOUND,
                     "content_type": Constant.TEXT_HTML}
 
         return {"content": result.content, "http_code": result.http_code, "content_type": result.content_type}

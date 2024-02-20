@@ -8,7 +8,7 @@ import sys
 # check .env for information
 
 def localize():
-    translation_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'translations')
+    translation_path = os.path.join(os.path.dirname(__file__), 'translations')
 
     available_languages = ['en', 'fr', 'af']
 
@@ -26,8 +26,7 @@ def localize():
 
     if len(sys.argv) > 2 and sys.argv[2] in available_languages:
         user_language = sys.argv[2]
-
+    print("Language: " + user_language)
     # Initialize the translation system
     translation = gettext.translation('messages', translation_path, languages=[user_language])
     translation.install()
-    print(os.environ)

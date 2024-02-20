@@ -12,5 +12,5 @@ class Debug:
     def __init__(self, message, debug_level=Constant.DEBUG_INFO):
 
         now = datetime.now()
-        # print(now.strftime("%Y-%m-%d %H:%M:%S"), ":", message)
+        print(now.strftime("%Y-%m-%d %H:%M:%S"), ":", message)
         pass
