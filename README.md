@@ -5,19 +5,31 @@ Tina4Python is a light-weight routing and twig based templating system based on 
 ### System Requirements
 
 - Install Poetry:
-  ```bash
-  pip install poetry
-  ```
+```bash
+curl -sSL https://install.python-poetry.org | python3 - 
+```
 
 - Install Jurigged (Enables Hot Reloading):
-  ```bash
-  pip install jurigged
-  ```
-  
-### Overview
+```bash
+pip install jurigged
+```
 
+### Quick Start
+
+After installing poetry you can do the following:
+```bash
+poetry new project-name
+cd project-name
+poetry add tina4_python
+```
+Create an entry point for Tina4 called ```app.py``` and add the following to the file
+```python
+from tina4_python import *
+```
+
+### Overview
 The basic tina4 project uses an autoloader methodology from the src folder
-All the source folders you should need are created there
+All the source folders you should need are created there and they are run from __init__.py
 
 If you are developing on Tina4, make sure you copy the public folder from tina4_python into src
 
@@ -64,7 +76,7 @@ After defining templates and routes, run the Tina4Python server:
 
 - **Server on a Specific Port**:
   ```bash
-  poetry run main.py 7777
+  poetry run app.py 7777
   ```
   
 - **Server with alternate language** (for example fr = French):
