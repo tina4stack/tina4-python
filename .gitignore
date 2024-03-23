@@ -3,3 +3,4 @@
 /dist/
 /src/public/
 /.pypirc
+/src/templates/index.twig

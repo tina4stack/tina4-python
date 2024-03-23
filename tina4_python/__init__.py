@@ -8,7 +8,7 @@ from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
 from tina4_python.Localization import localize
 import tina4_python.Messages
-from dotenv import load_dotenv, find_dotenv
+
 
 _ = gettext.gettext
 
@@ -20,7 +20,12 @@ MSG_SERVER_STOPPED = _('Server stopped.')
 MSG_STARTING_WEBSERVER = _('Starting webserver on {port}')
 MSG_ENTRY_POINT_NAME = _('Entry point name ... {name}')
 
-load_dotenv()
+if os.getenv('environment') is not None:
+    environment = ".env."+os.getenv('environment')
+else:
+    environment = ".env"
+
+Env.load_env(environment)
 localize()
 
 if importlib.util.find_spec("jurigged"):
@@ -29,6 +34,7 @@ if importlib.util.find_spec("jurigged"):
 # Define the variable to be used for global routes
 
 tina4_routes = []
+tina4_current_request = {}
 
 library_path = os.path.dirname(os.path.realpath(__file__))
 root_path = os.path.realpath(os.getcwd())

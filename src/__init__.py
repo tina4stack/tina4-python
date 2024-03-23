@@ -7,37 +7,35 @@ import os
 from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
-from tina4_python.Router import response
-
-
 
 @get("/env")
-async def env(request):
+async def env(request, response):
     Debug("Api GET")
-    env_variables = str(os.environ)
-    Debug(str(os.environ))
+    env_variables = os.environ
+
     return response(env_variables)
+
 # This is a simple example of a GET request
 # This will be available at http://localhost:port/example
 
 @get("/example")
-async def example(request):
+async def example(request, response):
     # Add your code here
     message = "This is an example of a GET request"
     return response(message)
 
-
 # This is an example of parameterized routing
 # This will be available at http://localhost:port/YOURNAME/YOURSURNAME?id=YOURID
 @get("/names/{name}/{surname}")
-async def example(request):
+async def example(request, response):
     Debug("Api GET")
+    print ('Params', request.params)
     name = request.params['name']
     surname = request.params['surname']
 
     # check if id is present
-    if "id" in request.queries:
-        id = request.queries['id']
+    if "id" in request.params:
+        id = request.params['id']
     else:
         id = "No id provided"
 
@@ -49,9 +47,8 @@ async def example(request):
 # This will be available at http://localhost:port/api/generate
 # You can test this using Postman
 @post("/api/generate")
-async def post_me(request):
+async def post_me(request, response):
     req = "NA"
-
     if request.body is not None:
         req = str(request.body)
 

@@ -28,12 +28,13 @@ class Template:
         twig_path = Path(path)
         Template.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
         Template.twig.add_extension('jinja2.ext.debug')
+        Template.twig.add_extension('jinja2.ext.do')
         return Template.twig
 
     @staticmethod
-    def render_twig_template(template_or_file_name, data):
+    def render_twig_template(template_or_file_name, data=None):
         if data is None:
-            data = []
+            data = {"request": tina4_python.tina4_current_request}
         twig = Template.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
         try:
             if twig.get_template(template_or_file_name):

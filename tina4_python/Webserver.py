@@ -3,6 +3,7 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+import tina4_python
 from tina4_python.Constant import LOOKUP_HTTP_CODE
 from tina4_python.Debug import Debug
 from http.server import BaseHTTPRequestHandler
@@ -52,23 +53,24 @@ class Webserver:
         body = await self.get_content_body(content_length)
         request = {"params": params, "body": body, "raw": self.request}
 
+        tina4_python.tina4_current_request = request
 
         response = await self.router_handler.resolve(method, self.path, request, self.headers)
 
         self.send_header("Access-Control-Allow-Origin", "*", headers)
         self.send_header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
         self.send_header("Access-Control-Allow-Credentials", "True", headers)
-        self.send_header("Content-Type", response["content_type"], headers)
-        self.send_header("Content-Length", str(len(response["content"])), headers)
+        self.send_header("Content-Type", response.content_type, headers)
+        self.send_header("Content-Length", str(len(response.content)), headers)
         self.send_header("Connection", "Keep-Alive", headers)
         self.send_header("Keep-Alive", "timeout=5, max=30", headers)
 
-        headers = await self.get_headers(headers, self.response_protocol, response["http_code"])
+        headers = await self.get_headers(headers, self.response_protocol, response.http_code)
 
-        if type(response["content"]) == str:
-            return headers + response["content"].encode()
+        if type(response.content) == str:
+            return headers + response.content.encode()
         else:
-            return headers + response["content"]
+            return headers + response.content
 
     @staticmethod
     def send_header(header, value, headers):
@@ -150,8 +152,8 @@ class Webserver:
         contains_method = [ele for ele in method_list if (ele in self.method)]
 
         if self.method != "" and contains_method:
-            response = await (self.get_response(self.method))
-            writer.write(response)
+            content = await (self.get_response(self.method))
+            writer.write(content)
             await writer.drain()
 
         writer.close()

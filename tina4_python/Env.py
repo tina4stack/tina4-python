@@ -5,21 +5,13 @@
 #
 import os
 
+from dotenv import load_dotenv
+
 
 # check .env for information
 def load_env(path: str = '.env'):
-    env_vars = []
     if not os.path.isfile(path):
         with open(path, 'w') as f:
             f.write("[Project]")
             f.write("\n")
-
-    with open(path, 'r') as f:
-        for line in f.readlines():
-            if not line.startswith('#') and not line.startswith("["):
-                key_value = line.replace('\n', '').split('=')
-                env_vars = dict([key_value])
-    if len(env_vars) > 0:
-        os.environ.update(env_vars)
-        print("Loaded environment variables from .env file")
-        print(env_vars)
+    load_dotenv(path)
