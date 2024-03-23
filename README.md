@@ -13,6 +13,13 @@ Tina4Python is a light-weight routing and twig based templating system based on 
   ```bash
   pip install jurigged
   ```
+  
+### Overview
+
+The basic tina4 project uses an autoloader methodology from the src folder
+All the source folders you should need are created there
+
+If you are developing on Tina4, make sure you copy the public folder from tina4_python into src
 
 ### Installation
 
@@ -100,7 +107,7 @@ The routing in Tina4Python can be defined in the `__init__.py` file or any file 
     ```python
 
    from tina4_python.Router import get
-   from tina4_python.Router import Response
+   from tina4_python.Router import response
 
 
     @get("/hello")

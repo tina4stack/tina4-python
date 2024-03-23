@@ -43,10 +43,6 @@ if root_path.count("tina4_python") > 0:
 
 # Make the beginning files for the tina4stack
 if not os.path.exists(root_path + os.sep + "src"):
-    source_dir = library_path + os.sep + "public"
-    destination_dir = root_path + os.sep + "src" + os.sep + "public"
-    shutil.copytree(source_dir, destination_dir)
-    os.makedirs(root_path + os.sep + "src" + os.sep + "templates")
     os.makedirs(root_path + os.sep + "src" + os.sep + "routes")
     os.makedirs(root_path + os.sep + "src" + os.sep + "scss")
     os.makedirs(root_path + os.sep + "src" + os.sep + "orm")
@@ -61,6 +57,17 @@ if not os.path.exists(root_path + os.sep + "src"):
             app_file.write('from tina4_python import *')
             app_file.write('\n')
 
+# copy over templates if needed - required for errors
+if not os.path.exists(root_path + os.sep + "src" + os.sep + "templates"):
+    source_dir = library_path + os.sep + "templates"
+    destination_dir = root_path + os.sep + "src" + os.sep + "templates"
+    shutil.copytree(source_dir, destination_dir)
+
+# copy over public if needed - required for static files like images and logos
+if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
+    source_dir = library_path + os.sep + "public"
+    destination_dir = root_path + os.sep + "src" + os.sep + "public"
+    shutil.copytree(source_dir, destination_dir)
 
 def initialize():
     print(Messages.MSG_LOAD_ALL_THINGS)
