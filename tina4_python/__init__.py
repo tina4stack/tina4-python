@@ -34,9 +34,6 @@ library_path = os.path.dirname(os.path.realpath(__file__))
 root_path = os.path.realpath(os.getcwd())
 print(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path))
 
-# please keep in place otherwise auto loading files does not work nicely
-from src import *
-
 # Hack for local development
 if root_path.count("tina4_python") > 0:
     root_path = root_path.split("tina4_python")[0][:-1]
@@ -68,6 +65,9 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
     source_dir = library_path + os.sep + "public"
     destination_dir = root_path + os.sep + "src" + os.sep + "public"
     shutil.copytree(source_dir, destination_dir)
+
+# please keep in place otherwise auto loading files does not work nicely
+from src import *
 
 def initialize():
     print(Messages.MSG_LOAD_ALL_THINGS)
