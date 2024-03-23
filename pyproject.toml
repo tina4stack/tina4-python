@@ -1,8 +1,9 @@
 [tool.poetry]
 name = "tina4-python"
-version = "0.1.32"
+version = "0.1.33"
 description = "Tina4Python - This is not another framework for Python"
 authors = ["Andre van Zuydam <andrevanzuydam@gmail.com>"]
+readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.9"
