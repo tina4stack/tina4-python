@@ -31,10 +31,11 @@ if importlib.util.find_spec("jurigged"):
 tina4_routes = []
 
 library_path = os.path.dirname(os.path.realpath(__file__))
-
 root_path = os.path.realpath(os.getcwd())
-
 print(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path))
+
+# please keep in place otherwise auto loading files does not work nicely
+from src import *
 
 # Hack for local development
 if root_path.count("tina4_python") > 0:
@@ -46,6 +47,10 @@ if not os.path.exists(root_path + os.sep + "src"):
     destination_dir = root_path + os.sep + "src" + os.sep + "public"
     shutil.copytree(source_dir, destination_dir)
     os.makedirs(root_path + os.sep + "src" + os.sep + "templates")
+    os.makedirs(root_path + os.sep + "src" + os.sep + "routes")
+    os.makedirs(root_path + os.sep + "src" + os.sep + "scss")
+    os.makedirs(root_path + os.sep + "src" + os.sep + "orm")
+    os.makedirs(root_path + os.sep + "src" + os.sep + "app")
     with open(root_path + os.sep + "src" + os.sep + "__init__.py", 'w') as init_file:
         init_file.write('# Start your project here')
         init_file.write('\n')
@@ -82,7 +87,8 @@ def main(in_hostname="localhost", in_port=7145):
 
 
 if importlib.util.find_spec("jurigged"):
-    jurigged.watch("./src")
+    print("Jurigged enabled")
+    jurigged.watch("./")
 
 print(Messages.MSG_ENTRY_POINT_NAME.format(name=__name__))
 if __name__ == '__main__' or __name__ == 'tina4_python':
@@ -99,4 +105,3 @@ if __name__ == '__main__' or __name__ == 'tina4_python':
                 PORT = SERVER_CONFIG[1]
 
     main(HOSTNAME, PORT)
-

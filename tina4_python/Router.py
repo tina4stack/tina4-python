@@ -2,13 +2,11 @@ import mimetypes
 import re
 import os
 import json
-import urllib.parse
 import tina4_python
-from pathlib import Path
-from jinja2 import Environment, select_autoescape, FileSystemLoader, TemplateNotFound
 from tina4_python import Constant
 from tina4_python.Debug import Debug
 from tina4_python import Request
+from tina4_python.Template import Template
 
 
 class Router:
@@ -42,8 +40,10 @@ class Router:
 
     # Renders the URL and returns the content
     @staticmethod
-    async def render(url, method, request, headers):
+    async def get_result(url, method, request, headers):
         Debug("Root Path " + tina4_python.root_path + " " + url)
+        # default response
+        result = response("", Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
 
         # split URL and extract query string
         url_parts = url.split('?')
@@ -53,62 +53,22 @@ class Router:
         query_parameters = request["queries"] if "queries" in request else {}
         Debug("Query Parameters: " + str(query_parameters))
 
-        # TODO Refactor serving stuff
         # Serve statics
         static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
         Debug("Attempting to serve static file: " + static_file)
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
             with open(static_file, 'rb') as file:
-                if mime_type == 'text/css':
-                    return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
-                else:
-                    return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
-
-        # Serve CSS from the src
-        css_file = tina4_python.root_path + os.sep + "src" + os.sep + url.replace("/", os.sep)
-        Debug("Attempting to serve CSS file: " + css_file)
-        if os.path.isfile(css_file):
-            mime_type = 'text/css'
-            with open(css_file, 'rb') as file:
                 return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
 
-        # Serve images from src
-        image_file = tina4_python.root_path + os.sep + "src" + os.sep + url.replace("/", os.sep)
-        Debug("Attempting to serve image file: " + image_file)
-        if os.path.isfile(image_file):
-            mime_type = mimetypes.guess_type(url)[0]
-            with open(image_file, 'rb') as file:
-                if mime_type and mime_type.startswith('image'):
-                    return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
-
-        # Serve images for other stuff eg; tina4_python/public/images/404.png
-        if url.startswith("/images"):
-            image_file = tina4_python.root_path + os.sep + "tina4_python" + os.sep + "public" + url.replace("/",
-                                                                                                             os.sep)
-            Debug("Attempting to serve image file: " + image_file)
-            if os.path.isfile(image_file):
-                mime_type = mimetypes.guess_type(url)[0]
-                with open(image_file, 'rb') as file:
-                    if mime_type and mime_type.startswith('image'):
-                        return {"content": file.read(), "http_code": Constant.HTTP_OK, "content_type": mime_type}
-
-        # Serve twigs
-        twig = Router.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
+        # Serve twigs if the files exist
         if url == "/":
-            twig_file = "index"
+            twig_file = "index.twig"
         else:
-            twig_file = url
-        try:
-            if twig.get_template(twig_file + ".twig"):
-                template = twig.get_template(twig_file + ".twig")
-                return {"content": template.render(), "http_code": Constant.HTTP_OK, "content_type": Constant.TEXT_HTML}
-        except TemplateNotFound:
-            Debug("Could not render " + twig_file)
-            # Continue to the next section to serve 404 if no route is found
-
-        # Serve routes
-        result = response('', Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
+            twig_file = url + ".twig"
+        content = Template.render_twig_template(twig_file, data=None)
+        if content != "":
+            return {"content": content, "http_code": Constant.HTTP_OK, "content_type": Constant.TEXT_HTML}
 
         for route in tina4_python.tina4_routes:
             if route["method"] != method:
@@ -128,11 +88,11 @@ class Router:
 
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
-            print("Not found")
-            notfound = tina4_python.root_path + os.sep + "tina4_python" + os.sep + "public" + os.sep + "errors" + os.sep + "404.html"
+            print(url, "Not found", request)
+            content = Template.render_twig_template(
+                "errors/404.twig", {"server": {"url": url}})
 
-            return {"content": open(notfound, 'rb').read(), "http_code": Constant.HTTP_NOT_FOUND,
-                    "content_type": Constant.TEXT_HTML}
+            return {"content": content, "http_code": Constant.HTTP_NOT_FOUND, "content_type": Constant.TEXT_HTML}
 
         return {"content": result.content, "http_code": result.http_code, "content_type": result.content_type}
 
@@ -141,7 +101,7 @@ class Router:
         url = Router.clean_url(url)
 
         Debug("Rendering URL: " + url)
-        html_response = await Router.render(url, method, request, headers)
+        html_response = await Router.get_result(url, method, request, headers)
         return dict(http_code=html_response["http_code"], content_type=html_response["content_type"],
                     content=html_response["content"])
 
@@ -159,21 +119,10 @@ class Router:
             route_variables = re.findall(r'{(.*?)}', route)
             tina4_python.tina4_routes[-1]["params"] = route_variables
 
-    # initializes the twig template engine
-    @staticmethod
-    def init_twig(path):
-        if hasattr(Router, "twig"):
-            Debug("Twig found on " + path)
-            return Router.twig
-        Debug("Initializing Twig on " + path)
-        twig_path = Path(path)
-        Router.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
-        return Router.twig
-
 
 class response:
     """
-    Response object for router
+    response object for router
     :param content
     :param http_code
     :param content_type

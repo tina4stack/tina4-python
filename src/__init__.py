@@ -3,12 +3,20 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+import os
 from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
-from tina4_python.Router import Response
+from tina4_python.Router import response
 
 
+
+@get("/env")
+async def env(request):
+    Debug("Api GET")
+    env_variables = str(os.environ)
+    Debug(str(os.environ))
+    return response(env_variables)
 # This is a simple example of a GET request
 # This will be available at http://localhost:port/example
 
@@ -16,7 +24,7 @@ from tina4_python.Router import Response
 async def example(request):
     # Add your code here
     message = "This is an example of a GET request"
-    return Response(message)
+    return response(message)
 
 
 # This is an example of parameterized routing
@@ -34,7 +42,7 @@ async def example(request):
         id = "No id provided"
 
     message = f"Hello {name} {surname} with id {id}"
-    return Response(f"{message}")
+    return response(f"{message}")
 
 
 # This is an example of a POST request
@@ -48,4 +56,4 @@ async def post_me(request):
         req = str(request.body)
 
     Debug(f"POST: {req}")
-    return Response(f"Api POST: {req}")
+    return response(f"Api POST: {req}")
