@@ -157,6 +157,14 @@ import tina4_python
 tina4_python.tina4_auth.get_token({"data": {"something":"more"}})
 ```
 
+OR 
+
+For ease of use you can supply an `API_KEY` param to your .env with a secret of your choice to use:
+
+```dotenv
+API_KEY=somehash
+```
+
 ### Features
 | Completed                  | To Do                            |
 |----------------------------|----------------------------------|
