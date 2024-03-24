@@ -5,3 +5,4 @@
 /.pypirc
 /src/templates/index.twig
 /secrets/
+/.env
