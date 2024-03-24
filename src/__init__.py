@@ -50,7 +50,7 @@ async def example(request, response):
 async def post_me(request, response):
     req = "NA"
     if request.body is not None:
-        req = str(request.body)
+        req = request.body
 
     Debug(f"POST: {req}")
-    return response(f"Api POST: {req}")
+    return response(req)

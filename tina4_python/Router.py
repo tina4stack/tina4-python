@@ -1,3 +1,8 @@
+#
+# Tina4 - This is not a 4ramework.
+# Copy-right 2007 - current Tina4
+# License: MIT https://opensource.org/licenses/MIT
+#
 import mimetypes
 import re
 import os
@@ -23,7 +28,6 @@ class Router:
                 param_name = re.search(r'{(.*?)}', segment).group(1)
                 variables[param_name] = url_segments[i]
         return variables
-
 
     # Matches the URL to the route and extracts the parameters
     @staticmethod
@@ -53,6 +57,21 @@ class Router:
     @staticmethod
     async def get_result(url, method, request, headers):
         Debug("Root Path " + tina4_python.root_path + " " + url)
+
+        # we can add other methods later but right now we validate posts
+        if method in [Constant.TINA4_POST]:
+            content = Template.render_twig_template(
+                "errors/403.twig", {"server": {"url": url}})
+            # check for token in the headers
+            if "Authorization" not in headers:
+                return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+
+            token = headers["Authorization"].replace("Bearer", "").strip()
+            if not (tina4_python.tina4_auth.valid(token)):
+                return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+
+            # @todo add other validations here for future security
+
         # default response
         result = Response("", Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
 
@@ -66,7 +85,7 @@ class Router:
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
             with open(static_file, 'rb') as file:
-                return Response(file.read(), Constant.HTTP_OK,  mime_type)
+                return Response(file.read(), Constant.HTTP_OK, mime_type)
 
         # Serve twigs if the files exist
         if url == "/":
@@ -75,7 +94,7 @@ class Router:
             twig_file = url + ".twig"
 
         # see if we can find the twig file
-        if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep +twig_file):
+        if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
             tina4_python.tina4_current_request["params"].update(Router.get_variables(url, url))
             content = Template.render_twig_template(twig_file)
             if content != "":
@@ -103,7 +122,6 @@ class Router:
 
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
-            Debug(url+ "Not found" )
             content = Template.render_twig_template(
                 "errors/404.twig", {"server": {"url": url}})
             return Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)

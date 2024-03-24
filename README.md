@@ -145,6 +145,17 @@ Example:
 - Visiting `/hello/John` will respond with "Hello, John!"
 - Visiting `/hello/Alice` will respond with "Hello, Alice!"
 
+3.) POST routes now require jwt token or API key to validate requests with an Authorization header
+```
+Authorization: Bearer <token>
+```
+You can generate tokens using tina4_python.tina4_auth which takes in a payload parameter which is a dictionary:
+
+```python
+import tina4_python
+
+tina4_python.tina4_auth.get_token({"data": {"something":"more"}})
+```
 
 ### Features
 | Completed                  | To Do                            |

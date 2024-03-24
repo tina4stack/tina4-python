@@ -1,3 +1,8 @@
+#
+# Tina4 - This is not a 4ramework.
+# Copy-right 2007 - current Tina4
+# License: MIT https://opensource.org/licenses/MIT
+#
 import json
 import inspect
 from tina4_python import Constant
@@ -11,7 +16,7 @@ class Response:
     :param content_type
     """
 
-    def __init__(self, content='', http_code=Constant.HTTP_OK, content_type=Constant.TEXT_HTML):
+    def __init__(self, content, http_code=Constant.HTTP_OK, content_type=Constant.TEXT_HTML):
         # convert a class into a dictionary
         if not isinstance(content, bytes) and not isinstance(content, str) and inspect.isclass(type(content)):
             content = dict(content)

@@ -15,7 +15,7 @@ setup(
         "Bug Reports": "https://github.com/tina4stack/tina4-python/issues",
         "Source": "https://github.com/tina4stack/tina4-python",
     },
-    license="GNU",
+    license="MIT",
     packages=find_packages(),
     install_requires=[
         "tina4_python>0.1.31",

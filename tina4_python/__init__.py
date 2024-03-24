@@ -1,3 +1,8 @@
+#
+# Tina4 - This is not a 4ramework.
+# Copy-right 2007 - current Tina4
+# License: MIT https://opensource.org/licenses/MIT
+#
 import gettext
 import os
 import shutil
@@ -7,8 +12,8 @@ from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
 from tina4_python.Localization import localize
+from tina4_python.Auth import Auth
 import tina4_python.Messages
-
 
 _ = gettext.gettext
 
@@ -32,13 +37,23 @@ if importlib.util.find_spec("jurigged"):
     import jurigged
 
 # Define the variable to be used for global routes
-
-tina4_routes = []
-tina4_current_request = {}
-
 library_path = os.path.dirname(os.path.realpath(__file__))
 root_path = os.path.realpath(os.getcwd())
 print(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path))
+
+tina4_routes = []
+tina4_current_request = {}
+tina4_secret = None
+tina4_auth = Auth(root_path)
+
+token = tina4_auth.get_token({"name": "Tina4"})
+print("TEST TOKEN", token)
+print("VALID TOKEN", tina4_auth.valid(token+"a"))
+print("VALID TOKEN", tina4_auth.valid(token))
+print("PAYLOAD", tina4_auth.get_payload(token))
+
+if "TINA4_SECRET" in os.environ:
+    tina4_secret = os.environ["TINA4_SECRET"]
 
 # Hack for local development
 if root_path.count("tina4_python") > 0:

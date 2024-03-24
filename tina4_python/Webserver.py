@@ -3,28 +3,25 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
-import tina4_python
-from tina4_python.Constant import LOOKUP_HTTP_CODE
-from tina4_python.Debug import Debug
-from http.server import BaseHTTPRequestHandler
-from tina4_python.Constant import *
-from urllib.parse import urlparse, parse_qsl
-import socket
 import asyncio
 import json
-import time
 import random
+from urllib.parse import urlparse, parse_qsl
+
+import tina4_python
+from tina4_python.Constant import *
 
 
 class Webserver:
     async def get_content_length(self):
-        content_length = 0
         # get the content length
-        for header in self.headers:
-            if header.find("Content-Length:") != -1:
-                value = header.split(":")
-                content_length = int(value[1].strip())
-        return content_length
+        if "Content-length" in self.headers != -1:
+            return int(self.headers["Content-length"])
+
+        if "Content-Length" in self.headers != -1:
+            return int(self.headers["Content-Length"])
+
+        return 0
 
     async def get_content_body(self, content_length):
         # get lines of content where at the end of the request
@@ -41,7 +38,8 @@ class Webserver:
         headers = []
         if method == "OPTIONS":
             self.send_header("Access-Control-Allow-Origin", "*", headers)
-            self.send_header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
+            self.send_header("Access-Control-Allow-Headers",
+                             "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
             self.send_header("Access-Control-Allow-Credentials", "True", headers)
 
             headers = await self.get_headers(headers, self.response_protocol, HTTP_OK)
@@ -58,7 +56,8 @@ class Webserver:
         response = await self.router_handler.resolve(method, self.path, request, self.headers)
 
         self.send_header("Access-Control-Allow-Origin", "*", headers)
-        self.send_header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
+        self.send_header("Access-Control-Allow-Headers",
+                         "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
         self.send_header("Access-Control-Allow-Credentials", "True", headers)
         self.send_header("Content-Type", response.content_type, headers)
         self.send_header("Content-Length", str(len(response.content)), headers)
@@ -118,13 +117,14 @@ class Webserver:
                 if not i == -1:
                     header_offset = i
 
-            if not found_length and (data.find('GET') != -1 or data.find('OPTIONS') != -1) and len(data) < header_offset:
+            if not found_length and (data.find('GET') != -1 or data.find('OPTIONS') != -1) and len(
+                    data) < header_offset:
                 content_length = len("".join(chunks))
 
-            if len("".join(chunks)) >= content_length+header_offset or len("".join(chunks)) == header_offset or len("".join(chunks)) == 0:
+            if len("".join(chunks)) >= content_length + header_offset or len("".join(chunks)) == header_offset or len(
+                    "".join(chunks)) == 0:
                 break
         return "".join(chunks)
-
 
     async def handle_client(self, reader, writer):
         loop = asyncio.get_event_loop()
@@ -146,6 +146,15 @@ class Webserver:
         initial = self.request.split("\n\n")[0]
 
         self.headers = initial.split("\n")
+
+        # parse headers into a dictionary for more efficient use
+        headers_list = {}
+        for header in self.headers:
+            split = header.split(":")
+            if len(split) == 2:
+                headers_list[split[0]] = split[1].strip()
+        self.headers = headers_list
+
 
         method_list = [TINA4_GET, TINA4_ANY, TINA4_POST, TINA4_PATCH, TINA4_OPTIONS]
 

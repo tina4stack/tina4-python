@@ -11,11 +11,6 @@ from pathlib import Path
 
 from jinja2 import Environment, PackageLoader, select_autoescape, FileSystemLoader, environment
 
-env = Environment(autoescape=select_autoescape(
-    enabled_extensions=('html', 'xml', 'twig'),
-    default_for_string=True,
-))
-
 
 class Template:
     # initializes the twig template engine

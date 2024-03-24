@@ -1,4 +1,8 @@
-# Localization setup
+#
+# Tina4 - This is not a 4ramework.
+# Copy-right 2007 - current Tina4
+# License: MIT https://opensource.org/licenses/MIT
+#
 import gettext
 import os
 import sys
@@ -14,7 +18,10 @@ def localize():
 
     # get user language from environment variable
     # default to english
-    user_language = os.environ.get('TINA4_LANGUAGE', 'en')
+    if "TINA4_LANGUAGE" in os.environ:
+        user_language = os.environ.get('TINA4_LANGUAGE', 'en')
+    else:
+        user_language = "en"
 
     # check if argument is a language
     if len(sys.argv) > 1:
