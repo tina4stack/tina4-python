@@ -123,13 +123,12 @@ if __name__ == '__main__' or __name__ == 'tina4_python':
     # Start up a webserver based on params passed on the command line
     HOSTNAME = "localhost"
     PORT = 7145
-    if len(sys.argv) > 1 and sys.argv[1].isdigit():
-        PORT = int(sys.argv[1])
-        if len(sys.argv) > 2 and sys.argv[2].isdigit():
-            PORT = int(sys.argv[2])
-            if ":" in PORT:
-                SERVER_CONFIG = PORT.split(":")
-                HOSTNAME = SERVER_CONFIG[0]
-                PORT = SERVER_CONFIG[1]
+    if len(sys.argv) > 1:
+        PORT = sys.argv[1]
+        if ":" in PORT:
+            SERVER_CONFIG = PORT.split(":")
+            HOSTNAME = SERVER_CONFIG[0]
+            PORT = SERVER_CONFIG[1]
 
+    PORT = int(PORT)
     main(HOSTNAME, PORT)
