@@ -167,3 +167,31 @@ def post(*arguments):
                 Router.add(Constant.TINA4_POST, route_path, param)
 
     return actual_post
+
+
+def put(*arguments):
+    def actual_put(param):
+        if len(arguments) > 0:
+            route_paths = arguments[0].split('|')
+            for route_path in route_paths:
+                Router.add(Constant.TINA4_PUT, route_path, param)
+
+    return actual_put
+
+def patch(*arguments):
+    def actual_patch(param):
+        if len(arguments) > 0:
+            route_paths = arguments[0].split('|')
+            for route_path in route_paths:
+                Router.add(Constant.TINA4_PATCH, route_path, param)
+
+    return actual_patch
+
+def delete(*arguments):
+    def actual_delete(param):
+        if len(arguments) > 0:
+            route_paths = arguments[0].split('|')
+            for route_path in route_paths:
+                Router.add(Constant.TINA4_DELETE, route_path, param)
+
+        return actual_delete
