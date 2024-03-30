@@ -59,7 +59,7 @@ class Router:
         Debug("Root Path " + tina4_python.root_path + " " + url)
 
         # we can add other methods later but right now we validate posts
-        if method in [Constant.TINA4_POST]:
+        if method in [Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
             content = Template.render_twig_template(
                 "errors/403.twig", {"server": {"url": url}})
             # check for token in the headers
