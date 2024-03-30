@@ -56,8 +56,7 @@ class Router:
     # Renders the URL and returns the content
     @staticmethod
     async def get_result(url, method, request, headers):
-        Debug("Root Path " + tina4_python.root_path + " " + url)
-
+        Debug("Root Path " + tina4_python.root_path + " " + url, method)
         # we can add other methods later but right now we validate posts
         if method in [Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
             content = Template.render_twig_template(
@@ -130,6 +129,7 @@ class Router:
 
     @staticmethod
     async def resolve(method, url, request, headers):
+        print("=====", method, "-========-")
         url = Router.clean_url(url)
         Debug("Resolving URL: " + url)
         return await Router.get_result(url, method, request, headers)

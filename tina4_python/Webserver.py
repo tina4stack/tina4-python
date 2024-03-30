@@ -155,8 +155,7 @@ class Webserver:
                 headers_list[split[0]] = split[1].strip()
         self.headers = headers_list
 
-
-        method_list = [TINA4_GET, TINA4_ANY, TINA4_POST, TINA4_PATCH, TINA4_OPTIONS]
+        method_list = [TINA4_GET, TINA4_DELETE, TINA4_PUT, TINA4_ANY, TINA4_POST, TINA4_PATCH, TINA4_OPTIONS]
 
         contains_method = [ele for ele in method_list if (ele in self.method)]
 
