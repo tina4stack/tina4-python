@@ -178,6 +178,7 @@ def put(*arguments):
 
     return actual_put
 
+
 def patch(*arguments):
     def actual_patch(param):
         if len(arguments) > 0:
@@ -187,6 +188,7 @@ def patch(*arguments):
 
     return actual_patch
 
+
 def delete(*arguments):
     def actual_delete(param):
         if len(arguments) > 0:
@@ -194,4 +196,4 @@ def delete(*arguments):
             for route_path in route_paths:
                 Router.add(Constant.TINA4_DELETE, route_path, param)
 
-        return actual_delete
+    return actual_delete
