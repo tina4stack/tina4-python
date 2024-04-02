@@ -150,6 +150,41 @@ Example:
 Authorization: Bearer <token>
 ```
 You can generate tokens using tina4_python.tina4_auth which takes in a payload parameter which is a dictionary:
+#### Example of a post with a form, assume the route is ```/capture```
+
+You need the following twig file in the ```src/templates``` folder called ```something.twig```
+
+```twig something.twig
+<form method="post">
+    <input name="email" type="text" placeholder="Email">
+    <button type="submit">Send</button>
+    <input type="hidden" name="formToken" value="{{ token }}" >
+</form>
+```
+
+You can add the following code to ```src/routes/example.py```
+
+```python
+# get router which renders the twig form html
+@get("/capture")
+async def capture_get(request, response):
+    # get a token to add to the form
+    token = tina4_python.tina4_auth.get_token({"data": {"formName": "capture"}})
+    html = Template.render_twig_template("somefile.twig", {"token": token})
+    return response(html)
+
+# returns back to the user the form data that has been posted
+@post("/capture")
+async def capture_post(request, response):
+    return response(request.body)
+```
+
+In your ```src/__init__.py``` add the following code
+
+```python
+from .routes.example import *
+```
+Generate tokens with the following code as per the example above, tokens carry a payload and we add an additional ```expires``` value to the token based on the env variable ```TINA4_TOKEN_LIMIT``` 
 
 ```python
 import tina4_python
