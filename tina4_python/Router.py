@@ -61,15 +61,23 @@ class Router:
         if method in [Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
             content = Template.render_twig_template(
                 "errors/403.twig", {"server": {"url": url}})
-            # check for token in the headers
-            if "Authorization" not in headers:
-                return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
-            token = headers["Authorization"].replace("Bearer", "").strip()
-            if not (tina4_python.tina4_auth.valid(token)):
-                return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+            validated = False
+            # check to see if we have an auth ability
+            if "Authorization" in headers:
+                token = headers["Authorization"].replace("Bearer", "").strip()
+                if tina4_python.tina4_auth.valid(token):
+                    validated = True
 
-            # @todo add other validations here for future security
+            if "formToken" in request["body"]:
+                token = request["body"]["formToken"]
+                if tina4_python.tina4_auth.valid(token):
+                    validated = True
+
+            if not validated:
+                return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+            else:
+                del request["body"]["formToken"]
 
         # default response
         result = Response("", Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)

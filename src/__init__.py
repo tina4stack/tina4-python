@@ -4,9 +4,13 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 import os
+
+import tina4_python
+from tina4_python.Template import Template
 from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
+
 
 @get("/env")
 async def env(request, response):
@@ -14,6 +18,7 @@ async def env(request, response):
     env_variables = os.environ
 
     return response(env_variables)
+
 
 # This is a simple example of a GET request
 # This will be available at http://localhost:port/example
@@ -24,12 +29,29 @@ async def example(request, response):
     message = "This is an example of a GET request"
     return response(message)
 
+
+@get("/capture")
+async def capture_get(request, response):
+    # Add your code here
+    token = tina4_python.tina4_auth.get_token({"data": {"formName": "capture"}})
+    print(token)
+    html = Template.render_twig_template("somefile.twig", {"token": token})
+    return response(html)
+
+
+@post("/capture")
+async def capture_post(request, response):
+
+
+    return response(request.body)
+
+
 # This is an example of parameterized routing
 # This will be available at http://localhost:port/YOURNAME/YOURSURNAME?id=YOURID
 @get("/names/{name}/{surname}")
 async def example(request, response):
     Debug("Api GET")
-    print ('Params', request.params)
+    print('Params', request.params)
     name = request.params['name']
     surname = request.params['surname']
 

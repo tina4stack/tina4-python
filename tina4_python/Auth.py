@@ -105,6 +105,10 @@ class Auth:
 
     def get_token(self,  payload_data):
         private_key = self.load_private_key()
+        now = datetime.datetime.now()
+        token_limit_minutes = os.environ.get("TINA4_TOKEN_LIMIT", 2)
+        expiry_time = now + datetime.timedelta(minutes=token_limit_minutes)
+        payload_data["expires"] = expiry_time.isoformat()
         token = jwt.encode(
             payload=payload_data,
             key=private_key,
@@ -130,6 +134,15 @@ class Auth:
         public_key = self.load_public_key()
         try:
             payload = jwt.decode(token, key=public_key, algorithms=['RS256'])
+            if "expires" not in payload:
+                return False
+
+            if "expires" in payload:
+                now = datetime.datetime.now()
+                expiry_time = datetime.datetime.fromisoformat(payload["expires"])
+                print("TOKEN EXPIRY", now, expiry_time)
+                if now > expiry_time:
+                    return False
         except Exception:
             return False
 

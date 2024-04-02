@@ -6,6 +6,7 @@
 import asyncio
 import json
 import random
+from urllib.parse import unquote
 from urllib.parse import urlparse, parse_qsl
 
 import tina4_python
@@ -26,15 +27,25 @@ class Webserver:
     async def get_content_body(self, content_length):
         # get lines of content where at the end of the request
         content = self.request_raw[-content_length:]
-
         try:
             content = json.loads(content)
         except Exception as e:
-            content = ""
+            # check for form body
+            body = {}
+            variables = content.split("&", 1)
+            for variable in variables:
+                variable = variable.split("=", 1)
+                body[variable[0]] = unquote(variable[1])
+            return body
 
         return content
 
     async def get_response(self, method):
+        """
+
+        :param method: GET, POST, PATCH, DELETE, PUT
+        :return:
+        """
         headers = []
         if method == "OPTIONS":
             self.send_header("Access-Control-Allow-Origin", "*", headers)
@@ -143,9 +154,9 @@ class Webserver:
 
         self.method = self.request.split(" ")[0]
 
-        initial = self.request.split("\n\n")[0]
+        body_parts = self.request.split("\n\n")
 
-        self.headers = initial.split("\n")
+        self.headers = body_parts[0].split("\n")
 
         # parse headers into a dictionary for more efficient use
         headers_list = {}
