@@ -77,7 +77,8 @@ class Router:
             if not validated:
                 return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
             else:
-                del request["body"]["formToken"]
+                if "formToken" in request["body"]:
+                    del request["body"]["formToken"]
 
         # default response
         result = Response("", Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)

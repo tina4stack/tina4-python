@@ -28,15 +28,17 @@ class Webserver:
         # get lines of content where at the end of the request
         content = self.request_raw[-content_length:]
         try:
+            print("JSON", content)
             content = json.loads(content)
         except Exception as e:
             # check for form body
-            body = {}
-            variables = content.split("&", 1)
-            for variable in variables:
-                variable = variable.split("=", 1)
-                body[variable[0]] = unquote(variable[1])
-            return body
+            if content != "":
+                body = {}
+                variables = content.split("&", 1)
+                for variable in variables:
+                    variable = variable.split("=", 1)
+                    body[variable[0]] = unquote(variable[1])
+                return body
 
         return content
 
@@ -59,7 +61,10 @@ class Webserver:
         params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
 
         content_length = await self.get_content_length()
-        body = await self.get_content_body(content_length)
+        if method != TINA4_GET:
+            body = await self.get_content_body(content_length)
+        else:
+            body = None
         request = {"params": params, "body": body, "raw": self.request}
 
         tina4_python.tina4_current_request = request
