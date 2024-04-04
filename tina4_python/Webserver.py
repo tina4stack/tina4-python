@@ -196,8 +196,8 @@ class Webserver:
         self.router_handler = None
         self.running = False
 
-    def serve_forever(self):
-        asyncio.run(self.run_server())
+    async def serve_forever(self):
+        await self.run_server()
 
     def server_close(self):
         self.running = False

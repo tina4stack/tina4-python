@@ -21,6 +21,7 @@ After installing poetry you can do the following:
 poetry new project-name
 cd project-name
 poetry add tina4_python
+poetry add jurigged
 ```
 Create an entry point for Tina4 called ```app.py``` and add the following to the file
 ```python
@@ -66,30 +67,33 @@ After defining templates and routes, run the Tina4Python server:
 
 - **Normal Server**:
 ```bash
-poetry run
+poetry run python app.py
 ```
 
 - **Server with Hot Reloading**:
 ```bash
-poetry run jurigged main.py
+poetry run jurigged app.py
 ```
 
 - **Server on a Specific Port**:
 ```bash
-poetry run app.py 7777
+poetry run python app.py 7777
+```
+
+- **Server to not autostart **:
+```bash
+poetry run python app.py manual
 ```
   
 - **Server with alternate language** (for example fr = French):
 ```bash
-poetry run main.py fr
+poetry run python app.py fr
 ```
 
 Add more translations by going [here](TRANSLATIONS.md)
 
 ### Templating
-
-
-Tina4 uses [Twig](https://twig.symfony.com/) templating to provide a simple and efficient way to create web pages.
+Tina4 uses Jinja2 (Twig) templating to provide a simple and efficient way to create web pages.
 
 1.) **Twig Files**: Add your Twig files within the `src/templates` folder. For instance, you might create files like `index.twig`, `base.twig`, etc., containing your HTML structure with Twig templating syntax for dynamic content.
 
@@ -200,18 +204,21 @@ For ease of use you can supply an `API_KEY` param to your .env with a secret of 
 API_KEY=somehash
 ```
 
+
 ### Features
-| Completed                  | To Do                            |
-|----------------------------|----------------------------------|
-| Python pip package         | Implement JWT for token handling |
-| Basic environment handling |                                  |
-| Basic routing              | OpenAPI (Swagger)                |
-| Enhanced routing           |                                  |
-| CSS Support                |                                  |
-| Image Support              |                                  |
-| Localization               |                                  |
-| Error Pages                |                                  |
-| Template handling          |                                  |
+| Completed                  | To Do             |
+|----------------------------|-------------------|
+| Python pip package         |                   |
+| Basic environment handling |                   |
+| Basic routing              | OpenAPI (Swagger) |
+| Enhanced routing           |                   |
+| CSS Support                |                   |
+| Image Support              |                   |
+| Localization               |                   |
+| Error Pages                |                   |
+| Template handling          |                   |
+| Form posting               |                   |
+| JWT tokens & security      |                   |
 
 ### Building and Deployment
 
