@@ -9,6 +9,7 @@ import os
 import shutil
 import importlib
 import sys
+import sass
 
 from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
@@ -93,6 +94,13 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
 from src import *
 from src.routes import *
 from src.app import *
+from . import *
+
+# compile sass
+if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
+    print("Compiling scss")
+    sass.compile(dirname=(root_path + os.sep + 'src' + os.sep + 'scss',
+                          root_path + os.sep + 'src' + os.sep + 'public' + os.sep + 'css'), output_style='compressed')
 
 
 def webserver(host_name, port):
@@ -111,10 +119,10 @@ def run_web_server(in_hostname="localhost", in_port=7145):
     print(Messages.MSG_STARTING_WEBSERVER.format(port=in_port))
     webserver(in_hostname, in_port)
 
+
 if importlib.util.find_spec("jurigged"):
     print("Jurigged enabled")
     jurigged.watch("./")
-
 
 # Start up a webserver based on params passed on the command line
 HOSTNAME = "localhost"

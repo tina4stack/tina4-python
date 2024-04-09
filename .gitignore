@@ -6,3 +6,4 @@
 /src/templates/index.twig
 /secrets/
 /.env
+/public/css/test.css
