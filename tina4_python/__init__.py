@@ -3,11 +3,14 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+import asyncio
 import gettext
 import os
 import shutil
 import importlib
 import sys
+import sass
+
 from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
@@ -26,7 +29,7 @@ MSG_STARTING_WEBSERVER = _('Starting webserver on {port}')
 MSG_ENTRY_POINT_NAME = _('Entry point name ... {name}')
 
 if os.getenv('environment') is not None:
-    environment = ".env."+os.getenv('environment')
+    environment = ".env." + os.getenv('environment')
 else:
     environment = ".env"
 
@@ -48,7 +51,7 @@ tina4_auth = Auth(root_path)
 
 token = tina4_auth.get_token({"name": "Tina4"})
 print("TEST TOKEN", token)
-print("VALID TOKEN", tina4_auth.valid(token+"a"))
+print("VALID TOKEN", tina4_auth.valid(token + "a"))
 print("VALID TOKEN", tina4_auth.valid(token))
 print("PAYLOAD", tina4_auth.get_payload(token))
 
@@ -87,30 +90,33 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
     destination_dir = root_path + os.sep + "src" + os.sep + "public"
     shutil.copytree(source_dir, destination_dir)
 
-# please keep in place otherwise auto loading files does not work nicely
+# please keep in place otherwise autoloading of files does not work nicely
 from src import *
+from src.routes import *
+from src.app import *
+from . import *
 
-def initialize():
-    print(Messages.MSG_LOAD_ALL_THINGS)
+# compile sass
+if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
+    print("Compiling scss")
+    sass.compile(dirname=(root_path + os.sep + 'src' + os.sep + 'scss',
+                          root_path + os.sep + 'src' + os.sep + 'public' + os.sep + 'css'), output_style='compressed')
 
 
 def webserver(host_name, port):
     web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
     web_server.router_handler = Router()
     print(Messages.MSG_SERVER_STARTED.format(host_name=host_name, port=port))
-
     try:
-        web_server.serve_forever()
+        asyncio.run(web_server.serve_forever())
     except KeyboardInterrupt:
         pass
-
     web_server.server_close()
     print(Messages.MSG_SERVER_STOPPED)
 
 
-def main(in_hostname="localhost", in_port=7145):
+def run_web_server(in_hostname="localhost", in_port=7145):
     print(Messages.MSG_STARTING_WEBSERVER.format(port=in_port))
-    initialize()
     webserver(in_hostname, in_port)
 
 
@@ -118,17 +124,19 @@ if importlib.util.find_spec("jurigged"):
     print("Jurigged enabled")
     jurigged.watch("./")
 
-print(Messages.MSG_ENTRY_POINT_NAME.format(name=__name__))
-if __name__ == '__main__' or __name__ == 'tina4_python':
-    # Start up a webserver based on params passed on the command line
-    HOSTNAME = "localhost"
-    PORT = 7145
-    if len(sys.argv) > 1:
-        PORT = sys.argv[1]
-        if ":" in PORT:
-            SERVER_CONFIG = PORT.split(":")
-            HOSTNAME = SERVER_CONFIG[0]
-            PORT = SERVER_CONFIG[1]
+# Start up a webserver based on params passed on the command line
+HOSTNAME = "localhost"
+PORT = 7145
+if len(sys.argv) > 1:
+    PORT = sys.argv[1]
+    if ":" in PORT:
+        SERVER_CONFIG = PORT.split(":")
+        HOSTNAME = SERVER_CONFIG[0]
+        PORT = SERVER_CONFIG[1]
 
+if PORT != "stop" and PORT != "manual":
     PORT = int(PORT)
-    main(HOSTNAME, PORT)
+    print("Threading")
+    run_web_server(HOSTNAME, PORT)
+else:
+    print("Webserver is set to manual start, please call run_web_server(HOSTNAME, PORT)")
