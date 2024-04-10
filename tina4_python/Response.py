@@ -18,8 +18,9 @@ class Response:
 
     def __init__(self, content, http_code=Constant.HTTP_OK, content_type=Constant.TEXT_HTML):
         # convert a class into a dictionary
-        if not isinstance(content, bytes) and not isinstance(content, str) and inspect.isclass(type(content)):
+        if not isinstance(content, bytes) and not isinstance(content, str) and not isinstance(content, list) and inspect.isclass(type(content)):
             content = dict(content)
+
         # convert the dictionary or list into JSON
         if type(content) is dict or type(content) is list:
             content = json.dumps(content)
