@@ -129,7 +129,8 @@ class Auth:
     def validate(self, token):
         # first check for API_KEY = token, simplest form
         if os.environ.get("API_KEY", None) is not None:
-            return token == os.environ.get("API_KEY")
+            if token == os.environ.get("API_KEY"):
+                return True
 
         public_key = self.load_public_key()
         try:
@@ -140,13 +141,14 @@ class Auth:
             if "expires" in payload:
                 now = datetime.datetime.now()
                 expiry_time = datetime.datetime.fromisoformat(payload["expires"])
-                print("TOKEN EXPIRY", now, expiry_time)
                 if now > expiry_time:
                     return False
+                else:
+                    return True
         except Exception:
             return False
 
-        return True
+        return False
 
     def valid(self, token):
         return self.validate(token)
