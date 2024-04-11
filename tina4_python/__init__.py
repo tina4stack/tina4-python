@@ -10,6 +10,8 @@ import shutil
 import importlib
 import sys
 import sass
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
@@ -96,11 +98,33 @@ from src.routes import *
 from src.app import *
 from . import *
 
+
 # compile sass
-if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
-    print("Compiling scss")
-    sass.compile(dirname=(root_path + os.sep + 'src' + os.sep + 'scss',
-                          root_path + os.sep + 'src' + os.sep + 'public' + os.sep + 'css'), output_style='compressed')
+def compile_scss():
+    try:
+        if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
+            print("Compiling scss")
+            sass.compile(dirname=(root_path + os.sep + 'src' + os.sep + 'scss',
+                                  root_path + os.sep + 'src' + os.sep + 'public' + os.sep + 'css'),
+                         output_style='compressed')
+    except sass.CompileError as E:
+        print('Error compiling SASS ', E)
+
+
+compile_scss()
+
+
+class SassCompiler(FileSystemEventHandler):
+    def on_modified(self, event: FileSystemEvent) -> None:
+        if not event.is_directory:
+            compile_scss()
+
+
+observer = Observer()
+event_handler = SassCompiler()
+observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
+observer.start()
+# end compile sass
 
 
 def webserver(host_name, port):

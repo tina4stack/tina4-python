@@ -55,7 +55,7 @@ class Router:
 
     # Renders the URL and returns the content
     @staticmethod
-    async def get_result(url, method, request, headers):
+    async def get_result(url, method, request, headers, session):
         Debug("Root Path " + tina4_python.root_path + " " + url, method)
         # we can add other methods later but right now we validate posts
         if method in [Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
@@ -122,6 +122,7 @@ class Router:
                 Request.headers = headers  # Add the headers
                 Request.params = request["params"]
                 Request.body = request["body"] if "body" in request else None
+                Request.session = session
 
                 tina4_python.tina4_current_request = Request
 
@@ -137,11 +138,11 @@ class Router:
         return result
 
     @staticmethod
-    async def resolve(method, url, request, headers):
+    async def resolve(method, url, request, headers, session):
         print("=====", method, "-========-")
         url = Router.clean_url(url)
         Debug("Resolving URL: " + url)
-        return await Router.get_result(url, method, request, headers)
+        return await Router.get_result(url, method, request, headers, session)
 
     # cleans the url of double slashes
     @staticmethod

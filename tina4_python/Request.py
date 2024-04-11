@@ -14,6 +14,7 @@ class Request:
         self.headers = headers if headers is not None else {}
         self.request = request if request is not None else {}
         self.cookies = {}
-        self.session = {}
+        self.cookies = {}
+        self.session = None
         self.files = {}
         self.raw = raw if raw is not None else None

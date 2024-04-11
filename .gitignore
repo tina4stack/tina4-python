@@ -7,3 +7,4 @@
 /secrets/
 /.env
 /public/css/test.css
+/sessions/

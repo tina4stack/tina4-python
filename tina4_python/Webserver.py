@@ -5,12 +5,14 @@
 #
 import asyncio
 import json
+import os
 import random
 from urllib.parse import unquote
 from urllib.parse import urlparse, parse_qsl
 
 import tina4_python
 from tina4_python.Constant import *
+from tina4_python.Session import Session
 
 
 class Webserver:
@@ -69,7 +71,7 @@ class Webserver:
 
         tina4_python.tina4_current_request = request
 
-        response = await self.router_handler.resolve(method, self.path, request, self.headers)
+        response = await self.router_handler.resolve(method, self.path, request, self.headers, self.session)
 
         self.send_header("Access-Control-Allow-Origin", "*", headers)
         self.send_header("Access-Control-Allow-Headers",
@@ -79,6 +81,10 @@ class Webserver:
         self.send_header("Content-Length", str(len(response.content)), headers)
         self.send_header("Connection", "Keep-Alive", headers)
         self.send_header("Keep-Alive", "timeout=5, max=30", headers)
+
+        cookie_value = ""
+        for cookie in self.cookies:
+            self.send_header("Set-Cookie", cookie+'='+self.cookies[cookie], headers)
 
         headers = await self.get_headers(headers, self.response_protocol, response.http_code)
 
@@ -171,6 +177,24 @@ class Webserver:
                 headers_list[split[0]] = split[1].strip()
         self.headers = headers_list
 
+        # parse cookies
+        cookie_list = {}
+        if "Cookie" in self.headers:
+            cookie_list_temp = self.headers["Cookie"].split(";")
+            for cookie_value in cookie_list_temp:
+                cookie = cookie_value.split("=", 1)
+                cookie_list[cookie[0].strip()] = cookie[1].strip();
+            self.cookies = cookie_list
+
+        # initialize the session
+        self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
+                               os.getenv("TINA4_SESSION_FOLDER", tina4_python.root_path + os.sep + "sessions"))
+
+        if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
+            self.session.load(self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
+        else:
+            self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
+
         method_list = [TINA4_GET, TINA4_DELETE, TINA4_PUT, TINA4_ANY, TINA4_POST, TINA4_PATCH, TINA4_OPTIONS]
 
         contains_method = [ele for ele in method_list if (ele in self.method)]
@@ -183,6 +207,8 @@ class Webserver:
         writer.close()
 
     def __init__(self, host_name, port):
+        self.session = None
+        self.cookies = None
         self.method = None
         self.response_protocol = "HTTP/1.1"
         self.headers = None
