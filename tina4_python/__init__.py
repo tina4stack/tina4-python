@@ -92,12 +92,11 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
     destination_dir = root_path + os.sep + "src" + os.sep + "public"
     shutil.copytree(source_dir, destination_dir)
 
-# please keep in place otherwise autoloading of files does not work nicely
+# please keep in place otherwise autoloading of files does not work nicely, if you want this to work
+# add __init__.py files in your folders
 from src import *
 from src.routes import *
 from src.app import *
-from . import *
-
 
 # compile sass
 def compile_scss():

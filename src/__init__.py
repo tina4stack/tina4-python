@@ -4,12 +4,11 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 import os
-
-import tina4_python
 from tina4_python.Template import Template
 from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
+
 
 
 @get("/env")
