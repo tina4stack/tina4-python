@@ -208,7 +208,7 @@ class Webserver:
 
     def __init__(self, host_name, port):
         self.session = None
-        self.cookies = None
+        self.cookies = []
         self.method = None
         self.response_protocol = "HTTP/1.1"
         self.headers = None
