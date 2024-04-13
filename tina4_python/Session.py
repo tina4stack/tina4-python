@@ -11,7 +11,7 @@ import tina4_python
 
 class Session:
 
-    def __init__(self, _default_name="PY_SESS", _default_path="./sessions"):
+    def __init__(self, _default_name="PY_SESS", _default_path="sessions"):
         self.session_name = _default_name
         self.cookie = cookies.SimpleCookie()
         self.session_path = _default_path
@@ -97,7 +97,7 @@ class Session:
         try:
             if not os.path.exists(self.session_path):
                 os.makedirs(self.session_path)
-            print("SAVING", self.session_values)
+            print("SAVING", self.session_values, self.session_path)
             token = tina4_python.tina4_auth.get_token(payload_data=self.session_values)
             with open(self.session_path + os.sep + self.session_hash, "w") as file:
                 file.write(token)

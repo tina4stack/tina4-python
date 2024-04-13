@@ -98,6 +98,7 @@ from src import *
 from src.routes import *
 from src.app import *
 
+
 # compile sass
 def compile_scss():
     try:
@@ -123,6 +124,8 @@ observer = Observer()
 event_handler = SassCompiler()
 observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
 observer.start()
+
+
 # end compile sass
 
 

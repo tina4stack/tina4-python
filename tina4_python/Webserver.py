@@ -83,8 +83,9 @@ class Webserver:
         self.send_header("Keep-Alive", "timeout=5, max=30", headers)
 
         cookie_value = ""
-        for cookie in self.cookies:
-            self.send_header("Set-Cookie", cookie+'='+self.cookies[cookie], headers)
+        if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
+            self.send_header("Set-Cookie",
+                             os.getenv("TINA4_SESSION", "PY_SESS")+'='+self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")], headers)
 
         headers = await self.get_headers(headers, self.response_protocol, response.http_code)
 
@@ -212,7 +213,6 @@ class Webserver:
         self.method = None
         self.response_protocol = "HTTP/1.1"
         self.headers = None
-        self.response_headers = []
         self.request = None
         self.request_raw = None
         self.path = None
