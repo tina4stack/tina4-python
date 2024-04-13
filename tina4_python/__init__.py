@@ -3,6 +3,7 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+# flake8: noqa: E403,F401,E402
 import asyncio
 import gettext
 import os
@@ -13,12 +14,13 @@ import sass
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
+from tina4_python import Messages, Constant
 from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
 from tina4_python.Localization import localize
 from tina4_python.Auth import Auth
-import tina4_python.Messages
+from tina4_python.Debug import Debug
 
 _ = gettext.gettext
 
@@ -35,7 +37,8 @@ if os.getenv('environment') is not None:
 else:
     environment = ".env"
 
-Env.load_env(environment)
+load_env(environment)
+print("Setting debug mode", os.getenv("TINA4_DEBUG_LEVEL"))
 localize()
 
 if importlib.util.find_spec("jurigged"):
@@ -44,7 +47,8 @@ if importlib.util.find_spec("jurigged"):
 # Define the variable to be used for global routes
 library_path = os.path.dirname(os.path.realpath(__file__))
 root_path = os.path.realpath(os.getcwd())
-print(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path))
+Debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path),
+      Constant.TINA4_LOG_INFO)
 
 tina4_routes = []
 tina4_current_request = {}
@@ -52,10 +56,10 @@ tina4_secret = None
 tina4_auth = Auth(root_path)
 
 token = tina4_auth.get_token({"name": "Tina4"})
-print("TEST TOKEN", token)
-print("VALID TOKEN", tina4_auth.valid(token + "a"))
-print("VALID TOKEN", tina4_auth.valid(token))
-print("PAYLOAD", tina4_auth.get_payload(token))
+Debug("TEST TOKEN", token, Constant.TINA4_LOG_DEBUG)
+Debug("VALID TOKEN", tina4_auth.valid(token + "a"), Constant.TINA4_LOG_DEBUG)
+Debug("VALID TOKEN", tina4_auth.valid(token), Constant.TINA4_LOG_DEBUG)
+Debug("PAYLOAD", tina4_auth.get_payload(token), Constant.TINA4_LOG_DEBUG)
 
 if "TINA4_SECRET" in os.environ:
     tina4_secret = os.environ["TINA4_SECRET"]
@@ -94,6 +98,7 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
 
 # please keep in place otherwise autoloading of files does not work nicely, if you want this to work
 # add __init__.py files in your folders
+# ignore F403
 from src import *
 from src.routes import *
 from src.app import *
@@ -103,12 +108,12 @@ from src.app import *
 def compile_scss():
     try:
         if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
-            print("Compiling scss")
+            Debug("Compiling scss", Constant.TINA4_LOG_DEBUG)
             sass.compile(dirname=(root_path + os.sep + 'src' + os.sep + 'scss',
                                   root_path + os.sep + 'src' + os.sep + 'public' + os.sep + 'css'),
                          output_style='compressed')
     except sass.CompileError as E:
-        print('Error compiling SASS ', E)
+        Debug('Error compiling SASS ', E, Constant.TINA4_LOG_ERROR)
 
 
 compile_scss()
@@ -132,22 +137,22 @@ observer.start()
 def webserver(host_name, port):
     web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
     web_server.router_handler = Router()
-    print(Messages.MSG_SERVER_STARTED.format(host_name=host_name, port=port))
+    Debug(Messages.MSG_SERVER_STARTED.format(host_name=host_name, port=port), Constant.TINA4_LOG_INFO)
     try:
         asyncio.run(web_server.serve_forever())
     except KeyboardInterrupt:
         pass
     web_server.server_close()
-    print(Messages.MSG_SERVER_STOPPED)
+    Debug(Messages.MSG_SERVER_STOPPED, Constant.TINA4_LOG_INFO)
 
 
 def run_web_server(in_hostname="localhost", in_port=7145):
-    print(Messages.MSG_STARTING_WEBSERVER.format(port=in_port))
+    Debug(Messages.MSG_STARTING_WEBSERVER.format(port=in_port), Constant.TINA4_LOG_INFO)
     webserver(in_hostname, in_port)
 
 
 if importlib.util.find_spec("jurigged"):
-    print("Jurigged enabled")
+    Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
     jurigged.watch("./")
 
 # Start up a webserver based on params passed on the command line
@@ -161,8 +166,11 @@ if len(sys.argv) > 1:
         PORT = SERVER_CONFIG[1]
 
 if PORT != "stop" and PORT != "manual":
-    PORT = int(PORT)
-    print("Threading")
-    run_web_server(HOSTNAME, PORT)
+    try:
+        PORT = int(PORT)
+        Debug("Threading", Constant.TINA4_LOG_DEBUG)
+        run_web_server(HOSTNAME, PORT)
+    except Exception:
+        Debug("Not running webserver", Constant.TINA4_LOG_ERROR)
 else:
-    print("Webserver is set to manual start, please call run_web_server(HOSTNAME, PORT)")
+    Debug("Webserver is set to manual start, please call run_web_server(HOSTNAME, PORT)", Constant.TINA4_LOG_INFO)

@@ -3,6 +3,7 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+# flake8: noqa: E501
 import datetime
 import os
 
@@ -103,7 +104,7 @@ class Auth:
             with open(self.self_signed, "wb") as f:
                 f.write(cert.public_bytes(serialization.Encoding.PEM))
 
-    def get_token(self,  payload_data):
+    def get_token(self, payload_data):
         private_key = self.load_private_key()
         now = datetime.datetime.now()
         token_limit_minutes = os.environ.get("TINA4_TOKEN_LIMIT", 2)

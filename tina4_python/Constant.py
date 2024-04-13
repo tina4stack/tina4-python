@@ -3,11 +3,12 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
-DEBUG_INFO = 0
-DEBUG_WARNING = 1
-DEBUG_DEBUG = 2
-DEBUG_ERROR = 3
-DEBUG_ALL = 6
+# flake8: noqa: E501
+TINA4_LOG_INFO = "INFO"
+TINA4_LOG_WARNING = "WARN"
+TINA4_LOG_DEBUG = "DEBUG"
+TINA4_LOG_ERROR = "ERROR"
+TINA4_LOG_ALL = "ALL"
 
 TINA4_GET = "GET"
 TINA4_POST = "POST"
@@ -35,5 +36,3 @@ TEXT_CSS = "text/css"
 TEXT_PLAIN = "text/plain"
 APPLICATION_JSON = "application/json"
 APPLICATION_XML = "application/xml"
-
-

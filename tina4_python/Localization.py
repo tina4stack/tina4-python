@@ -3,9 +3,12 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+# flake8: noqa: E501
 import gettext
 import os
 import sys
+from tina4_python.Debug import Debug
+from tina4_python import Constant
 
 
 # load environment variables from .env file
@@ -13,7 +16,6 @@ import sys
 
 def localize():
     translation_path = os.path.join(os.path.dirname(__file__), 'translations')
-
     available_languages = ['en', 'fr', 'af']
 
     # get user language from environment variable
@@ -33,7 +35,8 @@ def localize():
 
     if len(sys.argv) > 2 and sys.argv[2] in available_languages:
         user_language = sys.argv[2]
-    print("Language: " + user_language)
+
+    Debug("Language: " + user_language, Constant.TINA4_LOG_INFO)
     # Initialize the translation system
     translation = gettext.translation('messages', translation_path, languages=[user_language])
     translation.install()

@@ -3,6 +3,7 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+# flake8: noqa: E501
 class Request:
     """
     Request object to store parameters, headers, etc.

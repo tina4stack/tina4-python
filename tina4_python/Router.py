@@ -3,10 +3,10 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+# flake8: noqa: E501
 import mimetypes
 import re
 import os
-import json
 import tina4_python
 from tina4_python import Constant
 from tina4_python.Debug import Debug
@@ -56,7 +56,7 @@ class Router:
     # Renders the URL and returns the content
     @staticmethod
     async def get_result(url, method, request, headers, session):
-        Debug("Root Path " + tina4_python.root_path + " " + url, method)
+        Debug("Root Path " + tina4_python.root_path + " " + url, method, Constant.TINA4_LOG_DEBUG)
         # we can add other methods later but right now we validate posts
         if method in [Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
             content = Template.render_twig_template(
@@ -89,7 +89,7 @@ class Router:
 
         # Serve statics
         static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
-        Debug("Attempting to serve static file: " + static_file)
+        Debug("Attempting to serve static file: " + static_file, Constant.TINA4_LOG_DEBUG)
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
             with open(static_file, 'rb') as file:
@@ -111,7 +111,7 @@ class Router:
         for route in tina4_python.tina4_routes:
             if route["method"] != method:
                 continue
-            Debug("Matching route " + route['route'] + " to " + url)
+            Debug("Matching route " + route['route'] + " to " + url, Constant.TINA4_LOG_DEBUG)
             if Router.match(url, route['route']):
                 router_response = route["callback"]
 
@@ -139,9 +139,8 @@ class Router:
 
     @staticmethod
     async def resolve(method, url, request, headers, session):
-        print("=====", method, "-========-")
         url = Router.clean_url(url)
-        Debug("Resolving URL: " + url)
+        Debug(method, "Resolving URL: " + url, Constant.TINA4_LOG_DEBUG)
         return await Router.get_result(url, method, request, headers, session)
 
     # cleans the url of double slashes
@@ -152,7 +151,7 @@ class Router:
     # adds a route to the router
     @staticmethod
     def add(method, route, callback):
-        Debug("Adding a route: " + route)
+        Debug("Adding a route: " + route, Constant.TINA4_LOG_DEBUG)
         tina4_python.tina4_routes.append({"route": route, "callback": callback, "method": method})
         if '{' in route:  # store the parameters if needed
             route_variables = re.findall(r'{(.*?)}', route)

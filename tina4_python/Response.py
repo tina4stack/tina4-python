@@ -3,6 +3,7 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+# flake8: noqa: E501
 import json
 import inspect
 from tina4_python import Constant
@@ -17,8 +18,10 @@ class Response:
     """
 
     def __init__(self, content, http_code=Constant.HTTP_OK, content_type=Constant.TEXT_HTML):
-        # convert a class into a dictionary
-        if not isinstance(content, bool) and not isinstance(content, bytes) and not isinstance(content, str) and not isinstance(content, list) and inspect.isclass(type(content)):
+        if content is None:
+            content = ""
+        # try to make content into a dictionary
+        elif not isinstance(content, bool) and not isinstance(content, bytes) and not isinstance(content, str) and not isinstance(content, list) and inspect.isclass(type(content)):
             content = dict(content)
 
         # convert the dictionary or list into JSON

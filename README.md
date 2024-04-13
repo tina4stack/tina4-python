@@ -234,12 +234,24 @@ API_KEY=somehash
 
 #### Using Poetry
 
-1. Building the package:
+Building the package:
 ```bash
 poetry build
 ```
 
-1. Publishing the package:
+Publishing the package:
 ```bash
 poetry publish
+```
+
+#### Running tests & checks
+
+PyTests
+```
+poetry run pytest ./tests
+```
+
+Flake8 Code tests
+```
+poetry run flake8 ./tina4_python
 ```

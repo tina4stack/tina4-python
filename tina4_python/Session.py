@@ -3,10 +3,13 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+# flake8: noqa: E501
 import os
 from http import cookies
 import hashlib
 import tina4_python
+from tina4_python.Debug import Debug
+from tina4_python import Constant
 
 
 class Session:
@@ -42,12 +45,16 @@ class Session:
             with open(self.session_path + os.sep + _hash, "r") as file:
                 token = file.read()
                 file.close()
-                payload = tina4_python.tina4_auth.get_payload(token)
-                for key in payload:
-                    if key != "expires":
-                        self.set(key, payload[key])
-                self.save()
+                if tina4_python.tina4_auth.valid(token):
+                    payload = tina4_python.tina4_auth.get_payload(token)
+                    for key in payload:
+                        if key != "expires":
+                            self.set(key, payload[key])
+                else:
+                    Debug("Session expired, starting a new one", Constant.TINA4_LOG_DEBUG)
+                    self.start(_hash)
         else:
+            Debug("Cannot load session, starting a new one", Constant.TINA4_LOG_DEBUG)
             self.start(_hash)
 
     def set(self, _key, _value):
@@ -83,7 +90,7 @@ class Session:
         if _key in self.session_values:
             return self.session_values[_key]
         else:
-            return False
+            return None
 
     def close(self):
         if os.path.isfile(self.session_path + os.sep + self.session_hash):
@@ -97,12 +104,12 @@ class Session:
         try:
             if not os.path.exists(self.session_path):
                 os.makedirs(self.session_path)
-            print("SAVING", self.session_values, self.session_path)
+            Debug("SAVING", self.session_values, self.session_path, Constant.TINA4_LOG_DEBUG)
             token = tina4_python.tina4_auth.get_token(payload_data=self.session_values)
             with open(self.session_path + os.sep + self.session_hash, "w") as file:
                 file.write(token)
                 file.close()
                 return True
         except Exception as E:
-            print("Session save failure", E)
+            Debug("Session save failure", E, Constant.TINA4_LOG_ERROR)
             return False

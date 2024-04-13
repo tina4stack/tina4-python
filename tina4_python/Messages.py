@@ -3,6 +3,7 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+# flake8: noqa: E501
 import gettext
 
 _ = gettext.gettext
@@ -27,4 +28,3 @@ MSG_SERVER_STARTED = _('Server started http://{host_name}:{port}')
 MSG_SERVER_STOPPED = _('Server stopped.')
 MSG_STARTING_WEBSERVER = _('Starting webserver on {port}')
 MSG_ENTRY_POINT_NAME = _('Entry point name ... {name}')
-

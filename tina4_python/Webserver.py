@@ -3,15 +3,15 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+# flake8: noqa: E501
 import asyncio
 import json
 import os
-import random
 from urllib.parse import unquote
 from urllib.parse import urlparse, parse_qsl
-
 import tina4_python
-from tina4_python.Constant import *
+from tina4_python.Debug import Debug
+from tina4_python import Constant
 from tina4_python.Session import Session
 
 
@@ -30,9 +30,9 @@ class Webserver:
         # get lines of content where at the end of the request
         content = self.request_raw[-content_length:]
         try:
-            print("JSON", content)
+            Debug("JSON", content, Constant.TINA4_LOG_DEBUG)
             content = json.loads(content)
-        except Exception as e:
+        except Exception:
             # check for form body
             if content != "":
                 body = {}
@@ -57,13 +57,13 @@ class Webserver:
                              "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
             self.send_header("Access-Control-Allow-Credentials", "True", headers)
 
-            headers = await self.get_headers(headers, self.response_protocol, HTTP_OK)
+            headers = await self.get_headers(headers, self.response_protocol, Constant.HTTP_OK)
             return headers
 
         params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
 
         content_length = await self.get_content_length()
-        if method != TINA4_GET:
+        if method != Constant.TINA4_GET:
             body = await self.get_content_body(content_length)
         else:
             body = None
@@ -82,14 +82,13 @@ class Webserver:
         self.send_header("Connection", "Keep-Alive", headers)
         self.send_header("Keep-Alive", "timeout=5, max=30", headers)
 
-        cookie_value = ""
         if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
             self.send_header("Set-Cookie",
-                             os.getenv("TINA4_SESSION", "PY_SESS")+'='+self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")], headers)
+                             os.getenv("TINA4_SESSION", "PY_SESS") + '=' + self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")], headers)
 
         headers = await self.get_headers(headers, self.response_protocol, response.http_code)
 
-        if type(response.content) == str:
+        if isinstance(response.content, str):
             return headers + response.content.encode()
         else:
             return headers + response.content
@@ -100,7 +99,7 @@ class Webserver:
 
     @staticmethod
     async def get_headers(response_headers, response_protocol, response_code):
-        headers = response_protocol + " " + str(response_code) + " " + LOOKUP_HTTP_CODE[
+        headers = response_protocol + " " + str(response_code) + " " + Constant.LOOKUP_HTTP_CODE[
             response_code] + "\n"
         for header in response_headers:
             headers += header + "\n"
@@ -113,14 +112,10 @@ class Webserver:
             await server.serve_forever()
 
     async def get_data(self, reader):
-        loop = asyncio.get_event_loop()
         # https://stackoverflow.com/questions/17667903/python-socket-receive-large-amount-of-data
         chunks = []
-        data = None
-        i = random.randrange(1000, 9999)
         found_length = False
         content_length = 0
-        count = 0
         header_offset = 0
         while True:
             data = (await reader.read(2048)).decode("utf-8")
@@ -150,7 +145,6 @@ class Webserver:
         return "".join(chunks)
 
     async def handle_client(self, reader, writer):
-        loop = asyncio.get_event_loop()
         # Get the client request
         request = await self.get_data(reader)
 
@@ -184,7 +178,7 @@ class Webserver:
             cookie_list_temp = self.headers["Cookie"].split(";")
             for cookie_value in cookie_list_temp:
                 cookie = cookie_value.split("=", 1)
-                cookie_list[cookie[0].strip()] = cookie[1].strip();
+                cookie_list[cookie[0].strip()] = cookie[1].strip()
             self.cookies = cookie_list
 
         # initialize the session
@@ -196,7 +190,8 @@ class Webserver:
         else:
             self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
 
-        method_list = [TINA4_GET, TINA4_DELETE, TINA4_PUT, TINA4_ANY, TINA4_POST, TINA4_PATCH, TINA4_OPTIONS]
+        method_list = [Constant.TINA4_GET, Constant.TINA4_DELETE, Constant.TINA4_PUT, Constant.TINA4_ANY,
+                       Constant.TINA4_POST, Constant.TINA4_PATCH, Constant.TINA4_OPTIONS]
 
         contains_method = [ele for ele in method_list if (ele in self.method)]
 
@@ -208,7 +203,7 @@ class Webserver:
         writer.close()
 
     def __init__(self, host_name, port):
-        self.session = None
+        self.session = Session
         self.cookies = {}
         self.method = None
         self.response_protocol = "HTTP/1.1"
