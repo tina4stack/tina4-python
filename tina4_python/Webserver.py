@@ -67,7 +67,7 @@ class Webserver:
             body = await self.get_content_body(content_length)
         else:
             body = None
-        request = {"params": params, "body": body, "raw": self.request}
+        request = {"params": params, "body": body, "raw": self.request, "headers_raw": self.headers}
 
         tina4_python.tina4_current_request = request
 
@@ -167,7 +167,7 @@ class Webserver:
         # parse headers into a dictionary for more efficient use
         headers_list = {}
         for header in self.headers:
-            split = header.split(":")
+            split = header.split(":", 1)
             if len(split) == 2:
                 headers_list[split[0]] = split[1].strip()
         self.headers = headers_list

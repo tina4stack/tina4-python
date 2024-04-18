@@ -1,4 +1,11 @@
-from tina4_python import get
+from tina4_python import get, Template
+
+
+@get("/")
+async def home_page(request, response):
+
+    html = Template.render_twig_template("index.twig", {"sami": "This is sami"})
+    return response(html)
 
 
 @get("/test/session")

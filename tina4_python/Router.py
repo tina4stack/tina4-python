@@ -57,6 +57,8 @@ class Router:
     @staticmethod
     async def get_result(url, method, request, headers, session):
         Debug("Root Path " + tina4_python.root_path + " " + url, method, Constant.TINA4_LOG_DEBUG)
+        tina4_python.tina4_current_request["url"] = url
+        tina4_python.tina4_current_request["headers"] = headers
         # we can add other methods later but right now we validate posts
         if method in [Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
             content = Template.render_twig_template(
@@ -95,19 +97,6 @@ class Router:
             with open(static_file, 'rb') as file:
                 return Response(file.read(), Constant.HTTP_OK, mime_type)
 
-        # Serve twigs if the files exist
-        if url == "/":
-            twig_file = "index.twig"
-        else:
-            twig_file = url + ".twig"
-
-        # see if we can find the twig file
-        if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
-            tina4_python.tina4_current_request["params"].update(Router.get_variables(url, url))
-            content = Template.render_twig_template(twig_file)
-            if content != "":
-                return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML)
-
         for route in tina4_python.tina4_routes:
             if route["method"] != method:
                 continue
@@ -131,6 +120,21 @@ class Router:
 
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
+
+            # try to render a template
+            # Serve twigs if the files exist
+            if url == "/":
+                twig_file = "index.twig"
+            else:
+                twig_file = url + ".twig"
+
+            # see if we can find the twig file
+            if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
+                tina4_python.tina4_current_request["params"].update(Router.get_variables(url, url))
+                content = Template.render_twig_template(twig_file)
+                if content != "":
+                    return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML)
+
             content = Template.render_twig_template(
                 "errors/404.twig", {"server": {"url": url}})
             return Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)

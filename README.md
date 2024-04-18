@@ -224,13 +224,13 @@ API_KEY=somehash
 
 #### Using Python
 
-1. Building the package:
- ```bash
- python3 -m pip install --upgrade build
- python3 -m build
- python3 -m pip install --upgrade twine
- python3 -m twine upload dist/*
- ```
+Building the package without poetry - you will need to request an API key:
+```bash
+python3 -m pip install --upgrade build
+python3 -m build
+python3 -m pip install --upgrade twine
+python3 -m twine upload dist/*
+```
 
 #### Using Poetry
 

@@ -84,6 +84,9 @@ if not os.path.exists(root_path + os.sep + "src"):
             app_file.write('from tina4_python import *')
             app_file.write('\n')
 
+if not os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
+    os.makedirs(root_path + os.sep + "src" + os.sep + "app")
+
 # copy over templates if needed - required for errors
 if not os.path.exists(root_path + os.sep + "src" + os.sep + "templates"):
     source_dir = library_path + os.sep + "templates"
