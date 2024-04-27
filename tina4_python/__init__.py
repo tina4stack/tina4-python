@@ -21,6 +21,7 @@ from tina4_python.Router import Router
 from tina4_python.Localization import localize
 from tina4_python.Auth import Auth
 from tina4_python.Debug import Debug
+from tina4_python.ShellColors import ShellColors
 
 _ = gettext.gettext
 
@@ -38,7 +39,7 @@ else:
     environment = ".env"
 
 load_env(environment)
-print("Setting debug mode", os.getenv("TINA4_DEBUG_LEVEL"))
+print(ShellColors.bright_yellow + "Setting debug mode", os.getenv("TINA4_DEBUG_LEVEL"), ShellColors.end)
 localize()
 
 if importlib.util.find_spec("jurigged"):
@@ -137,6 +138,9 @@ observer.start()
 def webserver(host_name, port):
     web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
     web_server.router_handler = Router()
+    # Fix the display to make it clickable
+    if host_name == "0.0.0.0":
+        host_name = "localhost"
     Debug(Messages.MSG_SERVER_STARTED.format(host_name=host_name, port=port), Constant.TINA4_LOG_INFO)
     try:
         asyncio.run(web_server.serve_forever())
@@ -168,9 +172,10 @@ if len(sys.argv) > 1:
 if PORT != "stop" and PORT != "manual":
     try:
         PORT = int(PORT)
-        Debug("Threading", Constant.TINA4_LOG_DEBUG)
         run_web_server(HOSTNAME, PORT)
     except Exception:
-        Debug("Not running webserver", Constant.TINA4_LOG_ERROR)
+        Debug("Not running webserver", Constant.TINA4_LOG_WARNING)
 else:
-    Debug("Webserver is set to manual start, please call run_web_server(HOSTNAME, PORT)", Constant.TINA4_LOG_INFO)
+    Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
+          "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
+          Constant.TINA4_LOG_WARNING)

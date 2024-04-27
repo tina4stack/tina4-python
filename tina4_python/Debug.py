@@ -7,6 +7,7 @@
 import os
 
 import tina4_python.Constant as Constant
+from tina4_python.ShellColors import ShellColors
 from datetime import datetime
 
 
@@ -25,7 +26,19 @@ class Debug:
 
         if (os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL]) == "[TINA4_LOG_ALL]"
                 or debug_level in os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL])):
-            print(f"{debug_level:5}:", "", end="")
+
+            # choose the color
+            color = ShellColors.bright_blue
+            if debug_level == Constant.TINA4_LOG_INFO:
+                color = ShellColors.cyan
+            elif debug_level == Constant.TINA4_LOG_DEBUG:
+                color = ShellColors.bright_magenta
+            elif debug_level == Constant.TINA4_LOG_ERROR:
+                color = ShellColors.bright_red
+            elif debug_level == Constant.TINA4_LOG_WARNING:
+                color = ShellColors.bright_yellow
+
+            print(color + f"{debug_level:5}:"+ShellColors.end, "", end="")
             for output in params:
                 print(output, "", end="")
 

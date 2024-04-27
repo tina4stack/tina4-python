@@ -5,23 +5,22 @@
 #
 # flake8: noqa: E501
 import os
-
+from tina4_python import Constant
 from tina4_python.Debug import Debug
-
 import tina4_python
 
 
-def migrate(dba):
+def migrate(dba, delimiter=";"):
     """
     Migrates the database from the migrate folder
-    :param dba:
+    :param delimiter: SQL delimiter
+    :param dba: Database connection
     :return:
     """
     dba.execute(
-        "create table if not exists tina4_migration(id integer, description varchar(200) default '', content blob, "
-        "passed integer default 0, primary key(id))")
+        "create table if not exists tina4_migration(id integer, description varchar(200) default '', content blob, passed integer default 0, primary key(id))")
 
-    Debug("Migrations found ", tina4_python.root_path + os.sep + "migrations")
+    Debug("Migrations found ", tina4_python.root_path + os.sep + "migrations", Constant.TINA4_LOG_INFO)
     dir_list = os.listdir(tina4_python.root_path + os.sep + "migrations")
 
     for file in dir_list:
@@ -35,9 +34,12 @@ def migrate(dba):
                 dba.execute("replace into tina4_migration (description, content, passed) values (?, ?, 1) ",
                             (file, content))
                 dba.commit()
-                dba.execute(content)
+                # get each migration
+                content = content.split(";")
+                for script in content:
+                    dba.execute(script)
                 dba.commit()
             except Exception as e:
                 dba.execute("update tina4_migration set passed = ? where description = ?", (0, file))
                 dba.commit()
-                Debug("Failed to run", file, e)
+                Debug("Failed to run", file, e, Constant.TINA4_LOG_INFO)
