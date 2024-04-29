@@ -67,7 +67,8 @@ class Webserver:
             body = await self.get_content_body(content_length)
         else:
             body = None
-        request = {"params": params, "body": body, "raw": self.request}
+
+        request = {"params": params, "body": body, "raw": self.request, "headers": self.headers}
 
         tina4_python.tina4_current_request = request
 
@@ -84,7 +85,8 @@ class Webserver:
 
         if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
             self.send_header("Set-Cookie",
-                             os.getenv("TINA4_SESSION", "PY_SESS") + '=' + self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")], headers)
+                             os.getenv("TINA4_SESSION", "PY_SESS") + '=' + self.cookies[
+                                 os.getenv("TINA4_SESSION", "PY_SESS")], headers)
 
         headers = await self.get_headers(headers, self.response_protocol, response.http_code)
 
@@ -104,6 +106,7 @@ class Webserver:
         for header in response_headers:
             headers += header + "\n"
         headers += "\n"
+
         return headers.encode()
 
     async def run_server(self):
@@ -167,7 +170,7 @@ class Webserver:
         # parse headers into a dictionary for more efficient use
         headers_list = {}
         for header in self.headers:
-            split = header.split(":")
+            split = header.split(":", 1)
             if len(split) == 2:
                 headers_list[split[0]] = split[1].strip()
         self.headers = headers_list

@@ -107,7 +107,7 @@ class Auth:
     def get_token(self, payload_data):
         private_key = self.load_private_key()
         now = datetime.datetime.now()
-        token_limit_minutes = os.environ.get("TINA4_TOKEN_LIMIT", 2)
+        token_limit_minutes = int(os.environ.get("TINA4_TOKEN_LIMIT", 2))
         expiry_time = now + datetime.timedelta(minutes=token_limit_minutes)
         payload_data["expires"] = expiry_time.isoformat()
         token = jwt.encode(

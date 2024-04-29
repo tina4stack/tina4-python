@@ -38,8 +38,9 @@ class Template:
                 template = twig.get_template(template_or_file_name)
                 content = template.render(data)
             else:
-                template = environment.from_string(template_or_file_name)
+                template = twig.from_string(template_or_file_name)
                 content = template.render(data)
+
         except Exception as e:
             Debug("Error rendering twig file", template_or_file_name, data, e, Constant.TINA4_LOG_ERROR)
             content = ""

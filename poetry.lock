@@ -93,13 +93,13 @@ pycparser = "*"
 
 [[package]]
 name = "codefind"
-version = "0.1.3"
+version = "0.1.4"
 description = "Find code objects and their referents"
 optional = false
-python-versions = ">=3.8,<4.0"
+python-versions = "<4.0,>=3.8"
 files = [
-    {file = "codefind-0.1.3-py3-none-any.whl", hash = "sha256:3ffe85b74595b5c9f82391a11171ce7d68f1f555485720ab922f3b86f9bf30ec"},
-    {file = "codefind-0.1.3.tar.gz", hash = "sha256:5667050361bf601a253031b2437d16b7d82cb0fa0e756d93e548c7b35ce6f910"},
+    {file = "codefind-0.1.4-py3-none-any.whl", hash = "sha256:31bd5873b29c37776b4dc9041cbccd38e673fe472719b47268b1fbd3624866cb"},
+    {file = "codefind-0.1.4.tar.gz", hash = "sha256:9d7b60d231a68be9b205606d9164ee06e1e0d45b9da73101e429ebe4769ee5af"},
 ]
 
 [[package]]
@@ -169,13 +169,13 @@ test-randomorder = ["pytest-randomly"]
 
 [[package]]
 name = "exceptiongroup"
-version = "1.2.0"
+version = "1.2.1"
 description = "Backport of PEP 654 (exception groups)"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "exceptiongroup-1.2.0-py3-none-any.whl", hash = "sha256:4bfd3996ac73b41e9b9628b04e079f193850720ea5945fc96a08633c66912f14"},
-    {file = "exceptiongroup-1.2.0.tar.gz", hash = "sha256:91f5c769735f051a4290d52edd0858999b57e5876e9f85937691bd4c9fa3ed68"},
+    {file = "exceptiongroup-1.2.1-py3-none-any.whl", hash = "sha256:5258b9ed329c5bbdd31a309f53cbfb0b155341807f6ff7606a1e801a891b29ad"},
+    {file = "exceptiongroup-1.2.1.tar.gz", hash = "sha256:a4785e48b045528f5bfe627b6ad554ff32def154f42372786903b7abcfe1aa16"},
 ]
 
 [package.extras]
@@ -417,13 +417,13 @@ files = [
 
 [[package]]
 name = "ovld"
-version = "0.3.4"
+version = "0.3.5"
 description = "Overloading Python functions"
 optional = false
 python-versions = "<4.0,>=3.8"
 files = [
-    {file = "ovld-0.3.4-py3-none-any.whl", hash = "sha256:931b0a5ef34fb1a0b12ba1183d71756f0c10a7b78b7a994cd694597665f62379"},
-    {file = "ovld-0.3.4.tar.gz", hash = "sha256:9e4f5666cdc55947e8312f8c4e041925169dab2f7d756cb96af32e397f153175"},
+    {file = "ovld-0.3.5-py3-none-any.whl", hash = "sha256:d36604a9ff7202d5639ebefd6ff97955ce5b04ffff0c7f0ade6ddc3189ca9846"},
+    {file = "ovld-0.3.5.tar.gz", hash = "sha256:838358bc800d5bf3a66afcd6d59f0826eda7a598f48f885a9c8662169ef29813"},
 ]
 
 [[package]]
@@ -439,13 +439,13 @@ files = [
 
 [[package]]
 name = "pluggy"
-version = "1.4.0"
+version = "1.5.0"
 description = "plugin and hook calling mechanisms for python"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "pluggy-1.4.0-py3-none-any.whl", hash = "sha256:7db9f7b503d67d1c5b95f59773ebb58a8c1c288129a88665838012cfb07b8981"},
-    {file = "pluggy-1.4.0.tar.gz", hash = "sha256:8c85c2876142a764e5b7548e7d9a0e0ddb46f5185161049a79b7e974454223be"},
+    {file = "pluggy-1.5.0-py3-none-any.whl", hash = "sha256:44e1ad92c8ca002de6377e165f3e0f1be63266ab4d554740532335b9d75ea669"},
+    {file = "pluggy-1.5.0.tar.gz", hash = "sha256:2cffa88e94fdc978c4c574f15f9e59b7f4201d439195c3715ca9e2486f1d0cf1"},
 ]
 
 [package.extras]

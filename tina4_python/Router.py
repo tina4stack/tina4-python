@@ -124,7 +124,9 @@ class Router:
 
         # see if we can find the twig file
         if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
-            tina4_python.tina4_current_request["params"].update(Router.get_variables(url, url))
+            Debug("Looking for twig file",
+                  tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
+                  Constant.TINA4_LOG_DEBUG)
             content = Template.render_twig_template(twig_file)
             if content != "":
                 return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML)
