@@ -116,20 +116,22 @@ class Router:
                 result = await router_response(request=Request, response=Response)
                 break
 
-        # Serve twigs if the files exist
-        if url == "/":
-            twig_file = "index.twig"
-        else:
-            twig_file = url + ".twig"
+        # If no route is matched, serve 404
+        if result.http_code == Constant.HTTP_NOT_FOUND:
+            # Serve twigs if the files exist
+            if url == "/":
+                twig_file = "index.twig"
+            else:
+                twig_file = url + ".twig"
 
-        # see if we can find the twig file
-        if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
-            Debug("Looking for twig file",
-                  tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
-                  Constant.TINA4_LOG_DEBUG)
-            content = Template.render_twig_template(twig_file)
-            if content != "":
-                return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML)
+            # see if we can find the twig file
+            if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
+                Debug("Looking for twig file",
+                      tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
+                      Constant.TINA4_LOG_DEBUG)
+                content = Template.render_twig_template(twig_file)
+                if content != "":
+                    return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML)
 
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
