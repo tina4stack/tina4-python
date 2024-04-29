@@ -138,10 +138,10 @@ from tina4_python.Router import get
 from tina4_python.Response import Response
 
 @get("/hello/{name}")
-async def greet(**params):
+async def greet(**params): #(request, response)
    name = params['request'].params['name']
-   return params['response'](f"Hello, {name}!")
- ````
+   return params['response'](f"Hello, {name}!") # return response()
+````
 
 This code creates a route for a GET request to `/hello/{name}`, where `name` is a parameter in the URL. The function `greet` accepts this parameter and responds with a personalized greeting.
 
