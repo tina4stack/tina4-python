@@ -206,19 +206,96 @@ API_KEY=somehash
 
 
 ### Features
-| Completed                  | To Do             |
-|----------------------------|-------------------|
-| Python pip package         |                   |
-| Basic environment handling |                   |
-| Basic routing              | OpenAPI (Swagger) |
-| Enhanced routing           |                   |
-| CSS Support                |                   |
-| Image Support              |                   |
-| Localization               |                   |
-| Error Pages                |                   |
-| Template handling          |                   |
-| Form posting               |                   |
-| JWT tokens & security      |                   |
+| Completed                  | To Do                |
+|----------------------------|----------------------|
+| Python pip package         |                      |
+| Basic environment handling |                      |
+| Basic routing              | OpenAPI (Swagger)    |
+| Enhanced routing           |                      |
+| CSS Support                |                      |
+| Image Support              |                      |
+| Localization               |                      |
+| Error Pages                |                      |
+| Template handling          |                      |
+| Form posting               |                      |
+| Migrations                 |                      |
+| Colored Debugging          |                      |
+|                            | Database Abstraction |
+
+### Database
+
+```bash
+
+dba = Database("sqlite3:test.db", "username", "password")
+dba = Database("mysql:localhost/3306:myschema", "username", "password")
+dba = Database("postgres:localhost/5432:myschema", "username", "password")
+dba = Database("firebird:localhost/3050:/home/database/FIREBIRD.FDB", "username", "password")
+
+
+records = dba.fetch("select * from table where something = ? and something2 = ?", params=["something", "something2"], limit=10, skip=5)
+
+print (records)
+
+print (records.to_json())
+
+{
+  id : 1
+  something: "something",
+  something2: "something2"
+}
+
+print(records[0].id)
+
+1
+
+record = dba.fetch_one("select * from table where something = ? and something2 = ?", params=["something", "something2"])
+
+print(record.id)
+
+print (records.to_json())
+
+1
+
+dba.execute ("update table set something = ? and something2 = ? where id = ?", params=["something", "something2", 1])
+dba.execute ("delete from table where id = ?", params=[1])
+
+dba.start_transaction()
+
+dba.roll_back()
+
+dba.commit()
+
+dba.select(["id", "something", "something2"], "table_name", filter={"id": 1}, limit=10, skip=0)
+dba.select(["id", "something", "something2"], "table_name", filter=[{"id": 1}, {"id": 2}], limit=10, skip=0)
+dba.select(["id", "something", "sum(id)"])
+   .from(["table"])
+   .join(["tabel2"])
+   .on([""])
+   .and([{"id": 1}])
+   .where({"id" : 2}, "id = ?", [{"id": 2}])
+   .having()
+   .group_by()
+   .order_by(["id"])
+
+dba.update(table_name="table_name", records.fromJSON(json_string))
+dba.update(table_name="table_name", records, primary_key="id")
+
+dba.update(table_name="table_name", record, primary_key="id") # primary key implied by first key value pair
+dba.insert(table_name="table_name", dba.from_json(json_string))
+dba.insert(table_name="table_name", {"id": 1, "something": "hello", "something2": "world"})
+dba.insert(table_name="table_name", [{"id": 1, "something": "hello", "something2": "world"}, 
+{"id": 2, "something": "hello2", "something2": "world2"}])
+
+dba.delete("table_name", record, primary_key="id")
+dba.delete("table_name", filter={"id": 1})
+
+dba.delete("table_name", filter=[{"id": 1}, {"id": 2}])
+
+
+
+
+```
+
 
 ### Building and Deployment
 
