@@ -4,12 +4,17 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 import os
+import sqlite3
+
+from tina4_python import Migration
 from tina4_python.Template import Template
 from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
 
 
+dba = sqlite3.connect("test.db")
+Migration.migrate(dba)
 
 @get("/env")
 async def env(request, response):
