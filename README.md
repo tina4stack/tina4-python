@@ -231,6 +231,11 @@ dba = Database("mysql:localhost/3306:myschema", "username", "password")
 dba = Database("postgres:localhost/5432:myschema", "username", "password")
 dba = Database("firebird:localhost/3050:/home/database/FIREBIRD.FDB", "username", "password")
 
+NoSQL support
+
+dba = Database("mongodb:localhost/27017:mycollection", "username", "password")
+dba = Database("firebase:https://your_storage.firebaseio.com", "username", "password")
+
 
 records = dba.fetch("select * from table where something = ? and something2 = ?", params=["something", "something2"], limit=10, skip=5)
 

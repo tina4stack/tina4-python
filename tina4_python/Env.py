@@ -17,7 +17,7 @@ def load_env(path: str = '.env'):
             f.write("VERSION=1.0.0\n")
             f.write("TINA4_LANGUAGE=en\n")
             f.write("TINA4_SECRET=ABCDEF\n")
-            f.write("TINA4_DEBUG_LEVEL=[\"ALL\"]\n")
+            f.write("TINA4_DEBUG_LEVEL=[TINA4_LOG_ALL]\n")
     # Load the .env
     load_dotenv(path)
     # check for defaults we need
