@@ -15,17 +15,21 @@ from tina4_python.Database import Database
 
 
 dba1 = Database("sqlite3:test.db", "username", "password")
-dba2 = Database("firebird.driver:localhost:/tmp/TEST.FDB", "sysdba", "masterkey")
+dba2 = Database("firebird.driver:localhost:d:\\tmp\\ZOO.FDB", "sysdba", "masterkey")
 
 
-rows, columns = dba2.fetch("select * from users")
-print(rows, columns)
+rows = dba2.fetch("select * from zoo")
+print("FIRST", rows.to_json(), rows.columns, rows.error)
+
+rows = dba2.fetch("select * from zoo where id = ? and name = ?", [1, "ZOO 1"], 1)
+print("SECOND", rows[0], rows.columns, rows.error)
+
 rows = dba1.fetch("select * from test")
-print(rows)
+print("THIRD", rows)
 
-dba1.dba.close()
-dba2.dba.close()
 
+dba1.close()
+dba2.close()
 
 
 dba = sqlite3.connect("test.db")
@@ -95,3 +99,7 @@ async def post_me(request, response):
 
     Debug(f"POST: {req}")
     return response(req)
+
+
+
+

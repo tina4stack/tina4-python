@@ -6,6 +6,10 @@
 # flake8: noqa: E501
 import importlib
 
+from tina4_python import Debug, Constant
+from tina4_python.DatabaseResult import DatabaseResult
+
+
 class Database:
 
     def __init__(self, _connection_string, _username="", _password=""):
@@ -16,53 +20,58 @@ class Database:
         # split out the connection string
         # driver:host/port:schema/path
 
-        params = _connection_string.split(":")
+        params = _connection_string.split(":", 1)
         self.database_module = importlib.import_module(params[0])
+
         self.database_engine = params[0]
         self.database_path = params[1]
         self.username = _username
         self.password = _password
 
-        print("LOADING", self.database_engine)
         if self.database_engine == "sqlite3":
             self.dba = self.database_module.connect(self.database_path)
-
+            self.port = None
+            self.host = None
 
         if self.database_engine == "firebird.driver":
-            temp_params = self.database_path.split("/")
-            self.host = temp_params[0]
-            if len(temp_params) > 1:
-                self.port = temp_params[1]
+            # <host>/<port>:<file>
+            temp_params = self.database_path.split(":", 1)
+            host_port = temp_params[0].split("/", 1)
+            self.host = host_port[0]
+            if len(host_port) > 1:
+                self.port = int(host_port[1])
             else:
                 self.port = 3050
-            self.database_path = params[2]
+
+            self.database_path = temp_params[1]
 
             self.dba = self.database_module.connect(
-                self.host+"/"+str(self.port)+":"+self.database_path,
+                self.host + "/" + str(self.port) + ":" + self.database_path,
                 user=self.username,
                 password=self.password
             )
-            print(self.dba, self.host, self.database_path, self.username, self.port)
 
+        Debug("DATABASE:", self.database_module, self.host, self.port, self.database_path, self.username, Constant.TINA4_LOG_INFO)
 
     def fetch(self, sql, params=(), limit=10, skip=0):
+        Debug("DATABASE:", self.database_module, self.host, self.port, self.database_path, self.username, Constant.TINA4_LOG_DEBUG)
         # modify the select statement for limit and skip
         if self.database_engine == "firebird.driver":
             sql = f"select first {limit} skip {skip} * from ({sql})"
         elif self.database_engine == "sqlite3":
             sql = f"select * from ({sql}) limit {skip},{limit}"
-        print("SQL", sql)
+
         cursor = self.dba.cursor()
-        cursor.execute(sql, params)
-        columns = [column[0].lower() for column in cursor.description]
-        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-        columns = [column for column in cursor.description]
-        return rows, columns
+        try:
+            cursor.execute(sql, params)
+            columns = [column[0].lower() for column in cursor.description]
+            records = cursor.fetchall()
+            rows = [dict(zip(columns, row)) for row in records]
+            columns = [column for column in cursor.description]
+            return DatabaseResult(rows, columns, None)
+        except Exception as e:
+            return DatabaseResult(None, [], str(e))
 
-    def __del__(self):
-
+    def close(self):
+        self.dba.close()
         pass
-
-
-
-
