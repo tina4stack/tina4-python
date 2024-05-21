@@ -11,6 +11,21 @@ from tina4_python.Template import Template
 from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
+from tina4_python.Database import Database
+
+
+dba1 = Database("sqlite3:test.db", "username", "password")
+dba2 = Database("firebird.driver:localhost:/tmp/TEST.FDB", "sysdba", "masterkey")
+
+
+rows, columns = dba2.fetch("select * from users")
+print(rows, columns)
+rows = dba1.fetch("select * from test")
+print(rows)
+
+dba1.dba.close()
+dba2.dba.close()
+
 
 
 dba = sqlite3.connect("test.db")
