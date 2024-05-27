@@ -54,6 +54,14 @@ class Database:
         Debug("DATABASE:", self.database_module, self.host, self.port, self.database_path, self.username, Constant.TINA4_LOG_INFO)
 
     def fetch(self, sql, params=(), limit=10, skip=0):
+        """
+        Fetch records based on a sql statement
+        :param sql:
+        :param params:
+        :param limit:
+        :param skip:
+        :return:
+        """
         Debug("FETCH:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
         # modify the select statement for limit and skip
         if self.database_engine == "firebird.driver":
@@ -85,7 +93,6 @@ class Database:
         # Running an execute statement and committing any changes to the database
         try:
             cursor.execute(sql, params)
-            self.dba.commit()
             # On success return an empty result set with no error
             return DatabaseResult(None, [], None)
 
@@ -93,6 +100,15 @@ class Database:
             Debug("EXECUTE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
+
+    def start_transaction(self):
+        self.dba.start_transaction()
+
+    def commit(self):
+        self.dba.commit()
+
+    def rollback(self):
+        self.dba.rollback()
 
     def close(self):
         self.dba.close()
