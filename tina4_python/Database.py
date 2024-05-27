@@ -54,7 +54,7 @@ class Database:
         Debug("DATABASE:", self.database_module, self.host, self.port, self.database_path, self.username, Constant.TINA4_LOG_INFO)
 
     def fetch(self, sql, params=(), limit=10, skip=0):
-        Debug("DATABASE:", self.database_module, self.host, self.port, self.database_path, self.username, Constant.TINA4_LOG_DEBUG)
+        Debug("FETCH:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
         # modify the select statement for limit and skip
         if self.database_engine == "firebird.driver":
             sql = f"select first {limit} skip {skip} * from ({sql})"
@@ -68,8 +68,30 @@ class Database:
             records = cursor.fetchall()
             rows = [dict(zip(columns, row)) for row in records]
             columns = [column for column in cursor.description]
+            Debug("FETCH:", "cursor description", cursor.description, "records", records, "rows", rows, "columns", columns, Constant.TINA4_LOG_DEBUG)
             return DatabaseResult(rows, columns, None)
         except Exception as e:
+            return DatabaseResult(None, [], str(e))
+
+    def fetch_one(self, sql, params=(), skip=0):
+        Debug("FETCHONE:", sql, "params", params, "skip", skip)
+        # Calling the fetch method with limit as 1 and returning the result
+        return self.fetch(sql, params=params, limit=1, skip=skip)
+
+    def execute(self, sql, params=()):
+        Debug("EXECUTE:", sql, "params", params)
+
+        cursor = self.dba.cursor()
+        # Running an execute statement and committing any changes to the database
+        try:
+            cursor.execute(sql, params)
+            self.dba.commit()
+            # On success return an empty result set with no error
+            return DatabaseResult(None, [], None)
+
+        except Exception as e:
+            Debug("EXECUTE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            # Return the error in the result
             return DatabaseResult(None, [], str(e))
 
     def close(self):
