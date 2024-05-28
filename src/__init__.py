@@ -15,7 +15,7 @@ from tina4_python.Database import Database
 
 
 dba1 = Database("sqlite3:test.db", "username", "password")
-dba2 = Database("firebird.driver:localhost:c:\\tmp\\ZOO.FDB", "sysdba", "masterkey")
+# dba2 = Database("firebird.driver:localhost:c:\\tmp\\ZOO.FDB", "sysdba", "masterkey")
 
 
 # rows = dba2.fetch("select * from zoo")
@@ -53,9 +53,17 @@ dba2 = Database("firebird.driver:localhost:c:\\tmp\\ZOO.FDB", "sysdba", "masterk
 # dba1.close()
 # dba2.close()
 
+# dba2.start_transaction()
 
-dba = sqlite3.connect("test.db")
-Migration.migrate(dba)
+# dba1.insert("test", [{"first_name": "ongani", "last_name": "Dlamini", "age": 35}, {"first_name": "neesa", "last_name": "Abrahams", "age": 21}])
+# rows = dba1.fetch("SELECT * FROM test")
+# print("FIFTH", rows)
+# dba1.commit()
+# dba1.close()
+
+
+# dba = sqlite3.connect("test.db")
+# Migration.migrate(dba)
 
 @get("/env")
 async def env(request, response):
