@@ -5,13 +5,17 @@
 #
 # flake8: noqa: E501
 import importlib
-import sqlite3
 
 from tina4_python import Debug, Constant
 from tina4_python.DatabaseResult import DatabaseResult
 
 
 class Database:
+
+    SQLITE = "sqlite3"
+    FIREBIRD = "firebird.driver"
+    MYSQL = "mysql"
+    POSTGRES = "postgres"
 
     def __init__(self, _connection_string, _username="", _password=""):
         """
@@ -64,7 +68,7 @@ class Database:
         :param skip:
         :return:
         """
-        Debug("FETCH:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
+        # Debug("FETCH:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
         # modify the select statement for limit and skip
         if self.database_engine == "firebird.driver":
             sql = f"select first {limit} skip {skip} * from ({sql})"
@@ -78,8 +82,8 @@ class Database:
             records = cursor.fetchall()
             rows = [dict(zip(columns, row)) for row in records]
             columns = [column for column in cursor.description]
-            Debug("FETCH:", "cursor description", cursor.description, "records", records, "rows", rows, "columns",
-                  columns, Constant.TINA4_LOG_DEBUG)
+            # Debug("FETCH:", "cursor description", cursor.description, "records", records, "rows", rows, "columns",
+            #       columns, Constant.TINA4_LOG_DEBUG)
             return DatabaseResult(rows, columns, None)
         except Exception as e:
             return DatabaseResult(None, [], str(e))
@@ -117,17 +121,37 @@ class Database:
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
 
-    def start_transaction(self):
+    def execute_many(self, sql, params=()):
+        """
+        Execute a query based on a single sql statement with a different number of params
+        :param sql:
+        :param params:
+        :return:
+        """
+
+        cursor = self.dba.cursor()
+        # Running an execute statement and committing any changes to the database
         try:
-            if self.database_engine == "sqlite3" or self.database_engine == "postgres":
-                cursor = self.dba.cursor()
-                cursor.execute("BEGIN")
-            elif self.database_engine == "firebird.driver":
+            cursor.executemany(sql, params)
+            # On success return an empty result set with no error
+            return DatabaseResult(None, [], None)
+
+        except Exception as e:
+            Debug("EXECUTE MANY ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            # Return the error in the result
+            return DatabaseResult(None, [], str(e))
+
+    def start_transaction(self):
+
+        try:
+            if self.database_engine in (self.SQLITE, self.POSTGRES):
+                self.dba.execute("BEGIN")
+            elif self.database_engine == self.FIREBIRD:
                 self.dba.transaction_manager().begin()
-            elif self.database_engine == "mysql":
+            elif self.database_engine == self.MYSQL:
                 self.dba.start_transaction()
         except Exception as e:
-            Debug("START TRANSACTION ERROR:", str(e))
+            Debug("START TRANSACTION ERROR:", str(e), Constant.TINA4_LOG_ERROR)
 
     def commit(self):
         self.dba.commit()
@@ -149,33 +173,115 @@ class Database:
             keys = [key for key in data]
             columns = ", ".join(keys)
             values = [value for value in data.values()]
-
-            if self.database_engine == "sqlite3" or self.database_engine == "firebird.driver":
+            # Checking which database engine is used to generate respective syntax for placeholders
+            if self.database_engine in (self.SQLITE, self.FIREBIRD):
                 placeholders = ", ".join(['?'] * len(data))
-            elif self.database_engine == "mysql" or self.database_engine == "postgres":
+            elif self.database_engine in (self.MYSQL, self.POSTGRES):
                 placeholders = ", ".join(['%s'] * len(data))
 
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
-            cursor = self.dba.cursor()
+
             try:
-                cursor.execute(sql, values)
+                self.execute(sql, values)
             except Exception as e:
-                Debug("INSERT ERROR:", str(e))
+                Debug("INSERT ERROR:", str(e), Constant.TINA4_LOG_ERROR)
         elif isinstance(data, list):
             columns = ", ".join(data[0].keys())
-
-            if self.database_engine == "sqlite3" or self.database_engine == "firebird.driver":
+            # Checking which database engine is used to generate respective syntax for placeholders
+            if self.database_engine in (self.SQLITE, self.FIREBIRD):
                 placeholders = ", ".join(['?'] * len(data[0]))
-            elif self.database_engine == "mysql" or self.database_engine == "postgres":
+            elif self.database_engine in (self.MYSQL, self.POSTGRES):
                 placeholders = ", ".join(['%s'] * len(data[0]))
 
             values = [list(record.values()) for record in data]
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
-            cursor = self.dba.cursor()
-            try:
-                cursor.executemany(sql, values)
-            except Exception as e:
-                Debug("INSERT MANY ERROR:", str(e))
 
-    def delete(self, table_name, filter):
+            try:
+                self.execute_many(sql, values)
+            except Exception as e:
+                Debug("INSERT ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+
+
+    def delete(self, table_name, records=None, primary_key=None, filter=None):
+        """
+        Delete data based on table name and filter provided - single or multiple filters
+        :param table_name:
+        :param records:
+        :param primary_key:
+        :param filter:
+        """
+
+        if self.database_engine in (self.SQLITE, self.FIREBIRD):
+            placeholder = "?"
+        elif self.database_engine in (self.MYSQL, self.POSTGRES):
+            placeholder = "%s"
+
+        if records is not None:
+            pk_value = ""
+            condition_records = ""
+
+            if isinstance(records, dict):
+                for column, value in records.items():
+                    if column == primary_key:
+                        condition_records = f"{column} = {placeholder}"
+                        pk_value = value
+
+                sql = f"DELETE FROM {table_name} WHERE {condition_records}"
+
+                try:
+                    self.execute(sql, [pk_value])
+                except Exception as e:
+                    Debug("DELETE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+
+            elif isinstance(records, list):
+                placeholders = ", ".join([placeholder] * len(records))
+                pk_values = []
+                conditions_records = ""
+
+                for record in records:
+                    for column, value in record.items():
+                        if column == primary_key:
+                            conditions_records = f"{column} in ({placeholders})"
+                            pk_values.append(value)
+
+                sql = f"DELETE FROM {table_name} WHERE {conditions_records}"
+
+                try:
+                    self.execute(sql, pk_values)
+                except Exception as e:
+                    Debug("DELETE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+
+        if isinstance(filter, dict):
+            column = list(filter.keys())[0]
+            value = list(filter.values())[0]
+
+            condition = f"{column} = {placeholder}"
+
+            sql = f"DELETE FROM {table_name} WHERE {condition}"
+
+            try:
+                self.execute(sql, [value])
+            except Exception as e:
+                Debug("DELETE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+
+        elif isinstance(filter, list):
+
+            conditions_list = []
+            values = [value for item in filter for value in item.values()]
+
+            for filter_condition in filter:
+                for column in filter_condition.keys():
+                    where_clause = f"{column} = {placeholder}"
+                    conditions_list.append(where_clause)
+
+            conditions = " AND ".join(conditions_list)
+
+            sql = f"DELETE FROM {table_name} WHERE {conditions}"
+
+            try:
+                self.execute(sql, values)
+            except Exception as e:
+                Debug("DELETE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+
+    def update(self, table_name):
         pass

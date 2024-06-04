@@ -4,7 +4,6 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 import os
-import sqlite3
 
 from tina4_python import Migration
 from tina4_python.Template import Template
@@ -14,7 +13,7 @@ from tina4_python.Router import post
 from tina4_python.Database import Database
 
 
-dba1 = Database("sqlite3:test.db", "username", "password")
+# dba1 = Database("sqlite3:test.db", "username", "password")
 # dba2 = Database("firebird.driver:localhost:c:\\tmp\\ZOO.FDB", "sysdba", "masterkey")
 
 
@@ -55,13 +54,41 @@ dba1 = Database("sqlite3:test.db", "username", "password")
 
 # dba2.start_transaction()
 
-# dba1.insert("test", [{"first_name": "ongani", "last_name": "Dlamini", "age": 35}, {"first_name": "neesa", "last_name": "Abrahams", "age": 21}])
-# rows = dba1.fetch("SELECT * FROM test")
-# print("FIFTH", rows)
+# dba1.insert("test", [{"first_name": "Bongani", "last_name": "Dlamini", "age": 35}, {"first_name": "Aneesa", "last_name": "Abrahams", "age": 21}])
+
 # dba1.commit()
 # dba1.close()
+# dba1.start_transaction()
+# dba1.insert("test", {"first_name": "ongan", "last_name": "lamin", "age": 35})
+# rows = dba1.fetch("SELECT * FROM test")
+# print("FIFTH", rows)
 
+# dba1.start_transaction()
+# dba1.insert("test", {"first_name": "Roger", "last_name": "Thomas", "age": 35})
+# rows = dba1.fetch("SELECT * FROM test")
+# print("FIFTH", rows)
+#
+# # dba2.rollback()
+# # dba2.commit()
+# rows2 = dba1.fetch("SELECT * FROM test")
+# print("SIXTH", rows2)
 
+# dba1.start_transaction()
+# dba1.execute("DELETE FROM test")
+# dba1.insert("test", [{"first_name": "Joshua", "last_name": "Matthews", "age": 24}, {"first_name": "Derek", "last_name": "Meyer", "age": 28}])
+# dba1.insert("test", {"first_name": "Kyle", "last_name": "Cook", "age": 32})
+# dba1.delete("test", [{"first_name": "Nuraan"}, {"id": 1}])
+
+# dba1.insert("test", [{"first_name": "Joshua", "last_name": "Matthews", "age": 26}, {"first_name": "Joshua", "last_name": "Stewart", "age": 24}])
+# dba1.delete("test", [{"first_name": "Joshua"}, {"age": 24}])
+# dba1.commit()
+# dba1.delete("test", {"id": 3, "first_name": "Nuraa", "last_name": "Jacobs", "age": 24}, primary_key="id")
+# dba1.delete("test", [{"id": 2, "first_name": "Mikhail", "last_name": "Jonhson", "age": 28},{"id": 4, "first_name": "Mikhai", "last_name": "Jonhson", "age": 28}], primary_key="id")
+# dba1.delete("test", filter={"id": 10})
+# dba1.commit()
+# rows = dba1.fetch("SELECT * FROM test")
+# print("SEVENTH", rows)
+# dba1.close()
 # dba = sqlite3.connect("test.db")
 # Migration.migrate(dba)
 
