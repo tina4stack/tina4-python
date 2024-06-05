@@ -92,6 +92,47 @@ from tina4_python.Database import Database
 # dba = sqlite3.connect("test.db")
 # Migration.migrate(dba)
 
+# rows = dba1.fetch("SELECT * FROM TEST")
+# print("EIGHTH", rows)
+#dba1.start_transaction()
+
+# dba1.insert("test", {"first_name": "Brad", "last_name": "Samuels", "age": 28})
+# dba1.insert("test", {"first_name": "Bbb", "last_name": "ccc", "age": 33})
+# dba1.insert("test", {"first_name": "Ccc", "last_name": "ccc", "age": 34})
+# dba1.insert("test", {"first_name": "Ddd", "last_name": "ddd", "age": 35})
+
+# dba1.update("test", [{"id": 12, "first_name": "BBB"}, {"id": 13, "last_name": "CCC"}])
+# dba1.update("test", {"id": 12, "last_name": "DDD"})
+
+# dba1.delete("test", [{"id": 12}, {"id": 13}])
+
+# dba1.delete("test", filter=[{"age": 28}, {"last_name": "Matthews"}])
+
+# dba1.execute_many("INSERT INTO test (first_name, last_name, age) VALUES (?, ?, ?)", [["Roger", "Smith", 24], ["Tim", "Bradford", 19]])
+# dba1.delete("test", filter=[{"id": 12}, {"id": 13}])
+
+# rows2 = dba1.fetch("SELECT * FROM TEST")
+# print("NINTH", rows2)
+
+# dba1.rollback()
+# dba1.commit()
+
+
+
+
+# rows3 = dba1.fetch("SELECT * FROM TEST")
+# print("TENTH", rows3)
+#
+# dba1.update("test", [{"id": 12, "first_name": "Thomas", "last_name": "Matthews"}, {"id": 13, "age": 20}], "id")
+#
+# dba1.commit()
+#
+# rows = dba1.fetch("SELECT * FROM TEST")
+# print("EIGHTH", rows)
+#
+# dba1.close()
+
+
 @get("/env")
 async def env(request, response):
     Debug("Api GET")
