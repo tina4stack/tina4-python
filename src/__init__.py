@@ -129,9 +129,41 @@ from tina4_python.Database import Database
 #
 # rows = dba1.fetch("SELECT * FROM TEST")
 # print("EIGHTH", rows)
+
+# dba1.start_transaction()
+# dba1.delete("test", filter={"id": 13})
+# rows2 = dba1.fetch("SELECT * FROM TEST")
+# print(rows2)
+# dba1.rollback()
+# dba1.commit()
+# rows3 = dba1.fetch("SELECT * FROM TEST")
+# print(rows3)
 #
 # dba1.close()
 
+# rows = dba2.fetch("SELECT * FROM zoo", limit=100)
+# print(rows)
+
+# dba2.start_transaction()
+# # #
+# # dba2.delete("zoo", filter={"id": 19})
+# dba2.execute("INSERT INTO zoo (name, surname, age) VALUES (?, ?, ?)", ["Michael", "Jackson", 56])
+# # print(rows)
+# rows2 = dba2.fetch("SELECT * FROM zoo")
+# print(rows2)
+
+# dba2.insert("zoo", {"name": "E", "surname": "F", "age": 55})
+# # #
+# #
+# rows2 = dba2.fetch("SELECT * FROM zoo")
+# print(rows2)
+# dba2.rollback()
+# dba2.commit()
+# # #
+# rows3 = dba2.fetch("SELECT * FROM zoo", limit=100)
+# print(rows)
+# # #
+# dba2.close()
 
 @get("/env")
 async def env(request, response):

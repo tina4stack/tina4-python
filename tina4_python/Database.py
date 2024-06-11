@@ -11,7 +11,6 @@ from tina4_python.DatabaseResult import DatabaseResult
 
 
 class Database:
-
     SQLITE = "sqlite3"
     FIREBIRD = "firebird.driver"
     MYSQL = "mysql"
@@ -146,11 +145,12 @@ class Database:
             if self.database_engine in (self.SQLITE, self.POSTGRES):
                 self.dba.execute("BEGIN TRANSACTION")
             elif self.database_engine == self.FIREBIRD:
-                self.dba.transaction_manager().begin()
+                self.dba.begin()
             elif self.database_engine == self.MYSQL:
                 self.dba.start_transaction()
             else:
-                Debug("START TRANSACTION ERROR:", "Database engine unrecognised/not supported", Constant.TINA4_LOG_ERROR)
+                Debug("START TRANSACTION ERROR:", "Database engine unrecognised/not supported",
+                      Constant.TINA4_LOG_ERROR)
         except Exception as e:
             Debug("START TRANSACTION ERROR:", str(e), Constant.TINA4_LOG_ERROR)
 
@@ -228,7 +228,7 @@ class Database:
             pk_value = None
             condition_records = ""
 
-        # Delete a single record - record passed in is a dictionary
+            # Delete a single record - record passed in is a dictionary
 
             if isinstance(records, dict):
                 for column, value in records.items():
@@ -243,7 +243,7 @@ class Database:
                 except Exception as e:
                     Debug("DELETE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
 
-        # Delete multiple records - records passed in is a list
+            # Delete multiple records - records passed in is a list
 
             elif isinstance(records, list):
                 placeholders = ", ".join([placeholder] * len(records))
