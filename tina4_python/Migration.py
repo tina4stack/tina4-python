@@ -56,4 +56,4 @@ def migrate(dba, delimiter=";"):
                     (file, file_contents, str(e)))
                 dba.commit()
 
-                Debug("Failed to run", file, record[1], e, Constant.TINA4_LOG_ERROR)
+                Debug("Failed to run", file, e, Constant.TINA4_LOG_ERROR)
