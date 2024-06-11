@@ -4,7 +4,6 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 import os
-import sqlite3
 
 from tina4_python import Migration
 from tina4_python.Template import Template
@@ -14,8 +13,8 @@ from tina4_python.Router import post
 from tina4_python.Database import Database
 
 
-dba1 = Database("sqlite3:test.db", "username", "password")
-dba2 = Database("firebird.driver:localhost:c:\\tmp\\ZOO.FDB", "sysdba", "masterkey")
+# dba1 = Database("sqlite3:test.db", "username", "password")
+# dba2 = Database("firebird.driver:localhost:c:\\tmp\\ZOO.FDB", "sysdba", "masterkey")
 
 
 # rows = dba2.fetch("select * from zoo")
@@ -53,9 +52,118 @@ dba2 = Database("firebird.driver:localhost:c:\\tmp\\ZOO.FDB", "sysdba", "masterk
 # dba1.close()
 # dba2.close()
 
+# dba2.start_transaction()
 
-dba = sqlite3.connect("test.db")
-Migration.migrate(dba)
+# dba1.insert("test", [{"first_name": "Bongani", "last_name": "Dlamini", "age": 35}, {"first_name": "Aneesa", "last_name": "Abrahams", "age": 21}])
+
+# dba1.commit()
+# dba1.close()
+# dba1.start_transaction()
+# dba1.insert("test", {"first_name": "ongan", "last_name": "lamin", "age": 35})
+# rows = dba1.fetch("SELECT * FROM test")
+# print("FIFTH", rows)
+
+# dba1.start_transaction()
+# dba1.insert("test", {"first_name": "Roger", "last_name": "Thomas", "age": 35})
+# rows = dba1.fetch("SELECT * FROM test")
+# print("FIFTH", rows)
+#
+# # dba2.rollback()
+# # dba2.commit()
+# rows2 = dba1.fetch("SELECT * FROM test")
+# print("SIXTH", rows2)
+
+# dba1.start_transaction()
+# dba1.execute("DELETE FROM test")
+# dba1.insert("test", [{"first_name": "Joshua", "last_name": "Matthews", "age": 24}, {"first_name": "Derek", "last_name": "Meyer", "age": 28}])
+# dba1.insert("test", {"first_name": "Kyle", "last_name": "Cook", "age": 32})
+# dba1.delete("test", [{"first_name": "Nuraan"}, {"id": 1}])
+
+# dba1.insert("test", [{"first_name": "Joshua", "last_name": "Matthews", "age": 26}, {"first_name": "Joshua", "last_name": "Stewart", "age": 24}])
+# dba1.delete("test", [{"first_name": "Joshua"}, {"age": 24}])
+# dba1.commit()
+# dba1.delete("test", {"id": 3, "first_name": "Nuraa", "last_name": "Jacobs", "age": 24}, primary_key="id")
+# dba1.delete("test", [{"id": 2, "first_name": "Mikhail", "last_name": "Jonhson", "age": 28},{"id": 4, "first_name": "Mikhai", "last_name": "Jonhson", "age": 28}], primary_key="id")
+# dba1.delete("test", filter={"id": 10})
+# dba1.commit()
+# rows = dba1.fetch("SELECT * FROM test")
+# print("SEVENTH", rows)
+# dba1.close()
+# dba = sqlite3.connect("test.db")
+# Migration.migrate(dba)
+
+# rows = dba1.fetch("SELECT * FROM TEST")
+# print("EIGHTH", rows)
+#dba1.start_transaction()
+
+# dba1.insert("test", {"first_name": "Brad", "last_name": "Samuels", "age": 28})
+# dba1.insert("test", {"first_name": "Bbb", "last_name": "ccc", "age": 33})
+# dba1.insert("test", {"first_name": "Ccc", "last_name": "ccc", "age": 34})
+# dba1.insert("test", {"first_name": "Ddd", "last_name": "ddd", "age": 35})
+
+# dba1.update("test", [{"id": 12, "first_name": "BBB"}, {"id": 13, "last_name": "CCC"}])
+# dba1.update("test", {"id": 12, "last_name": "DDD"})
+
+# dba1.delete("test", [{"id": 12}, {"id": 13}])
+
+# dba1.delete("test", filter=[{"age": 28}, {"last_name": "Matthews"}])
+
+# dba1.execute_many("INSERT INTO test (first_name, last_name, age) VALUES (?, ?, ?)", [["Roger", "Smith", 24], ["Tim", "Bradford", 19]])
+# dba1.delete("test", filter=[{"id": 12}, {"id": 13}])
+
+# rows2 = dba1.fetch("SELECT * FROM TEST")
+# print("NINTH", rows2)
+
+# dba1.rollback()
+# dba1.commit()
+
+
+
+
+# rows3 = dba1.fetch("SELECT * FROM TEST")
+# print("TENTH", rows3)
+#
+# dba1.update("test", [{"id": 12, "first_name": "Thomas", "last_name": "Matthews"}, {"id": 13, "age": 20}], "id")
+#
+# dba1.commit()
+#
+# rows = dba1.fetch("SELECT * FROM TEST")
+# print("EIGHTH", rows)
+
+# dba1.start_transaction()
+# dba1.delete("test", filter={"id": 13})
+# rows2 = dba1.fetch("SELECT * FROM TEST")
+# print(rows2)
+# dba1.rollback()
+# dba1.commit()
+# rows3 = dba1.fetch("SELECT * FROM TEST")
+# print(rows3)
+#
+# dba1.close()
+
+# rows = dba2.fetch("SELECT * FROM zoo", limit=100)
+# print(rows)
+
+# dba2.start_transaction()
+# # #
+# # dba2.delete("zoo", filter={"id": 19})
+# dba2.execute("INSERT INTO zoo (name, surname, age) VALUES (?, ?, ?)", ["Michael", "Jackson", 56])
+# # print(rows)
+# rows2 = dba2.fetch("SELECT * FROM zoo")
+# print(rows2)
+
+# dba2.insert("zoo", {"name": "E", "surname": "F", "age": 55})
+# # #
+# #
+# rows2 = dba2.fetch("SELECT * FROM zoo")
+# print(rows2)
+# dba2.rollback()
+# dba2.commit()
+# # #
+# rows3 = dba2.fetch("SELECT * FROM zoo", limit=100)
+# print(rows)
+# # #
+# dba2.close()
 
 @get("/env")
 async def env(request, response):
