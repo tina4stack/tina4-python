@@ -182,7 +182,8 @@ class Webserver:
             for cookie_value in cookie_list_temp:
                 cookie = cookie_value.split("=", 1)
                 cookie_list[cookie[0].strip()] = cookie[1].strip()
-            self.cookies = cookie_list
+
+        self.cookies = cookie_list
 
         # initialize the session
         self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
