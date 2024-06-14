@@ -36,7 +36,7 @@ class Webserver:
             # check for form body
             if content != "":
                 body = {}
-                variables = content.split("&", 1)
+                variables = content.split("&")
                 for variable in variables:
                     variable = variable.split("=", 1)
                     body[variable[0]] = unquote(variable[1])
