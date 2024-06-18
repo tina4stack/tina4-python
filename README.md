@@ -226,7 +226,7 @@ API_KEY=somehash
 
 ```bash
 
-Various databases initialiased:
+Various databases initialised:
 
 dba = Database("sqlite3:test.db", "username", "password")
 dba = Database("mysql:localhost/3306:myschema", "username", "password")
@@ -267,7 +267,7 @@ dba.execute ("update table set something = ? and something2 = ? where id = ?", p
 dba.execute ("delete from table where id = ?", params=[1])
 
 
-Staring a transaction:
+Starting a transaction:
 
 dba.start_transaction()
 
