@@ -226,23 +226,24 @@ API_KEY=somehash
 
 ```bash
 
+Various databases initialiased:
+
 dba = Database("sqlite3:test.db", "username", "password")
 dba = Database("mysql:localhost/3306:myschema", "username", "password")
 dba = Database("postgres:localhost/5432:myschema", "username", "password")
 dba = Database("firebird:localhost/3050:/home/database/FIREBIRD.FDB", "username", "password")
 
-NoSQL support
+NoSQL support (Still to be developed):
 
 dba = Database("mongodb:localhost/27017:mycollection", "username", "password")
 dba = Database("firebase:https://your_storage.firebaseio.com", "username", "password")
 
+Fetching records and passing data as parameters, limit and skip specified:
 
 records = dba.fetch("select * from table where something = ? and something2 = ?", params=["something", "something2"], limit=10, skip=5)
 
 print (records)
-
 print (records.to_json())
-
 {
   id : 1
   something: "something",
@@ -250,7 +251,6 @@ print (records.to_json())
 }
 
 print(records[0].id)
-
 1
 
 record = dba.fetch_one("select * from table where something = ? and something2 = ?", params=["something", "something2"])
@@ -258,17 +258,31 @@ record = dba.fetch_one("select * from table where something = ? and something2 =
 print(record.id)
 
 print (records.to_json())
-
 1
+
+
+Executing sql queries:
 
 dba.execute ("update table set something = ? and something2 = ? where id = ?", params=["something", "something2", 1])
 dba.execute ("delete from table where id = ?", params=[1])
 
+
+Staring a transaction:
+
 dba.start_transaction()
+
+
+Rollback a transaction:
 
 dba.roll_back()
 
+
+Commit a transaction:
+
 dba.commit()
+
+
+Select method (Still in development):
 
 dba.select(["id", "something", "something2"], "table_name", filter={"id": 1}, limit=10, skip=0)
 dba.select(["id", "something", "something2"], "table_name", filter=[{"id": 1}, {"id": 2}], limit=10, skip=0)
@@ -282,23 +296,32 @@ dba.select(["id", "something", "sum(id)"])
    .group_by()
    .order_by(["id"])
 
+
+Updating records - records will be found by primary key specified and then updated:
+
 dba.update(table_name="table_name", records.fromJSON(json_string))
 dba.update(table_name="table_name", records, primary_key="id")
-
 dba.update(table_name="table_name", record, primary_key="id") # primary key implied by first key value pair
+
+
+Inserting records - pass a dictionary for a single record and a list of dictionaries for multiple records:
+
 dba.insert(table_name="table_name", dba.from_json(json_string))
 dba.insert(table_name="table_name", {"id": 1, "something": "hello", "something2": "world"})
 dba.insert(table_name="table_name", [{"id": 1, "something": "hello", "something2": "world"}, 
 {"id": 2, "something": "hello2", "something2": "world2"}])
 
+
+Deleting records - specify table name. Records can either be found by primary key or filter:
+
 dba.delete("table_name", record, primary_key="id")
 dba.delete("table_name", filter={"id": 1})
-
 dba.delete("table_name", filter=[{"id": 1}, {"id": 2}])
 
+Migration updates:
 
-
-
+   - record count added
+   - Database result object updated
 ```
 
 
