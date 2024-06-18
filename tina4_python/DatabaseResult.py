@@ -14,6 +14,8 @@ class DatabaseResult:
         else:
             self.records = []
 
+        self.count = len(self.records)
+
         if _columns is not None:
             self.columns = _columns
         else:
