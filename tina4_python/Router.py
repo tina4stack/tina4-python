@@ -129,7 +129,7 @@ class Router:
                 Debug("Looking for twig file",
                       tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
                       Constant.TINA4_LOG_DEBUG)
-                content = Template.render_twig_template(twig_file)
+                content = Template.render_twig_template(twig_file, {"request": tina4_python.tina4_current_request})
                 if content != "":
                     return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML)
 

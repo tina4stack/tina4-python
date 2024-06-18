@@ -27,10 +27,10 @@ class Session:
         token = tina4_python.tina4_auth.get_token(payload_data=self.session_values)
         if _hash is None:
             file_hash = hashlib.md5(token.encode()).hexdigest()
-            self.save()
         else:
             file_hash = _hash
         self.session_hash = file_hash
+        self.save()
 
         return file_hash
 

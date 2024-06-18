@@ -35,10 +35,9 @@ def migrate(dba, delimiter=";"):
                 # check if migration exists in the database and has passed - no need to run the scripts below
 
                 sql_check = "select * from tina4_migration where description = ? and passed = ?"
-                query = dba.execute(sql_check, (file, 1))
-                record = query.fetchone()
+                record = dba.fetch(sql_check, (file, 1))
 
-                if not record:
+                if record.count == 0:
                     Debug("Migration: running migration for", file, Constant.TINA4_LOG_INFO)
                     # get each migration
                     script_content = file_contents.split(";")
@@ -56,4 +55,4 @@ def migrate(dba, delimiter=";"):
                     (file, file_contents, str(e)))
                 dba.commit()
 
-                Debug("Failed to run", file, record[1], e, Constant.TINA4_LOG_ERROR)
+                Debug("Failed to run", file, e, Constant.TINA4_LOG_ERROR)
