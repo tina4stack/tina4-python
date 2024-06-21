@@ -190,10 +190,14 @@ class Database:
 
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
-            try:
-                self.execute(sql, values)
-            except Exception as e:
-                Debug("INSERT ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            result = self.execute(sql, values)
+
+            if result.error is None:
+                return True
+            else:
+                Debug("INSERT ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                return False
+
         elif isinstance(data, list):
             columns = ", ".join(data[0].keys())
             # Checking which database engine is used to generate respective syntax for placeholders
@@ -205,10 +209,13 @@ class Database:
             values = [list(record.values()) for record in data]
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
-            try:
-                self.execute_many(sql, values)
-            except Exception as e:
-                Debug("INSERT ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            result = self.execute_many(sql, values)
+
+            if result.error is None:
+                return True
+            else:
+                Debug("INSERT ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                return False
 
     def delete(self, table_name, records=None, primary_key="id", filter=None):
         """
@@ -238,10 +245,14 @@ class Database:
 
                 sql = f"DELETE FROM {table_name} WHERE {condition_records}"
 
-                try:
-                    self.execute(sql, [pk_value])
-                except Exception as e:
-                    Debug("DELETE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+                result = self.execute(sql, [pk_value])
+
+                if result.error is None:
+                    return True
+                else:
+                    Debug("DELETE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                    return False
+
 
             # Delete multiple records - records passed in is a list
 
@@ -258,10 +269,13 @@ class Database:
 
                 sql = f"DELETE FROM {table_name} WHERE {conditions_records}"
 
-                try:
-                    self.execute(sql, pk_values)
-                except Exception as e:
-                    Debug("DELETE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+                result = self.execute(sql, pk_values)
+
+                if result.error is None:
+                    return True
+                else:
+                    Debug("DELETE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                    return False
 
         # Delete a record by a single filter - filter passed in is a dictionary
 
@@ -273,11 +287,13 @@ class Database:
 
             sql = f"DELETE FROM {table_name} WHERE {condition}"
 
-            try:
-                self.execute(sql, [value])
-            except Exception as e:
-                Debug("DELETE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            result = self.execute(sql, [value])
 
+            if result.error is None:
+                return True
+            else:
+                Debug("DELETE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                return False
         # Delete multiple records by multiple filters - filters passed in is a list
 
         elif isinstance(filter, list):
@@ -289,10 +305,13 @@ class Database:
 
                 sql = f"DELETE FROM {table_name} WHERE {condition}"
 
-                try:
-                    self.execute(sql, [value])
-                except Exception as e:
-                    Debug("DELETE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+                result = self.execute(sql, [value])
+
+                if result.error is None:
+                    return True
+                else:
+                    Debug("DELETE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                    return False
 
     def update(self, table_name, records, primary_key="id"):
         """
@@ -330,10 +349,13 @@ class Database:
 
                 params = set_values + [pk_value]
 
-                try:
-                    self.execute(sql, params)
-                except Exception as e:
-                    Debug("UPDATE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+                result = self.execute(sql, params)
+
+                if result.error is None:
+                    return True
+                else:
+                    Debug("UPDATE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                    return False
 
             # Updating multiple records - records passed in is a list
 
@@ -358,7 +380,11 @@ class Database:
 
                     params = set_values + [pk_value]
 
-                    try:
-                        self.execute(sql, params)
-                    except Exception as e:
-                        Debug("UPDATE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+                    result = self.execute(sql, params)
+
+                    if result.error is None:
+                        return True
+                    else:
+                        Debug("UPDATE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                        return False
+
