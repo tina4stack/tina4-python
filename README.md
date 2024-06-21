@@ -36,6 +36,22 @@ If you are developing on Tina4, make sure you copy the public folder from tina4_
 
 ### Installation
 
+Virtual environment
+
+Linux / Mac
+```bash
+python3 -m venv venv
+source ./venv/bin/activate
+pip install poetry
+```
+
+Windows
+```bash
+python -m venv venv
+.\venv\Scripts\activate
+pip install poetry
+```
+
 #### Windows
 
 1.) Install Poetry:

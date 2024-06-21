@@ -13,7 +13,7 @@ from tina4_python.Router import post
 from tina4_python.Database import Database
 
 
-dba1 = Database("sqlite3:test.db", "username", "password")
+# dba1 = Database("sqlite3:test.db", "username", "password")
 # dba2 = Database("firebird.driver:localhost:c:\\tmp\\ZOO.FDB", "sysdba", "masterkey")
 
 
