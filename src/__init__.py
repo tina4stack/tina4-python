@@ -13,7 +13,7 @@ from tina4_python.Router import post
 from tina4_python.Database import Database
 
 
-# dba1 = Database("sqlite3:test.db", "username", "password")
+dba1 = Database("sqlite3:test.db", "username", "password")
 # dba2 = Database("firebird.driver:localhost:c:\\tmp\\ZOO.FDB", "sysdba", "masterkey")
 
 
@@ -164,6 +164,17 @@ from tina4_python.Database import Database
 # print(rows)
 # # #
 # dba2.close()
+
+# result = dba1.insert("test", {"irst_name": "One", "last_name": "Two"})
+# result = dba1.delete("test", {"id": 14})
+#
+# if result:
+#     print("Worked")
+#     dba1.commit()
+# else:
+#     print("Failed")
+#     dba1.rollback()
+
 
 @get("/env")
 async def env(request, response):
