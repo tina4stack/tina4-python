@@ -4,8 +4,7 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
-import os
-
+import os, json
 import tina4_python
 from tina4_python import Constant
 from tina4_python.Debug import Debug
@@ -26,7 +25,24 @@ class Template:
         Template.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
         Template.twig.add_extension('jinja2.ext.debug')
         Template.twig.add_extension('jinja2.ext.do')
+        Template.twig.globals['formToken'] = Template.get_form_token
+        Template.twig.filters['formToken'] = Template.get_form_token_input
+        if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):
+            Template.twig.globals['dump'] = Template.dump
+        Debug("Twig Initialized on "+path, Constant.TINA4_LOG_INFO)
         return Template.twig
+
+    @staticmethod
+    def dump(param):
+        return "<pre>"+json.dumps(param, indent=True)+"</pre>"
+
+    @staticmethod
+    def get_form_token(payload={}):
+        return tina4_python.tina4_auth.get_token(payload)
+
+    @staticmethod
+    def get_form_token_input(form_name):
+        return '<input type="hidden" name="formToken" value="'+Template.get_form_token({"formName": form_name})+'">'
 
     @staticmethod
     def render_twig_template(template_or_file_name, data=None):
@@ -43,6 +59,6 @@ class Template:
 
         except Exception as e:
             Debug("Error rendering twig file", template_or_file_name, data, e, Constant.TINA4_LOG_ERROR)
-            content = ""
+            content = str(e)
 
         return content
