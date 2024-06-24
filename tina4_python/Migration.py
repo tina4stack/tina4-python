@@ -10,23 +10,24 @@ from tina4_python.Debug import Debug
 import tina4_python
 
 
-def migrate(dba, delimiter=";"):
+def migrate(dba, delimiter=";", migration_folder="migrations"):
     """
     Migrates the database from the migrate folder
     :param delimiter: SQL delimiter
     :param dba: Database connection
+    :param migration_folder: Alternative folder for migrations
     :return:
     """
     dba.execute(
         "create table if not exists tina4_migration(id integer, description varchar(200) default '', content blob, error_message blob, passed integer default 0, primary key(id))")
 
-    Debug("Migrations found ", tina4_python.root_path + os.sep + "migrations", Constant.TINA4_LOG_INFO)
-    dir_list = os.listdir(tina4_python.root_path + os.sep + "migrations")
+    Debug("Migrations found ", tina4_python.root_path + os.sep + migration_folder, Constant.TINA4_LOG_INFO)
+    dir_list = os.listdir(tina4_python.root_path + os.sep + migration_folder)
 
     for file in dir_list:
         if '.sql' in file:
             Debug("Migration: Checking file", file, Constant.TINA4_LOG_INFO)
-            sql_file = open(tina4_python.root_path + os.sep + "migrations" + os.sep + file)
+            sql_file = open(tina4_python.root_path + os.sep + migration_folder + os.sep + file)
             file_contents = sql_file.read()
             sql_file.close()
             try:

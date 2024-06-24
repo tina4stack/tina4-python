@@ -7,6 +7,7 @@
 import json
 import inspect
 from tina4_python import Constant
+from tina4_python import DatabaseResult
 
 
 class Response:
@@ -21,8 +22,13 @@ class Response:
         if content is None:
             content = ""
         # try to make content into a dictionary
-        elif not isinstance(content, bool) and not isinstance(content, bytes) and not isinstance(content, str) and not isinstance(content, list) and inspect.isclass(type(content)):
+        elif not isinstance(content, bool) and not isinstance(content, object) and not isinstance(content, bytes) and not isinstance(content, str) and not isinstance(content, list) and inspect.isclass(type(content)):
             content = dict(content)
+
+        #check if database result
+        if type(content) is DatabaseResult.DatabaseResult:
+            content_type = Constant.APPLICATION_JSON
+            content = content.to_json()
 
         # convert the dictionary or list into JSON
         if not isinstance(content, bool) and type(content) is dict or type(content) is list:

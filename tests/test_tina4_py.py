@@ -3,10 +3,12 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+import tina4_python
 from tina4_python import *
 
 global dba_type
 dba_type = "sqlite3:test.db"
+
 
 def test_route_match():
     assert Router.match('/url', '/url') == True, "Test if route matches"
@@ -15,9 +17,11 @@ def test_route_match():
 def test_route_match_variable():
     assert Router.match('/url/hello', '/url/{name}') == True, "Test if route matches"
 
+
 def database_connect(driver, username="", password=""):
     dba = Database(driver, username, password)
     return dba
+
 
 def test_database_sqlite():
     dba = database_connect(dba_type)
@@ -28,14 +32,17 @@ def test_database_execute():
     dba = database_connect(dba_type)
     result = dba.execute("drop table if exists test_record")
     assert result.error is None
-    result = dba.execute ("insert into table with something")
+    result = dba.execute("insert into table with something")
     assert result.error != "", "There should be an error"
-    result = dba.execute("create table if not exists test_record(id integer default 0 not null, name varchar(200), primary key (id))")
+    result = dba.execute(
+        "create table if not exists test_record(id integer default 0 not null, name varchar(200), primary key (id))")
     assert result.error is None
-    result = dba.execute_many("insert into test_record (id, name) values (?, ?)", [[5, "Hello1"], [6, "Hello2"], [7, "Hello3"]])
+    result = dba.execute_many("insert into test_record (id, name) values (?, ?)",
+                              [[5, "Hello1"], [6, "Hello2"], [7, "Hello3"]])
     dba.commit()
     assert result.error is None
     dba.close()
+
 
 def test_database_insert():
     dba = database_connect(dba_type)
@@ -47,6 +54,7 @@ def test_database_insert():
     assert result is False
     dba.commit()
     dba.close()
+
 
 def test_database_update():
     dba = database_connect(dba_type)
@@ -60,6 +68,7 @@ def test_database_update():
     result = dba.update("test_record", [{"id": 2, "name": "Test2Update"}, {"id": 3, "name1": "Test3Update"}])
     assert result is False
     dba.close()
+
 
 def test_database_fetch():
     dba = database_connect(dba_type)
@@ -78,12 +87,23 @@ def test_database_fetch():
     assert result is None
     dba.close()
 
+
 def test_database_delete():
     dba = database_connect(dba_type)
     result = dba.delete("test_record", {"id": 1, "name": "Test1Update"})
     dba.commit()
-    result = dba.delete("test_record", [{"id": 3},{"id" : 4}])
+    result = dba.delete("test_record", [{"id": 3}, {"id": 4}])
     assert result is True
     dba.commit()
     result = dba.delete("test", [{"id": 12}, {"id": 13}])
-    assert result is False
+    assert result is True
+
+def test_password():
+    auth = Auth(tina4_python.root_path)
+    password = auth.hash_password("123456")
+    valid = auth.check_password(password, "123456")
+    assert valid == True, "Password check"
+    password = auth.hash_password("12345678")
+    valid = auth.check_password(password, "123456")
+    assert valid == False, "Password check"
+

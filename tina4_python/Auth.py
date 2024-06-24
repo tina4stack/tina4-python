@@ -13,6 +13,7 @@ from cryptography.x509 import NameOID
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
+import bcrypt
 
 
 class Auth:
@@ -21,6 +22,28 @@ class Auth:
     root_path = None
     loaded_private_key = None
     loaded_public_key = None
+
+    def hash_password(self, text):
+        """
+        Generates a Bcrypt password hash
+        :param text:
+        :return:
+        """
+        password_bytes = text.encode('utf-8')
+        # Generate a salt
+        salt = bcrypt.gensalt()
+        # Hash the password
+        return bcrypt.hashpw(password_bytes, salt)
+
+    def check_password(self, password_hash, text):
+        """
+        Checks a Bcrypt password hash
+        :param password_hash:
+        :param text:
+        :return:
+        """
+        password_bytes = text.encode('utf-8')
+        return bcrypt.checkpw(password_bytes, password_hash)
 
     def load_private_key(self):
         if self.loaded_private_key:

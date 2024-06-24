@@ -100,10 +100,20 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
 # please keep in place otherwise autoloading of files does not work nicely, if you want this to work
 # add __init__.py files in your folders
 # ignore F403
-from src import *
-from src.routes import *
-from src.app import *
+if os.path.exists(root_path + os.sep + "src"):
+    from src import *
+else:
+    Debug("Missing src folder", Constant.TINA4_LOG_WARNING)
 
+if os.path.exists(root_path + os.sep + "src" + os.sep + "routes"):
+    from src.routes import *
+else:
+    Debug("Missing src/routes folder", Constant.TINA4_LOG_WARNING)
+
+if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
+    from src.app import *
+else:
+    Debug("Missing src/app folder", Constant.TINA4_LOG_WARNING)
 
 # compile sass
 def compile_scss():
@@ -126,11 +136,13 @@ class SassCompiler(FileSystemEventHandler):
             compile_scss()
 
 
-observer = Observer()
-event_handler = SassCompiler()
-observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
-observer.start()
-
+if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
+    observer = Observer()
+    event_handler = SassCompiler()
+    observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
+    observer.start()
+else:
+    Debug("Missing scss folder", Constant.TINA4_LOG_WARNING)
 
 # end compile sass
 

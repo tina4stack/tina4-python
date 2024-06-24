@@ -5,9 +5,11 @@
 #
 # flake8: noqa: E501
 import importlib
+import datetime
 
 from tina4_python import Debug, Constant
 from tina4_python.DatabaseResult import DatabaseResult
+
 
 class Database:
     SQLITE = "sqlite3"
@@ -57,6 +59,18 @@ class Database:
         Debug("DATABASE:", self.database_module, self.host, self.port, self.database_path, self.username,
               Constant.TINA4_LOG_DEBUG)
 
+    def current_timestamp(self):
+        """
+        Gets the current timestamp based on the database being used
+        :return:
+        """
+        if self.database_engine == self.FIREBIRD:
+            return datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        elif self.database_engine == self.SQLITE:
+            return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     def fetch(self, sql, params=[], limit=10, skip=0):
         """
         Fetch records based on a sql statement
@@ -68,9 +82,11 @@ class Database:
         """
         Debug("FETCH:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
         # modify the select statement for limit and skip
-        if self.database_engine == "firebird.driver":
+        if self.database_engine == self.FIREBIRD:
             sql = f"select first {limit} skip {skip} * from ({sql})"
-        elif self.database_engine == "sqlite3":
+        elif self.database_engine == self.SQLITE:
+            sql = f"select * from ({sql}) limit {skip},{limit}"
+        else:
             sql = f"select * from ({sql}) limit {skip},{limit}"
 
         cursor = self.dba.cursor()
@@ -99,7 +115,6 @@ class Database:
             return record.records[0]
         else:
             return None
-
 
     def execute(self, sql, params=()):
         """
