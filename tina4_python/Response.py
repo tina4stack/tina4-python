@@ -6,8 +6,10 @@
 # flake8: noqa: E501
 import json
 import inspect
+from types import ModuleType
 from tina4_python import Constant
 from tina4_python import DatabaseResult
+from tina4_python.Debug import Debug
 
 
 class Response:
@@ -40,6 +42,10 @@ class Response:
                 content = "True"
             else:
                 content = "False"
+
+        if isinstance(content, ModuleType):
+            content = json.dumps({"error": "Cannot decode object of type "+str(type(content))})
+            content_type = Constant.APPLICATION_JSON
 
         self.content = content
         self.http_code = http_code

@@ -11,10 +11,12 @@ import shutil
 import importlib
 import sys
 import sass
+from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 from tina4_python import Messages, Constant
+from tina4_python.Swagger import Swagger
 from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
@@ -51,7 +53,7 @@ root_path = os.path.realpath(os.getcwd())
 Debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path),
       Constant.TINA4_LOG_INFO)
 
-tina4_routes = []
+tina4_routes = {}
 tina4_current_request = {}
 tina4_secret = None
 tina4_auth = Auth(root_path)
@@ -146,6 +148,20 @@ else:
 
 # end compile sass
 
+
+def file_get_contents(file_path):
+    return Path(file_path).read_text()
+
+# Add swagger routes
+@get("/swagger/swagger.json")
+async def get_swagger_json(request, response):
+    json = Swagger.get_json(request)
+    return response(json)
+
+@get("/swagger")
+async def get_swagger(request, response):
+    html = file_get_contents(root_path + os.sep +"src"+os.sep+"public"+ os.sep+"swagger"+os.sep+"index.html")
+    return response(html)
 
 def webserver(host_name, port):
     web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
