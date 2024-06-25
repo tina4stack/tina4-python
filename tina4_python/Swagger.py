@@ -40,7 +40,7 @@ class Swagger:
 
     @staticmethod
     def add_params(params, callback):
-        Swagger.set_swagger_value(callback, "example", params)
+        Swagger.set_swagger_value(callback, "params", params)
 
     @staticmethod
     def get_path_inputs(route_path):
