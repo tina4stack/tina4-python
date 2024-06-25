@@ -74,7 +74,14 @@ class Swagger:
         if security:
             secure_annotation = [{"bearerAuth": []}];
 
-        params = [*params, *Swagger.get_path_inputs(url)]
+        new_params = []
+        for param in params:
+            param_value = param.split("=")
+            if len(param_value) < 2:
+                param_value.append("")
+            new_params.append({"name": param_value[0], "in": "query", "type": "string", "default": param_value[1]})
+
+        params = [*new_params, *Swagger.get_path_inputs(url)]
 
         entry = {
             "tags": tags,

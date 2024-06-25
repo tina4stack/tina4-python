@@ -11,19 +11,21 @@ from tina4_python.Debug import Debug
 from tina4_python.Router import get
 from tina4_python.Router import post
 from tina4_python.Database import Database
-from tina4_python.Swagger import description, secure, summary, example, tags
+from tina4_python.Swagger import description, secure, summary, example, tags, params
 
 dba = Database("sqlite3:test.db", "username", "password")
 
 @get("/hello/{name}")
 @description("Some description")
+@params(["limit=10", "offset=0"])
 @summary("Some summary")
 @tags(["hello", "cars"])
 @secure()
 async def greet(**params): #(request, response)
-
+    print(params['request'])
     name = params['request'].params['name']
-    return params['response'](f"Hello, {name}!") # return response()
+    limit = params['request'].params['limit']
+    return params['response'](f"Hello, {name} {limit} !") # return response()
 
 @post("/hello/{name}")
 @description("Some description")
