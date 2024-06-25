@@ -8,6 +8,7 @@ import os, re
 import tina4_python
 from tina4_python import Messages, Constant
 
+
 class Swagger:
     @staticmethod
     def set_swagger_value(callback, key_name, value):
@@ -59,7 +60,8 @@ class Swagger:
         return params
 
     @staticmethod
-    def get_swagger_entry(url, method, tags, summary, description, produces, security, params=None, example=None, responses=None):
+    def get_swagger_entry(url, method, tags, summary, description, produces, security, params=None, example=None,
+                          responses=None):
 
         if params is None:
             params = []
@@ -110,8 +112,8 @@ class Swagger:
             swagger["summary"] = ""
         if not "example" in swagger:
             swagger["example"] = None
-        if not "security" in swagger:
-            swagger["security"] = None
+        if not "secure" in swagger:
+            swagger["secure"] = None
 
         if isinstance(swagger["tags"], str):
             swagger["tags"] = [swagger["tags"]]
@@ -135,19 +137,30 @@ class Swagger:
 
                     if not route["route"] in paths:
                         paths[route["route"]] = {}
-                    paths[route["route"]][route["method"].lower()] = Swagger.get_swagger_entry(route["route"], route["method"].lower(), swagger["tags"], swagger["summary"], swagger["description"], ["application/json", "html/text"], swagger["secure"], swagger["params"], swagger["example"], responses)
+                    paths[route["route"]][route["method"].lower()] = Swagger.get_swagger_entry(route["route"],
+                                                                                               route["method"].lower(),
+                                                                                               swagger["tags"],
+                                                                                               swagger["summary"],
+                                                                                               swagger["description"],
+                                                                                               ["application/json",
+                                                                                                "html/text"],
+                                                                                               swagger["secure"],
+                                                                                               swagger["params"],
+                                                                                               swagger["example"],
+                                                                                               responses)
 
-        json_object =  {
-            "openapi" : "3.0.0",
-            "host" : request.headers["Host"],
-            "info" : {
+        json_object = {
+            "openapi": "3.0.0",
+            "host": request.headers["Host"],
+            "info": {
                 "title": os.getenv("SWAGGER_TITLE", "Tina4 Project(SWAGGER_TITLE)"),
-                "description" : os.getenv("SWAGGER_DESCRIPTION", "Description(SWAGGER_DESCRIPTION)"),
+                "description": os.getenv("SWAGGER_DESCRIPTION", "Description(SWAGGER_DESCRIPTION)"),
                 "version": os.getenv("SWAGGER_VERSION", "1.0.0(SWAGGER_VERSION)")
             },
-            "components": {"securitySchemes": {"bearerAuth" : {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}}},
-            "basePath":  "",
-            "paths" : paths
+            "components": {
+                "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}}},
+            "basePath": "",
+            "paths": paths
         }
 
         return json_object
@@ -157,34 +170,45 @@ def description(text):
     def actual_description(callback):
         Swagger.add_descripton(text, callback)
         return callback
+
     return actual_description
+
 
 def summary(text):
     def actual_summary(callback):
         Swagger.add_summary(text, callback)
         return callback
+
     return actual_summary
+
 
 def secure():
     def actual_secure(callback):
         Swagger.add_secure(callback)
         return callback
+
     return actual_secure
+
 
 def tags(tags):
     def actual_tags(callback):
         Swagger.add_tags(tags, callback)
         return callback
+
     return actual_tags
+
 
 def example(example):
     def actual_example(callback):
         Swagger.add_example(example, callback)
         return callback
+
     return actual_example
+
 
 def params(params):
     def actual_params(callback):
         Swagger.add_params(params, callback)
         return callback
+
     return actual_params
