@@ -205,7 +205,7 @@ def put(path):
     :param path:
     :return:
     """
-    def actual_put(param):
+    def actual_put(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
             Router.add(Constant.TINA4_PUT, route_path, callback)
@@ -220,7 +220,7 @@ def patch(path):
     :param path:
     :return:
     """
-    def actual_patch(param):
+    def actual_patch(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
             Router.add(Constant.TINA4_PATCH, route_path, callback)
@@ -235,7 +235,7 @@ def delete(path):
     :param path:
     :return:
     """
-    def actual_delete(param):
+    def actual_delete(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
             Router.add(Constant.TINA4_DELETE, route_path, callback)
