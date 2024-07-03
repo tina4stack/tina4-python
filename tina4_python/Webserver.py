@@ -39,7 +39,10 @@ class Webserver:
                 variables = content.split("&")
                 for variable in variables:
                     variable = variable.split("=", 1)
-                    body[variable[0]] = unquote(variable[1])
+                    if len(variable) > 1:
+                        body[variable[0]] = unquote(variable[1])
+                    else:
+                        body[variable[0]] = None
                 return body
 
         return content
