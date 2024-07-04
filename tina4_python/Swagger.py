@@ -46,16 +46,18 @@ class Swagger:
     def get_path_inputs(route_path):
         url_segments = route_path.strip('/').split('/')
         route_segments = route_path.strip('/').split('/')
+        try:
+            variables = {}
+            for i, segment in enumerate(route_segments):
+                if '{' in segment and '}' in segment:  # parameter part
+                    param_name = re.search(r'{(.*?)}', segment).group(1)
+                    variables[param_name] = url_segments[i]
 
-        variables = {}
-        for i, segment in enumerate(route_segments):
-            if '{' in segment:  # parameter part
-                param_name = re.search(r'{(.*?)}', segment).group(1)
-                variables[param_name] = url_segments[i]
-
-        params = []
-        for variable in variables:
-            params.append({"name": variable, "in": "path", "type": "string"})
+            params = []
+            for variable in variables:
+                params.append({"name": variable, "in": "path", "type": "string"})
+        except Exception as e:
+            return []
 
         return params
 
