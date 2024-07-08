@@ -7,7 +7,7 @@
 import asyncio
 import json
 import os
-from urllib.parse import unquote
+from urllib.parse import unquote_plus
 from urllib.parse import urlparse, parse_qsl
 import tina4_python
 from tina4_python.Debug import Debug
@@ -40,7 +40,7 @@ class Webserver:
                 for variable in variables:
                     variable_value = variable.split("=", 1) # hello=1,2,3,4=50505
                     if len(variable) > 1:
-                        body[variable_value[0]] = unquote(variable_value[1])
+                        body[variable_value[0]] = unquote_plus(variable_value[1])
                     else:
                         body[variable] = None
 
