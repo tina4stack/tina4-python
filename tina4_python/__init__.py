@@ -20,7 +20,7 @@ from tina4_python import Messages, Constant
 from tina4_python.Swagger import Swagger
 from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
-from tina4_python.Router import Router
+from tina4_python.Router import Router, get
 from tina4_python.Localization import localize
 from tina4_python.Auth import Auth
 from tina4_python.Debug import Debug

@@ -33,7 +33,7 @@ class Auth:
         # Generate a salt
         salt = bcrypt.gensalt()
         # Hash the password
-        return bcrypt.hashpw(password_bytes, salt)
+        return bcrypt.hashpw(password_bytes, salt).decode('utf-8')
 
     def check_password(self, password_hash, text):
         """
@@ -43,7 +43,7 @@ class Auth:
         :return:
         """
         password_bytes = text.encode('utf-8')
-        return bcrypt.checkpw(password_bytes, password_hash)
+        return bcrypt.checkpw(password_bytes, password_hash.encode('utf-8'))
 
     def load_private_key(self):
         if self.loaded_private_key:

@@ -4,6 +4,7 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+import base64
 import json
 
 
@@ -23,13 +24,26 @@ class DatabaseResult:
 
         self.error = _error
 
-    def to_json(self):
+    def to_array(self):
         if self.error is not None:
-            return json.dumps({"error": self.error})
+            return {"error": self.error}
         elif len(self.records) > 0:
-            return json.dumps(self.records)
+            # check all the records - if we get bytes we base64encode them for the json to work
+            json_records = []
+            for record in self.records:
+                json_record = {}
+                for key in record:
+                    if isinstance(record[key], bytes):
+                        json_record[key] = base64.b64encode(record[key]).decode('utf-8')
+                    else:
+                        json_record[key] = record[key]
+                json_records.append(json_record)
+            return json_records
         else:
-            return "[]"
+            return []
+
+    def to_json(self):
+        return json.dumps(self.to_array())
 
     def __getitem__(self, item):
         if item < len(self.records):
