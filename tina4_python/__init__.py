@@ -11,16 +11,20 @@ import shutil
 import importlib
 import sys
 import sass
+from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
+from tina4_python.Router import get
 from tina4_python import Messages, Constant
+from tina4_python.Swagger import Swagger
 from tina4_python.Env import load_env
 from tina4_python.Webserver import Webserver
-from tina4_python.Router import Router
+from tina4_python.Router import Router, get
 from tina4_python.Localization import localize
 from tina4_python.Auth import Auth
 from tina4_python.Debug import Debug
+from tina4_python.ShellColors import ShellColors
 
 _ = gettext.gettext
 
@@ -38,7 +42,7 @@ else:
     environment = ".env"
 
 load_env(environment)
-print("Setting debug mode", os.getenv("TINA4_DEBUG_LEVEL"))
+print(ShellColors.bright_yellow + "Setting debug mode", os.getenv("TINA4_DEBUG_LEVEL"), ShellColors.end)
 localize()
 
 if importlib.util.find_spec("jurigged"):
@@ -50,7 +54,7 @@ root_path = os.path.realpath(os.getcwd())
 Debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path),
       Constant.TINA4_LOG_INFO)
 
-tina4_routes = []
+tina4_routes = {}
 tina4_current_request = {}
 tina4_secret = None
 tina4_auth = Auth(root_path)
@@ -102,10 +106,20 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
 # please keep in place otherwise autoloading of files does not work nicely, if you want this to work
 # add __init__.py files in your folders
 # ignore F403
-from src import *
-from src.routes import *
-from src.app import *
+if os.path.exists(root_path + os.sep + "src"):
+    from src import *
+else:
+    Debug("Missing src folder", Constant.TINA4_LOG_WARNING)
 
+if os.path.exists(root_path + os.sep + "src" + os.sep + "routes"):
+    from src.routes import *
+else:
+    Debug("Missing src/routes folder", Constant.TINA4_LOG_WARNING)
+
+if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
+    from src.app import *
+else:
+    Debug("Missing src/app folder", Constant.TINA4_LOG_WARNING)
 
 # compile sass
 def compile_scss():
@@ -128,18 +142,37 @@ class SassCompiler(FileSystemEventHandler):
             compile_scss()
 
 
-observer = Observer()
-event_handler = SassCompiler()
-observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
-observer.start()
-
+if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
+    observer = Observer()
+    event_handler = SassCompiler()
+    observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
+    observer.start()
+else:
+    Debug("Missing scss folder", Constant.TINA4_LOG_WARNING)
 
 # end compile sass
 
 
+def file_get_contents(file_path):
+    return Path(file_path).read_text()
+
+# Add swagger routes
+@get("/swagger/swagger.json")
+async def get_swagger_json(request, response):
+    json = Swagger.get_json(request)
+    return response(json)
+
+@get("/swagger")
+async def get_swagger(request, response):
+    html = file_get_contents(root_path + os.sep +"src"+os.sep+"public"+ os.sep+"swagger"+os.sep+"index.html")
+    return response(html)
+
 def webserver(host_name, port):
     web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
     web_server.router_handler = Router()
+    # Fix the display to make it clickable
+    if host_name == "0.0.0.0":
+        host_name = "localhost"
     Debug(Messages.MSG_SERVER_STARTED.format(host_name=host_name, port=port), Constant.TINA4_LOG_INFO)
     try:
         asyncio.run(web_server.serve_forever())
@@ -171,9 +204,10 @@ if len(sys.argv) > 1:
 if PORT != "stop" and PORT != "manual":
     try:
         PORT = int(PORT)
-        Debug("Threading", Constant.TINA4_LOG_DEBUG)
         run_web_server(HOSTNAME, PORT)
     except Exception:
-        Debug("Not running webserver", Constant.TINA4_LOG_ERROR)
+        Debug("Not running webserver", Constant.TINA4_LOG_WARNING)
 else:
-    Debug("Webserver is set to manual start, please call run_web_server(HOSTNAME, PORT)", Constant.TINA4_LOG_INFO)
+    Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
+          "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
+          Constant.TINA4_LOG_WARNING)

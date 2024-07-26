@@ -6,7 +6,10 @@
 # flake8: noqa: E501
 import json
 import inspect
+from types import ModuleType
 from tina4_python import Constant
+from tina4_python import DatabaseResult
+from tina4_python.Debug import Debug
 
 
 class Response:
@@ -21,8 +24,13 @@ class Response:
         if content is None:
             content = ""
         # try to make content into a dictionary
-        elif not isinstance(content, bool) and not isinstance(content, bytes) and not isinstance(content, str) and not isinstance(content, list) and inspect.isclass(type(content)):
+        elif not isinstance(content, bool) and not isinstance(content, object) and not isinstance(content, bytes) and not isinstance(content, str) and not isinstance(content, list) and inspect.isclass(type(content)):
             content = dict(content)
+
+        #check if database result
+        if type(content) is DatabaseResult.DatabaseResult:
+            content_type = Constant.APPLICATION_JSON
+            content = content.to_json()
 
         # convert the dictionary or list into JSON
         if not isinstance(content, bool) and type(content) is dict or type(content) is list:
@@ -34,6 +42,10 @@ class Response:
                 content = "True"
             else:
                 content = "False"
+
+        if isinstance(content, ModuleType):
+            content = json.dumps({"error": "Cannot decode object of type "+str(type(content))})
+            content_type = Constant.APPLICATION_JSON
 
         self.content = content
         self.http_code = http_code

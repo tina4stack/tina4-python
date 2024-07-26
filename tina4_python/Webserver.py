@@ -7,7 +7,7 @@
 import asyncio
 import json
 import os
-from urllib.parse import unquote
+from urllib.parse import unquote_plus
 from urllib.parse import urlparse, parse_qsl
 import tina4_python
 from tina4_python.Debug import Debug
@@ -36,10 +36,14 @@ class Webserver:
             # check for form body
             if content != "":
                 body = {}
-                variables = content.split("&", 1)
+                variables = content.split("&")
                 for variable in variables:
-                    variable = variable.split("=", 1)
-                    body[variable[0]] = unquote(variable[1])
+                    variable_value = variable.split("=", 1) # hello=1,2,3,4=50505
+                    if len(variable) > 1:
+                        body[variable_value[0]] = unquote_plus(variable_value[1])
+                    else:
+                        body[variable] = None
+
                 return body
 
         return content
@@ -67,7 +71,8 @@ class Webserver:
             body = await self.get_content_body(content_length)
         else:
             body = None
-        request = {"params": params, "body": body, "raw": self.request, "headers_raw": self.headers}
+
+        request = {"params": params, "body": body, "raw": self.request, "headers": self.headers}
 
         tina4_python.tina4_current_request = request
 
@@ -84,7 +89,8 @@ class Webserver:
 
         if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
             self.send_header("Set-Cookie",
-                             os.getenv("TINA4_SESSION", "PY_SESS") + '=' + self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")], headers)
+                             os.getenv("TINA4_SESSION", "PY_SESS") + '=' + self.cookies[
+                                 os.getenv("TINA4_SESSION", "PY_SESS")], headers)
 
         headers = await self.get_headers(headers, self.response_protocol, response.http_code)
 
@@ -104,6 +110,7 @@ class Webserver:
         for header in response_headers:
             headers += header + "\n"
         headers += "\n"
+
         return headers.encode()
 
     async def run_server(self):
@@ -179,7 +186,8 @@ class Webserver:
             for cookie_value in cookie_list_temp:
                 cookie = cookie_value.split("=", 1)
                 cookie_list[cookie[0].strip()] = cookie[1].strip()
-            self.cookies = cookie_list
+
+        self.cookies = cookie_list
 
         # initialize the session
         self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),

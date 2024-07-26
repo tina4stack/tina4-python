@@ -13,6 +13,7 @@ from cryptography.x509 import NameOID
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
+import bcrypt
 
 
 class Auth:
@@ -21,6 +22,28 @@ class Auth:
     root_path = None
     loaded_private_key = None
     loaded_public_key = None
+
+    def hash_password(self, text):
+        """
+        Generates a Bcrypt password hash
+        :param text:
+        :return:
+        """
+        password_bytes = text.encode('utf-8')
+        # Generate a salt
+        salt = bcrypt.gensalt()
+        # Hash the password
+        return bcrypt.hashpw(password_bytes, salt).decode('utf-8')
+
+    def check_password(self, password_hash, text):
+        """
+        Checks a Bcrypt password hash
+        :param password_hash:
+        :param text:
+        :return:
+        """
+        password_bytes = text.encode('utf-8')
+        return bcrypt.checkpw(password_bytes, password_hash.encode('utf-8'))
 
     def load_private_key(self):
         if self.loaded_private_key:
@@ -107,7 +130,7 @@ class Auth:
     def get_token(self, payload_data):
         private_key = self.load_private_key()
         now = datetime.datetime.now()
-        token_limit_minutes = os.environ.get("TINA4_TOKEN_LIMIT", 2)
+        token_limit_minutes = int(os.environ.get("TINA4_TOKEN_LIMIT", 2))
         expiry_time = now + datetime.timedelta(minutes=token_limit_minutes)
         payload_data["expires"] = expiry_time.isoformat()
         token = jwt.encode(

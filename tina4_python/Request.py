@@ -19,3 +19,4 @@ class Request:
         self.session = None
         self.files = {}
         self.raw = raw if raw is not None else None
+

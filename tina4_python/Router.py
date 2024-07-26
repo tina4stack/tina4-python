@@ -97,7 +97,7 @@ class Router:
             with open(static_file, 'rb') as file:
                 return Response(file.read(), Constant.HTTP_OK, mime_type)
 
-        for route in tina4_python.tina4_routes:
+        for route in tina4_python.tina4_routes.values():
             if route["method"] != method:
                 continue
             Debug("Matching route " + route['route'] + " to " + url, Constant.TINA4_LOG_DEBUG)
@@ -120,8 +120,6 @@ class Router:
 
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
-
-            # try to render a template
             # Serve twigs if the files exist
             if url == "/":
                 twig_file = "index.twig"
@@ -130,11 +128,14 @@ class Router:
 
             # see if we can find the twig file
             if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
-                tina4_python.tina4_current_request["params"].update(Router.get_variables(url, url))
-                content = Template.render_twig_template(twig_file)
+                Debug("Looking for twig file",
+                      tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
+                      Constant.TINA4_LOG_DEBUG)
+                content = Template.render_twig_template(twig_file, {"request": tina4_python.tina4_current_request})
                 if content != "":
                     return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML)
 
+        if result.http_code == Constant.HTTP_NOT_FOUND:
             content = Template.render_twig_template(
                 "errors/404.twig", {"server": {"url": url}})
             return Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
@@ -156,57 +157,89 @@ class Router:
     @staticmethod
     def add(method, route, callback):
         Debug("Adding a route: " + route, Constant.TINA4_LOG_DEBUG)
-        tina4_python.tina4_routes.append({"route": route, "callback": callback, "method": method})
+        if not callback in tina4_python.tina4_routes:
+            tina4_python.tina4_routes[callback] = {"route": route, "callback": callback, "method": method, "swagger": None}
+        else:
+            tina4_python.tina4_routes[callback]["route"] = route
+            tina4_python.tina4_routes[callback]["callback"] = callback
+            tina4_python.tina4_routes[callback]["method"] = method
+
         if '{' in route:  # store the parameters if needed
             route_variables = re.findall(r'{(.*?)}', route)
-            tina4_python.tina4_routes[-1]["params"] = route_variables
+            tina4_python.tina4_routes[callback]["params"] = route_variables
 
 
-def get(*arguments):
-    def actual_get(param):
-        if len(arguments) > 0:
-            route_paths = arguments[0].split('|')
-            for route_path in route_paths:
-                Router.add(Constant.TINA4_GET, route_path, param)
+
+def get(path: str):
+    """
+    Get router
+    :param arguments:
+    :return:
+    """
+    def actual_get(callback):
+        route_paths = path.split('|')
+        for route_path in route_paths:
+            Router.add(Constant.TINA4_GET, route_path, callback)
+        return callback
 
     return actual_get
 
 
-def post(*arguments):
-    def actual_post(param):
-        if len(arguments) > 0:
-            route_paths = arguments[0].split('|')
-            for route_path in route_paths:
-                Router.add(Constant.TINA4_POST, route_path, param)
+def post(path):
+    """
+    Post router
+    :param path:
+    :return:
+    """
+    def actual_post(callback):
+        route_paths = path.split('|')
+        for route_path in route_paths:
+            Router.add(Constant.TINA4_POST, route_path, callback)
+        return callback
 
     return actual_post
 
 
-def put(*arguments):
-    def actual_put(param):
-        if len(arguments) > 0:
-            route_paths = arguments[0].split('|')
-            for route_path in route_paths:
-                Router.add(Constant.TINA4_PUT, route_path, param)
+def put(path):
+    """
+    Put router
+    :param path:
+    :return:
+    """
+    def actual_put(callback):
+        route_paths = path.split('|')
+        for route_path in route_paths:
+            Router.add(Constant.TINA4_PUT, route_path, callback)
+        return callback
 
     return actual_put
 
 
-def patch(*arguments):
-    def actual_patch(param):
-        if len(arguments) > 0:
-            route_paths = arguments[0].split('|')
-            for route_path in route_paths:
-                Router.add(Constant.TINA4_PATCH, route_path, param)
+def patch(path):
+    """
+    Patch router
+    :param path:
+    :return:
+    """
+    def actual_patch(callback):
+        route_paths = path.split('|')
+        for route_path in route_paths:
+            Router.add(Constant.TINA4_PATCH, route_path, callback)
+        return callback
 
     return actual_patch
 
 
-def delete(*arguments):
-    def actual_delete(param):
-        if len(arguments) > 0:
-            route_paths = arguments[0].split('|')
-            for route_path in route_paths:
-                Router.add(Constant.TINA4_DELETE, route_path, param)
+def delete(path):
+    """
+    Delete router
+    :param path:
+    :return:
+    """
+    def actual_delete(callback):
+        route_paths = path.split('|')
+        for route_path in route_paths:
+            Router.add(Constant.TINA4_DELETE, route_path, callback)
+        return callback
 
     return actual_delete

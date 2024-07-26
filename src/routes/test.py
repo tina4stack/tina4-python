@@ -1,11 +1,5 @@
-from tina4_python import get, Template
-
-
-@get("/")
-async def home_page(request, response):
-
-    html = Template.render_twig_template("index.twig", {"sami": "This is sami"})
-    return response(html)
+from tina4_python import get, post
+from tina4_python.Swagger import description, example, secure, params
 
 
 @get("/test/session")
@@ -25,5 +19,16 @@ async def test_session_set(request, response):
 @get("/test/session/unset")
 async def test_session_unset(request, response):
     html = request.session.unset("me")
+
+    return response(html)
+
+
+@post("/test/variables")
+@description("A test for variables")
+@example('{"id": 100, "first_name": "Andre", "last_name": "van Zuydam"}')
+@params(["hello","one"])
+@secure()
+async def test_session_unset(request, response):
+    html = request.body
 
     return response(html)
