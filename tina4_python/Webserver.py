@@ -47,44 +47,45 @@ class Webserver:
             elif self.headers["Content-Type"] == "text/plain":
                 return content.decode("utf-8")
             else:
-               content_data = self.headers["Content-Type"].split("; ")
-               if (content_data[0] == "multipart/form-data"):
-                  boundary = content_data[1].split("=")[1]+"\r\n"
-                  content = b"\r\n"+content
-                  data_array = content.split(str.encode(boundary))
-                  body = {}
-                  for data in data_array:
-                      data = data.split(b"\r\n\r\n")
-                      data_names = data[0].decode("utf-8").split("; ")
-                      if data_names[0] == "Content-Disposition: form-data":
-                          key_name = data_names[1].split("=")[1][1:-1]
-                          if len(data_names) == 2:
-                              data_value = data[1].split(b"\r\n")[0]
-                              body[key_name] = unquote_plus(data_value.decode("utf-8"))
-                          else:
-                              data_value = data[1]
-                              file_data = data_names[2].split("\r\n")
-                              file_name="Unknown"
-                              content_type="Unknown"
-                              meta_data = {}
-                              for file_info in file_data:
-                                  file_info1 = file_info.split("=")
-                                  if len(file_info1) > 1:
-                                      meta_data[file_info1[0]] = file_info1[1].strip()
-                                  file_info2 = file_info.split(":")
-                                  if len(file_info2) > 1:
-                                      meta_data[file_info2[0]] = file_info2[1].strip()
+                content_data = self.headers["Content-Type"].split("; ")
+                if content_data[0] == "multipart/form-data":
+                    boundary = content_data[1].split("=")[1] + "\r\n"
+                    content = b"\r\n" + content
+                    data_array = content.split(str.encode(boundary))
+                    body = {}
+                    for data in data_array:
+                        data = data.split(b"\r\n\r\n")
+                        data_names = data[0].decode("utf-8").split("; ")
+                        if data_names[0] == "Content-Disposition: form-data":
+                            key_name = data_names[1].split("=")[1][1:-1]
+                            if len(data_names) == 2:
+                                data_value = data[1].split(b"\r\n")[0]
+                                body[key_name] = unquote_plus(data_value.decode("utf-8"))
+                            else:
+                                data_value = data[1].split(b"\r\n--")[0]
+                                file_data = data_names[2].split("\r\n")
+                                file_name = "Unknown"
+                                content_type = "Unknown"
+                                meta_data = {}
+                                for file_info in file_data:
+                                    file_info1 = file_info.split("=")
+                                    if len(file_info1) > 1:
+                                        meta_data[file_info1[0]] = file_info1[1].strip()
+                                    file_info2 = file_info.split(":")
+                                    if len(file_info2) > 1:
+                                        meta_data[file_info2[0]] = file_info2[1].strip()
 
-                              if "filename" in meta_data:
-                                  file_name = meta_data["filename"][1:-1]
-                              if "Content-Type" in meta_data:
-                                  content_type = meta_data["Content-Type"]
+                                if "filename" in meta_data:
+                                    file_name = meta_data["filename"][1:-1]
+                                if "Content-Type" in meta_data:
+                                    content_type = meta_data["Content-Type"]
 
-                              body[key_name] = {"file_name": file_name, "content-type": content_type, "content": base64.encodebytes(data_value).decode("utf-8").replace("\n", "")}
-                  return body
+                                body[key_name] = {"file_name": file_name, "content-type": content_type,
+                                                  "content": base64.encodebytes(data_value).decode("utf-8").replace(
+                                                      "\n", "")}
+                    return body
 
-
-        return {"data":  base64.encodebytes(content).decode("utf-8").replace("\n", "")}
+        return {"data": base64.encodebytes(content).decode("utf-8").replace("\n", "")}
 
     async def get_response(self, method):
         """
@@ -175,25 +176,25 @@ class Webserver:
         if "Content-Length" in headers:
             content_length = int(headers["Content-Length"])
             count = 0
+            read_size = 1024
             raw_data = b''
-            # print('Count', sys.getsizeof(raw_data), sys.getsizeof(""), content_length, headers["Content-Length"])
-            while count < content_length and not reader.at_eof():
-                read = await reader.read(1024)
+            #print('Count', sys.getsizeof(raw_data), sys.getsizeof(""), content_length, headers["Content-Length"], content_length*sys.getsizeof(b''))
+            while count < content_length * sys.getsizeof(b' ') and not reader.at_eof():
+                read = await reader.read(read_size)
                 count += sys.getsizeof(read)
                 raw_data += read
-                # print(count, read)
-
+                if sys.getsizeof(read) < read_size:
+                    break
             try:
-              content = raw_data.decode("utf-8")
-            except: #probably binary or multipart form?
-              content = raw_data
+                content = raw_data.decode("utf-8")
+            except:  #probably binary or multipart form?
+                content = raw_data
 
         return protocol, headers, content, raw_data
 
     async def handle_client(self, reader, writer):
         # Get the client request
         protocol, headers_list, request, raw_data = await self.get_data(reader)
-
         # Strange blank request ?
         if protocol == '':
             return
@@ -206,7 +207,6 @@ class Webserver:
         # print(protocol, headers_list)
         self.method = protocol[0]
         self.path = protocol[1]
-
 
         # parse cookies
         cookie_list = {}
