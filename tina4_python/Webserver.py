@@ -177,12 +177,12 @@ class Webserver:
             content_length = int(headers["Content-Length"])
             count = 0
             raw_data = b''
-            print('Count', sys.getsizeof(raw_data), sys.getsizeof(""), content_length, headers["Content-Length"])
+            # print('Count', sys.getsizeof(raw_data), sys.getsizeof(""), content_length, headers["Content-Length"])
             while count < content_length and not reader.at_eof():
                 read = await reader.read(1024)
                 count += sys.getsizeof(read)
                 raw_data += read
-                print(count, read)
+                # print(count, read)
 
             try:
               content = raw_data.decode("utf-8")
@@ -204,7 +204,7 @@ class Webserver:
         self.headers = headers_list
 
         protocol = protocol.split(" ")
-        print(protocol, headers_list)
+        # print(protocol, headers_list)
         self.method = protocol[0]
         self.path = protocol[1]
 
