@@ -80,7 +80,7 @@ class Webserver:
                                 if "Content-Type" in meta_data:
                                     content_type = meta_data["Content-Type"]
 
-                                body[key_name] = {"file_name": file_name, "content-type": content_type,
+                                body[key_name] = {"file_name": file_name, "content_type": content_type,
                                                   "content": base64.encodebytes(data_value).decode("utf-8").replace(
                                                       "\n", "")}
                     return body
@@ -178,7 +178,7 @@ class Webserver:
             count = 0
             read_size = 1024
             raw_data = b''
-            #print('Count', sys.getsizeof(raw_data), sys.getsizeof(""), content_length, headers["Content-Length"], content_length*sys.getsizeof(b''))
+            # print('Count', sys.getsizeof(raw_data), sys.getsizeof(""), content_length, headers["Content-Length"], content_length*sys.getsizeof(b''))
             while count < content_length * sys.getsizeof(b' ') and not reader.at_eof():
                 read = await reader.read(read_size)
                 count += sys.getsizeof(read)
@@ -187,7 +187,7 @@ class Webserver:
                     break
             try:
                 content = raw_data.decode("utf-8")
-            except:  #probably binary or multipart form?
+            except:  # probably binary or multipart form?
                 content = raw_data
 
         return protocol, headers, content, raw_data
