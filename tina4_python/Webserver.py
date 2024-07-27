@@ -12,7 +12,6 @@ import sys
 from urllib.parse import unquote_plus
 from urllib.parse import urlparse, parse_qsl
 import tina4_python
-from tina4_python.Debug import Debug
 from tina4_python import Constant
 from tina4_python.Session import Session
 
@@ -37,7 +36,7 @@ class Webserver:
                 content_data = content.decode("utf-8").split("&")
                 for data in content_data:
                     data = data.split("=", 1)
-                    body[data[0]] = data[1]
+                    body[data[0]] = unquote_plus(data[1])
                 return body
             elif self.headers["Content-Type"] == "application/json":
                 # print("CONTENT", content, self.request)
@@ -61,7 +60,7 @@ class Webserver:
                           key_name = data_names[1].split("=")[1][1:-1]
                           if len(data_names) == 2:
                               data_value = data[1].split(b"\r\n")[0]
-                              body[key_name] = data_value.decode("utf-8")
+                              body[key_name] = unquote_plus(data_value.decode("utf-8"))
                           else:
                               data_value = data[1]
                               file_data = data_names[2].split("\r\n")
