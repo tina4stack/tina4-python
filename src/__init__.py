@@ -44,3 +44,7 @@ async def greet_again(**params): #(request, response)
     print(params['request'])
     return params['response'](params['request'].body) # return response()
 
+@post("/upload/files")
+async def upload_file(request, response):
+
+    return response(request.body)

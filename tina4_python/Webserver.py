@@ -5,8 +5,10 @@
 #
 # flake8: noqa: E501
 import asyncio
+import base64
 import json
 import os
+import sys
 from urllib.parse import unquote_plus
 from urllib.parse import urlparse, parse_qsl
 import tina4_python
@@ -28,24 +30,59 @@ class Webserver:
 
     async def get_content_body(self, content_length):
         # get lines of content where at the end of the request
-        content = self.request_raw[-content_length:]
-        try:
-            Debug("JSON", content, Constant.TINA4_LOG_DEBUG)
-            content = json.loads(content)
-        except Exception:
-            # check for form body
-            if content != "":
+        content = self.request_raw
+
+        if "Content-Type" in self.headers:
+            if self.headers["Content-Type"] == "application/x-www-form-urlencoded":
                 body = {}
-                variables = content.split("&")
-                for variable in variables:
-                    variable_value = variable.split("=", 1) # hello=1,2,3,4=50505
-                    if len(variable) > 1:
-                        body[variable_value[0]] = unquote_plus(variable_value[1])
-                    else:
-                        body[variable] = None
-
+                content_data = content.decode("utf-8").split("&")
+                for data in content_data:
+                    data = data.split("=", 1)
+                    body[data[0]] = data[1]
                 return body
+            elif self.headers["Content-Type"] == "application/json":
+                try:
+                    return json.loads(content)
+                except:
+                    return content.decode("utf-8")
+            elif self.headers["Content-Type"] == "text/plain":
+                return content.decode("utf-8")
+            else:
+               content_data = self.headers["Content-Type"].split("; ")
+               if (content_data[0] == "multipart/form-data"):
+                  boundary = content_data[1].split("=")[1]+"\r\n"
+                  content = b"\r\n"+content
+                  data_array = content.split(str.encode(boundary))
+                  body = {}
+                  for data in data_array:
+                      data = data.split(b"\r\n\r\n")
+                      data_names = data[0].decode("utf-8").split("; ")
+                      if data_names[0] == "Content-Disposition: form-data":
+                          key_name = data_names[1].split("=")[1][1:-1]
+                          if len(data_names) == 2:
+                              data_value = data[1].split(b"\r\n")[0]
+                              body[key_name] = data_value.decode("utf-8")
+                          else:
+                              data_value = data[1]
+                              file_data = data_names[2].split("\r\n")
+                              file_name="Unknown"
+                              content_type="Unknown"
+                              meta_data = {}
+                              for file_info in file_data:
+                                  file_info1 = file_info.split("=")
+                                  if len(file_info1) > 1:
+                                      meta_data[file_info1[0]] = file_info1[1].strip()
+                                  file_info2 = file_info.split(":")
+                                  if len(file_info2) > 1:
+                                      meta_data[file_info2[0]] = file_info2[1].strip()
 
+                              if "filename" in meta_data:
+                                  file_name = meta_data["filename"][1:-1]
+                              if "Content-Type" in meta_data:
+                                  content_type = meta_data["Content-Type"]
+
+                              body[key_name] = {"file_name": file_name, "content-type": content_type, "content": base64.encodebytes(data_value).decode("utf-8").replace("\n", "")}
+                  return body
         return content
 
     async def get_response(self, method):
@@ -119,65 +156,50 @@ class Webserver:
             await server.serve_forever()
 
     async def get_data(self, reader):
-        # https://stackoverflow.com/questions/17667903/python-socket-receive-large-amount-of-data
-        chunks = []
-        found_length = False
-        content_length = 0
-        header_offset = 0
-        while True:
-            data = (await reader.read(2048)).decode("utf-8")
-            chunks.append(data)
+        try:
+            raw_data = await reader.readuntil(b"\r\n\r\n")
+        except:
+            raw_data = await reader.read(1024)
 
-            if not found_length:
-                i = "".join(chunks).find('Content-Length:')
-                e = "".join(chunks).find('\n', i)
-                if not i == -1 and not e == -1:
-                    value = "".join(chunks)[i:e].replace("\r", "").split(":")
-                    if len(value) > 1:
-                        content_length = int(value[1].strip())
-                        found_length = True
+        protocol = raw_data.decode("utf-8").split("\r\n", 1)[0]
+        header_array = raw_data.decode("utf-8").split("\r\n\r\n")[0]
+        header_array = header_array.split("\r\n")
+        headers = {}
+        for header in header_array:
+            split = header.split(":", 1)
+            if len(split) == 2:
+                headers[split[0]] = split[1].strip()
 
-            if header_offset == 0:
-                i = "".join(chunks).replace("\r", "").find("\n\n")
-                if not i == -1:
-                    header_offset = i
+        content = ""
+        if "Content-Length" in headers:
+            content_length = int(headers["Content-Length"])
+            raw_data = b''
+            while sys.getsizeof(raw_data) < content_length:
+                raw_data += await reader.read(1024)
+            try:
+              content = raw_data.decode("utf-8")
+            except: #probably binary or multipart form?
+              content = raw_data
 
-            if not found_length and (data.find('GET') != -1 or data.find('OPTIONS') != -1) and len(
-                    data) < header_offset:
-                content_length = len("".join(chunks))
-
-            if len("".join(chunks)) >= content_length + header_offset or len("".join(chunks)) == header_offset or len(
-                    "".join(chunks)) == 0:
-                break
-        return "".join(chunks)
+        return protocol, headers, content, raw_data
 
     async def handle_client(self, reader, writer):
         # Get the client request
-        request = await self.get_data(reader)
+        protocol, headers_list, request, raw_data = await self.get_data(reader)
 
+        # Strange blank request ?
+        if protocol == '':
+            return
         # Decode the request
-        self.request_raw = request
-
-        self.request = request.replace("\r", "")
-
-        self.path = request.split(" ")
-
-        if len(self.path) > 1:
-            self.path = self.request.split(" ")[1]
-
-        self.method = self.request.split(" ")[0]
-
-        body_parts = self.request.split("\n\n")
-
-        self.headers = body_parts[0].split("\n")
-
-        # parse headers into a dictionary for more efficient use
-        headers_list = {}
-        for header in self.headers:
-            split = header.split(":", 1)
-            if len(split) == 2:
-                headers_list[split[0]] = split[1].strip()
+        self.request_raw = raw_data
+        self.request = request
         self.headers = headers_list
+
+        protocol = protocol.split(" ")
+        print(protocol, headers_list)
+        self.method = protocol[0]
+        self.path = protocol[1]
+
 
         # parse cookies
         cookie_list = {}
