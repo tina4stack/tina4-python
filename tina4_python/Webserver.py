@@ -31,7 +31,6 @@ class Webserver:
     async def get_content_body(self, content_length):
         # get lines of content where at the end of the request
         content = self.request_raw
-
         if "Content-Type" in self.headers:
             if self.headers["Content-Type"] == "application/x-www-form-urlencoded":
                 body = {}
@@ -41,6 +40,7 @@ class Webserver:
                     body[data[0]] = data[1]
                 return body
             elif self.headers["Content-Type"] == "application/json":
+                # print("CONTENT", content, self.request)
                 try:
                     return json.loads(content)
                 except:
@@ -83,7 +83,9 @@ class Webserver:
 
                               body[key_name] = {"file_name": file_name, "content-type": content_type, "content": base64.encodebytes(data_value).decode("utf-8").replace("\n", "")}
                   return body
-        return content
+
+
+        return {"data":  base64.encodebytes(content).decode("utf-8").replace("\n", "")}
 
     async def get_response(self, method):
         """
@@ -159,7 +161,7 @@ class Webserver:
         try:
             raw_data = await reader.readuntil(b"\r\n\r\n")
         except:
-            raw_data = await reader.read(1024)
+            raw_data = await reader.read(128)
 
         protocol = raw_data.decode("utf-8").split("\r\n", 1)[0]
         header_array = raw_data.decode("utf-8").split("\r\n\r\n")[0]
@@ -173,9 +175,15 @@ class Webserver:
         content = ""
         if "Content-Length" in headers:
             content_length = int(headers["Content-Length"])
+            count = 0
             raw_data = b''
-            while sys.getsizeof(raw_data) < content_length:
-                raw_data += await reader.read(1024)
+            print('Count', sys.getsizeof(raw_data), sys.getsizeof(""), content_length, headers["Content-Length"])
+            while count < content_length and not reader.at_eof():
+                read = await reader.read(1024)
+                count += sys.getsizeof(read)
+                raw_data += read
+                print(count, read)
+
             try:
               content = raw_data.decode("utf-8")
             except: #probably binary or multipart form?
