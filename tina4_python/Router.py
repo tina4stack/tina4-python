@@ -57,6 +57,8 @@ class Router:
     @staticmethod
     async def get_result(url, method, request, headers, session):
         Debug("Root Path " + tina4_python.root_path + " " + url, method, Constant.TINA4_LOG_DEBUG)
+        tina4_python.tina4_current_request["url"] = url
+        tina4_python.tina4_current_request["headers"] = headers
         # we can add other methods later but right now we validate posts
         if method in [Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
             content = Template.render_twig_template(
@@ -133,7 +135,6 @@ class Router:
                 if content != "":
                     return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML)
 
-        # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
             content = Template.render_twig_template(
                 "errors/404.twig", {"server": {"url": url}})

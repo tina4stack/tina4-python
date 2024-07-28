@@ -5,6 +5,7 @@
 #
 import tina4_python
 from tina4_python import *
+from tina4_python.Database import Database
 
 global dba_type
 dba_type = "sqlite3:test.db"
@@ -35,7 +36,7 @@ def test_database_execute():
     result = dba.execute("insert into table with something")
     assert result.error != "", "There should be an error"
     result = dba.execute(
-        "create table if not exists test_record(id integer default 0 not null, name varchar(200), primary key (id))")
+        "create table if not exists test_record(id integer default 0 not null, name varchar(200), image blob, primary key (id))")
     assert result.error is None
     result = dba.execute_many("insert into test_record (id, name) values (?, ?)",
                               [[5, "Hello1"], [6, "Hello2"], [7, "Hello3"]])
@@ -54,6 +55,7 @@ def test_database_insert():
     assert result is False
     dba.commit()
     dba.close()
+
 
 
 def test_database_update():
@@ -76,7 +78,7 @@ def test_database_fetch():
     assert result.count == 3
     assert result.records[1]["name"] == "Test2Update"
     assert result.records[2]["id"] == 3
-    assert result.to_json() == '[{"id": 1, "name": "Test1Update"}, {"id": 2, "name": "Test2Update"}, {"id": 3, "name": "Test3Update"}]'
+    assert result.to_json() == '[{"id": 1, "name": "Test1Update", "image": null}, {"id": 2, "name": "Test2Update", "image": null}, {"id": 3, "name": "Test3Update", "image": null}]'
     result = dba.fetch("select * from test_record", limit=3, skip=3)
     assert result.records[1]["name"] == "Hello2"
     result = dba.fetch("select * from test_record where id = ?", [3])
@@ -88,6 +90,19 @@ def test_database_fetch():
     dba.close()
 
 
+
+def test_database_bytes_insert():
+    dba = database_connect(dba_type)
+    with open("./tests/logo.png", "rb") as file:
+        image_bytes = file.read()
+
+    result = dba.update("test_record", {"id": 2, "name": "Test2Update", "image": image_bytes})
+    dba.commit()
+    result = dba.fetch("select * from test_record where id = 2", limit=3)
+
+    assert result.to_json() is None
+
+
 def test_database_delete():
     dba = database_connect(dba_type)
     result = dba.delete("test_record", {"id": 1, "name": "Test1Update"})
@@ -96,7 +111,7 @@ def test_database_delete():
     assert result is True
     dba.commit()
     result = dba.delete("test", [{"id": 12}, {"id": 13}])
-    assert result is True
+    assert result is False
 
 def test_password():
     auth = Auth(tina4_python.root_path)

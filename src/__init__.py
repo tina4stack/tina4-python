@@ -15,6 +15,13 @@ from tina4_python.Swagger import description, secure, summary, example, tags, pa
 
 dba = Database("sqlite3:test.db", "username", "password")
 
+@get("/some/page")
+async def some_page(request, response):
+    global dba
+    result = dba.fetch("select id, name from test_record where id = 2")
+    html = Template.render_twig_template("index.twig", data={"persons": result.to_array()})
+    return response(html)
+
 @get("/hello/{name}")
 @description("Some description")
 @params(["limit=10", "offset=0"])
@@ -37,3 +44,7 @@ async def greet_again(**params): #(request, response)
     print(params['request'])
     return params['response'](params['request'].body) # return response()
 
+@post("/upload/files")
+async def upload_file(request, response):
+
+    return response(request.body)

@@ -48,6 +48,9 @@ class Template:
     def render_twig_template(template_or_file_name, data=None):
         if data is None:
             data = {"request": tina4_python.tina4_current_request}
+        else:
+            data.update({"request": tina4_python.tina4_current_request})
+
         twig = Template.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
         try:
             if twig.get_template(template_or_file_name):
@@ -58,7 +61,7 @@ class Template:
                 content = template.render(data)
 
         except Exception as e:
-            Debug("Error rendering twig file", template_or_file_name, data, e, Constant.TINA4_LOG_ERROR)
+            Debug("Error rendering twig file", template_or_file_name, e, Constant.TINA4_LOG_ERROR)
             content = str(e)
 
         return content

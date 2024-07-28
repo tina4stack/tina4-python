@@ -104,7 +104,6 @@ class Session:
         try:
             if not os.path.exists(self.session_path):
                 os.makedirs(self.session_path)
-            Debug("SAVING", self.session_values, self.session_path, Constant.TINA4_LOG_DEBUG)
             token = tina4_python.tina4_auth.get_token(payload_data=self.session_values)
             with open(self.session_path + os.sep + self.session_hash, "w") as file:
                 file.write(token)

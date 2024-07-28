@@ -222,21 +222,21 @@ API_KEY=somehash
 
 
 ### Features
-| Completed                  | To Do                |
-|----------------------------|----------------------|
-| Python pip package         |                      |
-| Basic environment handling |                      |
-| Basic routing              | OpenAPI (Swagger)    |
-| Enhanced routing           |                      |
-| CSS Support                |                      |
-| Image Support              |                      |
-| Localization               |                      |
-| Error Pages                |                      |
-| Template handling          |                      |
-| Form posting               |                      |
-| Migrations                 |                      |
-| Colored Debugging          |                      |
-|                            | Database Abstraction |
+| Completed                  | To Do             |
+|----------------------------|-------------------|
+| Python pip package         |                   |
+| Basic environment handling |                   |
+| Basic routing              | OpenAPI (Swagger) |
+| Enhanced routing           |                   |
+| CSS Support                |                   |
+| Image Support              |                   |
+| Localization               |                   |
+| Error Pages                |                   |
+| Template handling          |                   |
+| Form posting               |                   |
+| Migrations                 |                   |
+| Colored Debugging          |                   |
+| Database Abstraction       |                   |   
 
 ### Database
 
@@ -345,13 +345,13 @@ Migration updates:
 
 #### Using Python
 
-Building the package:
- ```bash
+Building the package without poetry - you will need to request an API key:
+```bash
 python3 -m pip install --upgrade build
 python3 -m build
 python3 -m pip install --upgrade twine
 python3 -m twine upload dist/*
- ```
+```
 
 #### Using Poetry
 
