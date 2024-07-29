@@ -115,10 +115,10 @@ class Database:
         if record.error is None and record.count == 1:
             data = {}
             for key in record.records[0]:
-                if isinstance(record[key], bytes):
-                    data[key] = base64.b64encode(record[key]).decode('utf-8')
+                if isinstance(record.records[0][key], bytes):
+                    data[key] = base64.b64encode(record.records[0][key]).decode('utf-8')
                 else:
-                    data[key] = record[key]
+                    data[key] = record.records[0][key]
             return data
         else:
             return None
