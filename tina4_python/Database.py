@@ -4,6 +4,7 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+import base64
 import importlib
 import datetime
 
@@ -112,7 +113,13 @@ class Database:
         # Calling the fetch method with limit as 1 and returning the result
         record = self.fetch(sql, params=params, limit=1, skip=skip)
         if record.error is None and record.count == 1:
-            return record.records[0]
+            data = {}
+            for key in record.records[0]:
+                if isinstance(record[key], bytes):
+                    data[key] = base64.b64encode(record[key]).decode('utf-8')
+                else:
+                    data[key] = record[key]
+            return data
         else:
             return None
 
