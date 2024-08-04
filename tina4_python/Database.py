@@ -81,7 +81,6 @@ class Database:
         :param skip:
         :return:
         """
-        Debug("FETCH:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
         # modify the select statement for limit and skip
         if self.database_engine == self.FIREBIRD:
             sql = f"select first {limit} skip {skip} * from ({sql})"
@@ -99,6 +98,7 @@ class Database:
             columns = [column for column in cursor.description]
             return DatabaseResult(rows, columns, None)
         except Exception as e:
+            Debug("FETCH ERROR:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
             return DatabaseResult(None, [], str(e))
 
     def fetch_one(self, sql, params=[], skip=0):
@@ -109,7 +109,6 @@ class Database:
         :param skip:
         :return:
         """
-        Debug("FETCHONE:", sql, "params", params, "skip", skip, Constant.TINA4_LOG_DEBUG)
         # Calling the fetch method with limit as 1 and returning the result
         record = self.fetch(sql, params=params, limit=1, skip=skip)
         if record.error is None and record.count == 1:
@@ -130,8 +129,6 @@ class Database:
         :param params:
         :return:
         """
-        Debug("EXECUTE:", sql, "params", params, Constant.TINA4_LOG_DEBUG)
-
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
@@ -139,7 +136,7 @@ class Database:
             # On success return an empty result set with no error
             return DatabaseResult(None, [], None)
         except Exception as e:
-            Debug("EXECUTE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            Debug("EXECUTE ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
 
@@ -150,9 +147,6 @@ class Database:
         :param params:
         :return:
         """
-
-        Debug("EXECUTE MANY:", sql, "params", params, Constant.TINA4_LOG_DEBUG)
-
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
@@ -160,7 +154,7 @@ class Database:
             # On success return an empty result set with no error
             return DatabaseResult(None, [], None)
         except Exception as e:
-            Debug("EXECUTE MANY ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            Debug("EXECUTE MANY ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
 
@@ -217,14 +211,13 @@ class Database:
 
             values = [list(record.values()) for record in data]
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
-            Debug("SQL:", sql, Constant.TINA4_LOG_DEBUG)
 
             result = self.execute_many(sql, values)
 
             if result.error is None:
                 return True
             else:
-                Debug("INSERT ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                Debug("INSERT ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                 return False
 
     def delete(self, table_name, filter=None):
@@ -261,7 +254,6 @@ class Database:
                     condition_records = " and ".join(condition_records)
 
                     sql = f"DELETE FROM {table_name} WHERE {condition_records}"
-                    Debug("SQL:", sql, Constant.TINA4_LOG_DEBUG)
 
                     params = pk_value
 
@@ -272,7 +264,7 @@ class Database:
                 if result.error is None:
                     return True
                 else:
-                    Debug("DELETE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                    Debug("DELETE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                     return False
 
     def update(self, table_name, records, primary_key="id"):
@@ -314,7 +306,6 @@ class Database:
                     set_clause = ", ".join(set_clause_list)
 
                     sql = f"UPDATE {table_name} SET {set_clause} WHERE {condition_records}"
-                    Debug("SQL:", sql, Constant.TINA4_LOG_DEBUG)
 
                     params = set_values + [pk_value]
 
@@ -325,5 +316,5 @@ class Database:
                 if result.error is None:
                     return True
                 else:
-                    Debug("UPDATE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                    Debug("UPDATE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                     return False
