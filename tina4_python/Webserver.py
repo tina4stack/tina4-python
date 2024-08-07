@@ -176,14 +176,14 @@ class Webserver:
         if "Content-Length" in headers:
             content_length = int(headers["Content-Length"])
             count = 0
-            read_size = 1024
+            read_size = 64
             raw_data = b''
-            # print('Count', sys.getsizeof(raw_data), sys.getsizeof(""), content_length, headers["Content-Length"], content_length*sys.getsizeof(b''))
-            while count < content_length * sys.getsizeof(b' ') and not reader.at_eof():
+            while len(raw_data) < content_length:
                 read = await reader.read(read_size)
-                count += sys.getsizeof(read)
+                count += len(read)
                 raw_data += read
-                if sys.getsizeof(read) < read_size:
+                # print('COUNT', count, len(read))
+                if len(read) < read_size and len(raw_data) == content_length:
                     break
             try:
                 content = raw_data.decode("utf-8")
