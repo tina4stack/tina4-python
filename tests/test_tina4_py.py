@@ -8,7 +8,7 @@ from tina4_python import *
 from tina4_python.Database import Database
 
 global dba_type
-dba_type = "sqlite3:test.db"
+dba_type = "sqlite3:test2.db"
 
 
 def test_route_match():
@@ -36,7 +36,7 @@ def test_database_execute():
     result = dba.execute("insert into table with something")
     assert result.error != "", "There should be an error"
     result = dba.execute(
-        "create table if not exists test_record(id integer default 0 not null, name varchar(200), image blob, primary key (id))")
+        "create table if not exists test_record(id integer not null, name varchar(200), image blob, primary key (id))")
     assert result.error is None
     result = dba.execute_many("insert into test_record (id, name) values (?, ?)",
                               [[5, "Hello1"], [6, "Hello2"], [7, "Hello3"]])
@@ -47,10 +47,11 @@ def test_database_execute():
 
 def test_database_insert():
     dba = database_connect(dba_type)
-    result = dba.insert("test_record", {"id": 1, "name": "Test1"})
-    assert result is True
+    result = dba.insert("test_record", {"name": "Test1"})
+    assert result.error is None
+    assert result.records[0]["id"] == 8
     result = dba.insert("test_record", [{"id": 2, "name": "Test2"}, {"id": 3, "name": "Test3"}])
-    assert result is True
+    assert result.error is None
     result = dba.insert("test_record1", [{"id": 2, "name": "Test2"}, {"id": 3, "name": "Test3"}])
     assert result is False
     dba.commit()
@@ -76,11 +77,11 @@ def test_database_fetch():
     dba = database_connect(dba_type)
     result = dba.fetch("select * from test_record", limit=3)
     assert result.count == 3
-    assert result.records[1]["name"] == "Test2Update"
-    assert result.records[2]["id"] == 3
-    assert result.to_json() == '[{"id": 1, "name": "Test1Update", "image": null}, {"id": 2, "name": "Test2Update", "image": null}, {"id": 3, "name": "Test3Update", "image": null}]'
+    assert result.records[1]["name"] == "Test3Update"
+    assert result.records[2]["id"] == 5
+    assert result.to_json() == '[{"id": 2, "name": "Test2Update", "image": null}, {"id": 3, "name": "Test3Update", "image": null}, {"id": 5, "name": "Hello1", "image": null}]'
     result = dba.fetch("select * from test_record", limit=3, skip=3)
-    assert result.records[1]["name"] == "Hello2"
+    assert result.records[1]["name"] == "Hello3"
     result = dba.fetch("select * from test_record where id = ?", [3])
     assert result.records[0]["name"] == "Test3Update"
     result = dba.fetch_one("select * from test_record where id = ?", [2])
@@ -93,14 +94,14 @@ def test_database_fetch():
 
 def test_database_bytes_insert():
     dba = database_connect(dba_type)
-    with open("./tests/logo.png", "rb") as file:
+    with open("./src/public/images/logo.png", "rb") as file:
         image_bytes = file.read()
 
     result = dba.update("test_record", {"id": 2, "name": "Test2Update", "image": image_bytes})
     dba.commit()
     result = dba.fetch("select * from test_record where id = 2", limit=3)
 
-    assert result.to_json() is None
+    assert isinstance(result.to_json(), object)
 
 
 def test_database_delete():

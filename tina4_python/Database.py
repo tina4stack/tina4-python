@@ -72,6 +72,18 @@ class Database:
         else:
             return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    def get_database_result(self, cursor):
+        """
+        Get database results
+        :param cursor:
+        :return:
+        """
+        columns = [column[0].lower() for column in cursor.description]
+        records = cursor.fetchall()
+        rows = [dict(zip(columns, row)) for row in records]
+        columns = [column for column in cursor.description]
+        return DatabaseResult(rows, columns, None)
+
     def fetch(self, sql, params=[], limit=10, skip=0):
         """
         Fetch records based on a sql statement
@@ -92,11 +104,7 @@ class Database:
         cursor = self.dba.cursor()
         try:
             cursor.execute(sql, params)
-            columns = [column[0].lower() for column in cursor.description]
-            records = cursor.fetchall()
-            rows = [dict(zip(columns, row)) for row in records]
-            columns = [column for column in cursor.description]
-            return DatabaseResult(rows, columns, None)
+            return self.get_database_result(cursor)
         except Exception as e:
             Debug("FETCH ERROR:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
             return DatabaseResult(None, [], str(e))
@@ -133,8 +141,11 @@ class Database:
         # Running an execute statement and committing any changes to the database
         try:
             cursor.execute(sql, params)
-            # On success return an empty result set with no error
-            return DatabaseResult(None, [], None)
+            if "returning" in sql:
+                return self.get_database_result(cursor)
+            else:
+                # On success return an empty result set with no error
+                return DatabaseResult(None, [], None)
         except Exception as e:
             Debug("EXECUTE ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
             # Return the error in the result
@@ -190,7 +201,7 @@ class Database:
         except Exception as e:
             Debug("DATABASE CLOSE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
 
-    def insert(self, table_name, data):
+    def insert(self, table_name, data, primary_key="id"):
         """
         Insert data based on table name and data provided - single or multiple records
         :param table_name:
@@ -209,10 +220,23 @@ class Database:
             else:
                 placeholders = ", ".join(['?'] * len(data))
 
-            values = [list(record.values()) for record in data]
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+            if self.database_engine in (self.SQLITE, self.FIREBIRD):
+                sql += f" returning ({primary_key})"
+                records = DatabaseResult()
+                for record in data:
+                    result = self.execute(sql, list(record.values()))
+                    records.records += result.records
+                    if result.error is not None:
+                        Debug("INSERT ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
+                        return False
 
-            result = self.execute_many(sql, values)
+                records.columns = result.columns
+                records.count = len(records.records)
+                return records
+            else:
+                values = [list(record.values()) for record in data]
+                result = self.execute_many(sql, values)
 
             if result.error is None:
                 return True
