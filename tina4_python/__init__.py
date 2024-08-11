@@ -186,28 +186,28 @@ def run_web_server(in_hostname="localhost", in_port=7145):
     Debug(Messages.MSG_STARTING_WEBSERVER.format(port=in_port), Constant.TINA4_LOG_INFO)
     webserver(in_hostname, in_port)
 
+if os.getenv('TINA4_DEFAULT_WEBSERVER', 'True') == 'True' :
+    if importlib.util.find_spec("jurigged"):
+        Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
+        jurigged.watch("./")
 
-if importlib.util.find_spec("jurigged"):
-    Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
-    jurigged.watch("./")
+    # Start up a webserver based on params passed on the command line
+    HOSTNAME = "localhost"
+    PORT = 7145
+    if len(sys.argv) > 1:
+        PORT = sys.argv[1]
+        if ":" in PORT:
+            SERVER_CONFIG = PORT.split(":")
+            HOSTNAME = SERVER_CONFIG[0]
+            PORT = SERVER_CONFIG[1]
 
-# Start up a webserver based on params passed on the command line
-HOSTNAME = "localhost"
-PORT = 7145
-if len(sys.argv) > 1:
-    PORT = sys.argv[1]
-    if ":" in PORT:
-        SERVER_CONFIG = PORT.split(":")
-        HOSTNAME = SERVER_CONFIG[0]
-        PORT = SERVER_CONFIG[1]
-
-if PORT != "stop" and PORT != "manual":
-    try:
-        PORT = int(PORT)
-        run_web_server(HOSTNAME, PORT)
-    except Exception:
-        Debug("Not running webserver", Constant.TINA4_LOG_WARNING)
-else:
-    Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
-          "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
-          Constant.TINA4_LOG_WARNING)
+    if PORT != "stop" and PORT != "manual":
+        try:
+            PORT = int(PORT)
+            run_web_server(HOSTNAME, PORT)
+        except Exception:
+            Debug("Not running webserver", Constant.TINA4_LOG_WARNING)
+    else:
+        Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
+              "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
+              Constant.TINA4_LOG_WARNING)

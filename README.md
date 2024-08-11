@@ -220,6 +220,19 @@ For ease of use you can supply an `API_KEY` param to your .env with a secret of 
 API_KEY=somehash
 ```
 
+### Suppressing the default webservice
+
+You may want to use your Tina4 project as a library in another project so suppressing the default webservice is probably needed.
+
+```.env
+TINA4_DEFAULT_WEBSERVER=False
+```
+or in your `__init__.py` file
+```python
+import os
+os.setenv("TINA4_DEFAULT_WEBSERVER", "False")
+```
+Additionally, it will require you to rename `src` to the name of your package
 
 ### Features
 | Completed                  | To Do             |
