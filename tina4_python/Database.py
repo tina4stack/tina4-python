@@ -88,7 +88,7 @@ class Database:
     def is_json(self, myjson):
         try:
             json.loads(myjson)
-        except ValueError as e:
+        except Exception as e:
             return False
         return True
 
@@ -133,7 +133,7 @@ class Database:
                 if isinstance(record.records[0][key], bytes):
                     data[key] = base64.b64encode(record.records[0][key]).decode('utf-8')
                 else:
-                    if self.is_json(record.records[0][key]):
+                    if isinstance(record.records[0][key], str) and self.is_json(record.records[0][key]):
                         data[key] = json.loads(record.records[0][key])
                     else:
                         data[key] = record.records[0][key]
