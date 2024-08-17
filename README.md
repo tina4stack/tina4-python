@@ -235,21 +235,21 @@ os.environ["TINA4_DEFAULT_WEBSERVER"] = "False"
 Additionally, it will require you to rename `src` to the name of your package
 
 ### Features
-| Completed                  | To Do             |
-|----------------------------|-------------------|
-| Python pip package         |                   |
-| Basic environment handling |                   |
-| Basic routing              | OpenAPI (Swagger) |
-| Enhanced routing           |                   |
-| CSS Support                |                   |
-| Image Support              |                   |
-| Localization               |                   |
-| Error Pages                |                   |
-| Template handling          |                   |
-| Form posting               |                   |
-| Migrations                 |                   |
-| Colored Debugging          |                   |
-| Database Abstraction       |                   |   
+| Completed                  | To Do |
+|----------------------------|-------|
+| Python pip package         |       |
+| Basic environment handling |       |
+| Routing with Swagger       |       |
+| Enhanced Routing           |       |
+| CSS Support                |       |
+| Image Support              |       |
+| Localization               |       |
+| Error Pages                |       |
+| Template handling          |       |
+| Form posting               |       |
+| Migrations                 |       |
+| Colored Debugging          |       |
+| Database Abstraction       |       |   
 
 ### Database
 
