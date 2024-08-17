@@ -230,7 +230,7 @@ TINA4_DEFAULT_WEBSERVER=False
 or in your `__init__.py` file
 ```python
 import os
-os.setenv("TINA4_DEFAULT_WEBSERVER", "False")
+os.environ["TINA4_DEFAULT_WEBSERVER"] = "False"
 ```
 Additionally, it will require you to rename `src` to the name of your package
 

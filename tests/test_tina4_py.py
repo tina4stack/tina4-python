@@ -54,9 +54,10 @@ def test_database_insert():
     assert result.error is None
     result = dba.insert("test_record1", [{"id": 2, "name": "Test2"}, {"id": 3, "name": "Test3"}])
     assert result is False
+    result = dba.insert("test_record", [{"id": 10, "name": {"id": 1}}, {"id": 11, "name": ["me", "myself", "I"]}])
+    assert result.records == [{"id": 10}, {"id": 11}]
     dba.commit()
     dba.close()
-
 
 
 def test_database_update():
@@ -70,6 +71,10 @@ def test_database_update():
     assert result is False
     result = dba.update("test_record", [{"id": 2, "name": "Test2Update"}, {"id": 3, "name1": "Test3Update"}])
     assert result is False
+    result = dba.update("test_record", [{"id": 10, "name": {"id": 2}}, {"id": 11, "name": ["me1", "myself2", "I3"]}])
+    assert result is True
+    dba.commit()
+
     dba.close()
 
 
@@ -89,7 +94,6 @@ def test_database_fetch():
     result = dba.fetch_one("select * from test_record where id = ?", [50])
     assert result is None
     dba.close()
-
 
 
 def test_database_bytes_insert():
@@ -114,6 +118,7 @@ def test_database_delete():
     result = dba.delete("test", [{"id": 12}, {"id": 13}])
     assert result is False
 
+
 def test_password():
     auth = Auth(tina4_python.root_path)
     password = auth.hash_password("123456")
@@ -122,4 +127,3 @@ def test_password():
     password = auth.hash_password("12345678")
     valid = auth.check_password(password, "123456")
     assert valid == False, "Password check"
-

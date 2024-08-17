@@ -7,6 +7,7 @@
 import base64
 import importlib
 import datetime
+import json
 
 from tina4_python import Debug, Constant
 from tina4_python.DatabaseResult import DatabaseResult
@@ -84,6 +85,13 @@ class Database:
         columns = [column for column in cursor.description]
         return DatabaseResult(rows, columns, None)
 
+    def is_json(self, myjson):
+        try:
+            json.loads(myjson)
+        except ValueError as e:
+            return False
+        return True
+
     def fetch(self, sql, params=[], limit=10, skip=0):
         """
         Fetch records based on a sql statement
@@ -125,7 +133,10 @@ class Database:
                 if isinstance(record.records[0][key], bytes):
                     data[key] = base64.b64encode(record.records[0][key]).decode('utf-8')
                 else:
-                    data[key] = record.records[0][key]
+                    if self.is_json(record.records[0][key]):
+                        data[key] = json.loads(record.records[0][key])
+                    else:
+                        data[key] = record.records[0][key]
             return data
         else:
             return None
@@ -201,6 +212,18 @@ class Database:
         except Exception as e:
             Debug("DATABASE CLOSE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
 
+    def sanitize(self, record):
+        """
+        Changes dictionaries and list values into json for updating and inserting
+        :param record:
+        :return:
+        """
+
+        for key in record:
+            if isinstance(record[key], list) or isinstance(record[key], dict):
+                record[key] = json.dumps(record[key])
+        return record
+
     def insert(self, table_name, data, primary_key="id"):
         """
         Insert data based on table name and data provided - single or multiple records
@@ -221,22 +244,21 @@ class Database:
                 placeholders = ", ".join(['?'] * len(data))
 
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
-            if self.database_engine in (self.SQLITE, self.FIREBIRD):
-                sql += f" returning ({primary_key})"
-                records = DatabaseResult()
-                for record in data:
-                    result = self.execute(sql, list(record.values()))
-                    records.records += result.records
-                    if result.error is not None:
-                        Debug("INSERT ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
-                        return False
 
-                records.columns = result.columns
-                records.count = len(records.records)
-                return records
-            else:
-                values = [list(record.values()) for record in data]
-                result = self.execute_many(sql, values)
+            sql += f" returning ({primary_key})"
+            records = DatabaseResult()
+            for record in data:
+                record = self.sanitize(record)
+                result = self.execute(sql, list(record.values()))
+                records.records += result.records
+                if result.error is not None:
+                    Debug("INSERT ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
+                    return False
+
+            records.columns = result.columns
+            records.count = len(records.records)
+            return records
+
 
             if result.error is None:
                 return True
@@ -325,7 +347,10 @@ class Database:
                             pk_value = value
                         else:
                             set_clause_list.append(f"{column} = {placeholder}")
-                            set_values.append(value)
+                            if isinstance(value, list) or isinstance(value, dict):
+                                set_values.append(json.dumps(value))
+                            else:
+                                set_values.append(value)
 
                     set_clause = ", ".join(set_clause_list)
 
