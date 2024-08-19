@@ -353,7 +353,6 @@ Migration updates:
    - Database result object updated
 ```
 
-
 ### Building and Deployment
 
 #### Using Python
