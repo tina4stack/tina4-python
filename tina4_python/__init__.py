@@ -221,3 +221,6 @@ if os.getenv('TINA4_DEFAULT_WEBSERVER', 'True') == 'True' :
         Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
               "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
               Constant.TINA4_LOG_WARNING)
+else:
+    library_path = os.path.dirname(os.path.realpath(__file__))
+    root_path = os.path.realpath(os.getcwd())
