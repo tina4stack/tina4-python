@@ -59,8 +59,9 @@ class Router:
         Debug("Root Path " + tina4_python.root_path + " " + url, method, Constant.TINA4_LOG_DEBUG)
         tina4_python.tina4_current_request["url"] = url
         tina4_python.tina4_current_request["headers"] = headers
+
         # we can add other methods later but right now we validate posts
-        if method in [Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
+        if method in [Constant.TINA4_GET, Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
             content = Template.render_twig_template(
                 "errors/403.twig", {"server": {"url": url}})
 
@@ -71,15 +72,20 @@ class Router:
                 if tina4_python.tina4_auth.valid(token):
                     validated = True
 
-            if "formToken" in request["body"]:
+            if request["params"] is not None and "formToken" in request["params"]:
+                token = request["params"]["formToken"]
+                if tina4_python.tina4_auth.valid(token):
+                    validated = True
+
+            if request["body"] is not None and "formToken" in request["body"]:
                 token = request["body"]["formToken"]
                 if tina4_python.tina4_auth.valid(token):
                     validated = True
 
-            if not validated:
+            if not validated and method != Constant.TINA4_GET:
                 return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
             else:
-                if "formToken" in request["body"]:
+                if request["body"] is not None and "formToken" in request["body"]:
                     del request["body"]["formToken"]
 
         # default response
@@ -102,6 +108,10 @@ class Router:
                 continue
             Debug("Matching route " + route['route'] + " to " + url, Constant.TINA4_LOG_DEBUG)
             if Router.match(url, route['route']):
+                if "swagger" in route and "secure" in route["swagger"]:
+                    if route["swagger"]["secure"] and not validated:
+                        return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+
                 router_response = route["callback"]
 
                 # Add the inline variables  & construct a Request variable

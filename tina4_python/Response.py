@@ -27,7 +27,7 @@ class Response:
         elif not isinstance(content, bool) and not isinstance(content, object) and not isinstance(content, bytes) and not isinstance(content, str) and not isinstance(content, list) and inspect.isclass(type(content)):
             content = dict(content)
 
-        #check if database result
+        # check if database result
         if type(content) is DatabaseResult.DatabaseResult:
             content_type = Constant.APPLICATION_JSON
             content = content.to_json()
