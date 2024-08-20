@@ -108,7 +108,7 @@ class Router:
                 continue
             Debug("Matching route " + route['route'] + " to " + url, Constant.TINA4_LOG_DEBUG)
             if Router.match(url, route['route']):
-                if "swagger" in route and "secure" in route["swagger"]:
+                if  "swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]:
                     if route["swagger"]["secure"] and not validated:
                         return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
