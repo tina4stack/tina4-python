@@ -225,7 +225,7 @@ API_KEY=somehash
 You may want to use your Tina4 project as a library in another project so suppressing the default webservice is probably needed.
 
 ```.env
-TINA4_DEFAULT_WEBSERVER=False
+TINA4_DEFAULT_WEBSERVER="False"
 ```
 or in your `__init__.py` file
 ```python
