@@ -62,8 +62,19 @@ class Router:
 
         # we can add other methods later but right now we validate posts
         if method in [Constant.TINA4_GET, Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
-            content = Template.render_twig_template(
-                "errors/403.twig", {"server": {"url": url}})
+            content_type = "text/html"
+            if "Content-Type" in headers:
+                content_type = headers["Content-Type"]
+            if "Content-type" in headers:
+                content_type = headers["Content-type"]
+            if "content-type" in headers:
+                content_type = headers["content-type"]
+
+            if content_type == "application/json":
+                content = {"error": "403 - Forbidden", "data": {"server": {"url": url}}};
+            else:
+                content = Template.render_twig_template(
+                    "errors/403.twig", {"server": {"url": url}})
 
             validated = False
             # check to see if we have an auth ability
