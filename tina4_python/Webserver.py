@@ -30,24 +30,25 @@ class Webserver:
     async def get_content_body(self, content_length):
         # get lines of content where at the end of the request
         content = self.request_raw
-        if "Content-Type" in self.headers:
-            if self.headers["Content-Type"] == "application/x-www-form-urlencoded":
+        lowercase_headers = {k.lower(): v for k, v in self.headers.items()}
+        if "content-type" in lowercase_headers:
+            if lowercase_headers["content-type"] == "application/x-www-form-urlencoded":
                 body = {}
                 content_data = content.decode("utf-8").split("&")
                 for data in content_data:
                     data = data.split("=", 1)
                     body[data[0]] = unquote_plus(data[1])
                 return body
-            elif self.headers["Content-Type"] == "application/json":
+            elif lowercase_headers["content-type"] == "application/json":
                 # print("CONTENT", content, self.request)
                 try:
                     return json.loads(content)
                 except:
                     return content.decode("utf-8")
-            elif self.headers["Content-Type"] == "text/plain":
+            elif lowercase_headers["content-type"] == "text/plain":
                 return content.decode("utf-8")
             else:
-                content_data = self.headers["Content-Type"].split("; ")
+                content_data = lowercase_headers["content-type"].split("; ")
                 if content_data[0] == "multipart/form-data":
                     boundary = content_data[1].split("=")[1] + "\r\n"
                     content = b"\r\n" + content
@@ -176,14 +177,14 @@ class Webserver:
         if "Content-Length" in headers:
             content_length = int(headers["Content-Length"])
             count = 0
-            read_size = 1024
+            read_size = 64
             raw_data = b''
-            # print('Count', sys.getsizeof(raw_data), sys.getsizeof(""), content_length, headers["Content-Length"], content_length*sys.getsizeof(b''))
-            while count < content_length * sys.getsizeof(b' ') and not reader.at_eof():
+            while len(raw_data) < content_length:
                 read = await reader.read(read_size)
-                count += sys.getsizeof(read)
+                count += len(read)
                 raw_data += read
-                if sys.getsizeof(read) < read_size:
+                # print('COUNT', count, len(read))
+                if len(read) < read_size and len(raw_data) == content_length:
                     break
             try:
                 content = raw_data.decode("utf-8")

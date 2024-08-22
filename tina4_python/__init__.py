@@ -42,6 +42,7 @@ else:
     environment = ".env"
 
 load_env(environment)
+
 print(ShellColors.bright_yellow + "Setting debug mode", os.getenv("TINA4_DEBUG_LEVEL"), ShellColors.end)
 localize()
 
@@ -53,6 +54,7 @@ library_path = os.path.dirname(os.path.realpath(__file__))
 root_path = os.path.realpath(os.getcwd())
 Debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path),
       Constant.TINA4_LOG_INFO)
+
 
 tina4_routes = {}
 tina4_current_request = {}
@@ -107,17 +109,26 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
 # add __init__.py files in your folders
 # ignore F403
 if os.path.exists(root_path + os.sep + "src"):
-    from src import *
+    try:
+        from src import *
+    except ImportError:
+        Debug("Cannot import src folder", Constant.TINA4_LOG_ERROR)
 else:
     Debug("Missing src folder", Constant.TINA4_LOG_WARNING)
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "routes"):
-    from src.routes import *
+    try:
+        from src.routes import *
+    except ImportError:
+        Debug("Cannot import src.routes folder", Constant.TINA4_LOG_ERROR)
 else:
     Debug("Missing src/routes folder", Constant.TINA4_LOG_WARNING)
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
-    from src.app import *
+    try:
+        from src.app import *
+    except ImportError:
+        Debug("Cannot import src.app folder", Constant.TINA4_LOG_ERROR)
 else:
     Debug("Missing src/app folder", Constant.TINA4_LOG_WARNING)
 
@@ -186,28 +197,28 @@ def run_web_server(in_hostname="localhost", in_port=7145):
     Debug(Messages.MSG_STARTING_WEBSERVER.format(port=in_port), Constant.TINA4_LOG_INFO)
     webserver(in_hostname, in_port)
 
+if os.getenv('TINA4_DEFAULT_WEBSERVER', 'True') == 'True' :
+    if importlib.util.find_spec("jurigged"):
+        Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
+        jurigged.watch("./")
 
-if importlib.util.find_spec("jurigged"):
-    Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
-    jurigged.watch("./")
+    # Start up a webserver based on params passed on the command line
+    HOSTNAME = "localhost"
+    PORT = 7145
+    if len(sys.argv) > 1:
+        PORT = sys.argv[1]
+        if ":" in PORT:
+            SERVER_CONFIG = PORT.split(":")
+            HOSTNAME = SERVER_CONFIG[0]
+            PORT = SERVER_CONFIG[1]
 
-# Start up a webserver based on params passed on the command line
-HOSTNAME = "localhost"
-PORT = 7145
-if len(sys.argv) > 1:
-    PORT = sys.argv[1]
-    if ":" in PORT:
-        SERVER_CONFIG = PORT.split(":")
-        HOSTNAME = SERVER_CONFIG[0]
-        PORT = SERVER_CONFIG[1]
-
-if PORT != "stop" and PORT != "manual":
-    try:
-        PORT = int(PORT)
-        run_web_server(HOSTNAME, PORT)
-    except Exception:
-        Debug("Not running webserver", Constant.TINA4_LOG_WARNING)
-else:
-    Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
-          "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
-          Constant.TINA4_LOG_WARNING)
+    if PORT != "stop" and PORT != "manual":
+        try:
+            PORT = int(PORT)
+            run_web_server(HOSTNAME, PORT)
+        except Exception:
+            Debug("Not running webserver", Constant.TINA4_LOG_WARNING)
+    else:
+        Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
+              "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
+              Constant.TINA4_LOG_WARNING)

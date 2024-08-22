@@ -220,23 +220,36 @@ For ease of use you can supply an `API_KEY` param to your .env with a secret of 
 API_KEY=somehash
 ```
 
+### Suppressing the default webservice
+
+You may want to use your Tina4 project as a library in another project so suppressing the default webservice is probably needed.
+
+```.env
+TINA4_DEFAULT_WEBSERVER=False
+```
+or in your `__init__.py` file
+```python
+import os
+os.environ["TINA4_DEFAULT_WEBSERVER"] = "False"
+```
+Additionally, it will require you to rename `src` to the name of your package
 
 ### Features
-| Completed                  | To Do             |
-|----------------------------|-------------------|
-| Python pip package         |                   |
-| Basic environment handling |                   |
-| Basic routing              | OpenAPI (Swagger) |
-| Enhanced routing           |                   |
-| CSS Support                |                   |
-| Image Support              |                   |
-| Localization               |                   |
-| Error Pages                |                   |
-| Template handling          |                   |
-| Form posting               |                   |
-| Migrations                 |                   |
-| Colored Debugging          |                   |
-| Database Abstraction       |                   |   
+| Completed                  | To Do |
+|----------------------------|-------|
+| Python pip package         |       |
+| Basic environment handling |       |
+| Routing with Swagger       |       |
+| Enhanced Routing           |       |
+| CSS Support                |       |
+| Image Support              |       |
+| Localization               |       |
+| Error Pages                |       |
+| Template handling          |       |
+| Form posting               |       |
+| Migrations                 |       |
+| Colored Debugging          |       |
+| Database Abstraction       |       |   
 
 ### Database
 
@@ -339,7 +352,6 @@ Migration updates:
    - record count added
    - Database result object updated
 ```
-
 
 ### Building and Deployment
 

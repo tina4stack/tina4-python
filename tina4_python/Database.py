@@ -4,8 +4,10 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+import base64
 import importlib
 import datetime
+import json
 
 from tina4_python import Debug, Constant
 from tina4_python.DatabaseResult import DatabaseResult
@@ -71,6 +73,25 @@ class Database:
         else:
             return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    def get_database_result(self, cursor):
+        """
+        Get database results
+        :param cursor:
+        :return:
+        """
+        columns = [column[0].lower() for column in cursor.description]
+        records = cursor.fetchall()
+        rows = [dict(zip(columns, row)) for row in records]
+        columns = [column for column in cursor.description]
+        return DatabaseResult(rows, columns, None)
+
+    def is_json(self, myjson):
+        try:
+            json.loads(myjson)
+        except Exception as e:
+            return False
+        return True
+
     def fetch(self, sql, params=[], limit=10, skip=0):
         """
         Fetch records based on a sql statement
@@ -80,7 +101,6 @@ class Database:
         :param skip:
         :return:
         """
-        Debug("FETCH:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
         # modify the select statement for limit and skip
         if self.database_engine == self.FIREBIRD:
             sql = f"select first {limit} skip {skip} * from ({sql})"
@@ -92,12 +112,9 @@ class Database:
         cursor = self.dba.cursor()
         try:
             cursor.execute(sql, params)
-            columns = [column[0].lower() for column in cursor.description]
-            records = cursor.fetchall()
-            rows = [dict(zip(columns, row)) for row in records]
-            columns = [column for column in cursor.description]
-            return DatabaseResult(rows, columns, None)
+            return self.get_database_result(cursor)
         except Exception as e:
+            Debug("FETCH ERROR:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
             return DatabaseResult(None, [], str(e))
 
     def fetch_one(self, sql, params=[], skip=0):
@@ -108,11 +125,19 @@ class Database:
         :param skip:
         :return:
         """
-        Debug("FETCHONE:", sql, "params", params, "skip", skip, Constant.TINA4_LOG_DEBUG)
         # Calling the fetch method with limit as 1 and returning the result
         record = self.fetch(sql, params=params, limit=1, skip=skip)
         if record.error is None and record.count == 1:
-            return record.records[0]
+            data = {}
+            for key in record.records[0]:
+                if isinstance(record.records[0][key], bytes):
+                    data[key] = base64.b64encode(record.records[0][key]).decode('utf-8')
+                else:
+                    if isinstance(record.records[0][key], str) and self.is_json(record.records[0][key]):
+                        data[key] = json.loads(record.records[0][key])
+                    else:
+                        data[key] = record.records[0][key]
+            return data
         else:
             return None
 
@@ -123,16 +148,17 @@ class Database:
         :param params:
         :return:
         """
-        Debug("EXECUTE:", sql, "params", params, Constant.TINA4_LOG_DEBUG)
-
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
             cursor.execute(sql, params)
-            # On success return an empty result set with no error
-            return DatabaseResult(None, [], None)
+            if "returning" in sql:
+                return self.get_database_result(cursor)
+            else:
+                # On success return an empty result set with no error
+                return DatabaseResult(None, [], None)
         except Exception as e:
-            Debug("EXECUTE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            Debug("EXECUTE ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
 
@@ -143,9 +169,6 @@ class Database:
         :param params:
         :return:
         """
-
-        Debug("EXECUTE MANY:", sql, "params", params, Constant.TINA4_LOG_DEBUG)
-
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
@@ -153,7 +176,7 @@ class Database:
             # On success return an empty result set with no error
             return DatabaseResult(None, [], None)
         except Exception as e:
-            Debug("EXECUTE MANY ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            Debug("EXECUTE MANY ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
 
@@ -189,7 +212,19 @@ class Database:
         except Exception as e:
             Debug("DATABASE CLOSE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
 
-    def insert(self, table_name, data):
+    def sanitize(self, record):
+        """
+        Changes dictionaries and list values into json for updating and inserting
+        :param record:
+        :return:
+        """
+
+        for key in record:
+            if isinstance(record[key], list) or isinstance(record[key], dict):
+                record[key] = json.dumps(record[key])
+        return record
+
+    def insert(self, table_name, data, primary_key="id"):
         """
         Insert data based on table name and data provided - single or multiple records
         :param table_name:
@@ -208,16 +243,27 @@ class Database:
             else:
                 placeholders = ", ".join(['?'] * len(data))
 
-            values = [list(record.values()) for record in data]
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
-            Debug("SQL:", sql, Constant.TINA4_LOG_DEBUG)
 
-            result = self.execute_many(sql, values)
+            sql += f" returning ({primary_key})"
+            records = DatabaseResult()
+            for record in data:
+                record = self.sanitize(record)
+                result = self.execute(sql, list(record.values()))
+                records.records += result.records
+                if result.error is not None:
+                    Debug("INSERT ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
+                    return False
+
+            records.columns = result.columns
+            records.count = len(records.records)
+            return records
+
 
             if result.error is None:
                 return True
             else:
-                Debug("INSERT ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                Debug("INSERT ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                 return False
 
     def delete(self, table_name, filter=None):
@@ -254,7 +300,6 @@ class Database:
                     condition_records = " and ".join(condition_records)
 
                     sql = f"DELETE FROM {table_name} WHERE {condition_records}"
-                    Debug("SQL:", sql, Constant.TINA4_LOG_DEBUG)
 
                     params = pk_value
 
@@ -265,7 +310,7 @@ class Database:
                 if result.error is None:
                     return True
                 else:
-                    Debug("DELETE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                    Debug("DELETE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                     return False
 
     def update(self, table_name, records, primary_key="id"):
@@ -302,12 +347,14 @@ class Database:
                             pk_value = value
                         else:
                             set_clause_list.append(f"{column} = {placeholder}")
-                            set_values.append(value)
+                            if isinstance(value, list) or isinstance(value, dict):
+                                set_values.append(json.dumps(value))
+                            else:
+                                set_values.append(value)
 
                     set_clause = ", ".join(set_clause_list)
 
                     sql = f"UPDATE {table_name} SET {set_clause} WHERE {condition_records}"
-                    Debug("SQL:", sql, Constant.TINA4_LOG_DEBUG)
 
                     params = set_values + [pk_value]
 
@@ -318,5 +365,5 @@ class Database:
                 if result.error is None:
                     return True
                 else:
-                    Debug("UPDATE ERROR:", result.error, Constant.TINA4_LOG_ERROR)
+                    Debug("UPDATE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                     return False
