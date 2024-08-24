@@ -7,6 +7,8 @@
 import mimetypes
 import re
 import os
+import sys
+import io
 import tina4_python
 from tina4_python import Constant
 from tina4_python.Debug import Debug
@@ -135,9 +137,14 @@ class Router:
                 Request.session = session
 
                 tina4_python.tina4_current_request = Request
-
+                old_stdout = sys.stdout # Memorize the default stdout stream
+                sys.stdout = buffer = io.StringIO()
                 result = await router_response(request=Request, response=Response)
                 break
+
+        if result is None:
+            sys.stdout = old_stdout
+            return Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML)
 
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
