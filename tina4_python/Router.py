@@ -4,6 +4,7 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+import json
 import mimetypes
 import re
 import os
@@ -144,7 +145,10 @@ class Router:
 
         if result is None:
             sys.stdout = old_stdout
-            return Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML)
+            try:
+                return Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON)
+            except:
+                return Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML)
 
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
