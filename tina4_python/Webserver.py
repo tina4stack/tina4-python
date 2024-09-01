@@ -146,10 +146,10 @@ class Webserver:
     @staticmethod
     async def get_headers(response_headers, response_protocol, response_code):
         headers = response_protocol + " " + str(response_code) + " " + Constant.LOOKUP_HTTP_CODE[
-            response_code] + "\n"
+            response_code] + "\r\n"
         for header in response_headers:
-            headers += header + "\n"
-        headers += "\n"
+            headers += header + "\r\n"
+        headers += "\r\n"
 
         return headers.encode()
 
