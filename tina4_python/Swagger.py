@@ -158,9 +158,14 @@ class Swagger:
                                                                                                swagger["example"],
                                                                                                responses)
 
+        if "Host" in request.headers:
+            host_name = request.headers["Host"]
+        else:
+            host_name = os.getenv("HOST_NAME", "localhost")
+
         json_object = {
             "openapi": "3.0.0",
-            "host": request.headers["Host"],
+            "host": host_name,
             "info": {
                 "title": os.getenv("SWAGGER_TITLE", "Tina4 Project(SWAGGER_TITLE)"),
                 "description": os.getenv("SWAGGER_DESCRIPTION", "Description(SWAGGER_DESCRIPTION)"),
