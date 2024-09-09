@@ -19,36 +19,33 @@ from tina4_python.Session import Session
 class Webserver:
     async def get_content_length(self):
         # get the content length
-        if "Content-length" in self.headers != -1:
-            return int(self.headers["Content-length"])
-
-        if "Content-Length" in self.headers != -1:
-            return int(self.headers["Content-Length"])
+        if "content-length" in self.lowercase_headers != -1:
+            return int(self.lowercase_headers["content-length"])
 
         return 0
 
     async def get_content_body(self, content_length):
         # get lines of content where at the end of the request
         content = self.request_raw
-        lowercase_headers = {k.lower(): v for k, v in self.headers.items()}
-        if "content-type" in lowercase_headers:
-            if lowercase_headers["content-type"] == "application/x-www-form-urlencoded":
+
+        if "content-type" in self.lowercase_headers:
+            if self.lowercase_headers["content-type"] == "application/x-www-form-urlencoded":
                 body = {}
                 content_data = content.decode("utf-8").split("&")
                 for data in content_data:
                     data = data.split("=", 1)
                     body[data[0]] = unquote_plus(data[1])
                 return body
-            elif lowercase_headers["content-type"] == "application/json":
+            elif self.lowercase_headers["content-type"] == "application/json":
                 # print("CONTENT", content, self.request)
                 try:
                     return json.loads(content)
                 except:
                     return content.decode("utf-8")
-            elif lowercase_headers["content-type"] == "text/plain":
+            elif self.lowercase_headers["content-type"] == "text/plain":
                 return content.decode("utf-8")
             else:
-                content_data = lowercase_headers["content-type"].split("; ")
+                content_data = self.lowercase_headers["content-type"].split("; ")
                 if content_data[0] == "multipart/form-data":
                     boundary = content_data[1].split("=")[1] + "\r\n"
                     content = b"\r\n" + content
@@ -104,6 +101,7 @@ class Webserver:
             headers = await self.get_headers(headers, self.response_protocol, Constant.HTTP_OK)
             return headers
 
+
         params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
 
         content_length = await self.get_content_length()
@@ -112,11 +110,11 @@ class Webserver:
         else:
             body = None
 
-        request = {"params": params, "body": body, "raw": self.request, "headers": self.headers}
+        request = {"params": params, "body": body, "raw": self.request, "headers": self.lowercase_headers}
 
         tina4_python.tina4_current_request = request
 
-        response = await self.router_handler.resolve(method, self.path, request, self.headers, self.session)
+        response = await self.router_handler.resolve(method, self.path, request, self.lowercase_headers, self.session)
 
         self.send_header("Access-Control-Allow-Origin", "*", headers)
         self.send_header("Access-Control-Allow-Headers",
@@ -173,6 +171,7 @@ class Webserver:
             if len(split) == 2:
                 headers[split[0]] = split[1].strip()
 
+        lowercase_headers = {k.lower(): v for k, v in headers.items()}
         content = ""
         if "Content-Length" in headers:
             content_length = int(headers["Content-Length"])
@@ -191,11 +190,11 @@ class Webserver:
             except:  # probably binary or multipart form?
                 content = raw_data
 
-        return protocol, headers, content, raw_data
+        return protocol, headers, lowercase_headers, content, raw_data
 
     async def handle_client(self, reader, writer):
         # Get the client request
-        protocol, headers_list, request, raw_data = await self.get_data(reader)
+        protocol, headers_list, lowercase_headers, request, raw_data = await self.get_data(reader)
         # Strange blank request ?
         if protocol == '':
             return
@@ -203,6 +202,7 @@ class Webserver:
         self.request_raw = raw_data
         self.request = request
         self.headers = headers_list
+        self.lowercase_headers = lowercase_headers
 
         protocol = protocol.split(" ")
         # print(protocol, headers_list)
@@ -246,6 +246,7 @@ class Webserver:
         self.method = None
         self.response_protocol = "HTTP/1.1"
         self.headers = None
+        self.lowercase_headers = None
         self.request = None
         self.request_raw = None
         self.path = None

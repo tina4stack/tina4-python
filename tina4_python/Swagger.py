@@ -158,8 +158,8 @@ class Swagger:
                                                                                                swagger["example"],
                                                                                                responses)
 
-        if "Host" in request.headers:
-            host_name = request.headers["Host"]
+        if "host" in request.headers:
+            host_name = request.headers["host"]
         else:
             host_name = os.getenv("HOST_NAME", "localhost")
 

@@ -66,10 +66,6 @@ class Router:
         # we can add other methods later but right now we validate posts
         if method in [Constant.TINA4_GET, Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
             content_type = "text/html"
-            if "Content-Type" in headers:
-                content_type = headers["Content-Type"]
-            if "Content-type" in headers:
-                content_type = headers["Content-type"]
             if "content-type" in headers:
                 content_type = headers["content-type"]
 
@@ -81,8 +77,8 @@ class Router:
 
             validated = False
             # check to see if we have an auth ability
-            if "Authorization" in headers:
-                token = headers["Authorization"].replace("Bearer", "").strip()
+            if "authorization" in headers:
+                token = headers["authorization"].replace("Bearer", "").strip()
                 if tina4_python.tina4_auth.valid(token):
                     validated = True
 
