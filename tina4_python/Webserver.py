@@ -13,6 +13,7 @@ from urllib.parse import unquote_plus
 from urllib.parse import urlparse, parse_qsl
 import tina4_python
 from tina4_python import Constant
+from tina4_python.Constant import HTTP_REDIRECT
 from tina4_python.Session import Session
 
 
@@ -116,19 +117,26 @@ class Webserver:
 
         response = await self.router_handler.resolve(method, self.path, request, self.lowercase_headers, self.session)
 
-        self.send_header("Access-Control-Allow-Origin", "*", headers)
-        self.send_header("Access-Control-Allow-Headers",
-                         "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
-        self.send_header("Access-Control-Allow-Credentials", "True", headers)
-        self.send_header("Content-Type", response.content_type, headers)
-        self.send_header("Content-Length", str(len(response.content)), headers)
-        self.send_header("Connection", "Keep-Alive", headers)
-        self.send_header("Keep-Alive", "timeout=5, max=30", headers)
+        if HTTP_REDIRECT != response.http_code:
+            self.send_header("Access-Control-Allow-Origin", "*", headers)
+            self.send_header("Access-Control-Allow-Headers",
+                             "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
+            self.send_header("Access-Control-Allow-Credentials", "True", headers)
+            self.send_header("Content-Type", response.content_type, headers)
+            self.send_header("Content-Length", str(len(response.content)), headers)
+            self.send_header("Connection", "Keep-Alive", headers)
+            self.send_header("Keep-Alive", "timeout=5, max=30", headers)
 
-        if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
-            self.send_header("Set-Cookie",
-                             os.getenv("TINA4_SESSION", "PY_SESS") + '=' + self.cookies[
-                                 os.getenv("TINA4_SESSION", "PY_SESS")], headers)
+            if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
+                self.send_header("Set-Cookie",
+                                 os.getenv("TINA4_SESSION", "PY_SESS") + '=' + self.cookies[
+                                     os.getenv("TINA4_SESSION", "PY_SESS")], headers)
+
+        # add the custom headers from the response
+        for response_header in response.headers:
+            self.send_header(response_header, response.headers[response_header], headers)
+
+
 
         headers = await self.get_headers(headers, self.response_protocol, response.http_code)
 

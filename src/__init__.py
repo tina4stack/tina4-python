@@ -4,6 +4,8 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 import os
+from codecs import replace_errors
+from idlelib.rpc import response_queue
 
 from tina4_python import Migration
 from tina4_python.Template import Template
@@ -48,3 +50,12 @@ async def greet_again(**params): #(request, response)
 async def upload_file(request, response):
 
     return response(request.body)
+
+
+@get("/test/redirect")
+async def redirect(request, response):
+
+    return response.redirect("/hello/world")
+
+
+

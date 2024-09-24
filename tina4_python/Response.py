@@ -18,9 +18,13 @@ class Response:
     :param content
     :param http_code
     :param content_type
+    :param headers
     """
 
-    def __init__(self, content, http_code=Constant.HTTP_OK, content_type=Constant.TEXT_HTML):
+    def __init__(self, content, http_code=Constant.HTTP_OK, content_type=Constant.TEXT_HTML, headers=None):
+        if headers is None:
+            headers = {}
+
         if content is None:
             content = ""
         # try to make content into a dictionary
@@ -50,3 +54,23 @@ class Response:
         self.content = content
         self.http_code = http_code
         self.content_type = content_type
+        self.headers = headers
+
+    def redirect(self, redirect_url):
+        """
+        Redirects a request to redirect_url
+        :param redirect_url:
+        :return:
+        """
+        self.http_code = Constant.HTTP_REDIRECT
+        self.headers["Location"] = redirect_url
+        return self
+
+    def add_header(self, key, value):
+        """
+        Adds a header for the response
+        :param key:
+        :param value:
+        :return:
+        """
+        self.headers[key] = value

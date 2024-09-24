@@ -136,7 +136,7 @@ class Router:
                 tina4_python.tina4_current_request = Request
                 old_stdout = sys.stdout # Memorize the default stdout stream
                 sys.stdout = buffer = io.StringIO()
-                result = await router_response(request=Request, response=Response)
+                result = await router_response(request=Request, response=result)
                 break
 
         if result is None:

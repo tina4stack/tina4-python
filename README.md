@@ -197,6 +197,16 @@ async def capture_get(request, response):
 @post("/capture")
 async def capture_post(request, response):
     return response(request.body)
+
+@get("/simple")
+async def simple_get(request, response):
+    print("<h1>Hello World!</h1>")
+
+@get("/redirect")
+async def simple_get(request, response):
+    
+    return response.redirect("/test")
+
 ```
 
 In your ```src/__init__.py``` add the following code

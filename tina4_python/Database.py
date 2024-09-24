@@ -227,6 +227,7 @@ class Database:
     def insert(self, table_name, data, primary_key="id"):
         """
         Insert data based on table name and data provided - single or multiple records
+        :param primary_key:
         :param table_name:
         :param data:
         """
@@ -258,13 +259,6 @@ class Database:
             records.columns = result.columns
             records.count = len(records.records)
             return records
-
-
-            if result.error is None:
-                return True
-            else:
-                Debug("INSERT ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
-                return False
 
     def delete(self, table_name, filter=None):
         """
