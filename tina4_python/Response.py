@@ -56,15 +56,17 @@ class Response:
         self.content_type = content_type
         self.headers = headers
 
-    def redirect(self, redirect_url):
+    @staticmethod
+    def redirect(redirect_url):
         """
         Redirects a request to redirect_url
         :param redirect_url:
         :return:
         """
-        self.http_code = Constant.HTTP_REDIRECT
-        self.headers["Location"] = redirect_url
-        return self
+        headers = {}
+        http_code = Constant.HTTP_REDIRECT
+        headers["Location"] = redirect_url
+        return Response("", http_code=http_code, headers=headers)
 
     def add_header(self, key, value):
         """
