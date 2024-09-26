@@ -78,7 +78,11 @@ class Router:
             validated = False
             # check to see if we have an auth ability
             if "authorization" in headers:
-                token = headers["authorization"].replace("Bearer", "").strip()
+                if "Bearer" in headers["authorization"]:
+                    token = headers["authorization"].replace("Bearer", "").strip()
+                elif "X-API-KEY" in headers["authorization"]:
+                    token = headers["authorization"].replace("X-API-KEY", "").strip()
+                
                 if tina4_python.tina4_auth.valid(token):
                     validated = True
 
@@ -120,7 +124,16 @@ class Router:
             if Router.match(url, route['route']):
                 if  "swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]:
                     if route["swagger"]["secure"] and not validated:
-                        return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+                        #Check if we have an override method
+                        if "secureoverride" in route["swagger"]:
+                            override_method = route["swagger"]["secureoverride"]
+
+                            if tina4_python.tina4_auth.valid(token, override_method):
+                                validated = True
+
+                        # If still not validated
+                        if not validated:
+                            return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
                 router_response = route["callback"]
 

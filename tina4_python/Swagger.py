@@ -31,6 +31,14 @@ class Swagger:
         Swagger.set_swagger_value(callback, "secure", True)
 
     @staticmethod
+    def add_secure_override(method, callback):
+        Swagger.set_swagger_value(callback, "secureoverride", method)
+
+    @staticmethod
+    def add_apikey_auth(callback):
+        Swagger.set_swagger_value(callback, "apikeyauth", True)
+
+    @staticmethod
     def add_tags(tags, callback):
         Swagger.set_swagger_value(callback, "tags", tags)
 
@@ -62,7 +70,7 @@ class Swagger:
         return params
 
     @staticmethod
-    def get_swagger_entry(url, method, tags, summary, description, produces, security, params=None, example=None,
+    def get_swagger_entry(url, method, tags, summary, description, produces, security, secure_override=None, apikeyauth=None, params=None, example=None,
                           responses=None):
 
         if params is None:
@@ -74,7 +82,11 @@ class Swagger:
 
         secure_annotation = [],
         if security:
-            secure_annotation = [{"bearerAuth": []}];
+            secure_annotation = [{"bearerAuth": []}]
+
+        # If we can add api key auth as well
+        if apikeyauth:
+            secure_annotation = [{"apiKey": []}]
 
         new_params = []
         for param in params:
@@ -101,6 +113,7 @@ class Swagger:
                 }
             },
             "security": secure_annotation,
+            "secureoverride": secure_override,
             "responses": responses
         };
 
@@ -123,6 +136,10 @@ class Swagger:
             swagger["example"] = None
         if not "secure" in swagger:
             swagger["secure"] = None
+        if not "secureoverride" in swagger:
+            swagger["secureoverride"] = None
+        if not "apikeyauth" in swagger:
+            swagger["apikeyauth"] = None
 
         if isinstance(swagger["tags"], str):
             swagger["tags"] = [swagger["tags"]]
@@ -132,12 +149,16 @@ class Swagger:
     @staticmethod
     def get_json(request):
         paths = {}
+        apikey_auth = False # If we have any routes that require api key auth
         for route in tina4_python.tina4_routes.values():
 
             if "swagger" in route:
                 if route["swagger"] is not None:
                     swagger = Swagger.parse_swagger(route["swagger"])
                     produces = {}
+
+                    if swagger["apikeyauth"]:
+                        apikey_auth = True
 
                     responses = {
                         "200": {"description": "Success"},
@@ -154,6 +175,8 @@ class Swagger:
                                                                                                ["application/json",
                                                                                                 "html/text"],
                                                                                                swagger["secure"],
+                                                                                               swagger["secureoverride"],
+                                                                                               swagger["apikeyauth"],
                                                                                                swagger["params"],
                                                                                                swagger["example"],
                                                                                                responses)
@@ -172,10 +195,17 @@ class Swagger:
                 "version": os.getenv("SWAGGER_VERSION", "1.0.0(SWAGGER_VERSION)")
             },
             "components": {
-                "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}}},
+                "securitySchemes": {}
+            },
             "basePath": "",
             "paths": paths
         }
+
+        # Populate the security schemes
+        if apikey_auth:
+            json_object["components"]["securitySchemes"]["apiKey"] = {"type": "apiKey", "in": "header", "name": "X-API-KEY"}
+
+        json_object["components"]["securitySchemes"]["bearerAuth"] = {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
 
         return json_object
 
@@ -202,6 +232,18 @@ def secure():
         return callback
 
     return actual_secure
+
+def apikeyauth():
+    def actual_apikey_auth(callback):
+        Swagger.add_apikey_auth(callback)
+        return callback
+
+    return actual_apikey_auth
+
+def secureoverride(method):
+    def actual_secure_override(callback):
+        Swagger.add_secure_override(method, callback)
+        return callback
 
 
 def tags(tags):

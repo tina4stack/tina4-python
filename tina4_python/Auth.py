@@ -174,5 +174,11 @@ class Auth:
 
         return False
 
-    def valid(self, token):
+    def valid(self, token, override_method = None):
+        if override_method is not None:
+            try:
+                return override_method(token)
+            except Exception:
+                return False
+        
         return self.validate(token)
