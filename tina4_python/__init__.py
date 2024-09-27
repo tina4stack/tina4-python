@@ -90,6 +90,19 @@ if not os.path.exists(root_path + os.sep + "src"):
             app_file.write('from tina4_python import *')
             app_file.write('\n')
 
+    # Middleware
+    with open(root_path + os.sep + "src" + os.sep + "Middleware.py", 'w') as middleware_file:
+        middleware_file.write('# Middleware class to inject values into headers and request')
+        middleware_file.write('\n')
+        middleware_file.write('class Middleware:')
+        middleware_file.write('\n')
+        middleware_file.write('#    def sample_inject(self, request, headers):')
+        middleware_file.write('\n')
+        middleware_file.write('#        Do something here')
+        middleware_file.write('\n')
+        middleware_file.write('#        return request, headers')
+        middleware_file.write('\n')
+
 if not os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
     os.makedirs(root_path + os.sep + "src" + os.sep + "app")
 
