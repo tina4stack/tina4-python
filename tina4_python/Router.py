@@ -88,8 +88,6 @@ class Router:
                     current_route = route
                     exit
 
-            Debug(current_route, Constant.TINA4_LOG_DEBUG)
-
             # If the route is not found
             if current_route is None:
                 return Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
@@ -133,22 +131,25 @@ class Router:
                     token = headers["authorization"].replace("Bearer", "").strip()
                     if tina4_python.tina4_auth.valid(token):
                         validated = True
+                    
+            Debug(current_route, Constant.TINA4_LOG_DEBUG)
 
             # check if we can authorize with an API key in the header
-            if "headerauth" in current_route["swagger"]:
-                if current_route["swagger"]["headerauth"]:
-                    if "x-api-key" in headers:
-                        token = headers["x-api-key"].strip()
-                        if tina4_python.tina4_auth.valid(token):
-                            validated = True
+            if current_route["swagger"] is not None:
+                if "headerauth" in current_route["swagger"]:
+                    if current_route["swagger"]["headerauth"]:
+                        if "x-api-key" in headers:
+                            token = headers["x-api-key"].strip()
+                            if tina4_python.tina4_auth.valid(token):
+                                validated = True
 
-            # check if we can authorize with an API key in the query string
-            if "queryauth" in current_route["swagger"]:
-                if current_route["swagger"]["queryauth"]:
-                    if "api-key" in request["params"]:
-                        token = request["params"]["api-key"]
-                        if tina4_python.tina4_auth.valid(token):
-                            validated = True
+                # check if we can authorize with an API key in the query string
+                if "queryauth" in current_route["swagger"]:
+                    if current_route["swagger"]["queryauth"]:
+                        if "api-key" in request["params"]:
+                            token = request["params"]["api-key"]
+                            if tina4_python.tina4_auth.valid(token):
+                                validated = True
 
             if request["params"] is not None and "formToken" in request["params"]:
                 token = request["params"]["formToken"]

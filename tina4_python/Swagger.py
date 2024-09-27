@@ -80,13 +80,19 @@ class Swagger:
         if example is not None:
             schema = {"type": "object", "example": example}
 
-        secure_annotation = [],
-        if security:
-            secure_annotation = [{"bearerAuth": []}]
+        secure_annotation = []
 
-        # If we can add api key auth as well
-        if headerauth or queryauth:
-            secure_annotation = [{"apiKey": []}]
+        # If security is defined, add bearerAuth
+        if security:
+            secure_annotation.append({"bearerAuth": []})
+
+        # If we can add API key auth from the header
+        if headerauth:
+            secure_annotation.append({"ApiKeyHeader": []})
+
+        # If we can add API key auth from the query
+        if queryauth:
+            secure_annotation.append({"ApiKeyQuery": []})
 
         new_params = []
         for param in params:
@@ -205,10 +211,29 @@ class Swagger:
 
         # Populate the security schemes
         if header_auth:
-            json_object["components"]["securitySchemes"]["apiKey"] = {"type": "apiKey", "in": "header", "name": "X-API-KEY"}
+            json_object["components"]["securitySchemes"]["ApiKeyHeader"] = {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-API-KEY"
+            }
 
         if query_auth:
-            json_object["components"]["securitySchemes"]["apiKey"] = {"type": "apiKey", "in": "query", "name": "api-key"}
+            json_object["components"]["securitySchemes"]["ApiKeyQuery"] = {
+                "type": "apiKey",
+                "in": "query",
+                "name": "api-key"
+            }
+
+        # Now you can set the security requirements for your API paths
+        json_object["security"] = []
+
+        # Example of how to apply both security schemes globally or to specific operations
+        if header_auth and query_auth:
+            json_object["security"].append({"ApiKeyHeader": [], "ApiKeyQuery": []})
+        elif header_auth:
+            json_object["security"].append({"ApiKeyHeader": []})
+        elif query_auth:
+            json_object["security"].append({"ApiKeyQuery": []})
 
         json_object["components"]["securitySchemes"]["bearerAuth"] = {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
 
