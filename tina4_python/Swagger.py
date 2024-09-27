@@ -162,8 +162,12 @@ class Swagger:
                     swagger = Swagger.parse_swagger(route["swagger"])
                     produces = {}
 
+                    header_auth = False
+
                     if swagger["headerauth"]:
                         header_auth = True
+
+                    query_auth = False
 
                     if swagger["queryauth"]:
                         query_auth = True
