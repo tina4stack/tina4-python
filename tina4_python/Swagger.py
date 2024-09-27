@@ -31,12 +31,12 @@ class Swagger:
         Swagger.set_swagger_value(callback, "secure", True)
 
     @staticmethod
-    def add_secure_override(method, callback):
-        Swagger.set_swagger_value(callback, "secureoverride", method)
+    def add_header_auth(callback):
+        Swagger.set_swagger_value(callback, "headerauth", True)
 
     @staticmethod
-    def add_apikey_auth(callback):
-        Swagger.set_swagger_value(callback, "apikeyauth", True)
+    def add_query_auth(callback):
+        Swagger.set_swagger_value(callback, "queryauth", True)
 
     @staticmethod
     def add_tags(tags, callback):
@@ -70,7 +70,7 @@ class Swagger:
         return params
 
     @staticmethod
-    def get_swagger_entry(url, method, tags, summary, description, produces, security, secure_override=None, apikeyauth=None, params=None, example=None,
+    def get_swagger_entry(url, method, tags, summary, description, produces, security, headerauth=None, queryauth=None, params=None, example=None,
                           responses=None):
 
         if params is None:
@@ -85,7 +85,7 @@ class Swagger:
             secure_annotation = [{"bearerAuth": []}]
 
         # If we can add api key auth as well
-        if apikeyauth:
+        if headerauth or queryauth:
             secure_annotation = [{"apiKey": []}]
 
         new_params = []
@@ -113,7 +113,6 @@ class Swagger:
                 }
             },
             "security": secure_annotation,
-            "secureoverride": secure_override,
             "responses": responses
         };
 
@@ -136,10 +135,10 @@ class Swagger:
             swagger["example"] = None
         if not "secure" in swagger:
             swagger["secure"] = None
-        if not "secureoverride" in swagger:
-            swagger["secureoverride"] = None
-        if not "apikeyauth" in swagger:
-            swagger["apikeyauth"] = None
+        if not "headerauth" in swagger:
+            swagger["headerauth"] = None
+        if not "queryauth" in swagger:
+            swagger["queryauth"] = None
 
         if isinstance(swagger["tags"], str):
             swagger["tags"] = [swagger["tags"]]
@@ -157,8 +156,11 @@ class Swagger:
                     swagger = Swagger.parse_swagger(route["swagger"])
                     produces = {}
 
-                    if swagger["apikeyauth"]:
-                        apikey_auth = True
+                    if swagger["headerauth"]:
+                        header_auth = True
+
+                    if swagger["queryauth"]:
+                        query_auth = True
 
                     responses = {
                         "200": {"description": "Success"},
@@ -175,8 +177,8 @@ class Swagger:
                                                                                                ["application/json",
                                                                                                 "html/text"],
                                                                                                swagger["secure"],
-                                                                                               swagger["secureoverride"],
-                                                                                               swagger["apikeyauth"],
+                                                                                               swagger["headerauth"],
+                                                                                               swagger["queryauth"],
                                                                                                swagger["params"],
                                                                                                swagger["example"],
                                                                                                responses)
@@ -202,8 +204,11 @@ class Swagger:
         }
 
         # Populate the security schemes
-        if apikey_auth:
+        if header_auth:
             json_object["components"]["securitySchemes"]["apiKey"] = {"type": "apiKey", "in": "header", "name": "X-API-KEY"}
+
+        if query_auth:
+            json_object["components"]["securitySchemes"]["apiKey"] = {"type": "apiKey", "in": "query", "name": "api-key"}
 
         json_object["components"]["securitySchemes"]["bearerAuth"] = {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"}
 
@@ -233,18 +238,21 @@ def secure():
 
     return actual_secure
 
-def apikeyauth():
-    def actual_apikey_auth(callback):
-        Swagger.add_apikey_auth(callback)
+# Pass the api key as a header
+def headerauth():
+    def actual_header_auth(callback):
+        Swagger.add_header_auth(callback)
         return callback
 
-    return actual_apikey_auth
+    return actual_header_auth
 
-def secureoverride(method):
-    def actual_secure_override(callback):
-        Swagger.add_secure_override(method, callback)
+# Pass the api key as a query parameter
+def queryauth():
+    def actual_query_auth(callback):
+        Swagger.add_query_auth(callback)
         return callback
 
+    return actual_query_auth
 
 def tags(tags):
     def actual_tags(callback):

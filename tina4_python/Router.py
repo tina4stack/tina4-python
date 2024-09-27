@@ -75,16 +75,80 @@ class Router:
                 content = Template.render_twig_template(
                     "errors/403.twig", {"server": {"url": url}})
 
+            current_route = None
             validated = False
+
+            # Get all the route parameters
+            for route in tina4_python.tina4_routes.values():
+                if route["method"] != method:
+                    continue
+                Debug("Matching route " + route['route'] + " to " + url, Constant.TINA4_LOG_DEBUG)
+                if Router.match(url, route['route']):
+                    Debug("Route matched: " + route['route'], Constant.TINA4_LOG_DEBUG)
+                    current_route = route
+                    exit
+
+            Debug(current_route, Constant.TINA4_LOG_DEBUG)
+
+            # If the route is not found
+            if current_route is None:
+                return Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
+
+            # if we need to execute middleware
+            if "middleware" in current_route:
+                if current_route["middleware"] is not None:
+                    middleware = current_route["middleware"]
+                    Debug("Middleware found: " + middleware, Constant.TINA4_LOG_DEBUG)
+
+                    try:
+                        import importlib
+                        
+                        module = importlib.import_module("src.Middleware")
+                        
+                        # Get the Middleware class from the module
+                        middleware_class = getattr(module, 'Middleware')
+                        
+                        # Create an instance of Middleware
+                        middleware_instance = middleware_class()
+
+                        # Get the middleware function
+                        middleware_function = getattr(middleware_instance, middleware) 
+                        
+                        if callable(middleware_function):
+                            # Execute the middleware - We can pass additional parameters in the request
+                            [request, headers] = middleware_function(request, headers) 
+                            Debug("Middleware executed", Constant.TINA4_LOG_DEBUG)
+                        else:
+                            Debug("Middleware function is not callable", Constant.TINA4_LOG_DEBUG)
+                    except (AttributeError, ImportError) as e:
+                        Debug(f"Error: {str(e)}", Constant.TINA4_LOG_DEBUG)
+
+            # If the middleware has validated the user then we can carry on
+            if "validated" in request:
+                validated = request["validated"]
+            
             # check to see if we have an auth ability
             if "authorization" in headers:
                 if "Bearer" in headers["authorization"]:
                     token = headers["authorization"].replace("Bearer", "").strip()
-                elif "X-API-KEY" in headers["authorization"]:
-                    token = headers["authorization"].replace("X-API-KEY", "").strip()
-                
-                if tina4_python.tina4_auth.valid(token):
-                    validated = True
+                    if tina4_python.tina4_auth.valid(token):
+                        validated = True
+
+            # check if we can authorize with an API key in the header
+            if "headerauth" in current_route["swagger"]:
+                if current_route["swagger"]["headerauth"]:
+                    if "x-api-key" in headers:
+                        token = headers["x-api-key"].strip()
+                        if tina4_python.tina4_auth.valid(token):
+                            validated = True
+
+            # check if we can authorize with an API key in the query string
+            if "queryauth" in current_route["swagger"]:
+                if current_route["swagger"]["queryauth"]:
+                    if "api-key" in request["params"]:
+                        token = request["params"]["api-key"]
+                        if tina4_python.tina4_auth.valid(token):
+                            validated = True
 
             if request["params"] is not None and "formToken" in request["params"]:
                 token = request["params"]["formToken"]
@@ -117,40 +181,28 @@ class Router:
             with open(static_file, 'rb') as file:
                 return Response(file.read(), Constant.HTTP_OK, mime_type)
 
-        for route in tina4_python.tina4_routes.values():
-            if route["method"] != method:
-                continue
-            Debug("Matching route " + route['route'] + " to " + url, Constant.TINA4_LOG_DEBUG)
-            if Router.match(url, route['route']):
-                if  "swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]:
-                    if route["swagger"]["secure"] and not validated:
-                        #Check if we have an override method
-                        if "secureoverride" in route["swagger"]:
-                            override_method = route["swagger"]["secureoverride"]
+        # check if we have a current route
+        if current_route is not None:
+            if  "swagger" in current_route and current_route["swagger"] is not None and "secure" in current_route["swagger"]:
+                if current_route["swagger"]["secure"] and not validated:
+                    if not validated:
+                        return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
-                            if tina4_python.tina4_auth.valid(token, override_method):
-                                validated = True
+            router_response = current_route["callback"]
 
-                        # If still not validated
-                        if not validated:
-                            return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+            # Add the inline variables  & construct a Request variable
+            request["params"].update(Router.variables)
 
-                router_response = route["callback"]
+            Request.request = request  # Add the request object
+            Request.headers = headers  # Add the headers
+            Request.params = request["params"]
+            Request.body = request["body"] if "body" in request else None
+            Request.session = session
 
-                # Add the inline variables  & construct a Request variable
-                request["params"].update(Router.variables)
-
-                Request.request = request  # Add the request object
-                Request.headers = headers  # Add the headers
-                Request.params = request["params"]
-                Request.body = request["body"] if "body" in request else None
-                Request.session = session
-
-                tina4_python.tina4_current_request = Request
-                old_stdout = sys.stdout # Memorize the default stdout stream
-                sys.stdout = buffer = io.StringIO()
-                result = await router_response(request=Request, response=Response)
-                break
+            tina4_python.tina4_current_request = Request
+            old_stdout = sys.stdout # Memorize the default stdout stream
+            sys.stdout = buffer = io.StringIO()
+            result = await router_response(request=Request, response=Response)
 
         if result is None:
             sys.stdout = old_stdout
@@ -196,7 +248,7 @@ class Router:
 
     # adds a route to the router
     @staticmethod
-    def add(method, route, callback):
+    def add(method, route, callback, middleware=None):
         Debug("Adding a route: " + route, Constant.TINA4_LOG_DEBUG)
         if not callback in tina4_python.tina4_routes:
             tina4_python.tina4_routes[callback] = {"route": route, "callback": callback, "method": method, "swagger": None}
@@ -205,13 +257,17 @@ class Router:
             tina4_python.tina4_routes[callback]["callback"] = callback
             tina4_python.tina4_routes[callback]["method"] = method
 
+        if middleware is not None:
+            tina4_python.tina4_routes[callback]["middleware"] = middleware
+            Debug("Adding Middleware " + middleware, Constant.TINA4_LOG_DEBUG)
+
         if '{' in route:  # store the parameters if needed
             route_variables = re.findall(r'{(.*?)}', route)
             tina4_python.tina4_routes[callback]["params"] = route_variables
 
 
 
-def get(path: str):
+def get(path: str, middleware=None):
     """
     Get router
     :param arguments:
@@ -220,13 +276,13 @@ def get(path: str):
     def actual_get(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
-            Router.add(Constant.TINA4_GET, route_path, callback)
+            Router.add(Constant.TINA4_GET, route_path, callback, middleware)
         return callback
 
     return actual_get
 
 
-def post(path):
+def post(path, middleware=None):
     """
     Post router
     :param path:
@@ -235,13 +291,12 @@ def post(path):
     def actual_post(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
-            Router.add(Constant.TINA4_POST, route_path, callback)
+            Router.add(Constant.TINA4_POST, route_path, callback, middleware)
         return callback
 
     return actual_post
 
-
-def put(path):
+def put(path, middleware=None):
     """
     Put router
     :param path:
@@ -250,13 +305,13 @@ def put(path):
     def actual_put(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
-            Router.add(Constant.TINA4_PUT, route_path, callback)
+            Router.add(Constant.TINA4_PUT, route_path, callback, middleware)
         return callback
 
     return actual_put
 
 
-def patch(path):
+def patch(path, middleware=None):
     """
     Patch router
     :param path:
@@ -265,13 +320,13 @@ def patch(path):
     def actual_patch(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
-            Router.add(Constant.TINA4_PATCH, route_path, callback)
+            Router.add(Constant.TINA4_PATCH, route_path, callback, middleware)
         return callback
 
     return actual_patch
 
 
-def delete(path):
+def delete(path, middleware=None):
     """
     Delete router
     :param path:
@@ -280,7 +335,7 @@ def delete(path):
     def actual_delete(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
-            Router.add(Constant.TINA4_DELETE, route_path, callback)
+            Router.add(Constant.TINA4_DELETE, route_path, callback, middleware)
         return callback
 
     return actual_delete

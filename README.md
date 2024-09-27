@@ -398,3 +398,42 @@ Flake8 Code tests
 ```
 poetry run flake8 ./tina4_python
 ```
+
+### Swagger Authentication Methods & Middleware
+
+#### Authentication Methods
+
+Support is added for Token (Bearer) authentication by default
+
+If there is a need to pass the token in the header or query parameters then you can add the following decorators to your route
+
+```
+@headerauth()
+```
+You then pass it as a header value. The key needs to be X-API-KEY
+
+```
+@queryauth()
+```
+You then pass it as a query parameter. The parameter needs to be api-key
+
+#### Middleware
+
+You can execute middleware when a route is called. Here you can authenticate a user before the default authentication or inject values into the header or request
+
+There is a file called Middleware.py in the src directory. Add all your middleware here
+
+To authenticate a user simply add the following to the request
+
+```
+request["validated"] = True
+```
+
+To run middleware simply add the function name to the @post, @get, @put etc decorator
+
+```
+@post('/api/user/authenticate', 'authenticate_user')
+```
+Then add a authenticate_user function to Middleware.py and do any checks there
+
+
