@@ -3,7 +3,7 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
-import os
+import sys
 from codecs import replace_errors
 from idlelib.rpc import response_queue
 
@@ -29,12 +29,12 @@ async def some_page(request, response):
 @params(["limit=10", "offset=0"])
 @summary("Some summary")
 @tags(["hello", "cars"])
-@secure()
+
 async def greet(**params): #(request, response)
-    print(params['request'])
+    Debug("Hello", params['request'], file_name="test.log")
     name = params['request'].params['name']
-    limit = params['request'].params['limit']
-    return params['response'](f"Hello, {name} {limit} !") # return response()
+    sys.stdout.flush()
+    return params['response'](f"Hello, {name}  !") # return response()
 
 @post("/hello/{name}")
 @description("Some description")

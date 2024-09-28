@@ -27,3 +27,4 @@
 /tests/.env
 /tests/app.py
 /test.db
+/logs/

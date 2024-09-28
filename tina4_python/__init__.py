@@ -58,7 +58,7 @@ Debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=l
 
 tina4_routes = {}
 tina4_current_request = {}
-tina4_secret = None
+tina4_api_key = None
 tina4_auth = Auth(root_path)
 
 token = tina4_auth.get_token({"name": "Tina4"})
@@ -67,12 +67,15 @@ Debug("VALID TOKEN", tina4_auth.valid(token + "a"), Constant.TINA4_LOG_DEBUG)
 Debug("VALID TOKEN", tina4_auth.valid(token), Constant.TINA4_LOG_DEBUG)
 Debug("PAYLOAD", tina4_auth.get_payload(token), Constant.TINA4_LOG_DEBUG)
 
-if "TINA4_SECRET" in os.environ:
-    tina4_secret = os.environ["TINA4_SECRET"]
+if "API_KEY" in os.environ:
+    tina4_api_key = os.environ["API_KEY"]
 
 # Hack for local development
 if root_path.count("tina4_python") > 0:
     root_path = root_path.split("tina4_python")[0][:-1]
+
+if not os.path.exists(root_path + os.sep + "logs"):
+    os.makedirs(root_path + os.sep + "logs")
 
 # Make the beginning files for the tina4stack
 if not os.path.exists(root_path + os.sep + "src"):
@@ -80,6 +83,7 @@ if not os.path.exists(root_path + os.sep + "src"):
     os.makedirs(root_path + os.sep + "src" + os.sep + "scss")
     os.makedirs(root_path + os.sep + "src" + os.sep + "orm")
     os.makedirs(root_path + os.sep + "src" + os.sep + "app")
+
     with open(root_path + os.sep + "src" + os.sep + "__init__.py", 'w') as init_file:
         init_file.write('# Start your project here')
         init_file.write('\n')
