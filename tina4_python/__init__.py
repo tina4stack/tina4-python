@@ -44,7 +44,7 @@ else:
 load_env(environment)
 
 print(ShellColors.bright_yellow + "Setting debug mode", os.getenv("TINA4_DEBUG_LEVEL"), ShellColors.end)
-localize()
+
 
 if importlib.util.find_spec("jurigged"):
     import jurigged
@@ -52,6 +52,12 @@ if importlib.util.find_spec("jurigged"):
 # Define the variable to be used for global routes
 library_path = os.path.dirname(os.path.realpath(__file__))
 root_path = os.path.realpath(os.getcwd())
+
+if not os.path.exists(root_path + os.sep + "logs"):
+    os.makedirs(root_path + os.sep + "logs")
+
+localize()
+
 Debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path),
       Constant.TINA4_LOG_INFO)
 
@@ -73,9 +79,6 @@ if "API_KEY" in os.environ:
 # Hack for local development
 if root_path.count("tina4_python") > 0:
     root_path = root_path.split("tina4_python")[0][:-1]
-
-if not os.path.exists(root_path + os.sep + "logs"):
-    os.makedirs(root_path + os.sep + "logs")
 
 # Make the beginning files for the tina4stack
 if not os.path.exists(root_path + os.sep + "src"):

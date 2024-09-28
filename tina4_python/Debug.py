@@ -18,7 +18,7 @@ class Debug:
 
     def __init__(self, *args, **kwargs):
         now = datetime.now()
-        debug_level = Constant.TINA4_LOG_ALL
+        debug_level = Constant.TINA4_LOG_INFO
         params = [now.strftime("%Y-%m-%d %H:%M:%S") + ":"]
         for value in args:
             if value in [Constant.TINA4_LOG_ALL, Constant.TINA4_LOG_DEBUG, Constant.TINA4_LOG_INFO,
@@ -33,6 +33,7 @@ class Debug:
 
         formatter = logging.Formatter("%(levelname)s: %(asctime)s: %(message)s")
         logger = logging.getLogger('TINA4')
+        logger.setLevel("DEBUG")
         handler = RotatingFileHandler("."+os.sep+"logs"+os.sep+file_name, maxBytes=1024*1024, backupCount=5)
         handler.setFormatter(formatter)
         logger.addHandler(handler)
@@ -41,7 +42,7 @@ class Debug:
         if (os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL]) == "[TINA4_LOG_ALL]"
                 or debug_level in os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL])):
 
-            log_level = 20
+            log_level = 0
             # choose the color
             color = ShellColors.bright_blue
             if debug_level == Constant.TINA4_LOG_INFO:
@@ -56,6 +57,7 @@ class Debug:
             elif debug_level == Constant.TINA4_LOG_WARNING:
                 color = ShellColors.bright_yellow
                 log_level = 30
+
 
             logger.log(log_level, params)
 
