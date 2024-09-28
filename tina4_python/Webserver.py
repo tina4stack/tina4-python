@@ -27,7 +27,7 @@ class Webserver:
 
     async def get_content_body(self, content_length):
         # get lines of content where at the end of the request
-        content = self.request_raw
+        content = self.content_raw
 
         if "content-type" in self.lowercase_headers:
             if self.lowercase_headers["content-type"] == "application/x-www-form-urlencoded":
@@ -251,6 +251,7 @@ class Webserver:
         writer.close()
 
     def __init__(self, host_name, port):
+        self.content_raw = None
         self.session = Session
         self.cookies = {}
         self.method = None
