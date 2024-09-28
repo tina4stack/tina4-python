@@ -111,7 +111,7 @@ class Webserver:
         else:
             body = None
 
-        request = {"params": params, "body": body, "raw": self.request, "headers": self.lowercase_headers}
+        request = {"params": params, "body": body, "raw_data": self.request, "headers": self.lowercase_headers, "raw_request": self.request_raw, "raw_content": self.content_raw}
 
         tina4_python.tina4_current_request = request
 
@@ -185,29 +185,31 @@ class Webserver:
             content_length = int(lowercase_headers["content-length"])
             count = 0
             read_size = 64
-            raw_data = b''
-            while len(raw_data) < content_length:
+            content_data = b''
+            while len(content_data) < content_length:
                 read = await reader.read(read_size)
                 count += len(read)
+                content_data += read
                 raw_data += read
                 # print('COUNT', count, len(read))
-                if len(read) < read_size and len(raw_data) == content_length:
+                if len(read) < read_size and len(content_data) == content_length:
                     break
             try:
-                content = raw_data.decode("utf-8")
+                content = content_data.decode("utf-8")
             except:  # probably binary or multipart form?
-                content = raw_data
+                content = content_data
 
-        return protocol, headers, lowercase_headers, content, raw_data
+        return protocol, headers, lowercase_headers, content, raw_data, content_data
 
     async def handle_client(self, reader, writer):
         # Get the client request
-        protocol, headers_list, lowercase_headers, request, raw_data = await self.get_data(reader)
+        protocol, headers_list, lowercase_headers, request, request_raw, content_raw = await self.get_data(reader)
         # Strange blank request ?
         if protocol == '':
             return
         # Decode the request
-        self.request_raw = raw_data
+        self.request_raw = request_raw
+        self.content_raw = content_raw
         self.request = request
         self.headers = headers_list
         self.lowercase_headers = lowercase_headers

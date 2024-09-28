@@ -132,6 +132,9 @@ class Router:
                 Request.params = request["params"]
                 Request.body = request["body"] if "body" in request else None
                 Request.session = session
+                Request.raw_data = request["raw_data"] if "raw_data" in request else None
+                Request.raw_request = request["raw_request"] if "raw_request" in request else None
+                Request.raw_content = request["raw_content"] if "raw_content" in request else None
 
                 tina4_python.tina4_current_request = Request
                 old_stdout = sys.stdout # Memorize the default stdout stream
