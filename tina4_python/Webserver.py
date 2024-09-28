@@ -181,6 +181,7 @@ class Webserver:
 
         lowercase_headers = {k.lower(): v for k, v in headers.items()}
         content = ""
+        content_data = b''
         if "content-length" in lowercase_headers:
             content_length = int(lowercase_headers["content-length"])
             count = 0
