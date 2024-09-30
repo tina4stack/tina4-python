@@ -222,8 +222,8 @@ class Webserver:
 
         # parse cookies
         cookie_list = {}
-        if "Cookie" in self.headers:
-            cookie_list_temp = self.headers["Cookie"].split(";")
+        if "cookie" in self.lowercase_headers:
+            cookie_list_temp = self.lowercase_headers["cookie"].split(";")
             for cookie_value in cookie_list_temp:
                 cookie = cookie_value.split("=", 1)
                 cookie_list[cookie[0].strip()] = cookie[1].strip()
