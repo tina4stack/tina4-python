@@ -10,7 +10,7 @@ from idlelib.rpc import response_queue
 from tina4_python import Migration
 from tina4_python.Template import Template
 from tina4_python.Debug import Debug
-from tina4_python.Router import get
+from tina4_python.Router import get, cached
 from tina4_python.Router import post
 from tina4_python.Database import Database
 from tina4_python.Swagger import description, secure, summary, example, tags, params
@@ -57,5 +57,9 @@ async def redirect(request, response):
 
     return response.redirect("/hello/world")
 
+@cached(False)
+@get("/")
+async def index_html(request, response):
 
+    return response(Template.render_twig_template("index.twig"))
 

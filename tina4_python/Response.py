@@ -22,8 +22,7 @@ class Response:
     """
 
     def __init__(self, content, http_code=Constant.HTTP_OK, content_type=Constant.TEXT_HTML, headers=None):
-        if headers is None:
-            headers = {}
+        self.headers = headers if headers is not None else {}
 
         if content is None:
             content = ""
@@ -54,7 +53,7 @@ class Response:
         self.content = content
         self.http_code = http_code
         self.content_type = content_type
-        self.headers = headers
+
 
     @staticmethod
     def redirect(redirect_url):

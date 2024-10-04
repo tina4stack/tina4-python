@@ -117,6 +117,8 @@ class Webserver:
 
         response = await self.router_handler.resolve(method, self.path, request, self.lowercase_headers, self.session)
 
+
+
         if HTTP_REDIRECT != response.http_code:
             self.send_header("Access-Control-Allow-Origin", "*", headers)
             self.send_header("Access-Control-Allow-Headers",
@@ -135,8 +137,6 @@ class Webserver:
         # add the custom headers from the response
         for response_header in response.headers:
             self.send_header(response_header, response.headers[response_header], headers)
-
-
 
         headers = await self.get_headers(headers, self.response_protocol, response.http_code)
 
