@@ -16,6 +16,7 @@ class Request:
         self.request = request if request is not None else {}
         self.cookies = {}
         self.cookies = {}
+        self.url = None
         self.session = None
         self.files = {}
         self.raw_data = raw_data if raw_data is not None else None

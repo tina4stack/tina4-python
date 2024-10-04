@@ -136,6 +136,7 @@ class Router:
                 Request.raw_data = request["raw_data"] if "raw_data" in request else None
                 Request.raw_request = request["raw_request"] if "raw_request" in request else None
                 Request.raw_content = request["raw_content"] if "raw_content" in request else None
+                Request.url = url
 
                 tina4_python.tina4_current_request = Request
 
