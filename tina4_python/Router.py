@@ -13,9 +13,10 @@ import io
 import tina4_python
 from tina4_python import Constant
 from tina4_python.Debug import Debug
+from tina4_python import Response
 from tina4_python import Request
-from tina4_python.Response import Response
 from tina4_python.Template import Template
+from tina4_python.MiddleWare import MiddleWare
 
 
 class Router:
@@ -59,12 +60,21 @@ class Router:
     # Renders the URL and returns the content
     @staticmethod
     async def get_result(url, method, request, headers, session):
+        global Request
+        global Response
+
+        Response.headers = {}
+        Response.content = ""
+        Response.http_code = Constant.HTTP_OK
+        result = None
+
         Debug("Root Path " + tina4_python.root_path + " " + url, method, Constant.TINA4_LOG_DEBUG)
         tina4_python.tina4_current_request["url"] = url
         tina4_python.tina4_current_request["headers"] = headers
 
         # we can add other methods later but right now we validate posts
-        if method in [Constant.TINA4_GET, Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH, Constant.TINA4_DELETE]:
+        if method in [Constant.TINA4_GET, Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH,
+                      Constant.TINA4_DELETE]:
             content_type = "text/html"
             if "content-type" in headers:
                 content_type = headers["content-type"]
@@ -93,13 +103,10 @@ class Router:
                     validated = True
 
             if not validated and method != Constant.TINA4_GET:
-                return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+                return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
             else:
                 if request["body"] is not None and "formToken" in request["body"]:
                     del request["body"]["formToken"]
-
-        # default response
-        result = Response("", Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
 
         # split URL and extract query string
         url_parts = url.split('?')
@@ -111,7 +118,7 @@ class Router:
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
             with open(static_file, 'rb') as file:
-                return Response(file.read(), Constant.HTTP_OK, mime_type)
+                return Response.Response(file.read(), Constant.HTTP_OK, mime_type)
 
         old_stdout = None
         for route in tina4_python.tina4_routes.values():
@@ -119,14 +126,15 @@ class Router:
                 continue
             Debug("Matching route " + route['route'] + " to " + url, Constant.TINA4_LOG_DEBUG)
             if Router.match(url, route['route']):
-                if  "swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]:
+                if "swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]:
                     if route["swagger"]["secure"] and not validated:
-                        return Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+                        return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
                 router_response = route["callback"]
 
                 # Add the inline variables  & construct a Request variable
                 request["params"].update(Router.variables)
+
 
                 Request.request = request  # Add the request object
                 Request.headers = headers  # Add the headers
@@ -140,31 +148,53 @@ class Router:
 
                 tina4_python.tina4_current_request = Request
 
-                old_stdout = sys.stdout # Memorize the default stdout stream
+                old_stdout = sys.stdout  # Memorize the default stdout stream
                 sys.stdout = buffer = io.StringIO()
-                result = await router_response(request=Request, response=Response)
 
-                if "cache" in route and route["cache"] is not None:
-                    if not route["cache"]["cached"]:
-                        result.headers["Cache-Control"] = "max-age=1, must-revalidate"
-                        result.headers["Pragma"] = "no-cache"
-                        result.headers["Clear-Site-Data"] =  "cache"
+                if "middleware" in route:
+                    middleware_runner = MiddleWare(route["middleware"]["class"])
+
+                    if "methods" in route["middleware"]:
+                        for method in route["middleware"]["methods"]:
+                            Request, Response = middleware_runner.call_direct_method(Request, Response, method)
                     else:
-                        result.headers["Cache-Control"] = "max-age="+str(route["cache"]["max_age"])+", must-revalidate"
-                        result.headers["Pragma"] = "cache"
-                else:
-                    result.headers["Cache-Control"] = "max-age=-1, must-revalidate"
-                    result.headers["Pragma"] = "cache"
+                        Request, Response = middleware_runner.call_before_methods(Request, Response)
+                        Request, Response = middleware_runner.call_any_methods(Request, Response)
 
+                result = await router_response(request=Request, response=Response.Response)
+
+                if "middleware" in route:
+                    middleware_runner = MiddleWare(route["middleware"]["class"])
+
+                    if "methods" in route["middleware"]:
+                        for method in route["middleware"]["methods"]:
+                            Request, result = middleware_runner.call_direct_method(Request, result, method)
+                    else:
+                        Request, result = middleware_runner.call_after_methods(Request, result)
+                        Request, result = middleware_runner.call_any_methods(Request, result)
+
+                if result is not None:
+                    if "cache" in route and route["cache"] is not None:
+                        if not route["cache"]["cached"]:
+                            result.headers["Cache-Control"] = "max-age=1, must-revalidate"
+                            result.headers["Pragma"] = "no-cache"
+                            result.headers["Clear-Site-Data"] = "cache"
+                        else:
+                            result.headers["Cache-Control"] = "max-age=" + str(
+                                route["cache"]["max_age"]) + ", must-revalidate"
+                            result.headers["Pragma"] = "cache"
+                    else:
+                        result.headers["Cache-Control"] = "max-age=-1, must-revalidate"
+                        result.headers["Pragma"] = "cache"
 
                 break
 
         if result is None:
             sys.stdout = old_stdout
             try:
-                return Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON)
+                return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON)
             except:
-                return Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML)
+                return Response.Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML)
 
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
@@ -184,12 +214,12 @@ class Router:
                 result.headers["Pragma"] = "no-cache"
                 content = Template.render_twig_template(twig_file, {"request": tina4_python.tina4_current_request})
                 if content != "":
-                    return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML, result.headers)
+                    return Response.Response(content, Constant.HTTP_OK, Constant.TEXT_HTML, result.headers)
 
         if result.http_code == Constant.HTTP_NOT_FOUND:
             content = Template.render_twig_template(
                 "errors/404.twig", {"server": {"url": url}})
-            return Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
+            return Response.Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
 
         return result
 
@@ -209,7 +239,8 @@ class Router:
     def add(method, route, callback):
         Debug("Adding a route: " + route, Constant.TINA4_LOG_DEBUG)
         if not callback in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {"route": route, "callback": callback, "method": method, "swagger": None, "cached": False}
+            tina4_python.tina4_routes[callback] = {"route": route, "callback": callback, "method": method,
+                                                   "swagger": None, "cached": False}
         else:
             tina4_python.tina4_routes[callback]["route"] = route
             tina4_python.tina4_routes[callback]["callback"] = callback
@@ -227,6 +258,7 @@ def get(path: str):
     :param arguments:
     :return:
     """
+
     def actual_get(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
@@ -242,6 +274,7 @@ def post(path):
     :param path:
     :return:
     """
+
     def actual_post(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
@@ -257,6 +290,7 @@ def put(path):
     :param path:
     :return:
     """
+
     def actual_put(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
@@ -272,6 +306,7 @@ def patch(path):
     :param path:
     :return:
     """
+
     def actual_patch(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
@@ -287,6 +322,7 @@ def delete(path):
     :param path:
     :return:
     """
+
     def actual_delete(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
@@ -295,6 +331,7 @@ def delete(path):
 
     return actual_delete
 
+
 def cached(is_cached, max_age=60):
     """
     Sets whether the route is cached or not
@@ -302,6 +339,7 @@ def cached(is_cached, max_age=60):
     :param max_age:
     :return:
     """
+
     def actual_cached(callback):
         if callback not in tina4_python.tina4_routes:
             tina4_python.tina4_routes[callback] = {}
@@ -309,3 +347,20 @@ def cached(is_cached, max_age=60):
         return callback
 
     return actual_cached
+
+
+def middleware(middleware, specific_methods=[]):
+    """
+    Sets middleware for the route and methods that need to be called
+    :param middleware:
+    :param specific_methods:
+    :return:
+    """
+
+    def actual_middleware(callback):
+        if callback not in tina4_python.tina4_routes:
+            tina4_python.tina4_routes[callback] = {}
+        tina4_python.tina4_routes[callback]["middleware"] = {"class": middleware, "methods": specific_methods}
+        return callback
+
+    return actual_middleware

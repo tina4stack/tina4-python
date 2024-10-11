@@ -7,11 +7,12 @@ import sys
 from codecs import replace_errors
 from idlelib.rpc import response_queue
 
+from src.app.MiddleWare import MiddleWare
 from tina4_python import Migration
 from tina4_python.Template import Template
 from tina4_python.Debug import Debug
 from tina4_python.Router import get, cached
-from tina4_python.Router import post
+from tina4_python.Router import post, middleware
 from tina4_python.Database import Database
 from tina4_python.Swagger import description, secure, summary, example, tags, params
 
@@ -29,7 +30,6 @@ async def some_page(request, response):
 @params(["limit=10", "offset=0"])
 @summary("Some summary")
 @tags(["hello", "cars"])
-
 async def greet(**params): #(request, response)
     Debug("Hello", params['request'], file_name="test.log")
     name = params['request'].params['name']
@@ -51,7 +51,23 @@ async def upload_file(request, response):
 
     return response(request.body)
 
+@get("/system/roles")
+async def system_roles(request, response):
+    print("roles")
 
+@middleware(MiddleWare, ["before_and_after"])
+@get("/system/roles/data")
+async def system_roles(request, response):
+    print("roles ggg")
+
+
+    return response("OK")
+
+@get("/system/roles/{id}")
+async def system_roles(request, response):
+    print("roles id")
+
+@middleware(MiddleWare)
 @get("/test/redirect")
 async def redirect(request, response):
 
