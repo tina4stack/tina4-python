@@ -80,7 +80,7 @@ class Router:
                 content_type = headers["content-type"]
 
             if content_type == "application/json":
-                content = {"error": "403 - Forbidden", "data": {"server": {"url": url}}};
+                content = {"error": "403 - Forbidden", "data": {"server": {"url": url}}}
             else:
                 content = Template.render_twig_template(
                     "errors/403.twig", {"server": {"url": url}})
