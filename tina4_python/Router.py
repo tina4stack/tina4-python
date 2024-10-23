@@ -66,6 +66,7 @@ class Router:
         Response.headers = {}
         Response.content = ""
         Response.http_code = Constant.HTTP_OK
+        Response.content_type = Constant.TEXT_HTML
         result = None
 
         Debug("Root Path " + tina4_python.root_path + " " + url, method, Constant.TINA4_LOG_DEBUG)
@@ -121,6 +122,7 @@ class Router:
                 return Response.Response(file.read(), Constant.HTTP_OK, mime_type)
 
         old_stdout = None
+        buffer = io.StringIO()
         for route in tina4_python.tina4_routes.values():
             if route["method"] != method:
                 continue
@@ -178,7 +180,6 @@ class Router:
                         if not route["cache"]["cached"]:
                             result.headers["Cache-Control"] = "max-age=1, must-revalidate"
                             result.headers["Pragma"] = "no-cache"
-                            result.headers["Clear-Site-Data"] = "cache"
                         else:
                             result.headers["Cache-Control"] = "max-age=" + str(
                                 route["cache"]["max_age"]) + ", must-revalidate"
@@ -190,7 +191,11 @@ class Router:
                 break
 
         if result is None:
-            sys.stdout = old_stdout
+            if old_stdout is not None:
+                sys.stdout = old_stdout
+            else:
+                sys.stdout = buffer = io.StringIO()
+
             try:
                 return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON)
             except:

@@ -66,7 +66,8 @@ class Debug:
                 print(output, "", end="")
             print()
 
-            sys.stdout.flush()
+            if sys.stdout is not None:
+                sys.stdout.flush()
 
         handler.flush()
         logger.removeHandler(handler)

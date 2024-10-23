@@ -7,6 +7,9 @@
 import json
 import inspect
 from types import ModuleType
+
+from markdown_it.common.utils import isStrSpace
+
 from tina4_python import Constant
 from tina4_python import DatabaseResult
 from tina4_python.Debug import Debug
@@ -16,21 +19,19 @@ content = ""
 http_code = Constant.HTTP_OK
 content_type = Constant.TEXT_HTML
 
+
 class Response:
     def __init__(self, content_in=None, http_code_in=None, content_type_in=None,
-                headers_in=None):
+                 headers_in=None):
         global headers
         global content
         global http_code
         global content_type
 
-        if content is not None:
-            content_in = content + content_in
-
         if (not isinstance(content_in, bool) and not isinstance(content_in, object)
-              and not isinstance(content_in,bytes)
-              and not isinstance(content_in, str)
-              and not isinstance(content_in, list) and inspect.isclass(type(content_in))):
+                and not isinstance(content_in, bytes)
+                and not isinstance(content_in, str)
+                and not isinstance(content_in, list) and inspect.isclass(type(content_in))):
             content_in = dict(content_in)
 
         # check if database result
@@ -52,6 +53,9 @@ class Response:
         if isinstance(content_in, ModuleType):
             content_in = json.dumps({"error": "Cannot decode object of type " + str(type(content_in))})
             content_type = Constant.APPLICATION_JSON
+
+        if content is not None and isinstance(content_in, str):
+            content_in = content + content_in
 
         self.headers = headers_in if headers_in is not None else headers
         self.content = content_in if content_in is not None else content
@@ -90,5 +94,3 @@ class Response:
         """
         global headers
         headers[key] = value
-
-
