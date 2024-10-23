@@ -7,9 +7,6 @@
 import json
 import inspect
 from types import ModuleType
-
-from markdown_it.common.utils import isStrSpace
-
 from tina4_python import Constant
 from tina4_python import DatabaseResult
 from tina4_python.Debug import Debug
