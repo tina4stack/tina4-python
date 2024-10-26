@@ -65,9 +65,9 @@ class Router:
 
         Response.headers = {}
         Response.content = ""
-        Response.http_code = Constant.HTTP_OK
+        Response.http_code = Constant.HTTP_NOT_FOUND
         Response.content_type = Constant.TEXT_HTML
-        result = None
+        result = Response
 
         Debug("Root Path " + tina4_python.root_path + " " + url, method, Constant.TINA4_LOG_DEBUG)
         tina4_python.tina4_current_request["url"] = url
@@ -165,6 +165,11 @@ class Router:
 
                 result = await router_response(request=Request, response=Response.Response)
 
+                # we have found a result ... make sure we reflect this if the user didn't actually put the correct http response code in
+                if result is not None:
+                    if result.http_code == Constant.HTTP_NOT_FOUND:
+                        result.http_code = Constant.HTTP_OK
+
                 if "middleware" in route:
                     middleware_runner = MiddleWare(route["middleware"]["class"])
 
@@ -190,36 +195,39 @@ class Router:
 
                 break
 
-        if result is None:
-            if old_stdout is not None:
-                sys.stdout = old_stdout
+        if result is None and old_stdout is not None:
+            sys.stdout = old_stdout
+            if buffer.getvalue() != "":
+                try:
+                    return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON)
+                except:
+                    return Response.Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML)
             else:
-                sys.stdout = buffer = io.StringIO()
-
-            try:
-                return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON)
-            except:
-                return Response.Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML)
+                result = Response
+                result.http_code = Constant.HTTP_NOT_FOUND
 
         # If no route is matched, serve 404
         if result.http_code == Constant.HTTP_NOT_FOUND:
             # Serve twigs if the files exist
+            twig_files = []
             if url == "/":
-                twig_file = "index.twig"
+                twig_files.append("index.twig")
             else:
-                twig_file = url + ".twig"
+                twig_files.append(url + ".twig")
+                twig_files.append(url + "index.twig")
 
             # see if we can find the twig file
-            if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
-                Debug("Looking for twig file",
-                      tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
-                      Constant.TINA4_LOG_DEBUG)
+            for twig_file in twig_files:
+                if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
+                    Debug("Looking for twig file",
+                          tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
+                          Constant.TINA4_LOG_DEBUG)
 
-                result.headers["Cache-Control"] = "max-age=-1, public"
-                result.headers["Pragma"] = "no-cache"
-                content = Template.render_twig_template(twig_file, {"request": tina4_python.tina4_current_request})
-                if content != "":
-                    return Response.Response(content, Constant.HTTP_OK, Constant.TEXT_HTML, result.headers)
+                    result.headers["Cache-Control"] = "max-age=-1, public"
+                    result.headers["Pragma"] = "no-cache"
+                    content = Template.render_twig_template(twig_file, {"request": tina4_python.tina4_current_request})
+                    if content != "":
+                        return Response.Response(content, Constant.HTTP_OK, Constant.TEXT_HTML, result.headers)
 
         if result.http_code == Constant.HTTP_NOT_FOUND:
             content = Template.render_twig_template(
