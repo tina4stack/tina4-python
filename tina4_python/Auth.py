@@ -127,12 +127,17 @@ class Auth:
             with open(self.self_signed, "wb") as f:
                 f.write(cert.public_bytes(serialization.Encoding.PEM))
 
-    def get_token(self, payload_data):
+    def get_token(self, payload_data, expiry_minutes=0):
         private_key = self.load_private_key()
         now = datetime.datetime.now()
-        token_limit_minutes = int(os.environ.get("TINA4_TOKEN_LIMIT", 2))
-        expiry_time = now + datetime.timedelta(minutes=token_limit_minutes)
-        payload_data["expires"] = expiry_time.isoformat()
+
+        if not "expires" in payload_data:
+            token_limit_minutes = int(os.environ.get("TINA4_TOKEN_LIMIT", 2))
+            if expiry_minutes != 0:
+                token_limit_minutes  = expiry_minutes
+            expiry_time = now + datetime.timedelta(minutes=token_limit_minutes)
+            payload_data["expires"] = expiry_time.isoformat()
+
         token = jwt.encode(
             payload=payload_data,
             key=private_key,

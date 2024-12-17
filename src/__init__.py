@@ -18,6 +18,7 @@ from tina4_python.Swagger import description, secure, summary, example, tags, pa
 
 dba = Database("sqlite3:test.db", "username", "password")
 
+
 @get("/some/page")
 async def some_page(request, response):
     global dba
@@ -25,16 +26,18 @@ async def some_page(request, response):
     html = Template.render_twig_template("index.twig", data={"persons": result.to_array()})
     return response(html)
 
+
 @get("/hello/{name}")
 @description("Some description")
 @params(["limit=10", "offset=0"])
 @summary("Some summary")
 @tags(["hello", "cars"])
-async def greet(**params): #(request, response)
+async def greet(**params):  #(request, response)
     Debug("Hello", params['request'], file_name="test.log")
     name = params['request'].params['name']
     sys.stdout.flush()
-    return params['response'](f"Hello, {name}  !") # return response()
+    return params['response'](f"Hello, {name}  !")  # return response()
+
 
 @post("/hello/{name}")
 @description("Some description")
@@ -42,40 +45,41 @@ async def greet(**params): #(request, response)
 @example({"id": 1, "name": "Test"})
 @tags("OK")
 @secure()
-async def greet_again(**params): #(request, response)
+async def greet_again(**params):  #(request, response)
     print(params['request'])
-    return params['response'](params['request'].body) # return response()
+    return params['response'](params['request'].body)  # return response()
+
 
 @post("/upload/files")
 async def upload_file(request, response):
-
     return response(request.body)
+
 
 @get("/system/roles")
 async def system_roles(request, response):
     print("roles")
+
 
 @middleware(MiddleWare, ["before_and_after"])
 @get("/system/roles/data")
 async def system_roles(request, response):
     print("roles ggg")
 
-
     return response("OK")
+
 
 @get("/system/roles/{id}")
 async def system_roles(request, response):
     print("roles id")
 
+
 @middleware(MiddleWare)
 @get("/test/redirect")
 async def redirect(request, response):
-
     return response.redirect("/hello/world")
+
 
 @cached(False)
 @get("/")
 async def index_html(request, response):
-
     return response(Template.render_twig_template("index.twig"))
-
