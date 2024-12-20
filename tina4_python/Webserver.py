@@ -117,7 +117,7 @@ class Webserver:
         for key, value in params.items():
             regex = r"(\w+)"
             matches = re.finditer(regex, key)
-            start_var = new_params
+
             var_names = []
             for matchNum, match in enumerate(matches, start=0):
                 if is_int(match.group()):
@@ -125,37 +125,42 @@ class Webserver:
                 else:
                     var_names.append(match.group())
 
-            counter = 0
-
-            while counter < len(var_names):
-                var_name = var_names[counter]
-                if not is_int(var_name):
-                    if isinstance(start_var, dict) and var_name in start_var:
-                        start_var = start_var[var_name]
-                    else:
-                        if counter+1 < len(var_names) and is_int(var_names[counter+1]) :
-                            if var_name not in start_var:
-                                start_var[var_name] = []
+            if len(var_names) > 1:
+                start_var = new_params
+                counter = 0
+                while counter < len(var_names):
+                    var_name = var_names[counter]
+                    if not is_int(var_name):
+                        if isinstance(start_var, dict) and var_name in start_var:
                             start_var = start_var[var_name]
                         else:
-                            if counter-1 > 0 and is_int(var_names[counter-1]):
-                                index = int(var_names[counter-1])
-                                new_value = {var_name: value}
-                                if index in range(len(start_var)):
-                                    start_var[index].update(new_value)
-                                else:
-                                    while len(start_var) < index:
-                                        start_var.append({})
-                                    start_var.append(new_value)
-                                start_var = start_var[index]
+                            if counter+1 < len(var_names) and is_int(var_names[counter+1]) :
+                                if var_name not in start_var:
+                                    start_var[var_name] = []
+                                start_var = start_var[var_name]
                             else:
-                                if isinstance(start_var, dict):
-                                    start_var[var_name] = value
-                                    start_var = start_var[var_name]
+                                if counter-1 > 0 and is_int(var_names[counter-1]):
+                                    index = int(var_names[counter-1])
+                                    new_value = {var_name: value}
+                                    if index in range(len(start_var)):
+                                        start_var[index].update(new_value)
+                                    else:
+                                        while len(start_var) < index:
+                                            start_var.append({})
+                                        start_var.append(new_value)
+                                    start_var = start_var[index]
+                                else:
+                                    if isinstance(start_var, dict):
+                                        if counter+1 == len(var_names):
+                                            start_var[var_name] = value
+                                        else:
+                                            start_var[var_name] = {}
+                                        start_var = start_var[var_name]
 
-                counter += 1
+                    counter += 1
 
         params.update(new_params)
+
         content_length = await self.get_content_length()
         if method != Constant.TINA4_GET:
             body = await self.get_content_body(content_length)
