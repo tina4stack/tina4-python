@@ -8,13 +8,20 @@ import asyncio
 import base64
 import json
 import os
-import sys
+import re
 from urllib.parse import unquote_plus
 from urllib.parse import urlparse, parse_qsl
 import tina4_python
 from tina4_python import Constant
 from tina4_python.Constant import HTTP_REDIRECT
 from tina4_python.Session import Session
+
+def is_int(v):
+    try:
+        f=int(v)
+    except ValueError:
+        return False
+    return True
 
 
 class Webserver:
@@ -102,22 +109,65 @@ class Webserver:
             headers = await self.get_headers(headers, self.response_protocol, Constant.HTTP_OK)
             return headers
 
-
         params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
 
+        new_params = {}
+        new_params.update(params)
+
+        for key, value in params.items():
+            regex = r"(\w+)"
+            matches = re.finditer(regex, key)
+            start_var = new_params
+            var_names = []
+            for matchNum, match in enumerate(matches, start=0):
+                if is_int(match.group()):
+                    var_names.append(int(match.group()))
+                else:
+                    var_names.append(match.group())
+
+            counter = 0
+
+            while counter < len(var_names):
+                var_name = var_names[counter]
+                if not is_int(var_name):
+                    if isinstance(start_var, dict) and var_name in start_var:
+                        start_var = start_var[var_name]
+                    else:
+                        if counter+1 < len(var_names) and is_int(var_names[counter+1]) :
+                            if var_name not in start_var:
+                                start_var[var_name] = []
+                            start_var = start_var[var_name]
+                        else:
+                            if counter-1 > 0 and is_int(var_names[counter-1]):
+                                index = int(var_names[counter-1])
+                                new_value = {var_name: value}
+                                if index in range(len(start_var)):
+                                    start_var[index].update(new_value)
+                                else:
+                                    while len(start_var) < index:
+                                        start_var.append({})
+                                    start_var.append(new_value)
+                                start_var = start_var[index]
+                            else:
+                                if isinstance(start_var, dict):
+                                    start_var[var_name] = value
+                                    start_var = start_var[var_name]
+
+                counter += 1
+
+        params.update(new_params)
         content_length = await self.get_content_length()
         if method != Constant.TINA4_GET:
             body = await self.get_content_body(content_length)
         else:
             body = None
 
-        request = {"params": params, "body": body, "raw_data": self.request, "url": self.path, "headers": self.lowercase_headers, "raw_request": self.request_raw, "raw_content": self.content_raw}
+        request = {"params": params, "body": body, "raw_data": self.request, "url": self.path,
+                   "headers": self.lowercase_headers, "raw_request": self.request_raw, "raw_content": self.content_raw}
 
         tina4_python.tina4_current_request = request
 
         response = await self.router_handler.resolve(method, self.path, request, self.lowercase_headers, self.session)
-
-
 
         if HTTP_REDIRECT != response.http_code:
             self.send_header("Access-Control-Allow-Origin", "*", headers)

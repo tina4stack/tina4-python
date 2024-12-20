@@ -83,3 +83,9 @@ async def redirect(request, response):
 @get("/")
 async def index_html(request, response):
     return response(Template.render_twig_template("index.twig"))
+
+@get("/test/vars")
+async def test_vars(request, response):
+    print("<pre>")
+    print("vars")
+    print(request.params)

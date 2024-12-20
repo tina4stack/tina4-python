@@ -45,7 +45,6 @@ load_env(environment)
 
 print(ShellColors.bright_yellow + "Setting debug mode", os.getenv("TINA4_DEBUG_LEVEL"), ShellColors.end)
 
-
 if importlib.util.find_spec("jurigged"):
     import jurigged
 
@@ -60,7 +59,6 @@ localize()
 
 Debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path),
       Constant.TINA4_LOG_INFO)
-
 
 tina4_routes = {}
 tina4_current_request = {}
@@ -139,6 +137,7 @@ if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
 else:
     Debug("Missing src/app folder", Constant.TINA4_LOG_WARNING)
 
+
 # compile sass
 def compile_scss():
     try:
@@ -168,22 +167,27 @@ if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
 else:
     Debug("Missing scss folder", Constant.TINA4_LOG_WARNING)
 
+
 # end compile sass
 
 
 def file_get_contents(file_path):
     return Path(file_path).read_text()
 
+
 # Add swagger routes
-@get("/swagger/swagger.json")
+@get(os.getenv("SWAGGER_ROUTE", "/swagger")+"/swagger.json")
 async def get_swagger_json(request, response):
     json = Swagger.get_json(request)
     return response(json)
 
-@get("/swagger")
+
+@get(os.getenv("SWAGGER_ROUTE", "/swagger"))
 async def get_swagger(request, response):
-    html = file_get_contents(root_path + os.sep +"src"+os.sep+"public"+ os.sep+"swagger"+os.sep+"index.html")
+    html = file_get_contents(
+        root_path + os.sep + "src" + os.sep + "public" + os.sep + "swagger" + os.sep + "index.html")
     return response(html)
+
 
 def webserver(host_name, port):
     web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
@@ -204,7 +208,8 @@ def run_web_server(in_hostname="localhost", in_port=7145):
     Debug(Messages.MSG_STARTING_WEBSERVER.format(port=in_port), Constant.TINA4_LOG_INFO)
     webserver(in_hostname, in_port)
 
-if os.getenv('TINA4_DEFAULT_WEBSERVER', 'True') == 'True' :
+
+if os.getenv('TINA4_DEFAULT_WEBSERVER', 'True') == 'True':
     if importlib.util.find_spec("jurigged"):
         Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
         jurigged.watch("./")
