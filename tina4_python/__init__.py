@@ -186,6 +186,8 @@ async def get_swagger_json(request, response):
 async def get_swagger(request, response):
     html = file_get_contents(
         root_path + os.sep + "src" + os.sep + "public" + os.sep + "swagger" + os.sep + "index.html")
+
+    html = html.replace("{SWAGGER_ROUTE}", os.getenv("SWAGGER_ROUTE", "/swagger"))
     return response(html)
 
 

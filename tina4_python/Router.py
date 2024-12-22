@@ -11,10 +11,10 @@ import os
 import sys
 import io
 import tina4_python
-from tina4_python import Constant
-from tina4_python.Debug import Debug
+from tina4_python import Constant,Auth
 from tina4_python import Response
 from tina4_python import Request
+from tina4_python.Debug import Debug
 from tina4_python.Template import Template
 from tina4_python.MiddleWare import MiddleWare
 
@@ -107,6 +107,7 @@ class Router:
                 return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
             else:
                 if request["body"] is not None and "formToken" in request["body"]:
+                    request["params"]["formToken"] = request["body"]["formToken"]
                     del request["body"]["formToken"]
 
         # split URL and extract query string
@@ -181,6 +182,7 @@ class Router:
                         Request, result = middleware_runner.call_any_methods(Request, result)
 
                 if result is not None:
+                    result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
                     if "cache" in route and route["cache"] is not None:
                         if not route["cache"]["cached"]:
                             result.headers["Cache-Control"] = "max-age=1, must-revalidate"
@@ -196,12 +198,14 @@ class Router:
                 break
 
         if result is None and old_stdout is not None:
+            result = Response
+            result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
             sys.stdout = old_stdout
             if buffer.getvalue() != "":
                 try:
-                    return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON)
+                    return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON, result.headers)
                 except:
-                    return Response.Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML)
+                    return Response.Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML, result.headers)
             else:
                 result = Response
                 result.http_code = Constant.HTTP_NOT_FOUND
@@ -223,6 +227,7 @@ class Router:
                           tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
                           Constant.TINA4_LOG_DEBUG)
 
+                    result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
                     result.headers["Cache-Control"] = "max-age=-1, public"
                     result.headers["Pragma"] = "no-cache"
                     content = Template.render_twig_template(twig_file, {"request": tina4_python.tina4_current_request})
@@ -234,6 +239,7 @@ class Router:
                 "errors/404.twig", {"server": {"url": url}})
             return Response.Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
 
+        result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
         return result
 
     @staticmethod

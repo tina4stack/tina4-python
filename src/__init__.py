@@ -7,8 +7,9 @@ import sys
 from codecs import replace_errors
 from idlelib.rpc import response_queue
 
+
 from src.app.MiddleWare import MiddleWare
-from tina4_python import Migration
+from tina4_python import Migration, tina4_auth
 from tina4_python.Template import Template
 from tina4_python.Debug import Debug
 from tina4_python.Router import get, cached
@@ -23,8 +24,17 @@ dba = Database("sqlite3:test.db", "username", "password")
 async def some_page(request, response):
     global dba
     result = dba.fetch("select id, name from test_record where id = 2")
+
     html = Template.render_twig_template("index.twig", data={"persons": result.to_array()})
     return response(html)
+
+@post("/some/page")
+async def some_page_post(request, response):
+    print(request.params)
+    print(request.body)
+
+    token = tina4_auth.get_payload(request.params["formToken"])
+    print(token)
 
 
 @get("/hello/{name}")
@@ -83,6 +93,7 @@ async def redirect(request, response):
 @get("/")
 async def index_html(request, response):
     return response(Template.render_twig_template("index.twig"))
+
 
 @get("/test/vars")
 async def test_vars(request, response):
