@@ -10,6 +10,7 @@ from idlelib.rpc import response_queue
 
 from src.app.MiddleWare import MiddleWare
 from tina4_python import Migration, tina4_auth
+from tina4_python.Migration import migrate
 from tina4_python.Template import Template
 from tina4_python.Debug import Debug
 from tina4_python.Router import get, cached
@@ -18,7 +19,7 @@ from tina4_python.Database import Database
 from tina4_python.Swagger import description, secure, summary, example, tags, params
 
 dba = Database("sqlite3:test.db", "username", "password")
-
+migrate(dba)
 
 @get("/some/page")
 async def some_page(request, response):
@@ -96,7 +97,7 @@ async def index_html(request, response):
 
 
 @get("/test/vars")
-async def test_vars(request, response):
+async def run_test_vars(request, response):
     print("<pre>")
     print("vars")
     print(request.params)

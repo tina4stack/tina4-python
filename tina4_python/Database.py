@@ -16,7 +16,7 @@ from tina4_python.DatabaseResult import DatabaseResult
 class Database:
     SQLITE = "sqlite3"
     FIREBIRD = "firebird.driver"
-    MYSQL = "mysql"
+    MYSQL = "mysql.connector"
     POSTGRES = "postgres"
 
     def __init__(self, _connection_string, _username="", _password=""):
@@ -39,8 +39,7 @@ class Database:
             self.dba = self.database_module.connect(self.database_path)
             self.port = None
             self.host = None
-
-        if self.database_engine == self.FIREBIRD:
+        elif self.database_engine == self.FIREBIRD:
             # <host>/<port>:<file>
             temp_params = self.database_path.split(":", 1)
             host_port = temp_params[0].split("/", 1)
@@ -57,9 +56,31 @@ class Database:
                 user=self.username,
                 password=self.password
             )
+        else:
+            temp_params = self.database_path.split(":", 1)
+            host_port = temp_params[0].split("/", 1)
+            self.host = host_port[0]
+            if len(host_port) > 1:
+                self.port = int(host_port[1])
+            else:
+                self.port = 0
+
+            self.database_path = temp_params[1]
+
+            self.dba = self.database_module.connect(
+                database=self.database_path,
+                port=self.port,
+                host=self.host,
+                user=self.username,
+                password=self.password
+            )
 
         Debug("DATABASE:", self.database_module, self.host, self.port, self.database_path, self.username,
               Constant.TINA4_LOG_DEBUG)
+
+    def database_exists(self, database_name):
+
+        return True
 
     def current_timestamp(self):
         """
@@ -103,14 +124,15 @@ class Database:
         """
         # modify the select statement for limit and skip
         if self.database_engine == self.FIREBIRD:
-            sql = f"select first {limit} skip {skip} * from ({sql})"
+            sql = f"select first {limit} skip {skip} * from ({sql}) as t"
         elif self.database_engine == self.SQLITE:
-            sql = f"select * from ({sql}) limit {skip},{limit}"
+            sql = f"select * from ({sql}) as t limit {skip},{limit}"
         else:
-            sql = f"select * from ({sql}) limit {skip},{limit}"
+            sql = f"select * from ({sql}) as t limit {skip},{limit}"
 
         cursor = self.dba.cursor()
         try:
+            sql = self.parse_place_holders(sql)
             cursor.execute(sql, params)
             return self.get_database_result(cursor)
         except Exception as e:
@@ -126,6 +148,7 @@ class Database:
         :return:
         """
         # Calling the fetch method with limit as 1 and returning the result
+        sql = self.parse_place_holders(sql)
         record = self.fetch(sql, params=params, limit=1, skip=skip)
         if record.error is None and record.count == 1:
             data = {}
@@ -141,6 +164,19 @@ class Database:
         else:
             return None
 
+    def parse_place_holders(self, sql):
+        """
+        Sanitizes a sql statement to replace param chars with the appropriate placeholders
+        MYSQL expects %s and firebird, posgres and sqlite expect ?
+        :param sql:
+        :return:
+        """
+
+        if self.database_engine == self.MYSQL:
+            return sql.replace("?", "%s")
+        else:
+            return sql.replace("%s", "?")
+
     def execute(self, sql, params=()):
         """
         Execute a query based on a sql statement
@@ -148,13 +184,18 @@ class Database:
         :param params:
         :return:
         """
+        sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
             cursor.execute(sql, params)
-            if "returning" in sql:
+            if "returning" in sql.lower():
                 return self.get_database_result(cursor)
             else:
+                # see if we are mysql and if we are insert statement to get the last record
+                if "insert" in sql.lower() and self.database_engine == self.MYSQL:
+                    return DatabaseResult([{"id": cursor.lastrowid}], [], None)
+
                 # On success return an empty result set with no error
                 return DatabaseResult(None, [], None)
         except Exception as e:
@@ -169,6 +210,7 @@ class Database:
         :param params:
         :return:
         """
+        sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
@@ -246,7 +288,9 @@ class Database:
 
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
-            sql += f" returning ({primary_key})"
+            if self.database_engine == self.FIREBIRD or self.database_engine == self.SQLITE:
+                sql += f" returning ({primary_key})"
+
             records = DatabaseResult()
             for record in data:
                 record = self.sanitize(record)

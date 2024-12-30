@@ -8,7 +8,9 @@ from tina4_python import *
 from tina4_python.Database import Database
 
 global dba_type
-dba_type = "sqlite3:test2.db"
+# docker run --name my-mysql -e MYSQL_ROOT_PASSWORD=secret -p 33066:3306 -d mysql:latest
+dba_type = "mysql.connector:localhost/33066:test"
+#dba_type = "sqlite3:test.db"
 
 
 def test_route_match():
@@ -19,14 +21,20 @@ def test_route_match_variable():
     assert Router.match('/url/hello', '/url/{name}') == True, "Test if route matches"
 
 
-def database_connect(driver, username="", password=""):
+def database_connect(driver, username="root", password="secret"):
     dba = Database(driver, username, password)
     return dba
 
 
 def test_database_sqlite():
+    dba_type = "sqlite3:test.db"
     dba = database_connect(dba_type)
     assert dba.database_engine == dba.SQLITE
+
+def test_database_mysql():
+    dba_type = "mysql.connector:localhost/33066:test"
+    dba = database_connect(dba_type)
+    assert dba.database_engine == dba.MYSQL
 
 
 def test_database_execute():
@@ -35,8 +43,13 @@ def test_database_execute():
     assert result.error is None
     result = dba.execute("insert into table with something")
     assert result.error != "", "There should be an error"
-    result = dba.execute(
-        "create table if not exists test_record(id integer not null, name varchar(200), image blob, primary key (id))")
+
+    if "mysql" in dba_type:
+        result = dba.execute(
+            "create table if not exists test_record(id integer not null auto_increment, name varchar(200), image longblob, primary key (id))")
+    else:
+        result = dba.execute(
+            "create table if not exists test_record(id integer not null, name varchar(200), image blob, primary key (id))")
     assert result.error is None
     result = dba.execute_many("insert into test_record (id, name) values (?, ?)",
                               [[5, "Hello1"], [6, "Hello2"], [7, "Hello3"]])
@@ -49,6 +62,7 @@ def test_database_insert():
     dba = database_connect(dba_type)
     result = dba.insert("test_record", {"name": "Test1"})
     assert result.error is None
+    print(result)
     assert result.records[0]["id"] == 8
     result = dba.insert("test_record", [{"id": 2, "name": "Test2"}, {"id": 3, "name": "Test3"}])
     assert result.error is None
@@ -88,6 +102,7 @@ def test_database_fetch():
     result = dba.fetch("select * from test_record", limit=3, skip=3)
     assert result.records[1]["name"] == "Hello3"
     result = dba.fetch("select * from test_record where id = ?", [3])
+    print(result)
     assert result.records[0]["name"] == "Test3Update"
     result = dba.fetch_one("select * from test_record where id = ?", [2])
     assert result["name"] == "Test2Update"
@@ -105,18 +120,24 @@ def test_database_bytes_insert():
     dba.commit()
     result = dba.fetch("select * from test_record where id = 2", limit=3)
 
+
     assert isinstance(result.to_json(), object)
+    dba.close()
 
 
 def test_database_delete():
     dba = database_connect(dba_type)
+
     result = dba.delete("test_record", {"id": 1, "name": "Test1Update"})
+    assert result is True
     dba.commit()
     result = dba.delete("test_record", [{"id": 3}, {"id": 4}])
+
     assert result is True
     dba.commit()
     result = dba.delete("test", [{"id": 12}, {"id": 13}])
     assert result is False
+    dba.close()
 
 
 def test_password():
@@ -127,3 +148,29 @@ def test_password():
     password = auth.hash_password("12345678")
     valid = auth.check_password(password, "123456")
     assert valid == False, "Password check"
+
+
+def test_database_transactions():
+    dba = database_connect(dba_type)
+
+    dba.start_transaction()
+
+    dba.insert("test_record", [{"name": "NEW ONE"}])
+
+    dba.rollback()
+
+    result = dba.fetch("select * from test_record where name = 'NEW ONE'")
+
+    assert result.count == 0
+
+    dba.start_transaction()
+
+    dba.insert("test_record", [{"name": "NEW ONE"}])
+
+    dba.commit()
+
+    result = dba.fetch("select * from test_record where name = 'NEW ONE'")
+
+    assert result.count == 1
+
+    dba.close()
