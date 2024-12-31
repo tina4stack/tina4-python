@@ -54,11 +54,12 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                     error = False
                     error_message = ""
                     for script in script_content:
-                        result = dba.execute(script)
-                        if result.error is not None:
-                            error = True
-                            error_message = result.error
-                            break
+                        if script.strip() != "":
+                            result = dba.execute(script)
+                            if result.error is not None:
+                                error = True
+                                error_message = result.error
+                                break
 
                     if not error:
                         # passed print(color + f"{debug_level:5}:"+ShellColors.end, "", end="")
