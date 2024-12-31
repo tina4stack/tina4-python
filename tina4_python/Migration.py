@@ -18,8 +18,14 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
     :param migration_folder: Alternative folder for migrations
     :return:
     """
-    dba.execute(
-        "create table if not exists tina4_migration(id integer, description varchar(200) default '', content blob, error_message blob, passed integer default 0, primary key(id))")
+
+    if dba.database_engine == dba.MYSQL:
+        dba.execute(
+            "create table if not exists tina4_migration(id integer not null auto_increment, description varchar(200) default '', content text, error_message text, passed integer default 0, primary key(id))")
+    else:
+        dba.execute(
+            "create table if not exists tina4_migration(id integer not null, description varchar(200) default '', content blob, error_message blob, passed integer default 0, primary key(id))")
+
 
     Debug("Migrations found ", tina4_python.root_path + os.sep + migration_folder, Constant.TINA4_LOG_INFO)
     dir_list = os.listdir(tina4_python.root_path + os.sep + migration_folder)
