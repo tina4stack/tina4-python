@@ -6,6 +6,7 @@
 # flake8: noqa: E501
 import base64
 import json
+import datetime
 
 
 class DatabaseResult:
@@ -33,11 +34,15 @@ class DatabaseResult:
             for record in self.records:
                 json_record = {}
                 for key in record:
-                    if isinstance(record[key], bytes):
+                    if isinstance(record[key], datetime.datetime):
+                        json_record[key] = record[key].isoformat()
+                    elif isinstance(record[key], bytes):
                         json_record[key] = base64.b64encode(record[key]).decode('utf-8')
                     else:
                         json_record[key] = record[key]
+
                 json_records.append(json_record)
+
             return json_records
         else:
             return []

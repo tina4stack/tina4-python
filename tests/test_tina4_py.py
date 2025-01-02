@@ -34,6 +34,8 @@ def test_database_sqlite():
 def test_database_mysql():
     dba_type = "mysql.connector:localhost/33066:test"
     dba = database_connect(dba_type)
+    dba.execute("create database if not exists test")
+    dba.commit()
     assert dba.database_engine == dba.MYSQL
 
 
@@ -46,10 +48,10 @@ def test_database_execute():
 
     if "mysql" in dba_type:
         result = dba.execute(
-            "create table if not exists test_record(id integer not null auto_increment, name varchar(200), image longblob, primary key (id))")
+            "create table if not exists test_record(id integer not null auto_increment, name varchar(200), image longblob, date_created timestamp default CURRENT_TIMESTAMP,  primary key (id))")
     else:
         result = dba.execute(
-            "create table if not exists test_record(id integer not null, name varchar(200), image blob, primary key (id))")
+            "create table if not exists test_record(id integer not null, name varchar(200), image blob, date_created timestamp default CURRENT_TIMESTAMP, primary key (id))")
     assert result.error is None
     result = dba.execute_many("insert into test_record (id, name) values (?, ?)",
                               [[5, "Hello1"], [6, "Hello2"], [7, "Hello3"]])
@@ -94,7 +96,7 @@ def test_database_update():
 
 def test_database_fetch():
     dba = database_connect(dba_type)
-    result = dba.fetch("select * from test_record", limit=3)
+    result = dba.fetch("select id, name, image from test_record", limit=3)
     assert result.count == 3
     assert result.records[1]["name"] == "Test3Update"
     assert result.records[2]["id"] == 5
