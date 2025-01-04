@@ -115,25 +115,38 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
 # ignore F403
 if os.path.exists(root_path + os.sep + "src"):
     try:
-        from src import *
-    except ImportError:
-        Debug("Cannot import src folder", Constant.TINA4_LOG_ERROR)
+        src_path = root_path + os.sep + "src"
+        for file in os.listdir(src_path):
+            if file.endswith(".py"):
+                file_name = file.removesuffix(".py")
+                exec("from src import "+ file_name)
+
+    except ImportError as e:
+        Debug("Cannot import src folder", str(e), Constant.TINA4_LOG_ERROR)
 else:
     Debug("Missing src folder", Constant.TINA4_LOG_WARNING)
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "routes"):
     try:
-        from src.routes import *
-    except ImportError:
-        Debug("Cannot import src.routes folder", Constant.TINA4_LOG_ERROR)
+        src_path = root_path + os.sep + "src"+ os.sep + "routes"
+        for file in os.listdir(src_path):
+            if file.endswith(".py"):
+                file_name = file.removesuffix(".py")
+                exec("from src.routes import "+ file_name)
+    except ImportError as e:
+        Debug("Cannot import src.routes folder", str(e), Constant.TINA4_LOG_ERROR)
 else:
     Debug("Missing src/routes folder", Constant.TINA4_LOG_WARNING)
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
     try:
-        from src.app import *
-    except ImportError:
-        Debug("Cannot import src.app folder", Constant.TINA4_LOG_ERROR)
+        src_path = root_path + os.sep + "src"+ os.sep + "app"
+        for file in os.listdir(src_path):
+            if file.endswith(".py"):
+                file_name = file.removesuffix(".py")
+                exec("from src.app import "+ file_name)
+    except ImportError as e:
+        Debug("Cannot import src.app folder", str(e), Constant.TINA4_LOG_ERROR)
 else:
     Debug("Missing src/app folder", Constant.TINA4_LOG_WARNING)
 

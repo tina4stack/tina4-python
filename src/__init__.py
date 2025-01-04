@@ -4,12 +4,11 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 import sys
-from codecs import replace_errors
-from idlelib.rpc import response_queue
-
-
+from datetime import datetime
 from src.app.MiddleWare import MiddleWare
+from src.orm.Log import Log
 from tina4_python import Migration, tina4_auth
+from tina4_python.ORM import orm
 from tina4_python.Migration import migrate
 from tina4_python.Template import Template
 from tina4_python.Debug import Debug
@@ -20,6 +19,18 @@ from tina4_python.Swagger import description, secure, summary, example, tags, pa
 
 dba = Database("sqlite3:test.db", "username", "password")
 migrate(dba)
+orm(dba)
+
+log = Log()
+
+log.id = 1
+log.description = "Tina4"
+log.log_data = "OK"
+log.date_created = datetime.now()
+
+
+print(log.to_dict())
+print(log.to_json())
 
 @get("/some/page")
 async def some_page(request, response):
