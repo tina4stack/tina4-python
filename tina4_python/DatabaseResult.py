@@ -36,7 +36,7 @@ class DatabaseResult:
                 json_record = {}
                 for key in record:
                     if isinstance(record[key], Decimal):
-                        json_record[key] = str(record[key])
+                        json_record[key] = float(record[key])
                     elif isinstance(record[key], datetime.datetime):
                         json_record[key] = record[key].isoformat()
                     elif isinstance(record[key], bytes):
