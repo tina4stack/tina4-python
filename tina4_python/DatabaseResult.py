@@ -7,6 +7,7 @@
 import base64
 import json
 import datetime
+from decimal import Decimal
 
 
 class DatabaseResult:
@@ -34,7 +35,9 @@ class DatabaseResult:
             for record in self.records:
                 json_record = {}
                 for key in record:
-                    if isinstance(record[key], datetime.datetime):
+                    if isinstance(record[key], Decimal):
+                        json_record[key] = str(record[key])
+                    elif isinstance(record[key], datetime.datetime):
                         json_record[key] = record[key].isoformat()
                     elif isinstance(record[key], bytes):
                         json_record[key] = base64.b64encode(record[key]).decode('utf-8')
@@ -54,6 +57,7 @@ class DatabaseResult:
         return json.dumps(self.to_array())
 
     def __getitem__(self, item):
+        print('ITEM', item)
         if item < len(self.records):
             return self.records[item]
         else:
@@ -61,3 +65,4 @@ class DatabaseResult:
 
     def __str__(self):
         return self.to_json()
+

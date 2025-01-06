@@ -48,10 +48,10 @@ def test_database_execute():
 
     if "mysql" in dba_type:
         result = dba.execute(
-            "create table if not exists test_record(id integer not null auto_increment, name varchar(200), image longblob, date_created timestamp default CURRENT_TIMESTAMP,  primary key (id))")
+            "create table if not exists test_record(id integer not null auto_increment, name varchar(200), image longblob, date_created timestamp default CURRENT_TIMESTAMP,  age numeric (10,2) default 0.00, primary key (id))")
     else:
         result = dba.execute(
-            "create table if not exists test_record(id integer not null, name varchar(200), image blob, date_created timestamp default CURRENT_TIMESTAMP, primary key (id))")
+            "create table if not exists test_record(id integer not null, name varchar(200), image blob, date_created timestamp default CURRENT_TIMESTAMP, age numeric (10,2) default 0.00, primary key (id))")
     assert result.error is None
     result = dba.execute_many("insert into test_record (id, name) values (?, ?)",
                               [[5, "Hello1"], [6, "Hello2"], [7, "Hello3"]])

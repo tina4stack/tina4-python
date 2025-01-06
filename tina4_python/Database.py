@@ -8,6 +8,7 @@ import base64
 import importlib
 import datetime
 import json
+from decimal import Decimal
 
 from tina4_python import Debug, Constant
 from tina4_python.DatabaseResult import DatabaseResult
