@@ -5,6 +5,7 @@ import ast
 import json
 import os
 import tina4_python
+from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.Debug import Debug
 
 
@@ -28,6 +29,10 @@ class BaseField:
     default_value = None
     column_name = None
     auto_increment = False
+    value = None
+
+    def __str__(self):
+        return str(self.value)
 
     def __init__(self, column_name=None, primary_key=False, default_value=None, auto_increment=False):
         self.primary_key = primary_key
@@ -53,23 +58,32 @@ class DateTimeField(BaseField):
 
 class IntegerField(BaseField):
     column_type = int
+    default_value = 0
 
 class NumericField(BaseField):
     column_type = float
+    default_value = 0.00
 
 class StringField(BaseField):
     column_type = str
+    default_value = ""
 
 class TextField(BaseField):
     column_type = str
+    default_value = ""
 
 class BlobField(BaseField):
     column_type = bytes
+    default_value = None
 
 class ForeignKeyField:
     field_type = None
     references_table = None
     references_column = None
+    primary_key = False
+    foreign_key = True
+    value = None
+    default_value = None
 
     def __init__(self, field_type=BaseField, references_table=None):
         self.field_type = field_type
@@ -88,10 +102,20 @@ def json_serialize(obj):
 
 class ORM:
     __table_name__ = None
-    __primary_key__ = "id"
     __dba__ = None
+    __field_definitions__ = {}
 
     def __init__(self, init_object=None, table_name=None):
+        # save the initial declarations
+        counter = 0
+        for key in dir(self):
+            if not key.startswith('__') and not key.startswith('_') and key not in ['save', 'load', 'delete', 'to_json', 'to_dict']:
+                self.__field_definitions__[key] = getattr(self, key)
+                counter += 1
+
+        if counter == 0:
+            self.__field_definitions__["id"] = IntegerField(default_value=0, auto_increment=True, primary_key=True)
+
         class_name = self.__class__.__name__
         if self.__table_name__ is None:
             if table_name is None:
@@ -99,29 +123,95 @@ class ORM:
             else:
                 self.__table_name__ = table_name.lower()
         if init_object is not None:
-            self.populate_orm(init_object)
-        print(self.__dba__, self.__table_name__, self.__primary_key__)
+            self.__populate_orm(init_object)
+        print(self.__dba__, self.__table_name__)
 
-    def populate_orm(self, init_object):
-        print("Populating ORM", init_object)
-        pass
+    def __populate_orm(self, init_object):
+        if isinstance(init_object, str):
+            init_object = json.loads(init_object)
+
+        for key,value in init_object.items():
+            if key in self.__field_definitions__:
+                field_value = self.__field_definitions__[key]
+                field_value.value = value
+                setattr(self, key, field_value)
+
+    def __get_primary_keys(self):
+        primary_keys = []
+        for key,value in self.__field_definitions__.items():
+            if value.primary_key:
+                primary_keys.append(key)
+
+        return primary_keys
 
     def to_json(self):
+
         return json.dumps(self.__dict__, default=json_serialize)
 
     def to_dict(self):
-        return self.__dict__
+        data = {}
+        for key, value in self.__field_definitions__.items():
+            print ("DEFINITION", key, getattr(self, key), type(getattr(self, key)))
+            if isinstance(value, IntegerField) or isinstance(value, DateTimeField) or isinstance(value, BlobField) or isinstance(value, TextField) or isinstance(value, StringField):
+
+                # print ("HERE", value.value)
+                if value.value is not None:
+                    data[key] = value.value
+                else:
+                    data[key] = value.default_value
+
+            else:
+                print('OK', key , getattr(self, key))
+                data[key] = getattr(self, key)
+
+        return data
 
     def __str__(self):
         return self.to_json()
 
     def load(self, query="", params=[]):
+        if query == "":
+            sql = f"select * from {self.__table_name__} where "
+            primary_keys = self.__get_primary_keys()
+            values = self.to_dict()
+            counter = 0
+            for key in primary_keys:
+                if counter > 0:
+                    sql += " and "
+                sql += key +" = '"+str(values[key])+"'"
+                counter += 1
+        else:
+            sql = f"select * from {self.__table_name__} where {query}"
 
-        pass
+        if self.__dba__ is not None:
+            record = self.__dba__.fetch_one(sql, params)
+            try:
+                if record:
+                    for key, value in record.items():
+                        if key in self.__field_definitions__:
+                            field_value = self.__field_definitions__[key]
+                            field_value.value = value
+                            setattr(self, key, field_value)
+
+            except Exception as e:
+                Debug ("ORM Load Error", str(e), TINA4_LOG_ERROR)
+        else:
+            Debug("Database not initialized", TINA4_LOG_ERROR)
+            return False
 
     def save(self):
         # check if record exists
+        values = self.to_dict()
+        primary_keys = self.__get_primary_keys()
+        sql = "select count(*) as count_records from "+self.__table_name__+" where "
+        counter = 0
+        for key in primary_keys:
+            if counter > 0:
+                sql += " and "
+            sql += key +" = '"+str(values[key])+"'"
+            counter += 1
 
+        print("SQL", sql, values)
         # save or update record
 
         return False

@@ -17,7 +17,7 @@ from tina4_python.Router import post, middleware
 from tina4_python.Database import Database
 from tina4_python.Swagger import description, secure, summary, example, tags, params
 
-dba = Database("sqlite3:test.db", "username", "password")
+dba = Database("sqlite3:test2.db", "username", "password")
 migrate(dba)
 orm(dba)
 
@@ -27,9 +27,22 @@ log.id = 1
 log.description = "Tina4"
 log.log_data = "OK"
 log.date_created = datetime.now()
+log.user_id = 10
+
+log.save()
+
+log.load()
+
+print("LOG", log.__field_definitions__)
 
 
-print(log.to_dict())
+
+log1 = Log('{"id": 1, "description": "Tina4 A"}')
+
+log1.load("id = ?", [2])
+
+
+print(log.to_dict(), log1.to_dict())
 print(log.to_json())
 
 @get("/some/page")
