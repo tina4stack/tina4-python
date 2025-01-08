@@ -28,3 +28,5 @@
 /tests/app.py
 /test.db
 /logs/
+/migrations/__test_user.sql
+/migrations/__test_user_item.sql

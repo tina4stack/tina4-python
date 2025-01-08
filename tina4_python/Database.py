@@ -5,6 +5,7 @@
 #
 # flake8: noqa: E501
 import base64
+import sys
 import importlib
 import datetime
 import json
@@ -17,8 +18,11 @@ from tina4_python.DatabaseResult import DatabaseResult
 class Database:
     SQLITE = "sqlite3"
     FIREBIRD = "firebird.driver"
+    FIREBIRD_INSTALL = "pip install firebird-driver or poerty add firebird-driver"
     MYSQL = "mysql.connector"
-    POSTGRES = "postgres"
+    MYSQL_INSTALL = "pip install mysql-connector-python or poetry add mysql-connector-python"
+    POSTGRES = "psycopg2"
+    POSTGRES_INSTALL = "pip install psycopg2-binary or poetry add psycopg2-binary"
 
     def __init__(self, _connection_string, _username="", _password=""):
         """
@@ -28,8 +32,24 @@ class Database:
         # split out the connection string
         # driver:host/port:schema/path
 
+
         params = _connection_string.split(":", 1)
-        self.database_module = importlib.import_module(params[0])
+
+        try:
+            self.database_module = importlib.import_module(params[0])
+        except Exception as e:
+            install_message = "What driver are we working with?"
+            if params[0] == Database.SQLITE:
+                install_message = "Your python is missing the sqlite3 module, please reinstall or update"
+            elif params[0] == Database.MYSQL:
+                install_message = "Your python is missing the mysql module, please install with "+Database.MYSQL_INSTALL
+            elif params[0] == Database.POSTGRES:
+                install_message = "Your python is missing the postgres module, please install with "+Database.POSTGRES_INSTALL
+            elif params[0] == Database.FIREBIRD:
+                install_message = "Your python is missing the firebird module, please install with "+Database.FIREBIRD_INSTALL
+
+            sys.exit("Could not load database driver for "+params[0]+"\n"+install_message)
+
 
         self.database_engine = params[0]
         self.database_path = params[1]
@@ -40,7 +60,7 @@ class Database:
             self.dba = self.database_module.connect(self.database_path)
             self.port = None
             self.host = None
-        elif self.database_engine == self.FIREBIRD:
+        else:
             # <host>/<port>:<file>
             temp_params = self.database_path.split(":", 1)
             host_port = temp_params[0].split("/", 1)
@@ -52,32 +72,65 @@ class Database:
 
             self.database_path = temp_params[1]
 
-            self.dba = self.database_module.connect(
-                self.host + "/" + str(self.port) + ":" + self.database_path,
-                user=self.username,
-                password=self.password
-            )
-        else:
-            temp_params = self.database_path.split(":", 1)
-            host_port = temp_params[0].split("/", 1)
-            self.host = host_port[0]
-            if len(host_port) > 1:
-                self.port = int(host_port[1])
+            if self.database_engine == self.FIREBIRD:
+                self.dba = self.database_module.connect(
+                    self.host + "/" + str(self.port) + ":" + self.database_path,
+                    user=self.username,
+                    password=self.password
+                )
+            elif self.database_engine == self.MYSQL:
+                self.dba = self.database_module.connect(
+                    database=self.database_path,
+                    port=self.port,
+                    host=self.host,
+                    user=self.username,
+                    password=self.password
+                )
+            elif self.database_engine == self.POSTGRES:
+                self.dba = self.database_module.connect(
+                    dbname=self.database_path,
+                    port=self.port,
+                    host=self.host,
+                    user=self.username,
+                    password=self.password
+                )
+
             else:
-                self.port = 0
-
-            self.database_path = temp_params[1]
-
-            self.dba = self.database_module.connect(
-                database=self.database_path,
-                port=self.port,
-                host=self.host,
-                user=self.username,
-                password=self.password
-            )
+                sys.exit("Could not load database driver for "+params[0])
 
         Debug("DATABASE:", self.database_module, self.host, self.port, self.database_path, self.username,
               Constant.TINA4_LOG_DEBUG)
+
+    def table_exists(self, table_name):
+        """
+        Checks if a table exists in the database
+        :param table_name:
+        :return:
+        """
+
+        sql = ""
+        if self.database_engine == self.SQLITE:
+            sql = "SELECT count(*) as count_table FROM sqlite_master WHERE type='table' AND name='"+table_name+"'"
+        elif self.database_engine == self.MYSQL:
+            sql = "SELECT count(*) as count_table FROM information_schema.tables WHERE table_schema = '"+self.database_path+"' AND table_name = '"+table_name+"'"
+        elif self.database_engine == self.POSTGRES:
+            sql = """SELECT count(*) as count_table FROM pg_catalog.pg_class c
+                        JOIN   pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                        WHERE  c.relname = '"""+table_name+"""'
+                        AND    c.relkind = 'r'        """
+        elif self.database_engine == self.FIREBIRD:
+            sql = "SELECT count(*) as count_table FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = '"+table_name+"'"
+        else:
+            return False
+
+        record = self.fetch_one(sql)
+        if record:
+            if record["count_table"] > 0:
+                return True
+            else:
+                return False
+        else:
+            return False
 
     def database_exists(self, database_name):
 
@@ -108,6 +161,11 @@ class Database:
         return DatabaseResult(rows, columns, None)
 
     def is_json(self, myjson):
+        """
+        Checks if a JSON string is valid
+        :param myjson:
+        :return:
+        """
         try:
             json.loads(myjson)
         except Exception as e:
@@ -126,8 +184,10 @@ class Database:
         # modify the select statement for limit and skip
         if self.database_engine == self.FIREBIRD:
             sql = f"select first {limit} skip {skip} * from ({sql}) as t"
-        elif self.database_engine == self.SQLITE:
+        elif self.database_engine == self.SQLITE or self.database_engine == self.MYSQL:
             sql = f"select * from ({sql}) as t limit {skip},{limit}"
+        elif self.database_engine == self.POSTGRES:
+            sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
         else:
             sql = f"select * from ({sql}) as t limit {skip},{limit}"
 
@@ -137,7 +197,7 @@ class Database:
             cursor.execute(sql, params)
             return self.get_database_result(cursor)
         except Exception as e:
-            Debug("FETCH ERROR:", sql, "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
+            Debug("FETCH ERROR:",  sql, str(e), "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
             return DatabaseResult(None, [], str(e))
 
     def fetch_one(self, sql, params=[], skip=0):
@@ -172,8 +232,7 @@ class Database:
         :param sql:
         :return:
         """
-
-        if self.database_engine == self.MYSQL:
+        if self.database_engine == self.MYSQL or self.database_engine == self.POSTGRES:
             return sql.replace("?", "%s")
         else:
             return sql.replace("%s", "?")
@@ -224,13 +283,19 @@ class Database:
             return DatabaseResult(None, [], str(e))
 
     def start_transaction(self):
+        """
+        Starts a transaction
+        :return:
+        """
         try:
-            if self.database_engine in (self.SQLITE, self.POSTGRES):
+            if self.database_engine == self.SQLITE:
                 self.dba.execute("BEGIN TRANSACTION")
             elif self.database_engine == self.FIREBIRD:
                 self.dba.begin()
             elif self.database_engine == self.MYSQL:
                 self.dba.start_transaction()
+            elif self.database_engine == self.POSTGRES:
+                self.dba.rollback() #start fresh
             else:
                 Debug("START TRANSACTION ERROR:", "Database engine unrecognised/not supported",
                       Constant.TINA4_LOG_ERROR)
@@ -238,18 +303,30 @@ class Database:
             Debug("START TRANSACTION ERROR:", str(e), Constant.TINA4_LOG_ERROR)
 
     def commit(self):
+        """
+        Commit transaction
+        :return:
+        """
         try:
             self.dba.commit()
         except Exception as e:
             Debug("COMMIT TRANSACTION ERROR:", str(e), Constant.TINA4_LOG_ERROR)
 
     def rollback(self):
+        """
+        Rollback transaction
+        :return:
+        """
         try:
             self.dba.rollback()
         except Exception as e:
             Debug("ROLLBACK TRANSACTION ERROR:", str(e), Constant.TINA4_LOG_ERROR)
 
     def close(self):
+        """
+        Close database connection
+        :return:
+        """
         try:
             self.dba.close()
         except Exception as e:
@@ -261,7 +338,6 @@ class Database:
         :param record:
         :return:
         """
-
         for key in record:
             if isinstance(record[key], list) or isinstance(record[key], dict):
                 record[key] = json.dumps(record[key])
@@ -289,10 +365,11 @@ class Database:
 
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
-            if self.database_engine == self.FIREBIRD or self.database_engine == self.SQLITE:
+            if self.database_engine == self.FIREBIRD or self.database_engine == self.SQLITE or self.database_engine == self.POSTGRES:
                 sql += f" returning ({primary_key})"
 
             records = DatabaseResult()
+
             for record in data:
                 record = self.sanitize(record)
                 result = self.execute(sql, list(record.values()))
@@ -313,7 +390,6 @@ class Database:
         :param primary_key:
         :param filter:
         """
-
         if self.database_engine in (self.SQLITE, self.FIREBIRD):
             placeholder = "?"
         elif self.database_engine in (self.MYSQL, self.POSTGRES):

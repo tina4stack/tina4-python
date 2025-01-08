@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "tina4-python"
-version = "0.2.37"
+version = "0.2.38"
 description = "Tina4Python - This is not another framework for Python"
 authors = ["Andre van Zuydam <andrevanzuydam@gmail.com>"]
 readme = "README.md"
@@ -24,6 +24,8 @@ pytest = "^7.2.0"
 jurigged = "^0.5.3"
 safety = "^3.2.8"
 ruff = "^0.7.0"
+mysql-connector-python = "^9.1.0"
+psycopg2-binary = "^2.9.10"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

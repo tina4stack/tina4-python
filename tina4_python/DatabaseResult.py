@@ -39,6 +39,8 @@ class DatabaseResult:
                         json_record[key] = float(record[key])
                     elif isinstance(record[key], datetime.datetime):
                         json_record[key] = record[key].isoformat()
+                    elif isinstance(record[key], memoryview):
+                        json_record[key] = base64.b64encode(record[key].tobytes()).decode('utf-8')
                     elif isinstance(record[key], bytes):
                         json_record[key] = base64.b64encode(record[key]).decode('utf-8')
                     else:
@@ -57,7 +59,6 @@ class DatabaseResult:
         return json.dumps(self.to_array())
 
     def __getitem__(self, item):
-        print('ITEM', item)
         if item < len(self.records):
             return self.records[item]
         else:

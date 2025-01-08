@@ -19,7 +19,9 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
     :param migration_folder: Alternative folder for migrations
     :return:
     """
-
+    if dba.database_engine == dba.POSTGRES:
+        dba.execute(
+            "create table if not exists tina4_migration(id serial primary key, description varchar(200) default '', content text, error_message text, passed integer default 0)")
     if dba.database_engine == dba.MYSQL:
         dba.execute(
             "create table if not exists tina4_migration(id integer not null auto_increment, description varchar(200) default '', content text, error_message text, passed integer default 0, primary key(id))")
