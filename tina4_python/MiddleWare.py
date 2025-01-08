@@ -1,5 +1,9 @@
-
-
+#
+# Tina4 - This is not a 4ramework.
+# Copy-right 2007 - current Tina4
+# License: MIT https://opensource.org/licenses/MIT
+#
+# flake8: noqa: E501
 class MiddleWare:
     def __init__(self, middleware_class):
         """
