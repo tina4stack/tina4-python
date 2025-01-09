@@ -18,7 +18,7 @@ from tina4_python.DatabaseResult import DatabaseResult
 class Database:
     SQLITE = "sqlite3"
     FIREBIRD = "firebird.driver"
-    FIREBIRD_INSTALL = "pip install firebird-driver or poerty add firebird-driver"
+    FIREBIRD_INSTALL = "pip install firebird-driver or poetry add firebird-driver"
     MYSQL = "mysql.connector"
     MYSQL_INSTALL = "pip install mysql-connector-python or poetry add mysql-connector-python"
     POSTGRES = "psycopg2"
@@ -49,7 +49,6 @@ class Database:
                 install_message = "Your python is missing the firebird module, please install with "+Database.FIREBIRD_INSTALL
 
             sys.exit("Could not load database driver for "+params[0]+"\n"+install_message)
-
 
         self.database_engine = params[0]
         self.database_path = params[1]
@@ -386,8 +385,6 @@ class Database:
         """
         Delete data based on table name and filter provided - single or multiple filters
         :param table_name:
-        :param records:
-        :param primary_key:
         :param filter:
         """
         if self.database_engine in (self.SQLITE, self.FIREBIRD):

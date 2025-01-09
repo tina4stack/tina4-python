@@ -21,6 +21,7 @@ dba_type = "sqlite3:test3.db"
 dba_type = "mysql.connector:localhost/33066:test"
 user_name = "root"
 password = "secret"
+dba_type = "sqlite3:test3.db"
 
 def test_route_match():
     assert Router.match('/url', '/url') == True, "Test if route matches"
@@ -206,6 +207,7 @@ def test_orm():
     dba = database_connect(dba_type, user_name, password)
 
     dba.execute("delete from test_user")
+    dba.execute("delete from test_user_item")
     dba.commit()
 
     class TestUser(ORM):
@@ -239,11 +241,16 @@ def test_orm():
     counter = 0
     for item_value in ["Item 1", "Item 2"]:
         item = TestUserItem()
-        item.id = counter+1
+        # item.id = counter+1
         item.name = item_value
         item.user_id = user.id
         item.save()
         counter += 1
 
-    assert user.__field_definitions__["id"] == 1
+    user1 = TestUser()
+    user1.load("id = ?", [1])
+
+
+    assert user1.__field_definitions__["id"] == 1
+    assert user1.id == 1
     dba.close()

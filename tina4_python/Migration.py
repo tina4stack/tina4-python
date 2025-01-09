@@ -5,6 +5,8 @@
 #
 # flake8: noqa: E501
 import os
+import sys
+
 from tina4_python import ShellColors
 from tina4_python import Constant
 from tina4_python.Debug import Debug
@@ -78,6 +80,7 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                             "insert into tina4_migration (description, content, passed, error_message) values (?, ?, 0, ?) ",
                             (file, file_contents, str(error_message)))
                         dba.commit()
+                        sys.exit(1)
             except Exception as e:
                 dba.execute(
                     "insert into tina4_migration (description, content, passed, error_message) values (?, ?, 0, ?) ",
@@ -85,3 +88,4 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                 dba.commit()
 
                 Debug("Migration: Failed to run", file, e, Constant.TINA4_LOG_ERROR)
+                sys.exit(1)
