@@ -12,6 +12,7 @@ from tina4_python.ORM import ORM, IntegerField, StringField, DateTimeField, Fore
 
 global dba_type
 # docker run --name my-mysql -e MYSQL_ROOT_PASSWORD=secret -p 33066:3306 -d mysql:latest
+# docker run --name my-firebird -e ISC_PASSWORD=masterkey  -e FIREBIRD_DATABASE=TEST.FDB -p 30500:3050 -d jacobalberty/firebird:latest
 dba_type = "mysql.connector:localhost/33066:test"
 
 dba_type = "psycopg2:localhost/5432:test"
@@ -22,6 +23,11 @@ dba_type = "mysql.connector:localhost/33066:test"
 user_name = "root"
 password = "secret"
 dba_type = "sqlite3:test3.db"
+
+dba_type = "firebird.driver:localhost/30500:/firebird/data/TEST.FDB"
+user_name = "sysdba"
+password = "masterkey"
+
 
 def test_route_match():
     assert Router.match('/url', '/url') == True, "Test if route matches"
@@ -55,9 +61,16 @@ def test_database_posgresql():
 
 def test_database_execute():
     dba = database_connect(dba_type, user_name, password)
-    result = dba.execute("drop table if exists test_record")
-    assert result.error is None
-    dba.commit()
+    if "firebird" in dba_type:
+        if dba.table_exists("test_record"):
+            result = dba.execute("drop table test_record")
+            dba.commit()
+            assert result.error is None
+    else:
+        result = dba.execute("drop table if exists test_record")
+        assert result.error is None
+        dba.commit()
+
     result = dba.execute("insert into table with something")
     assert result.error != "", "There should be an error"
     dba.commit()
@@ -68,10 +81,13 @@ def test_database_execute():
     elif "psycopg2" in dba_type:
         result = dba.execute(
             "create table if not exists test_record(id serial primary key, name varchar(200), image bytea, date_created timestamp default CURRENT_TIMESTAMP,  age numeric (10,2) default 0.00)")
+    elif "firebird" in dba_type:
+        result = dba.execute(
+            "create table test_record(id integer not null, name varchar(200), image blob sub_type 0, date_created timestamp default 'now', age numeric (10,2) default 0.00, primary key (id))\n")
     else:
         result = dba.execute(
             "create table if not exists test_record(id integer not null, name varchar(200), image blob, date_created timestamp default CURRENT_TIMESTAMP, age numeric (10,2) default 0.00, primary key (id))\n")
-
+    dba.commit()
     assert result.error is None
     result = dba.execute_many("insert into test_record (id, name) values (?, ?)",
                               [[1, "Hello1"], [2, "Hello2"], [3, "Hello3"]])
@@ -206,12 +222,13 @@ def test_database_transactions():
 def test_orm():
     dba = database_connect(dba_type, user_name, password)
 
-    dba.execute("delete from test_user")
     dba.execute("delete from test_user_item")
     dba.commit()
+    dba.execute("delete from test_user")
+    dba.commit()
+
 
     class TestUser(ORM):
-        __table_name__ = "test_user"
         id = IntegerField(auto_increment=True, primary_key=True, default_value=1)
         first_name = StringField()
         last_name = StringField()
@@ -229,10 +246,14 @@ def test_orm():
     # attach the database connection
     orm(dba)
 
+    print("START")
+
     user = TestUser()
     user.first_name = "First Name"
     user.last_name = "Last Name"
     user.save()
+
+    print("END")
 
     assert user.id == 1
 
@@ -241,16 +262,22 @@ def test_orm():
     counter = 0
     for item_value in ["Item 1", "Item 2"]:
         item = TestUserItem()
-        # item.id = counter+1
+        #item.id = counter+1
         item.name = item_value
         item.user_id = user.id
         item.save()
+
         counter += 1
 
     user1 = TestUser()
     user1.load("id = ?", [1])
 
-
     assert user1.__field_definitions__["id"] == 1
     assert user1.id == 1
+
+    sql = "select * from test_user_item"
+    result = dba.fetch(sql)
+
+    assert result.count == 2
+
     dba.close()

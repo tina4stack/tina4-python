@@ -12,6 +12,7 @@ import json
 from decimal import Decimal
 
 from tina4_python import Debug, Constant
+from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.DatabaseResult import DatabaseResult
 
 
@@ -118,7 +119,7 @@ class Database:
                         WHERE  c.relname = '"""+table_name+"""'
                         AND    c.relkind = 'r'        """
         elif self.database_engine == self.FIREBIRD:
-            sql = "SELECT count(*) as count_table FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = '"+table_name+"'"
+            sql = "SELECT count(*) as count_table FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = upper('"+table_name+"')"
         else:
             return False
 
@@ -130,6 +131,19 @@ class Database:
                 return False
         else:
             return False
+
+    def get_next_id(self, table_name, column_name="id"):
+        try:
+            sql = "select max(" + column_name + ") as \"max_id\" from " + table_name
+            record = self.fetch_one(sql)
+            if record["max_id"] is None:
+                record = {"max_id": 0}
+
+            next_id = int(record["max_id"]) + 1
+            return next_id
+        except Exception as e:
+            Debug("Get next id", str(e), TINA4_LOG_ERROR)
+            return None
 
     def database_exists(self, database_name):
 

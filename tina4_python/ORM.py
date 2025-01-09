@@ -303,26 +303,20 @@ class ORM:
 
     def to_dict(self):
         data = {}
+        # print(self.__field_definitions__.items(), self.__dict__)
         for key, value in self.__field_definitions__.items():
-            value = getattr(self, key)
-            if isinstance(value, ForeignKeyField) or isinstance(value, IntegerField) or isinstance(value,
-                                                                                                   DateTimeField) or isinstance(
-                    value, BlobField) or isinstance(value, TextField) or isinstance(value, StringField):
-                if value.value is not None:
-                    data[key] = value.value
+            current_value = getattr(self, key)
+            if (isinstance(current_value, ForeignKeyField) or isinstance(current_value, IntegerField) or isinstance(current_value,DateTimeField)
+                    or isinstance(current_value, BlobField) or isinstance(current_value, TextField) or isinstance(current_value, StringField)):
+                if current_value.value is not None:
+                    data[key] = current_value.value
                 else:
                     if value.auto_increment:
-                        # get the max value from table add one
-                        sql = "select max(" + value.column_name + ") as max_id from " + self.__table_name__
-                        record = self.__dba__.fetch_one(sql)
-                        if record["max_id"] is None:
-                            record = {"max_id": 0}
-                        data[key] = int(record["max_id"]) + 1
-                        setattr(self, key, data[key])
+                        data[key] = self.__dba__.get_next_id(table_name=self.__table_name__, column_name=value.column_name)
                     else:
-                        data[key] = value.default_value
+                        data[key] = current_value.default_value
             else:
-                data[key] = value
+                data[key] = current_value
         return data
 
     def __str__(self):
@@ -388,34 +382,32 @@ class ORM:
         """
         if not self.__table_exists:
             Debug("ORM: Save Error - Table", self.__table_name__, "does not exist", TINA4_LOG_ERROR)
-            print(self.__create_table__(self.__table_name__))
             return False
         # check if record exists
-        values = self.to_dict()
+        data = self.to_dict()
         primary_keys = self.__get_primary_keys()
-        sql = "select count(*) as count_records from " + self.__table_name__ + " where "
+        sql = "select count(*) as \"count_records\" from " + self.__table_name__ + " where "
         counter = 0
         input_params = []
         for key in primary_keys:
             if counter > 0:
                 sql += " and "
             sql += key + " = ?"
-            input_params.append(values[key])
+            input_params.append(data[key])
             counter += 1
 
         record = self.__dba__.fetch_one(sql, input_params)
 
-        data = self.to_dict()
         if record["count_records"] == 0:
             result = self.__dba__.insert(self.__table_name__, data)
         else:
             result = self.__dba__.update(self.__table_name__, data)
 
         self.__dba__.commit()
+
         if result:
             self.load()
 
-        print(result)
         return result
 
     def delete(self, query="", params=[]):

@@ -27,6 +27,10 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
     if dba.database_engine == dba.MYSQL:
         dba.execute(
             "create table if not exists tina4_migration(id integer not null auto_increment, description varchar(200) default '', content text, error_message text, passed integer default 0, primary key(id))")
+    if dba.database_engine == dba.FIREBIRD:
+        if not dba.table_exists("tina4_migration"):
+            dba.execute(
+                "create table tina4_migration(id integer not null, description varchar(200) default '', content blob sub_type text, error_message blob sub_type text, passed integer default 0, primary key(id))")
     else:
         dba.execute(
             "create table if not exists tina4_migration(id integer not null, description varchar(200) default '', content blob, error_message blob, passed integer default 0, primary key(id))")
@@ -34,6 +38,7 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
 
     Debug(ShellColors.bright_yellow, "Migration:  Found ", tina4_python.root_path + os.sep + migration_folder, ShellColors.end, Constant.TINA4_LOG_INFO)
     dir_list = os.listdir(tina4_python.root_path + os.sep + migration_folder)
+    dir_list.sort()
 
     for file in dir_list:
         if '.sql' in file:
@@ -69,22 +74,25 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                         # passed print(color + f"{debug_level:5}:"+ShellColors.end, "", end="")
                         Debug(ShellColors.bright_yellow,"Migration:", ShellColors.end, ShellColors.bright_green+"PASSED running migration for", file, ShellColors.end, Constant.TINA4_LOG_INFO)
                         dba.commit()
-                        dba.execute("insert into tina4_migration (description, content, passed) values (?, ?, 1) ",
-                                    (file, file_contents))
+                        next_id = dba.get_next_id("tina4_migration")
+                        dba.execute("insert into tina4_migration (id, description, content, passed) values (?, ?, ?, 1) ",
+                                    (next_id, file, file_contents))
                         dba.commit()
                     else:
                         # did not pass
                         Debug(ShellColors.bright_yellow, "Migration:", ShellColors.end, ShellColors.bright_red+"FAILED running migration for", file, error_message, ShellColors.end, Constant.TINA4_LOG_ERROR)
                         dba.rollback()
+                        next_id = dba.get_next_id("tina4_migration")
                         dba.execute(
-                            "insert into tina4_migration (description, content, passed, error_message) values (?, ?, 0, ?) ",
-                            (file, file_contents, str(error_message)))
+                            "insert into tina4_migration (id, description, content, passed, error_message) values (?, ?, ?, 0, ?) ",
+                            (next_id, file, file_contents, str(error_message)))
                         dba.commit()
                         sys.exit(1)
             except Exception as e:
+                next_id = dba.get_next_id("tina4_migration")
                 dba.execute(
-                    "insert into tina4_migration (description, content, passed, error_message) values (?, ?, 0, ?) ",
-                    (file, file_contents, str(e)))
+                    "insert into tina4_migration (id, description, content, passed, error_message) values (?, ?, ?, 0, ?) ",
+                    (next_id, file, file_contents, str(e)))
                 dba.commit()
 
                 Debug("Migration: Failed to run", file, e, Constant.TINA4_LOG_ERROR)
