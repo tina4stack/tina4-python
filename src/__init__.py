@@ -71,6 +71,17 @@ async def system_roles(request, response):
     print("roles")
 
 
+@get("/session/set")
+async def session_set(request, response):
+    request.session.set("name", "Tina")
+    print("session set")
+
+@get("/session/get")
+async def session_get(request, response):
+    print(request.session.get("name"))
+    print("session set")
+
+
 @middleware(MiddleWare, ["before_and_after"])
 @get("/system/roles/data")
 async def system_roles(request, response):

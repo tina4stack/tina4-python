@@ -6,20 +6,183 @@
 # flake8: noqa: E501
 import os
 from http import cookies
+import sys
+import importlib
 import hashlib
 import tina4_python
 from tina4_python.Debug import Debug
 from tina4_python import Constant
 
+class SessionHandler(object):
+    """
+    Base class for session handling.
+    """
+
+    @staticmethod
+    def load(session, _hash):
+        pass
+
+    @staticmethod
+    def set(session, _key, _value):
+        try:
+            session.session_values[_key] = _value
+            session.save()
+            return True
+        except:
+            return False
+
+    @staticmethod
+    def unset(session, _key):
+        if _key in session.session_values:
+            del session.session_values[_key]
+            session.save()
+            return True
+        else:
+            return False
+
+    @staticmethod
+    def get(session, _key):
+        if _key in session.session_values:
+            return session.session_values[_key]
+        else:
+            return None
+
+    @staticmethod
+    def close(session):
+        pass
+
+    @staticmethod
+    def save(session):
+        pass
+
+class SessionFileHandler(SessionHandler):
+    """
+    Session File Handler
+    """
+    @staticmethod
+    def load(session, _hash):
+        session.session_hash = _hash
+        if os.path.isfile(session.session_path + os.sep + _hash):
+            with open(session.session_path + os.sep + _hash, "r") as file:
+                token = file.read()
+                file.close()
+                if tina4_python.tina4_auth.valid(token):
+                    payload = tina4_python.tina4_auth.get_payload(token)
+                    for key in payload:
+                        if key != "expires":
+                            session.set(key, payload[key])
+                else:
+                    Debug("Session expired, starting a new one", Constant.TINA4_LOG_DEBUG)
+                    session.start(_hash)
+        else:
+            Debug("Cannot load session, starting a new one", Constant.TINA4_LOG_DEBUG)
+            session.start(_hash)
+
+    @staticmethod
+    def close(session):
+        try:
+            if os.path.isfile(session.session_path + os.sep + session.session_hash):
+                os.remove(session.session_path + os.sep + session.session_hash)
+            return True
+        except:
+            return False
+
+    @staticmethod
+    def save(session):
+        try:
+            if not os.path.exists(session.session_path):
+                os.makedirs(session.session_path)
+            token = tina4_python.tina4_auth.get_token(payload_data=session.session_values)
+            with open(session.session_path + os.sep + session.session_hash, "w") as file:
+                file.write(token)
+                file.close()
+                return True
+        except Exception as E:
+            Debug("Session save failure", E, Constant.TINA4_LOG_ERROR)
+            return False
+
+class SessionRedisHandler(SessionHandler):
+
+    @staticmethod
+    def __init_redis():
+        try:
+            redis = importlib.import_module("redis")
+        except Exception as e:
+            Debug("Redis not installed, install with pip install redis or poetry add redis", Constant.TINA4_LOG_ERROR)
+            sys.exit(1)
+
+        redis_instance = redis.Redis(host=os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"), port=os.getenv("TINA4_SESSION_REDIS_HOST",6379), decode_responses=True)
+
+        return redis_instance
+
+    """
+    Session Redis Handler
+    """
+    @staticmethod
+    def load(session, _hash):
+        """
+        Loads the redis session
+        :param session:
+        :param _hash:
+        :return:
+        """
+        try:
+            session.session_hash = _hash
+            r = SessionRedisHandler.__init_redis()
+            token = r.get(_hash)
+            if tina4_python.tina4_auth.valid(token):
+                payload = tina4_python.tina4_auth.get_payload(token)
+                for key in payload:
+                    if key != "expires":
+                        session.set(key, payload[key])
+            else:
+                Debug("Session expired, starting a new one", Constant.TINA4_LOG_DEBUG)
+                session.start(_hash)
+        except:
+            Debug("Redis not available, sessions will fail", Constant.TINA4_LOG_ERROR)
+
+
+    @staticmethod
+    def close(session):
+        """
+        Closes the redis session
+        :param session:
+        :return:
+        """
+        r = SessionRedisHandler.__init_redis()
+        try:
+            r.set(session.session_hash, "")
+            return True
+        except:
+            return False
+
+    @staticmethod
+    def save(session):
+        """
+        Saves the redis session
+        :param session:
+        :return:
+        """
+        r = SessionRedisHandler.__init_redis()
+        try:
+            token = tina4_python.tina4_auth.get_token(payload_data=session.session_values)
+            r.set(session.session_hash, token)
+            return True
+        except Exception as e:
+            Debug("Session save failure", str(e), Constant.TINA4_LOG_ERROR)
+            return False
+
 
 class Session:
 
-    def __init__(self, _default_name="PY_SESS", _default_path="sessions"):
+    def __init__(self, _default_name="PY_SESS", _default_path="sessions", _default_handler="SessionFileHandler"):
         self.session_name = _default_name
         self.cookie = cookies.SimpleCookie()
         self.session_path = _default_path
         self.session_values = {}
         self.session_hash = ""
+        self.default_handler = _default_handler
+        exec("self.default_handler = "+_default_handler)
 
     def start(self, _hash=None):
         # create a file for the session?
@@ -40,22 +203,7 @@ class Session:
         :param _hash:
         :return:
         """
-        self.session_hash = _hash
-        if os.path.isfile(self.session_path + os.sep + _hash):
-            with open(self.session_path + os.sep + _hash, "r") as file:
-                token = file.read()
-                file.close()
-                if tina4_python.tina4_auth.valid(token):
-                    payload = tina4_python.tina4_auth.get_payload(token)
-                    for key in payload:
-                        if key != "expires":
-                            self.set(key, payload[key])
-                else:
-                    Debug("Session expired, starting a new one", Constant.TINA4_LOG_DEBUG)
-                    self.start(_hash)
-        else:
-            Debug("Cannot load session, starting a new one", Constant.TINA4_LOG_DEBUG)
-            self.start(_hash)
+        self.default_handler.load(self, _hash)
 
     def set(self, _key, _value):
         """
@@ -64,9 +212,8 @@ class Session:
         :param _value:
         :return:
         """
-        self.session_values[_key] = _value
-        self.save()
-        return True
+        return self.default_handler.set(self, _key, _value)
+
 
     def unset(self, _key):
         """
@@ -74,12 +221,7 @@ class Session:
         :param _key:
         :return:
         """
-        if _key in self.session_values:
-            del self.session_values[_key]
-            self.save()
-            return True
-        else:
-            return False
+        return self.default_handler.unset(self, _key)
 
     def get(self, _key):
         """
@@ -87,28 +229,19 @@ class Session:
         :param _key:
         :return:
         """
-        if _key in self.session_values:
-            return self.session_values[_key]
-        else:
-            return None
+        return self.default_handler.get(self, _key)
 
     def close(self):
-        if os.path.isfile(self.session_path + os.sep + self.session_hash):
-            os.remove(self.session_path + os.sep + self.session_hash)
+        """
+        Close the session and remove the file or record
+        :return:
+        """
+        return self.default_handler.close(self)
 
     def save(self):
         """
         Saves the session information
         :return:
         """
-        try:
-            if not os.path.exists(self.session_path):
-                os.makedirs(self.session_path)
-            token = tina4_python.tina4_auth.get_token(payload_data=self.session_values)
-            with open(self.session_path + os.sep + self.session_hash, "w") as file:
-                file.write(token)
-                file.close()
-                return True
-        except Exception as E:
-            Debug("Session save failure", E, Constant.TINA4_LOG_ERROR)
-            return False
+        return self.default_handler.save(self)
+

@@ -287,7 +287,9 @@ class Webserver:
 
         # initialize the session
         self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
-                               os.getenv("TINA4_SESSION_FOLDER", tina4_python.root_path + os.sep + "sessions"))
+                               os.getenv("TINA4_SESSION_FOLDER", tina4_python.root_path + os.sep + "sessions"),
+                               os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
+                               )
 
         if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
             self.session.load(self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
