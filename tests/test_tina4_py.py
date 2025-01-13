@@ -27,6 +27,7 @@ dba_type = "sqlite3:test3.db"
 dba_type = "firebird.driver:localhost/30500:/firebird/data/TEST.FDB"
 user_name = "sysdba"
 password = "masterkey"
+dba_type = "sqlite3:test3.db"
 
 
 def test_route_match():
@@ -48,6 +49,7 @@ def test_database_sqlite():
     dba = database_connect(dba_type, user_name, password)
     assert dba.database_engine == dba.SQLITE
 
+
 def test_database_mysql():
     dba_type = "mysql.connector:localhost/33066:test"
     dba = database_connect(dba_type)
@@ -58,6 +60,7 @@ def test_database_posgresql():
     dba_type = "psycopg2:localhost/5432:test"
     dba = database_connect(dba_type, "postgres", "password")
     assert dba.database_engine == dba.POSTGRES
+
 
 def test_database_execute():
     dba = database_connect(dba_type, user_name, password)
@@ -163,7 +166,6 @@ def test_database_bytes_insert():
     dba.commit()
     result = dba.fetch("select * from test_record where id = 2", limit=3)
 
-
     assert isinstance(result.to_json(), object)
     dba.close()
 
@@ -199,7 +201,7 @@ def test_database_transactions():
 
     dba.start_transaction()
 
-    dba.insert("test_record", [{"id":1000, "name": "NEW ONE"}])
+    dba.insert("test_record", [{"id": 1000, "name": "NEW ONE"}])
 
     dba.rollback()
 
@@ -209,7 +211,7 @@ def test_database_transactions():
 
     dba.start_transaction()
 
-    dba.insert("test_record", [{"id":1000, "name": "NEW ONE"}])
+    dba.insert("test_record", [{"id": 1000, "name": "NEW ONE"}])
 
     dba.commit()
 
@@ -219,6 +221,7 @@ def test_database_transactions():
 
     dba.close()
 
+
 def test_orm():
     dba = database_connect(dba_type, user_name, password)
 
@@ -226,7 +229,6 @@ def test_orm():
     dba.commit()
     dba.execute("delete from test_user")
     dba.commit()
-
 
     class TestUser(ORM):
         id = IntegerField(auto_increment=True, primary_key=True, default_value=1)

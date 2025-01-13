@@ -111,7 +111,7 @@ class SessionRedisHandler(SessionHandler):
             Debug("Redis not installed, install with pip install redis or poetry add redis", Constant.TINA4_LOG_ERROR)
             sys.exit(1)
 
-        redis_instance = redis.Redis(host=os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"), port=os.getenv("TINA4_SESSION_REDIS_HOST",6379), decode_responses=True)
+        redis_instance = redis.Redis(host=os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"), port=os.getenv("TINA4_SESSION_REDIS_PORT",6379), decode_responses=True)
 
         return redis_instance
 

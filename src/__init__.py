@@ -30,6 +30,7 @@ async def some_page(request, response):
     return response(html)
 
 @post("/some/page")
+@secure()
 async def some_page_post(request, response):
     print(request.params)
     print(request.body)
