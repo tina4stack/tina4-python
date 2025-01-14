@@ -75,11 +75,12 @@ async def system_roles(request, response):
 @get("/session/set")
 async def session_set(request, response):
     request.session.set("name", "Tina")
+    request.session.set("user", {"name": "Tina", "email": "test@email.com"})
     print("session set")
 
 @get("/session/get")
 async def session_get(request, response):
-    print(request.session.get("name"))
+    print(request.session.get("name"), request.session.get("user"))
     print("session set")
 
 

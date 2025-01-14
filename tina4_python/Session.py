@@ -5,6 +5,7 @@
 #
 # flake8: noqa: E501
 import os
+import json
 from http import cookies
 import sys
 import importlib
@@ -245,3 +246,5 @@ class Session:
         """
         return self.default_handler.save(self)
 
+    def __str__(self):
+        return json.dumps(self.session_values)

@@ -95,7 +95,7 @@ class Webserver:
 
     async def get_response(self, method):
         """
-
+        Get response
         :param method: GET, POST, PATCH, DELETE, PUT
         :return:
         """

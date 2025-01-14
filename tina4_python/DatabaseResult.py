@@ -27,6 +27,10 @@ class DatabaseResult:
         self.error = _error
 
     def to_array(self):
+        """
+        Creates an array or list of the items
+        :return:
+        """
         if self.error is not None:
             return {"error": self.error}
         elif len(self.records) > 0:
@@ -37,7 +41,7 @@ class DatabaseResult:
                 for key in record:
                     if isinstance(record[key], Decimal):
                         json_record[key] = float(record[key])
-                    elif isinstance(record[key], datetime.datetime):
+                    elif isinstance(record[key], (datetime.date, datetime.datetime)):
                         json_record[key] = record[key].isoformat()
                     elif isinstance(record[key], memoryview):
                         json_record[key] = base64.b64encode(record[key].tobytes()).decode('utf-8')

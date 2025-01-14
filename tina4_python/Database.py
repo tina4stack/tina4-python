@@ -227,6 +227,8 @@ class Database:
         if record.error is None and record.count == 1:
             data = {}
             for key in record.records[0]:
+                if isinstance(record.records[0][key], (datetime.date, datetime.datetime)):
+                    data[key] = record.records[0][key].isoformat()
                 if isinstance(record.records[0][key], bytes):
                     data[key] = base64.b64encode(record.records[0][key]).decode('utf-8')
                 else:
@@ -446,7 +448,6 @@ class Database:
         :param records:
         :param primary_key:
         """
-
         if self.database_engine in (self.SQLITE, self.FIREBIRD):
             placeholder = "?"
         elif self.database_engine in (self.MYSQL, self.POSTGRES):
