@@ -3,6 +3,7 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+import datetime
 import tina4_python
 from tina4_python import *
 from tina4_python.Database import Database
@@ -29,6 +30,10 @@ user_name = "sysdba"
 password = "masterkey"
 dba_type = "sqlite3:test3.db"
 
+
+def test_auth_payload():
+    auth = tina4_auth.get_token({"id": 1, "username": "hello", "date_created": datetime.datetime.now()})
+    assert str(auth)
 
 def test_route_match():
     assert Router.match('/url', '/url') == True, "Test if route matches"

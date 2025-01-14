@@ -6,14 +6,23 @@
 # flake8: noqa: E501
 import datetime
 import os
-
 import jwt
+import bcrypt
+from json import JSONEncoder
 from cryptography import x509
 from cryptography.x509 import NameOID
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.backends import default_backend
-import bcrypt
+
+
+class AuthJSONSerializer(JSONEncoder):
+    def default(self, o):
+        if isinstance(o, datetime.datetime):
+            return o.isoformat()
+        else:
+            raise TypeError(f'Object of type {o.__class__.__name__} '
+                            f'is not JSON serializable')
 
 
 class Auth:
@@ -141,7 +150,8 @@ class Auth:
         token = jwt.encode(
             payload=payload_data,
             key=private_key,
-            algorithm='RS256'
+            algorithm='RS256',
+            json_encoder=AuthJSONSerializer
         )
 
         return token
