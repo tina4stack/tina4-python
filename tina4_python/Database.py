@@ -133,6 +133,12 @@ class Database:
             return False
 
     def get_next_id(self, table_name, column_name="id"):
+        """
+        Gets the next id using max method in sql
+        :param table_name:
+        :param column_name:
+        :return:
+        """
         try:
             sql = "select max(" + column_name + ") as \"max_id\" from " + table_name
             record = self.fetch_one(sql)
