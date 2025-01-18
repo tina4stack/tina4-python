@@ -9,8 +9,9 @@ import tina4_python
 from tina4_python import Constant
 from tina4_python.Debug import Debug
 from pathlib import Path
-
-from jinja2 import Environment, FileSystemLoader, environment
+from datetime import datetime, date
+from jinja2 import Environment, FileSystemLoader, Undefined
+from tina4_python.Session import Session
 
 
 class Template:
@@ -34,7 +35,17 @@ class Template:
 
     @staticmethod
     def dump(param):
-        return "<pre>"+json.dumps(param, indent=True)+"</pre>"
+        if param is not None and not isinstance(param, Undefined):
+            def json_serialize(obj):
+                if isinstance(obj, (date, datetime)):
+                    return obj.isoformat()
+                if isinstance(obj, Session):
+                    return obj.session_values
+                raise TypeError("Type %s not serializable to Jinja2 template" % type(obj))
+
+            return "<pre>"+json.dumps(param, indent=True, default=json_serialize)+"</pre>"
+        else:
+            return ""
 
     @staticmethod
     def get_form_token(payload={}):
@@ -65,3 +76,4 @@ class Template:
             content = str(e)
 
         return content
+

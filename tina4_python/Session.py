@@ -246,5 +246,7 @@ class Session:
         """
         return self.default_handler.save(self)
 
-    def __str__(self):
-        return json.dumps(self.session_values)
+    def __iter__(self):
+        for key, value in self.session_values.items():
+            yield key, value
+

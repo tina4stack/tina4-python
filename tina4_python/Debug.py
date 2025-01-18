@@ -12,9 +12,27 @@ import tina4_python.Constant as Constant
 from tina4_python.ShellColors import ShellColors
 from datetime import datetime
 
-
-
 class Debug:
+
+    @staticmethod
+    def info(*args, **kwargs):
+        args += (Constant.TINA4_LOG_INFO,)
+        Debug(*args)
+
+    @staticmethod
+    def error(*args, **kwargs):
+        args += (Constant.TINA4_LOG_ERROR,)
+        Debug(*args)
+
+    @staticmethod
+    def debug(*args, **kwargs):
+        args += (Constant.TINA4_LOG_DEBUG,)
+        Debug(*args)
+
+    @staticmethod
+    def warning(*args, **kwargs):
+        args += (Constant.TINA4_LOG_WARNING,)
+        Debug(*args)
 
     def __init__(self, *args, **kwargs):
         now = datetime.now()
@@ -38,10 +56,8 @@ class Debug:
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
-
         if (os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL]) == "[TINA4_LOG_ALL]"
                 or debug_level in os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL])):
-
             log_level = 0
             # choose the color
             color = ShellColors.bright_blue
@@ -58,8 +74,7 @@ class Debug:
                 color = ShellColors.bright_yellow
                 log_level = 30
 
-
-            logger.log(log_level, params)
+            logger.log(log_level, " ".join(str(param) for param in params).strip())
 
             print(color + f"{debug_level:5}:"+ShellColors.end, "", end="")
             for output in params:

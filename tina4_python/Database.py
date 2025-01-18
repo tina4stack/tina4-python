@@ -9,8 +9,6 @@ import sys
 import importlib
 import datetime
 import json
-from decimal import Decimal
-
 from tina4_python import Debug, Constant
 from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.DatabaseResult import DatabaseResult
@@ -32,8 +30,6 @@ class Database:
         """
         # split out the connection string
         # driver:host/port:schema/path
-
-
         params = _connection_string.split(":", 1)
 
         try:
@@ -60,6 +56,39 @@ class Database:
             self.dba = self.database_module.connect(self.database_path)
             self.port = None
             self.host = None
+
+            # we need to register data adapters for sqlite3 due to deprecations in python3.12
+            def adapt_date_iso(val):
+                """Adapt datetime.date to ISO 8601 date."""
+                return val.isoformat()
+
+            def adapt_datetime_iso(val):
+                """Adapt datetime.datetime to timezone-naive ISO 8601 date."""
+                return val.isoformat()
+
+            def adapt_datetime_epoch(val):
+                """Adapt datetime.datetime to Unix timestamp."""
+                return int(val.timestamp())
+
+            self.database_module.register_adapter(datetime.date, adapt_date_iso)
+            self.database_module.register_adapter(datetime.datetime, adapt_datetime_iso)
+            self.database_module.register_adapter(datetime.datetime, adapt_datetime_epoch)
+
+            def convert_date(val):
+                """Convert ISO 8601 date to datetime.date object."""
+                return datetime.date.fromisoformat(val.decode())
+
+            def convert_datetime(val):
+                """Convert ISO 8601 datetime to datetime.datetime object."""
+                return datetime.datetime.fromisoformat(val.decode())
+
+            def convert_timestamp(val):
+                """Convert Unix epoch timestamp to datetime.datetime object."""
+                return datetime.datetime.fromtimestamp(int(val))
+
+            self.database_module.register_converter("date", convert_date)
+            self.database_module.register_converter("datetime", convert_datetime)
+            self.database_module.register_converter("timestamp", convert_timestamp)
         else:
             # <host>/<port>:<file>
             temp_params = self.database_path.split(":", 1)

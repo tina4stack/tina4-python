@@ -398,3 +398,13 @@ Flake8 Code tests
 ```
 poetry run flake8 ./tina4_python
 ```
+
+### Using queues
+
+```bash
+docker run -d --hostname=my-kafka --name=some-kafka -p 9092:9092 apache/kafka
+```
+
+```bash
+docker run -d --hostname=my-rabbit --name=some-rabbit -p 15672:15672 -p 5672:5672 rabbitmq:3
+```

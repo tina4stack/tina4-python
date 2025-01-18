@@ -106,6 +106,8 @@ async def redirect(request, response):
 @cached(False)
 @get("/")
 async def index_html(request, response):
+    request.session.set("name", "Tina4 222")
+
     return response(Template.render_twig_template("index.twig"))
 
 

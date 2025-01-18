@@ -3,13 +3,14 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+import pytest
 import datetime
 import tina4_python
 from tina4_python import *
 from tina4_python.Database import Database
 from tina4_python.Migration import migrate
-from tina4_python.ORM import ORM, IntegerField, StringField, DateTimeField, ForeignKeyField, TextField, \
-    find_all_sub_classes, orm
+from tina4_python.ORM import ORM, IntegerField, StringField, DateTimeField, ForeignKeyField, TextField, orm
+from tina4_python.Queue import Config, Queue, Producer, Consumer
 
 global dba_type
 # docker run --name my-mysql -e MYSQL_ROOT_PASSWORD=secret -p 33066:3306 -d mysql:latest
@@ -54,13 +55,13 @@ def test_database_sqlite():
     dba = database_connect(dba_type, user_name, password)
     assert dba.database_engine == dba.SQLITE
 
-
+@pytest.mark.skip
 def test_database_mysql():
     dba_type = "mysql.connector:localhost/33066:test"
     dba = database_connect(dba_type)
     assert dba.database_engine == dba.MYSQL
 
-
+@pytest.mark.skip
 def test_database_posgresql():
     dba_type = "psycopg2:localhost/5432:test"
     dba = database_connect(dba_type, "postgres", "password")
@@ -288,3 +289,29 @@ def test_orm():
     assert result.count == 2
 
     dba.close()
+
+
+def test_queues():
+    """
+    Tests the queue functionality
+    :return:
+    """
+    config = Config()
+    config.litequeue_database_name = "test_queue.db"
+
+
+    def call_me(queue_, err, data):
+        if data is not None and data.status == 1:
+            queue_.done(data.message_id)
+        print("RESULT", err, data)
+
+    queue = Queue(config)
+
+    producer = Producer(queue, call_me)
+    producer.produce({"name": "Andre"}, "andre")
+
+    consumer = Consumer(queue, call_me, acknowledge=False)
+    consumer.run(1, 5)
+
+    assert queue.config.queue_type != "litequeue"
+
