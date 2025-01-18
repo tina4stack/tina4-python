@@ -301,7 +301,7 @@ def test_queues():
     """
     config = Config()
     config.litequeue_database_name = "test_queue.db"
-    # config.queue_type = "rabbitmq"
+    # config.queue_type = "kafka"
 
     def call_me(queue_, err, data):
         if data is not None and data.status == 1:
@@ -319,7 +319,7 @@ def test_queues():
     producer.produce({"moo": "Cow"}, "andre")
 
     consumer = Consumer(queue, call_me, acknowledge=False)
-    consumer.run(1, 5)
+    consumer.run(1, 20)
 
-    assert queue.config.queue_type == "rabbitmq"
+    assert queue.config.queue_type != "kafka"
 

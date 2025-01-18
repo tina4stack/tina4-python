@@ -204,7 +204,30 @@ class Queue(object):
                 if delivery_callback is not None:
                     delivery_callback(self.producer, e, None)
         elif self.config.queue_type == "kafka":
-            pass
+            try:
+                body = {
+                    "message_id": uuid7(), "msg": value, "user_id": user_id, "in_time": time_ns()
+                }
+
+                def kafka_delivery_callback(err, kafka_msg):
+                    if err:
+                        delivery_callback(self.consumer, err, None)
+                    else:
+                        response_msg = Message(
+                            body["message_id"],
+                            value,
+                            user_id,
+                            0,
+                            body["in_time"],
+                            kafka_msg.offset()
+                        )
+                        delivery_callback(self.consumer, err, response_msg)
+
+                self.producer.produce(self.topic, json.dumps(body), user_id, callback=kafka_delivery_callback)
+                self.producer.poll(1000)
+                self.producer.flush()
+            except Exception as e:
+                delivery_callback(self.consumer, e, None)
 
         pass
 
@@ -276,9 +299,32 @@ class Queue(object):
                 if consumer_callback is not None:
                     consumer_callback(self.consumer, e, None)
         elif self.config.queue_type == "kafka":
-            pass
+            try:
 
-        pass
+                msg = self.consumer.poll(1.0)
+                if msg is None:
+                    pass
+                elif msg.error():
+                    if consumer_callback is not None:
+                        consumer_callback(self.consumer, msg.error(), None)
+                else:
+                    msg_status = "1"
+                    if acknowledge:
+                        msg_status = "2"
+                    data = json.loads(msg.value().decode('utf-8'))
+                    response_msg = Message(
+                        data["message_id"],
+                        data["msg"],
+                        data["user_id"],
+                        msg_status,
+                        data["in_time"],
+                        msg.offset()
+                    )
+                    if consumer_callback is not None:
+                        consumer_callback(self.consumer, None, response_msg)
+            except Exception as e:
+                if consumer_callback is not None:
+                    consumer_callback(self.consumer, e, None)
 
     def init_litequeue(self):
         """
@@ -320,10 +366,31 @@ class Queue(object):
 
         except Exception as e:
             Debug.error("Failed to import rabbitmq module, try pip install pika or poetry add pika", e)
-
         pass
 
     def init_kafka(self):
+        try:
+            if self.config.kafka_config is None:
+                self.config.kafka_config  = {
+                    # User-specific properties that you must set
+                    'bootstrap.servers': 'localhost:9092',
+                    'group.id': 'default-queue',
+                    'auto.offset.reset': 'earliest'
+                }
+            kafka = importlib.import_module("confluent_kafka")
+
+            self.consumer = kafka.Consumer(self.config.kafka_config)
+            self.consumer.subscribe([self.topic])
+
+            if 'auto.offset.reset' in self.config.kafka_config:
+                del self.config.kafka_config['auto.offset.reset']
+            if 'group.id' in self.config.kafka_config:
+                del self.config.kafka_config['group.id']
+
+            self.producer = kafka.Producer(self.config.kafka_config)
+
+        except Exception as e:
+            Debug.error("Failed to import kafka module, try pip install confluent-kafka or poetry add confluent-kafka", e)
         pass
 
 
@@ -391,7 +458,7 @@ class Consumer(object):
         except KeyboardInterrupt:
             pass
         finally:
-
+            Debug.info("Done running consumer")
             pass
 
 
