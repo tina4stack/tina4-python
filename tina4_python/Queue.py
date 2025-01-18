@@ -6,6 +6,7 @@
 # flake8: noqa: E501
 import json
 import sys
+import os
 import importlib
 import time
 from tina4_python import Debug
@@ -16,11 +17,110 @@ _DKW: Dict[str, Any] = {}
 if sys.version_info >= (3, 10):
     _DKW["slots"] = True
 
+# Extracted from https://github.com/stevesimmons/uuid7 under MIT license
+
+# Expose function used by uuid7() to get current time in nanoseconds
+# since the Unix epoch.
+time_ns = time.time_ns
+
+
+def uuid7(
+        _last=[0, 0, 0, 0],  # noqa
+        _last_as_of=[0, 0, 0, 0],  # noqa
+) -> str:
+    """
+    UUID v7, following the proposed extension to RFC4122 described in
+    https://www.ietf.org/id/draft-peabody-dispatch-new-uuid-format-02.html.
+    All representations sort chronologically, with a potential time resolution
+    of 50ns (if the system clock supports this).
+    Parameters
+    ----------
+    time_func - Set the time function, which must return integer
+                nanoseconds since the Unix epoch, midnight on 1-Jan-1970.
+                Defaults to time.time_ns(). This is exposed because
+                time.time_ns() may have a low resolution on Windows.
+    _last and _last_as_of - Used internally to trigger incrementing a
+                sequence counter when consecutive calls have the same time
+                values. The values [t1, t2, t3, seq] are described below.
+    Returns
+    -------
+    A UUID object, or if as_type is specified, a string, int or
+    bytes of length 16.
+    Implementation notes
+    --------------------
+    The 128 bits in the UUID are allocated as follows:
+    - 36 bits of whole seconds
+    - 24 bits of fractional seconds, giving approx 50ns resolution
+    - 14 bits of sequential counter, if called repeatedly in same time tick
+    - 48 bits of randomness
+    plus, at locations defined by RFC4122, 4 bits for the
+    uuid version (0b111) and 2 bits for the uuid variant (0b10).
+             0                   1                   2                   3
+             0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+            +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    t1      |                 unixts (secs since epoch)                     |
+            +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    t2/t3   |unixts |  frac secs (12 bits)  |  ver  |  frac secs (12 bits)  |
+            +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    t4/rand |var|       seq (14 bits)       |          rand (16 bits)       |
+            +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    rand    |                          rand (32 bits)                       |
+            +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+    Indicative timings:
+    - uuid.uuid4()            2.4us
+    - uuid7(as_type='str')    2.5us
+    Examples
+    --------
+    >>> uuid7()
+    '061cb26a-54b8-7a52-8000-2124e7041024'
+    >>> uuid7(0)
+    '00000000-0000-0000-0000-00000000000'
+    """
+    ns = time_ns()
+    last = _last
+
+    if ns == 0:
+        # Special case for all-zero uuid. Strictly speaking not a UUIDv7.
+        t1 = t2 = t3 = t4 = 0
+        rand = b"\0" * 6
+    else:
+        # Treat the first 8 bytes of the uuid as a long (t1) and two ints
+        # (t2 and t3) holding 36 bits of whole seconds and 24 bits of
+        # fractional seconds.
+        # This gives a nominal 60ns resolution, comparable to the
+        # timestamp precision in Linux (~200ns) and Windows (100ns ticks).
+        sixteen_secs = 16_000_000_000
+        t1, rest1 = divmod(ns, sixteen_secs)
+        t2, rest2 = divmod(rest1 << 16, sixteen_secs)
+        t3, _ = divmod(rest2 << 12, sixteen_secs)
+        t3 |= 7 << 12  # Put uuid version in top 4 bits, which are 0 in t3
+
+        # The next two bytes are an int (t4) with two bits for
+        # the variant 2 and a 14 bit sequence counter which increments
+        # if the time is unchanged.
+        if t1 == last[0] and t2 == last[1] and t3 == last[2]:
+            # Stop the seq counter wrapping past 0x3FFF.
+            # This won't happen in practice, but if it does,
+            # uuids after the 16383rd with that same timestamp
+            # will not longer be correctly ordered but
+            # are still unique due to the 6 random bytes.
+            if last[3] < 0x3FFF:
+                last[3] += 1
+        else:
+            last[:] = (t1, t2, t3, 0)
+        t4 = (2 << 14) | last[3]  # Put variant 0b10 in top two bits
+
+        # Six random bytes for the lower part of the uuid
+        rand = os.urandom(6)
+
+    return f"{t1:>08x}-{t2:>04x}-{t3:>04x}-{t4:>04x}-{rand.hex()}"
 
 class Config(object):
     queue_type = "litequeue" # can be rabbitmq or kafka as well
     litequeue_database_name = "queue.db"
     kafka_config = None
+    rabbitmq_config = None
+    rabbitmq_queue = "default-queue"
 
     def __init__(self):
         pass
@@ -32,6 +132,7 @@ class Message:
     user_id: str
     status: str
     time_stamp: int
+    delivery_tag: str
 
 class Queue(object):
     def __init__(self, config=None, topic="default-queue"):
@@ -74,13 +175,34 @@ class Queue(object):
                     value,
                     user_id,
                     int(msg.status),
-                    msg.in_time
+                    msg.in_time,
+                    0
                 )
-                delivery_callback(self.producer, None, response_msg)
+                if delivery_callback is not None:
+                    delivery_callback(self.producer, None, response_msg)
             except Exception as e:
-                delivery_callback(self.producer, e, None)
+                if delivery_callback is not None:
+                    delivery_callback(self.producer, e, None)
         elif self.config.queue_type == "rabbitmq":
-            pass
+            try:
+                body = {
+                    "message_id": uuid7(), "msg": value, "user_id": user_id, "in_time": time_ns()
+                }
+
+                self.producer.basic_publish(exchange=self.topic, routing_key='', body=json.dumps(body))
+                response_msg = Message(
+                    body["message_id"],
+                    value,
+                    user_id,
+                    0,
+                    body["in_time"],
+                    0
+                )
+                if delivery_callback is not None:
+                    delivery_callback(self.producer, None, response_msg)
+            except Exception as e:
+                if delivery_callback is not None:
+                    delivery_callback(self.producer, e, None)
         elif self.config.queue_type == "kafka":
             pass
 
@@ -103,7 +225,8 @@ class Queue(object):
                                     data["msg"],
                                     data["user_id"],
                                     msg.status,
-                                    msg.in_time
+                                    msg.in_time,
+                                    0
                     )
 
                     if consumer_callback is not None:
@@ -118,7 +241,8 @@ class Queue(object):
                             data["msg"],
                             data["user_id"],
                             msg.status,
-                            msg.in_time
+                            msg.in_time,
+                            0
                         )
 
                         if consumer_callback is not None:
@@ -130,7 +254,27 @@ class Queue(object):
             except Exception as e:
                 consumer_callback(self.consumer, e, None)
         elif self.config.queue_type == "rabbitmq":
-            pass
+            try:
+                method_frame, header_frame, body = self.consumer.basic_get(queue=self.config.rabbitmq_queue, auto_ack=acknowledge)
+
+                if method_frame is not None:
+                    msg_status = "1"
+                    if acknowledge:
+                        msg_status = "2"
+                    data = json.loads(body)
+                    response_msg = Message(
+                        data["message_id"],
+                        data["msg"],
+                        data["user_id"],
+                        msg_status,
+                        data["in_time"],
+                        method_frame.delivery_tag
+                    )
+                    if consumer_callback is not None:
+                        consumer_callback(self.consumer, None, response_msg)
+            except Exception as e:
+                if consumer_callback is not None:
+                    consumer_callback(self.consumer, e, None)
         elif self.config.queue_type == "kafka":
             pass
 
@@ -152,6 +296,31 @@ class Queue(object):
         pass
 
     def init_rabbitmq(self):
+        try:
+            if self.config.rabbitmq_config is None:
+                self.config.rabbitmq_config = {"host": "localhost", "port": 5672}
+
+            pika = importlib.import_module("pika")
+
+            try:
+                connection = pika.BlockingConnection(
+                    pika.ConnectionParameters(host=self.config.rabbitmq_config["host"],
+                                              port=self.config.rabbitmq_config["port"])
+                )
+            except Exception as e:
+                print(e)
+            channel = connection.channel()
+            channel.exchange_declare(exchange=self.topic, exchange_type="topic")
+            result = channel.queue_declare('', exclusive=False)
+            self.config.rabbitmq_queue = result.method.queue
+            channel.queue_bind(
+                exchange=self.topic, queue=self.config.rabbitmq_queue, routing_key='')
+            self.producer = channel
+            self.consumer = channel
+
+        except Exception as e:
+            Debug.error("Failed to import rabbitmq module, try pip install pika or poetry add pika", e)
+
         pass
 
     def init_kafka(self):
@@ -210,6 +379,7 @@ class Consumer(object):
             while True:
                 for queue in self.queues:
                     try:
+                        Debug("Consuming", queue.topic)
                         queue.consume(self.acknowledge, self.consumer_callback)
                     except Exception as e:
                         if self.consumer_callback is not None:

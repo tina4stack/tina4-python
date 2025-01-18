@@ -5,6 +5,9 @@
 #
 import pytest
 import datetime
+
+from pika.adapters.blocking_connection import BlockingChannel
+
 import tina4_python
 from tina4_python import *
 from tina4_python.Database import Database
@@ -298,20 +301,25 @@ def test_queues():
     """
     config = Config()
     config.litequeue_database_name = "test_queue.db"
-
+    # config.queue_type = "rabbitmq"
 
     def call_me(queue_, err, data):
         if data is not None and data.status == 1:
-            queue_.done(data.message_id)
+            if not isinstance(queue_, BlockingChannel):
+                # queue_.done(data.message_id)
+                pass
+            else:
+                queue_.basic_ack(data.delivery_tag)
         print("RESULT", err, data)
 
     queue = Queue(config)
 
     producer = Producer(queue, call_me)
     producer.produce({"name": "Andre"}, "andre")
+    producer.produce({"moo": "Cow"}, "andre")
 
     consumer = Consumer(queue, call_me, acknowledge=False)
     consumer.run(1, 5)
 
-    assert queue.config.queue_type != "litequeue"
+    assert queue.config.queue_type == "rabbitmq"
 
