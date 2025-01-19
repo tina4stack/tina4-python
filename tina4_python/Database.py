@@ -133,8 +133,8 @@ class Database:
     def table_exists(self, table_name):
         """
         Checks if a table exists in the database
-        :param table_name:
-        :return:
+        :param str table_name: Name of the table
+        :return: bool : True if table exists, else False
         """
 
         sql = ""
@@ -163,10 +163,10 @@ class Database:
 
     def get_next_id(self, table_name, column_name="id"):
         """
-        Gets the next id using max method in sql
-        :param table_name:
-        :param column_name:
-        :return:
+        Gets the next id using max method in sql for databases which don't have good sequences
+        :param str table_name: Name of the table
+        :param str column_name: Name of the column in that table to increment
+        :return: int : The next id in the sequence
         """
         try:
             sql = "select max(" + column_name + ") as \"max_id\" from " + table_name
@@ -223,11 +223,11 @@ class Database:
     def fetch(self, sql, params=[], limit=10, skip=0):
         """
         Fetch records based on a sql statement
-        :param sql:
-        :param params:
-        :param limit:
-        :param skip:
-        :return:
+        :param str sql: A plain SQL statement or one with params in it designated by ?
+        :param list params: A list of params in order of precedence
+        :param int limit: Number of records to fetch
+        :param int skip: Offset of records to skip
+        :return: DatabaseResult
         """
         # modify the select statement for limit and skip
         if self.database_engine == self.FIREBIRD:
@@ -250,11 +250,11 @@ class Database:
 
     def fetch_one(self, sql, params=[], skip=0):
         """
-        Fetch a single record based on a sql statement
-        :param sql:
-        :param params:
-        :param skip:
-        :return:
+        Fetch a single record based on a sql statement, take note that BLOB and byte record data is converted into base64 automatically
+        :param str sql: A plain SQL statement or one with params in it designated by ?
+        :param list params: A list of params in order of precedence
+        :param int skip: Offset of records to skip
+        :return: dict : A dictionary containing the single record
         """
         # Calling the fetch method with limit as 1 and returning the result
         sql = self.parse_place_holders(sql)
@@ -287,12 +287,12 @@ class Database:
         else:
             return sql.replace("%s", "?")
 
-    def execute(self, sql, params=()):
+    def execute(self, sql, params=[]):
         """
         Execute a query based on a sql statement
-        :param sql:
-        :param params:
-        :return:
+        :param str sql: A plain SQL statement or one with params in it designated by ?
+        :param list params: A list of params in order of precedence
+        :return: DatabaseResult
         """
         sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
@@ -313,12 +313,12 @@ class Database:
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
 
-    def execute_many(self, sql, params=()):
+    def execute_many(self, sql, params=[]):
         """
         Execute a query based on a single sql statement with a different number of params
-        :param sql:
-        :param params:
-        :return:
+        :param sql: A plain SQL statement or one with params in it designated by ?
+        :param params: A list of params in order of precedence
+        :return: DatabaseResult
         """
         sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
@@ -396,9 +396,9 @@ class Database:
     def insert(self, table_name, data, primary_key="id"):
         """
         Insert data based on table name and data provided - single or multiple records
-        :param primary_key:
-        :param table_name:
-        :param data:
+        :param str table_name: Name of table
+        :param None data: List or Dictionary containing the data to be inserted
+        :param str primary_key: The name of the primary key of the table
         """
         if isinstance(data, dict):
             data = [data]
@@ -420,6 +420,7 @@ class Database:
 
             records = DatabaseResult()
 
+            result = None
             for record in data:
                 record = self.sanitize(record)
                 result = self.execute(sql, list(record.values()))
@@ -435,8 +436,8 @@ class Database:
     def delete(self, table_name, filter=None):
         """
         Delete data based on table name and filter provided - single or multiple filters
-        :param table_name:
-        :param filter:
+        :param str table_name: Name of table
+        :param str filter: Expression for deleting records
         """
         if self.database_engine in (self.SQLITE, self.FIREBIRD):
             placeholder = "?"
@@ -452,6 +453,8 @@ class Database:
 
             # Updating multiple records - records passed in is a list
             if isinstance(filter, list):
+                sql = ""
+                result = None
                 for record in filter:
                     pk_value = []
                     condition_records = []
@@ -476,12 +479,12 @@ class Database:
                     Debug("DELETE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                     return False
 
-    def update(self, table_name, records, primary_key="id"):
+    def update(self, table_name, data, primary_key="id"):
         """
         Update data based on table name and record/primary key provided - single or multiple records
-        :param table_name:
-        :param records:
-        :param primary_key:
+        :param str table_name: Name of table
+        :param None data: List or Dictionary containing the data to be inserted
+        :param str primary_key: The name of the primary key of the table
         """
         if self.database_engine in (self.SQLITE, self.FIREBIRD):
             placeholder = "?"
@@ -490,14 +493,16 @@ class Database:
         else:
             placeholder = "?"
 
-        if records is not None:
+        if data is not None:
             # Updating a single record - record passed in is a dictionary
-            if isinstance(records, dict):
-                records = [records]
+            if isinstance(data, dict):
+                data = [data]
 
             # Updating multiple records - records passed in is a list
-            if isinstance(records, list):
-                for record in records:
+            if isinstance(data, list):
+                sql = ""
+                result = None
+                for record in data:
                     pk_value = None
                     condition_records = ""
                     set_clause_list = []

@@ -81,6 +81,10 @@ async def session_set(request, response):
 @get("/session/get")
 async def session_get(request, response):
     print(request.session.get("name"), request.session.get("user"))
+    for pair in request.session:
+        print(pair)
+
+
     print("session set")
 
 
