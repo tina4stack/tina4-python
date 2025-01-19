@@ -74,7 +74,7 @@ class Debug:
                 color = ShellColors.bright_yellow
                 log_level = 30
 
-            logger.log(log_level, " ".join(str(param) for param in params).strip())
+            logger.log(log_level, " ".join(str(param) for param in params[1:]).strip())
 
             print(color + f"{debug_level:5}:"+ShellColors.end, "", end="")
             for output in params:

@@ -133,8 +133,8 @@ class Database:
     def table_exists(self, table_name):
         """
         Checks if a table exists in the database
-        :param table_name:
-        :return:
+        :param str table_name: Name of the table
+        :return: bool : True if table exists, else False
         """
 
         sql = ""
@@ -163,10 +163,10 @@ class Database:
 
     def get_next_id(self, table_name, column_name="id"):
         """
-        Gets the next id using max method in sql
-        :param table_name:
-        :param column_name:
-        :return:
+        Gets the next id using max method in sql for databases which don't have good sequences
+        :param str table_name: Name of the table
+        :param str column_name: Name of the column in that table to increment
+        :return: int : The next id in the sequence
         """
         try:
             sql = "select max(" + column_name + ") as \"max_id\" from " + table_name
@@ -223,11 +223,11 @@ class Database:
     def fetch(self, sql, params=[], limit=10, skip=0):
         """
         Fetch records based on a sql statement
-        :param sql:
-        :param params:
-        :param limit:
-        :param skip:
-        :return:
+        :param str sql: A plan SQL statement or one with params in it designated by ?
+        :param list params: A list of params in order of precedence
+        :param int limit: Number of records to fetch
+        :param int skip: Offset of records to skip
+        :return: DatabaseResult
         """
         # modify the select statement for limit and skip
         if self.database_engine == self.FIREBIRD:
@@ -250,11 +250,11 @@ class Database:
 
     def fetch_one(self, sql, params=[], skip=0):
         """
-        Fetch a single record based on a sql statement
-        :param sql:
-        :param params:
-        :param skip:
-        :return:
+        Fetch a single record based on a sql statement, take note that BLOB and byte record data is converted into base64 automatically
+        :param str sql: A plan SQL statement or one with params in it designated by ?
+        :param list params: A list of params in order of precedence
+        :param int skip: Offset of records to skip
+        :return: dict : A dictionary containing the single record
         """
         # Calling the fetch method with limit as 1 and returning the result
         sql = self.parse_place_holders(sql)
