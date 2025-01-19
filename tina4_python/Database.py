@@ -399,6 +399,7 @@ class Database:
         :param str table_name: Name of table
         :param None data: List or Dictionary containing the data to be inserted
         :param str primary_key: The name of the primary key of the table
+        :return:
         """
         if isinstance(data, dict):
             data = [data]
@@ -438,6 +439,7 @@ class Database:
         Delete data based on table name and filter provided - single or multiple filters
         :param str table_name: Name of table
         :param str filter: Expression for deleting records
+        :return: bool
         """
         if self.database_engine in (self.SQLITE, self.FIREBIRD):
             placeholder = "?"
@@ -485,6 +487,7 @@ class Database:
         :param str table_name: Name of table
         :param None data: List or Dictionary containing the data to be inserted
         :param str primary_key: The name of the primary key of the table
+        :return:
         """
         if self.database_engine in (self.SQLITE, self.FIREBIRD):
             placeholder = "?"
