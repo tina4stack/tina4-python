@@ -252,12 +252,12 @@ class Queue(object):
                 if msg is not None:
                     data = json.loads(msg.data)
                     response_msg = Message(
-                                    msg.message_id,
-                                    data["msg"],
-                                    data["user_id"],
-                                    msg.status,
-                                    msg.in_time,
-                                    0
+                        msg.message_id,
+                        data["msg"],
+                        data["user_id"],
+                        msg.status,
+                        msg.in_time,
+                        0
                     )
 
                     if consumer_callback is not None:
@@ -362,7 +362,6 @@ class Queue(object):
 
             if self.config.rabbitmq_config is None:
                 self.config.rabbitmq_config = {"host": "localhost", "port": 5672}
-                self.config.virtual_host = prefix
 
             pika = importlib.import_module("pika")
 
@@ -376,7 +375,7 @@ class Queue(object):
                 connection = pika.BlockingConnection(
                     pika.ConnectionParameters(host=self.config.rabbitmq_config["host"],
                                               port=self.config.rabbitmq_config["port"],
-                                              virtual_host=self.config.rabbitmq_config["virtual_host"],
+                                              virtual_host=prefix,
                                               credentials=credentials
                                               )
                 )
