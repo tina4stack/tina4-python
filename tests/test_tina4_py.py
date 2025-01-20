@@ -301,6 +301,7 @@ def test_queues():
     """
     config = Config()
     config.litequeue_database_name = "test_queue.db"
+    config.prefix = "dev"
     # config.queue_type = "kafka"
 
     def call_me(queue_, err, data):

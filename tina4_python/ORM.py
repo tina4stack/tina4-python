@@ -23,11 +23,16 @@ def find_all_sub_classes(a_class):
 def orm(dba):
     Debug("Initializing ORM")
     orm_path = tina4_python.root_path + os.sep + "src" + os.sep + "orm"
-    # load and assign
 
+    if not os.path.exists(orm_path):
+        os.makedirs(orm_path)
+
+    # load and assign
     for file in os.listdir(orm_path):
+        if not file.endswith(".py"):
+            continue
         mod_name = file.removesuffix(".py")
-        if "__init__" not in mod_name and "__pycache__" not in mod_name:
+        if "__init__" not in mod_name and "__pycache__" not in mod_name and ".git" not in mod_name:
             # import and set the database object
             Debug('from src.orm.' + mod_name + ' import ' + mod_name)
             exec('from src.orm.' + mod_name + ' import ' + mod_name)

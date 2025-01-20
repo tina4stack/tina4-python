@@ -9,6 +9,9 @@ import sys
 import os
 import importlib
 import time
+
+from jurigged import virtual_file
+
 from tina4_python import Debug
 from dataclasses import dataclass
 from typing import Dict, Any
@@ -121,6 +124,7 @@ class Config(object):
     kafka_config = None
     rabbitmq_config = None
     rabbitmq_queue = "default-queue"
+    prefix=""
 
     def __init__(self):
         pass
@@ -145,6 +149,7 @@ class Queue(object):
             config = Config()
             config.queue_type = "litequeue"
             config.litequeue_database_name = "queue.db"
+            config.prefix = ""
 
         Debug.info("Initializing", config.queue_type, topic)
         self.producer = None
@@ -167,6 +172,11 @@ class Queue(object):
         :param delivery_callback:
         :return:
         """
+        if self.config.prefix != "":
+            prefix = self.config.prefix+"_"
+        else:
+            prefix = ""
+
         if self.config.queue_type == "litequeue":
             try:
                 msg = self.producer.put(json.dumps({"msg": value, "user_id": user_id}))
@@ -213,7 +223,7 @@ class Queue(object):
                     if err:
                         delivery_callback(self.consumer, err, None)
                     else:
-                        response_msg = Message(
+                        response_msg_internal = Message(
                             body["message_id"],
                             value,
                             user_id,
@@ -221,7 +231,7 @@ class Queue(object):
                             body["in_time"],
                             kafka_msg.offset()
                         )
-                        delivery_callback(self.consumer, err, response_msg)
+                        delivery_callback(self.consumer, err, response_msg_internal)
 
                 self.producer.produce(self.topic, json.dumps(body), user_id, callback=kafka_delivery_callback)
                 self.producer.poll(1000)
@@ -238,6 +248,7 @@ class Queue(object):
         :param consumer_callback:
         :return:
         """
+
         if self.config.queue_type == "litequeue":
             try:
                 msg = self.consumer.pop()
@@ -300,7 +311,6 @@ class Queue(object):
                     consumer_callback(self.consumer, e, None)
         elif self.config.queue_type == "kafka":
             try:
-
                 msg = self.consumer.poll(1.0)
                 if msg is None:
                     pass
@@ -332,8 +342,13 @@ class Queue(object):
         :return:
         """
         try:
+            if self.config.prefix != "":
+                prefix = self.config.prefix+"_"
+            else:
+                prefix = ""
+
             litequeue = importlib.import_module("litequeue")
-            q = litequeue.LiteQueue(self.config.litequeue_database_name, queue_name=self.topic)
+            q = litequeue.LiteQueue(self.config.litequeue_database_name, queue_name=prefix+self.topic)
             self.producer = q
             self.consumer = q
         except Exception as e:
@@ -343,15 +358,23 @@ class Queue(object):
 
     def init_rabbitmq(self):
         try:
+            if self.config.prefix != "":
+                prefix = "/"+self.config.prefix
+            else:
+                prefix = "/"
+
             if self.config.rabbitmq_config is None:
                 self.config.rabbitmq_config = {"host": "localhost", "port": 5672}
+                self.config.virtual_host = prefix
 
             pika = importlib.import_module("pika")
 
             try:
                 connection = pika.BlockingConnection(
                     pika.ConnectionParameters(host=self.config.rabbitmq_config["host"],
-                                              port=self.config.rabbitmq_config["port"])
+                                              port=self.config.rabbitmq_config["port"],
+                                              virtual_host=self.config.rabbitmq_config["virtual_host"]
+                                              )
                 )
             except Exception as e:
                 print(e)
@@ -370,17 +393,22 @@ class Queue(object):
 
     def init_kafka(self):
         try:
+            if self.config.prefix != "":
+                prefix = self.config.prefix+"_"
+            else:
+                prefix = ""
+
             if self.config.kafka_config is None:
                 self.config.kafka_config  = {
                     # User-specific properties that you must set
                     'bootstrap.servers': 'localhost:9092',
-                    'group.id': 'default-queue',
+                    'group.id': prefix+'default-queue',
                     'auto.offset.reset': 'earliest'
                 }
             kafka = importlib.import_module("confluent_kafka")
 
             self.consumer = kafka.Consumer(self.config.kafka_config)
-            self.consumer.subscribe([self.topic])
+            self.consumer.subscribe([prefix+self.topic])
 
             if 'auto.offset.reset' in self.config.kafka_config:
                 del self.config.kafka_config['auto.offset.reset']
