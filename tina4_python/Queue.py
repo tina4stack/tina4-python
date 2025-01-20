@@ -9,9 +9,6 @@ import sys
 import os
 import importlib
 import time
-
-from jurigged import virtual_file
-
 from tina4_python import Debug
 from dataclasses import dataclass
 from typing import Dict, Any
