@@ -370,10 +370,17 @@ class Queue(object):
             pika = importlib.import_module("pika")
 
             try:
+                if "username" in self.config.rabbitmq_config:
+                    credentials = pika.PlainCredentials(self.config.rabbitmq_config["username"],
+                                                        self.config.rabbitmq_config["password"])
+                else:
+                    credentials = None
+
                 connection = pika.BlockingConnection(
                     pika.ConnectionParameters(host=self.config.rabbitmq_config["host"],
                                               port=self.config.rabbitmq_config["port"],
-                                              virtual_host=self.config.rabbitmq_config["virtual_host"]
+                                              virtual_host=self.config.rabbitmq_config["virtual_host"],
+                                              credentials=credentials
                                               )
                 )
             except Exception as e:
