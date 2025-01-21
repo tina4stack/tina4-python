@@ -77,3 +77,7 @@ class Template:
 
         return content
 
+    @staticmethod
+    def render(template_or_file_name, data=None):
+        return Template.render_twig_template(template_or_file_name, data)
+

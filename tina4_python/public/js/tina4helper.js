@@ -19,30 +19,41 @@ function sendRequest (url, request, method, callback) {
     }
 
     //Inject the new token
-    //Inject the new token
-    let urlParams;
     if (formToken !== null) {
-        console.log('Injecting new token');
-        // check if there is a form token in the url, if so replace it
-        urlParams = url.searchParams;
-        urlParams.set('formToken', formToken);
-        url.search = urlParams.toString();
+        const regex = /formToken=(.*)/gm;
+        const subst = `formToken=${formToken}`;
+        url = url.replace(regex, subst);
+        if (url.indexOf('formToken') === -1) {
+            if (url.indexOf('?') === -1) {
+                url += '?formToken='+formToken;
+            } else {
+                url += '&formToken='+formToken;
+            }
+        }
     }
 
     const xhr = new XMLHttpRequest();
     xhr.open(method, url, true);
 
-    xhr.onload = function () {
-        let content = xhr.response;
-        if (xhr.getResponseHeader('FreshToken') !== '' && xhr.getResponseHeader('FreshToken') !== null) {
-            formToken = xhr.getResponseHeader('FreshToken');
-        }
+    xhr.onreadystatechange  = function () {
+        if (xhr.readyState == 4 && xhr.status == 200) {
+            let content = xhr.response;
 
-        try {
-            content = JSON.parse(content);
-            callback(content);
-        } catch (exception) {
-            callback (content);
+            if (xhr.getResponseHeader('FreshToken') !== '' && xhr.getResponseHeader('FreshToken') !== null) {
+                formToken = xhr.getResponseHeader('FreshToken');
+            }
+
+            try {
+                content = JSON.parse(content);
+                callback(content);
+            } catch (exception) {
+                callback (content);
+            }
+
+        } else if (xhr.status !== 200) {
+            let content = xhr.response;
+            console.log('An unexpected response occurred while sending request',url, content, xhr.status, xhr.readyState, xhr, xhr.getResponseHeader('Location'));
+            callback(xhr.status+" An error occurred, see the console")
         }
     };
 
@@ -261,9 +272,24 @@ function saveForm(formId, targetURL, targetElement, callback = null) {
 /**
  * Shows a message
  * @param message
+ * @param alertType
+ * @param element
  */
-function showMessage(message) {
-    document.getElementById('message').innerHTML = '<div class="alert alert-info alert-dismissible fade show"><strong>Info</strong> ' + message + '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button></div>';
+function showMessage(message, alertType, element) {
+    if (alertType === undefined) {
+        alertType = 'info';
+    }
+
+    if (!element) {
+        element = "message";
+    }
+
+    document.getElementById(element).innerHTML = '<div class="alert alert-' + alertType + ' alert-dismissible fade show" role="alert"><strong>Info</strong> ' + message + '<button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button></div>';
+
+    // Function to close alert after 10 seconds with a slide-up effect.
+    $(".alert").delay(10000).slideUp(200, function() {
+        $(this).alert('close');
+    });
 }
 
 /**

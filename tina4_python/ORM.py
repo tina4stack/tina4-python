@@ -23,6 +23,7 @@ def find_all_sub_classes(a_class):
 def orm(dba):
     Debug("Initializing ORM")
     orm_path = tina4_python.root_path + os.sep + "src" + os.sep + "orm"
+    print("Path", orm_path)
 
     if not os.path.exists(orm_path):
         os.makedirs(orm_path)
@@ -196,10 +197,13 @@ class ForeignKeyField:
     value = None
     default_value = None
 
-    def __init__(self, field_type=BaseField, references_table=None, column_name=None):
+    def __init__(self, field_type=BaseField, references_table=None, column_name=None, default_value = None):
         self.field_type = field_type
         self.references_table = references_table
         self.references_column = field_type.column_name
+        self.default_value = default_value
+        self.auto_increment = False
+
         if column_name is None:
             frame = inspect.stack()[1]
             # Parse python syntax of the assignment line
@@ -273,7 +277,7 @@ class ORM:
         if init_object is not None:
             self.__populate_orm(init_object)
 
-        Debug("Checking for ", self.__table_name__, TINA4_LOG_INFO)
+        Debug("Checking for", self.__table_name__, TINA4_LOG_INFO)
         if self.__dba__:
             self.__table_exists = self.__dba__.table_exists(self.__table_name__)
             if not self.__table_exists:
@@ -283,7 +287,9 @@ class ORM:
                 with open(filename, "w") as f:
                     f.write(sql)
                     f.close()
-            Debug("Table Exists ", self.__table_exists, TINA4_LOG_INFO)
+            Debug("Table Exists", self.__table_exists, TINA4_LOG_INFO)
+        else:
+            self.__table_exists = False
 
     def __populate_orm(self, init_object):
         if isinstance(init_object, str):
@@ -316,7 +322,7 @@ class ORM:
                 if current_value.value is not None:
                     data[key] = current_value.value
                 else:
-                    if value.auto_increment:
+                    if not isinstance(current_value, ForeignKeyField) and value.auto_increment:
                         data[key] = self.__dba__.get_next_id(table_name=self.__table_name__, column_name=value.column_name)
                     else:
                         data[key] = current_value.default_value
@@ -373,7 +379,9 @@ class ORM:
                             field_value = self.__field_definitions__[key]
                             field_value.value = value
                             setattr(self, key, field_value)
-
+                    return True
+                else:
+                    return False
             except Exception as e:
                 Debug("ORM Load Error", str(e), TINA4_LOG_ERROR)
         else:
@@ -401,17 +409,23 @@ class ORM:
             input_params.append(data[key])
             counter += 1
 
-        record = self.__dba__.fetch_one(sql, input_params)
+        try:
 
-        if record["count_records"] == 0:
-            result = self.__dba__.insert(self.__table_name__, data)
-        else:
-            result = self.__dba__.update(self.__table_name__, data)
+            record = self.__dba__.fetch_one(sql, input_params)
 
-        self.__dba__.commit()
+            if record["count_records"] == 0:
+                result = self.__dba__.insert(self.__table_name__, data)
+            else:
+                result = self.__dba__.update(self.__table_name__, data)
 
-        if result:
-            self.load()
+            self.__dba__.commit()
+
+            if result:
+                self.load()
+                return True
+        except Exception as e:
+            Debug.error("Error saving", str(e))
+            return False
 
         return result
 
@@ -439,3 +453,4 @@ class ORM:
             return False
         else:
             return True
+        pass
