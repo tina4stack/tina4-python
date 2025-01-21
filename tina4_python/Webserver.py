@@ -302,7 +302,7 @@ class Webserver:
                 with open(static_file, 'rb') as file:
                     headers = []
                     self.send_header("Content-Type", mime_type, headers)
-                    self.send_basic_headers(headers)
+                    await self.send_basic_headers(headers)
                     content = file.read()
                     headers =  await self.get_headers(headers, self.response_protocol, HTTP_OK)
                     writer.write(headers + content)
