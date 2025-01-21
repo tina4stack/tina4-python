@@ -9,12 +9,15 @@ import base64
 import json
 import os
 import re
+import mimetypes
 from urllib.parse import unquote_plus
 from urllib.parse import urlparse, parse_qsl
 import tina4_python
 from tina4_python import Constant
-from tina4_python.Constant import HTTP_REDIRECT
+from tina4_python.Constant import HTTP_REDIRECT, HTTP_OK
 from tina4_python.Session import Session
+from tina4_python.Router import Router
+from tina4_python.Debug import Debug
 
 def is_int(v):
     try:
@@ -92,6 +95,15 @@ class Webserver:
                     return body
 
         return {"data": base64.encodebytes(content).decode("utf-8").replace("\n", "")}
+
+    async def send_basic_headers(self, headers):
+        self.send_header("Access-Control-Allow-Origin", "*", headers)
+        self.send_header("Access-Control-Allow-Headers",
+                         "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
+        self.send_header("Access-Control-Allow-Credentials", "True", headers)
+        # self.send_header("Content-Length", str(len(response.content)), headers)
+        self.send_header("Connection", "Keep-Alive", headers)
+        self.send_header("Keep-Alive", "timeout=5, max=30", headers)
 
     async def get_response(self, method):
         """
@@ -175,14 +187,8 @@ class Webserver:
         response = await self.router_handler.resolve(method, self.path, request, self.lowercase_headers, self.session)
 
         if HTTP_REDIRECT != response.http_code:
-            self.send_header("Access-Control-Allow-Origin", "*", headers)
-            self.send_header("Access-Control-Allow-Headers",
-                             "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
-            self.send_header("Access-Control-Allow-Credentials", "True", headers)
             self.send_header("Content-Type", response.content_type, headers)
-            # self.send_header("Content-Length", str(len(response.content)), headers)
-            self.send_header("Connection", "Keep-Alive", headers)
-            self.send_header("Keep-Alive", "timeout=5, max=30", headers)
+            await self.send_basic_headers(headers)
 
             if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
                 self.send_header("Set-Cookie",
@@ -275,36 +281,60 @@ class Webserver:
         self.method = protocol[0]
         self.path = protocol[1]
 
-        # parse cookies
-        cookie_list = {}
-        if "cookie" in self.lowercase_headers:
-            cookie_list_temp = self.lowercase_headers["cookie"].split(";")
-            for cookie_value in cookie_list_temp:
-                cookie = cookie_value.split("=", 1)
-                cookie_list[cookie[0].strip()] = cookie[1].strip()
-
-        self.cookies = cookie_list
-
-        # initialize the session
-        self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
-                               os.getenv("TINA4_SESSION_FOLDER", tina4_python.root_path + os.sep + "sessions"),
-                               os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
-                               )
-
-        if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
-            self.session.load(self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
-        else:
-            self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
-
         method_list = [Constant.TINA4_GET, Constant.TINA4_DELETE, Constant.TINA4_PUT, Constant.TINA4_ANY,
                        Constant.TINA4_POST, Constant.TINA4_PATCH, Constant.TINA4_OPTIONS]
 
         contains_method = [ele for ele in method_list if (ele in self.method)]
 
-        if self.method != "" and contains_method:
-            content = await (self.get_response(self.method))
-            writer.write(content)
-            await writer.drain()
+        request_handled = False
+        # return static content asap
+        if self.method == "GET":
+            # split URL and extract query string
+            url = Router.clean_url(self.path)
+            url_parts = url.split('?')
+            url = url_parts[0]
+
+            # Serve statics
+            static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
+            Debug.info("Attempting to serve static file: " + static_file)
+            if os.path.isfile(static_file):
+                mime_type = mimetypes.guess_type(url)[0]
+                with open(static_file, 'rb') as file:
+                    headers = []
+                    self.send_header("Content-Type", mime_type, headers)
+                    self.send_basic_headers(headers)
+                    content = file.read()
+                    headers =  await self.get_headers(headers, self.response_protocol, HTTP_OK)
+                    writer.write(headers + content)
+                    await writer.drain()
+                    request_handled = True
+
+        if not request_handled:
+            # parse cookies
+            cookie_list = {}
+            if "cookie" in self.lowercase_headers:
+                cookie_list_temp = self.lowercase_headers["cookie"].split(";")
+                for cookie_value in cookie_list_temp:
+                    cookie = cookie_value.split("=", 1)
+                    cookie_list[cookie[0].strip()] = cookie[1].strip()
+
+            self.cookies = cookie_list
+
+            # initialize the session
+            self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
+                                   os.getenv("TINA4_SESSION_FOLDER", tina4_python.root_path + os.sep + "sessions"),
+                                   os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
+                                   )
+
+            if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
+                self.session.load(self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
+            else:
+                self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
+
+            if self.method != "" and contains_method:
+                content = await (self.get_response(self.method))
+                writer.write(content)
+                await writer.drain()
 
         writer.close()
 
