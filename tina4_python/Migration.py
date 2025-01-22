@@ -47,12 +47,12 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
             file_contents = sql_file.read()
             sql_file.close()
             try:
-                dba.execute("delete from tina4_migration where description = ? and passed = ?", (file, 0))
+                dba.execute("delete from tina4_migration where description = ? and passed = ?", [file, 0])
                 dba.commit()
                 # check if migration exists in the database and has passed - no need to run the scripts below
 
                 sql_check = "select * from tina4_migration where description = ? and passed = ?"
-                record = dba.fetch(sql_check, (file, 1))
+                record = dba.fetch(sql_check, [file, 1])
 
                 if record.count == 0:
                     Debug(ShellColors.bright_yellow, "Migration:  Running migration for", file, ShellColors.end, Constant.TINA4_LOG_INFO)
@@ -76,7 +76,7 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                         dba.commit()
                         next_id = dba.get_next_id("tina4_migration")
                         dba.execute("insert into tina4_migration (id, description, content, passed) values (?, ?, ?, 1) ",
-                                    (next_id, file, file_contents))
+                                    [next_id, file, file_contents])
                         dba.commit()
                     else:
                         # did not pass
@@ -85,14 +85,14 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                         next_id = dba.get_next_id("tina4_migration")
                         dba.execute(
                             "insert into tina4_migration (id, description, content, passed, error_message) values (?, ?, ?, 0, ?) ",
-                            (next_id, file, file_contents, str(error_message)))
+                            [next_id, file, file_contents, str(error_message)])
                         dba.commit()
                         sys.exit(1)
             except Exception as e:
                 next_id = dba.get_next_id("tina4_migration")
                 dba.execute(
                     "insert into tina4_migration (id, description, content, passed, error_message) values (?, ?, ?, 0, ?) ",
-                    (next_id, file, file_contents, str(e)))
+                    [next_id, file, file_contents, str(e)])
                 dba.commit()
 
                 Debug("Migration: Failed to run", file, e, Constant.TINA4_LOG_ERROR)

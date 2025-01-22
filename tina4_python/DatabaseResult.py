@@ -51,7 +51,8 @@ class DatabaseResult:
         self.error = _error
 
     def to_paginate(self):
-        return {"recordsTotal": self.total_count, "recordsOffset": self.skip, "recordCount": self.count, "recordsFiltered": self.count, "fields": self.columns, "data": self.to_array(), "dataError": self.error}
+
+        return {"recordsTotal": self.total_count, "recordsOffset": self.skip,  "recordCount": self.count, "recordsFiltered": self.total_count, "fields": self.columns, "data": self.to_array(), "dataError": self.error}
 
     def to_array(self):
         """

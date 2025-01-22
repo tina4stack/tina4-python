@@ -233,19 +233,13 @@ class Database:
         :return: DatabaseResult
         """
         # make a statement to count the records
-        if "where" in sql.lower():
-            sql_count = sql.lower().split("where")[0].strip()
-        else:
-            sql_count = sql
-
-        sql_count = f"select count(*) as \"count_records\" from ({sql_count}) as t"
+        sql_count = f"select count(*) as \"count_records\" from ({sql}) as t"
 
         # modify the select statement for limit and skip
         if self.database_engine == self.FIREBIRD:
             sql = f"select first {limit} skip {skip} * from ({sql}) as t"
         elif self.database_engine == self.SQLITE or self.database_engine == self.MYSQL:
             sql = f"select * from ({sql}) as t limit {skip},{limit}"
-
         elif self.database_engine == self.POSTGRES:
             sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
         else:
@@ -255,6 +249,7 @@ class Database:
         counter_cursor = self.dba.cursor()
         try:
             if "?" in sql_count:
+                sql_count = self.parse_place_holders(sql_count)
                 counter_cursor.execute(sql_count, params)
             else:
                 counter_cursor.execute(sql_count)
@@ -264,6 +259,7 @@ class Database:
                 count_records = count_records[0][0]
             else:
                 count_records = 0
+
             counter_cursor.close()
 
             sql = self.parse_place_holders(sql)
@@ -283,7 +279,6 @@ class Database:
         :return: dict : A dictionary containing the single record
         """
         # Calling the fetch method with limit as 1 and returning the result
-        sql = self.parse_place_holders(sql)
         record = self.fetch(sql, params=params, limit=1, skip=skip)
         if record.error is None and record.count == 1:
             data = {}
