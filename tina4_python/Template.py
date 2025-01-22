@@ -31,8 +31,15 @@ class Template:
         Template.twig.filters['formToken'] = Template.get_form_token_input
         if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):
             Template.twig.globals['dump'] = Template.dump
+        else:
+            Template.twig.globals['dump'] = Template.production_dump
         Debug("Twig Initialized on "+path, Constant.TINA4_LOG_INFO)
         return Template.twig
+
+    @staticmethod
+    def production_dump(param):
+        Debug.error("DUMP FOUND ON PAGE!")
+        return ""
 
     @staticmethod
     def dump(param):

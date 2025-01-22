@@ -113,7 +113,8 @@ class Database:
                     port=self.port,
                     host=self.host,
                     user=self.username,
-                    password=self.password
+                    password=self.password,
+                    consume_results=True
                 )
             elif self.database_engine == self.POSTGRES:
                 self.dba = self.database_module.connect(
@@ -244,24 +245,29 @@ class Database:
             sql = f"select first {limit} skip {skip} * from ({sql}) as t"
         elif self.database_engine == self.SQLITE or self.database_engine == self.MYSQL:
             sql = f"select * from ({sql}) as t limit {skip},{limit}"
+
         elif self.database_engine == self.POSTGRES:
             sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
         else:
             sql = f"select * from ({sql}) as t limit {skip},{limit}"
 
         cursor = self.dba.cursor()
+        counter_cursor = self.dba.cursor()
         try:
             if "?" in sql_count:
-                counter = cursor.execute(sql_count, params)
+                counter = counter_cursor.execute(sql_count, params)
             else:
-                counter = cursor.execute(sql_count)
+                counter = counter_cursor.execute(sql_count)
 
-            count_records = counter.fetchall()
-
-            if len(count_records) > 0:
-                count_records = count_records[0][0]
+            if counter is None:
+                count_records = counter_cursor.description[0][1]
             else:
-                count_records = 0
+                count_records = counter.fetchall()
+
+                if len(count_records) > 0:
+                    count_records = count_records[0][0]
+                else:
+                    count_records = 0
 
             sql = self.parse_place_holders(sql)
 

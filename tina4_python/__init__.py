@@ -135,7 +135,7 @@ if os.path.exists(root_path + os.sep + "src"):
         for file in os.listdir(src_path):
             if file.endswith(".py"):
                 file_name = file.removesuffix(".py")
-                exec("from .src import " + file_name)
+                exec("from src import " + file_name)
 
     except ImportError as e:
         Debug("Cannot import src folder", str(e), Constant.TINA4_LOG_ERROR)
@@ -148,7 +148,7 @@ if os.path.exists(root_path + os.sep + "src" + os.sep + "routes"):
         for file in os.listdir(src_path):
             if file.endswith(".py"):
                 file_name = file.removesuffix(".py")
-                exec("from .src.routes import " + file_name)
+                exec("from src.routes import " + file_name)
     except ImportError as e:
         Debug("Cannot import src.routes folder", str(e), Constant.TINA4_LOG_ERROR)
 else:
@@ -160,7 +160,7 @@ if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
         for file in os.listdir(src_path):
             if file.endswith(".py"):
                 file_name = file.removesuffix(".py")
-                exec("from .src.app import " + file_name)
+                exec("from src.app import " + file_name)
     except ImportError as e:
         Debug("Cannot import src.app folder", str(e), Constant.TINA4_LOG_ERROR)
 else:
