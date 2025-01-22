@@ -346,7 +346,15 @@ class Webserver:
             await self.send_basic_headers(headers)
             headers =  await self.get_headers(headers, self.response_protocol, HTTP_SERVER_ERROR)
             url = Router.clean_url(self.path)
-            html = Template.render_twig_template("errors/500.twig",  {"server": {"url": url}, "error_message": error_string})
+
+            content_type = "text/html"
+            if "content-type" in self.lowercase_headers:
+                content_type = self.lowercase_headers["content-type"].lower()
+
+            if content_type == "application/json":
+                html = json.dumps({"error": "500 - Internal Server Error", "data": {"server": {"url": url}, "error_message": error_string}})
+            else:
+                html = Template.render_twig_template("errors/500.twig",  {"server": {"url": url}, "error_message": error_string})
             writer.write(headers + html.encode())
             await writer.drain()
             writer.close()
