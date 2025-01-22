@@ -10,6 +10,7 @@ from types import ModuleType
 from tina4_python import Constant
 from tina4_python import DatabaseResult
 from tina4_python.Debug import Debug
+from tina4_python.ORM import ORM
 
 headers = {}
 content = ""
@@ -30,6 +31,10 @@ class Response:
                 and not isinstance(content_in, str)
                 and not isinstance(content_in, list) and inspect.isclass(type(content_in))):
             content_in = dict(content_in)
+
+        if isinstance(content_in, ORM):
+            content_type = Constant.APPLICATION_JSON
+            content_in = content_in.to_json()
 
         # check if database result
         if type(content_in) is DatabaseResult.DatabaseResult:

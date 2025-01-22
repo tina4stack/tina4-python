@@ -270,6 +270,28 @@ function saveForm(formId, targetURL, targetElement, callback = null) {
 }
 
 /**
+ * Alias of saveForm
+ * @param formId
+ * @param targetURL
+ * @param targetElement
+ * @param callback
+ */
+function postForm(formId, targetURL, targetElement, callback = null){
+    saveForm(formId, targetURL, targetElement, callback = null)
+}
+
+/**
+ * Alias of saveForm
+ * @param formId
+ * @param targetURL
+ * @param targetElement
+ * @param callback
+ */
+function submitForm(formId, targetURL, targetElement, callback = null){
+    saveForm(formId, targetURL, targetElement, callback = null)
+}
+
+/**
  * Shows a message
  * @param message
  * @param alertType
@@ -363,6 +385,11 @@ function openReport(pdfReportPath){
     }
 }
 
+/**
+ * Does a GET request to an end point
+ * @param loadURL
+ * @param callback
+ */
 function getRoute(loadURL, callback) {
     sendRequest(loadURL, null, 'GET', function(data) {
         callback(handleHtmlData (data, null));

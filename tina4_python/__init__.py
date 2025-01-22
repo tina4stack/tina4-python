@@ -10,6 +10,7 @@ import os
 import shutil
 import importlib
 import sys
+import traceback
 import sass
 from pathlib import Path
 from watchdog.observers import Observer
@@ -65,6 +66,21 @@ tina4_current_request = {}
 tina4_api_key = None
 tina4_auth = Auth(root_path)
 
+
+# Set up the global exception handler
+def global_exception_handler(exception):
+    debug_level = Constant.TINA4_LOG_DEBUG
+    error = str(exception)
+    tb_str = ''.join(traceback.format_exception(None, exception, exception.__traceback__))
+    error_string = "Exception Error: "+ error+"\n"+tb_str+"\nYou are seeing this error because Tina4 is in debug mode"
+    Debug.error(error_string)
+    if (os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL]) == "[TINA4_LOG_ALL]"
+            or debug_level in os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL])):
+        pass
+    else:
+        error_string = ""
+    return error_string
+
 token = tina4_auth.get_token({"name": "Tina4"})
 Debug("TEST TOKEN", token, Constant.TINA4_LOG_DEBUG)
 Debug("VALID TOKEN", tina4_auth.valid(token + "a"), Constant.TINA4_LOG_DEBUG)
@@ -119,7 +135,7 @@ if os.path.exists(root_path + os.sep + "src"):
         for file in os.listdir(src_path):
             if file.endswith(".py"):
                 file_name = file.removesuffix(".py")
-                exec("from src import "+ file_name)
+                exec("from src import " + file_name)
 
     except ImportError as e:
         Debug("Cannot import src folder", str(e), Constant.TINA4_LOG_ERROR)
@@ -128,11 +144,11 @@ else:
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "routes"):
     try:
-        src_path = root_path + os.sep + "src"+ os.sep + "routes"
+        src_path = root_path + os.sep + "src" + os.sep + "routes"
         for file in os.listdir(src_path):
             if file.endswith(".py"):
                 file_name = file.removesuffix(".py")
-                exec("from src.routes import "+ file_name)
+                exec("from src.routes import " + file_name)
     except ImportError as e:
         Debug("Cannot import src.routes folder", str(e), Constant.TINA4_LOG_ERROR)
 else:
@@ -140,11 +156,11 @@ else:
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
     try:
-        src_path = root_path + os.sep + "src"+ os.sep + "app"
+        src_path = root_path + os.sep + "src" + os.sep + "app"
         for file in os.listdir(src_path):
             if file.endswith(".py"):
                 file_name = file.removesuffix(".py")
-                exec("from src.app import "+ file_name)
+                exec("from src.app import " + file_name)
     except ImportError as e:
         Debug("Cannot import src.app folder", str(e), Constant.TINA4_LOG_ERROR)
 else:
@@ -189,7 +205,7 @@ def file_get_contents(file_path):
 
 
 # Add swagger routes
-@get(os.getenv("SWAGGER_ROUTE", "/swagger")+"/swagger.json")
+@get(os.getenv("SWAGGER_ROUTE", "/swagger") + "/swagger.json")
 async def get_swagger_json(request, response):
     json = Swagger.get_json(request)
     return response(json)

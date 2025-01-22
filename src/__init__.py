@@ -21,6 +21,8 @@ dba = Database("sqlite3:test2.db", "username", "password")
 migrate(dba)
 orm(dba)
 
+
+
 @get("/some/page")
 async def some_page(request, response):
     global dba
@@ -70,6 +72,7 @@ async def upload_file(request, response):
 @get("/system/roles")
 async def system_roles(request, response):
     print("roles")
+    a = a / 0
 
 
 @get("/session/set")

@@ -14,10 +14,12 @@ from urllib.parse import unquote_plus
 from urllib.parse import urlparse, parse_qsl
 import tina4_python
 from tina4_python import Constant
-from tina4_python.Constant import HTTP_REDIRECT, HTTP_OK
+from tina4_python.Constant import HTTP_REDIRECT, HTTP_OK, HTTP_SERVER_ERROR
 from tina4_python.Session import Session
 from tina4_python.Router import Router
 from tina4_python.Debug import Debug
+from tina4_python.Template import Template
+
 
 def is_int(v):
     try:
@@ -264,79 +266,90 @@ class Webserver:
         return protocol, headers, lowercase_headers, content, raw_data, content_data
 
     async def handle_client(self, reader, writer):
-        # Get the client request
-        protocol, headers_list, lowercase_headers, request, request_raw, content_raw = await self.get_data(reader)
-        # Strange blank request ?
-        if protocol == '':
-            return
-        # Decode the request
-        self.request_raw = request_raw
-        self.content_raw = content_raw
-        self.request = request
-        self.headers = headers_list
-        self.lowercase_headers = lowercase_headers
+        try:
+            # Get the client request
+            protocol, headers_list, lowercase_headers, request, request_raw, content_raw = await self.get_data(reader)
+            # Strange blank request ?
+            if protocol == '':
+                return
+            # Decode the request
+            self.request_raw = request_raw
+            self.content_raw = content_raw
+            self.request = request
+            self.headers = headers_list
+            self.lowercase_headers = lowercase_headers
 
-        protocol = protocol.split(" ")
-        # print(protocol, headers_list)
-        self.method = protocol[0]
-        self.path = protocol[1]
+            protocol = protocol.split(" ")
+            # print(protocol, headers_list)
+            self.method = protocol[0]
+            self.path = protocol[1]
 
-        method_list = [Constant.TINA4_GET, Constant.TINA4_DELETE, Constant.TINA4_PUT, Constant.TINA4_ANY,
-                       Constant.TINA4_POST, Constant.TINA4_PATCH, Constant.TINA4_OPTIONS]
+            method_list = [Constant.TINA4_GET, Constant.TINA4_DELETE, Constant.TINA4_PUT, Constant.TINA4_ANY,
+                           Constant.TINA4_POST, Constant.TINA4_PATCH, Constant.TINA4_OPTIONS]
 
-        contains_method = [ele for ele in method_list if (ele in self.method)]
+            contains_method = [ele for ele in method_list if (ele in self.method)]
 
-        request_handled = False
-        # return static content asap
-        if self.method == "GET":
-            # split URL and extract query string
-            url = Router.clean_url(self.path)
-            url_parts = url.split('?')
-            url = url_parts[0]
+            request_handled = False
+            # return static content asap
+            if self.method == "GET":
+                # split URL and extract query string
+                url = Router.clean_url(self.path)
+                url_parts = url.split('?')
+                url = url_parts[0]
 
-            # Serve statics
-            static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
-            Debug.info("Attempting to serve static file: " + static_file)
-            if os.path.isfile(static_file):
-                mime_type = mimetypes.guess_type(url)[0]
-                with open(static_file, 'rb') as file:
-                    headers = []
-                    self.send_header("Content-Type", mime_type, headers)
-                    await self.send_basic_headers(headers)
-                    content = file.read()
-                    headers =  await self.get_headers(headers, self.response_protocol, HTTP_OK)
-                    writer.write(headers + content)
+                # Serve statics
+                static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
+                Debug.info("Attempting to serve static file: " + static_file)
+                if os.path.isfile(static_file):
+                    mime_type = mimetypes.guess_type(url)[0]
+                    with open(static_file, 'rb') as file:
+                        headers = []
+                        self.send_header("Content-Type", mime_type, headers)
+                        await self.send_basic_headers(headers)
+                        content = file.read()
+                        headers =  await self.get_headers(headers, self.response_protocol, HTTP_OK)
+                        writer.write(headers + content)
+                        await writer.drain()
+                        request_handled = True
+
+            if not request_handled:
+                # parse cookies
+                cookie_list = {}
+                if "cookie" in self.lowercase_headers:
+                    cookie_list_temp = self.lowercase_headers["cookie"].split(";")
+                    for cookie_value in cookie_list_temp:
+                        cookie = cookie_value.split("=", 1)
+                        cookie_list[cookie[0].strip()] = cookie[1].strip()
+
+                self.cookies = cookie_list
+
+                # initialize the session
+                self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
+                                       os.getenv("TINA4_SESSION_FOLDER", tina4_python.root_path + os.sep + "sessions"),
+                                       os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
+                                       )
+
+                if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
+                    self.session.load(self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
+                else:
+                    self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
+
+                if self.method != "" and contains_method:
+                    content = await (self.get_response(self.method))
+                    writer.write(content)
                     await writer.drain()
-                    request_handled = True
 
-        if not request_handled:
-            # parse cookies
-            cookie_list = {}
-            if "cookie" in self.lowercase_headers:
-                cookie_list_temp = self.lowercase_headers["cookie"].split(";")
-                for cookie_value in cookie_list_temp:
-                    cookie = cookie_value.split("=", 1)
-                    cookie_list[cookie[0].strip()] = cookie[1].strip()
-
-            self.cookies = cookie_list
-
-            # initialize the session
-            self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
-                                   os.getenv("TINA4_SESSION_FOLDER", tina4_python.root_path + os.sep + "sessions"),
-                                   os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
-                                   )
-
-            if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
-                self.session.load(self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
-            else:
-                self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
-
-            if self.method != "" and contains_method:
-                content = await (self.get_response(self.method))
-                writer.write(content)
-                await writer.drain()
-
-        writer.close()
+                writer.close()
+        except Exception as e:
+            error_string = tina4_python.global_exception_handler(e)
+            headers = []
+            await self.send_basic_headers(headers)
+            headers =  await self.get_headers(headers, self.response_protocol, HTTP_SERVER_ERROR)
+            url = Router.clean_url(self.path)
+            html = Template.render_twig_template("errors/500.twig",  {"server": {"url": url}, "error_message": error_string})
+            writer.write(headers + html.encode())
+            await writer.drain()
+            writer.close()
 
     def __init__(self, host_name, port):
         self.content_raw = None
@@ -361,3 +374,4 @@ class Webserver:
     def server_close(self):
         self.running = False
         self.server_socket.close()
+

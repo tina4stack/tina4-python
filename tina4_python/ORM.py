@@ -52,6 +52,7 @@ class BaseField:
     value = None
     field_size = None
     decimal_places = None
+    protected_field = False
 
     def get_definition(self):
         return self.column_name.lower() + " not defined"
@@ -102,12 +103,13 @@ class BaseField:
         return float(self.value)
 
     def __init__(self, column_name=None, primary_key=False, default_value=None, auto_increment=False, field_size=None,
-                 decimal_places=None):
+                 decimal_places=None, protected_field=False):
         self.primary_key = primary_key
         self.column_type = None
         if default_value is not None:
             self.default_value = default_value
         self.auto_increment = auto_increment
+        self.protected_field = protected_field
         if field_size is not None:
             self.field_size = field_size
         if decimal_places is not None:
@@ -196,13 +198,15 @@ class ForeignKeyField:
     foreign_key = True
     value = None
     default_value = None
+    protected_field = False
 
-    def __init__(self, field_type=BaseField, references_table=None, column_name=None, default_value = None):
+    def __init__(self, field_type=BaseField, references_table=None, column_name=None, default_value = None, protected_field=False):
         self.field_type = field_type
         self.references_table = references_table
         self.references_column = field_type.column_name
         self.default_value = default_value
         self.auto_increment = False
+        self.protected_field = protected_field
 
         if column_name is None:
             frame = inspect.stack()[1]
@@ -237,7 +241,7 @@ class ORM:
     __dba__ = None
     __field_definitions__ = {}
 
-    def __get_table_name__(self, name):
+    def __get_snake_case_name__(self, name):
         """
         Gets the table name
         :param name:
@@ -245,15 +249,15 @@ class ORM:
         """
         if "_" in name:
             return name.lower()
-        table_name = ""
+        snake_case_name = ""
         counter = 0
         for c in name:
             if c.isupper() and counter > 0:
-                table_name = table_name + "_" + c.lower()
+                snake_case_name = snake_case_name + "_" + c.lower()
             else:
-                table_name = table_name + c.lower()
+                snake_case_name = snake_case_name + c.lower()
             counter += 1
-        return table_name
+        return snake_case_name
 
     def __init__(self, init_object=None, table_name=None):
         # save the initial declarations
@@ -261,7 +265,7 @@ class ORM:
         self.__field_definitions__ = {}
         for key in dir(self):
             if not key.startswith('__') and not key.startswith('_') and key not in ['save', 'load', 'delete', 'to_json',
-                                                                                    'to_dict']:
+                                                                                    'to_dict', 'create_table']:
                 self.__field_definitions__[key] = getattr(self, key)
                 counter += 1
 
@@ -271,7 +275,7 @@ class ORM:
         class_name = self.__class__.__name__
         if self.__table_name__ is None:
             if table_name is None:
-                self.__table_name__ = self.__get_table_name__(class_name)
+                self.__table_name__ = self.__get_snake_case_name__(class_name)
             else:
                 self.__table_name__ = table_name.lower()
         if init_object is not None:
@@ -292,14 +296,22 @@ class ORM:
             self.__table_exists = False
 
     def __populate_orm(self, init_object):
+        """
+        Populates an ORM object from an input object, also transforms camel case objects to snake case ...
+        :param init_object:
+        :return:
+        """
         if isinstance(init_object, str):
             init_object = json.loads(init_object)
 
         for key, value in init_object.items():
-            if key in self.__field_definitions__:
-                field_value = self.__field_definitions__[key]
+            snake_case_name = self.__get_snake_case_name__(key)
+            if  snake_case_name in self.__field_definitions__:
+                field_value = self.__field_definitions__[snake_case_name]
                 field_value.value = value
-                setattr(self, key, field_value)
+                if hasattr(self, snake_case_name):
+                    setattr(self, snake_case_name, field_value)
+
 
     def __get_primary_keys(self):
         primary_keys = []
@@ -317,6 +329,9 @@ class ORM:
         # print(self.__field_definitions__.items(), self.__dict__)
         for key, value in self.__field_definitions__.items():
             current_value = getattr(self, key)
+            if current_value.protected_field:
+                continue
+
             if (isinstance(current_value, ForeignKeyField) or isinstance(current_value, IntegerField) or isinstance(current_value,DateTimeField)
                     or isinstance(current_value, BlobField) or isinstance(current_value, TextField) or isinstance(current_value, StringField)):
                 if current_value.value is not None:
@@ -334,7 +349,7 @@ class ORM:
         return self.to_json()
 
     def __create_table__(self, table_name, execute=False):
-        sql = "create table " + self.__table_name__ + " ("
+        sql = "create table " + table_name + " ("
         counter = 0
         for field, field_definition in self.__field_definitions__.items():
             if counter > 0:
@@ -353,7 +368,20 @@ class ORM:
         else:
             return sql
 
+    def create_table(self):
+        """
+        Creates the table for the ORM structure
+        :return:
+        """
+        self.__dba__.create_table(self.__table_name__, True)
+
     def load(self, query="", params=[]):
+        """
+        Loads a single record into the object based on the primary key or query if query is set
+        :param query:
+        :param params:
+        :return:
+        """
         if not self.__table_exists:
             Debug("ORM: Load Error - Table", self.__table_name__, "does not exist", TINA4_LOG_ERROR)
             return False

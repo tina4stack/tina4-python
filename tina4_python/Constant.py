@@ -27,11 +27,13 @@ HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
 HTTP_NOT_FOUND = 404
 HTTP_REDIRECT = 302
+HTTP_SERVER_ERROR = 500
 
 LOOKUP_HTTP_CODE = {HTTP_OK: "OK", HTTP_CREATED: "Created", HTTP_BAD_REQUEST: "Bad Request",
                     HTTP_PARTIAL_CONTENT: "Partial Content", HTTP_UNAUTHORIZED: "Unauthorized",
                     HTTP_FORBIDDEN: "Forbidden", HTTP_NOT_FOUND: "Not Found", HTTP_NO_CONTENT: "No Content",
-                    HTTP_REDIRECT: "Redirect"}
+                    HTTP_REDIRECT: "Redirect",
+                    HTTP_SERVER_ERROR: "Internal Server Error"}
 
 TEXT_HTML = "text/html"
 TEXT_CSS = "text/css"
