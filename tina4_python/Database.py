@@ -255,19 +255,16 @@ class Database:
         counter_cursor = self.dba.cursor()
         try:
             if "?" in sql_count:
-                counter = counter_cursor.execute(sql_count, params)
+                counter_cursor.execute(sql_count, params)
             else:
-                counter = counter_cursor.execute(sql_count)
+                counter_cursor.execute(sql_count)
+            count_records = counter_cursor.fetchall()
 
-            if counter is None:
-                count_records = counter_cursor.description[0][1]
+            if len(count_records) > 0:
+                count_records = count_records[0][0]
             else:
-                count_records = counter.fetchall()
-
-                if len(count_records) > 0:
-                    count_records = count_records[0][0]
-                else:
-                    count_records = 0
+                count_records = 0
+            counter_cursor.close()
 
             sql = self.parse_place_holders(sql)
 
