@@ -196,17 +196,19 @@ class Database:
         else:
             return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def get_database_result(self, cursor):
+    def get_database_result(self, cursor, counter, limit, skip):
         """
         Get database results
         :param cursor:
+        :param counter:
+        :param limit:
+        :param skip:
         :return:
         """
         columns = [column[0].lower() for column in cursor.description]
         records = cursor.fetchall()
         rows = [dict(zip(columns, row)) for row in records]
-        columns = [column for column in cursor.description]
-        return DatabaseResult(rows, columns, None)
+        return DatabaseResult(rows, columns, None, counter, limit, skip)
 
     def is_json(self, myjson):
         """
@@ -229,6 +231,14 @@ class Database:
         :param int skip: Offset of records to skip
         :return: DatabaseResult
         """
+        # make a statement to count the records
+        if "where" in sql.lower():
+            sql_count = sql.lower().split("where")[0].strip()
+        else:
+            sql_count = sql
+
+        sql_count = f"select count(*) as \"count_records\" from ({sql_count}) as t"
+
         # modify the select statement for limit and skip
         if self.database_engine == self.FIREBIRD:
             sql = f"select first {limit} skip {skip} * from ({sql}) as t"
@@ -241,9 +251,22 @@ class Database:
 
         cursor = self.dba.cursor()
         try:
+            if "?" in sql_count:
+                counter = cursor.execute(sql_count, params)
+            else:
+                counter = cursor.execute(sql_count)
+
+            count_records = counter.fetchall()
+
+            if len(count_records) > 0:
+                count_records = count_records[0][0]
+            else:
+                count_records = 0
+
             sql = self.parse_place_holders(sql)
+
             cursor.execute(sql, params)
-            return self.get_database_result(cursor)
+            return self.get_database_result(cursor, count_records, limit, skip)
         except Exception as e:
             Debug("FETCH ERROR:",  sql, str(e), "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
             return DatabaseResult(None, [], str(e))
@@ -300,11 +323,11 @@ class Database:
         try:
             cursor.execute(sql, params)
             if "returning" in sql.lower():
-                return self.get_database_result(cursor)
+                return self.get_database_result(cursor, 1, 1, 0)
             else:
                 # see if we are mysql and if we are insert statement to get the last record
                 if "insert" in sql.lower() and self.database_engine == self.MYSQL:
-                    return DatabaseResult([{"id": cursor.lastrowid}], [], None)
+                    return DatabaseResult([{"id": cursor.lastrowid}], [], None, 1, 1, 0)
 
                 # On success return an empty result set with no error
                 return DatabaseResult(None, [], None)
@@ -399,7 +422,6 @@ class Database:
         :param str table_name: Name of table
         :param None data: List or Dictionary containing the data to be inserted
         :param str primary_key: The name of the primary key of the table
-        :return:
         """
         if isinstance(data, dict):
             data = [data]
@@ -439,7 +461,6 @@ class Database:
         Delete data based on table name and filter provided - single or multiple filters
         :param str table_name: Name of table
         :param str filter: Expression for deleting records
-        :return: bool
         """
         if self.database_engine in (self.SQLITE, self.FIREBIRD):
             placeholder = "?"
@@ -487,7 +508,6 @@ class Database:
         :param str table_name: Name of table
         :param None data: List or Dictionary containing the data to be inserted
         :param str primary_key: The name of the primary key of the table
-        :return:
         """
         if self.database_engine in (self.SQLITE, self.FIREBIRD):
             placeholder = "?"

@@ -265,7 +265,7 @@ class ORM:
         self.__field_definitions__ = {}
         for key in dir(self):
             if not key.startswith('__') and not key.startswith('_') and key not in ['save', 'load', 'delete', 'to_json',
-                                                                                    'to_dict', 'create_table']:
+                                                                                    'to_dict', 'create_table', 'select']:
                 self.__field_definitions__[key] = getattr(self, key)
                 counter += 1
 
@@ -329,11 +329,12 @@ class ORM:
         # print(self.__field_definitions__.items(), self.__dict__)
         for key, value in self.__field_definitions__.items():
             current_value = getattr(self, key)
-            if current_value.protected_field:
-                continue
 
             if (isinstance(current_value, ForeignKeyField) or isinstance(current_value, IntegerField) or isinstance(current_value,DateTimeField)
                     or isinstance(current_value, BlobField) or isinstance(current_value, TextField) or isinstance(current_value, StringField)):
+                if current_value.protected_field:
+                    continue
+
                 if current_value.value is not None:
                     data[key] = current_value.value
                 else:
@@ -374,6 +375,39 @@ class ORM:
         :return:
         """
         self.__dba__.create_table(self.__table_name__, True)
+
+    def select (self, column_names="*", filter="", params=[], join="", having="", order_by="", limit=10, skip=0):
+        """
+        Selects an array of records based on the ORM object
+        :param filter:
+        :param params:
+        :param order_by:
+        :param limit:
+        :param skip:
+        :return:
+        """
+        if isinstance(column_names, str) and column_names != "*" and column_names != "":
+            column_names = column_names.split(',')
+
+        if column_names == "":
+            column_names = "*"
+
+        if isinstance(order_by, str) and order_by != "":
+            order_by = order_by.split(',')
+
+        sql = "select " + ",\n".join(column_names) + "\nfrom " + self.__table_name__ +" as t "
+        if join != "":
+            sql += "\n"+join
+        if filter != "":
+            sql += "\nwhere " + filter
+        if having != "":
+            sql += having
+
+        if len(order_by) > 0:
+            sql += "\norder by " + ",".join(order_by)
+
+        records = self.__dba__.fetch(sql, params=params, limit=limit, skip=skip)
+        return records
 
     def load(self, query="", params=[]):
         """

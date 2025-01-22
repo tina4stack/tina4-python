@@ -11,7 +11,31 @@ from decimal import Decimal
 
 
 class DatabaseResult:
-    def __init__(self, _records=None, _columns=None, _error=None):
+    def __init__(self, _records=None, _columns=None, _error=None, count=None, limit=None, skip=None):
+        """
+        DatabaseResult constructor
+        :param _records:
+        :param _columns:
+        :param _error:
+        :param count:
+        :param limit:
+        :param skip:
+        """
+        if count is not None:
+            self.total_count = count
+        else:
+            self.total_count = 0
+
+        if limit is not None:
+            self.limit = limit
+        else:
+            self.limit = 0
+
+        if skip is not None:
+            self.skip = skip
+        else:
+            self.skip = 0
+
         if _records is not None:
             self.records = _records
         else:
@@ -25,6 +49,9 @@ class DatabaseResult:
             self.columns = []
 
         self.error = _error
+
+    def to_paginate(self):
+        return {"recordsTotal": self.total_count, "recordsOffset": self.skip, "recordCount": self.count, "recordsFiltered": self.count, "fields": self.columns, "data": self.records, "dataError": self.error}
 
     def to_array(self):
         """

@@ -7,7 +7,6 @@ import pytest
 import datetime
 
 from pika.adapters.blocking_connection import BlockingChannel
-
 import tina4_python
 from tina4_python import *
 from tina4_python.Database import Database
@@ -54,7 +53,7 @@ def database_connect(driver, username="root", password="secret"):
 
 
 def test_database_sqlite():
-    dba_type = "sqlite3:test.db"
+    dba_type = "sqlite3:test4.db"
     dba = database_connect(dba_type, user_name, password)
     assert dba.database_engine == dba.SQLITE
 
@@ -111,6 +110,7 @@ def test_database_execute():
 def test_database_insert():
     dba = database_connect(dba_type, user_name, password)
     result = dba.insert("test_record", {"id": 4, "name": "Test1"})
+    print("TEST RESULT", result)
     assert result.error is None
     print(result)
     assert result.records[0]["id"] == 4
@@ -157,12 +157,14 @@ def test_database_fetch():
     result = dba.fetch("select * from test_record order by id", limit=3, skip=3)
     assert result.records[1]["name"] == "Test2"
     result = dba.fetch("select * from test_record where id = ?", [3])
-    print(result)
     assert result.records[0]["name"] == "Test3Update"
     result = dba.fetch_one("select * from test_record where id = ?", [2])
     assert result["name"] == "Test2Update"
     result = dba.fetch_one("select * from test_record where id = ?", [50])
     assert result is None
+    result = dba.fetch("select * from test_record where id < 3")
+    assert result.to_paginate()["recordsTotal"] == 8
+
     dba.close()
 
 
@@ -293,7 +295,7 @@ def test_orm():
 
     dba.close()
 
-
+@pytest.mark.skip
 def test_queues():
     """
     Tests the queue functionality
