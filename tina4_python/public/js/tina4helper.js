@@ -36,7 +36,7 @@ function sendRequest (url, request, method, callback) {
     xhr.open(method, url, true);
 
     xhr.onreadystatechange  = function () {
-        if (xhr.readyState == 4 && xhr.status == 200) {
+        if (xhr.readyState === 4 && xhr.status === 200) {
             let content = xhr.response;
 
             if (xhr.getResponseHeader('FreshToken') !== '' && xhr.getResponseHeader('FreshToken') !== null) {
@@ -277,7 +277,7 @@ function saveForm(formId, targetURL, targetElement, callback = null) {
  * @param callback
  */
 function postForm(formId, targetURL, targetElement, callback = null){
-    saveForm(formId, targetURL, targetElement, callback = null)
+    saveForm(formId, targetURL, targetElement, callback)
 }
 
 /**
@@ -288,7 +288,7 @@ function postForm(formId, targetURL, targetElement, callback = null){
  * @param callback
  */
 function submitForm(formId, targetURL, targetElement, callback = null){
-    saveForm(formId, targetURL, targetElement, callback = null)
+    saveForm(formId, targetURL, targetElement, callback)
 }
 
 /**
