@@ -339,7 +339,7 @@ class Webserver:
                     writer.write(content)
                     await writer.drain()
 
-                writer.close()
+            writer.close()
         except Exception as e:
             error_string = tina4_python.global_exception_handler(e)
             headers = []
