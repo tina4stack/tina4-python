@@ -11,7 +11,6 @@ import sys
 import ast
 import json
 import os
-import tina4_python
 from tina4_python.Constant import TINA4_LOG_ERROR, TINA4_LOG_INFO
 from tina4_python.Debug import Debug
 
@@ -407,7 +406,6 @@ class ORM:
             sql += "\norder by " + ",".join(order_by)
 
         records = self.__dba__.fetch(sql, params=params, limit=limit, skip=skip)
-        self.__dba__.commit()
         return records
 
     def load(self, query="", params=[]):
@@ -513,7 +511,9 @@ class ORM:
             result = self.__dba__.delete(sql, params)
 
         if result.error is not None:
+            self.__dba__.rollback()
             return False
         else:
+            self.__dba__.commit()
             return True
         pass
