@@ -53,7 +53,7 @@ def database_connect(driver, username="root", password="secret"):
 
 
 def test_database_sqlite():
-    dba_type = "sqlite3:test4.db"
+    dba_type = "sqlite3:test2.db"
     dba = database_connect(dba_type, user_name, password)
     assert dba.database_engine == dba.SQLITE
 
@@ -163,7 +163,7 @@ def test_database_fetch():
     result = dba.fetch_one("select * from test_record where id = ?", [50])
     assert result is None
     result = dba.fetch("select * from test_record where id < 3")
-    assert result.to_paginate()["recordsTotal"] == 8
+    assert result.to_paginate()["recordsTotal"] == 2
 
     dba.close()
 
@@ -292,6 +292,8 @@ def test_orm():
     result = dba.fetch(sql)
 
     assert result.count == 2
+
+    user1.delete()
 
     dba.close()
 

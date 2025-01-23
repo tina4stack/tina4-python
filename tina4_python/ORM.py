@@ -508,10 +508,11 @@ class ORM:
         else:
             sql = f"delete from {self.__table_name__} where {query}"
 
+        result = False
         if self.__dba__ is not None:
-            result = self.__dba__.delete(sql, params)
+            result = self.__dba__.execute(sql, params)
 
-        if not result:
+        if result.error is not None:
             self.__dba__.rollback()
             return False
         else:
