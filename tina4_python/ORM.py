@@ -23,21 +23,10 @@ def orm(dba):
     from tina4_python import root_path
     Debug("Initializing ORM")
     orm_path = root_path + os.sep + "src" + os.sep + "orm"
-    print("Path", orm_path)
-
     if not os.path.exists(orm_path):
         os.makedirs(orm_path)
 
-    # load and assign
-    for file in os.listdir(orm_path):
-        if not file.endswith(".py"):
-            continue
-        mod_name = file.removesuffix(".py")
-        if "__init__" not in mod_name and "__pycache__" not in mod_name and ".git" not in mod_name:
-            # import and set the database object
-            Debug('from src.orm.' + mod_name + ' import ' + mod_name)
-            exec('from src.orm.' + mod_name + ' import ' + mod_name)
-            exec(mod_name + ".__dba__ = dba")
+    exec ('from src.orm import *')
     classes = find_all_sub_classes(ORM)
     for a_class in classes:
         a_class.__dba__ = dba
@@ -260,6 +249,7 @@ class ORM:
         return snake_case_name
 
     def __init__(self, init_object=None, table_name=None):
+        from tina4_python import root_path
         # save the initial declarations
         counter = 0
         self.__field_definitions__ = {}
@@ -286,7 +276,7 @@ class ORM:
             self.__table_exists = self.__dba__.table_exists(self.__table_name__)
             if not self.__table_exists:
                 sql = self.__create_table__(self.__table_name__)
-                filename = tina4_python.root_path + os.sep + "migrations" + os.sep + "__" + self.__table_name__ + ".sql"
+                filename = root_path + os.sep + "migrations" + os.sep + "__" + self.__table_name__ + ".sql"
                 os.makedirs(os.path.dirname(filename), exist_ok=True)
                 with open(filename, "w") as f:
                     f.write(sql)

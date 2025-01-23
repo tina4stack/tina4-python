@@ -21,8 +21,6 @@ dba = Database("sqlite3:test2.db", "username", "password")
 migrate(dba)
 orm(dba)
 
-
-
 @get("/some/page")
 async def some_page(request, response):
     global dba
@@ -123,3 +121,5 @@ async def run_test_vars(request, response):
     print("<pre>")
     print("vars")
     print(request.params)
+
+from .routes.meme import *

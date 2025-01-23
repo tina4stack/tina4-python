@@ -52,6 +52,7 @@ if importlib.util.find_spec("jurigged"):
 # Define the variable to be used for global routes
 library_path = os.path.dirname(os.path.realpath(__file__))
 root_path = os.path.realpath(os.getcwd())
+sys.path.append(root_path)
 
 if not os.path.exists(root_path + os.sep + "logs"):
     os.makedirs(root_path + os.sep + "logs")
@@ -131,12 +132,7 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
 # ignore F403
 if os.path.exists(root_path + os.sep + "src"):
     try:
-        src_path = root_path + os.sep + "src"
-        for file in os.listdir(src_path):
-            if file.endswith(".py"):
-                file_name = file.removesuffix(".py")
-                exec("from src import " + file_name)
-
+        exec("from src import *")
     except ImportError as e:
         Debug("Cannot import src folder", str(e), Constant.TINA4_LOG_ERROR)
 else:
@@ -144,11 +140,7 @@ else:
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "routes"):
     try:
-        src_path = root_path + os.sep + "src" + os.sep + "routes"
-        for file in os.listdir(src_path):
-            if file.endswith(".py"):
-                file_name = file.removesuffix(".py")
-                exec("from src.routes import " + file_name)
+        exec("from src.routes import *")
     except ImportError as e:
         Debug("Cannot import src.routes folder", str(e), Constant.TINA4_LOG_ERROR)
 else:
@@ -156,11 +148,7 @@ else:
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
     try:
-        src_path = root_path + os.sep + "src" + os.sep + "app"
-        for file in os.listdir(src_path):
-            if file.endswith(".py"):
-                file_name = file.removesuffix(".py")
-                exec("from src.app import " + file_name)
+        exec("from src.app import *")
     except ImportError as e:
         Debug("Cannot import src.app folder", str(e), Constant.TINA4_LOG_ERROR)
 else:

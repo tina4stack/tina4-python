@@ -128,7 +128,7 @@ class Database:
             else:
                 sys.exit("Could not load database driver for "+params[0])
 
-        Debug("DATABASE:", self.database_module, self.host, self.port, self.database_path, self.username,
+        Debug("DATABASE:", self.database_module.__name__, self.host, self.port, self.database_path, self.username,
               Constant.TINA4_LOG_DEBUG)
 
     def table_exists(self, table_name):
