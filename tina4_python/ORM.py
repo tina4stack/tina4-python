@@ -407,6 +407,7 @@ class ORM:
             sql += "\norder by " + ",".join(order_by)
 
         records = self.__dba__.fetch(sql, params=params, limit=limit, skip=skip)
+        self.__dba__.commit()
         return records
 
     def load(self, query="", params=[]):
