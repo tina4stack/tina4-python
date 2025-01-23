@@ -442,13 +442,7 @@ class Database:
 
         if isinstance(data, list):
             columns = ", ".join(data[0].keys())
-            # Checking which database engine is used to generate respective syntax for placeholders
-            if self.database_engine in (self.SQLITE, self.FIREBIRD):
-                placeholders = ", ".join(['?'] * len(data[0]))
-            elif self.database_engine in (self.MYSQL, self.POSTGRES):
-                placeholders = ", ".join(['%s'] * len(data[0]))
-            else:
-                placeholders = ", ".join(['?'] * len(data))
+            placeholders = ", ".join(['?'] * len(data[0]))
 
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
@@ -476,12 +470,7 @@ class Database:
         :param str table_name: Name of table
         :param str filter: Expression for deleting records
         """
-        if self.database_engine in (self.SQLITE, self.FIREBIRD):
-            placeholder = "?"
-        elif self.database_engine in (self.MYSQL, self.POSTGRES):
-            placeholder = "%s"
-        else:
-            placeholder = "?"
+        placeholder = "?"
 
         if filter is not None:
             # Updating a single record - record passed in is a dictionary
@@ -523,12 +512,7 @@ class Database:
         :param None data: List or Dictionary containing the data to be inserted
         :param str primary_key: The name of the primary key of the table
         """
-        if self.database_engine in (self.SQLITE, self.FIREBIRD):
-            placeholder = "?"
-        elif self.database_engine in (self.MYSQL, self.POSTGRES):
-            placeholder = "%s"
-        else:
-            placeholder = "?"
+        placeholder = "?"
 
         if data is not None:
             # Updating a single record - record passed in is a dictionary

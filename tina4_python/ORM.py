@@ -20,8 +20,9 @@ def find_all_sub_classes(a_class):
 
 
 def orm(dba):
+    from tina4_python import root_path
     Debug("Initializing ORM")
-    orm_path = tina4_python.root_path + os.sep + "src" + os.sep + "orm"
+    orm_path = root_path + os.sep + "src" + os.sep + "orm"
     print("Path", orm_path)
 
     if not os.path.exists(orm_path):
@@ -510,7 +511,7 @@ class ORM:
         if self.__dba__ is not None:
             result = self.__dba__.delete(sql, params)
 
-        if result.error is not None:
+        if not result:
             self.__dba__.rollback()
             return False
         else:
