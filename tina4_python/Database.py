@@ -223,6 +223,18 @@ class Database:
             return False
         return True
 
+    def check_connected(self):
+        """
+        Checks if the database connection is established
+        :return:
+        """
+        if self.database_engine == self.MYSQL:
+            self.dba.ping(reconnect=True, attempts=1, delay=0)
+        else:
+            # implement other database requirements if needed
+            pass
+
+
     def fetch(self, sql, params=[], limit=10, skip=0):
         """
         Fetch records based on a sql statement
@@ -232,6 +244,7 @@ class Database:
         :param int skip: Offset of records to skip
         :return: DatabaseResult
         """
+        self.check_connected()
         # make a statement to count the records
         sql_count = f"select count(*) as \"count_records\" from ({sql}) as t"
 
@@ -315,6 +328,7 @@ class Database:
         :param list params: A list of params in order of precedence
         :return: DatabaseResult
         """
+        self.check_connected()
         sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
@@ -341,6 +355,7 @@ class Database:
         :param params: A list of params in order of precedence
         :return: DatabaseResult
         """
+        self.check_connected()
         sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
@@ -359,6 +374,7 @@ class Database:
         :return:
         """
         try:
+            self.check_connected()
             if self.database_engine == self.SQLITE:
                 self.dba.execute("BEGIN TRANSACTION")
             elif self.database_engine == self.FIREBIRD:
