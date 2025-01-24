@@ -185,7 +185,7 @@ class Webserver:
         else:
             body = None
 
-        request = {"params": params, "body": body, "raw_data": self.request, "url": self.path,
+        request = {"params": params, "body": body, "raw_data": self.request, "url": self.path, "session": self.session,
                    "headers": self.lowercase_headers, "raw_request": self.request_raw, "raw_content": self.content_raw}
 
         tina4_python.tina4_current_request = request

@@ -26,7 +26,16 @@ def orm(dba):
     if not os.path.exists(orm_path):
         os.makedirs(orm_path)
 
-    exec ('from src.orm import *')
+    # load and assign
+    for file in os.listdir(orm_path):
+        if not file.endswith(".py"):
+            continue
+        mod_name = file.removesuffix(".py")
+        if "__init__" not in mod_name and "__pycache__" not in mod_name and ".git" not in mod_name:
+            # import and set the database object
+            Debug('from src.orm.' + mod_name + ' import ' + mod_name)
+            exec('from src.orm.' + mod_name + ' import ' + mod_name)
+            exec(mod_name + ".__dba__ = dba")
     classes = find_all_sub_classes(ORM)
     for a_class in classes:
         a_class.__dba__ = dba
