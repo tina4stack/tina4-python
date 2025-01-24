@@ -32,7 +32,7 @@ def is_int(v):
 class Webserver:
     async def get_content_length(self):
         # get the content length
-        if "content-length" in self.lowercase_headers != -1:
+        if "content-length" in self.lowercase_headers:
             return int(self.lowercase_headers["content-length"])
 
         return 0
@@ -107,7 +107,7 @@ class Webserver:
         self.send_header("Connection", "Keep-Alive", headers)
         self.send_header("Keep-Alive", "timeout=5, max=30", headers)
 
-    async def get_response(self, method):
+    async def get_response(self, method, asgi_response=False):
         """
         Get response
         :param method: GET, POST, PATCH, DELETE, PUT
@@ -121,7 +121,11 @@ class Webserver:
             self.send_header("Access-Control-Allow-Credentials", "True", headers)
 
             headers = await self.get_headers(headers, self.response_protocol, Constant.HTTP_OK)
-            return headers
+
+            if asgi_response:
+                return None, headers
+            else:
+                return headers
 
         params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
 
@@ -200,6 +204,9 @@ class Webserver:
         # add the custom headers from the response
         for response_header in response.headers:
             self.send_header(response_header, response.headers[response_header], headers)
+
+        if asgi_response:
+            return response, headers
 
         headers = await self.get_headers(headers, self.response_protocol, response.http_code)
 

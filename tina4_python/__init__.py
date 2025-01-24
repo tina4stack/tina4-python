@@ -15,7 +15,6 @@ import sass
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
-
 from tina4_python.Router import get
 from tina4_python import Messages, Constant
 from tina4_python.Swagger import Swagger
@@ -26,6 +25,7 @@ from tina4_python.Localization import localize
 from tina4_python.Auth import Auth
 from tina4_python.Debug import Debug
 from tina4_python.ShellColors import ShellColors
+from tina4_python.Session import Session
 
 _ = gettext.gettext
 
@@ -253,3 +253,97 @@ if os.getenv('TINA4_DEFAULT_WEBSERVER', 'True') == 'True':
         Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
               "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
               Constant.TINA4_LOG_WARNING)
+
+async def app(scope, receive, send):
+    """
+    Runs normal hypercorn, uvicorn, granian
+    :param scope:
+    :param receive:
+    :param send:
+    :return:
+    """
+    body = b""
+    while True and scope['type'] == 'http':
+        message =  await receive()
+        if "body" in message:
+            body += message["body"]
+        if message['type'] == 'lifespan.startup':
+            await send({'type': 'lifespan.startup.complete'})
+            return
+        elif message['type'] == 'lifespan.shutdown':
+            await send({'type': 'lifespan.shutdown.complete'})
+            return
+        elif message["type"] == "http.disconnect":
+            return
+        elif not message.get("more_body"):
+            webserver = Webserver(scope["server"][0], scope["server"][1])
+            parsed_headers = {}
+            parsed_headers_lowercase = {}
+            for header in scope["headers"]:
+                parsed_headers[header[0].decode()] = header[1].decode()
+                parsed_headers_lowercase[header[0].decode().lower()] = header[1].decode()
+
+            if "content-length" not in parsed_headers_lowercase and "accept" in parsed_headers_lowercase:
+                parsed_headers_lowercase["content-type"] = parsed_headers_lowercase["accept"].split(",")[0]
+                parsed_headers["Content-Type"] = parsed_headers_lowercase["content-type"]
+
+            if "content-length" not in parsed_headers_lowercase:
+                parsed_headers_lowercase["content-length"] = 0
+                parsed_headers_lowercase["Content-Length"] = parsed_headers_lowercase["content-length"]
+
+            webserver.headers = parsed_headers
+            webserver.lowercase_headers = parsed_headers_lowercase
+            webserver.path = scope["path"]+"?"+scope["query_string"].decode()
+            webserver.method = scope["method"]
+
+            if message["type"] == "http.request":
+                webserver.content_raw = body
+            else:
+                webserver.content_raw = b""
+            webserver.content_length = parsed_headers_lowercase["content-length"]
+            webserver.router_handler = Router()
+            webserver.session = Session
+
+            cookie_list = {}
+            if "cookie" in webserver.lowercase_headers:
+                cookie_list_temp = webserver.lowercase_headers["cookie"].split(";")
+                for cookie_value in cookie_list_temp:
+                    cookie = cookie_value.split("=", 1)
+                    cookie_list[cookie[0].strip()] = cookie[1].strip()
+
+            webserver.cookies = cookie_list
+
+            # initialize the session
+            webserver.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
+                                   os.getenv("TINA4_SESSION_FOLDER", root_path + os.sep + "sessions"),
+                                   os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
+                                   )
+
+            if os.getenv("TINA4_SESSION", "PY_SESS") in webserver.cookies:
+                webserver.session.load(webserver.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
+            else:
+                webserver.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = webserver.session.start()
+
+            tina4_response, tina4_headers = await webserver.get_response(scope["method"], True)
+
+            response_headers = []
+            for header in tina4_headers:
+                header = header.split(":")
+                response_headers.append([header[0].strip().encode(), header[1].strip().encode()])
+
+            await send({
+                'type': 'http.response.start',
+                'status': tina4_response.http_code,
+                'headers': response_headers,
+            })
+
+            if isinstance(tina4_response.content, str):
+                await send({
+                    'type': 'http.response.body',
+                    'body': tina4_response.content.encode(),
+                })
+            else:
+                await send({
+                    'type': 'http.response.body',
+                    'body': tina4_response.content,
+                })

@@ -86,7 +86,7 @@ async def session_get(request, response):
         print(pair)
 
 
-    print("session set")
+    print("session get")
 
 
 @middleware(MiddleWare, ["before_and_after"])
