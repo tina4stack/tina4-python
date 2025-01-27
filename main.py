@@ -5,6 +5,5 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 
-# import tina4_python
-
-from tina4_python import app
+import tina4_python
+# from tina4_python import app

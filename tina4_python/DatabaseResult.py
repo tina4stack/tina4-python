@@ -54,7 +54,7 @@ class DatabaseResult:
 
         return {"recordsTotal": self.total_count, "recordsOffset": self.skip,  "recordCount": self.count, "recordsFiltered": self.total_count, "fields": self.columns, "data": self.to_array(), "dataError": self.error}
 
-    def to_array(self):
+    def to_array(self, _filter=None):
         """
         Creates an array or list of the items
         :return:
@@ -78,17 +78,20 @@ class DatabaseResult:
                     else:
                         json_record[key] = record[key]
 
+                if _filter is not None:
+                    json_record = _filter(json_record)
+
                 json_records.append(json_record)
 
             return json_records
         else:
             return []
 
-    def to_list(self):
-        return self.to_array()
+    def to_list(self, _filter=None):
+        return self.to_array(_filter)
 
-    def to_json(self):
-        return json.dumps(self.to_array())
+    def to_json(self, _filter=None):
+        return json.dumps(self.to_array(_filter))
 
     def __getitem__(self, item):
         if item < len(self.records):

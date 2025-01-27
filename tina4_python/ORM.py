@@ -280,7 +280,7 @@ class ORM:
         if init_object is not None:
             self.__populate_orm(init_object)
 
-        Debug("Checking for", self.__table_name__, TINA4_LOG_INFO)
+        # Debug("Checking for", self.__table_name__, TINA4_LOG_INFO)
         if self.__dba__:
             self.__table_exists = self.__dba__.table_exists(self.__table_name__)
             if not self.__table_exists:
@@ -290,7 +290,7 @@ class ORM:
                 with open(filename, "w") as f:
                     f.write(sql)
                     f.close()
-            Debug("Table Exists", self.__table_exists, TINA4_LOG_INFO)
+            # Debug("Table Exists", self.__table_exists, TINA4_LOG_INFO)
         else:
             self.__table_exists = False
 
