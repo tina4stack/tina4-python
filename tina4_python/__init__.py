@@ -263,8 +263,12 @@ async def app(scope, receive, send):
     :return:
     """
     body = b""
-    while True and scope['type'] == 'http':
-        message =  await receive()
+    while True and scope['type'] == 'http' or scope['type'] == 'websocket':
+        if scope['type'] != 'websocket':
+            message =  await receive()
+        else:
+            message = {'type': 'websocket'}
+
         if "body" in message:
             body += message["body"]
         if message['type'] == 'lifespan.startup':
@@ -273,7 +277,7 @@ async def app(scope, receive, send):
         elif message['type'] == 'lifespan.shutdown':
             await send({'type': 'lifespan.shutdown.complete'})
             return
-        elif message["type"] == "http.disconnect":
+        elif message["type"] == "http.disconnect" or message["type"] == "websocket.disconnect":
             return
         elif not message.get("more_body"):
             webserver = Webserver(scope["server"][0], scope["server"][1])
@@ -293,8 +297,13 @@ async def app(scope, receive, send):
 
             webserver.headers = parsed_headers
             webserver.lowercase_headers = parsed_headers_lowercase
+
             webserver.path = scope["path"]+"?"+scope["query_string"].decode()
-            webserver.method = scope["method"]
+
+            if message["type"] == "http":
+                webserver.method = scope["method"]
+            else:
+                webserver.method = "GET"
 
             if message["type"] == "http.request":
                 webserver.content_raw = body
@@ -324,7 +333,7 @@ async def app(scope, receive, send):
             else:
                 webserver.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = webserver.session.start()
 
-            tina4_response, tina4_headers = await webserver.get_response(scope["method"], True)
+            tina4_response, tina4_headers = await webserver.get_response(webserver.method, (scope,receive,send),True)
 
             response_headers = []
             for header in tina4_headers:

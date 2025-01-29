@@ -6,4 +6,11 @@
 #
 
 import tina4_python
+# from hypercorn.config import Config
 # from tina4_python import app
+# import asyncio
+# from hypercorn.asyncio import serve
+# config = Config()
+# config.bind = ["localhost:8080"]
+
+# asyncio.run(serve(app, config))

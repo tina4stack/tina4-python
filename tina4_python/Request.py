@@ -14,5 +14,7 @@ cookies = {}
 url = None
 session = None
 files = {}
+raw_request = None
 raw_data = None
 raw_content = None
+transport = None

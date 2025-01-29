@@ -107,7 +107,7 @@ class Webserver:
         self.send_header("Connection", "Keep-Alive", headers)
         self.send_header("Keep-Alive", "timeout=5, max=30", headers)
 
-    async def get_response(self, method, asgi_response=False):
+    async def get_response(self, method, transport, asgi_response=False):
         """
         Get response
         :param method: GET, POST, PATCH, DELETE, PUT
@@ -186,7 +186,8 @@ class Webserver:
             body = None
 
         request = {"params": params, "body": body, "raw_data": self.request, "url": self.path, "session": self.session,
-                   "headers": self.lowercase_headers, "raw_request": self.request_raw, "raw_content": self.content_raw}
+                   "headers": self.lowercase_headers, "raw_request": self.request_raw, "raw_content": self.content_raw,
+                   "transport": transport}
 
         tina4_python.tina4_current_request = request
 
@@ -230,9 +231,9 @@ class Webserver:
         return headers.encode()
 
     async def run_server(self):
-        server = await asyncio.start_server(self.handle_client, self.host_name, self.port)
-        async with server:
-            await server.serve_forever()
+        self.server = await asyncio.start_server(self.handle_client, self.host_name, self.port)
+        async with self.server:
+            await self.server.serve_forever()
 
     async def get_data(self, reader):
         try:
@@ -342,7 +343,7 @@ class Webserver:
                     self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
 
                 if self.method != "" and contains_method:
-                    content = await (self.get_response(self.method))
+                    content = await (self.get_response(self.method, writer))
                     writer.write(content)
                     await writer.drain()
 

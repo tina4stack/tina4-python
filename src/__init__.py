@@ -122,4 +122,4 @@ async def run_test_vars(request, response):
     print("vars")
     print(request.params)
 
-from .routes.meme import *
+from .routes import meme
