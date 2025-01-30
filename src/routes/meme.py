@@ -16,7 +16,7 @@ async def get_websocket(request, response):
     ws = await AioServer.accept(aiohttp=request)
     try:
         while True:
-            data = await ws.receive()
+            data = await ws.receive()+ " Reply"
             await ws.send(data)
     except ConnectionClosed:
         pass

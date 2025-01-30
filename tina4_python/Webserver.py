@@ -351,7 +351,7 @@ class Webserver:
                     try:
                         writer.write(content)
                         await writer.drain()
-                        await writer.close()
+                        writer.close()
                     except BrokenPipeError as e:
                         # socket got terminated
                         pass
@@ -377,7 +377,7 @@ class Webserver:
 
             writer.write(headers + html.encode())
             await writer.drain()
-            await writer.close()
+            writer.close()
 
     def __init__(self, host_name, port):
         self.content_raw = None
