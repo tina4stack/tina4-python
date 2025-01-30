@@ -13,6 +13,8 @@ import sys
 import traceback
 import sass
 from pathlib import Path
+
+from safety.scan.command import scan_system_app
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 from tina4_python.Router import get
@@ -300,7 +302,7 @@ async def app(scope, receive, send):
 
             webserver.path = scope["path"]+"?"+scope["query_string"].decode()
 
-            if message["type"] == "http":
+            if "method" in scope:
                 webserver.method = scope["method"]
             else:
                 webserver.method = "GET"
@@ -335,24 +337,25 @@ async def app(scope, receive, send):
 
             tina4_response, tina4_headers = await webserver.get_response(webserver.method, (scope,receive,send),True)
 
-            response_headers = []
-            for header in tina4_headers:
-                header = header.split(":")
-                response_headers.append([header[0].strip().encode(), header[1].strip().encode()])
+            if message["type"] != "websocket":
+                response_headers = []
+                for header in tina4_headers:
+                    header = header.split(":")
+                    response_headers.append([header[0].strip().encode(), header[1].strip().encode()])
 
-            await send({
-                'type': 'http.response.start',
-                'status': tina4_response.http_code,
-                'headers': response_headers,
-            })
+                await send({
+                    'type': 'http.response.start',
+                    'status': tina4_response.http_code,
+                    'headers': response_headers,
+                })
 
-            if isinstance(tina4_response.content, str):
-                await send({
-                    'type': 'http.response.body',
-                    'body': tina4_response.content.encode(),
-                })
-            else:
-                await send({
-                    'type': 'http.response.body',
-                    'body': tina4_response.content,
-                })
+                if isinstance(tina4_response.content, str):
+                    await send({
+                        'type': 'http.response.body',
+                        'body': tina4_response.content.encode(),
+                    })
+                else:
+                    await send({
+                        'type': 'http.response.body',
+                        'body': tina4_response.content,
+                    })

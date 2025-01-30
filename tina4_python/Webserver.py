@@ -23,7 +23,7 @@ from tina4_python.Template import Template
 
 def is_int(v):
     try:
-        f=int(v)
+        f = int(v)
     except ValueError:
         return False
     return True
@@ -152,13 +152,13 @@ class Webserver:
                         if isinstance(start_var, dict) and var_name in start_var:
                             start_var = start_var[var_name]
                         else:
-                            if counter+1 < len(var_names) and is_int(var_names[counter+1]) :
+                            if counter + 1 < len(var_names) and is_int(var_names[counter + 1]):
                                 if var_name not in start_var:
                                     start_var[var_name] = []
                                 start_var = start_var[var_name]
                             else:
-                                if counter-1 > 0 and is_int(var_names[counter-1]):
-                                    index = int(var_names[counter-1])
+                                if counter - 1 > 0 and is_int(var_names[counter - 1]):
+                                    index = int(var_names[counter - 1])
                                     new_value = {var_name: value}
                                     if index in range(len(start_var)):
                                         start_var[index].update(new_value)
@@ -169,7 +169,7 @@ class Webserver:
                                     start_var = start_var[index]
                                 else:
                                     if isinstance(start_var, dict):
-                                        if counter+1 == len(var_names):
+                                        if counter + 1 == len(var_names):
                                             start_var[var_name] = value
                                         else:
                                             start_var[var_name] = {}
@@ -232,8 +232,7 @@ class Webserver:
 
     async def run_server(self):
         self.server = await asyncio.start_server(self.handle_client, self.host_name, self.port)
-        async with self.server:
-            await self.server.serve_forever()
+        await self.server.serve_forever()
 
     async def get_data(self, reader):
         try:
@@ -292,6 +291,7 @@ class Webserver:
             self.method = protocol[0]
             self.path = protocol[1]
 
+
             method_list = [Constant.TINA4_GET, Constant.TINA4_DELETE, Constant.TINA4_PUT, Constant.TINA4_ANY,
                            Constant.TINA4_POST, Constant.TINA4_PATCH, Constant.TINA4_OPTIONS]
 
@@ -299,7 +299,7 @@ class Webserver:
 
             request_handled = False
             # return static content asap
-            if self.method == "GET":
+            if self.method == "GET" and "sec-websocket-key" not in self.lowercase_headers:
                 # split URL and extract query string
                 url = Router.clean_url(self.path)
                 url_parts = url.split('?')
@@ -315,14 +315,16 @@ class Webserver:
                         self.send_header("Content-Type", mime_type, headers)
                         await self.send_basic_headers(headers)
                         content = file.read()
-                        headers =  await self.get_headers(headers, self.response_protocol, HTTP_OK)
+                        headers = await self.get_headers(headers, self.response_protocol, HTTP_OK)
                         writer.write(headers + content)
                         await writer.drain()
+                        await writer.close()
                         request_handled = True
 
             if not request_handled:
                 # parse cookies
                 cookie_list = {}
+                content = ""
                 if "cookie" in self.lowercase_headers:
                     cookie_list_temp = self.lowercase_headers["cookie"].split(";")
                     for cookie_value in cookie_list_temp:
@@ -344,15 +346,22 @@ class Webserver:
 
                 if self.method != "" and contains_method:
                     content = await (self.get_response(self.method, writer))
-                    writer.write(content)
-                    await writer.drain()
 
-            writer.close()
+                if "sec-websocket-key" not in self.lowercase_headers and content != "":
+                    try:
+                        writer.write(content)
+                        await writer.drain()
+                        await writer.close()
+                    except BrokenPipeError as e:
+                        # socket got terminated
+                        pass
+
+
         except Exception as e:
             error_string = tina4_python.global_exception_handler(e)
             headers = []
             await self.send_basic_headers(headers)
-            headers =  await self.get_headers(headers, self.response_protocol, HTTP_SERVER_ERROR)
+            headers = await self.get_headers(headers, self.response_protocol, HTTP_SERVER_ERROR)
             url = Router.clean_url(self.path)
 
             content_type = "text/html"
@@ -360,12 +369,15 @@ class Webserver:
                 content_type = self.lowercase_headers["content-type"].lower()
 
             if content_type == "application/json":
-                html = json.dumps({"error": "500 - Internal Server Error", "data": {"server": {"url": url}, "error_message": error_string}})
+                html = json.dumps({"error": "500 - Internal Server Error",
+                                   "data": {"server": {"url": url}, "error_message": error_string}})
             else:
-                html = Template.render_twig_template("errors/500.twig",  {"server": {"url": url}, "error_message": error_string})
+                html = Template.render_twig_template("errors/500.twig",
+                                                     {"server": {"url": url}, "error_message": error_string})
+
             writer.write(headers + html.encode())
             await writer.drain()
-            writer.close()
+            await writer.close()
 
     def __init__(self, host_name, port):
         self.content_raw = None
@@ -383,6 +395,7 @@ class Webserver:
         self.port = port
         self.router_handler = None
         self.running = False
+        self.server = None
 
     async def serve_forever(self):
         await self.run_server()
@@ -390,4 +403,3 @@ class Webserver:
     def server_close(self):
         self.running = False
         self.server_socket.close()
-

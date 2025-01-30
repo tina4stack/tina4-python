@@ -17,7 +17,6 @@ async def get_websocket(request, response):
     try:
         while True:
             data = await ws.receive()
-            data = "Hello World! "+data
             await ws.send(data)
     except ConnectionClosed:
         pass
@@ -29,6 +28,7 @@ async def get_websocket2(request, response):
     try:
         while True:
             data = await ws.receive()
-            await ws.send(data)
+            await ws.send(data+" Respond")
     except ConnectionClosed:
         pass
+    return response("")
