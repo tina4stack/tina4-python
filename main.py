@@ -4,7 +4,6 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
-
 import tina4_python
 # from hypercorn.config import Config
 # from tina4_python import app

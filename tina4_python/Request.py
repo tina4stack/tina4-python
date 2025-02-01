@@ -18,3 +18,4 @@ raw_request = None
 raw_data = None
 raw_content = None
 transport = None
+asgi_response = None

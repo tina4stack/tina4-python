@@ -187,7 +187,7 @@ class Webserver:
 
         request = {"params": params, "body": body, "raw_data": self.request, "url": self.path, "session": self.session,
                    "headers": self.lowercase_headers, "raw_request": self.request_raw, "raw_content": self.content_raw,
-                   "transport": transport}
+                   "transport": transport, "asgi_response": asgi_response}
 
         tina4_python.tina4_current_request = request
 
@@ -344,17 +344,20 @@ class Webserver:
                 else:
                     self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
 
-                if self.method != "" and contains_method:
-                    content = await (self.get_response(self.method, writer))
-
-                if "sec-websocket-key" not in self.lowercase_headers and content != "":
+                if "sec-websocket-key" not in self.lowercase_headers:
                     try:
-                        writer.write(content)
-                        await writer.drain()
+                        if self.method != "" and contains_method:
+                            content = await (self.get_response(self.method, writer))
+                        if content != "":
+                            writer.write(content)
+                            await writer.drain()
                         writer.close()
                     except BrokenPipeError as e:
                         # socket got terminated
                         pass
+                else:
+                    # for sockets
+                    await (self.get_response(self.method, writer))
 
 
         except Exception as e:
