@@ -24,12 +24,16 @@ class Websocket:
         Returns a websocket connection
         :return:
         """
-        if self.request.asgi_response:
-            connection = await self.server.AioServer.accept(asgi=self.request.transport)
-        else:
-            if os.name == "nt":
-                connection = await self.server.AioServer.accept(sock=self.request.transport.transport._sock, headers=self.request.headers)
+        try:
+            if self.request.asgi_response:
+                connection = await self.server.AioServer.accept(asgi=self.request.transport)
             else:
-                connection = await self.server.AioServer.accept(aiohttp=self.request)
+                if os.name == "nt":
+                    connection = await self.server.AioServer.accept(sock=self.request.transport.get_extra_info('socket'), headers=self.request.headers)
+                else:
+                    connection = await self.server.AioServer.accept(sock=self.request.transport.get_extra_info('socket').dup(), headers=self.request.headers)
 
-        return connection
+            return connection
+        except Exception as e:
+            Debug.error("Could not establish a socket connection:", str(e))
+            return None
