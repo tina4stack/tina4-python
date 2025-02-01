@@ -16,7 +16,6 @@ class Websocket:
         try:
             self.server = importlib.import_module("simple_websocket")
             self.request = request
-            self.connection = None
         except Exception as e:
             Debug.error("Error creating Websocket, perhaps you need to install simple_websocket ?", e)
 
@@ -26,11 +25,11 @@ class Websocket:
         :return:
         """
         if self.request.asgi_response:
-            self.connection = await self.server.AioServer.accept(asgi=self.request.transport)
+            connection = await self.server.AioServer.accept(asgi=self.request.transport)
         else:
             if os.name == "nt":
-                self.connection = await self.server.AioServer.accept(sock=self.request.transport.transport._sock, headers=self.request.headers)
+                connection = await self.server.AioServer.accept(sock=self.request.transport.transport._sock, headers=self.request.headers)
             else:
-                self.connection = await self.server.AioServer.accept(aiohttp=self.request)
+                connection = await self.server.AioServer.accept(aiohttp=self.request)
 
-        return self.connection
+        return connection

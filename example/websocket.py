@@ -1,19 +1,12 @@
-from aiohttp import web
-from simple_websocket import AioServer, ConnectionClosed
+import asyncio
+from websockets.asyncio.server import serve
 
-app = web.Application()
+async def echo(websocket):
+    async for message in websocket:
+        await websocket.send(message)
 
-async def echo(request):
-    ws = await AioServer.accept(aiohttp=request)
-    try:
-        while True:
-            data = await ws.receive()
-            await ws.send(data)
-    except ConnectionClosed:
-        pass
-    return web.Response(text='')
+async def main():
+    server = await serve(echo, "localhost", 8765)
+    await server.serve_forever()
 
-app.add_routes([web.get('/echo', echo)])
-
-if __name__ == '__main__':
-    web.run_app(app, port=5000)
+asyncio.run(main())
