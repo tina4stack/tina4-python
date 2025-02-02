@@ -13,8 +13,6 @@ import sys
 import traceback
 import sass
 from pathlib import Path
-
-from safety.scan.command import scan_system_app
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 from tina4_python.Router import get
@@ -209,53 +207,6 @@ async def get_swagger(request, response):
     html = html.replace("{SWAGGER_ROUTE}", os.getenv("SWAGGER_ROUTE", "/swagger"))
     return response(html)
 
-
-def webserver(host_name, port):
-    web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
-    web_server.router_handler = Router()
-    # Fix the display to make it clickable
-    if host_name == "0.0.0.0":
-        host_name = "localhost"
-    Debug(Messages.MSG_SERVER_STARTED.format(host_name=host_name, port=port), Constant.TINA4_LOG_INFO)
-    try:
-        asyncio.run(web_server.serve_forever())
-    except KeyboardInterrupt:
-        pass
-    web_server.server_close()
-    Debug(Messages.MSG_SERVER_STOPPED, Constant.TINA4_LOG_INFO)
-
-
-def run_web_server(in_hostname="localhost", in_port=7145):
-    Debug(Messages.MSG_STARTING_WEBSERVER.format(port=in_port), Constant.TINA4_LOG_INFO)
-    webserver(in_hostname, in_port)
-
-
-if os.getenv('TINA4_DEFAULT_WEBSERVER', 'True') == 'True':
-    if importlib.util.find_spec("jurigged"):
-        Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
-        jurigged.watch("./")
-
-    # Start up a webserver based on params passed on the command line
-    HOSTNAME = "localhost"
-    PORT = 7145
-    if len(sys.argv) > 1:
-        PORT = sys.argv[1]
-        if ":" in PORT:
-            SERVER_CONFIG = PORT.split(":")
-            HOSTNAME = SERVER_CONFIG[0]
-            PORT = SERVER_CONFIG[1]
-
-    if PORT != "stop" and PORT != "manual":
-        try:
-            PORT = int(PORT)
-            run_web_server(HOSTNAME, PORT)
-        except Exception:
-            Debug("Not running webserver", Constant.TINA4_LOG_WARNING)
-    else:
-        Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
-              "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
-              Constant.TINA4_LOG_WARNING)
-
 async def app(scope, receive, send):
     """
     Runs normal hypercorn, uvicorn, granian
@@ -359,3 +310,69 @@ async def app(scope, receive, send):
                         'type': 'http.response.body',
                         'body': tina4_response.content,
                     })
+
+
+def run_web_server(in_hostname="localhost", in_port=7145):
+    Debug(Messages.MSG_STARTING_WEBSERVER.format(port=in_port), Constant.TINA4_LOG_INFO)
+    webserver(in_hostname, in_port)
+
+def webserver(host_name, port):
+    """
+    Runs the correct webserver
+    :param host_name:
+    :param port:
+    :return:
+    """
+    if os.getenv("TINA4_BUILT_IN_WEBSERVER", "False").upper() == "TRUE":
+        # runs the built-in webserver (websockets) don't work on windows
+        web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
+        web_server.router_handler = Router()
+        # Fix the display to make it clickable
+        if host_name == "0.0.0.0":
+            host_name = "localhost"
+        Debug(Messages.MSG_SERVER_STARTED.format(host_name=host_name, port=port), Constant.TINA4_LOG_INFO)
+        try:
+            asyncio.run(web_server.serve_forever())
+        except KeyboardInterrupt:
+            pass
+        web_server.server_close()
+    else:
+        # Runs a hyper corn server
+        try:
+            from hypercorn.config import Config
+            from hypercorn.asyncio import serve
+            config = Config()
+            config.bind = [host_name+":"+str(port)]
+            asyncio.run(serve(app, config))
+        except Exception:
+            Debug("Not running Hypercorn webserver", str(e), Constant.TINA4_LOG_WARNING)
+
+
+    Debug(Messages.MSG_SERVER_STOPPED, Constant.TINA4_LOG_INFO)
+
+
+if os.getenv('TINA4_DEFAULT_WEBSERVER', 'True').upper() == 'TRUE':
+    if importlib.util.find_spec("jurigged"):
+        Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
+        jurigged.watch("./")
+
+    # Start up a webserver based on params passed on the command line
+    HOSTNAME = "localhost"
+    PORT = 7145
+    if len(sys.argv) > 1:
+        PORT = sys.argv[1]
+        if ":" in PORT:
+            SERVER_CONFIG = PORT.split(":")
+            HOSTNAME = SERVER_CONFIG[0]
+            PORT = SERVER_CONFIG[1]
+
+    if PORT != "stop" and PORT != "manual":
+        try:
+            PORT = int(PORT)
+            run_web_server(HOSTNAME, PORT)
+        except Exception as e:
+            Debug("Not running webserver", str(e), Constant.TINA4_LOG_WARNING)
+    else:
+        Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
+              "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
+              Constant.TINA4_LOG_WARNING)

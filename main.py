@@ -5,10 +5,4 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 import tina4_python
-# from hypercorn.config import Config
-# from tina4_python import app
-# import asyncio
-# from hypercorn.asyncio import serve
-# config = Config()
-# config.bind = ["localhost:7148"]
-# asyncio.run(serve(app, config))
+

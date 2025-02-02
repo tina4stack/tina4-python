@@ -5,7 +5,10 @@
 #
 # flake8: noqa: E501
 import importlib
+import weakref
 import os
+from asyncio.trsock import TransportSocket
+
 from tina4_python.Debug import Debug
 
 class Websocket:
@@ -29,11 +32,17 @@ class Websocket:
                 connection = await self.server.AioServer.accept(asgi=self.request.transport)
             else:
                 if os.name == "nt":
-                    connection = await self.server.AioServer.accept(sock=self.request.transport.get_extra_info('socket'), headers=self.request.headers)
+                    connection = await self.server.AioServer.accept(
+                        sock=TransportSocket(self.request.transport.transport._sock), # not working properly
+                        headers=self.request.headers
+                    )
                 else:
-                    connection = await self.server.AioServer.accept(sock=self.request.transport.get_extra_info('socket').dup(), headers=self.request.headers)
-
+                    connection = await self.server.AioServer.accept(
+                        sock=self.request.transport.get_extra_info('socket').dup(),
+                        headers=self.request.headers
+                    )
             return connection
+
         except Exception as e:
             Debug.error("Could not establish a socket connection:", str(e))
             return None
