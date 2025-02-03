@@ -5,7 +5,6 @@
 #
 # flake8: noqa: E501
 import importlib
-import weakref
 import os
 from asyncio.trsock import TransportSocket
 
@@ -19,6 +18,7 @@ class Websocket:
         try:
             self.server = importlib.import_module("simple_websocket")
             self.request = request
+
         except Exception as e:
             Debug.error("Error creating Websocket, perhaps you need to install simple_websocket ?", e)
 
@@ -41,6 +41,7 @@ class Websocket:
                         sock=self.request.transport.get_extra_info('socket').dup(),
                         headers=self.request.headers
                     )
+
             return connection
 
         except Exception as e:
