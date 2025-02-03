@@ -35,7 +35,7 @@ dba_type = "sqlite3:test3.db"
 
 
 def test_auth_payload():
-    auth = tina4_auth.get_token({"id": 1, "username": "hello", "date_created": datetime.datetime.now()})
+    auth = tina4_auth.get_token({"id": 1, "username": "hello", "date_created": datetime.now()})
     assert str(auth)
 
 def test_route_match():
@@ -155,6 +155,10 @@ def test_database_fetch():
     assert result.records[2]["id"] == 3
     assert result.to_json() == '[{"id": 1, "name": "Test1Update", "image": null}, {"id": 2, "name": "Test2Update", "image": null}, {"id": 3, "name": "Test3Update", "image": null}]'
     result = dba.fetch("select * from test_record order by id", limit=3, skip=3)
+
+    for record in result:
+        assert  isinstance(record, dict)
+
     assert result.records[1]["name"] == "Test2"
     result = dba.fetch("select * from test_record where id = ?", [3])
     assert result.records[0]["name"] == "Test3Update"
@@ -217,6 +221,8 @@ def test_database_transactions():
     dba.rollback()
 
     result = dba.fetch("select * from test_record where name = 'NEW ONE'")
+
+
 
     assert result.count == 0
 

@@ -93,6 +93,9 @@ class DatabaseResult:
     def to_json(self, _filter=None):
         return json.dumps(self.to_array(_filter))
 
+    def __iter__(self):
+        return iter(self.to_array())
+
     def __getitem__(self, item):
         if item < len(self.records):
             return self.records[item]
