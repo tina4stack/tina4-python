@@ -69,7 +69,7 @@ def test_database_posgresql():
     dba = database_connect(dba_type, "postgres", "password")
     assert dba.database_engine == dba.POSTGRES
 
-@pytest.mark.skip
+
 def test_database_execute():
     dba = database_connect(dba_type, user_name, password)
     if "firebird" in dba_type:
@@ -106,7 +106,7 @@ def test_database_execute():
     assert result.error is None
     dba.close()
 
-@pytest.mark.skip
+
 def test_database_insert():
     dba = database_connect(dba_type, user_name, password)
     result = dba.insert("test_record", {"id": 4, "name": "Test1"})
@@ -125,7 +125,7 @@ def test_database_insert():
     dba.commit()
     dba.close()
 
-@pytest.mark.skip
+
 def test_database_update():
     dba = database_connect(dba_type, user_name, password)
     result = dba.update("test_record", {"id": 1, "name": "Test1Update"})
@@ -145,7 +145,7 @@ def test_database_update():
 
     dba.close()
 
-@pytest.mark.skip
+
 def test_database_fetch():
     dba = database_connect(dba_type, user_name, password)
     result = dba.fetch("select id, name, image from test_record order by id", limit=3)
@@ -171,7 +171,7 @@ def test_database_fetch():
 
     dba.close()
 
-@pytest.mark.skip
+
 def test_database_bytes_insert():
     dba = database_connect(dba_type, user_name, password)
     with open("./src/public/images/logo.png", "rb") as file:
@@ -184,7 +184,7 @@ def test_database_bytes_insert():
     assert isinstance(result.to_json(), object)
     dba.close()
 
-@pytest.mark.skip
+
 def test_database_delete():
     dba = database_connect(dba_type, user_name, password)
 
@@ -200,7 +200,7 @@ def test_database_delete():
     dba.rollback()
     dba.close()
 
-@pytest.mark.skip
+
 def test_password():
     auth = Auth(tina4_python.root_path)
     password = auth.hash_password("123456")
@@ -210,7 +210,7 @@ def test_password():
     valid = auth.check_password(password, "123456")
     assert valid == False, "Password check"
 
-@pytest.mark.skip
+
 def test_database_transactions():
     dba = database_connect(dba_type, user_name, password)
 
@@ -267,10 +267,10 @@ def test_orm():
 
     print("START")
 
-    user = TestUser()
-    user.first_name = "First Name"
-    user.last_name = "Last Name"
+
+    user = TestUser({"firstName": "First Name 2", "lastName": "Last Name 2"})
     user.save()
+
 
     assert int(user.id) == 1
 
@@ -278,8 +278,11 @@ def test_orm():
 
     print("FIRST ID", test_id, user.id)
 
-    user = TestUser({"firstName": "First Name 2", "lastName": "Last Name 2"})
+    user = TestUser()
+    user.first_name = "First Name"
+    user.last_name = "Last Name"
     user.save()
+
 
     print ("SECOND ID", user.id)
 
@@ -294,7 +297,7 @@ def test_orm():
     counter = 0
     for item_value in ["Item 1", "Item 2"]:
         item = TestUserItem()
-        print ("TEST USER ITEM", item.to_dict())
+        # print ("TEST USER ITEM", item.to_dict())
         # item.id = counter+1
         item.name = item_value
         item.user_id = user.id
@@ -321,7 +324,7 @@ def test_orm():
 
     dba.close()
 
-@pytest.mark.skip
+
 def test_queues():
     """
     Tests the queue functionality

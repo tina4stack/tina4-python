@@ -277,8 +277,11 @@ class ORM:
                 self.__table_name__ = self.__get_snake_case_name__(class_name)
             else:
                 self.__table_name__ = table_name.lower()
+
         if init_object is not None:
             self.__populate_orm(init_object)
+        else:
+            self.__populate_orm({})
 
         # Debug("Checking for", self.__table_name__, TINA4_LOG_INFO)
         if self.__dba__:
@@ -294,7 +297,7 @@ class ORM:
         else:
             self.__table_exists = False
 
-        self.__populate_orm({})
+
 
     def __populate_orm(self, init_object):
         """
