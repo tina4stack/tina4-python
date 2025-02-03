@@ -353,7 +353,6 @@ class ORM:
                         if new_id is not None:
                             data[key] = new_id
                             current_value.value = data[key]
-                        print("GET INCREMENT", data)
                     else:
                         data[key] = current_value.default_value
             else:
@@ -450,7 +449,6 @@ class ORM:
             sql = f"select * from {self.__table_name__} where {query}"
 
         if self.__dba__ is not None:
-            print("FETCHING", sql)
             record = self.__dba__.fetch_one(sql, params)
             try:
                 if record:
@@ -480,7 +478,6 @@ class ORM:
         # check if record exists
         data = self.to_dict()
 
-        print ("DATA BEFORE", data)
         primary_keys = self.__get_primary_keys()
         sql = "select count(*) as \"count_records\" from " + self.__table_name__ + " where "
         counter = 0
@@ -497,10 +494,8 @@ class ORM:
             record = self.__dba__.fetch_one(sql, input_params)
 
             if record["count_records"] == 0:
-                print("NEW")
                 result = self.__dba__.insert(self.__table_name__, data)
             else:
-                print("UPDATE")
                 result = self.__dba__.update(self.__table_name__, data)
 
             self.__dba__.commit()
@@ -508,7 +503,6 @@ class ORM:
             if result:
                 self.load()
 
-                print ("DATA AFTER", self.to_dict())
                 return True
         except Exception as e:
             Debug.error("Error saving", str(e))
