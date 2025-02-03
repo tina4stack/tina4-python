@@ -294,12 +294,20 @@ class ORM:
         else:
             self.__table_exists = False
 
+        self.__populate_orm({})
+
     def __populate_orm(self, init_object):
         """
         Populates an ORM object from an input object, also transforms camel case objects to snake case ...
         :param init_object:
         :return:
         """
+        for field, field_definition in self.__field_definitions__.items():
+            if hasattr(self, field):
+                setattr(self, field, None)
+                field_definition.value = None
+                setattr(self, field, field_definition)
+
         if isinstance(init_object, str):
             init_object = json.loads(init_object)
 
@@ -338,11 +346,17 @@ class ORM:
                     data[key] = current_value.value
                 else:
                     if not isinstance(current_value, ForeignKeyField) and value.auto_increment:
-                        data[key] = self.__dba__.get_next_id(table_name=self.__table_name__, column_name=value.column_name)
+                        new_id = self.__dba__.get_next_id(table_name=self.__table_name__, column_name=value.column_name)
+                        if new_id is not None:
+                            data[key] = new_id
+                            current_value.value = data[key]
+                        print("GET INCREMENT", data)
                     else:
                         data[key] = current_value.default_value
             else:
                 data[key] = current_value
+
+
         return data
 
     def __str__(self):
@@ -418,6 +432,7 @@ class ORM:
         if not self.__table_exists:
             Debug("ORM: Load Error - Table", self.__table_name__, "does not exist", TINA4_LOG_ERROR)
             return False
+
         if query == "":
             sql = f"select * from {self.__table_name__} where "
             primary_keys = self.__get_primary_keys()
@@ -432,6 +447,7 @@ class ORM:
             sql = f"select * from {self.__table_name__} where {query}"
 
         if self.__dba__ is not None:
+            print("FETCHING", sql)
             record = self.__dba__.fetch_one(sql, params)
             try:
                 if record:
@@ -439,6 +455,7 @@ class ORM:
                         if key in self.__field_definitions__:
                             field_value = self.__field_definitions__[key]
                             field_value.value = value
+
                             setattr(self, key, field_value)
                     return True
                 else:
@@ -459,6 +476,8 @@ class ORM:
             return False
         # check if record exists
         data = self.to_dict()
+
+        print ("DATA BEFORE", data)
         primary_keys = self.__get_primary_keys()
         sql = "select count(*) as \"count_records\" from " + self.__table_name__ + " where "
         counter = 0
@@ -475,14 +494,18 @@ class ORM:
             record = self.__dba__.fetch_one(sql, input_params)
 
             if record["count_records"] == 0:
+                print("NEW")
                 result = self.__dba__.insert(self.__table_name__, data)
             else:
+                print("UPDATE")
                 result = self.__dba__.update(self.__table_name__, data)
 
             self.__dba__.commit()
 
             if result:
                 self.load()
+
+                print ("DATA AFTER", self.to_dict())
                 return True
         except Exception as e:
             Debug.error("Error saving", str(e))
