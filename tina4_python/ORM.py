@@ -33,9 +33,11 @@ def orm(dba):
         mod_name = file.removesuffix(".py")
         if "__init__" not in mod_name and "__pycache__" not in mod_name and ".git" not in mod_name:
             # import and set the database object
-            Debug('from src.orm.' + mod_name + ' import ' + mod_name)
-            exec('from src.orm.' + mod_name + ' import ' + mod_name)
-            exec(mod_name + ".__dba__ = dba")
+            try:
+                Debug('from src.orm.' + mod_name + ' import ' + mod_name)
+                exec('from src.orm.' + mod_name + ' import ' + mod_name+"\n"+mod_name + ".__dba__ = dba")
+            except Exception as e:
+                Debug("Failed to import " + mod_name)
     classes = find_all_sub_classes(ORM)
     for a_class in classes:
         a_class.__dba__ = dba
