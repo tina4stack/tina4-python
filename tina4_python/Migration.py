@@ -21,20 +21,22 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
     :param migration_folder: Alternative folder for migrations
     :return:
     """
-    if dba.database_engine == dba.POSTGRES:
+    if dba.database_engine == dba.MSSQL:
+        if not dba.table_exists("tina4_migration"):
+            dba.execute("create table tina4_migration(id integer not null, description varchar(200) default '', content nvarchar(max), error_message nvarchar(max), passed integer default 0, primary key(id))")
+    elif dba.database_engine == dba.POSTGRES:
         dba.execute(
             "create table if not exists tina4_migration(id serial primary key, description varchar(200) default '', content text, error_message text, passed integer default 0)")
-    if dba.database_engine == dba.MYSQL:
+    elif dba.database_engine == dba.MYSQL:
         dba.execute(
             "create table if not exists tina4_migration(id integer not null auto_increment, description varchar(200) default '', content text, error_message text, passed integer default 0, primary key(id))")
-    if dba.database_engine == dba.FIREBIRD:
+    elif dba.database_engine == dba.FIREBIRD:
         if not dba.table_exists("tina4_migration"):
             dba.execute(
                 "create table tina4_migration(id integer not null, description varchar(200) default '', content blob sub_type text, error_message blob sub_type text, passed integer default 0, primary key(id))")
     else:
         dba.execute(
             "create table if not exists tina4_migration(id integer not null, description varchar(200) default '', content blob, error_message blob, passed integer default 0, primary key(id))")
-
 
     Debug(ShellColors.bright_yellow, "Migration:  Found ", tina4_python.root_path + os.sep + migration_folder, ShellColors.end, Constant.TINA4_LOG_INFO)
     dir_list = os.listdir(tina4_python.root_path + os.sep + migration_folder)

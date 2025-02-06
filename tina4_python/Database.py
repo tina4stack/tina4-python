@@ -22,6 +22,8 @@ class Database:
     MYSQL_INSTALL = "pip install mysql-connector-python or poetry add mysql-connector-python"
     POSTGRES = "psycopg2"
     POSTGRES_INSTALL = "pip install psycopg2-binary or poetry add psycopg2-binary"
+    MSSQL = "pymssql"
+    MSSQL_INSTALL = "pip install pymssql or poetry add pymssql"
 
     def __init__(self, _connection_string, _username="", _password=""):
         """
@@ -35,7 +37,7 @@ class Database:
         try:
             self.database_module = importlib.import_module(params[0])
         except Exception:
-            install_message = "What driver are we working with?"
+            install_message = "Please implement "+params[0]+" in Database.py and make a pull request!"
             if params[0] == Database.SQLITE:
                 install_message = "Your python is missing the sqlite3 module, please reinstall or update"
             elif params[0] == Database.MYSQL:
@@ -44,6 +46,8 @@ class Database:
                 install_message = "Your python is missing the postgres module, please install with "+Database.POSTGRES_INSTALL
             elif params[0] == Database.FIREBIRD:
                 install_message = "Your python is missing the firebird module, please install with "+Database.FIREBIRD_INSTALL
+            elif params[0] == Database.MSSQL:
+                install_message = "Your python is missing the mssql module, please install with "+Database.MSSQL_INSTALL
 
             sys.exit("Could not load database driver for "+params[0]+"\n"+install_message)
 
@@ -124,7 +128,15 @@ class Database:
                     user=self.username,
                     password=self.password
                 )
-
+            elif self.database_engine == self.MSSQL:
+                self.dba = self.database_module.connect(
+                    server=self.host,
+                    port=self.port,
+                    user=self.username,
+                    password=self.password,
+                    database=self.database_path
+                )
+                self.dba.autocommit(False)
             else:
                 sys.exit("Could not load database driver for "+params[0])
 
@@ -139,7 +151,9 @@ class Database:
         """
 
         sql = ""
-        if self.database_engine == self.SQLITE:
+        if self.database_engine == self.MSSQL:
+            sql = "select count(*) as count_table from sys.tables WHERE name = '"+table_name.upper()+"'"
+        elif self.database_engine == self.SQLITE:
             sql = "SELECT count(*) as count_table FROM sqlite_master WHERE type='table' AND name='"+table_name+"'"
         elif self.database_engine == self.MYSQL:
             sql = "SELECT count(*) as count_table FROM information_schema.tables WHERE table_schema = '"+self.database_path+"' AND table_name = '"+table_name+"'"
@@ -246,6 +260,7 @@ class Database:
         """
         self.check_connected()
         # make a statement to count the records
+        # select top * from table
         sql_count = f"select count(*) as \"count_records\" from ({sql}) as t"
 
         # modify the select statement for limit and skip
@@ -255,8 +270,12 @@ class Database:
             sql = f"select * from ({sql}) as t limit {skip},{limit}"
         elif self.database_engine == self.POSTGRES:
             sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
+        elif self.database_engine == self.MSSQL:
+            sql = sql.replace("select ", f"select top {limit} ")
+            sql = f"select * from ({sql}) as t\norder by 1\nOFFSET {skip} ROWS FETCH NEXT {limit} ROWS ONLY"
         else:
-            sql = f"select * from ({sql}) as t limit {skip},{limit}"
+            sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
+
 
         cursor = self.dba.cursor()
         counter_cursor = self.dba.cursor()
@@ -316,7 +335,7 @@ class Database:
         :param sql:
         :return:
         """
-        if self.database_engine == self.MYSQL or self.database_engine == self.POSTGRES:
+        if self.database_engine == self.MYSQL or self.database_engine == self.POSTGRES or self.database_engine == self.MSSQL:
             return sql.replace("?", "%s")
         else:
             return sql.replace("%s", "?")
@@ -338,7 +357,10 @@ class Database:
                 return self.get_database_result(cursor, 1, 1, 0)
             else:
                 # see if we are mysql and if we are insert statement to get the last record
-                if "insert" in sql.lower() and self.database_engine == self.MYSQL:
+                if "insert" in sql.lower() and (self.database_engine == self.MYSQL or self.database_engine == self.MSSQL):
+
+                    print ("LAST ROW ID", cursor.lastrowid)
+
                     return DatabaseResult([{"id": cursor.lastrowid}], [], None, 1, 1, 0)
 
                 # On success return an empty result set with no error
@@ -381,6 +403,8 @@ class Database:
                 self.dba.begin()
             elif self.database_engine == self.MYSQL:
                 self.dba.start_transaction()
+            elif self.database_engine == self.MSSQL:
+                self.dba.execute("BEGIN TRANSACTION")
             elif self.database_engine == self.POSTGRES:
                 self.dba.rollback() #start fresh
             else:
@@ -555,3 +579,4 @@ class Database:
                 else:
                     Debug("UPDATE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                     return False
+
