@@ -4,8 +4,7 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 import pytest
-import datetime
-
+from datetime import datetime
 from pika.adapters.blocking_connection import BlockingChannel
 import tina4_python
 from tina4_python import *
