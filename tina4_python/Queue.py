@@ -230,7 +230,7 @@ class Queue(object):
                         )
                         delivery_callback(self.consumer, err, response_msg_internal)
 
-                self.producer.produce(self.topic, json.dumps(body), user_id, callback=kafka_delivery_callback)
+                self.producer.produce(prefix+self.topic, json.dumps(body), user_id, callback=kafka_delivery_callback)
                 self.producer.poll(1000)
                 self.producer.flush()
             except Exception as e:

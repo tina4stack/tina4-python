@@ -23,7 +23,7 @@ from tina4_python.Template import Template
 
 def is_int(v):
     try:
-        f = int(v)
+        int(v)
     except ValueError:
         return False
     return True
@@ -53,7 +53,7 @@ class Webserver:
                 # print("CONTENT", content, self.request)
                 try:
                     return json.loads(content)
-                except:
+                except Exception:
                     return content.decode("utf-8")
             elif self.lowercase_headers["content-type"] == "text/plain":
                 return content.decode("utf-8")
@@ -237,7 +237,7 @@ class Webserver:
     async def get_data(self, reader):
         try:
             raw_data = await reader.readuntil(b"\r\n\r\n")
-        except:
+        except Exception:
             raw_data = await reader.read(128)
 
         protocol = raw_data.decode("utf-8").split("\r\n", 1)[0]
@@ -267,7 +267,7 @@ class Webserver:
                     break
             try:
                 content = content_data.decode("utf-8")
-            except:  # probably binary or multipart form?
+            except Exception:  # probably binary or multipart form?
                 content = content_data
 
         return protocol, headers, lowercase_headers, content, raw_data, content_data
@@ -353,6 +353,7 @@ class Webserver:
                             await writer.drain()
                         writer.close()
                     except BrokenPipeError as e:
+                        Debug.warning("Socket connection broken: " + str(e))
                         # socket got terminated
                         pass
                 else:

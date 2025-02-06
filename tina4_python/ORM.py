@@ -7,11 +7,10 @@
 import base64
 from datetime import datetime, date
 import inspect
-import sys
 import ast
 import json
 import os
-from tina4_python.Constant import TINA4_LOG_ERROR, TINA4_LOG_INFO
+from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.Debug import Debug
 
 
@@ -37,7 +36,7 @@ def orm(dba):
                 Debug('from src.orm.' + mod_name + ' import ' + mod_name)
                 exec('from src.orm.' + mod_name + ' import ' + mod_name+"\n"+mod_name + ".__dba__ = dba")
             except Exception as e:
-                Debug("Failed to import " + mod_name)
+                Debug("Failed to import " + mod_name, str(e))
     classes = find_all_sub_classes(ORM)
     for a_class in classes:
         a_class.__dba__ = dba
@@ -134,7 +133,7 @@ class DateTimeField(BaseField):
     default_value = datetime.now()
 
     def get_definition(self):
-        return self.column_name.lower() + " timestamp";
+        return self.column_name.lower() + " timestamp"
 
 
 class IntegerField(BaseField):

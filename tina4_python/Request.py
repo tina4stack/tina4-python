@@ -4,8 +4,6 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
-import inspect
-
 request = None
 body = None
 params = {}

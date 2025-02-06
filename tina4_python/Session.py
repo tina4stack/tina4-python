@@ -5,7 +5,6 @@
 #
 # flake8: noqa: E501
 import os
-import json
 from http import cookies
 import sys
 import importlib
@@ -29,7 +28,7 @@ class SessionHandler(object):
             session.session_values[_key] = _value
             session.save()
             return True
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -85,7 +84,7 @@ class SessionFileHandler(SessionHandler):
             if os.path.isfile(session.session_path + os.sep + session.session_hash):
                 os.remove(session.session_path + os.sep + session.session_hash)
             return True
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -109,7 +108,7 @@ class SessionRedisHandler(SessionHandler):
         try:
             redis = importlib.import_module("redis")
         except Exception as e:
-            Debug("Redis not installed, install with pip install redis or poetry add redis", Constant.TINA4_LOG_ERROR)
+            Debug("Redis not installed, install with pip install redis or poetry add redis", str(e), Constant.TINA4_LOG_ERROR)
             sys.exit(1)
 
         redis_instance = redis.Redis(host=os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"), port=os.getenv("TINA4_SESSION_REDIS_PORT",6379), decode_responses=True)
@@ -139,7 +138,7 @@ class SessionRedisHandler(SessionHandler):
             else:
                 Debug("Session expired, starting a new one", Constant.TINA4_LOG_DEBUG)
                 session.start(_hash)
-        except:
+        except Exception:
             Debug("Redis not available, sessions will fail", Constant.TINA4_LOG_ERROR)
 
 
@@ -154,7 +153,7 @@ class SessionRedisHandler(SessionHandler):
         try:
             r.set(session.session_hash, "")
             return True
-        except:
+        except Exception:
             return False
 
     @staticmethod

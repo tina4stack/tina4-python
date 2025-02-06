@@ -34,7 +34,7 @@ class Database:
 
         try:
             self.database_module = importlib.import_module(params[0])
-        except Exception as e:
+        except Exception:
             install_message = "What driver are we working with?"
             if params[0] == Database.SQLITE:
                 install_message = "Your python is missing the sqlite3 module, please reinstall or update"
@@ -219,7 +219,7 @@ class Database:
         """
         try:
             json.loads(myjson)
-        except Exception as e:
+        except Exception:
             return False
         return True
 

@@ -140,7 +140,7 @@ class Auth:
         private_key = self.load_private_key()
         now = datetime.datetime.now()
 
-        if not "expires" in payload_data:
+        if "expires" not in payload_data:
             token_limit_minutes = int(os.environ.get("TINA4_TOKEN_LIMIT", 2))
             if expiry_minutes != 0:
                 token_limit_minutes  = expiry_minutes

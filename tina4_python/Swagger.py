@@ -4,9 +4,10 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
-import os, re
+import os
+import re
 import tina4_python
-from tina4_python import Messages, Constant
+from tina4_python import Constant, Debug
 
 
 class Swagger:
@@ -57,6 +58,7 @@ class Swagger:
             for variable in variables:
                 params.append({"name": variable, "in": "path", "type": "string"})
         except Exception as e:
+            Debug.error("Failed to parse path inputs", str(e))
             return []
 
         return params
@@ -74,7 +76,7 @@ class Swagger:
 
         secure_annotation = [],
         if security:
-            secure_annotation = [{"bearerAuth": []}];
+            secure_annotation = [{"bearerAuth": []}]
 
         new_params = []
         for param in params:
@@ -102,7 +104,7 @@ class Swagger:
             },
             "security": secure_annotation,
             "responses": responses
-        };
+        }
 
         if method == Constant.TINA4_GET or example is None:
             del entry["requestBody"]
@@ -111,17 +113,17 @@ class Swagger:
 
     @staticmethod
     def parse_swagger(swagger):
-        if not "tags" in swagger:
+        if "tags" not in swagger:
             swagger["tags"] = []
-        if not "params" in swagger:
+        if "params" not in swagger:
             swagger["params"] = []
-        if not "description" in swagger:
+        if "description" not in swagger:
             swagger["description"] = ""
-        if not "summary" in swagger:
+        if "summary" not in swagger:
             swagger["summary"] = ""
-        if not "example" in swagger:
+        if "example" not in swagger:
             swagger["example"] = None
-        if not "secure" in swagger:
+        if "secure" not in swagger:
             swagger["secure"] = None
 
         if isinstance(swagger["tags"], str):
@@ -137,14 +139,12 @@ class Swagger:
             if "swagger" in route:
                 if route["swagger"] is not None:
                     swagger = Swagger.parse_swagger(route["swagger"])
-                    produces = {}
-
                     responses = {
                         "200": {"description": "Success"},
                         "400": {"description": "Failed"}
                     }
 
-                    if not route["route"] in paths:
+                    if route["route"] not in paths:
                         paths[route["route"]] = {}
                     paths[route["route"]][route["method"].lower()] = Swagger.get_swagger_entry(route["route"],
                                                                                                route["method"].lower(),

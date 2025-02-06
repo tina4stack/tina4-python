@@ -4,7 +4,8 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
-import os, json
+import os
+import json
 import tina4_python
 from tina4_python import Constant
 from tina4_python.Debug import Debug

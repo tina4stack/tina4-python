@@ -9,7 +9,6 @@ import inspect
 from types import ModuleType
 from tina4_python import Constant
 from tina4_python import DatabaseResult
-from tina4_python.Debug import Debug
 from tina4_python.ORM import ORM
 
 headers = {}

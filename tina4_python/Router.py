@@ -11,7 +11,7 @@ import os
 import sys
 import io
 import tina4_python
-from tina4_python import Constant,Auth
+from tina4_python import Constant
 from tina4_python import Response
 from tina4_python import Request
 from tina4_python.Debug import Debug
@@ -206,7 +206,7 @@ class Router:
             if buffer.getvalue() != "":
                 try:
                     return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON, result.headers)
-                except:
+                except Exception:
                     return Response.Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML, result.headers)
             else:
                 result = Response
@@ -259,7 +259,7 @@ class Router:
     @staticmethod
     def add(method, route, callback):
         Debug("Adding a route: " + route, Constant.TINA4_LOG_DEBUG)
-        if not callback in tina4_python.tina4_routes:
+        if callback not in tina4_python.tina4_routes:
             tina4_python.tina4_routes[callback] = {"route": route, "callback": callback, "method": method,
                                                    "swagger": None, "cached": False}
         else:
