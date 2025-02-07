@@ -136,7 +136,6 @@ class Database:
                     password=self.password,
                     database=self.database_path
                 )
-                self.dba.autocommit(False)
             else:
                 sys.exit("Could not load database driver for "+params[0])
 
@@ -223,6 +222,7 @@ class Database:
         columns = [column[0].lower() for column in cursor.description]
         records = cursor.fetchall()
         rows = [dict(zip(columns, row)) for row in records]
+        cursor.close()
         return DatabaseResult(rows, columns, None, counter, limit, skip)
 
     def is_json(self, myjson):
@@ -248,7 +248,6 @@ class Database:
             # implement other database requirements if needed
             pass
 
-
     def fetch(self, sql, params=[], limit=10, skip=0):
         """
         Fetch records based on a sql statement
@@ -271,11 +270,16 @@ class Database:
         elif self.database_engine == self.POSTGRES:
             sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
         elif self.database_engine == self.MSSQL:
-            sql = sql.replace("select ", f"select top {limit} ")
-            sql = f"select * from ({sql}) as t\norder by 1\nOFFSET {skip} ROWS FETCH NEXT {limit} ROWS ONLY"
+            sql_check = sql.upper().rsplit("ORDER BY")[0]
+            sql_count = f"select count(*) as \"count_records\" from ({sql_check}) as t"
+
+            if "ORDER BY" in sql.upper():
+                sql = f"select * from ({sql} offset {skip} rows FETCH NEXT {limit} ROWS ONLY) as t"
+                sql_count += " offset 0 rows"
+            else:
+                sql = f"select * from ({sql} order by 1 OFFSET {skip} ROWS FETCH NEXT {limit} ROWS ONLY) as t"
         else:
             sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
-
 
         cursor = self.dba.cursor()
         counter_cursor = self.dba.cursor()
@@ -358,9 +362,6 @@ class Database:
             else:
                 # see if we are mysql and if we are insert statement to get the last record
                 if "insert" in sql.lower() and (self.database_engine == self.MYSQL or self.database_engine == self.MSSQL):
-
-                    print ("LAST ROW ID", cursor.lastrowid)
-
                     return DatabaseResult([{"id": cursor.lastrowid}], [], None, 1, 1, 0)
 
                 # On success return an empty result set with no error
@@ -369,6 +370,9 @@ class Database:
             Debug("EXECUTE ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
+        finally:
+            cursor.close()
+
 
     def execute_many(self, sql, params=[]):
         """
@@ -389,6 +393,8 @@ class Database:
             Debug("EXECUTE MANY ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
+        finally:
+            cursor.close()
 
     def start_transaction(self):
         """

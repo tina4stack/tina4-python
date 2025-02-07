@@ -28,6 +28,7 @@ user_name = "root"
 password = "secret"
 dba_type = "sqlite3:test3.db"
 
+
 dba_type = "firebird.driver:localhost/30500:/firebird/data/TEST.FDB"
 user_name = "sysdba"
 password = "masterkey"
@@ -208,7 +209,7 @@ def test_database_delete():
     dba.commit()
     result = dba.delete("test", [{"id": 12}, {"id": 13}])
     assert result is False
-    dba.rollback()
+    # dba.rollback()
     dba.close()
 
 
@@ -232,8 +233,6 @@ def test_database_transactions():
     dba.rollback()
 
     result = dba.fetch("select * from test_record where name = 'NEW ONE'")
-
-
 
     assert result.count == 0
 
