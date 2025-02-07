@@ -271,7 +271,13 @@ dba = Database("sqlite3:test.db", "username", "password")
 dba = Database("mysql:localhost/3306:myschema", "username", "password")
 dba = Database("postgres:localhost/5432:myschema", "username", "password")
 dba = Database("firebird:localhost/3050:/home/database/FIREBIRD.FDB", "username", "password")
-
+# mssql
+brew install FreeTDS 
+export LDFLAGS="-L/opt/homebrew/lib -L/opt/homebrew/opt/openssl/lib"
+export CFLAGS="-I/opt/homebrew/include"
+export CPPFLAGS="-I/opt/homebrew/opt/openssl@3/include"
+poetry run pip uninstall pymssql -y
+poetry run pip install pymssql==2.3.2 --no-binary :all:
 NoSQL support (Still to be developed):
 
 dba = Database("mongodb:localhost/27017:mycollection", "username", "password")

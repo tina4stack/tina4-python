@@ -8,6 +8,7 @@ from datetime import datetime
 from pika.adapters.blocking_connection import BlockingChannel
 import tina4_python
 from tina4_python import *
+from tina4_python.DatabaseTypes import *
 from tina4_python.Database import Database
 from tina4_python.Migration import migrate
 from tina4_python.ORM import ORM, IntegerField, StringField, DateTimeField, ForeignKeyField, TextField, orm
@@ -37,6 +38,7 @@ dba_type = "sqlite3:test3.db"
 dba_type = "pymssql:localhost/14333:tempdb"
 user_name = "sa"
 password = "Password123"
+dba_type = "sqlite3:test3.db"
 
 
 def test_auth_payload():
@@ -60,13 +62,13 @@ def database_connect(driver, username="root", password="secret"):
 def test_database_sqlite():
     dba_type = "sqlite3:test2.db"
     dba = database_connect(dba_type, user_name, password)
-    assert dba.database_engine == dba.SQLITE
+    assert dba.database_engine == SQLITE
 
 @pytest.mark.skip
 def test_database_mysql():
     dba_type = "mysql.connector:localhost/33066:test"
     dba = database_connect(dba_type)
-    assert dba.database_engine == dba.MYSQL
+    assert dba.database_engine == MYSQL
 
 @pytest.mark.skip
 def test_database_posgresql():
@@ -77,7 +79,7 @@ def test_database_posgresql():
 def test_database_mssql():
     dba_type = "pymssql:localhost/14333:tempdb"
     dba = database_connect(dba_type, "sa", "Password123")
-    assert dba.database_engine == dba.MSSQL
+    assert dba.database_engine == MSSQL
 
 def test_database_execute():
     dba = database_connect(dba_type, user_name, password)
@@ -97,7 +99,10 @@ def test_database_execute():
 
     if "pymssql" in dba_type:
         result = dba.execute(
-            "create table test_record(id integer not null, name varchar(200), image VARBINARY(MAX), date_created datetime default CURRENT_TIMESTAMP,  age numeric (10,2) default 0.00, primary key(id))")
+            "create table test_record(id integer identity(1,1) not null, name varchar(200), image varbinary(max), date_created datetime default CURRENT_TIMESTAMP,  age numeric (10,2) default 0.00, primary key(id))"
+        )
+        dba.execute("SET IDENTITY_INSERT test_record ON")
+        dba.commit()
     elif "mysql" in dba_type:
         result = dba.execute(
             "create table if not exists test_record(id integer not null auto_increment, name varchar(200), image longblob, date_created timestamp default CURRENT_TIMESTAMP,  age numeric (10,2) default 0.00, primary key (id))")
@@ -160,6 +165,7 @@ def test_database_update():
 
 def test_database_fetch():
     dba = database_connect(dba_type, user_name, password)
+
     result = dba.fetch("select id, name, image from test_record order by id", limit=3)
     print(result)
     assert result.count == 3
@@ -196,7 +202,7 @@ def test_database_bytes_insert():
     assert isinstance(result.to_json(), object)
     dba.close()
 
-@pytest.mark.skip
+
 def test_database_delete():
     dba = database_connect(dba_type, user_name, password)
 
@@ -222,7 +228,7 @@ def test_password():
     valid = auth.check_password(password, "123456")
     assert valid == False, "Password check"
 
-@pytest.mark.skip
+
 def test_database_transactions():
     dba = database_connect(dba_type, user_name, password)
 
@@ -252,10 +258,16 @@ def test_database_transactions():
 def test_orm():
     dba = database_connect(dba_type, user_name, password)
 
-    dba.execute("delete from test_user_item")
-    dba.commit()
-    dba.execute("delete from test_user")
-    dba.commit()
+    if dba.table_exists("tina4_migration"):
+        dba.execute("drop table tina4_migration")
+        dba.commit()
+
+    if dba.table_exists("test_user_item"):
+        dba.execute("drop table test_user_item")
+        dba.commit()
+    if dba.table_exists("test_user"):
+        dba.execute("drop table test_user")
+        dba.commit()
 
     class TestUser(ORM):
         id = IntegerField(auto_increment=True, primary_key=True, default_value=1)
@@ -268,7 +280,7 @@ def test_orm():
     class TestUserItem(ORM):
         id = IntegerField(auto_increment=True, primary_key=True, default_value=1)
         name = StringField(default_value="Item 1")
-        user_id = ForeignKeyField(IntegerField("id"), references_table=TestUser)
+        user_id = ForeignKeyField(IntegerField("id"), references_table=TestUser())
         date_created = DateTimeField()
 
     migrate(dba)

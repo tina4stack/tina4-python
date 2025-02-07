@@ -12,7 +12,7 @@ import json
 import os
 from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.Debug import Debug
-
+from tina4_python.DatabaseTypes import *
 
 def find_all_sub_classes(a_class):
     return a_class.__subclasses__()
@@ -53,7 +53,7 @@ class BaseField:
     decimal_places = None
     protected_field = False
 
-    def get_definition(self):
+    def get_definition(self, database_type="generic"):
         return self.column_name.lower() + " not defined"
 
     def __eq__(self, other):
@@ -132,19 +132,25 @@ class DateTimeField(BaseField):
     column_type = datetime
     default_value = datetime.now()
 
-    def get_definition(self):
-        return self.column_name.lower() + " timestamp"
+    def get_definition(self, database_type="generic"):
+        if database_type == MSSQL:
+            return self.column_name.lower() + " datetime"
+        else:
+            return self.column_name.lower() + " timestamp"
 
 
 class IntegerField(BaseField):
     column_type = int
     default_value = 0
 
-    def get_definition(self):
+    def get_definition(self, database_type="generic"):
         not_null = ""
         if self.primary_key:
             not_null = " not null"
-        return self.column_name.lower() + " integer default " + str(self.default_value) + " " + not_null
+        if database_type == MSSQL:
+            return self.column_name.lower() + " integer identity(1,1)  " + not_null
+        else:
+            return self.column_name.lower() + " integer default " + str(self.default_value) + " " + not_null
 
 
 class NumericField(BaseField):
@@ -153,7 +159,7 @@ class NumericField(BaseField):
     field_size = 10
     decimal_places = 2
 
-    def get_definition(self):
+    def get_definition(self, database_type="generic"):
         not_null = ""
         if self.primary_key:
             not_null = " not null"
@@ -167,7 +173,7 @@ class StringField(BaseField):
     default_value = ""
     field_size = 255
 
-    def get_definition(self):
+    def get_definition(self, database_type="generic"):
         not_null = ""
         if self.primary_key:
             not_null = " not null"
@@ -184,8 +190,10 @@ class BlobField(BaseField):
     column_type = bytes
     default_value = None
 
-    def get_definition(self):
+    def get_definition(self, database_type="generic"):
         field_type = "blob"
+        if database_type == MSSQL:
+            field_type = "varbinary(max)"
         return self.column_name.lower() + " " + field_type
 
 
@@ -220,10 +228,10 @@ class ForeignKeyField:
         else:
             self.column_name = column_name
 
-    def get_definition(self):
-        references_definition = self.field_type.get_definition().split(" ")
-        return self.column_name + " " + references_definition[
-            1] + " references " + self.references_table.__table_name__ + "(" + self.references_column + ") on update cascade on delete cascade"
+    def get_definition(self, database_type="generic"):
+        references_definition = self.field_type.get_definition(database_type).split(" ")
+        print("REFERENCES", references_definition, self.references_table.__table_name__, self.references_column)
+        return self.column_name + " " + str(references_definition[1]) + " references " + self.references_table.__table_name__ + "(" + self.references_column + ") on update cascade on delete cascade"
 
 
 def json_serialize(obj):
@@ -371,7 +379,7 @@ class ORM:
         for field, field_definition in self.__field_definitions__.items():
             if counter > 0:
                 sql += ",\n"
-            sql += "\t" + field_definition.get_definition()
+            sql += "\t" + field_definition.get_definition(self.__dba__.database_engine)
             counter += 1
 
         primary_keys = self.__get_primary_keys()

@@ -10,6 +10,7 @@ import sys
 from tina4_python import ShellColors
 from tina4_python import Constant
 from tina4_python.Debug import Debug
+from tina4_python.Database import MSSQL, POSTGRES, FIREBIRD, MYSQL
 import tina4_python
 
 
@@ -21,16 +22,17 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
     :param migration_folder: Alternative folder for migrations
     :return:
     """
-    if dba.database_engine == dba.MSSQL:
+    if dba.database_engine == MSSQL:
         if not dba.table_exists("tina4_migration"):
-            dba.execute("create table tina4_migration(id integer not null, description varchar(200) default '', content nvarchar(max), error_message nvarchar(max), passed integer default 0, primary key(id))")
-    elif dba.database_engine == dba.POSTGRES:
+            dba.execute("create table tina4_migration(id integer identity(1,1) not null, description varchar(200) default '', content nvarchar(max), error_message nvarchar(max), passed integer default 0, primary key(id))")
+        dba.execute("SET IDENTITY_INSERT tina4_migration ON")
+    elif dba.database_engine == POSTGRES:
         dba.execute(
             "create table if not exists tina4_migration(id serial primary key, description varchar(200) default '', content text, error_message text, passed integer default 0)")
-    elif dba.database_engine == dba.MYSQL:
+    elif dba.database_engine == MYSQL:
         dba.execute(
             "create table if not exists tina4_migration(id integer not null auto_increment, description varchar(200) default '', content text, error_message text, passed integer default 0, primary key(id))")
-    elif dba.database_engine == dba.FIREBIRD:
+    elif dba.database_engine == FIREBIRD:
         if not dba.table_exists("tina4_migration"):
             dba.execute(
                 "create table tina4_migration(id integer not null, description varchar(200) default '', content blob sub_type text, error_message blob sub_type text, passed integer default 0, primary key(id))")
@@ -99,3 +101,7 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
 
                 Debug("Migration: Failed to run", file, e, Constant.TINA4_LOG_ERROR)
                 sys.exit(1)
+
+    if dba.database_engine == MSSQL:
+        dba.execute("SET IDENTITY_INSERT tina4_migration OFF")
+

@@ -12,18 +12,9 @@ import json
 from tina4_python import Debug, Constant
 from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.DatabaseResult import DatabaseResult
-
+from tina4_python.DatabaseTypes import *
 
 class Database:
-    SQLITE = "sqlite3"
-    FIREBIRD = "firebird.driver"
-    FIREBIRD_INSTALL = "pip install firebird-driver or poetry add firebird-driver"
-    MYSQL = "mysql.connector"
-    MYSQL_INSTALL = "pip install mysql-connector-python or poetry add mysql-connector-python"
-    POSTGRES = "psycopg2"
-    POSTGRES_INSTALL = "pip install psycopg2-binary or poetry add psycopg2-binary"
-    MSSQL = "pymssql"
-    MSSQL_INSTALL = "pip install pymssql or poetry add pymssql"
 
     def __init__(self, _connection_string, _username="", _password=""):
         """
@@ -38,16 +29,16 @@ class Database:
             self.database_module = importlib.import_module(params[0])
         except Exception:
             install_message = "Please implement "+params[0]+" in Database.py and make a pull request!"
-            if params[0] == Database.SQLITE:
+            if params[0] == SQLITE:
                 install_message = "Your python is missing the sqlite3 module, please reinstall or update"
-            elif params[0] == Database.MYSQL:
-                install_message = "Your python is missing the mysql module, please install with "+Database.MYSQL_INSTALL
-            elif params[0] == Database.POSTGRES:
-                install_message = "Your python is missing the postgres module, please install with "+Database.POSTGRES_INSTALL
-            elif params[0] == Database.FIREBIRD:
-                install_message = "Your python is missing the firebird module, please install with "+Database.FIREBIRD_INSTALL
-            elif params[0] == Database.MSSQL:
-                install_message = "Your python is missing the mssql module, please install with "+Database.MSSQL_INSTALL
+            elif params[0] == MYSQL:
+                install_message = "Your python is missing the mysql module, please install with "+MYSQL_INSTALL
+            elif params[0] == POSTGRES:
+                install_message = "Your python is missing the postgres module, please install with "+POSTGRES_INSTALL
+            elif params[0] == FIREBIRD:
+                install_message = "Your python is missing the firebird module, please install with "+FIREBIRD_INSTALL
+            elif params[0] == MSSQL:
+                install_message = "Your python is missing the mssql module, please install with "+MSSQL_INSTALL
 
             sys.exit("Could not load database driver for "+params[0]+"\n"+install_message)
 
@@ -56,7 +47,7 @@ class Database:
         self.username = _username
         self.password = _password
 
-        if self.database_engine == self.SQLITE:
+        if self.database_engine == SQLITE:
             self.dba = self.database_module.connect(self.database_path)
             self.port = None
             self.host = None
@@ -105,13 +96,13 @@ class Database:
 
             self.database_path = temp_params[1]
 
-            if self.database_engine == self.FIREBIRD:
+            if self.database_engine == FIREBIRD:
                 self.dba = self.database_module.connect(
                     self.host + "/" + str(self.port) + ":" + self.database_path,
                     user=self.username,
                     password=self.password
                 )
-            elif self.database_engine == self.MYSQL:
+            elif self.database_engine == MYSQL:
                 self.dba = self.database_module.connect(
                     database=self.database_path,
                     port=self.port,
@@ -120,7 +111,7 @@ class Database:
                     password=self.password,
                     consume_results=True
                 )
-            elif self.database_engine == self.POSTGRES:
+            elif self.database_engine == POSTGRES:
                 self.dba = self.database_module.connect(
                     dbname=self.database_path,
                     port=self.port,
@@ -128,7 +119,7 @@ class Database:
                     user=self.username,
                     password=self.password
                 )
-            elif self.database_engine == self.MSSQL:
+            elif self.database_engine == MSSQL:
                 self.dba = self.database_module.connect(
                     server=self.host,
                     port=self.port,
@@ -136,6 +127,7 @@ class Database:
                     password=self.password,
                     database=self.database_path
                 )
+                self.dba.autocommit(False)
             else:
                 sys.exit("Could not load database driver for "+params[0])
 
@@ -150,18 +142,18 @@ class Database:
         """
 
         sql = ""
-        if self.database_engine == self.MSSQL:
+        if self.database_engine == MSSQL:
             sql = "select count(*) as count_table from sys.tables WHERE name = '"+table_name.upper()+"'"
-        elif self.database_engine == self.SQLITE:
+        elif self.database_engine == SQLITE:
             sql = "SELECT count(*) as count_table FROM sqlite_master WHERE type='table' AND name='"+table_name+"'"
-        elif self.database_engine == self.MYSQL:
+        elif self.database_engine == MYSQL:
             sql = "SELECT count(*) as count_table FROM information_schema.tables WHERE table_schema = '"+self.database_path+"' AND table_name = '"+table_name+"'"
-        elif self.database_engine == self.POSTGRES:
+        elif self.database_engine == POSTGRES:
             sql = """SELECT count(*) as count_table FROM pg_catalog.pg_class c
                         JOIN   pg_catalog.pg_namespace n ON n.oid = c.relnamespace
                         WHERE  c.relname = '"""+table_name+"""'
                         AND    c.relkind = 'r'        """
-        elif self.database_engine == self.FIREBIRD:
+        elif self.database_engine == FIREBIRD:
             sql = "SELECT count(*) as count_table FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = upper('"+table_name+"')"
         else:
             return False
@@ -203,9 +195,9 @@ class Database:
         Gets the current timestamp based on the database being used
         :return:
         """
-        if self.database_engine == self.FIREBIRD:
+        if self.database_engine == FIREBIRD:
             return datetime.datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        elif self.database_engine == self.SQLITE:
+        elif self.database_engine == SQLITE:
             return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         else:
             return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -242,7 +234,7 @@ class Database:
         Checks if the database connection is established
         :return:
         """
-        if self.database_engine == self.MYSQL:
+        if self.database_engine == MYSQL:
             self.dba.ping(reconnect=True, attempts=1, delay=0)
         else:
             # implement other database requirements if needed
@@ -263,40 +255,40 @@ class Database:
         sql_count = f"select count(*) as \"count_records\" from ({sql}) as t"
 
         # modify the select statement for limit and skip
-        if self.database_engine == self.FIREBIRD:
+        if self.database_engine == FIREBIRD:
             sql = f"select first {limit} skip {skip} * from ({sql}) as t"
-        elif self.database_engine == self.SQLITE or self.database_engine == self.MYSQL:
+        elif self.database_engine == SQLITE or self.database_engine == MYSQL:
             sql = f"select * from ({sql}) as t limit {skip},{limit}"
-        elif self.database_engine == self.POSTGRES:
+        elif self.database_engine == POSTGRES:
             sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
-        elif self.database_engine == self.MSSQL:
+        elif self.database_engine == MSSQL:
             sql_check = sql.upper().rsplit("ORDER BY")[0]
             sql_count = f"select count(*) as \"count_records\" from ({sql_check}) as t"
-
             if "ORDER BY" in sql.upper():
                 sql = f"select * from ({sql} offset {skip} rows FETCH NEXT {limit} ROWS ONLY) as t"
-                sql_count += " offset 0 rows"
             else:
                 sql = f"select * from ({sql} order by 1 OFFSET {skip} ROWS FETCH NEXT {limit} ROWS ONLY) as t"
         else:
             sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
-
-        cursor = self.dba.cursor()
-        counter_cursor = self.dba.cursor()
         try:
-            if "?" in sql_count:
-                sql_count = self.parse_place_holders(sql_count)
-                counter_cursor.execute(sql_count, params)
-            else:
-                counter_cursor.execute(sql_count)
-            count_records = counter_cursor.fetchall()
+            cursor = self.dba.cursor()
+            try:
+                counter_cursor = self.dba.cursor()
+                if "?" in sql_count:
+                    sql_count = self.parse_place_holders(sql_count)
+                    counter_cursor.execute(sql_count, params)
+                else:
+                    counter_cursor.execute(sql_count)
+                count_records = counter_cursor.fetchall()
 
-            if len(count_records) > 0:
-                count_records = count_records[0][0]
-            else:
-                count_records = 0
-
-            counter_cursor.close()
+                if len(count_records) > 0:
+                    count_records = count_records[0][0]
+                else:
+                    count_records = 0
+            except Exception as e:
+                Debug("FETCH ERROR:",  sql_count, str(e), TINA4_LOG_ERROR)
+            finally:
+                counter_cursor.close()
 
             sql = self.parse_place_holders(sql)
 
@@ -339,7 +331,7 @@ class Database:
         :param sql:
         :return:
         """
-        if self.database_engine == self.MYSQL or self.database_engine == self.POSTGRES or self.database_engine == self.MSSQL:
+        if self.database_engine == MYSQL or self.database_engine == POSTGRES or self.database_engine == MSSQL:
             return sql.replace("?", "%s")
         else:
             return sql.replace("%s", "?")
@@ -361,7 +353,7 @@ class Database:
                 return self.get_database_result(cursor, 1, 1, 0)
             else:
                 # see if we are mysql and if we are insert statement to get the last record
-                if "insert" in sql.lower() and (self.database_engine == self.MYSQL or self.database_engine == self.MSSQL):
+                if "insert" in sql.lower() and (self.database_engine == MYSQL or self.database_engine == MSSQL):
                     return DatabaseResult([{"id": cursor.lastrowid}], [], None, 1, 1, 0)
 
                 # On success return an empty result set with no error
@@ -403,15 +395,15 @@ class Database:
         """
         try:
             self.check_connected()
-            if self.database_engine == self.SQLITE:
+            if self.database_engine == SQLITE:
                 self.dba.execute("BEGIN TRANSACTION")
-            elif self.database_engine == self.FIREBIRD:
+            elif self.database_engine == FIREBIRD:
                 self.dba.begin()
-            elif self.database_engine == self.MYSQL:
+            elif self.database_engine == MYSQL:
                 self.dba.start_transaction()
-            elif self.database_engine == self.MSSQL:
+            elif self.database_engine == MSSQL:
                 self.dba.execute("BEGIN TRANSACTION")
-            elif self.database_engine == self.POSTGRES:
+            elif self.database_engine == POSTGRES:
                 self.dba.rollback() #start fresh
             else:
                 Debug("START TRANSACTION ERROR:", "Database engine unrecognised/not supported",
@@ -476,7 +468,7 @@ class Database:
 
             sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
-            if self.database_engine == self.FIREBIRD or self.database_engine == self.SQLITE or self.database_engine == self.POSTGRES:
+            if self.database_engine == FIREBIRD or self.database_engine == SQLITE or self.database_engine == POSTGRES:
                 sql += f" returning ({primary_key})"
 
             records = DatabaseResult()
@@ -484,7 +476,11 @@ class Database:
             result = None
             for record in data:
                 record = self.sanitize(record)
+                if self.database_engine == MSSQL:
+                    self.execute(f"SET IDENTITY_INSERT {table_name} ON")
                 result = self.execute(sql, list(record.values()))
+                if self.database_engine == MSSQL:
+                    self.execute(f"SET IDENTITY_INSERT {table_name} OFF")
                 records.records += result.records
                 if result.error is not None:
                     Debug("INSERT ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
@@ -576,7 +572,11 @@ class Database:
 
                     params = set_values + [pk_value]
 
+                    if self.database_engine == MSSQL:
+                        self.execute(f"SET IDENTITY_UPDATE {table_name} ON")
                     result = self.execute(sql, params)
+                    if self.database_engine == MSSQL:
+                        self.execute(f"SET IDENTITY_UPDATE {table_name} OFF")
                     if result.error is not None:
                         break
 
