@@ -13,6 +13,7 @@ import os
 from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.Debug import Debug
 from tina4_python.DatabaseTypes import *
+import inspect
 
 def find_all_sub_classes(a_class):
     return a_class.__subclasses__()
@@ -207,6 +208,41 @@ class ForeignKeyField:
     default_value = None
     protected_field = False
 
+    def __eq__(self, other):
+        if self.value is None:
+            self.value = self.default_value
+        return other == self.value
+
+    def __ne__(self, other):
+        if self.value is None:
+            self.value = self.default_value
+        return other != self.value
+
+    def __add__(self, other):
+        if self.value is None:
+            self.value = self.default_value
+        return other + self.value
+
+    def __mul__(self, other):
+        if self.value is None:
+            self.value = self.default_value
+        return other * self.value
+
+    def __sub__(self, other):
+        if self.value is None:
+            self.value = self.default_value
+        return self.value - other
+
+    def __truediv__(self, other):
+        if self.value is None:
+            self.value = self.default_value
+        return self.value / other
+
+    def __str__(self):
+        if self.value is None:
+            self.value = self.default_value
+        return str(self.value)
+
     def __init__(self, field_type=BaseField, references_table=None, column_name=None, default_value = None, protected_field=False):
         self.field_type = field_type
         self.references_table = references_table
@@ -214,6 +250,7 @@ class ForeignKeyField:
         self.default_value = default_value
         self.auto_increment = False
         self.protected_field = protected_field
+        self.value = field_type
 
         if column_name is None:
             frame = inspect.stack()[1]
@@ -230,7 +267,7 @@ class ForeignKeyField:
 
     def get_definition(self, database_type="generic"):
         references_definition = self.field_type.get_definition(database_type).split(" ")
-        print("REFERENCES", references_definition, self.references_table.__table_name__, self.references_column)
+        # print("REFERENCES", references_definition, self.references_table.__table_name__, self.references_column)
         return self.column_name + " " + str(references_definition[1]) + " references " + self.references_table.__table_name__ + "(" + self.references_column + ") on update cascade on delete cascade"
 
 
@@ -317,8 +354,11 @@ class ORM:
         for field, field_definition in self.__field_definitions__.items():
             if hasattr(self, field):
                 setattr(self, field, None)
-                field_definition.value = None
-                setattr(self, field, field_definition)
+                try:
+                    field_definition.value = None
+                    setattr(self, field, field_definition)
+                except Exception as e:
+                    print("Could not set attribute for", field, str(e))
 
         if isinstance(init_object, str):
             init_object = json.loads(init_object)
@@ -326,10 +366,13 @@ class ORM:
         for key, value in init_object.items():
             snake_case_name = self.__get_snake_case_name__(key)
             if  snake_case_name in self.__field_definitions__:
-                field_value = self.__field_definitions__[snake_case_name]
-                field_value.value = value
-                if hasattr(self, snake_case_name):
-                    setattr(self, snake_case_name, field_value)
+                try:
+                    field_value = self.__field_definitions__[snake_case_name]
+                    field_value.value = value
+                    if hasattr(self, snake_case_name):
+                        setattr(self, snake_case_name, field_value)
+                except Exception as e:
+                    print("Could not set value for", snake_case_name, str(e))
 
 
     def __get_primary_keys(self):
@@ -343,32 +386,33 @@ class ORM:
     def to_json(self):
         return json.dumps(self.to_dict(), default=json_serialize)
 
+    def __is_class(self, class_name):
+        return str(type(class_name)).startswith("<class") and hasattr(class_name, '__weakref__')
+
     def to_dict(self):
+        # print(inspect.currentframe().f_back.f_code.co_qualname)
         data = {}
-        # print(self.__field_definitions__.items(), self.__dict__)
+
         for key, value in self.__field_definitions__.items():
             current_value = getattr(self, key)
 
-            if (isinstance(current_value, ForeignKeyField) or isinstance(current_value, IntegerField) or isinstance(current_value,DateTimeField)
-                    or isinstance(current_value, BlobField) or isinstance(current_value, TextField) or isinstance(current_value, StringField)):
-                if current_value.protected_field:
-                    continue
+            if current_value is not None and not isinstance(current_value, ForeignKeyField) and value.auto_increment and self.__is_class(current_value):
+                if current_value.value is None:
+                    new_id = self.__dba__.get_next_id(table_name=self.__table_name__, column_name=value.column_name)
 
-                if current_value.value is not None:
-                    data[key] = current_value.value
-                else:
-                    if not isinstance(current_value, ForeignKeyField) and value.auto_increment:
-                        new_id = self.__dba__.get_next_id(table_name=self.__table_name__, column_name=value.column_name)
-                        if new_id is not None:
-                            data[key] = new_id
-                            current_value.value = data[key]
+                    if new_id is not None:
+                        current_value.value = new_id
                     else:
-                        data[key] = current_value.default_value
-            else:
-                data[key] = current_value
+                       current_value.value = current_value.default_value
 
+                data[key] = current_value.value
+            elif isinstance(value, IntegerField):
+                data[key] = int(current_value)
+            else:
+                data[key] = str(current_value)
 
         return data
+
 
     def __str__(self):
         return self.to_json()
@@ -547,3 +591,4 @@ class ORM:
             self.__dba__.commit()
             return True
         pass
+

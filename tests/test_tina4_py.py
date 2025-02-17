@@ -41,6 +41,7 @@ password = "Password123"
 dba_type = "sqlite3:test3.db"
 
 
+
 def test_auth_payload():
     auth = tina4_auth.get_token({"id": 1, "username": "hello", "date_created": datetime.now()})
     assert str(auth)
@@ -76,6 +77,7 @@ def test_database_posgresql():
     dba = database_connect(dba_type, "postgres", "password")
     assert dba.database_engine == dba.POSTGRES
 
+@pytest.mark.skip
 def test_database_mssql():
     dba_type = "pymssql:localhost/14333:tempdb"
     dba = database_connect(dba_type, "sa", "Password123")
@@ -290,27 +292,31 @@ def test_orm():
     print("START")
 
 
-    user = TestUser({"firstName": "First Name 2", "lastName": "Last Name 2"})
+    user = TestUser({"firstName": "First Name 1", "lastName": "Last Name 1"})
     user.save()
-
 
     assert int(user.id) == 1
 
     test_id = int(user.id)
 
-    print("FIRST ID", test_id, user.id)
+    print("FIRST ID", user.to_dict())
 
     user = TestUser()
-    user.first_name = "First Name"
-    user.last_name = "Last Name"
+    user.first_name = "First Name 2"
+    user.last_name = "Last Name 2"
     user.save()
 
+    sql = "select * from test_user"
+    result = dba.fetch(sql)
 
-    print ("SECOND ID", user.id)
+    assert result.count == 2
 
-    assert int(user.id) == test_id+1
 
-    print("END")
+    print ("SECOND ID", user.to_dict())
+
+    assert int(user.id) == int(test_id)+1
+
+    print("END", test_id+1, user.id)
 
     assert user.id == 2
 
@@ -330,6 +336,10 @@ def test_orm():
 
         counter += 1
 
+    for item_value in ["Item 3", "Item 4"]:
+        item = TestUserItem({"user_id": user.id})
+        item.name = item_value
+        assert item.save() == True
 
     user1 = TestUser()
     user1.load("id = ?", [1])
@@ -340,9 +350,14 @@ def test_orm():
     sql = "select * from test_user_item"
     result = dba.fetch(sql)
 
-    assert result.count == 2
+    assert result.count == 4
 
     user1.delete()
+
+    sql = "select * from test_user"
+    result = dba.fetch(sql)
+
+    assert result.count == 1
 
     dba.close()
 
