@@ -131,7 +131,7 @@ class Message:
     message_id: str
     data: str
     user_id: str
-    status: str
+    status: int
     time_stamp: int
     delivery_tag: str
 
@@ -153,6 +153,7 @@ class Queue(object):
         self.consumer = None
         self.topic = topic
         self.config = config
+        self.library = None
 
         if config.queue_type == "litequeue":
             self.init_litequeue()
@@ -187,9 +188,13 @@ class Queue(object):
                 )
                 if delivery_callback is not None:
                     delivery_callback(self.producer, None, response_msg)
+
+                return response_msg
             except Exception as e:
                 if delivery_callback is not None:
                     delivery_callback(self.producer, e, None)
+
+            return e
         elif self.config.queue_type == "rabbitmq":
             try:
                 body = {
@@ -207,14 +212,26 @@ class Queue(object):
                 )
                 if delivery_callback is not None:
                     delivery_callback(self.producer, None, response_msg)
+
+                return response_msg
             except Exception as e:
                 if delivery_callback is not None:
                     delivery_callback(self.producer, e, None)
+                return e
         elif self.config.queue_type == "kafka":
             try:
                 body = {
                     "message_id": uuid7(), "msg": value, "user_id": user_id, "in_time": time_ns()
                 }
+
+                response_msg = Message(
+                    body["message_id"],
+                    value,
+                    user_id,
+                    0,
+                    body["in_time"],
+                    0
+                )
 
                 def kafka_delivery_callback(err, kafka_msg):
                     if err:
@@ -230,12 +247,16 @@ class Queue(object):
                         )
                         delivery_callback(self.consumer, err, response_msg_internal)
 
+
                 self.producer.produce(prefix+self.topic, json.dumps(body), user_id, callback=kafka_delivery_callback)
                 self.producer.poll(1000)
                 self.producer.flush()
+
+                return response_msg
+
             except Exception as e:
                 delivery_callback(self.consumer, e, None)
-
+                return e
         pass
 
     def consume(self, acknowledge=True, consumer_callback=None):
@@ -286,12 +307,12 @@ class Queue(object):
                 consumer_callback(self.consumer, e, None)
         elif self.config.queue_type == "rabbitmq":
             try:
-                method_frame, header_frame, body = self.consumer.basic_get(queue=self.config.rabbitmq_queue, auto_ack=acknowledge)
+                method_frame, header_frame, body = self.consumer.basic_get(queue=self.topic, auto_ack=acknowledge)
 
                 if method_frame is not None:
-                    msg_status = "1"
+                    msg_status = 1
                     if acknowledge:
-                        msg_status = "2"
+                        msg_status = 2
                     data = json.loads(body)
                     response_msg = Message(
                         data["message_id"],
@@ -315,9 +336,9 @@ class Queue(object):
                     if consumer_callback is not None:
                         consumer_callback(self.consumer, msg.error(), None)
                 else:
-                    msg_status = "1"
+                    msg_status = 1
                     if acknowledge:
-                        msg_status = "2"
+                        msg_status = 2
                     data = json.loads(msg.value().decode('utf-8'))
                     response_msg = Message(
                         data["message_id"],
@@ -369,21 +390,27 @@ class Queue(object):
                 if "username" in self.config.rabbitmq_config:
                     credentials = pika.PlainCredentials(self.config.rabbitmq_config["username"],
                                                         self.config.rabbitmq_config["password"])
+                    connection = pika.BlockingConnection(
+                        pika.ConnectionParameters(host=self.config.rabbitmq_config["host"],
+                                                  port=self.config.rabbitmq_config["port"],
+                                                  virtual_host=prefix,
+                                                  credentials=credentials
+                                                  )
+                    )
                 else:
-                    credentials = None
+                    connection = pika.BlockingConnection(
+                        pika.ConnectionParameters(host=self.config.rabbitmq_config["host"],
+                                                  port=self.config.rabbitmq_config["port"],
+                                                  virtual_host=prefix
+                                                  )
+                    )
 
-                connection = pika.BlockingConnection(
-                    pika.ConnectionParameters(host=self.config.rabbitmq_config["host"],
-                                              port=self.config.rabbitmq_config["port"],
-                                              virtual_host=prefix,
-                                              credentials=credentials
-                                              )
-                )
+
             except Exception as e:
                 print(e)
             channel = connection.channel()
             channel.exchange_declare(exchange=self.topic, exchange_type="topic")
-            result = channel.queue_declare('', exclusive=False)
+            result = channel.queue_declare(self.topic, exclusive=False)
             self.config.rabbitmq_queue = result.method.queue
             channel.queue_bind(
                 exchange=self.topic, queue=self.config.rabbitmq_queue, routing_key='')
@@ -438,14 +465,18 @@ class Producer(object):
         self.queue = queue
         self.delivery_callback = delivery_callback
 
-    def produce(self, value, user_id=None):
+    def produce(self, value, user_id=None, delivery_callback=None):
         """
         Produces a message to queue
+        :param delivery_callback:
         :param value:
         :param user_id:
         :return:
         """
-        self.queue.produce(value, user_id, self.delivery_callback)
+        if delivery_callback is None:
+            delivery_callback = self.delivery_callback
+
+        return self.queue.produce(value, user_id, delivery_callback)
 
 class Consumer(object):
     """

@@ -65,11 +65,24 @@ class Template:
         return '<input type="hidden" name="formToken" value="'+Template.get_form_token({"formName": form_name})+'"><!--"'+str(datetime.now().isoformat())+'"-->'
 
     @staticmethod
+    def convert_special_types(obj):
+        if isinstance(obj, dict):
+            return {k: Template.convert_special_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [Template.convert_special_types(i) for i in obj]
+        elif isinstance(obj, (date, datetime)):
+            return obj.isoformat()
+        else:
+            return obj
+
+    @staticmethod
     def render_twig_template(template_or_file_name, data=None):
         if data is None:
             data = {"request": tina4_python.tina4_current_request}
         else:
             data.update({"request": tina4_python.tina4_current_request})
+
+        data = Template.convert_special_types(data)
 
         twig = Template.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
         try:

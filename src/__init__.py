@@ -123,3 +123,4 @@ async def run_test_vars(request, response):
     print(request.params)
 
 from .routes import meme
+from .routes import test_queue

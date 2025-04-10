@@ -6,6 +6,7 @@
 # flake8: noqa: E501
 import json
 import inspect
+from datetime import datetime, date
 from types import ModuleType
 from tina4_python import Constant
 from tina4_python import DatabaseResult
@@ -18,6 +19,18 @@ content_type = Constant.TEXT_HTML
 
 
 class Response:
+
+    @staticmethod
+    def convert_special_types(obj):
+        if isinstance(obj, dict):
+            return {k: Response.convert_special_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [Response.convert_special_types(i) for i in obj]
+        elif isinstance(obj, (date, datetime)):
+            return obj.isoformat()
+        else:
+            return obj
+
     def __init__(self, content_in=None, http_code_in=None, content_type_in=None,
                  headers_in=None):
         global headers
@@ -42,7 +55,7 @@ class Response:
 
         # convert the dictionary or list into JSON
         if not isinstance(content_in, bool) and type(content_in) is dict or type(content_in) is list:
-            content_in = json.dumps(content_in)
+            content_in = json.dumps(Response.convert_special_types(content_in))
             content_type = Constant.APPLICATION_JSON
 
         if isinstance(content_in, bool):

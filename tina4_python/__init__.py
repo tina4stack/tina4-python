@@ -10,6 +10,7 @@ import os
 import shutil
 import importlib
 import sys
+import threading
 import traceback
 import sass
 from pathlib import Path
@@ -73,7 +74,7 @@ def global_exception_handler(exception):
     debug_level = Constant.TINA4_LOG_DEBUG
     error = str(exception)
     tb_str = ''.join(traceback.format_exception(None, exception, exception.__traceback__))
-    error_string = "Exception Error: "+ error+"\n"+tb_str+"\nYou are seeing this error because Tina4 is in debug mode"
+    error_string = "Exception Error: " + error + "\n" + tb_str + "\nYou are seeing this error because Tina4 is in debug mode"
     Debug.error(error_string)
     if (os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL]) == "[TINA4_LOG_ALL]"
             or debug_level in os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL])):
@@ -81,6 +82,15 @@ def global_exception_handler(exception):
     else:
         error_string = ""
     return error_string
+
+def start_in_thread(target):
+    """
+    Starts a method in a thread
+    :param target:
+    :return:
+    """
+    thread = threading.Thread(target=target)
+    thread.start()
 
 token = tina4_auth.get_token({"name": "Tina4"})
 Debug("TEST TOKEN", token, Constant.TINA4_LOG_DEBUG)
@@ -207,6 +217,7 @@ async def get_swagger(request, response):
     html = html.replace("{SWAGGER_ROUTE}", os.getenv("SWAGGER_ROUTE", "/swagger"))
     return response(html)
 
+
 async def app(scope, receive, send):
     """
     Runs normal hypercorn, uvicorn, granian
@@ -218,7 +229,7 @@ async def app(scope, receive, send):
     body = b""
     while True and scope['type'] == 'http' or scope['type'] == 'websocket':
         if scope['type'] != 'websocket':
-            message =  await receive()
+            message = await receive()
         else:
             message = {'type': 'websocket'}
 
@@ -251,7 +262,7 @@ async def app(scope, receive, send):
             webserver.headers = parsed_headers
             webserver.lowercase_headers = parsed_headers_lowercase
 
-            webserver.path = scope["path"]+"?"+scope["query_string"].decode()
+            webserver.path = scope["path"] + "?" + scope["query_string"].decode()
 
             if "method" in scope:
                 webserver.method = scope["method"]
@@ -277,16 +288,16 @@ async def app(scope, receive, send):
 
             # initialize the session
             webserver.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
-                                   os.getenv("TINA4_SESSION_FOLDER", root_path + os.sep + "sessions"),
-                                   os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
-                                   )
+                                        os.getenv("TINA4_SESSION_FOLDER", root_path + os.sep + "sessions"),
+                                        os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
+                                        )
 
             if os.getenv("TINA4_SESSION", "PY_SESS") in webserver.cookies:
                 webserver.session.load(webserver.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
             else:
                 webserver.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = webserver.session.start()
 
-            tina4_response, tina4_headers = await webserver.get_response(webserver.method, (scope,receive,send),True)
+            tina4_response, tina4_headers = await webserver.get_response(webserver.method, (scope, receive, send), True)
 
             if message["type"] != "websocket":
                 response_headers = []
@@ -316,6 +327,7 @@ def run_web_server(in_hostname="localhost", in_port=7145):
     Debug(Messages.MSG_STARTING_WEBSERVER.format(port=in_port), Constant.TINA4_LOG_INFO)
     webserver(in_hostname, in_port)
 
+
 def webserver(host_name, port):
     """
     Runs the correct webserver
@@ -342,11 +354,10 @@ def webserver(host_name, port):
             from hypercorn.config import Config
             from hypercorn.asyncio import serve
             config = Config()
-            config.bind = [host_name+":"+str(port)]
+            config.bind = [host_name + ":" + str(port)]
             asyncio.run(serve(app, config))
         except Exception as e:
             Debug("Not running Hypercorn webserver", str(e), Constant.TINA4_LOG_WARNING)
-
 
     Debug(Messages.MSG_SERVER_STOPPED, Constant.TINA4_LOG_INFO)
 
