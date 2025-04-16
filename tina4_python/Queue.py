@@ -505,7 +505,7 @@ class Consumer(object):
 
         try:
             counter = 0
-            Debug("Consuming", queue.topic)
+            Debug("Consuming", self.queues)
             while True:
                 for queue in self.queues:
                     try:
