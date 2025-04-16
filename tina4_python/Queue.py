@@ -505,10 +505,10 @@ class Consumer(object):
 
         try:
             counter = 0
+            Debug("Consuming", queue.topic)
             while True:
                 for queue in self.queues:
                     try:
-                        Debug("Consuming", queue.topic)
                         queue.consume(self.acknowledge, self.consumer_callback)
                     except Exception as e:
                         if self.consumer_callback is not None:
