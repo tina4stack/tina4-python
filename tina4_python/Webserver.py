@@ -229,14 +229,16 @@ class Webserver:
                 cookie_list[cookie[0].strip()] = cookie[1].strip()
 
         self.cookies = cookie_list
-
+        print(self.cookies)
         # initialize the session
         self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
                                os.getenv("TINA4_SESSION_FOLDER", tina4_python.root_path + os.sep + "sessions"))
 
         if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
+            print("Session exists")
             self.session.load(self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
         else:
+            print("Starting new session")
             self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
 
         method_list = [Constant.TINA4_GET, Constant.TINA4_DELETE, Constant.TINA4_PUT, Constant.TINA4_ANY,
