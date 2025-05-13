@@ -1,6 +1,6 @@
 [project]
 name = "tina4-python"
-version = "0.2.94"
+version = "0.2.95"
 description = "Tina4Python - This is not another framework for Python"
 authors = [
     {name = "Andre van Zuydam",email = "andrevanzuydam@gmail.com"}
@@ -31,4 +31,12 @@ dev = [
     "ruff>=0.11.9",
     "safety>=3.5.0",
 ]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# Point hatch to the src/ layout
+sources = ["tina4_python/public", "tina4_python/templates", "tina4_python/translations"]
 
