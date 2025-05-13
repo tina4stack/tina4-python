@@ -1009,7 +1009,7 @@ wheels = [
 
 [[package]]
 name = "tina4-python"
-version = "0.2.95"
+version = "0.2.97"
 source = { editable = "." }
 dependencies = [
     { name = "asyncer" },

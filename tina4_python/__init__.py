@@ -335,7 +335,7 @@ def webserver(host_name, port):
     :param port:
     :return:
     """
-    if os.getenv('TINA4_DEFAULT_WEBSERVER', 'True').upper() == 'TRUE':
+    if os.getenv('TINA4_DEFAULT_WEBSERVER', 'FALSE').upper() == 'TRUE':
         # runs the built-in webserver (websockets) don't work on windows
         web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
         web_server.router_handler = Router()
