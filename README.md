@@ -4,19 +4,37 @@ Tina4Python is a light-weight routing and twig based templating system based on 
 .
 ### System Requirements
 
-- Install Poetry:
+- Install UV
+
+Linux
 ```bash
-curl -sSL https://install.python-poetry.org | python3 - 
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Windows
+```bash
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Lock down a specific Python version
+```bash
+uv python pin 3.13
 ```
 
 - Install Jurigged (Enables Hot Reloading):
 ```bash
-pip install jurigged
+uv pip install jurigged
 ```
 
 ### Quick Start
 
-After installing poetry you can do the following:
+Our package management is moving to UV, the following is enough to get started once uv has been installed.
+See here https://docs.astral.sh/uv/getting-started/installation/
+```bash
+uv add tina4_python
+```
+
+Poetry should still work as follows
 ```bash
 poetry new project-name
 cd project-name
