@@ -1009,8 +1009,8 @@ wheels = [
 
 [[package]]
 name = "tina4-python"
-version = "0.2.94"
-source = { virtual = "." }
+version = "0.2.95"
+source = { editable = "." }
 dependencies = [
     { name = "asyncer" },
     { name = "bcrypt" },
