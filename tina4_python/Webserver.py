@@ -318,7 +318,8 @@ class Webserver:
                         headers = await self.get_headers(headers, self.response_protocol, HTTP_OK)
                         writer.write(headers + content)
                         await writer.drain()
-                        await writer.close()
+                        if writer is not None:
+                            writer.close()
                         request_handled = True
 
             if not request_handled:
