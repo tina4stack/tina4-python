@@ -1,6 +1,6 @@
 [project]
 name = "tina4-python"
-version = "0.2.93"
+version = "0.2.94"
 description = "Tina4Python - This is not another framework for Python"
 authors = [
     {name = "Andre van Zuydam",email = "andrevanzuydam@gmail.com"}
@@ -8,7 +8,7 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.12,<4.0"
 dependencies = [
-    "jinja2 (>=3.1.5,<4.0.0)",
+    "jinja2>=3.1.5,<4.0.0",
     "libsass (>=0.23.0,<0.24.0)",
     "python-dotenv (>=1.0.1,<2.0.0)",
     "pyjwt (>=2.10.1,<3.0.0)",
@@ -17,21 +17,18 @@ dependencies = [
     "bcrypt (>=4.2.1,<5.0.0)",
     "litequeue (>=0.9,<0.10)",
     "simple-websocket (>=1.1.0,<2.0.0)",
-    "poetry-plugin-export (>=1.9.0,<2.0.0)",
-    "hypercorn (>=0.17.3,<0.18.0)"
+    "hypercorn (>=0.17.3,<0.18.0)",
+    "asyncer>=0.0.8",
 ]
 
-
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry.group.dev.dependencies]
-flake8 = "^7.1.1"
-pytest = "^8.3.4"
-jurigged = "^0.6.0"
-safety = "^3.2.14"
-ruff = "^0.9.4"
-mysql-connector-python = "^9.2.0"
-psycopg2-binary = "^2.9.10"
+[dependency-groups]
+dev = [
+    "flake8>=7.2.0",
+    "jurigged>=0.6.0",
+    "mysql-connector-python>=9.3.0",
+    "psycopg2-binary>=2.9.10",
+    "pytest>=8.3.5",
+    "ruff>=0.11.9",
+    "safety>=3.5.0",
+]
 

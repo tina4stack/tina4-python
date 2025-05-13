@@ -1,3 +1,3 @@
-poetry export -f requirements.txt --output requirements.txt
-poetry build
-poetry publish
+uv export --format requirements-txt
+uv build --no-sources
+uv publish --username __token__ --password $UV_PYPI_PASSWORD
