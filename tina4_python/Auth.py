@@ -55,6 +55,10 @@ class Auth:
         return bcrypt.checkpw(password_bytes, password_hash.encode('utf-8'))
 
     def load_private_key(self):
+        """
+        Loads the private key from the secrets folder
+        :return:
+        """
         if self.loaded_private_key:
             return self.loaded_private_key
         with open(self.private_key, "rb") as f:
@@ -65,6 +69,10 @@ class Auth:
             return private_key
 
     def load_public_key(self):
+        """
+        Loads the public key from the secrets folder
+        :return:
+        """
         if self.loaded_public_key:
             return self.loaded_public_key
         with open(self.public_key, "rb") as f:
@@ -137,6 +145,12 @@ class Auth:
                 f.write(cert.public_bytes(serialization.Encoding.PEM))
 
     def get_token(self, payload_data, expiry_minutes=0):
+        """
+        Returns a token to be used as bearer
+        :param payload_data:
+        :param expiry_minutes:
+        :return:
+        """
         private_key = self.load_private_key()
         now = datetime.datetime.now()
 
@@ -157,6 +171,11 @@ class Auth:
         return token
 
     def get_payload(self, token):
+        """
+        Gets the payload of the token to be evaluated
+        :param token:
+        :return:
+        """
         public_key = self.load_public_key()
         try:
             payload = jwt.decode(token, key=public_key, algorithms=['RS256'])
@@ -166,6 +185,11 @@ class Auth:
         return payload
 
     def validate(self, token):
+        """
+        Validates the token
+        :param token:
+        :return:
+        """
         # first check for API_KEY = token, simplest form
         if os.environ.get("API_KEY", None) is not None:
             if token == os.environ.get("API_KEY"):
@@ -190,4 +214,9 @@ class Auth:
         return False
 
     def valid(self, token):
+        """
+        Validates the token
+        :param token:
+        :return:
+        """
         return self.validate(token)

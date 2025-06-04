@@ -384,12 +384,20 @@ class ORM:
         return primary_keys
 
     def to_json(self):
+        """
+        Returns a json string
+        :return:
+        """
         return json.dumps(self.to_dict(), default=json_serialize)
 
     def __is_class(self, class_name):
         return str(type(class_name)).startswith("<class") and hasattr(class_name, '__weakref__')
 
     def to_dict(self):
+        """
+        Returns a Python dictionary
+        :return:
+        """
         # print(inspect.currentframe().f_back.f_code.co_qualname)
         data = {}
 
