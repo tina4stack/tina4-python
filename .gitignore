@@ -31,3 +31,24 @@
 /migrations/__test_user.sql
 /migrations/__test_user_item.sql
 /tina4_python.egg-info/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# Secrets & test keys
+*.key
+*.cert
+.env
+
+# Databases
+*.db
+
+# Coverage
+.coverage
+
+# Virtual environment
+.venv/
