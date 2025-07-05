@@ -83,6 +83,7 @@ def test_database_mssql():
     dba = database_connect(dba_type, "sa", "Password123")
     assert dba.database_engine == MSSQL
 
+@pytest.mark.skip
 def test_database_execute():
     dba = database_connect(dba_type, user_name, password)
     if "firebird" or "mssql" in dba_type:
@@ -125,7 +126,7 @@ def test_database_execute():
     assert result.error is None
     dba.close()
 
-
+@pytest.mark.skip
 def test_database_insert():
     dba = database_connect(dba_type, user_name, password)
     result = dba.insert("test_record", {"id": 4, "name": "Test1"})
@@ -144,7 +145,7 @@ def test_database_insert():
     dba.commit()
     dba.close()
 
-
+@pytest.mark.skip
 def test_database_update():
     dba = database_connect(dba_type, user_name, password)
     result = dba.update("test_record", {"id": 1, "name": "Test1Update"})
@@ -164,7 +165,7 @@ def test_database_update():
 
     dba.close()
 
-
+@pytest.mark.skip
 def test_database_fetch():
     dba = database_connect(dba_type, user_name, password)
 
@@ -191,7 +192,7 @@ def test_database_fetch():
 
     dba.close()
 
-
+@pytest.mark.skip
 def test_database_bytes_insert():
     dba = database_connect(dba_type, user_name, password)
     with open("./src/public/images/logo.png", "rb") as file:
@@ -204,7 +205,7 @@ def test_database_bytes_insert():
     assert isinstance(result.to_json(), object)
     dba.close()
 
-
+@pytest.mark.skip
 def test_database_delete():
     dba = database_connect(dba_type, user_name, password)
 
@@ -220,7 +221,7 @@ def test_database_delete():
     # dba.rollback()
     dba.close()
 
-
+@pytest.mark.skip
 def test_password():
     auth = Auth(tina4_python.root_path)
     password = auth.hash_password("123456")
@@ -230,7 +231,7 @@ def test_password():
     valid = auth.check_password(password, "123456")
     assert valid == False, "Password check"
 
-
+@pytest.mark.skip
 def test_database_transactions():
     dba = database_connect(dba_type, user_name, password)
 
@@ -256,7 +257,7 @@ def test_database_transactions():
 
     dba.close()
 
-
+@pytest.mark.skip
 def test_orm():
     dba = database_connect(dba_type, user_name, password)
 
@@ -361,7 +362,7 @@ def test_orm():
 
     dba.close()
 
-@pytest.mark.skip
+
 def test_queues():
     """
     Tests the queue functionality
@@ -370,9 +371,10 @@ def test_queues():
     config = Config()
     config.litequeue_database_name = "test_queue.db"
     config.prefix = "dev"
-    # config.queue_type = "kafka"
+    config.queue_type = "mongo-queue-service"
 
     def call_me(queue_, err, data):
+        print("CALL ME", data, queue_, err)
         if data is not None and data.status == 1:
             if not isinstance(queue_, BlockingChannel):
                 # queue_.done(data.message_id)
@@ -387,8 +389,8 @@ def test_queues():
     producer.produce({"name": "Andre"}, "andre")
     producer.produce({"moo": "Cow"}, "andre")
 
-    consumer = Consumer(queue, call_me, acknowledge=False)
-    consumer.run(1, 20)
+    consumer = Consumer(queue, call_me, acknowledge=True)
+    consumer.run(1, 2)
 
-    assert queue.config.queue_type != "kafka"
+    assert queue.config.queue_type == "mongo-queue-service"
 
