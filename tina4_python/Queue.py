@@ -342,13 +342,13 @@ class Queue(object):
                     if acknowledge:
                         msg_status = 2
                         msg.complete()
-                    data = json.loads(msg.data)
+                    data = msg.payload
                     response_msg = Message(
-                        msg.message_id,
+                        data["message_id"],
                         data["msg"],
                         data["user_id"],
-                        msg.status,
-                        msg.in_time,
+                        msg_status,
+                        msg.queued_at,
                         0
                     )
                     if consumer_callback is not None:
