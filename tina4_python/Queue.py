@@ -567,11 +567,11 @@ class Consumer(object):
     """
     Consumer class to consume queues
     """
-    def __init__(self, queues, consumer_callback=None, acknowledge=True):
+    def __init__(self, queues, consumer_callback=None, acknowledge=False):
         """
         Creates a consumer to consume queues
-        :param queue:
-        :param topics:
+        :param queues: Array of declared queues
+        :param acknowledge: Acknowledge messages is False by default
         :param consumer_callback:
         """
         self.queues = queues
