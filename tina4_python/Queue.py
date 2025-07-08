@@ -120,6 +120,7 @@ class Config(object):
     litequeue_database_name = "queue.db"
     kafka_config = None
     rabbitmq_config = None
+    mongo_queue_config = None
     rabbitmq_queue = "default-queue"
     prefix=""
 
@@ -157,6 +158,8 @@ class Queue(object):
 
         if config.queue_type == "litequeue":
             self.init_litequeue()
+        elif config.queue_type == "mongo-queue-service":
+            self.init_mongoqueue()
         elif config.queue_type == "rabbitmq":
             self.init_rabbitmq()
         elif config.queue_type == "kafka":
@@ -195,13 +198,37 @@ class Queue(object):
                     delivery_callback(self.producer, e, None)
 
             return e
+        elif self.config.queue_type == "mongo-queue-service":
+            try:
+                body = {
+                    "message_id": uuid7(), "msg": value, "user_id": user_id, "in_time": time_ns()
+                }
+
+                #queue.put({"task_id": 1}, priority=1, channel="channel_1", job_id="x_job")
+                self.producer.put(body, priority=1,channel=self.topic, job_id=body["message_id"])
+                response_msg = Message(
+                    body["message_id"],
+                    value,
+                    user_id,
+                    0,
+                    body["in_time"],
+                    0
+                )
+                if delivery_callback is not None:
+                    delivery_callback(self.producer, None, response_msg)
+
+                return response_msg
+            except Exception as e:
+                if delivery_callback is not None:
+                    delivery_callback(self.producer, e, None)
+                return e
         elif self.config.queue_type == "rabbitmq":
             try:
                 body = {
                     "message_id": uuid7(), "msg": value, "user_id": user_id, "in_time": time_ns()
                 }
 
-                self.producer.basic_publish(exchange=self.topic, routing_key='', body=json.dumps(body))
+                self.producer.basic_publish(exchange=prefix+self.topic, routing_key='', body=json.dumps(body))
                 response_msg = Message(
                     body["message_id"],
                     value,
@@ -267,6 +294,11 @@ class Queue(object):
         :return:
         """
 
+        if self.config.prefix != "":
+            prefix = self.config.prefix+"_"
+        else:
+            prefix = ""
+
         if self.config.queue_type == "litequeue":
             try:
                 msg = self.consumer.pop()
@@ -300,14 +332,33 @@ class Queue(object):
                         if consumer_callback is not None:
                             consumer_callback(self.consumer, None, response_msg)
 
-                else:
-                    if consumer_callback is not None:
-                        consumer_callback(self.consumer, None, None)
             except Exception as e:
                 consumer_callback(self.consumer, e, None)
+        elif self.config.queue_type == "mongo-queue-service":
+            try:
+                msg = self.consumer.next(channel=self.topic)
+                if msg is not None:
+                    msg_status = 1
+                    if acknowledge:
+                        msg_status = 2
+                        msg.complete()
+                    data = msg.payload
+                    response_msg = Message(
+                        data["message_id"],
+                        data["msg"],
+                        data["user_id"],
+                        msg_status,
+                        msg.queued_at,
+                        0
+                    )
+                    if consumer_callback is not None:
+                        consumer_callback(msg, None, response_msg)
+            except Exception as e:
+                msg.error(e.message)
+                consumer_callback(msg, e, None)
         elif self.config.queue_type == "rabbitmq":
             try:
-                method_frame, header_frame, body = self.consumer.basic_get(queue=self.topic, auto_ack=acknowledge)
+                method_frame, header_frame, body = self.consumer.basic_get(queue=prefix+self.topic, auto_ack=acknowledge)
 
                 if method_frame is not None:
                     msg_status = 1
@@ -374,6 +425,40 @@ class Queue(object):
             sys.exit(1)
         pass
 
+    def init_mongoqueue(self):
+        """
+        Initializes mongo queue service
+        :return:
+        """
+        try:
+            if self.config.prefix != "":
+                prefix = self.config.prefix+"_"
+            else:
+                prefix = ""
+
+            mongo_queue = importlib.import_module("mongo_queue")
+            pymongo =  importlib.import_module("pymongo")
+
+            if self.config.mongo_queue_config is None:
+                self.config.mongo_queue_config = {"host": "localhost", "port": 27017, "timeout": 300, "max_attempts": 5}
+
+            if "username" in self.config.mongo_queue_config and "password" in self.config.mongo_queue_config:
+                client = pymongo.MongoClient(self.config.mongo_queue_config["host"],
+                                             self.config.mongo_queue_config["port"],
+                                             username=self.config.mongo_queue_config["username"],
+                                             password=self.config.mongo_queue_config["password"] ).queue
+            else:
+                client = pymongo.MongoClient(self.config.mongo_queue_config["host"],
+                                             self.config.mongo_queue_config["port"] ).queue
+
+            queue = mongo_queue.queue.Queue(client[prefix+self.topic],
+                                            consumer_id=self.topic, timeout=self.config.mongo_queue_config["timeout"],
+                                            max_attempts=self.config.mongo_queue_config["max_attempts"])
+            self.producer = queue
+            self.consumer = queue
+        except Exception as e:
+            Debug.error("Failed to import mongo_queue and mongo client, try pip install mongo-queue-service or poetry add mongo-queue-service", e)
+        pass
     def init_rabbitmq(self):
         try:
             if self.config.prefix != "":
@@ -482,11 +567,11 @@ class Consumer(object):
     """
     Consumer class to consume queues
     """
-    def __init__(self, queues, consumer_callback=None, acknowledge=True):
+    def __init__(self, queues, consumer_callback=None, acknowledge=False):
         """
         Creates a consumer to consume queues
-        :param queue:
-        :param topics:
+        :param queues: Array of declared queues
+        :param acknowledge: Acknowledge messages is False by default
         :param consumer_callback:
         """
         self.queues = queues
