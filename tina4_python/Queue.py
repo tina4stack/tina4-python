@@ -354,7 +354,7 @@ class Queue(object):
                     if consumer_callback is not None:
                         consumer_callback(msg, None, response_msg)
             except Exception as e:
-                msg.error(e.message)
+                msg.error(str(e))
                 consumer_callback(msg, e, None)
         elif self.config.queue_type == "rabbitmq":
             try:
@@ -567,11 +567,11 @@ class Consumer(object):
     """
     Consumer class to consume queues
     """
-    def __init__(self, queues, consumer_callback=None, acknowledge=False):
+    def __init__(self, queues, consumer_callback=None, acknowledge=True):
         """
         Creates a consumer to consume queues
-        :param queues: Array of declared queues
-        :param acknowledge: Acknowledge messages is False by default
+        :param queue:
+        :param topics:
         :param consumer_callback:
         """
         self.queues = queues
@@ -596,8 +596,7 @@ class Consumer(object):
                     try:
                         queue.consume(self.acknowledge, self.consumer_callback)
                     except Exception as e:
-                        if self.consumer_callback is not None:
-                            self.consumer_callback (queue, e, None)
+                       Debug("Queue Consumer Exception", str(e))
                     counter += 1
                 if iterations is not None and counter >= iterations:
                     break

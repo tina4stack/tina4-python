@@ -83,12 +83,15 @@ def global_exception_handler(exception):
         error_string = ""
     return error_string
 
-def start_in_thread(target):
+def start_in_thread(target, exception_hook=None):
     """
     Starts a method in a thread
+    :param exception_hook:
     :param target:
     :return:
     """
+    if exception_hook is not None:
+        threading.excepthook = exception_hook
     thread = threading.Thread(target=target)
     thread.start()
 
