@@ -52,7 +52,7 @@ class Debug:
         formatter = logging.Formatter("%(levelname)s: %(asctime)s: %(message)s")
         logger = logging.getLogger('TINA4')
         logger.setLevel("DEBUG")
-        handler = RotatingFileHandler("."+os.sep+"logs"+os.sep+file_name, maxBytes=1024*1024, backupCount=5)
+        handler = RotatingFileHandler("."+os.sep+"logs"+os.sep+file_name, maxBytes=1024*1024, backupCount=5, encoding="utf-8")
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 
