@@ -76,10 +76,10 @@ class Debug:
 
             logger.log(log_level, " ".join(str(param) for param in params[1:]).strip())
 
-            print(color + f"{debug_level:5}:"+ShellColors.end, "", end="")
+            print(color + f"{debug_level:5}:"+ShellColors.end, "", end="", flush=True)
             for output in params:
-                print(output, "", end="")
-            print()
+                print(output, "", end="", flush=True)
+            print(flush=True)
 
             if sys.stdout is not None:
                 sys.stdout.flush()
