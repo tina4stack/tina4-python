@@ -333,7 +333,7 @@ class Queue(object):
                             consumer_callback(self.consumer, None, response_msg)
 
             except Exception as e:
-                consumer_callback(self.consumer, e, None)
+                Debug.error("Error consuming ", self.topic, str(e))
         elif self.config.queue_type == "mongo-queue-service":
             try:
                 msg = self.consumer.next(channel=self.topic)
@@ -355,7 +355,7 @@ class Queue(object):
                         consumer_callback(msg, None, response_msg)
             except Exception as e:
                 msg.error(str(e))
-                consumer_callback(msg, e, None)
+                Debug.error("Error consuming ", self.topic, str(e))
         elif self.config.queue_type == "rabbitmq":
             try:
                 method_frame, header_frame, body = self.consumer.basic_get(queue=prefix+self.topic, auto_ack=acknowledge)
@@ -376,8 +376,8 @@ class Queue(object):
                     if consumer_callback is not None:
                         consumer_callback(self.consumer, None, response_msg)
             except Exception as e:
-                if consumer_callback is not None:
-                    consumer_callback(self.consumer, e, None)
+                Debug.error("Error consuming ", self.topic, str(e))
+
         elif self.config.queue_type == "kafka":
             try:
                 msg = self.consumer.poll(1.0)
@@ -402,8 +402,7 @@ class Queue(object):
                     if consumer_callback is not None:
                         consumer_callback(self.consumer, None, response_msg)
             except Exception as e:
-                if consumer_callback is not None:
-                    consumer_callback(self.consumer, e, None)
+                Debug.error("Error consuming ", self.topic, str(e))
 
     def init_litequeue(self):
         """
@@ -596,7 +595,7 @@ class Consumer(object):
                     try:
                         queue.consume(self.acknowledge, self.consumer_callback)
                     except Exception as e:
-                       Debug("Queue Consumer Exception", str(e))
+                        Debug("Queue Consumer Exception", str(e))
                     counter += 1
                 if iterations is not None and counter >= iterations:
                     break
