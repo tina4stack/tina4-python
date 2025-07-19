@@ -50,8 +50,8 @@ class Debug:
             file_name = kwargs["file_name"]
 
         formatter = logging.Formatter("%(levelname)s: %(asctime)s: %(message)s")
+        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(levelname)s: %(asctime)s: %(message)s")
         logger = logging.getLogger('TINA4')
-        logger.setLevel("DEBUG")
         handler = RotatingFileHandler("."+os.sep+"logs"+os.sep+file_name, maxBytes=1024*1024, backupCount=5, encoding="utf-8")
         handler.setFormatter(formatter)
         logger.addHandler(handler)
@@ -74,15 +74,9 @@ class Debug:
                 color = ShellColors.bright_yellow
                 log_level = 30
 
-            logger.log(log_level, " ".join(str(param) for param in params[1:]).strip())
+            end = ShellColors.end
 
-            print(color + f"{debug_level:5}:"+ShellColors.end, "", end="", flush=True)
-            for output in params:
-                print(output, "", end="", flush=True)
-            print(flush=True)
-
-            if sys.stdout is not None:
-                sys.stdout.flush()
+            logger.log(log_level, f"{color}".join(str(param) for param in params[1:]).strip()+f"{end}")
 
         handler.flush()
         logger.removeHandler(handler)

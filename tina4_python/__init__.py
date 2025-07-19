@@ -15,7 +15,7 @@ import traceback
 import sass
 from pathlib import Path
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileSystemEvent
+from watchdog.events import PatternMatchingEventHandler, FileSystemEvent
 from tina4_python.Router import get
 from tina4_python import Messages, Constant
 from tina4_python.Swagger import Swagger
@@ -182,8 +182,7 @@ def compile_scss():
 
 compile_scss()
 
-
-class SassCompiler(FileSystemEventHandler):
+class SassCompiler(PatternMatchingEventHandler):
     def on_modified(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
             compile_scss()
@@ -191,7 +190,7 @@ class SassCompiler(FileSystemEventHandler):
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
     observer = Observer()
-    event_handler = SassCompiler()
+    event_handler = SassCompiler(patterns=["*.sass", "*.scss"])
     observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
     observer.start()
 else:
@@ -362,11 +361,11 @@ def webserver(host_name, port):
         except Exception as e:
             Debug("Not running Hypercorn webserver", str(e), Constant.TINA4_LOG_WARNING)
 
-    Debug(Messages.MSG_SERVER_STOPPED, Constant.TINA4_LOG_INFO)
+    Debug(Messages.MSG_SERVER_STOPPED, Constanst.TINA4_LOG_INFO)
 
 if importlib.util.find_spec("jurigged"):
     Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
-    jurigged.watch("./")
+    jurigged.watch(["./src/app", "./src/orm", "./src/routes", "./src/templates"])
 
 # Start up a webserver based on params passed on the command line
 HOSTNAME = "localhost"
