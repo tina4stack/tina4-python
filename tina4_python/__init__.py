@@ -361,7 +361,7 @@ def webserver(host_name, port):
         except Exception as e:
             Debug("Not running Hypercorn webserver", str(e), Constant.TINA4_LOG_WARNING)
 
-    Debug(Messages.MSG_SERVER_STOPPED, Constanst.TINA4_LOG_INFO)
+    Debug(Messages.MSG_SERVER_STOPPED, Constant.TINA4_LOG_INFO)
 
 if importlib.util.find_spec("jurigged"):
     Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)

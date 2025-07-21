@@ -49,8 +49,8 @@ class Debug:
         if "file_name" in kwargs:
             file_name = kwargs["file_name"]
 
+
         formatter = logging.Formatter("%(levelname)s: %(asctime)s: %(message)s")
-        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(levelname)s: %(asctime)s: %(message)s")
         logger = logging.getLogger('TINA4')
         handler = RotatingFileHandler("."+os.sep+"logs"+os.sep+file_name, maxBytes=1024*1024, backupCount=5, encoding="utf-8")
         handler.setFormatter(formatter)
@@ -64,20 +64,25 @@ class Debug:
             if debug_level == Constant.TINA4_LOG_INFO:
                 color = ShellColors.cyan
                 log_level = 20
+                logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(levelname)s: %(asctime)s: %(message)s")
             elif debug_level == Constant.TINA4_LOG_DEBUG:
                 color = ShellColors.bright_magenta
                 log_level = 10
+                logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(levelname)s: %(asctime)s: %(message)s")
             elif debug_level == Constant.TINA4_LOG_ERROR:
                 color = ShellColors.bright_red
                 log_level = 40
+                logging.basicConfig(stream=sys.stdout, level=logging.ERROR, format="%(levelname)s: %(asctime)s: %(message)s")
             elif debug_level == Constant.TINA4_LOG_WARNING:
                 color = ShellColors.bright_yellow
                 log_level = 30
+                logging.basicConfig(stream=sys.stdout, level=logging.WARNING, format="%(levelname)s: %(asctime)s: %(message)s")
 
             end = ShellColors.end
 
-            logger.log(log_level, f"{color}".join(str(param) for param in params[1:]).strip()+f"{end}")
+            logger.log(log_level, f"{color} ".join(str(param) for param in params[1:]).strip()+f"{end} ")
 
+        logging.basicConfig(level=logging.NOTSET)
         handler.flush()
         logger.removeHandler(handler)
         handler.close()
