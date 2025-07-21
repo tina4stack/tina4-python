@@ -12,6 +12,18 @@ import tina4_python.Constant as Constant
 from tina4_python.ShellColors import ShellColors
 from datetime import datetime
 
+debug_level = os.getenv("TINA4_DEBUG_LEVEL", Constant.TINA4_LOG_ALL)
+
+if debug_level == Constant.TINA4_LOG_ALL or debug_level == Constant.TINA4_LOG_DEBUG:
+    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+elif debug_level == Constant.TINA4_LOG_INFO:
+    logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+elif debug_level == Constant.TINA4_LOG_ERROR:
+    logging.basicConfig(stream=sys.stdout, level=logging.ERROR)
+elif debug_level == Constant.TINA4_LOG_WARNING:
+    logging.basicConfig(stream=sys.stdout, level=logging.WARNING)
+
+
 class Debug:
 
     @staticmethod
@@ -49,41 +61,41 @@ class Debug:
         if "file_name" in kwargs:
             file_name = kwargs["file_name"]
 
-
         formatter = logging.Formatter("%(levelname)s: %(asctime)s: %(message)s")
         logger = logging.getLogger('TINA4')
+        logger.setLevel(logging.DEBUG)
         handler = RotatingFileHandler("."+os.sep+"logs"+os.sep+file_name, maxBytes=1024*1024, backupCount=5, encoding="utf-8")
         handler.setFormatter(formatter)
+
         logger.addHandler(handler)
 
         if (os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL]) == "[TINA4_LOG_ALL]"
-                or debug_level in os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL])):
+            or debug_level in os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL])):
+
             log_level = 0
             # choose the color
             color = ShellColors.bright_blue
-            # logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(levelname)s: %(asctime)s: %(message)s")
+
             if debug_level == Constant.TINA4_LOG_INFO:
                 color = ShellColors.cyan
                 log_level = 20
-                logging.basicConfig(stream=sys.stdout, level=logging.INFO, format="%(levelname)s: %(asctime)s: %(message)s")
+
             elif debug_level == Constant.TINA4_LOG_DEBUG:
                 color = ShellColors.bright_magenta
                 log_level = 10
-                logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(levelname)s: %(asctime)s: %(message)s")
+
             elif debug_level == Constant.TINA4_LOG_ERROR:
                 color = ShellColors.bright_red
                 log_level = 40
-                logging.basicConfig(stream=sys.stdout, level=logging.ERROR, format="%(levelname)s: %(asctime)s: %(message)s")
+
             elif debug_level == Constant.TINA4_LOG_WARNING:
                 color = ShellColors.bright_yellow
                 log_level = 30
-                logging.basicConfig(stream=sys.stdout, level=logging.WARNING, format="%(levelname)s: %(asctime)s: %(message)s")
 
             end = ShellColors.end
 
             logger.log(log_level, f"{color} ".join(str(param) for param in params[1:]).strip()+f"{end} ")
 
-        logging.basicConfig(level=logging.NOTSET)
         handler.flush()
         logger.removeHandler(handler)
         handler.close()

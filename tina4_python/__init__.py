@@ -6,6 +6,7 @@
 # flake8: noqa: E403,F401,E402
 import asyncio
 import gettext
+import logging
 import os
 import shutil
 import importlib
@@ -45,7 +46,8 @@ else:
 
 load_env(environment)
 
-print(ShellColors.bright_yellow + "Setting debug mode", os.getenv("TINA4_DEBUG_LEVEL"), ShellColors.end)
+debug_level = os.getenv("TINA4_DEBUG_LEVEL", Constant.TINA4_LOG_ALL)
+print(ShellColors.bright_yellow + "Setting debug mode", debug_level, ShellColors.end)
 
 if importlib.util.find_spec("jurigged"):
     import jurigged
