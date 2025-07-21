@@ -61,7 +61,7 @@ class Debug:
             log_level = 0
             # choose the color
             color = ShellColors.bright_blue
-            logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(levelname)s: %(asctime)s: %(message)s")
+            # logging.basicConfig(stream=sys.stdout, level=logging.DEBUG, format="%(levelname)s: %(asctime)s: %(message)s")
             if debug_level == Constant.TINA4_LOG_INFO:
                 color = ShellColors.cyan
                 log_level = 20
