@@ -3,7 +3,9 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
+import os
 import sys
+import  tina4_python
 from datetime import datetime
 from src.app.MiddleWare import MiddleWare
 from src.orm.Log import Log
@@ -121,6 +123,13 @@ async def run_test_vars(request, response):
     print("<pre>")
     print("vars")
     print(request.params)
+
+@get("/healthcheck")
+async def get_healthcheck(request, response):
+    if os.path.isfile(tina4_python.root_path + "/broken"):
+        Debug.error("broken", tina4_python.root_path + "/broken")
+        return response("Broken", 503)
+    return response("OK")
 
 from .routes import meme
 from .routes import test_queue

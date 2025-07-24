@@ -62,7 +62,7 @@ class Debug:
 
     def __init__(self, *args, **kwargs):
         now = datetime.now()
-        debug_level = os.getenv("TINA4_DEBUG_LEVEL", Constant.TINA4_LOG_ALL)
+        debug_level = os.getenv("TINA4_DEBUG_LEVEL", Constant.TINA4_LOG_INFO)
 
         logging.config.dictConfig(LOGGING_CONFIG)
         if debug_level == Constant.TINA4_LOG_ALL or debug_level == Constant.TINA4_LOG_DEBUG:
