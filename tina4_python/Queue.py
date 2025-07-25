@@ -137,11 +137,12 @@ class Message:
     delivery_tag: str
 
 class Queue(object):
-    def __init__(self, config=None, topic="default-queue"):
+    def __init__(self, config=None, topic="default-queue", callback=None):
         """
         Initializes the queue object
         :param config:
         :param topic:
+        :param callback:
         """
         if config is None:
             config = Config()
@@ -155,6 +156,7 @@ class Queue(object):
         self.topic = topic
         self.config = config
         self.library = None
+        self.callback = callback
 
         if config.queue_type == "litequeue":
             self.init_litequeue()
@@ -593,7 +595,11 @@ class Consumer(object):
             while True:
                 for queue in self.queues:
                     try:
-                        queue.consume(self.acknowledge, self.consumer_callback)
+                        if queue.callback is not None:
+                            callback = queue.callback
+                        else:
+                            callback = self.consumer_callback
+                        queue.consume(self.acknowledge, callback)
                     except Exception as e:
                         Debug("Queue Consumer Exception", str(e))
                     counter += 1
