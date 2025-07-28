@@ -415,12 +415,12 @@ poetry publish
 
 PyTests
 ```
-poetry run pytest ./tests
+uv run pytest ./tests --verbose
 ```
 
 Flake8 Code tests
 ```
-poetry run flake8 ./tina4_python
+uv run flake8 ./tina4_python
 ```
 
 ### Using queues

@@ -17,22 +17,22 @@ class Debug:
     @staticmethod
     def info(*args, **kwargs):
         args += (Constant.TINA4_LOG_INFO,)
-        Debug(*args)
+        Debug(*args, **kwargs)
 
     @staticmethod
     def error(*args, **kwargs):
         args += (Constant.TINA4_LOG_ERROR,)
-        Debug(*args)
+        Debug(*args, **kwargs)
 
     @staticmethod
     def debug(*args, **kwargs):
         args += (Constant.TINA4_LOG_DEBUG,)
-        Debug(*args)
+        Debug(*args, **kwargs)
 
     @staticmethod
     def warning(*args, **kwargs):
         args += (Constant.TINA4_LOG_WARNING,)
-        Debug(*args)
+        Debug(*args, **kwargs)
 
     def __init__(self, *args, **kwargs):
         now = datetime.now()
