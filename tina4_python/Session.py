@@ -105,30 +105,21 @@ class SessionRedisHandler(SessionHandler):
 
     @staticmethod
     def __init_redis():
-        use_valkey = os.getenv("TINA4_SESSION_REDIS_IS_VALKEY", "False").lower() == "true"
-        module_name = "valkey" if use_valkey else "redis"
         try:
-            redis_mod = importlib.import_module(module_name)
+            redis = importlib.import_module("redis")
         except Exception as e:
-            msg = "Valkey not installed" if use_valkey else "Redis not installed"
-            Debug(f"{msg}, install with pip/uv", str(e), Constant.TINA4_LOG_ERROR)
+            Debug("Redis not installed, install with pip install redis or poetry add redis", str(e), Constant.TINA4_LOG_ERROR)
             sys.exit(1)
 
-        params = {
-            "host": os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"),
-            "port": int(os.getenv("TINA4_SESSION_REDIS_PORT", 6379)),
-            "decode_responses": True
-        }
-        if os.getenv("TINA4_SESSION_REDIS_SECRET", ""):
-            params["password"] = os.getenv("TINA4_SESSION_REDIS_SECRET", "")
-            params["username"] = os.getenv("TINA4_SESSION_REDIS_USER", "default")
-
-        if use_valkey:
-            params["ssl"] = os.getenv("TINA4_SESSION_REDIS_SSL", True)
-            redis_instance = redis_mod.Valkey(**params)
+        if os.getenv("TINA4_SESSION_REDIS_SECRET", "") != "":
+            redis_instance = redis.Redis(host=os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"),
+                                         port=os.getenv("TINA4_SESSION_REDIS_PORT",6379),
+                                         password=os.getenv("TINA4_SESSION_REDIS_SECRET", ""),
+                                         decode_responses=True)
         else:
-            redis_instance = redis_mod.Redis(**params)
-
+            redis_instance = redis.Redis(host=os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"),
+                                         port=os.getenv("TINA4_SESSION_REDIS_PORT",6379),
+                                         decode_responses=True)
         return redis_instance
 
     """
@@ -188,6 +179,86 @@ class SessionRedisHandler(SessionHandler):
             Debug("Session save failure", str(e), Constant.TINA4_LOG_ERROR)
             return False
 
+class SessionValkeyHandler(SessionHandler):
+
+    @staticmethod
+    def __init_valkey():
+        try:
+            valkey = importlib.import_module("valkey")
+        except Exception as e:
+            Debug("Valkey not installed, install with pip/uv", str(e), Constant.TINA4_LOG_ERROR)
+            sys.exit(1)
+
+        params = {
+            "host": os.getenv("TINA4_SESSION_VALKEY_HOST", "localhost"),
+            "port": int(os.getenv("TINA4_SESSION_VALKEY_PORT", 6379)),
+            "decode_responses": True
+        }
+        if os.getenv("TINA4_SESSION_VALKEY_SECRET", ""):
+            params["password"] = os.getenv("TINA4_SESSION_VALKEY_SECRET", "")
+            params["username"] = os.getenv("TINA4_SESSION_VALKEY_USER", "default")
+
+        params["ssl"] = os.getenv("TINA4_SESSION_VALKEY_SSL", True)
+        valkey_instance = valkey.Valkey(**params)
+
+        return valkey_instance
+
+    """
+    Session Redis Handler
+    """
+    @staticmethod
+    def load(session, _hash):
+        """
+        Loads the Valkey session
+        :param session:
+        :param _hash:
+        :return:
+        """
+        try:
+            session.session_hash = _hash
+            r = SessionValkeyHandler.__init_valkey()
+            token = r.get(_hash)
+            if tina4_python.tina4_auth.valid(token):
+                payload = tina4_python.tina4_auth.get_payload(token)
+                for key in payload:
+                    if key != "expires":
+                        session.set(key, payload[key])
+            else:
+                Debug("Session expired, starting a new one", Constant.TINA4_LOG_DEBUG)
+                session.start(_hash)
+        except Exception:
+            Debug("Valkey not available, sessions will fail", Constant.TINA4_LOG_ERROR)
+
+
+    @staticmethod
+    def close(session):
+        """
+        Closes the Valkey session
+        :param session:
+        :return:
+        """
+        r = SessionValkeyHandler.__init_valkey()
+        try:
+            r.set(session.session_hash, "")
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def save(session):
+        """
+        Saves the Valkey session
+        :param session:
+        :return:
+        """
+        r = SessionValkeyHandler.__init_valkey()
+        try:
+            token = tina4_python.tina4_auth.get_token(payload_data=session.session_values)
+            r.set(session.session_hash, token)
+            return True
+        except Exception as e:
+            Debug("Session save failure", str(e), Constant.TINA4_LOG_ERROR)
+            return False
 
 class Session:
 
