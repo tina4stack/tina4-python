@@ -105,21 +105,30 @@ class SessionRedisHandler(SessionHandler):
 
     @staticmethod
     def __init_redis():
+        use_valkey = os.getenv("TINA4_SESSION_REDIS_IS_VALKEY", "False").lower() == "true"
+        module_name = "valkey" if use_valkey else "redis"
         try:
-            redis = importlib.import_module("redis")
+            redis_mod = importlib.import_module(module_name)
         except Exception as e:
-            Debug("Redis not installed, install with pip install redis or poetry add redis", str(e), Constant.TINA4_LOG_ERROR)
+            msg = "Valkey not installed" if use_valkey else "Redis not installed"
+            Debug(f"{msg}, install with pip/uv", str(e), Constant.TINA4_LOG_ERROR)
             sys.exit(1)
 
-        if os.getenv("TINA4_SESSION_REDIS_SECRET", "") != "":
-            redis_instance = redis.Redis(host=os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"),
-                                         port=os.getenv("TINA4_SESSION_REDIS_PORT",6379),
-                                         password=os.getenv("TINA4_SESSION_REDIS_SECRET", ""),
-                                         decode_responses=True)
+        params = {
+            "host": os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"),
+            "port": int(os.getenv("TINA4_SESSION_REDIS_PORT", 6379)),
+            "decode_responses": True
+        }
+        if os.getenv("TINA4_SESSION_REDIS_SECRET", ""):
+            params["password"] = os.getenv("TINA4_SESSION_REDIS_SECRET", "")
+            params["username"] = os.getenv("TINA4_SESSION_REDIS_USER", "default")
+
+        if use_valkey:
+            params["ssl"] = os.getenv("TINA4_SESSION_REDIS_SSL", True)
+            redis_instance = redis_mod.Valkey(**params)
         else:
-            redis_instance = redis.Redis(host=os.getenv("TINA4_SESSION_REDIS_HOST", "localhost"),
-                                         port=os.getenv("TINA4_SESSION_REDIS_PORT",6379),
-                                         decode_responses=True)
+            redis_instance = redis_mod.Redis(**params)
+
         return redis_instance
 
     """
