@@ -198,7 +198,9 @@ class SessionValkeyHandler(SessionHandler):
             params["password"] = os.getenv("TINA4_SESSION_VALKEY_SECRET", "")
             params["username"] = os.getenv("TINA4_SESSION_VALKEY_USER", "default")
 
-        params["ssl"] = os.getenv("TINA4_SESSION_VALKEY_SSL", True)
+        if os.getenv("TINA4_SESSION_VALKEY_SSL", "False").upper() == "TRUE":
+            params["ssl"] = True
+
         valkey_instance = valkey.Valkey(**params)
 
         return valkey_instance
