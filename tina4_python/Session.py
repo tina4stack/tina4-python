@@ -204,7 +204,7 @@ class SessionValkeyHandler(SessionHandler):
         return valkey_instance
 
     """
-    Session Redis Handler
+    Session Valkey Handler
     """
     @staticmethod
     def load(session, _hash):
