@@ -107,7 +107,8 @@ async def system_roles(request, response):
 @middleware(MiddleWare)
 @get("/test/redirect")
 async def redirect(request, response):
-    return response.redirect("/hello/world")
+    return response.redir
+    ect("/hello/world")
 
 
 @cached(False)

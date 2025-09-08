@@ -339,6 +339,7 @@ def webserver(host_name, port):
     :return:
     """
     if os.getenv('TINA4_DEFAULT_WEBSERVER', 'FALSE').upper() == 'TRUE':
+        Debug("Using default webserver", Constant.TINA4_LOG_INFO)
         # runs the built-in webserver (websockets) don't work on windows
         web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
         web_server.router_handler = Router()
@@ -353,6 +354,7 @@ def webserver(host_name, port):
         web_server.server_close()
     else:
         # Runs a hyper corn server
+        Debug("Using hypercorn webserver", Constant.TINA4_LOG_INFO)
         try:
             from hypercorn.config import Config
             from hypercorn.asyncio import serve
