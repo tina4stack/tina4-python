@@ -279,7 +279,6 @@ async def app(scope, receive, send):
                 webserver.content_raw = b""
             webserver.content_length = parsed_headers_lowercase["content-length"]
             webserver.router_handler = Router()
-            webserver.session = Session
 
             cookie_list = {}
             if "cookie" in webserver.lowercase_headers:
