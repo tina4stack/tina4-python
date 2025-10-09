@@ -64,6 +64,7 @@ class Webserver:
                     content = b"\r\n" + content
                     data_array = content.split(str.encode(boundary))
                     body = {}
+                    files = {}
                     for data in data_array:
                         data = data.split(b"\r\n\r\n")
                         data_names = data[0].decode("utf-8").split("; ")
@@ -91,10 +92,24 @@ class Webserver:
                                 if "Content-Type" in meta_data:
                                     content_type = meta_data["Content-Type"]
 
-                                body[key_name] = {"file_name": file_name, "content_type": content_type,
-                                                  "content": base64.encodebytes(data_value).decode("utf-8").replace(
-                                                      "\n", "")}
-                    return body
+
+                                if key_name in body:
+                                    body[key_name] = [body[key_name]]
+                                    body[key_name].append({"file_name": file_name, "content_type": content_type,"content": base64.encodebytes(data_value).decode("utf-8").replace(
+                                        "\n", "")})
+                                else:
+                                    body[key_name] = {"file_name": file_name, "content_type": content_type,"content": base64.encodebytes(data_value).decode("utf-8").replace(
+                                        "\n", "")}
+
+                                if key_name in files:
+                                    files[key_name] = [files[key_name]]
+                                    files[key_name].append({"file_name": file_name, "content_type": content_type,"content": base64.encodebytes(data_value).decode("utf-8").replace(
+                                        "\n", "")})
+                                else:
+                                    files[key_name] = {"file_name": file_name, "content_type": content_type,"content": base64.encodebytes(data_value).decode("utf-8").replace(
+                                        "\n", "")}
+
+                    return body, files
 
         return {"data": base64.encodebytes(content).decode("utf-8").replace("\n", "")}
 
@@ -181,11 +196,12 @@ class Webserver:
 
         content_length = await self.get_content_length()
         if method != Constant.TINA4_GET:
-            body = await self.get_content_body(content_length)
+            body, files = await self.get_content_body(content_length)
         else:
             body = None
+            files = None
 
-        request = {"params": params, "body": body, "raw_data": self.request, "url": self.path, "session": self.session,
+        request = {"params": params, "body": body, "files": files, "raw_data": self.request, "url": self.path, "session": self.session,
                    "headers": self.lowercase_headers, "raw_request": self.request_raw, "raw_content": self.content_raw,
                    "transport": transport, "asgi_response": asgi_response}
 

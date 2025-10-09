@@ -141,7 +141,6 @@ class Database:
         :return: bool : True if table exists, else False
         """
 
-        sql = ""
         if self.database_engine == MSSQL:
             sql = "select count(*) as count_table from sys.tables WHERE name = '"+table_name.upper()+"'"
         elif self.database_engine == SQLITE:
@@ -158,7 +157,11 @@ class Database:
         else:
             return False
 
-        record = self.fetch_one(sql)
+        try:
+            record = self.fetch_one(sql)
+        except Exception as e:
+            raise Exception (f"Error checking if table {table_name} exists: "+str(e))
+
         if record:
             if record["count_table"] > 0:
                 return True

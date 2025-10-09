@@ -330,16 +330,16 @@ class ORM:
             self.__populate_orm({})
 
         # Debug("Checking for", self.__table_name__, TINA4_LOG_INFO)
-        if self.__dba__:
+        if self.__dba__ is not None:
             self.__table_exists = self.__dba__.table_exists(self.__table_name__)
             if not self.__table_exists:
                 sql = self.__create_table__(self.__table_name__)
                 filename = root_path + os.sep + "migrations" + os.sep + "__" + self.__table_name__ + ".sql"
                 os.makedirs(os.path.dirname(filename), exist_ok=True)
-                with open(filename, "w") as f:
-                    f.write(sql)
-                    f.close()
-            # Debug("Table Exists", self.__table_exists, TINA4_LOG_INFO)
+                #with open(filename, "w") as f:
+                #    f.write(sql)
+                #    f.close()
+                Debug.warning("Create Table ? ", sql)
         else:
             self.__table_exists = False
 

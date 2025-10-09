@@ -143,6 +143,7 @@ class Router:
                 Request.headers = headers  # Add the headers
                 Request.params = request["params"]
                 Request.body = request["body"] if "body" in request else None
+                Request.files = request["files"] if "files" in request else None
                 Request.session = session
                 Request.raw_data = request["raw_data"] if "raw_data" in request else None
                 Request.raw_request = request["raw_request"] if "raw_request" in request else None
@@ -150,6 +151,7 @@ class Router:
                 Request.url = url
                 Request.transport = request["transport"] if "transport" in request else None
                 Request.asgi_response = request["asgi_response"] if "asgi_response" in request else None
+
 
                 tina4_python.tina4_current_request = Request
 
@@ -166,7 +168,16 @@ class Router:
                         Request, Response = middleware_runner.call_before_methods(Request, Response)
                         Request, Response = middleware_runner.call_any_methods(Request, Response)
 
-                result = await router_response(request=Request, response=Response.Response)
+                try:
+                    result = await router_response(request=Request, response=Response.Response)
+                except Exception as e:
+                    error_string = tina4_python.global_exception_handler(e)
+                    if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):
+                        html = Template.render_twig_template("errors/500.twig",
+                                                             {"server": {"url": url}, "error_message": error_string})
+                        return Response.Response(html, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
+                    else:
+                        return Response.Response(error_string, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
 
                 # we have found a result ... make sure we reflect this if the user didn't actually put the correct http response code in
                 if result is not None:

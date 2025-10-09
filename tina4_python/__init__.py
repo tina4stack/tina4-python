@@ -82,7 +82,7 @@ def global_exception_handler(exception):
             or debug_level in os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL])):
         pass
     else:
-        error_string = ""
+        error_string = "An exception happened"
     return error_string
 
 def start_in_thread(target, exception_hook=None):
