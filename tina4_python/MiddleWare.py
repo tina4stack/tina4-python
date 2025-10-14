@@ -26,7 +26,7 @@ class MiddleWare:
             else:
                 self.any_methods.append(method)
 
-    def call_before_methods(self, request, response):
+    async def call_before_methods(self, request, response):
         """
         Call before methods
         :param request:
@@ -35,10 +35,10 @@ class MiddleWare:
         """
         for method in self.before_methods:
             method = getattr(self.middleware_class, method)
-            request, response = method(request, response)
+            request, response = await method(request, response)
         return request, response
 
-    def call_after_methods(self, request, response):
+    async def call_after_methods(self, request, response):
         """
         Call after methods
         :param request:
@@ -47,10 +47,10 @@ class MiddleWare:
         """
         for method in self.after_methods:
             method = getattr(self.middleware_class, method)
-            request, response = method(request, response)
+            request, response = await method(request, response)
         return request, response
 
-    def call_any_methods(self, request, response):
+    async def call_any_methods(self, request, response):
         """
         Call any methods
         :param request:
@@ -59,7 +59,7 @@ class MiddleWare:
         """
         for method in self.any_methods:
             method = getattr(self.middleware_class, method)
-            request, response = method(request, response)
+            request, response = await method(request, response)
         return request, response
 
     def call_direct_method(self, request, response, method_name):
