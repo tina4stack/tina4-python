@@ -161,12 +161,12 @@ class Router:
                 if "middleware" in route:
                     middleware_runner = MiddleWare(route["middleware"]["class"])
 
-                    if "methods" in route["middleware"]:
+                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(route["middleware"]["methods"]) > 0:
                         for method in route["middleware"]["methods"]:
                             Request, Response = middleware_runner.call_direct_method(Request, Response, method)
                     else:
-                        Request, Response = middleware_runner.call_before_methods(Request, Response)
-                        Request, Response = middleware_runner.call_any_methods(Request, Response)
+                        Request, Response = await middleware_runner.call_before_methods(Request, Response)
+                        Request, Response = await middleware_runner.call_any_methods(Request, Response)
 
                 try:
                     result = await router_response(request=Request, response=Response.Response)
@@ -187,12 +187,12 @@ class Router:
                 if "middleware" in route:
                     middleware_runner = MiddleWare(route["middleware"]["class"])
 
-                    if "methods" in route["middleware"]:
+                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(route["middleware"]["methods"]) > 0:
                         for method in route["middleware"]["methods"]:
                             Request, result = middleware_runner.call_direct_method(Request, result, method)
                     else:
-                        Request, result = middleware_runner.call_after_methods(Request, result)
-                        Request, result = middleware_runner.call_any_methods(Request, result)
+                        Request, result = await middleware_runner.call_after_methods(Request, result)
+                        Request, result = await middleware_runner.call_any_methods(Request, result)
 
                 if result is not None:
                     result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
