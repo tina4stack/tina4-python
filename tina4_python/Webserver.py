@@ -48,7 +48,7 @@ class Webserver:
                 for data in content_data:
                     data = data.split("=", 1)
                     body[data[0]] = unquote_plus(data[1])
-                return body
+                return body, {}
             elif self.lowercase_headers["content-type"] == "application/json":
                 # print("CONTENT", content, self.request)
                 try:
@@ -111,7 +111,7 @@ class Webserver:
 
                     return body, files
 
-        return {"data": base64.encodebytes(content).decode("utf-8").replace("\n", "")}
+        return {"data": base64.encodebytes(content).decode("utf-8").replace("\n", "")}, {}
 
     async def send_basic_headers(self, headers):
         self.send_header("Access-Control-Allow-Origin", "*", headers)
