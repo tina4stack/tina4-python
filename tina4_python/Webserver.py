@@ -52,13 +52,15 @@ class Webserver:
             elif self.lowercase_headers["content-type"] == "application/json":
                 # print("CONTENT", content, self.request)
                 try:
-                    return json.loads(content)
+                    return json.loads(content), {}
                 except Exception:
-                    return content.decode("utf-8")
+                    return content.decode("utf-8"), {}
+
             elif self.lowercase_headers["content-type"] == "text/plain":
-                return content.decode("utf-8")
+                return content.decode("utf-8"), {}
             else:
                 content_data = self.lowercase_headers["content-type"].split("; ")
+
                 if content_data[0] == "multipart/form-data":
                     boundary = content_data[1].split("=")[1] + "\r\n"
                     content = b"\r\n" + content
@@ -68,8 +70,10 @@ class Webserver:
                     for data in data_array:
                         data = data.split(b"\r\n\r\n")
                         data_names = data[0].decode("utf-8").split("; ")
+
                         if data_names[0] == "Content-Disposition: form-data":
                             key_name = data_names[1].split("=")[1][1:-1]
+
                             if len(data_names) == 2:
                                 data_value = data[1].split(b"\r\n")[0]
                                 body[key_name] = unquote_plus(data_value.decode("utf-8"))
@@ -91,7 +95,6 @@ class Webserver:
                                     file_name = meta_data["filename"][1:-1]
                                 if "Content-Type" in meta_data:
                                     content_type = meta_data["Content-Type"]
-
 
                                 if key_name in body:
                                     body[key_name] = [body[key_name]]
