@@ -4,6 +4,8 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+import asyncio
+
 class MiddleWare:
     def __init__(self, middleware_class):
         """
@@ -35,7 +37,12 @@ class MiddleWare:
         """
         for method in self.before_methods:
             method = getattr(self.middleware_class, method)
-            request, response = await method(request, response)
+            result = method(request, response)
+            if asyncio.iscoroutine(result):
+                request, response = await result
+            else:
+                request, response = result
+
         return request, response
 
     async def call_after_methods(self, request, response):
@@ -47,7 +54,11 @@ class MiddleWare:
         """
         for method in self.after_methods:
             method = getattr(self.middleware_class, method)
-            request, response = await method(request, response)
+            result = method(request, response)
+            if asyncio.iscoroutine(result):
+                request, response = await result
+            else:
+                request, response = result
         return request, response
 
     async def call_any_methods(self, request, response):
@@ -59,7 +70,11 @@ class MiddleWare:
         """
         for method in self.any_methods:
             method = getattr(self.middleware_class, method)
-            request, response = await method(request, response)
+            result = method(request, response)
+            if asyncio.iscoroutine(result):
+                request, response = await result
+            else:
+                request, response = result
         return request, response
 
     def call_direct_method(self, request, response, method_name):
