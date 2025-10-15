@@ -15,6 +15,7 @@ from jinja2 import Environment, FileSystemLoader, Undefined
 from tina4_python.Session import Session
 from random import random as RANDOM
 
+
 class Template:
     # initializes the twig template engine
     @staticmethod
@@ -30,11 +31,12 @@ class Template:
         Template.twig.globals['RANDOM'] = RANDOM
         Template.twig.globals['formToken'] = Template.get_form_token
         Template.twig.filters['formToken'] = Template.get_form_token_input
-        if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):
+        if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv(
+                "TINA4_DEBUG_LEVEL"):
             Template.twig.globals['dump'] = Template.dump
         else:
             Template.twig.globals['dump'] = Template.production_dump
-        Debug("Twig Initialized on "+path, Constant.TINA4_LOG_INFO)
+        Debug("Twig Initialized on " + path, Constant.TINA4_LOG_INFO)
         return Template.twig
 
     @staticmethod
@@ -52,7 +54,7 @@ class Template:
                     return obj.session_values
                 raise TypeError("Type %s not serializable to Jinja2 template" % type(obj))
 
-            return "<pre>"+json.dumps(param, indent=True, default=json_serialize)+"</pre>"
+            return "<pre>" + json.dumps(param, indent=True, default=json_serialize) + "</pre>"
         else:
             return ""
 
@@ -62,7 +64,8 @@ class Template:
 
     @staticmethod
     def get_form_token_input(form_name):
-        return '<input type="hidden" name="formToken" value="'+Template.get_form_token({"formName": form_name})+'"><!--"'+str(datetime.now().isoformat())+'"-->'
+        return '<input type="hidden" name="formToken" value="' + Template.get_form_token(
+            {"formName": form_name}) + '"><!--"' + str(datetime.now().isoformat()) + '"-->'
 
     @staticmethod
     def convert_special_types(obj):
@@ -102,4 +105,3 @@ class Template:
     @staticmethod
     def render(template_or_file_name, data=None):
         return Template.render_twig_template(template_or_file_name, data)
-
