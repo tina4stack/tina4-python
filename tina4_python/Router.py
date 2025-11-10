@@ -73,6 +73,7 @@ class Router:
         tina4_python.tina4_current_request["url"] = url
         tina4_python.tina4_current_request["headers"] = headers
 
+        validated = False
         # we can add other methods later but right now we validate posts
         if method in [Constant.TINA4_GET, Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH,
                       Constant.TINA4_DELETE]:
@@ -86,7 +87,6 @@ class Router:
                 content = Template.render_twig_template(
                     "errors/403.twig", {"server": {"url": url}})
 
-            validated = False
             # check to see if we have an auth ability
             if "authorization" in headers:
                 token = headers["authorization"].replace("Bearer", "").strip()
@@ -103,12 +103,9 @@ class Router:
                 if tina4_python.tina4_auth.valid(token):
                     validated = True
 
-            if not validated and method != Constant.TINA4_GET:
-                return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
-            else:
-                if request["body"] is not None and "formToken" in request["body"]:
-                    request["params"]["formToken"] = request["body"]["formToken"]
-                    del request["body"]["formToken"]
+            if request["body"] is not None and "formToken" in request["body"]:
+                request["params"]["formToken"] = request["body"]["formToken"]
+                del request["body"]["formToken"]
 
         # split URL and extract query string
         url_parts = url.split('?')
@@ -129,9 +126,10 @@ class Router:
                 continue
             Debug("Matching route " + route['route'] + " to " + url, Constant.TINA4_LOG_DEBUG)
             if Router.match(url, route['route']):
-                if "swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]:
-                    if route["swagger"]["secure"] and not validated:
-                        return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+                if not "noauth" in route:
+                    if "secure" in route or ("swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]):
+                        if (route["secure"] or route["swagger"]["secure"]) and not validated:
+                            return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
                 router_response = route["callback"]
 
@@ -396,3 +394,25 @@ def middleware(middleware, specific_methods=[]):
         return callback
 
     return actual_middleware
+
+def secure():
+    """
+    Makes a route secure
+    :return:
+    """
+    def actual_secure(callback):
+        tina4_python.tina4_routes[callback]["secure"] = True
+        return callback
+
+    return actual_secure
+
+def noauth():
+    """
+    Defines a route with no auth
+    :return:
+    """
+    def actual_noauth(callback):
+        tina4_python.tina4_routes[callback]["noauth"] = True
+        return callback
+
+    return actual_noauth
