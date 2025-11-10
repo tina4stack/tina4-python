@@ -128,14 +128,16 @@ class Router:
             if Router.match(url, route['route']):
                 if not "noauth" in route:
                     if "secure" in route or ("swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]):
-                        if (route["secure"] or route["swagger"]["secure"]) and not validated:
+                        if (("secure" in route and route["secure"]) or ("swagger" in route and route["swagger"] is not None and route["swagger"]["secure"])) and not validated:
+                            return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+                    else:
+                        if not validated:
                             return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
                 router_response = route["callback"]
 
-                # Add the inline variables  & construct a Request variable
+                # Add the inline variables & construct a Request variable
                 request["params"].update(Router.variables)
-
 
                 Request.request = request  # Add the request object
                 Request.headers = headers  # Add the headers
@@ -149,7 +151,6 @@ class Router:
                 Request.url = url
                 Request.transport = request["transport"] if "transport" in request else None
                 Request.asgi_response = request["asgi_response"] if "asgi_response" in request else None
-
 
                 tina4_python.tina4_current_request = Request
 
@@ -395,12 +396,14 @@ def middleware(middleware, specific_methods=[]):
 
     return actual_middleware
 
-def secure():
+def secured():
     """
-    Makes a route secure
+    Makes a route secure - secured vs secure with swagger
     :return:
     """
     def actual_secure(callback):
+        if callback not in tina4_python.tina4_routes:
+            tina4_python.tina4_routes[callback] = {}
         tina4_python.tina4_routes[callback]["secure"] = True
         return callback
 
@@ -412,6 +415,8 @@ def noauth():
     :return:
     """
     def actual_noauth(callback):
+        if callback not in tina4_python.tina4_routes:
+            tina4_python.tina4_routes[callback] = {}
         tina4_python.tina4_routes[callback]["noauth"] = True
         return callback
 

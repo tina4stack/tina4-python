@@ -19,3 +19,5 @@ class MiddleWare:
         response.content += "Before After"
         response.headers['Andre-Control-Allow-Origin-BEFORE_AFTER'] = '*'
         return request, response
+
+

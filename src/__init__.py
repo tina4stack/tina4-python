@@ -15,7 +15,7 @@ from tina4_python.Migration import migrate
 from tina4_python.Template import Template
 from tina4_python.Debug import Debug
 from tina4_python.Router import get, cached
-from tina4_python.Router import post, middleware
+from tina4_python.Router import post, middleware, noauth
 from tina4_python.Database import Database
 from tina4_python.Swagger import description, secure, summary, example, tags, params
 
@@ -131,6 +131,15 @@ async def get_healthcheck(request, response):
         Debug.error("broken", tina4_python.root_path + "/broken")
         return response("Broken", 503)
     return response("OK")
+
+
+@post("/generic/post")
+@noauth()
+async def some_generic_post(request, response):
+    print(request.params)
+    print(request.body)
+
+
 
 from .routes import meme
 from .routes import test_queue
