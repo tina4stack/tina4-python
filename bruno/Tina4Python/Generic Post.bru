@@ -1,0 +1,39 @@
+meta {
+  name: Generic Post
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{URL}}/generic/post
+  body: text
+  auth: inherit
+}
+
+headers {
+  ~Authorization: Bearer 38168ba8aad6c91ba13d959c3f91c7a7
+}
+
+body:json {
+  {
+    
+  }
+}
+
+body:text {
+  <?xml version="1.0" encoding="utf-8"?>
+  <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+    <soap:Body>
+      <GetVersion xmlns="DVSE.WebApp.CISService" />
+    </soap:Body>
+  </soap:Envelope>
+}
+
+body:xml {
+  <?xml version="1.0" encoding="utf-8"?>
+  <soap:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+    <soap:Body>
+      <GetVersion xmlns="DVSE.WebApp.CISService" />
+    </soap:Body>
+  </soap:Envelope>
+}

@@ -10,18 +10,50 @@ from datetime import datetime
 from src.app.MiddleWare import MiddleWare
 from src.orm.Log import Log
 from tina4_python import Migration, tina4_auth
+from tina4_python.Constant import HTTP_OK, APPLICATION_XML
 from tina4_python.ORM import orm
 from tina4_python.Migration import migrate
 from tina4_python.Template import Template
 from tina4_python.Debug import Debug
-from tina4_python.Router import get, cached
+from tina4_python.Router import get, cached, secured
 from tina4_python.Router import post, middleware, noauth
 from tina4_python.Database import Database
 from tina4_python.Swagger import description, secure, summary, example, tags, params
 
+import xml.etree.ElementTree as ET
+from xml.dom import minidom
+
 dba = Database("sqlite3:test2.db", "username", "password")
 migrate(dba)
 orm(dba)
+
+
+def dict_to_xml(tag, data):
+    elem = ET.Element(tag)
+    if "@attributes" in data:
+        for k, v in data["@attributes"].items():
+            elem.set(k, v)
+    for k, v in data.items():
+        if k == "@attributes":
+            continue
+        if k == "value":
+            elem.text = v
+            continue
+        if isinstance(v, dict):
+            sub_elem = dict_to_xml(k, v)
+            elem.append(sub_elem)
+        else:
+            sub_elem = ET.SubElement(elem, k)
+            sub_elem.text = str(v)
+    return elem
+
+
+def generate_xml(xml_dict):
+    root_tag = list(xml_dict.keys())[0]
+    root = dict_to_xml(root_tag, xml_dict[root_tag])
+    xml_str = ET.tostring(root, encoding='unicode', method='xml')
+    dom = minidom.parseString(xml_str)
+    return dom.toprettyxml(indent="  ")
 
 @get("/some/page")
 async def some_page(request, response):
@@ -126,6 +158,7 @@ async def run_test_vars(request, response):
     print(request.params)
 
 @get("/healthcheck")
+@secured()
 async def get_healthcheck(request, response):
     if os.path.isfile(tina4_python.root_path + "/broken"):
         Debug.error("broken", tina4_python.root_path + "/broken")
@@ -134,11 +167,31 @@ async def get_healthcheck(request, response):
 
 
 @post("/generic/post")
+@middleware(MiddleWare)
 @noauth()
 async def some_generic_post(request, response):
-    print(request.params)
-    print(request.body)
 
+    #determine the WSDL operation
+    #call the method
+
+    xml_response = {"Envelope" : {"@attributes": {"xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+                                                  "xmlns:xsd":"http://www.w3.org/2001/XMLSchema",
+                                                  "xmlns:soap":"http://schemas.xmlsoap.org/soap/envelope/"},
+                                  "Body": {
+                                      "@attributes": {},
+                                      "GetVersionResponse": {
+                                          "@attributes": {"xmlns": "DVSE.WebApp.CISService"},
+                                          "GetVersionResult": {"value": "1.0.0.0"},
+                                          "OrderItems": [{
+                                            "OrderId": 11,
+                                            "Description":"Test"
+                                          }]
+                                      }
+                                  }
+                              }
+                    }
+
+    return response(generate_xml(xml_response), HTTP_OK, APPLICATION_XML)
 
 
 from .routes import meme

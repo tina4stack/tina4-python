@@ -131,7 +131,7 @@ class Router:
                         if (("secure" in route and route["secure"]) or ("swagger" in route and route["swagger"] is not None and route["swagger"]["secure"])) and not validated:
                             return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
                     else:
-                        if not validated:
+                        if not validated and method not in [Constant.TINA4_OPTIONS, Constant.TINA4_GET]:
                             return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
                 router_response = route["callback"]
