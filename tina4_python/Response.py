@@ -11,6 +11,7 @@ from types import ModuleType
 from tina4_python import Constant
 from tina4_python import DatabaseResult
 from tina4_python.ORM import ORM
+from tina4_python.Template import Template
 
 headers = {}
 content = ""
@@ -97,6 +98,16 @@ class Response:
         content = ""
         content_type = Constant.TEXT_HTML
         return Response("", http_code, content_type, headers)
+
+
+    @staticmethod
+    def render(template_name, data=None):
+        global content, content_type, http_code
+        http_code = Constant.HTTP_OK
+        content_type = Constant.TEXT_HTML
+
+        return Response(Template.render(template_name, data=data), http_code, content_type)
+
 
     @staticmethod
     def add_header(key, value):

@@ -25,8 +25,8 @@ from xml.dom import minidom
 
 dba = Database("sqlite3:test2.db", "username", "password")
 migrate(dba)
-orm(dba)
 
+orm(dba)
 
 def dict_to_xml(tag, data):
     elem = ET.Element(tag)
@@ -115,7 +115,7 @@ async def session_set(request, response):
 
 @get("/session/get")
 async def session_get(request, response):
-    print(request.session.get("name"), request.session.get("user"))
+
     for pair in request.session:
         print(pair)
 

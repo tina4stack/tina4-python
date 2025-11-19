@@ -143,7 +143,8 @@ class SessionRedisHandler(SessionHandler):
                     if key != "expires":
                         session.set(key, payload[key])
             else:
-                Debug("Session expired, starting a new one", Constant.TINA4_LOG_DEBUG)
+                Debug("Session expired, starting a new one", Constant.TINA4_LOG_WARNING)
+                _hash = None
                 session.start(_hash)
         except Exception:
             Debug("Redis not available, sessions will fail", Constant.TINA4_LOG_ERROR)
@@ -336,5 +337,6 @@ class Session:
 
     def __iter__(self):
         for key, value in self.session_values.items():
-            yield key, value
+            if key != "expires":
+                yield key, value
 
