@@ -19,13 +19,13 @@ def localize():
     available_languages = ['en', 'fr', 'af']
 
     # get user language from environment variable
-    # default to english
+    # default to English
     if "TINA4_LANGUAGE" in os.environ:
         user_language = os.environ.get('TINA4_LANGUAGE', 'en')
     else:
         user_language = "en"
 
-    # check if argument is a language
+    # check if an argument is a language
     if len(sys.argv) > 1:
         try:
             int(sys.argv[1])

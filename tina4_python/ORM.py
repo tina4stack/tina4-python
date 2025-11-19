@@ -452,38 +452,71 @@ class ORM:
         """
         self.__dba__.create_table(self.__table_name__, True)
 
-    def select (self, column_names="*", filter="", params=[], join="", having="", order_by="", limit=10, skip=0):
+    def _build_sql(self, column_names="*", join="", filter="", group_by="", having="", order_by=""):
         """
-        Selects an array of records based on the ORM object
+        Helper method to build the SQL query
+        :param column_names:
+        :param join:
+        :param filter:
+        :param group_by:
+        :param having:
+        :param order_by:
+        :return:
+        """
+        if isinstance(column_names, str):
+            if column_names in ("", "*"):
+                cols = "*"
+            else:
+                cols = ",\n".join(c.strip() for c in column_names.split(','))
+        else:
+            cols = ",\n".join(column_names)
+
+        group_by = [g.strip() for g in group_by.split(',')] if isinstance(group_by, str) and group_by else group_by if isinstance(group_by, list) else []
+        having = [h.strip() for h in having.split(',')] if isinstance(having, str) and having else having if isinstance(having, list) else []
+        order_by = [o.strip() for o in order_by.split(',')] if isinstance(order_by, str) and order_by else order_by if isinstance(order_by, list) else []
+
+        sql = f"select {cols}\nfrom {self.__table_name__} as t"
+        if join: sql += f"\n{join}"
+        if filter: sql += f"\nwhere {filter}"
+        if group_by: sql += "\ngroup by " + ", ".join(group_by)
+        if having: sql += "\nhaving " + ", ".join(having)
+        if order_by: sql += "\norder by " + ", ".join(order_by)
+        return sql
+
+    def fetch_one(self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by=""):
+        """
+        Fetch one record from the database
+        :param column_names:
         :param filter:
         :param params:
+        :param join:
+        :param group_by:
+        :param having:
+        :param order_by:
+        :return:
+        """
+        sql = self._build_sql(column_names, join, filter, group_by, having, order_by)
+        return self.__dba__.fetch_one(sql, params=params)
+
+    def fetch(self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10, skip=0):
+        """
+        Fetch multiple records from the database
+        :param column_names:
+        :param filter:
+        :param params:
+        :param join:
+        :param group_by:
+        :param having:
         :param order_by:
         :param limit:
         :param skip:
         :return:
         """
-        if isinstance(column_names, str) and column_names != "*" and column_names != "":
-            column_names = column_names.split(',')
+        sql = self._build_sql(column_names, join, filter, group_by, having, order_by)
+        return self.__dba__.fetch(sql, params=params, limit=limit, skip=skip)
 
-        if column_names == "":
-            column_names = "*"
-
-        if isinstance(order_by, str) and order_by != "":
-            order_by = order_by.split(',')
-
-        sql = "select " + ",\n".join(column_names) + "\nfrom " + self.__table_name__ +" as t "
-        if join != "":
-            sql += "\n"+join
-        if filter != "":
-            sql += "\nwhere " + filter
-        if having != "":
-            sql += having
-
-        if len(order_by) > 0:
-            sql += "\norder by " + ",".join(order_by)
-
-        records = self.__dba__.fetch(sql, params=params, limit=limit, skip=skip)
-        return records
+    def select (self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10, skip=0):
+        return self.fetch(column_names, filter, params, join, group_by, having, order_by, limit, skip)
 
     def load(self, query="", params=[]):
         """
