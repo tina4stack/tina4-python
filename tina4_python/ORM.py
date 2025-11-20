@@ -587,7 +587,8 @@ class ORM:
             record = self.__dba__.fetch_one(sql, input_params)
             for key, value in data.items():
                 if key in self.__field_definitions__:
-                    if type(value) == BlobField and (isinstance(value, dict) or isinstance(value, list)):
+                    if type(value) == BlobField and (isinstance(value, dict) or isinstance(value, list)) or (isinstance(value, str) and value.startswith("{") and value.endswith("}")):
+                        Debug.warning("Saving BlobField as JSON", key)
                         data[key] = json.dumps(value)
 
             if record["count_records"] == 0:
@@ -634,5 +635,5 @@ class ORM:
         else:
             self.__dba__.commit()
             return True
-        pass
+
 
