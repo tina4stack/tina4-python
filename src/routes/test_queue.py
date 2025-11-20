@@ -35,7 +35,7 @@ def run_consumer():
     consumer.run()
 
 
-start_in_thread(run_consumer)
+# start_in_thread(run_consumer)
 
 
 @post("/api/generate")

@@ -11,18 +11,17 @@ from tina4_python import *
 from tina4_python.DatabaseTypes import *
 from tina4_python.Database import Database
 from tina4_python.Migration import migrate
-from tina4_python.ORM import ORM, IntegerField, StringField, DateTimeField, ForeignKeyField, TextField, orm
+from tina4_python.ORM import ORM, IntegerField, StringField, DateTimeField, ForeignKeyField, TextField, orm, JSONBField
 from tina4_python.Queue import Config, Queue, Producer, Consumer
 
 global dba_type
+# docker run --name my-postgres -d -e POSTGRES_PASSWORD=password -v postgres_data:/var/lib/postgresql/data -p 5432:5432 postgres
 # docker run --name my-mysql -e MYSQL_ROOT_PASSWORD=secret -p 33066:3306 -d mysql:latest
 # docker run --name my-firebird -e ISC_PASSWORD=masterkey  -e FIREBIRD_DATABASE=TEST.FDB -p 30500:3050 -d jacobalberty/firebird:latest
 # docker run --name my-mssql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=Password123 -e MSSQL_PID=Developer -p 14333:1433 mcr.microsoft.com/mssql/server:2022-latest
 dba_type = "mysql.connector:localhost/33066:test"
 
-dba_type = "psycopg2:localhost/5432:test"
-user_name = "postgres"
-password = "password"
+
 dba_type = "sqlite3:test3.db"
 dba_type = "mysql.connector:localhost/33066:test"
 user_name = "root"
@@ -40,7 +39,9 @@ user_name = "sa"
 password = "Password123"
 dba_type = "sqlite3:test3.db"
 
-
+dba_type = "psycopg2:localhost/5432:test"
+user_name = "postgres"
+password = "password"
 
 def test_auth_payload():
     auth = tina4_auth.get_token({"id": 1, "username": "hello", "date_created": datetime.now()})
@@ -71,11 +72,11 @@ def test_database_mysql():
     dba = database_connect(dba_type)
     assert dba.database_engine == MYSQL
 
-@pytest.mark.skip
+
 def test_database_posgresql():
     dba_type = "psycopg2:localhost/5432:test"
     dba = database_connect(dba_type, "postgres", "password")
-    assert dba.database_engine == dba.POSTGRES
+    assert dba.database_engine == POSTGRES
 
 @pytest.mark.skip
 def test_database_mssql():
@@ -83,7 +84,7 @@ def test_database_mssql():
     dba = database_connect(dba_type, "sa", "Password123")
     assert dba.database_engine == MSSQL
 
-@pytest.mark.skip
+
 def test_database_execute():
     dba = database_connect(dba_type, user_name, password)
     if "firebird" or "mssql" in dba_type:
@@ -111,13 +112,13 @@ def test_database_execute():
             "create table if not exists test_record(id integer not null auto_increment, name varchar(200), image longblob, date_created timestamp default CURRENT_TIMESTAMP,  age numeric (10,2) default 0.00, primary key (id))")
     elif "psycopg2" in dba_type:
         result = dba.execute(
-            "create table if not exists test_record(id serial primary key, name varchar(200), image bytea, date_created timestamp default CURRENT_TIMESTAMP,  age numeric (10,2) default 0.00)")
+            "create table if not exists test_record(id serial primary key, name varchar(200), image bytea, date_created timestamp default CURRENT_TIMESTAMP,  age numeric (10,2) default 0.00, json_data jsonb)")
     elif "firebird" in dba_type:
         result = dba.execute(
             "create table test_record(id integer not null, name varchar(200), image blob sub_type 0, date_created timestamp default 'now', age numeric (10,2) default 0.00, primary key (id))\n")
     else:
         result = dba.execute(
-            "create table if not exists test_record(id integer not null, name varchar(200), image blob, date_created timestamp default CURRENT_TIMESTAMP, age numeric (10,2) default 0.00, primary key (id))\n")
+            "create table if not exists test_record(id integer not null, name varchar(200), image blob, date_created timestamp default CURRENT_TIMESTAMP, age numeric (10,2) default 0.00, json_data blob, primary key (id))\n")
     dba.commit()
     assert result.error is None
     result = dba.execute_many("insert into test_record (id, name) values (?, ?)",
@@ -126,7 +127,9 @@ def test_database_execute():
     assert result.error is None
     dba.close()
 
-@pytest.mark.skip
+
+
+
 def test_database_insert():
     dba = database_connect(dba_type, user_name, password)
     result = dba.insert("test_record", {"id": 4, "name": "Test1"})
@@ -145,7 +148,8 @@ def test_database_insert():
     dba.commit()
     dba.close()
 
-@pytest.mark.skip
+
+
 def test_database_update():
     dba = database_connect(dba_type, user_name, password)
     result = dba.update("test_record", {"id": 1, "name": "Test1Update"})
@@ -165,7 +169,7 @@ def test_database_update():
 
     dba.close()
 
-@pytest.mark.skip
+
 def test_database_fetch():
     dba = database_connect(dba_type, user_name, password)
 
@@ -192,7 +196,7 @@ def test_database_fetch():
 
     dba.close()
 
-@pytest.mark.skip
+
 def test_database_bytes_insert():
     dba = database_connect(dba_type, user_name, password)
     with open("./src/public/images/logo.png", "rb") as file:
@@ -205,7 +209,7 @@ def test_database_bytes_insert():
     assert isinstance(result.to_json(), object)
     dba.close()
 
-@pytest.mark.skip
+
 def test_database_delete():
     dba = database_connect(dba_type, user_name, password)
 
@@ -231,7 +235,7 @@ def test_password():
     valid = auth.check_password(password, "123456")
     assert valid == False, "Password check"
 
-@pytest.mark.skip
+
 def test_database_transactions():
     dba = database_connect(dba_type, user_name, password)
 
@@ -257,7 +261,7 @@ def test_database_transactions():
 
     dba.close()
 
-@pytest.mark.skip
+
 def test_orm():
     dba = database_connect(dba_type, user_name, password)
 
@@ -278,6 +282,7 @@ def test_orm():
         last_name = StringField()
         email = TextField(default_value="test@test.com")
         title = StringField(default_value="Mr")
+        moo=JSONBField(default_value={"name": "Moo"})
         date_created = DateTimeField()
 
     class TestUserItem(ORM):
@@ -295,6 +300,8 @@ def test_orm():
 
     user = TestUser({"firstName": "First Name 1", "lastName": "Last Name 1"})
     user.save()
+
+
 
     assert int(user.id) == 1
 
@@ -360,9 +367,21 @@ def test_orm():
 
     assert result.count == 1
 
+    test_user = TestUser()
+    test_user.id = 2
+    test_user.load()
+
+    assert test_user.moo.value == {"name": "Moo"}
+
+    test_user.moo = {"moo":"cow", "baa": "sheep", "complex": ["1", "2", "3"]}
+    test_user.save()
+
+    test_user.load()
+
+    assert test_user.moo.value == {"moo":"cow", "baa": "sheep", "complex": ["1", "2", "3"]}
     dba.close()
 
-
+@pytest.mark.skip
 def test_queues():
     """
     Tests the queue functionality

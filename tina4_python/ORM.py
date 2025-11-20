@@ -6,7 +6,6 @@
 # flake8: noqa: E501
 import base64
 from datetime import datetime, date
-import inspect
 import ast
 import json
 import os
@@ -195,8 +194,25 @@ class BlobField(BaseField):
         field_type = "blob"
         if database_type == MSSQL:
             field_type = "varbinary(max)"
+        elif database_type == FIREBIRD:
+            field_type = "blob sub_type 0"
         return self.column_name.lower() + " " + field_type
 
+
+class JSONBField(BaseField):
+    column_type = dict
+    default_value = None
+
+    def get_definition(self, database_type="generic"):
+        field_type = "blob"
+        if database_type == POSTGRES:
+            field_type = "jsonb"
+        elif database_type == MSSQL:
+            field_type = "varbinary(max)"
+        elif database_type == FIREBIRD:
+            field_type = "blob sub_type 0"
+
+        return self.column_name.lower() + " " + field_type
 
 class ForeignKeyField:
     field_type = None
@@ -549,7 +565,13 @@ class ORM:
                     for key, value in record.items():
                         if key in self.__field_definitions__:
                             field_value = self.__field_definitions__[key]
-                            field_value.value = value
+                            if isinstance(self.__field_definitions__[key], JSONBField):
+                                try:
+                                    field_value.value = ast.literal_eval(value)
+                                except Exception as e:
+                                    field_value.value = value
+                            else:
+                                field_value.value = value
 
                             setattr(self, key, field_value)
                     return True
@@ -587,9 +609,8 @@ class ORM:
             record = self.__dba__.fetch_one(sql, input_params)
             for key, value in data.items():
                 if key in self.__field_definitions__:
-                    if type(value) == BlobField and (isinstance(value, dict) or isinstance(value, list)) or (isinstance(value, str) and value.startswith("{") and value.endswith("}")):
-                        Debug.warning("Saving BlobField as JSON", key)
-                        data[key] = json.dumps(value)
+                    if type(value) == JSONBField and (isinstance(value, dict) or isinstance(value, list)) or (isinstance(value, str) and value.startswith("{") and value.endswith("}")):
+                        data[key] = ast.literal_eval(value)
 
             if record["count_records"] == 0:
                 result = self.__dba__.insert(self.__table_name__, data)

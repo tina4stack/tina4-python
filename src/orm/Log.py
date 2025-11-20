@@ -7,5 +7,6 @@ class Log(ORM):
     date_created = DateTimeField(default_value=datetime.now())
     description = StringField("name")
     log_data = BlobField()
+    json_data = JSONBField(default_value={})
     some_id = IntegerField(primary_key=True)
     user_id = ForeignKeyField(IntegerField("id"), references_table=User)
