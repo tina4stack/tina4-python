@@ -584,8 +584,11 @@ class ORM:
             counter += 1
 
         try:
-
             record = self.__dba__.fetch_one(sql, input_params)
+            for key, value in data.items():
+                if key in self.__field_definitions__:
+                    if type(value) == BlobField and (isinstance(value, dict) or isinstance(value, list)):
+                        data[key] = json.dumps(value)
 
             if record["count_records"] == 0:
                 result = self.__dba__.insert(self.__table_name__, data)
