@@ -310,7 +310,7 @@ class ORM:
         self.__field_definitions__ = {}
         for key in dir(self):
             if not key.startswith('__') and not key.startswith('_') and key not in ['save', 'load', 'delete', 'to_json',
-                                                                                    'to_dict', 'create_table', 'select']:
+                                                                                    'to_dict', 'create_table', 'select', 'fetch', 'fetch_one']:
                 self.__field_definitions__[key] = getattr(self, key)
                 counter += 1
 
@@ -411,7 +411,7 @@ class ORM:
                     if new_id is not None:
                         current_value.value = new_id
                     else:
-                       current_value.value = current_value.default_value
+                        current_value.value = current_value.default_value
 
                 data[key] = current_value.value
             elif isinstance(value, IntegerField):
