@@ -14,6 +14,7 @@ from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.DatabaseResult import DatabaseResult
 from tina4_python.DatabaseTypes import *
 
+
 class Database:
 
     def __init__(self, _connection_string, _username="", _password=""):
@@ -28,19 +29,19 @@ class Database:
         try:
             self.database_module = importlib.import_module(params[0])
         except Exception:
-            install_message = "Please implement "+params[0]+" in Database.py and make a pull request!"
+            install_message = "Please implement " + params[0] + " in Database.py and make a pull request!"
             if params[0] == SQLITE:
                 install_message = "Your python is missing the sqlite3 module, please reinstall or update"
             elif params[0] == MYSQL:
-                install_message = "Your python is missing the mysql module, please install with "+MYSQL_INSTALL
+                install_message = "Your python is missing the mysql module, please install with " + MYSQL_INSTALL
             elif params[0] == POSTGRES:
-                install_message = "Your python is missing the postgres module, please install with "+POSTGRES_INSTALL
+                install_message = "Your python is missing the postgres module, please install with " + POSTGRES_INSTALL
             elif params[0] == FIREBIRD:
-                install_message = "Your python is missing the firebird module, please install with "+FIREBIRD_INSTALL
+                install_message = "Your python is missing the firebird module, please install with " + FIREBIRD_INSTALL
             elif params[0] == MSSQL:
-                install_message = "Your python is missing the mssql module, please install with "+MSSQL_INSTALL
+                install_message = "Your python is missing the mssql module, please install with " + MSSQL_INSTALL
 
-            sys.exit("Could not load database driver for "+params[0]+"\n"+install_message)
+            sys.exit("Could not load database driver for " + params[0] + "\n" + install_message)
 
         self.database_engine = params[0]
         self.database_path = params[1]
@@ -129,7 +130,7 @@ class Database:
                 )
                 self.dba.autocommit(False)
             else:
-                sys.exit("Could not load database driver for "+params[0])
+                sys.exit("Could not load database driver for " + params[0])
 
         Debug("DATABASE:", self.database_module.__name__, self.host, self.port, self.database_path, self.username,
               Constant.TINA4_LOG_DEBUG)
@@ -142,25 +143,25 @@ class Database:
         """
 
         if self.database_engine == MSSQL:
-            sql = "select count(*) as count_table from sys.tables WHERE name = '"+table_name.upper()+"'"
+            sql = "select count(*) as count_table from sys.tables WHERE name = '" + table_name.upper() + "'"
         elif self.database_engine == SQLITE:
-            sql = "SELECT count(*) as count_table FROM sqlite_master WHERE type='table' AND name='"+table_name+"'"
+            sql = "SELECT count(*) as count_table FROM sqlite_master WHERE type='table' AND name='" + table_name + "'"
         elif self.database_engine == MYSQL:
-            sql = "SELECT count(*) as count_table FROM information_schema.tables WHERE table_schema = '"+self.database_path+"' AND table_name = '"+table_name+"'"
+            sql = "SELECT count(*) as count_table FROM information_schema.tables WHERE table_schema = '" + self.database_path + "' AND table_name = '" + table_name + "'"
         elif self.database_engine == POSTGRES:
             sql = """SELECT count(*) as count_table FROM pg_catalog.pg_class c
                         JOIN   pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                        WHERE  c.relname = '"""+table_name+"""'
+                        WHERE  c.relname = '""" + table_name + """'
                         AND    c.relkind = 'r'        """
         elif self.database_engine == FIREBIRD:
-            sql = "SELECT count(*) as count_table FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = upper('"+table_name+"')"
+            sql = "SELECT count(*) as count_table FROM RDB$RELATIONS WHERE RDB$RELATION_NAME = upper('" + table_name + "')"
         else:
             return False
 
         try:
             record = self.fetch_one(sql)
         except Exception as e:
-            raise Exception (f"Error checking if table {table_name} exists: "+str(e))
+            raise Exception(f"Error checking if table {table_name} exists: " + str(e))
 
         if record:
             if record["count_table"] > 0:
@@ -289,7 +290,7 @@ class Database:
                 else:
                     count_records = 0
             except Exception as e:
-                Debug("FETCH ERROR:",  sql_count, str(e), TINA4_LOG_ERROR)
+                Debug("FETCH ERROR:", sql_count, str(e), TINA4_LOG_ERROR)
             finally:
                 counter_cursor.close()
 
@@ -298,7 +299,7 @@ class Database:
             cursor.execute(sql, params)
             return self.get_database_result(cursor, count_records, limit, skip)
         except Exception as e:
-            Debug("FETCH ERROR:",  sql, str(e), "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
+            Debug("FETCH ERROR:", sql, str(e), "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
             return DatabaseResult(None, [], str(e))
 
     def fetch_one(self, sql, params=[], skip=0):
@@ -368,7 +369,6 @@ class Database:
         finally:
             cursor.close()
 
-
     def execute_many(self, sql, params=[]):
         """
         Execute a query based on a single sql statement with a different number of params
@@ -407,7 +407,7 @@ class Database:
             elif self.database_engine == MSSQL:
                 self.dba.execute("BEGIN TRANSACTION")
             elif self.database_engine == POSTGRES:
-                self.dba.rollback() #start fresh
+                self.dba.rollback()  # start fresh
             else:
                 Debug("START TRANSACTION ERROR:", "Database engine unrecognised/not supported",
                       Constant.TINA4_LOG_ERROR)
@@ -491,7 +491,10 @@ class Database:
 
             records.columns = result.columns
             records.count = len(records.records)
+
             return records
+        else:
+            return False
 
     def delete(self, table_name, filter=None):
         """
@@ -533,6 +536,8 @@ class Database:
                 else:
                     Debug("DELETE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                     return False
+
+        return False
 
     def update(self, table_name, data, primary_key="id"):
         """
@@ -589,3 +594,4 @@ class Database:
                     Debug("UPDATE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
                     return False
 
+        return False
