@@ -37,11 +37,12 @@ dba_type = "sqlite3:test3.db"
 dba_type = "pymssql:localhost/14333:tempdb"
 user_name = "sa"
 password = "Password123"
-dba_type = "sqlite3:test3.db"
+
 
 dba_type = "psycopg2:localhost/5432:test"
 user_name = "postgres"
 password = "password"
+dba_type = "sqlite3:test3.db"
 
 def test_auth_payload():
     auth = tina4_auth.get_token({"id": 1, "username": "hello", "date_created": datetime.now()})
