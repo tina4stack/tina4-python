@@ -452,7 +452,7 @@ class ORM:
         """
         self.__dba__.create_table(self.__table_name__, True)
 
-    def _build_sql(self, column_names="*", join="", filter="", group_by="", having="", order_by=""):
+    def __build_sql(self, column_names="*", join="", filter="", group_by="", having="", order_by=""):
         """
         Helper method to build the SQL query
         :param column_names:
@@ -495,7 +495,7 @@ class ORM:
         :param order_by:
         :return:
         """
-        sql = self._build_sql(column_names, join, filter, group_by, having, order_by)
+        sql = self.__build_sql(column_names, join, filter, group_by, having, order_by)
         return self.__dba__.fetch_one(sql, params=params)
 
     def fetch(self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10, skip=0):
@@ -512,7 +512,7 @@ class ORM:
         :param skip:
         :return:
         """
-        sql = self._build_sql(column_names, join, filter, group_by, having, order_by)
+        sql = self.__build_sql(column_names, join, filter, group_by, having, order_by)
         return self.__dba__.fetch(sql, params=params, limit=limit, skip=skip)
 
     def select (self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10, skip=0):
