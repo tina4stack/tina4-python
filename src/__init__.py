@@ -23,7 +23,7 @@ from tina4_python.Swagger import description, secure, summary, example, tags, pa
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
-dba = Database("sqlite3:test2.db", "username", "password")
+dba = Database("sqlite3:test3.db", "username", "password")
 migrate(dba)
 
 orm(dba)
@@ -196,3 +196,4 @@ async def some_generic_post(request, response):
 
 from .routes import meme
 from .routes import test_queue
+from .routes import crud

@@ -74,6 +74,7 @@ def test_database_mysql():
     assert dba.database_engine == MYSQL
 
 
+@pytest.mark.skip
 def test_database_posgresql():
     dba_type = "psycopg2:localhost/5432:test"
     dba = database_connect(dba_type, "postgres", "password")

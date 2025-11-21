@@ -8,9 +8,10 @@ import base64
 import json
 import datetime
 from decimal import Decimal
+from .CRUD import CRUD
 
 
-class DatabaseResult:
+class DatabaseResult(CRUD):
     def __init__(self, _records=None, _columns=None, _error=None, count=None, limit=None, skip=None):
         """
         DatabaseResult constructor
@@ -21,6 +22,7 @@ class DatabaseResult:
         :param limit:
         :param skip:
         """
+        super().__init__()
         if count is not None:
             self.total_count = count
         else:
@@ -49,6 +51,7 @@ class DatabaseResult:
             self.columns = []
 
         self.error = _error
+
 
     def to_paginate(self):
 
