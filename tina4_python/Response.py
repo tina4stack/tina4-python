@@ -18,7 +18,6 @@ content = ""
 http_code = Constant.HTTP_OK
 content_type = Constant.TEXT_HTML
 
-
 class Response:
 
     @staticmethod

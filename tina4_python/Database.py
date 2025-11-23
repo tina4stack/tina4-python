@@ -206,9 +206,10 @@ class Database:
         else:
             return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    def get_database_result(self, cursor, counter, limit, skip):
+    def get_database_result(self, cursor, counter, limit, skip, sql):
         """
         Get database results
+        :param sql:
         :param cursor:
         :param counter:
         :param limit:
@@ -219,7 +220,7 @@ class Database:
         records = cursor.fetchall()
         rows = [dict(zip(columns, row)) for row in records]
         cursor.close()
-        return DatabaseResult(rows, columns, None, counter, limit, skip)
+        return DatabaseResult(rows, columns, None, counter, limit, skip, sql)
 
     def is_json(self, myjson):
         """
@@ -297,7 +298,7 @@ class Database:
             sql = self.parse_place_holders(sql)
 
             cursor.execute(sql, params)
-            return self.get_database_result(cursor, count_records, limit, skip)
+            return self.get_database_result(cursor, count_records, limit, skip, sql)
         except Exception as e:
             Debug("FETCH ERROR:", sql, str(e), "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
             return DatabaseResult(None, [], str(e))
@@ -354,11 +355,11 @@ class Database:
         try:
             cursor.execute(sql, params)
             if "returning" in sql.lower():
-                return self.get_database_result(cursor, 1, 1, 0)
+                return self.get_database_result(cursor, 1, 1, 0, sql)
             else:
                 # see if we are mysql and if we are insert statement to get the last record
                 if "insert" in sql.lower() and (self.database_engine == MYSQL or self.database_engine == MSSQL):
-                    return DatabaseResult([{"id": cursor.lastrowid}], [], None, 1, 1, 0)
+                    return DatabaseResult([{"id": cursor.lastrowid}], [], None, 1, 1, 0, sql)
 
                 # On success return an empty result set with no error
                 return DatabaseResult(None, [], None)
@@ -491,6 +492,7 @@ class Database:
 
             records.columns = result.columns
             records.count = len(records.records)
+            records.sql = sql
 
             return records
         else:

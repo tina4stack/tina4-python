@@ -18,42 +18,27 @@ function sendRequest (url, request, method, callback) {
         method = 'GET';
     }
 
-    //Inject the new token
-    if (formToken !== null) {
-        const regex = /formToken=(.*)/gm;
-        const subst = `formToken=${formToken}`;
-        url = url.replace(regex, subst);
-        if (url.indexOf('formToken') === -1) {
-            if (url.indexOf('?') === -1) {
-                url += '?formToken='+formToken;
-            } else {
-                url += '&formToken='+formToken;
-            }
-        }
-    }
-
     const xhr = new XMLHttpRequest();
+
+
     xhr.open(method, url, true);
 
-    xhr.onreadystatechange  = function () {
-        if (xhr.readyState === 4 && xhr.status === 200) {
-            let content = xhr.response;
+    if (formToken !== null) {
+        //set a form token to the header
+        xhr.setRequestHeader('Authorization', 'Bearer '+formToken);
+    }
 
-            if (xhr.getResponseHeader('FreshToken') !== '' && xhr.getResponseHeader('FreshToken') !== null) {
-                formToken = xhr.getResponseHeader('FreshToken');
-            }
+    xhr.onload = function () {
+        let content = xhr.response;
+        if (xhr.getResponseHeader('FreshToken') !== '' && xhr.getResponseHeader('FreshToken') !== null) {
+            formToken = xhr.getResponseHeader('FreshToken');
+        }
 
-            try {
-                content = JSON.parse(content);
-                callback(content);
-            } catch (exception) {
-                callback (content);
-            }
-
-        } else if (xhr.status !== 200) {
-            let content = xhr.response;
-            console.log('An unexpected response occurred while sending request',url, content, xhr.status, xhr.readyState, xhr, xhr.getResponseHeader('Location'));
-            callback(xhr.status+" An error occurred, see the console")
+        try {
+            content = JSON.parse(content);
+            callback(content);
+        } catch (exception) {
+            callback (content);
         }
     };
 
@@ -294,24 +279,9 @@ function submitForm(formId, targetURL, targetElement, callback = null){
 /**
  * Shows a message
  * @param message
- * @param alertType
- * @param element
  */
-function showMessage(message, alertType, element) {
-    if (alertType === undefined) {
-        alertType = 'info';
-    }
-
-    if (!element) {
-        element = "message";
-    }
-
-    document.getElementById(element).innerHTML = '<div class="alert alert-' + alertType + ' alert-dismissible fade show" role="alert"><strong>Info</strong> ' + message + '<button type="button" class="close" data-dismiss="alert" aria-label="Close"><span aria-hidden="true">&times;</span></button></div>';
-
-    // Function to close alert after 10 seconds with a slide-up effect.
-    $(".alert").delay(10000).slideUp(200, function() {
-        $(this).alert('close');
-    });
+function showMessage(message) {
+    document.getElementById('message').innerHTML = '<div class="alert alert-info alert-dismissible fade show"><strong>Info</strong> ' + message + '<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button></div>';
 }
 
 /**
@@ -385,11 +355,6 @@ function openReport(pdfReportPath){
     }
 }
 
-/**
- * Does a GET request to an end point
- * @param loadURL
- * @param callback
- */
 function getRoute(loadURL, callback) {
     sendRequest(loadURL, null, 'GET', function(data) {
         callback(handleHtmlData (data, null));

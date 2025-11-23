@@ -12,8 +12,6 @@ import sys
 import io
 import tina4_python
 from tina4_python import Constant
-from tina4_python import Response
-from tina4_python import Request
 from tina4_python.Debug import Debug
 from tina4_python.Template import Template
 from tina4_python.MiddleWare import MiddleWare
@@ -60,8 +58,8 @@ class Router:
     # Renders the URL and returns the content
     @staticmethod
     async def get_result(url, method, request, headers, session):
-        global Request
-        global Response
+        from tina4_python import Request
+        from tina4_python import Response
 
         Response.headers = {}
         Response.content = ""
@@ -286,7 +284,7 @@ class Router:
 def get(path: str):
     """
     Get router
-    :param arguments:
+    :param path:
     :return:
     """
 

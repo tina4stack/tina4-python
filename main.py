@@ -4,13 +4,7 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
-from  tina4_python import run_web_server
-
-import sys
+import tina4_python
 
 
-print("Running the service", sys.argv)
-default_port = 8081
-if len(sys.argv) > 2:
-    default_port = int(sys.argv[2])
-run_web_server("127.0.0.1", default_port)
+

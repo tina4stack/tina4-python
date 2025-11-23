@@ -5,6 +5,7 @@
 #
 # flake8: noqa: E501
 import os
+import re
 import json
 import tina4_python
 from tina4_python import Constant
@@ -29,6 +30,9 @@ class Template:
         Template.twig.add_extension('jinja2.ext.debug')
         Template.twig.add_extension('jinja2.ext.do')
         Template.twig.globals['RANDOM'] = RANDOM
+        Template.twig.filters['json_encode'] = json.dumps
+        Template.twig.filters['json_decode'] = json.loads
+        Template.twig.filters['nice_label'] = Template.get_nice_label
         Template.twig.globals['formToken'] = Template.get_form_token
         Template.twig.filters['formToken'] = Template.get_form_token_input
         if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv(
@@ -105,3 +109,11 @@ class Template:
     @staticmethod
     def render(template_or_file_name, data=None):
         return Template.render_twig_template(template_or_file_name, data)
+
+    @staticmethod
+    def get_nice_label(field_name: str) -> str:
+        # snake_case / camelCase / PascalCase → words
+        s = re.sub(r'[_.-]+', ' ', field_name)
+        s = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', s)
+        # Capitalize words & strip id
+        words = s.split()

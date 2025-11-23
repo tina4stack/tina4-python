@@ -6,12 +6,12 @@ class CRUD:
         self.records = []
 
     def to_crud(self, request):
-        html = "1121112"
+        html = "1121112222AAA"
 
         Debug.info("RECORDS", self.records)
         for record in self.records:
-            html += record["name"]
+            html += record["name"]+"\n"
 
-        return html
+        return html.__str__()
 
 

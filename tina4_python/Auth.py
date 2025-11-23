@@ -198,6 +198,7 @@ class Auth:
         public_key = self.load_public_key()
         try:
             payload = jwt.decode(token, key=public_key, algorithms=['RS256'])
+
             if "expires" not in payload:
                 return False
 

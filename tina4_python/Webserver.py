@@ -120,10 +120,12 @@ class Webserver:
         self.send_header("Access-Control-Allow-Origin", "*", headers)
         self.send_header("Access-Control-Allow-Headers",
                          "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
+       
         self.send_header("Access-Control-Allow-Credentials", "True", headers)
         # self.send_header("Content-Length", str(len(response.content)), headers)
         self.send_header("Connection", "Keep-Alive", headers)
         self.send_header("Keep-Alive", "timeout=5, max=30", headers)
+        self.send_header("Timing-Allow-Origin", "*", headers)
 
     async def get_response(self, method, transport, asgi_response=False):
         """
@@ -134,6 +136,7 @@ class Webserver:
         headers = []
         if method == "OPTIONS":
             self.send_header("Access-Control-Allow-Origin", "*", headers)
+            self.send_header("Timing-Allow-Origin", "*", headers)
             self.send_header("Access-Control-Allow-Headers",
                              "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
             self.send_header("Access-Control-Allow-Credentials", "True", headers)
