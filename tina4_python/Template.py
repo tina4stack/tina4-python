@@ -117,3 +117,4 @@ class Template:
         s = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', s)
         # Capitalize words & strip id
         words = s.split()
+        return ' '.join(word.capitalize() for word in words)

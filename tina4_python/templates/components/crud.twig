@@ -1,156 +1,347 @@
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
-      integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
-
-<script>
-    formToken = `{{ formToken() }}`;
-</script
-<div class="container-fluid">
-    <h1>{{ table_name }}</h1>
-
-    {# Main content - table or card view #}
-    {% if options.card_view|default(false) %}
-        <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
-            {% for record in records %}
-                <div class="col">
-                    <div class="card h-100 shadow-sm">
-                        <div class="card-body">
-                            <h5 class="card-title">
-                                {{ record[options.title_field|default(columns[0].name)]|default('Record') }}
-                            </h5>
-                            <div class="card-text">
-                                {% for column in columns %}
-                                    {% set name = column.name %}
-                                    <div class="mb-2">
-                                        <strong>{{ column.label|default(column.name|nice_label) }}:</strong>
-                                        <span class="text-muted">{{ record[name]|e }}</span>
-                                    </div>
-                                {% endfor %}
+<div id="crudTarget{{ table_name }}">
+    <script>
+        formToken = `{{ formToken({"token": RANDOM()}) }}`;
+    </script>
+    <div class="container-fluid">
+        <h1>{{ table_name }}</h1>
+        <div class="row mb-4 align-items-center">
+            <div class="col-md-4">
+                <input type="text" class="form-control" id="search{{ table_name }}"
+                       placeholder="Search..." value="{{ search|default('') }}">
+            </div>
+            <div class="col-md-4 text-end">
+                <nav>
+                    <ul class="pagination pagination-sm mb-0" id="pagination{{ table_name }}"></ul>
+                </nav>
+            </div>
+            <div class="col-md-4 text-end">
+                <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#crudModal{{ table_name }}"
+                        onclick="addRecord{{ table_name }}()">
+                    Create
+                </button>
+            </div>
+        </div>
+        {# Main content - table or card view #}
+        {% if options.card_view|default(false) %}
+            <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+                {% for record in records %}
+                    <div class="col">
+                        <div class="card h-100 shadow-sm">
+                            <div class="card-body">
+                                <h5 class="card-title">
+                                    {{ record[options.title_field|default(columns[0].name)]|default('Record') }}
+                                </h5>
+                                <div class="card-text">
+                                    {% for column in columns %}
+                                        {% set name = column.name %}
+                                        <div class="mb-2">
+                                            <strong>{{ column.label|default(column.name|nice_label) }}:</strong>
+                                            <span class="text-muted">{{ record[name]|e }}</span>
+                                        </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div class="card-footer bg-transparent">
+                                <button type="button" class="btn btn-sm btn-outline-primary me-1"
+                                        data-bs-toggle="modal" data-bs-target="#crudModal{{ table_name }}"
+                                        onclick='loadRecord{{ table_name }}({{ record|json_encode }}, {{ loop.index0 }})'>
+                                    Update
+                                </button>
+                                <button type="button" class="btn btn-sm btn-outline-danger"
+                                        onclick='confirmDelete{{ table_name }}({{ record.id|default(loop.index0) }})'>
+                                    Delete
+                                </button>
                             </div>
                         </div>
-                        <div class="card-footer bg-transparent">
-                            <button type="button" class="btn btn-sm btn-outline-primary"
-                                    data-bs-toggle="modal" data-bs-target="#crudModal"
-                                    onclick="loadRecord({{ record|json_encode }}, {{ loop.index0 }})">
-                                Edit
-                            </button>
-                            <button type="button" class="btn btn-sm btn-outline-danger"
-                                    onclick="confirmDelete({{ record.id|default(loop.index0) }})">
-                                Delete
-                            </button>
-                        </div>
                     </div>
-                </div>
-            {% else %}
-                <div class="col-12 text-center py-5">
-                    <p class="text-muted">No records found</p>
-                </div>
-            {% endfor %}
-        </div>
-
-    {% else %}
-        <table class="table table-striped table-hover table-bordered">
-            <thead class="table-light">
-            <tr>
-                {% for column in columns %}
-                    <th scope="col">{{ column.label|default(column.name|nice_label) }}</th>
+                {% else %}
+                    <div class="col-12 text-center py-5">
+                        <p class="text-muted">No records found</p>
+                    </div>
                 {% endfor %}
-                <th scope="col">Actions</th>
-            </tr>
-            </thead>
-            <tbody>
-            {% for record in records %}
+            </div>
+
+        {% else %}
+            <table class="table table-striped table-hover table-bordered">
+                <thead class="table-light">
                 <tr>
                     {% for column in columns %}
-                        {% set name = column.name %}
-                        <td>{{ record[name]|e }}</td>
+                        <th scope="col">{{ column.label|default(column.name|nice_label) }}</th>
                     {% endfor %}
-                    <td class="text-nowrap">
-                        <button type="button" class="btn btn-sm btn-outline-primary me-1"
-                                data-bs-toggle="modal" data-bs-target="#crudModal"
-                                onclick='loadRecord({{ record|json_encode }}, {{ loop.index0 }})'>
-                            Edit
-                        </button>
-                        <button type="button" class="btn btn-sm btn-outline-danger"
-                                onclick='confirmDelete({{ record.id|default(loop.index0) }})''>
-                        Delete
-                        </button>
-                    </td>
+                    <th scope="col">Actions</th>
                 </tr>
-            {% else %}
-                <tr>
-                    <td colspan="{{ columns|length + 1 }}" class="text-center text-muted py-4">
-                        No records found
-                    </td>
-                </tr>
-            {% endfor %}
-            </tbody>
-        </table>
-    {% endif %}
-</div>
+                </thead>
+                <tbody>
+                {% for record in records %}
+                    <tr>
+                        {% for column in columns %}
+                            {% set name = column.name %}
+                            <td>{{ record[name]|e }}</td>
+                        {% endfor %}
+                        <td class="text-nowrap">
+                            <button type="button" class="btn btn-sm btn-outline-primary me-1"
+                                    data-bs-toggle="modal" data-bs-target="#crudModal{{ table_name }}"
+                                    onclick='loadRecord{{ table_name }}({{ record|json_encode }}, {{ loop.index0 }})'>
+                                Update
+                            </button>
+                            <button type="button" class="btn btn-sm btn-outline-danger"
+                                    onclick='confirmDelete{{ table_name }}({{ record.id|default(loop.index0) }})'>
+                                Delete
+                            </button>
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr>
+                        <td colspan="{{ columns|length + 1 }}" class="text-center text-muted py-4">
+                            No records found
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        {% endif %}
+    </div>
 
-{# Bootstrap Modal #}
-<div class="modal fade" id="crudModal" tabindex="-1" aria-labelledby="crudModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="crudModalLabel">Edit Record</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    {# Bootstrap Modal #}
+    <div class="modal fade" id="crudModal{{ table_name }}" tabindex="-1" aria-labelledby="crudModalLabel"
+         aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="crudModalLabel{{ table_name }}">Edit Record</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form id="crudForm{{ table_name }}" method="POST" onsubmit="return false">
+                    <div class="modal-body" id="modalBody{{ table_name }}">
+                        <!-- Form fields loaded dynamically by JS -->
+                    </div>
+                    {{ (table_name~RANDOM()) | formToken }}
+                    <div class="modal-footer">
+                        <button id="saveButton{{ table_name }}" type="submit" class="btn btn-primary">Save</button>
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    </div>
+                </form>
             </div>
-            <form id="crudForm{{ table_name }}" method="POST" onsubmit="return false">
-                <div class="modal-body" id="modalBody">
-                    <!-- Form fields loaded dynamically by JS -->
-                </div>
-                {{  (table_name~RANDOM()) | formToken }}
-                <div class="modal-footer">
-                    <button id="saveButton{{ table_name }}" type="submit" class="btn btn-primary" >Save</button>
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                </div>
-            </form>
         </div>
     </div>
-</div>
+    <script>
+        function loadRecord{{ table_name }}(record, index) {
+            const modalBody = document.getElementById('modalBody{{ table_name }}');
+            const saveButton = document.getElementById('saveButton{{ table_name }}');
+            const formLabel = document.getElementById('crudModalLabel{{ table_name }}');
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-    function loadRecord(record, index) {
-        const modalBody = document.getElementById('modalBody');
-        const saveButton = document.getElementById('saveButton{{ table_name }}');
+            formLabel.innerText = `Update Record`;
+            let html = '';
+            let field = null;
+            let label = null;
+            let value = null;
+            let type = null;
+            {% for column in columns %}
+            field = `{{ column.name }}`;
+            label = `{{ column.label|default(column.name|nice_label) }}`;
+            value = record[field] || '';
+            type = `{{ column.type|default('text') }}`;
 
-        let html = '';
-        let field = null;
-        let label = null;
-        let value = null;
-        let type = null;
-        {% for column in columns %}
-        field = `{{ column.name }}`;
-        label = `{{ column.label|default(column.name|nice_label) }}`;
-        value = record[field] || '';
-        type = `{{ column.type|default('text') }}`;
-
-        html += `<div class="mb-3">
+            html += `<div class="mb-3">
                     <label for="${field}" class="form-label">${label}</label>
                     <input type="${type === 'password' ? 'password' : 'text'}"
                            class="form-control"
                            id="${field}"
                            name="${field}"
+                           placeholder="${label}"
                            value='${value}'>
                 </div>`;
-        {% endfor %}
+            {% endfor %}
 
-        modalBody.innerHTML = html;
+            modalBody.innerHTML = html;
 
-        saveButton.onclick = () => {
-            postForm('crudForm{{ table_name }}', window.location.pathname + "/{{ table_name }}/" + (record.id || index));
-        };
-    }
+            // Inside loadRecord{{ table_name }}
+            saveButton.onclick = () => {
+                postForm('crudForm{{ table_name }}', window.location.pathname + "/{{ table_name }}/" + (record.id || index), null, function() {
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('crudModal{{ table_name }}'));
+                    modal.hide();
 
-    function confirmDelete(id) {
-        console.log("formToken", formToken);
-        if (confirm("Are you sure you want to delete this record?")) {
-            sendRequest(window.location.pathname + "/{{ table_name }}/"+id, null, "DELETE",
-                function (response) {
-                    console.log(response);
-                })
+                    window['reloadPage{{ table_name }}']();
+                });
+            };
+
         }
-    }
-</script>
+
+        function addRecord{{ table_name }}() {
+            const modalBody = document.getElementById('modalBody{{ table_name }}');
+            const saveButton = document.getElementById('saveButton{{ table_name }}');
+
+            const formLabel = document.getElementById('crudModalLabel{{ table_name }}');
+
+            formLabel.innerText = `Create Record`;
+
+            let html = '';
+            let field = null;
+            let label = null;
+            let value = null;
+            let type = null;
+            {% for column in columns %}
+            field = `{{ column.name }}`;
+            label = `{{ column.label|default(column.name|nice_label) }}`;
+            value = '';
+            type = `{{ column.type|default('text') }}`;
+
+            html += `<div class="mb-3">
+                    <label for="${field}" class="form-label">${label}</label>
+                    <input type="${type === 'password' ? 'password' : 'text'}"
+                           class="form-control"
+                           id="${field}"
+                           name="${field}"
+                           placeholder="${label}"
+                           value='${value}'>
+                </div>`;
+            {% endfor %}
+
+            modalBody.innerHTML = html;
+
+            // Inside loadRecord{{ table_name }}
+            saveButton.onclick = () => {
+                postForm('crudForm{{ table_name }}', window.location.pathname + "/{{ table_name }}", null, function() {
+                    const modal = bootstrap.Modal.getInstance(document.getElementById('crudModal{{ table_name }}'));
+                    modal.hide();
+
+                    window['reloadPage{{ table_name }}']();
+                });
+            };
+
+        }
+
+
+        function confirmDelete{{ table_name }}(id) {
+            console.log("formToken", formToken);
+            if (confirm("Are you sure you want to delete this record?")) {
+                sendRequest(window.location.pathname + "/{{ table_name }}/" + id, null, "DELETE",
+                    function (response) {
+                        window['reloadPage{{ table_name }}']();
+                    })
+            }
+        }
+
+
+    </script>
+
+    <script>
+        window['config_crud_{{ table_name }}'] = {
+            perPage: {{ options.limit }},
+            total: {{ total_records |default(records|length) }}
+        };
+
+        (function() {
+            const tableKey = "crud_{{ table_name }}";
+
+            // Prevent double initialization
+            if (window[tableKey]) return;
+            window[tableKey] = true;
+
+            // === 1. Get current state from URL (shared across all reloads) ===
+            const urlParams{{ table_name }} = new URLSearchParams(location.search);
+            const currentLimit = parseInt(urlParams{{ table_name }}.get('limit')) || {{ options.limit }};
+            const currentOffset = parseInt(urlParams{{ table_name }}.get('offset')) || 0;
+            const currentSearch = urlParams{{ table_name }}.get('search') || '';
+
+            window['reloadPage{{ table_name }}'] = function () {
+                const offset = parseInt(urlParams{{ table_name }}.get('offset') || 0);
+                const limit = parseInt(urlParams{{ table_name }}.get('limit') || {{ options.limit }});
+                const page = Math.max(1, Math.floor(offset / limit) + 1);
+                window['goToPage_crud_{{ table_name }}'](page);
+            }
+
+            // === 2. Store per-table config safely ===
+            window['config_' + tableKey] = {
+                perPage: {{ options.limit }},
+                total: {{ total_records |default(records|length) }}
+            };
+
+            // === 3. Go to page ===
+            window['goToPage_' + tableKey] = function(page = 1) {
+                const searchInput = document.getElementById('search{{ table_name }}');
+                const search = (searchInput?.value || '').trim();
+                const offset = (page - 1) * currentLimit;
+
+                const url = new URL(location.pathname + "/{{ table_name }}", location.origin);
+                url.searchParams.set('limit', currentLimit);
+                url.searchParams.set('offset', offset);
+
+                urlParams{{ table_name }}.set('limit', currentLimit);
+                urlParams{{ table_name }}.set('offset', offset);
+                if (search) url.searchParams.set('search', search);
+
+                loadPage(url.toString(), "crudTarget{{ table_name }}", () => {
+                    window['renderPagination_' + tableKey](page);
+                });
+            };
+
+            // === 4. Render pagination ===
+            window['renderPagination_' + tableKey] = function(currentPage) {
+                const config = window['config_' + tableKey];
+                console.log("currentPage", currentPage, config);
+                let totalPages = Math.ceil(config.total / config.perPage);
+                const container = document.getElementById('pagination{{ table_name }}');
+                if (!container) {
+                    if (container) container.innerHTML = '';
+                    return;
+                }
+
+                if (totalPages < 1) {
+                    totalPages = 1;
+                }
+
+                container.innerHTML = '';
+                for (let i = 1; i <= totalPages; i++) {
+                    const li = document.createElement('li');
+                    li.className = 'page-item' + (i === currentPage ? ' active' : '');
+                    li.innerHTML = `<a class="page-link" href="#" onclick="goToPage_${tableKey}(${i}); return false;">${i}</a>`;
+                    container.appendChild(li);
+                }
+            };
+
+            // === 5. Search on Enter ===
+            document.getElementById('search{{ table_name }}')?.addEventListener('keypress', e => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    window['goToPage_' + tableKey](1);
+                }
+            });
+
+            // === 6. Initial render ===
+            const currentPage = Math.max(1, Math.floor(currentOffset / currentLimit) + 1);
+            window['renderPagination_' + tableKey](currentPage);
+
+            // === 7. Global loadPage hook (only once) ===
+            if (!window.loadPagePatched) {
+                const orig = window.loadPage;
+                window.loadPage = function(url, target, cb) {
+                    orig(url, target, () => {
+                        setTimeout(() => {
+                            document.querySelectorAll('[id^="crudTarget"]').forEach(el => {
+                                const match = el.id.match(/^crudTarget(.+)$/);
+                                if (match) {
+                                    const key = 'crud_' + match[1];
+                                    if (window[key]) {
+                                        const params = new URL(url || location.href).searchParams;
+                                        const limit = parseInt(params.get('limit')) || 1;
+                                        const offset = parseInt(params.get('offset')) || 0;
+                                        const page = Math.max(1, Math.floor(offset / limit) + 1);
+                                        window['renderPagination_' + key](page);
+                                    }
+                                }
+                            });
+                        }, 50);
+                        if (cb) cb();
+                    });
+                };
+                window.loadPagePatched = true;
+            }
+        })();
+    </script>
+</div>
+<div id="message"></div>
+{# You only need the bootstrap libraries and tina4helper below if you don't include them anywhere else #}
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/js/tina4helper.js"></script>

@@ -28,6 +28,9 @@ from tina4_python.Auth import Auth
 from tina4_python.Debug import Debug
 from tina4_python.ShellColors import ShellColors
 from tina4_python.Session import Session
+from tina4_python.HtmlElement import add_html_helpers
+add_html_helpers(globals())
+
 
 _ = gettext.gettext
 

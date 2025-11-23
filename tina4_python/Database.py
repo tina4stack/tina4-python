@@ -220,7 +220,7 @@ class Database:
         records = cursor.fetchall()
         rows = [dict(zip(columns, row)) for row in records]
         cursor.close()
-        return DatabaseResult(rows, columns, None, counter, limit, skip, sql)
+        return DatabaseResult(rows, columns, None, counter, limit, skip, sql, self)
 
     def is_json(self, myjson):
         """
@@ -359,10 +359,10 @@ class Database:
             else:
                 # see if we are mysql and if we are insert statement to get the last record
                 if "insert" in sql.lower() and (self.database_engine == MYSQL or self.database_engine == MSSQL):
-                    return DatabaseResult([{"id": cursor.lastrowid}], [], None, 1, 1, 0, sql)
+                    return DatabaseResult([{"id": cursor.lastrowid}], [], None, 1, 1, 0, sql, self)
 
                 # On success return an empty result set with no error
-                return DatabaseResult(None, [], None)
+                return DatabaseResult(None, [], None, 0, 0, 0, sql, self)
         except Exception as e:
             Debug("EXECUTE ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
             # Return the error in the result
@@ -467,18 +467,25 @@ class Database:
             data = [data]
 
         if isinstance(data, list):
-            columns = ", ".join(data[0].keys())
-            placeholders = ", ".join(['?'] * len(data[0]))
-
-            sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
-
-            if self.database_engine == FIREBIRD or self.database_engine == SQLITE or self.database_engine == POSTGRES:
-                sql += f" returning ({primary_key})"
-
             records = DatabaseResult()
 
             result = None
             for record in data:
+                columns = ", ".join(data[0].keys())
+                placeholders = ", ".join(['?'] * len(data[0]))
+
+                pk_key = primary_key in columns
+                if not pk_key or (primary_key in columns and (record[primary_key] is None or record[primary_key] == "")):
+                    if primary_key not in columns:
+                        columns += f", {primary_key}"
+                        placeholders += ", ?"
+                    record[primary_key] = self.get_next_id(table_name, primary_key)
+
+                sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
+
+                if self.database_engine == FIREBIRD or self.database_engine == SQLITE or self.database_engine == POSTGRES:
+                    sql += f" returning ({primary_key})"
+
                 record = self.sanitize(record)
                 if self.database_engine == MSSQL:
                     self.execute(f"SET IDENTITY_INSERT {table_name} ON")
@@ -493,6 +500,7 @@ class Database:
             records.columns = result.columns
             records.count = len(records.records)
             records.sql = sql
+            records.dba = self
 
             return records
         else:

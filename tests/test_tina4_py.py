@@ -147,6 +147,18 @@ def test_database_insert():
     dba.rollback()
     result = dba.insert("test_record", [{"id": 9, "name": {"id": 1}}, {"id": 10, "name": ["me", "myself", "I"]}])
     assert result.records == [{"id": 9}, {"id": 10}]
+
+    result = dba.insert("test_record", {"name": "TestLast"})
+    print("TEST RESULT", result)
+    assert result.records == [{"id": 11}]
+
+    result = dba.insert("test_record", {"id": None, "name": "TestLast2"})
+    print("TEST RESULT", result)
+    assert result.records == [{"id": 12}]
+
+    result = dba.insert("test_record", {"id": "", "name": "TestLast3"})
+    print("TEST RESULT", result)
+    assert result.records == [{"id": 13}]
     dba.commit()
     dba.close()
 
