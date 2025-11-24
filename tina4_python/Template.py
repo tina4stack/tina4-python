@@ -4,6 +4,8 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+import ast
+import html
 import os
 import re
 import json
@@ -33,6 +35,7 @@ class Template:
         Template.twig.add_extension('jinja2.ext.do')
         Template.twig.globals['RANDOM'] = RANDOM
         Template.twig.globals['json'] = json
+        Template.twig.filters['detect_image'] = Template.detect_image
         Template.twig.filters['json_encode'] = json.dumps
         Template.twig.filters['json_decode'] = json.loads
         Template.twig.filters['nice_label'] = Template.get_nice_label
@@ -79,7 +82,7 @@ class Template:
         """
         Recursively convert non-JSON-serializable objects:
           • datetime/date → ISO 8601 string
-          • bytes        → base64 string
+          • bytes base64 string
           • dict/list/tuple/set → recursively processed
         Safe for deeply nested data (arrays of arrays, dicts in lists, etc.)
         """
@@ -145,81 +148,51 @@ class Template:
 
     @staticmethod
     def detect_image(value: Any) -> Dict[str, str]:
-        """
-        Detects if a string is an image (base64, data URL, or raw bytes)
-        Returns: {"content": "<base64 without prefix>", "content_type": "image/jpeg|png|gif|webp"}
-        """
-        if value is None:
-            return {"content": "", "content_type": ""}
+        if not value or len(value) <= 50:
+            return {"content": value, "content_type": ""}
 
-        # Convert to string if it's bytes or something else
-        if isinstance(value, (bytes, bytearray)):
-            value = value.decode('latin1', errors='ignore')
-        elif not isinstance(value, str):
-            value = str(value)
-
-        original = value.strip()
-
-        # Case 1: JSON object like {"content": "...", "content_type": "..."}
-        if original.startswith("{"):
+        if value[0] == '{' and value[-1] == '}':
             try:
-                data = json.loads(original)
-                if isinstance(data, dict) and "content" in data:
-                    content = data["content"]
-                    content_type = data.get("content_type", "")
-                    if content_type.startswith("image/"):
-                        return {
-                            "content": str(content).split(",", 1)[-1] if "," in content else str(content),
-                            "content_type": content_type
-                        }
-            except:
-                pass  # not valid JSON, continue
+                value = html.unescape(value)
+                data = json.loads(value)
+                content = data.get('content', '')
 
-        # Case 2: Data URL like data:image/png;base64,...
-        if original.startswith("data:image/"):
-            try:
-                header, b64_data = original.split(",", 1)
-                mime = header.split(";")[0].split(":", 1)[1]  # extract image/png
-                return {
-                    "content": b64_data,
-                    "content_type": mime
-                }
-            except:
-                pass
+                if not content:
+                    return  {"content": value, "content_type": ""}
 
-        # Case 3: Pure base64 string with magic bytes detection
-        b64 = original
+                content_type = data.get('content_type', '')
+                if content_type.startswith('image/'):
+                    mime_type = content_type.split('/')[1]
+                    return  {"content": content, "content_type": mime_type}
 
-        # Remove common prefixes if present
-        if b64.startswith("data:"):
-            b64 = b64.split(",", 1)[-1]
+                # Fallback to magic bytes if no content_type
+                if content[:4] == '/9j/':
+                    mime_type = 'jpeg'
+                elif content[:11] == 'iVBORw0KGgo':
+                    mime_type = 'png'
+                elif content[:6] == 'R0lGOD':
+                    mime_type = 'gif'
+                elif content[:5] == 'UklGR':
+                    mime_type = 'webp'
+                else:
+                    return  {"content": content, "content_type": ""}
 
-        # Clean whitespace/newlines
-        b64 = b64.strip()
+                return {"content": content, "content_type": mime_type}
+            except json.JSONDecodeError as e:
+                return {"content": str(e), "content_type": ""}
 
-        # Try to detect by magic bytes (first few chars of base64)
-        try:
-            # Decode just the first 20 bytes to inspect magic
-            sample = base64.b64decode(b64[:40] + "===", validate=True)
-        except:
-            return {"content": "", "content_type": ""}
 
-        if sample.startswith(b'\xFF\xD8\xFF'):
-            mime = "image/jpeg"
-        elif sample.startswith(b'\x89PNG\r\n\x1A\n'):
-            mime = "image/png"
-        elif sample.startswith(b'GIF87a') or sample.startswith(b'GIF89a'):
-            mime = "image/gif"
-        elif sample.startswith(b'RIFF') and len(sample) >= 12 and sample[8:12] == b'WEBP':
-            mime = "image/webp"
-        elif sample.startswith(b'BM'):  # BMP
-            mime = "image/bmp"
-        elif sample.startswith(b'\x00\x00\x01\x00'):  # ICO
-            mime = "image/x-icon"
+        mime_type = "jpeg"
+        # Check magic bytes on value
+        if value[:4] == '/9j/':
+            mime_type = 'jpeg'
+        elif value[:11] == 'iVBORw0KGgo':
+            mime_type = 'png'
+        elif value[:6] == 'R0lGOD':
+            mime_type = 'gif'
+        elif value[:5] == 'UklGR':
+            mime_type = 'webp'
         else:
-            return {"content": "", "content_type": ""}
+            return {"content": value, "content_type": mime_type}
 
-        return {
-            "content": b64,
-            "content_type": mime
-        }
+        return {"content": value, "content_type": mime_type}

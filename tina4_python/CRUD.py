@@ -141,6 +141,9 @@ class CRUD:
         table_nice_name = Template.get_nice_label(table_name)
         twig_file = self.ensure_crud_template(table_name + ".twig")
 
+        if options is None:
+            options = {}
+
         if "primary_key" not in options:
             options["primary_key"] = "id"
 
@@ -165,9 +168,12 @@ class CRUD:
 
 
             # Use defined columns or fallback
-            search_columns = self.columns
-            if isinstance(search_columns, dict):
-                search_columns = [c["name"] for c in search_columns if "name" in c]
+            if not "search_columns" in options:
+                search_columns = self.columns
+                if isinstance(search_columns, dict):
+                    search_columns = [c["name"] for c in search_columns if "name" in c]
+            else:
+                search_columns = options["search_columns"]
 
             # Execute fetch with search
             result = self.dba.fetch(

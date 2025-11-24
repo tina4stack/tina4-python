@@ -48,26 +48,12 @@
 
                                         {# --- Detect image by magic bytes (no ternary, no starts with) --- #}
                                         {% set is_image = False %}
-                                        {% set mime_type = 'jpeg' %}
+                                        {% set check_value = value | detect_image   %}
 
-                                        {% if value[0] == "{" %}
+                                        {% if check_value.content_type  %}
                                             {% set is_image = True %}
-                                            {% set value = value | json_decode %}
-                                            {% set value = value.content %}
-                                        {% else %}
-                                            {% if value[:4] == '/9j/' %}
-                                                {% set is_image = True %}
-                                                {% set mime_type = 'jpeg' %}
-                                                {% elif value[:11] == 'iVBORw0KGgo' %}
-                                                {% set is_image = True %}
-                                                {% set mime_type = 'png' %}
-                                                {% elif value[:6] == 'R0lGOD' %}
-                                                {% set is_image = True %}
-                                                {% set mime_type = 'gif' %}
-                                                {% elif value[:5] == 'UklGR' %}
-                                                {% set is_image = True %}
-                                                {% set mime_type = 'webp' %}
-                                            {% endif %}
+                                            {% set value = check_value.content %}
+                                            {% set mime_type = check_value.mime_type %}
                                         {% endif %}
 
                                         {# --- Only show image if it's base64-like and long enough --- #}
@@ -132,34 +118,18 @@
                             {% set name = column.name %}
                             {% set value = record[name]|e %}
 
-                            {# --- Detect image by magic bytes (no ternary, no starts with) --- #}
                             {% set is_image = False %}
-                            {% set mime_type = 'jpeg' %}
 
+                            {% set check_value = value | detect_image   %}
 
-                            {% if value | length > 50  and value != "" and value[0] == "{" %}
+                            {% if check_value.content_type  %}
                                 {% set is_image = True %}
-                                {% set value =  record[name] | json_decode %}
-                                {% set value = value.content %}
-                            {% else %}
-                                {% if value|length > 50 and value[:4] == '/9j/' %}
-                                    {% set is_image = True %}
-                                    {% set mime_type = 'jpeg' %}
-                                    {% elif value[:11] == 'iVBORw0KGgo' %}
-                                    {% set is_image = True %}
-                                    {% set mime_type = 'png' %}
-                                    {% elif value[:6] == 'R0lGOD' %}
-                                    {% set is_image = True %}
-                                    {% set mime_type = 'gif' %}
-                                    {% elif value[:5] == 'UklGR' %}
-                                    {% set is_image = True %}
-                                    {% set mime_type = 'webp' %}
-                                {% endif %}
+                                {% set value = check_value.content %}
+                                {% set mime_type = check_value.mime_type %}
                             {% endif %}
-
                             <td>
                                 {# --- Only show image if it's base64-like and long enough --- #}
-                                {% if is_image and value|length > 50 and value is string %}
+                                {% if is_image  %}
                                     {% set src = value %}
                                     {% if value[:10] != 'data:image/' %}
                                         {% set src = 'data:image/' ~ mime_type ~ ';base64,' ~ value %}
