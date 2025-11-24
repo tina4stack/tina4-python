@@ -7,6 +7,7 @@
 import os
 import re
 import json
+import base64
 import tina4_python
 from tina4_python import Constant
 from tina4_python.Debug import Debug
@@ -30,6 +31,7 @@ class Template:
         Template.twig.add_extension('jinja2.ext.debug')
         Template.twig.add_extension('jinja2.ext.do')
         Template.twig.globals['RANDOM'] = RANDOM
+        Template.twig.globals['json'] = json
         Template.twig.filters['json_encode'] = json.dumps
         Template.twig.filters['json_decode'] = json.loads
         Template.twig.filters['nice_label'] = Template.get_nice_label
@@ -73,13 +75,33 @@ class Template:
 
     @staticmethod
     def convert_special_types(obj):
-        if isinstance(obj, dict):
-            return {k: Template.convert_special_types(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [Template.convert_special_types(i) for i in obj]
-        elif isinstance(obj, (date, datetime)):
+        """
+        Recursively convert non-JSON-serializable objects:
+          • datetime/date → ISO 8601 string
+          • bytes        → base64 string
+          • dict/list/tuple/set → recursively processed
+        Safe for deeply nested data (arrays of arrays, dicts in lists, etc.)
+        """
+        if isinstance(obj, (date, datetime)):
             return obj.isoformat()
+
+        elif isinstance(obj, bytes):
+            return base64.b64encode(obj).decode('utf-8')
+
+        elif isinstance(obj, dict):
+            return {
+                key: Template.convert_special_types(value)
+                for key, value in obj.items()
+            }
+
+        elif isinstance(obj, (list, tuple, set)):
+            return [
+                Template.convert_special_types(item)
+                for item in obj
+            ]
+
         else:
+            # Primitives: str, int, float, bool, None → pass through
             return obj
 
     @staticmethod
@@ -117,4 +139,4 @@ class Template:
         s = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', s)
         # Capitalize words & strip id
         words = s.split()
-        return ' '.join(word.capitalize() for word in words)
+        return " ".join(word.capitalize() for word in words )

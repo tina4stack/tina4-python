@@ -5,7 +5,10 @@ from ..orm.User import User
 
 @get("/some/dashboard")
 async def some_dashboard(request, response):
-    logs = Log().select(column_names="*")
-    users = User().select(column_names="id, title, first_name, last_name, email")
+    logs = Log().select(column_names="id, name, image", order_by="id DESC")
+    users = User().select(column_names="id, first_name, last_name", order_by="id DESC")
 
-    return response.render("dashboard.twig", {"crud_log": logs.to_crud(request, {"card_view": True}), "crud_users": users.to_crud(request, {"card_view": False}) })
+
+
+    return response.render("dashboard.twig", {"crud_log": logs.to_crud(request, {"card_view": True, "something": "Cris"}),
+                                              "crud_users": users.to_crud(request, {"card_view": False}) })

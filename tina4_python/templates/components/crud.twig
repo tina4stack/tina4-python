@@ -34,10 +34,52 @@
                                 <div class="card-text">
                                     {% for column in columns %}
                                         {% set name = column.name %}
-                                        <div class="mb-2">
-                                            <strong>{{ column.label|default(column.name|nice_label) }}:</strong>
-                                            <span class="text-muted">{{ record[name]|e }}</span>
-                                        </div>
+                                        {% set value = (record[name] | default('')) | string %}
+
+                                        {# --- Detect image by magic bytes (no ternary, no starts with) --- #}
+                                        {% set is_image = False %}
+                                        {% set mime_type = 'jpeg' %}
+
+                                        {% if value[0] == "{" %}
+                                            {% set is_image = True %}
+                                            {% set value = value | json_decode %}
+                                            {% set value = value.content %}
+                                        {% else %}
+                                            {% if value[:4] == '/9j/' %}
+                                                {% set is_image = True %}
+                                                {% set mime_type = 'jpeg' %}
+                                                {% elif value[:11] == 'iVBORw0KGgo' %}
+                                                {% set is_image = True %}
+                                                {% set mime_type = 'png' %}
+                                                {% elif value[:6] == 'R0lGOD' %}
+                                                {% set is_image = True %}
+                                                {% set mime_type = 'gif' %}
+                                                {% elif value[:5] == 'UklGR' %}
+                                                {% set is_image = True %}
+                                                {% set mime_type = 'webp' %}
+                                            {% endif %}
+                                        {% endif %}
+
+                                        {# --- Only show image if it's base64-like and long enough --- #}
+                                        {% if is_image and value|length > 50 and value is string %}
+                                            {% set src = value %}
+                                            {% if value[:10] != 'data:image/' %}
+                                                {% set src = 'data:image/' ~ mime_type ~ ';base64,' ~ value %}
+                                            {% endif %}
+
+                                            <div class="mb-3">
+                                                <strong>{{ column.label|default(column.name|replace('_', ' ')|title) }}:</strong><br>
+                                                <img src="{{ src }}"
+                                                     alt="Image"
+                                                     class="img-thumbnail mt-2"
+                                                     style="max-height: 200px; max-width: 100%; border-radius: 8px; object-fit: cover;">
+                                            </div>
+                                        {% else %}
+                                            <div class="mb-2">
+                                                <strong>{{ column.label|default(column.name|replace('_', ' ')|title) }}:</strong>
+                                                <span class="text-muted">{{ value }}</span>
+                                            </div>
+                                        {% endif %}
                                     {% endfor %}
                                 </div>
                             </div>
@@ -76,7 +118,49 @@
                     <tr>
                         {% for column in columns %}
                             {% set name = column.name %}
-                            <td>{{ record[name]|e }}</td>
+                            {% set value = record[name]|e %}
+
+                            {# --- Detect image by magic bytes (no ternary, no starts with) --- #}
+                            {% set is_image = False %}
+                            {% set mime_type = 'jpeg' %}
+
+
+                            {% if value | length > 50  and value != "" and value[0] == "{" %}
+                                {% set is_image = True %}
+                                {% set value =  record[name] | json_decode %}
+                                {% set value = value.content %}
+                            {% else %}
+                                {% if value|length > 50 and value[:4] == '/9j/' %}
+                                    {% set is_image = True %}
+                                    {% set mime_type = 'jpeg' %}
+                                    {% elif value[:11] == 'iVBORw0KGgo' %}
+                                    {% set is_image = True %}
+                                    {% set mime_type = 'png' %}
+                                    {% elif value[:6] == 'R0lGOD' %}
+                                    {% set is_image = True %}
+                                    {% set mime_type = 'gif' %}
+                                    {% elif value[:5] == 'UklGR' %}
+                                    {% set is_image = True %}
+                                    {% set mime_type = 'webp' %}
+                                {% endif %}
+                            {% endif %}
+
+                            <td>
+                                {# --- Only show image if it's base64-like and long enough --- #}
+                                {% if is_image and value|length > 50 and value is string %}
+                                    {% set src = value %}
+                                    {% if value[:10] != 'data:image/' %}
+                                        {% set src = 'data:image/' ~ mime_type ~ ';base64,' ~ value %}
+                                    {% endif %}
+
+                                    <img src="{{ src }}"
+                                         alt="Image"
+                                         class="img-thumbnail mt-2"
+                                         style="max-height: 200px; max-width: 100%; border-radius: 8px; object-fit: cover;">
+                                {% else %}
+                                    {{ value }}
+                                {% endif %}
+                            </td>
                         {% endfor %}
                         <td class="text-nowrap">
                             <button type="button" class="btn btn-sm btn-outline-primary me-1"
@@ -136,21 +220,91 @@
             let label = null;
             let value = null;
             let type = null;
+            let isImage = false;
+            let mimeType = 'jpeg';
+            let rawValue = null;
             {% for column in columns %}
-            field = `{{ column.name }}`;
-            label = `{{ column.label|default(column.name|nice_label) }}`;
+            field = "{{ column.name }}";
+            label = "{{ column.label|default(column.name|nice_label) }}";
             value = record[field] || '';
-            type = `{{ column.type|default('text') }}`;
+            try {
+                rawValue = JSON.parse(record[field] || '');
+            } catch (e) {
+                rawValue = record[field];
+            }
+            type = "{{ column.type|default('text') }}";
 
-            html += `<div class="mb-3">
-                    <label for="${field}" class="form-label">${label}</label>
-                    <input type="${type === 'password' ? 'password' : 'text'}"
-                           class="form-control"
-                           id="${field}"
-                           name="${field}"
-                           placeholder="${label}"
-                           value='${value}'>
-                </div>`;
+            if (typeof rawValue === 'object' && rawValue !== null) {
+                if (rawValue.content) {
+                    value = rawValue.content;
+                    if (rawValue.content_type && rawValue.content_type.startsWith('image/')) {
+                        mimeType = rawValue.content_type.split('/')[1];  // png, jpeg, webp, etc.
+                        isImage = true;
+                    }
+                }
+            }
+
+            if (value && typeof value === 'string') {
+                if (value.startsWith('data:image/')) {
+                    isImage = true;
+                }
+                else if (value.substring(0, 4) === '/9j/') {
+                    isImage = true;
+                    mimeType = 'jpeg';
+                }
+                else if (value.substring(0, 11) === 'iVBORw0KGgo') {
+                    isImage = true;
+                    mimeType = 'png';
+                }
+                else if (value.substring(0, 6) === 'R0lGOD') {
+                    isImage = true;
+                    mimeType = 'gif';
+                }
+                else if (value.substring(0, 5) === 'UklGR') {
+                    isImage = true;
+                    mimeType = 'webp';
+                }
+            }
+
+            // --- If it's an image → show preview + file upload ---
+            if (isImage && value.length > 50 || field.indexOf('image') !== -1) {
+                let imageSrc = value;
+                if (value.length > 0 && !value.startsWith('data:image/') ) {
+                    imageSrc = `data:image/${mimeType};base64,${value}`;
+                }
+
+                html += `
+    <div class="mb-3">
+        <label class="form-label fw-bold">${label}</label>
+        <div class="border rounded p-3 bg-light text-center">
+            <img src="${imageSrc}"
+                 alt="Current ${label}"
+                 class="img-thumbnail mb-3"
+                 style="max-height: 180px; max-width: 100%;">
+            <div>
+                <input type="file"
+                       accept="image/*"
+                       class="form-control form-control-sm"
+                       id="${field}"
+                       name="${field}">
+                <small class="text-muted">Choose new image (optional)</small>
+            </div>
+        </div>
+    </div>`;
+            }
+            else {
+                // Normal text/password input
+                html += `
+    <div class="mb-3">
+        <label for="${field}" class="form-label">${label}</label>
+        <input type="${type === 'password' ? 'password' : 'text'}"
+               class="form-control"
+               id="${field}"
+               name="${field}"
+               placeholder="${label}"
+               value="${value}">
+    </div>`;
+            }
             {% endfor %}
 
             modalBody.innerHTML = html;
@@ -223,9 +377,6 @@
         }
 
 
-    </script>
-
-    <script>
         window['config_crud_{{ table_name }}'] = {
             perPage: {{ options.limit }},
             total: {{ total_records |default(records|length) }}
@@ -342,6 +493,6 @@
 </div>
 <div id="message"></div>
 {# You only need the bootstrap libraries and tina4helper below if you don't include them anywhere else #}
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script src="/js/tina4helper.js"></script>
+{#<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">#}
+{#<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>#}
+{#<script src="/js/tina4helper.js"></script>#}

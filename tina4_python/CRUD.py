@@ -23,15 +23,16 @@ class CRUD:
         Remove ALL known SQL pagination syntaxes from a query.
 
         Supported dialects:
-          - MySQL / MariaDB:          LIMIT 10, 20  or  LIMIT 20 OFFSET 10
+          - MySQL / MariaDB: LIMIT 10, 20, or LIMIT 20 OFFSET 10
           - PostgreSQL / SQLite:      LIMIT 10 OFFSET 20
           - Firebird:                 FIRST 10 SKIP 20
-          - SQL Server (MSSQL):       OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY
-          - Oracle (12c+):            OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY
-          - Oracle (older):           WHERE ROWNUM <= 10  (partial support)
+          - SQL Server (MSSQL): OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY
+          - Oracle (12c+): OFFSET 20 ROWS FETCH NEXT 10 ROWS ONLY
+          - Oracle (older): WHERE ROWNUM <= 10 (partial support)
 
-        Safe for nested subqueries, comments, and mixed case.
+        Safe for nested subqueries, comments, and mixed cases.
         """
+        Debug.info("SQL INPUT", sql)
         if not sql or not sql.strip():
             return sql
 
@@ -95,6 +96,7 @@ class CRUD:
         sql = re.sub(r';\s*$', '', sql)          # trailing semicolon
         sql = re.sub(r'\s+WHERE\s*$', ' WHERE', sql)  # fix dangling WHERE
 
+        Debug.info("SQL", sql)
         return sql.strip()
 
     def get_table_name(self, query):
@@ -134,7 +136,6 @@ class CRUD:
         return target_path
 
     def to_crud(self, request, options=None):
-        Debug.info("RECORDS", self.records)
         table_name = self.get_table_name(self.sql)
         table_nice_name = Template.get_nice_label(table_name)
         twig_file = self.ensure_crud_template(table_name + ".twig")
@@ -161,7 +162,6 @@ class CRUD:
                 options["offset"] = offset
 
             records = self.dba.fetch(self.strip_sql_pagination(self.sql), limit=limit, skip=offset)
-            Debug.info("RECORDS", records)
 
             self.records = records.records
             self.count = records.count
