@@ -266,16 +266,30 @@ class Router:
     # adds a route to the router
     @staticmethod
     def add(method, route, callback):
-        Debug("Adding a route: " + route, Constant.TINA4_LOG_DEBUG)
-        if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {"route": route, "callback": callback, "method": method,
-                                                   "swagger": None, "cached": False}
-        else:
-            tina4_python.tina4_routes[callback]["route"] = route
-            tina4_python.tina4_routes[callback]["callback"] = callback
-            tina4_python.tina4_routes[callback]["method"] = method
 
-        if '{' in route:  # store the parameters if needed
+        # Normalize route (remove trailing slash for comparison)
+        norm_route = route.rstrip("/")
+
+        # Check if the same method + route already exists
+        for cb, data in tina4_python.tina4_routes.items():
+            if method in data and data["method"].upper() == method.upper() and \
+                    data["route"].rstrip("/") == norm_route:
+                Debug(f"Route already exists: {method} {route}", Constant.TINA4_LOG_WARNING)
+                # Optionally raise or return False
+                return  # or raise ValueError("Route already defined")
+
+        Debug("Adding a route: " + route, Constant.TINA4_LOG_DEBUG)
+
+        # Add or update the route
+        tina4_python.tina4_routes[callback] = {
+            "route": route,
+            "callback": callback,
+            "method": method,
+            "swagger": None,
+            "cached": False
+        }
+
+        if '{' in route:
             route_variables = re.findall(r'{(.*?)}', route)
             tina4_python.tina4_routes[callback]["params"] = route_variables
 

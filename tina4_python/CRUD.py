@@ -32,7 +32,7 @@ class CRUD:
 
         Safe for nested subqueries, comments, and mixed cases.
         """
-        Debug.info("SQL INPUT", sql)
+
         if not sql or not sql.strip():
             return sql
 
@@ -96,7 +96,6 @@ class CRUD:
         sql = re.sub(r';\s*$', '', sql)          # trailing semicolon
         sql = re.sub(r'\s+WHERE\s*$', ' WHERE', sql)  # fix dangling WHERE
 
-        Debug.info("SQL", sql)
         return sql.strip()
 
     def get_table_name(self, query):
