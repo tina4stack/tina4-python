@@ -108,7 +108,7 @@ class CRUD:
         """
         # Remove LIMIT and everything after
         query = re.sub(r'\s+LIMIT\s+.*$', '', query, flags=re.I)
-        # Find innermost FROM table (non-subquery)
+        # Find the innermost FROM table (non-subquery)
         from_parts = re.findall(r'\bFROM\s+([a-zA-Z0-9_]+)(?:\s+AS\s+\w+)?(?:\s+|$|\))', query, re.I)
         return from_parts[-1] if from_parts else None
 

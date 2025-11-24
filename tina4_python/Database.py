@@ -246,10 +246,16 @@ class Database:
             # implement other database requirements if needed
             pass
 
- 
     def fetch(self, sql, params=None, limit=10, skip=0, search=None, search_columns=None):
         """
         Enhanced fetch with optional full-text search + correct pagination
+        :param sql:
+        :param params:
+        :param limit:
+        :param skip:
+        :param search:
+        :param search_columns:
+        :return:
         """
         if params is None:
             params = []
@@ -260,13 +266,9 @@ class Database:
 
         self.check_connected()
 
-        # 1. Remove any existing pagination from the original query
-        base_sql = sql
-
-        final_sql   = base_sql
+        final_sql = sql
         final_params = params
 
-        # 2. SEARCH – build WHERE clause (if we have a search term)
         if search and search.strip():
             search = search.strip()
 
@@ -293,7 +295,7 @@ class Database:
                     final_params.append(f"%{search}%")
 
                 where_clause = " WHERE (" + " OR ".join(conditions) + ")"
-                final_sql = base_sql + where_clause
+                final_sql = sql + where_clause
 
         # 3. TOTAL COUNT (with the same filter!)
         count_sql = f"SELECT COUNT(*) AS count_records FROM ({final_sql}) AS t"
@@ -508,7 +510,8 @@ class Database:
                 placeholders = ", ".join(['?'] * len(data[0]))
 
                 pk_key = primary_key in columns
-                if not pk_key or (primary_key in columns and (record[primary_key] is None or record[primary_key] == "")):
+                if not pk_key or (
+                        primary_key in columns and (record[primary_key] is None or record[primary_key] == "")):
                     if primary_key not in columns:
                         columns += f", {primary_key}"
                         placeholders += ", ?"

@@ -208,6 +208,10 @@ def test_database_fetch():
     result = dba.fetch("select * from test_record where id < 3")
     assert result.to_paginate()["recordsTotal"] == 2
 
+    result = dba.fetch("select * from test_record", None, search_columns=["name"], search="Test3Update")
+    assert result[0]["name"] == "Test3Update"
+
+
     dba.close()
 
 
@@ -239,7 +243,7 @@ def test_database_delete():
     # dba.rollback()
     dba.close()
 
-@pytest.mark.skip
+
 def test_password():
     auth = Auth(tina4_python.root_path)
     password = auth.hash_password("123456")
