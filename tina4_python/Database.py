@@ -5,6 +5,7 @@
 #
 # flake8: noqa: E501
 import base64
+import re
 import sys
 import importlib
 import datetime
@@ -245,63 +246,95 @@ class Database:
             # implement other database requirements if needed
             pass
 
-    def fetch(self, sql, params=[], limit=10, skip=0):
+ 
+    def fetch(self, sql, params=None, limit=10, skip=0, search=None, search_columns=None):
         """
-        Fetch records based on a sql statement
-        :param str sql: A plain SQL statement or one with params in it designated by ?
-        :param list params: A list of params in order of precedence
-        :param int limit: Number of records to fetch
-        :param int skip: Offset of records to skip
-        :return: DatabaseResult
+        Enhanced fetch with optional full-text search + correct pagination
         """
-        self.check_connected()
-        # make a statement to count the records
-        # select top * from table
-        sql_count = f"select count(*) as \"count_records\" from ({sql}) as t"
-
-        # modify the select statement for limit and skip
-        if self.database_engine == FIREBIRD:
-            sql = f"select first {limit} skip {skip} * from ({sql}) as t"
-        elif self.database_engine == SQLITE or self.database_engine == MYSQL:
-            sql = f"select * from ({sql}) as t limit {skip},{limit}"
-        elif self.database_engine == POSTGRES:
-            sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
-        elif self.database_engine == MSSQL:
-            sql_check = sql.upper().rsplit("ORDER BY")[0]
-            sql_count = f"select count(*) as \"count_records\" from ({sql_check}) as t"
-            if "ORDER BY" in sql.upper():
-                sql = f"select * from ({sql} offset {skip} rows FETCH NEXT {limit} ROWS ONLY) as t"
-            else:
-                sql = f"select * from ({sql} order by 1 OFFSET {skip} ROWS FETCH NEXT {limit} ROWS ONLY) as t"
+        if params is None:
+            params = []
+        if params is list:
+            params = params.copy()
         else:
-            sql = f"select * from ({sql}) as t limit {limit} offset {skip}"
+            params = list(params)
+
+        self.check_connected()
+
+        # 1. Remove any existing pagination from the original query
+        base_sql = sql
+
+        final_sql   = base_sql
+        final_params = params
+
+        # 2. SEARCH – build WHERE clause (if we have a search term)
+        if search and search.strip():
+            search = search.strip()
+
+            # which columns are searchable?
+            cols = search_columns or getattr(self, "columns", None)
+            if not cols:
+                # fallback – try to extract column names from SELECT
+                m = re.search(r"SELECT\s+([\s\S]*?)\s+FROM", base_sql, re.I)
+                if m:
+                    raw = re.split(r',\s*(?=[a-zA-Z_`"\[\]])', m.group(1))
+                    cols = []
+                    for c in raw:
+                        name = c.strip().split()[-1].split(".")[-1]
+                        name = re.sub(r'^[`"\[\(].*[`"\]\)]$', '', name).strip('`"[]')
+                        if name and name != "*":
+                            cols.append(name)
+
+            if cols:
+                like_op = "ILIKE" if self.database_engine == "POSTGRES" else "LIKE"
+                conditions = []
+                for col in cols:
+                    col_name = f'"{col}"' if " " not in col else col
+                    conditions.append(f"{col_name} {like_op} ?")
+                    final_params.append(f"%{search}%")
+
+                where_clause = " WHERE (" + " OR ".join(conditions) + ")"
+                final_sql = base_sql + where_clause
+
+        # 3. TOTAL COUNT (with the same filter!)
+        count_sql = f"SELECT COUNT(*) AS count_records FROM ({final_sql}) AS t"
+        counter = self.dba.cursor()
         try:
-            cursor = self.dba.cursor()
-            try:
-                counter_cursor = self.dba.cursor()
-                if "?" in sql_count:
-                    sql_count = self.parse_place_holders(sql_count)
-                    counter_cursor.execute(sql_count, params)
-                else:
-                    counter_cursor.execute(sql_count)
-                count_records = counter_cursor.fetchall()
-
-                if len(count_records) > 0:
-                    count_records = count_records[0][0]
-                else:
-                    count_records = 0
-            except Exception as e:
-                Debug("FETCH ERROR:", sql_count, str(e), TINA4_LOG_ERROR)
-            finally:
-                counter_cursor.close()
-
-            sql = self.parse_place_holders(sql)
-
-            cursor.execute(sql, params)
-            return self.get_database_result(cursor, count_records, limit, skip, sql)
+            counter.execute(self.parse_place_holders(count_sql), final_params)
+            total = counter.fetchone()[0]
         except Exception as e:
-            Debug("FETCH ERROR:", sql, str(e), "params", params, "limit", limit, "skip", skip, Constant.TINA4_LOG_DEBUG)
+            Debug("COUNT ERROR", count_sql, final_params, str(e), TINA4_LOG_ERROR)
+            total = 0
+        finally:
+            counter.close()
+
+        # 4. FINAL PAGINATION – applied AFTER the filter
+        if self.database_engine == "FIREBIRD":
+            final_sql = f"SELECT FIRST {limit} SKIP {skip} * FROM ({final_sql}) AS t"
+        elif self.database_engine in ("MYSQL", "SQLITE"):
+            final_sql = f"SELECT * FROM ({final_sql}) AS t LIMIT {limit} OFFSET {skip}"
+        elif self.database_engine == "POSTGRES":
+            final_sql = f"SELECT * FROM ({final_sql}) AS t LIMIT {limit} OFFSET {skip}"
+        elif self.database_engine == "MSSQL":
+            # MSSQL needs ORDER BY for OFFSET/FETCH
+            inner = final_sql.strip()
+            if not re.search(r"\border\s+by\b", inner, re.I):
+                inner += " ORDER BY (SELECT NULL)"
+            final_sql = f"SELECT * FROM ({inner}) AS t OFFSET {skip} ROWS FETCH NEXT {limit} ROWS ONLY"
+        else:
+            final_sql = f"SELECT * FROM ({final_sql}) AS t LIMIT {limit} OFFSET {skip}"
+
+        final_sql = self.parse_place_holders(final_sql)
+
+        # 5. Execute the real query
+        cursor = self.dba.cursor()
+        try:
+            cursor.execute(final_sql, final_params)
+            return self.get_database_result(cursor, total, limit, skip, final_sql)
+        except Exception as e:
+            Debug("FETCH ERROR", final_sql, final_params, str(e), TINA4_LOG_ERROR)
             return DatabaseResult(None, [], str(e))
+        finally:
+            cursor.close()
 
     def fetch_one(self, sql, params=[], skip=0):
         """

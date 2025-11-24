@@ -16,6 +16,7 @@ from datetime import datetime, date
 from jinja2 import Environment, FileSystemLoader, Undefined
 from tina4_python.Session import Session
 from random import random as RANDOM
+from typing import Dict, Any
 
 
 class Template:
@@ -140,3 +141,85 @@ class Template:
         # Capitalize words & strip id
         words = s.split()
         return " ".join(word.capitalize() for word in words )
+
+
+    @staticmethod
+    def detect_image(value: Any) -> Dict[str, str]:
+        """
+        Detects if a string is an image (base64, data URL, or raw bytes)
+        Returns: {"content": "<base64 without prefix>", "content_type": "image/jpeg|png|gif|webp"}
+        """
+        if value is None:
+            return {"content": "", "content_type": ""}
+
+        # Convert to string if it's bytes or something else
+        if isinstance(value, (bytes, bytearray)):
+            value = value.decode('latin1', errors='ignore')
+        elif not isinstance(value, str):
+            value = str(value)
+
+        original = value.strip()
+
+        # Case 1: JSON object like {"content": "...", "content_type": "..."}
+        if original.startswith("{"):
+            try:
+                data = json.loads(original)
+                if isinstance(data, dict) and "content" in data:
+                    content = data["content"]
+                    content_type = data.get("content_type", "")
+                    if content_type.startswith("image/"):
+                        return {
+                            "content": str(content).split(",", 1)[-1] if "," in content else str(content),
+                            "content_type": content_type
+                        }
+            except:
+                pass  # not valid JSON, continue
+
+        # Case 2: Data URL like data:image/png;base64,...
+        if original.startswith("data:image/"):
+            try:
+                header, b64_data = original.split(",", 1)
+                mime = header.split(";")[0].split(":", 1)[1]  # extract image/png
+                return {
+                    "content": b64_data,
+                    "content_type": mime
+                }
+            except:
+                pass
+
+        # Case 3: Pure base64 string with magic bytes detection
+        b64 = original
+
+        # Remove common prefixes if present
+        if b64.startswith("data:"):
+            b64 = b64.split(",", 1)[-1]
+
+        # Clean whitespace/newlines
+        b64 = b64.strip()
+
+        # Try to detect by magic bytes (first few chars of base64)
+        try:
+            # Decode just the first 20 bytes to inspect magic
+            sample = base64.b64decode(b64[:40] + "===", validate=True)
+        except:
+            return {"content": "", "content_type": ""}
+
+        if sample.startswith(b'\xFF\xD8\xFF'):
+            mime = "image/jpeg"
+        elif sample.startswith(b'\x89PNG\r\n\x1A\n'):
+            mime = "image/png"
+        elif sample.startswith(b'GIF87a') or sample.startswith(b'GIF89a'):
+            mime = "image/gif"
+        elif sample.startswith(b'RIFF') and len(sample) >= 12 and sample[8:12] == b'WEBP':
+            mime = "image/webp"
+        elif sample.startswith(b'BM'):  # BMP
+            mime = "image/bmp"
+        elif sample.startswith(b'\x00\x00\x01\x00'):  # ICO
+            mime = "image/x-icon"
+        else:
+            return {"content": "", "content_type": ""}
+
+        return {
+            "content": b64,
+            "content_type": mime
+        }

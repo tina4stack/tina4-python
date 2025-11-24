@@ -11,4 +11,4 @@ async def some_dashboard(request, response):
 
 
     return response.render("dashboard.twig", {"crud_log": logs.to_crud(request, {"card_view": True, "something": "Cris"}),
-                                              "crud_users": users.to_crud(request, {"card_view": False}) })
+                                              "crud_users": users.to_crud(request, {"search_columns": ["first_name", "last_name", "email"]}) })

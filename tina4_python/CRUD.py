@@ -13,6 +13,8 @@ class CRUD:
         self.records = []
         self.dba = None
         self.columns = []
+        self.search = ""
+        self.search_columns = []
         self.total_count = 0
         self.sql = None
 
@@ -148,25 +150,38 @@ class CRUD:
         if "offset" not in options:
             options["offset"] = 0
 
+        if "search" not in options:
+            options["search"] = ""
+
+        if "search_columns" in options:
+            self.search_columns = options["search_columns"]
+
         async def get_record(request, response):
-            self.dba.commit()
-            limit = 10
-            offset = 0
-            if "limit" in request.params:
-                limit = int(request.params["limit"])
-                options["limit"] = limit
+            limit = int(request.params.get("limit", options.get("limit", 10)))
+            offset = int(request.params.get("offset", options.get("offset", 0)))
+            search = request.params.get("search", "").strip()
+            self.search = search
+            options["search"] = search
 
-            if "offset" in request.params:
-                offset = int(request.params["offset"])
-                options["offset"] = offset
 
-            records = self.dba.fetch(self.strip_sql_pagination(self.sql), limit=limit, skip=offset)
+            # Use defined columns or fallback
+            search_columns = self.columns
+            if isinstance(search_columns, dict):
+                search_columns = [c["name"] for c in search_columns if "name" in c]
 
-            self.records = records.records
-            self.count = records.count
+            # Execute fetch with search
+            result = self.dba.fetch(
+                sql=self.strip_sql_pagination(self.sql),
+                limit=limit,
+                skip=offset,
+                search=search,
+                search_columns=search_columns
+            )
+
+            self.records = result.records
+            self.total_count = result.total_count
             self.limit = limit
             self.skip = offset
-            self.total_count = records.total_count
 
             return response(self.to_crud(request, options), HTTP_OK, APPLICATION_JSON)
 
