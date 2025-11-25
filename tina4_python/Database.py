@@ -10,6 +10,8 @@ import sys
 import importlib
 import datetime
 import json
+from decimal import Decimal
+
 from tina4_python import Debug, Constant
 from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.DatabaseResult import DatabaseResult
@@ -351,6 +353,8 @@ class Database:
         if record.error is None and record.count == 1:
             data = {}
             for key in record.records[0]:
+                if isinstance(record.records[0][key], Decimal):
+                    data[key] = float(record.records[0][key])
                 if isinstance(record.records[0][key], (datetime.date, datetime.datetime)):
                     data[key] = record.records[0][key].isoformat()
                 if isinstance(record.records[0][key], bytes):

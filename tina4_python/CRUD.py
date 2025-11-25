@@ -1,3 +1,7 @@
+import base64
+import datetime
+from decimal import Decimal
+
 from tina4_python.Debug import Debug
 import re
 from tina4_python.Template import Template
@@ -6,6 +10,7 @@ from tina4_python.Router import Router
 import tina4_python
 import os
 import shutil
+import json
 
 class CRUD:
 
@@ -17,8 +22,7 @@ class CRUD:
         self.search_columns = []
         self.total_count = 0
         self.sql = None
-
-    import re
+        self.error = ""
 
     def strip_sql_pagination(self, sql: str) -> str:
         """
@@ -219,7 +223,7 @@ class CRUD:
             fields.append({"name": column, "label": Template.get_nice_label(column)})
 
         html = Template.render(twig_file.replace(os.path.join(tina4_python.root_path, "src", "templates"), "").replace("\\", "/"),
-                               {"columns": fields, "records": self.records,
+                               {"columns": fields, "records": self.to_array(),
                                 "table_name": table_name,
                                 "total_records": self.total_count,
                                 "options": options})
@@ -227,3 +231,53 @@ class CRUD:
         return html
 
 
+    def to_array(self, _filter=None):
+        """
+        Creates an array or list of the items
+        :return:
+        """
+        if self.error is not None:
+            return {"error": self.error}
+        elif len(self.records) > 0:
+            # check all the records - if we get bytes we base64encode them for the json to work
+            json_records = []
+            for record in self.records:
+                json_record = {}
+                for key in record:
+                    if isinstance(record[key], Decimal):
+                        json_record[key] = float(record[key])
+                    elif isinstance(record[key], (datetime.date, datetime.datetime)):
+                        json_record[key] = record[key].isoformat()
+                    elif isinstance(record[key], memoryview):
+                        json_record[key] = base64.b64encode(record[key].tobytes()).decode('utf-8')
+                    elif isinstance(record[key], bytes):
+                        json_record[key] = base64.b64encode(record[key]).decode('utf-8')
+                    else:
+                        json_record[key] = record[key]
+
+                if _filter is not None:
+                    json_record = _filter(json_record)
+
+                json_records.append(json_record)
+
+            return json_records
+        else:
+            return []
+
+    def to_list(self, _filter=None):
+        return self.to_array(_filter)
+
+    def to_json(self, _filter=None):
+        return json.dumps(self.to_array(_filter))
+
+    def __iter__(self):
+        return iter(self.to_array())
+
+    def __getitem__(self, item):
+        if item < len(self.records):
+            return self.records[item]
+        else:
+            return {}
+
+    def __str__(self):
+        return self.to_json()
