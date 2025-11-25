@@ -143,7 +143,6 @@ class CRUD:
     def to_crud(self, request, options=None):
         table_name = self.get_table_name(self.sql)
         table_nice_name = Template.get_nice_label(table_name)
-        twig_file = self.ensure_crud_template(table_name + ".twig")
 
         if options is None:
             options = {}
@@ -162,6 +161,13 @@ class CRUD:
 
         if "search_columns" in options:
             self.search_columns = options["search_columns"]
+
+        crud_name = table_name
+        if "name" in options:
+            crud_name = options["name"]
+
+        twig_file = self.ensure_crud_template(crud_name + ".twig")
+
 
         async def get_record(request, response):
             limit = int(request.params.get("limit", options.get("limit", 10)))
@@ -213,18 +219,19 @@ class CRUD:
             self.dba.commit()
             return response({"message": f"<script>showMessage('{table_nice_name}  Record deleted');</script>"}, HTTP_OK, APPLICATION_JSON)
 
-        Router.add(TINA4_GET, os.path.join(request.url, table_name).replace("\\", "/"), get_record)
-        Router.add(TINA4_POST, os.path.join(request.url, table_name).replace("\\", "/"), post_record)
-        Router.add(TINA4_POST, os.path.join(request.url, table_name, "{"+options["primary_key"]+"}").replace("\\", "/"), update_record)
-        Router.add(TINA4_DELETE, os.path.join(request.url, table_name, "{"+options["primary_key"]+"}").replace("\\", "/"), delete_record)
+        Router.add(TINA4_GET, os.path.join(request.url, crud_name).replace("\\", "/"), get_record)
+        Router.add(TINA4_POST, os.path.join(request.url, crud_name).replace("\\", "/"), post_record)
+        Router.add(TINA4_POST, os.path.join(request.url, crud_name, "{"+options["primary_key"]+"}").replace("\\", "/"), update_record)
+        Router.add(TINA4_DELETE, os.path.join(request.url, crud_name, "{"+options["primary_key"]+"}").replace("\\", "/"), delete_record)
 
         fields = []
         for column in self.columns:
             fields.append({"name": column, "label": Template.get_nice_label(column)})
 
+
         html = Template.render(twig_file.replace(os.path.join(tina4_python.root_path, "src", "templates"), "").replace("\\", "/"),
                                {"columns": fields, "records": self.to_array(),
-                                "table_name": table_name,
+                                "table_name": crud_name,
                                 "total_records": self.total_count,
                                 "options": options})
 
