@@ -132,6 +132,7 @@ class Router:
                         if not validated and method not in [Constant.TINA4_OPTIONS, Constant.TINA4_GET]:
                             return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
+
                 router_response = route["callback"]
 
                 # Add the inline variables & construct a Request variable
@@ -280,13 +281,19 @@ class Router:
 
         Debug("Adding a route: " + route, Constant.TINA4_LOG_DEBUG)
 
+        is_secure = False
+        if method == Constant.TINA4_GET:
+            is_secure = True
+
         # Add or update the route
         tina4_python.tina4_routes[callback] = {
             "route": route,
             "callback": callback,
             "method": method,
             "swagger": None,
-            "cached": False
+            "cached": False,
+            "noauth": False,
+            "secure": is_secure
         }
 
         if '{' in route:
