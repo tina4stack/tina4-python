@@ -23,6 +23,7 @@ class CRUD:
         self.total_count = 0
         self.sql = None
         self.error = ""
+        self.table_name = None
 
     def strip_sql_pagination(self, sql: str) -> str:
         """
@@ -110,6 +111,10 @@ class CRUD:
         :param query:
         :return:
         """
+
+        if self.table_name is not None:
+            return self.table_name
+
         # Remove LIMIT and everything after
         query = re.sub(r'\s+LIMIT\s+.*$', '', query, flags=re.I)
         # Find the innermost FROM table (non-subquery)
@@ -142,6 +147,10 @@ class CRUD:
 
     def to_crud(self, request, options=None):
         table_name = self.get_table_name(self.sql)
+
+        if table_name is not None and self.table_name is None:
+            self.table_name = table_name
+
         table_nice_name = Template.get_nice_label(table_name)
 
         if options is None:
