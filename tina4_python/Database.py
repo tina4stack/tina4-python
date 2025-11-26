@@ -289,11 +289,15 @@ class Database:
                             cols.append(name)
 
             if cols:
-                like_op = "ILIKE" if self.database_engine == "POSTGRES" else "LIKE"
+                if self.database_engine == "POSTGRES":
+                    like_op = "LIKE"
+                else:
+                    like_op = "LIKE"
+
                 conditions = []
                 for col in cols:
                     col_name = f'"{col}"' if " " not in col else col
-                    conditions.append(f"{col_name} {like_op} ?")
+                    conditions.append(f"cast({col_name} as varchar(1000)) {like_op} ?")
                     final_params.append(f"%{search}%")
 
                 where_clause = " WHERE (" + " OR ".join(conditions) + ")"
