@@ -4,11 +4,10 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
-import base64
-import json
-import datetime
-from decimal import Decimal
+import csv
+import io
 from tina4_python.CRUD import CRUD
+
 class DatabaseResult(CRUD):
     def __init__(self, _records=None, _columns=None, _error=None, count=None, limit=None, skip=None, sql=None, dba=None):
         """
@@ -64,4 +63,17 @@ class DatabaseResult(CRUD):
 
 
 
-
+    def to_csv(self):
+        if not self.columns:
+            return ''
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(self.columns)
+        if self.records:
+            first_record = self.records[0]
+            if isinstance(first_record, dict):
+                rows = [[str(row.get(col, '')) for col in self.columns] for row in self.records]
+            else:
+                rows = [list(map(str, row)) for row in self.records]
+            writer.writerows(rows)
+        return output.getvalue()
