@@ -35,9 +35,13 @@ class Template:
         Template.twig.add_extension('jinja2.ext.do')
         Template.twig.globals['RANDOM'] = RANDOM
         Template.twig.globals['json'] = json
+        Template.twig.globals['base64encode'] = Template.base64encode
+        Template.twig.filters['base64encode'] = Template.base64encode
         Template.twig.filters['detect_image'] = Template.detect_image
         Template.twig.filters['json_encode'] = json.dumps
-        Template.twig.filters['json_decode'] = json.loads
+        Template.twig.globals['json_encode'] = json.dumps
+        Template.twig.filters['json_decode'] = Template.json_decode
+        Template.twig.globals['json_decode'] = Template.json_decode
         Template.twig.filters['nice_label'] = Template.get_nice_label
         Template.twig.globals['formToken'] = Template.get_form_token
         Template.twig.filters['formToken'] = Template.get_form_token_input
@@ -55,7 +59,13 @@ class Template:
         return ""
 
     @staticmethod
+    def json_decode(param):
+        param = html.unescape(param)
+        return ast.literal_eval(param)
+
+    @staticmethod
     def dump(param):
+        param = html.unescape(param)
         if param is not None and not isinstance(param, Undefined):
             def json_serialize(obj):
                 if isinstance(obj, (date, datetime)):
@@ -67,6 +77,12 @@ class Template:
             return "<pre>" + json.dumps(param, indent=True, default=json_serialize) + "</pre>"
         else:
             return ""
+
+    @staticmethod
+    def base64encode(param):
+        value =  base64.b64encode(param.encode('utf-8')).decode('utf-8')
+        Debug.info(value)
+        return value
 
     @staticmethod
     def get_form_token(payload={}):

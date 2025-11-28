@@ -435,9 +435,7 @@
                 if (search) url.searchParams.set('search', search);
 
                 loadPage(url.toString(), "crudTarget{{ table_name }}", () => {
-                    const params = new URLSearchParams(location.search);
-                    const currentPage = Math.max(1, Math.floor((parseInt(params.get('offset') || 0) / limit)) + 1);
-                    renderPagination(currentPage);
+                    renderPagination(page);
                 });
             };
 
