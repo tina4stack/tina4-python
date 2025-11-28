@@ -81,7 +81,6 @@ class Template:
     @staticmethod
     def base64encode(param):
         value =  base64.b64encode(param.encode('utf-8')).decode('utf-8')
-        Debug.info(value)
         return value
 
     @staticmethod
