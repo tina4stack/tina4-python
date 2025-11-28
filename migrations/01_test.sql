@@ -5,6 +5,8 @@ create table if not exists test_user (    date_created timestamp,
                             last_name varchar(255) default '',
                             title varchar(255) default 'Mr',
                             moo jsonb,
+                            balance numeric (10,2) default 10.00,
+                            age integer default 64,
                             primary key (id)
 );
 create table test_user_item (       date_created timestamp,

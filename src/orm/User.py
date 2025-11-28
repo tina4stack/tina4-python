@@ -8,5 +8,7 @@ class User(ORM):
     first_name = StringField()
     last_name = StringField()
     email = TextField()
+    balance = NumericField()
+    age = IntegerField()
     date_created = DateTimeField()
 

@@ -146,105 +146,109 @@ class CRUD:
         return target_path
 
     def to_crud(self, request, options=None):
-        table_name = self.get_table_name(self.sql)
+        try:
+            table_name = self.get_table_name(self.sql)
 
-        if table_name is not None and self.table_name is None:
-            self.table_name = table_name
+            if table_name is not None and self.table_name is None:
+                self.table_name = table_name
 
-        table_nice_name = Template.get_nice_label(table_name)
+            table_nice_name = Template.get_nice_label(table_name)
 
-        if options is None:
-            options = {}
+            if options is None:
+                options = {}
 
-        if "primary_key" not in options:
-            options["primary_key"] = "id"
+            if "primary_key" not in options:
+                options["primary_key"] = "id"
 
-        if "limit" not in options:
-            options["limit"] = 10
+            if "limit" not in options:
+                options["limit"] = 10
 
-        if "offset" not in options:
-            options["offset"] = 0
+            if "offset" not in options:
+                options["offset"] = 0
 
-        if "search" not in options:
-            options["search"] = ""
+            if "search" not in options:
+                options["search"] = ""
 
-        if "search_columns" in options:
-            self.search_columns = options["search_columns"]
+            if "search_columns" in options:
+                self.search_columns = options["search_columns"]
 
-        crud_name = table_name
-        if "name" in options:
-            crud_name = options["name"]
+            crud_name = table_name
+            if "name" in options:
+                crud_name = options["name"]
 
-        twig_file = self.ensure_crud_template(crud_name + ".twig")
-
-
-        async def get_record(request, response):
-            limit = int(request.params.get("limit", options.get("limit", 10)))
-            offset = int(request.params.get("offset", options.get("offset", 0)))
-            search = request.params.get("search", "").strip()
-            self.search = search
-            options["search"] = search
+            twig_file = self.ensure_crud_template(crud_name + ".twig")
 
 
-            # Use defined columns or fallback
-            if not "search_columns" in options:
-                search_columns = self.columns
-                if isinstance(search_columns, dict):
-                    search_columns = [c["name"] for c in search_columns if "name" in c]
-            else:
-                search_columns = options["search_columns"]
-
-            # Execute fetch with search
-            result = self.dba.fetch(
-                sql=self.strip_sql_pagination(self.sql),
-                limit=limit,
-                skip=offset,
-                search=search,
-                search_columns=search_columns
-            )
-
-            self.records = result.records
-            self.total_count = result.total_count
-            self.limit = limit
-            self.skip = offset
-
-            return response(self.to_crud(request, options), HTTP_OK, APPLICATION_JSON)
-
-        async def post_record(request, response):
-            Debug.info("CRUD CREATE", table_name, request.body)
-            self.dba.insert(table_name, request.body, primary_key=options["primary_key"])
-            self.dba.commit()
-            return response({"message": f"<script>showMessage('{table_nice_name} Record added');</script>"}, HTTP_OK, APPLICATION_JSON)
-
-        async def update_record(request, response):
-            Debug.info("CRUD UPDATE", table_name, request.params, request.body)
-            self.dba.update(table_name, request.body, primary_key=options["primary_key"])
-            self.dba.commit()
-            return response({"message": f"<script>showMessage('{table_nice_name}  Record updated');</script>", "post": request.body}, HTTP_OK, APPLICATION_JSON)
-
-        async def delete_record(request, response):
-            Debug.info("CRUD DELETE", table_name, request.params)
-            self.dba.delete(table_name, {options["primary_key"] : request.params[options["primary_key"]]})
-            self.dba.commit()
-            return response({"message": f"<script>showMessage('{table_nice_name}  Record deleted');</script>"}, HTTP_OK, APPLICATION_JSON)
-
-        Router.add(TINA4_GET, os.path.join(request.url, crud_name).replace("\\", "/"), get_record)
-        Router.add(TINA4_POST, os.path.join(request.url, crud_name).replace("\\", "/"), post_record)
-        Router.add(TINA4_POST, os.path.join(request.url, crud_name, "{"+options["primary_key"]+"}").replace("\\", "/"), update_record)
-        Router.add(TINA4_DELETE, os.path.join(request.url, crud_name, "{"+options["primary_key"]+"}").replace("\\", "/"), delete_record)
-
-        fields = []
-        for column in self.columns:
-            fields.append({"name": column, "label": Template.get_nice_label(column)})
+            async def get_record(request, response):
+                limit = int(request.params.get("limit", options.get("limit", 10)))
+                offset = int(request.params.get("offset", options.get("offset", 0)))
+                search = request.params.get("search", "").strip()
+                self.search = search
+                options["search"] = search
 
 
-        html = Template.render(twig_file.replace(os.path.join(tina4_python.root_path, "src", "templates"), "").replace("\\", "/"),
-                               {"columns": fields, "records": self.to_array(),
-                                "table_name": crud_name,
-                                "total_records": self.total_count,
-                                "options": options})
+                # Use defined columns or fallback
+                if not "search_columns" in options:
+                    search_columns = self.columns
+                    if isinstance(search_columns, dict):
+                        search_columns = [c["name"] for c in search_columns if "name" in c]
+                else:
+                    search_columns = options["search_columns"]
 
-        return html
+                # Execute fetch with search
+                result = self.dba.fetch(
+                    sql=self.strip_sql_pagination(self.sql),
+                    limit=limit,
+                    skip=offset,
+                    search=search,
+                    search_columns=search_columns
+                )
+
+                self.records = result.records
+                self.total_count = result.total_count
+                self.limit = limit
+                self.skip = offset
+
+                return response(self.to_crud(request, options), HTTP_OK, APPLICATION_JSON)
+
+            async def post_record(request, response):
+                Debug.info("CRUD CREATE", table_name, request.body)
+                self.dba.insert(table_name, request.body, primary_key=options["primary_key"])
+                self.dba.commit()
+                return response({"message": f"<script>showMessage('{table_nice_name} Record added');</script>"}, HTTP_OK, APPLICATION_JSON)
+
+            async def update_record(request, response):
+                Debug.info("CRUD UPDATE", table_name, request.params, request.body)
+                self.dba.update(table_name, request.body, primary_key=options["primary_key"])
+                self.dba.commit()
+                return response({"message": f"<script>showMessage('{table_nice_name}  Record updated');</script>", "post": request.body}, HTTP_OK, APPLICATION_JSON)
+
+            async def delete_record(request, response):
+                Debug.info("CRUD DELETE", table_name, request.params)
+                self.dba.delete(table_name, {options["primary_key"] : request.params[options["primary_key"]]})
+                self.dba.commit()
+                return response({"message": f"<script>showMessage('{table_nice_name}  Record deleted');</script>"}, HTTP_OK, APPLICATION_JSON)
+
+            Router.add(TINA4_GET, os.path.join(request.url, crud_name).replace("\\", "/"), get_record)
+            Router.add(TINA4_POST, os.path.join(request.url, crud_name).replace("\\", "/"), post_record)
+            Router.add(TINA4_POST, os.path.join(request.url, crud_name, "{"+options["primary_key"]+"}").replace("\\", "/"), update_record)
+            Router.add(TINA4_DELETE, os.path.join(request.url, crud_name, "{"+options["primary_key"]+"}").replace("\\", "/"), delete_record)
+
+            fields = []
+            for column in self.columns:
+                fields.append({"name": column, "label": Template.get_nice_label(column)})
+
+
+            html = Template.render(twig_file.replace(os.path.join(tina4_python.root_path, "src", "templates"), "").replace("\\", "/"),
+                                   {"columns": fields, "records": self.to_array(),
+                                    "table_name": crud_name,
+                                    "total_records": self.total_count,
+                                    "options": options})
+
+            return html
+        except Exception as e:
+            return "Error rendering CRUD: "+str(e)
+
 
 
     def to_array(self, _filter=None):

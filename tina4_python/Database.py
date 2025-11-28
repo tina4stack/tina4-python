@@ -8,15 +8,14 @@ import base64
 import re
 import sys
 import importlib
-import datetime
 import json
 from decimal import Decimal
-
 from tina4_python import Debug, Constant
 from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.DatabaseResult import DatabaseResult
 from tina4_python.DatabaseTypes import *
-
+from tina4_python.FieldTypes import get_field_type_values
+import datetime
 
 class Database:
 
@@ -278,7 +277,7 @@ class Database:
             cols = search_columns or getattr(self, "columns", None)
             if not cols:
                 # fallback – try to extract column names from SELECT
-                m = re.search(r"SELECT\s+([\s\S]*?)\s+FROM", base_sql, re.I)
+                m = re.search(r"SELECT\s+([\s\S]*?)\s+FROM", final_sql, re.I)
                 if m:
                     raw = re.split(r',\s*(?=[a-zA-Z_`"\[\]])', m.group(1))
                     cols = []
@@ -384,18 +383,22 @@ class Database:
         else:
             return sql.replace("%s", "?")
 
-    def execute(self, sql, params=[]):
+    def execute(self, sql, params=None):
         """
         Execute a query based on a sql statement
         :param str sql: A plain SQL statement or one with params in it designated by ?
         :param list params: A list of params in order of precedence
         :return: DatabaseResult
         """
+        if params is None:
+            params = {}
+
         self.check_connected()
         sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
+            params = get_field_type_values(params)
             cursor.execute(sql, params)
             if "returning" in sql.lower():
                 return self.get_database_result(cursor, 1, 1, 0, sql)
@@ -425,6 +428,7 @@ class Database:
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
+            params = get_field_type_values(params)
             cursor.executemany(sql, params)
             # On success return an empty result set with no error
             return DatabaseResult(None, [], None)

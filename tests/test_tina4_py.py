@@ -11,7 +11,8 @@ from tina4_python import *
 from tina4_python.DatabaseTypes import *
 from tina4_python.Database import Database
 from tina4_python.Migration import migrate
-from tina4_python.ORM import ORM, IntegerField, StringField, DateTimeField, ForeignKeyField, TextField, orm, JSONBField
+from tina4_python.ORM import ORM, IntegerField, StringField, DateTimeField, ForeignKeyField, TextField, orm, JSONBField, \
+    NumericField
 from tina4_python.Queue import Config, Queue, Producer, Consumer
 
 global dba_type
@@ -42,7 +43,7 @@ password = "Password123"
 dba_type = "psycopg2:localhost/5432:test"
 user_name = "postgres"
 password = "password"
-dba_type = "sqlite3:test3.db"
+
 
 def test_auth_payload():
     auth = tina4_auth.get_token({"id": 1, "username": "hello", "date_created": datetime.now()})
@@ -301,6 +302,8 @@ def test_orm():
         email = TextField(default_value="test@test.com")
         title = StringField(default_value="Mr")
         moo=JSONBField(default_value={"name": "Moo"})
+        balance = NumericField(default_value=0.00)
+        age = IntegerField(default_value=0)
         date_created = DateTimeField()
 
     class TestUserItem(ORM):
@@ -390,6 +393,16 @@ def test_orm():
     test_user.load()
 
     assert test_user.moo.value == {"name": "Moo"}
+
+    result = dba.execute("insert into test_user (id, first_name, last_name, balance, age) values (3, ?, ?, ?, ?)", ['TEST First', 'TEST last', user.balance, user.age ])
+    dba.commit()
+
+    assert result.error is None
+
+    result = dba.execute_many("insert into test_user (id, first_name, last_name, balance, age) values (?, ?, ?, ?, ?)", [[5, 'TEST First', 'TEST last', user.balance, user.age ], [4, 'TEST First', 'TEST last', user.balance, user.age ]])
+    dba.commit()
+
+    assert result.error is None
 
     test_user.moo = {"moo":"cow", "baa": "sheep", "complex": ["1", "2", "3"]}
     test_user.save()
