@@ -10,423 +10,574 @@ import json
 import os
 import re
 import mimetypes
-from urllib.parse import unquote_plus
-from urllib.parse import urlparse, parse_qsl
+from urllib.parse import unquote_plus, urlparse, parse_qsl
 import tina4_python
 from tina4_python import Constant
-from tina4_python.Constant import HTTP_REDIRECT, HTTP_OK, HTTP_SERVER_ERROR
+from tina4_python.Constant import (
+    HTTP_REDIRECT,
+    HTTP_OK,
+    HTTP_SERVER_ERROR,
+    TINA4_GET
+)
 from tina4_python.Session import Session
 from tina4_python.Router import Router
 from tina4_python.Debug import Debug
 from tina4_python.Template import Template
 
 
-def is_int(v):
+def is_int(v: str) -> bool:
+    """
+    Utility to check if a string can be converted to an integer.
+
+    Args:
+        v (str): Value to test.
+
+    Returns:
+        bool: True if convertible to int, False otherwise.
+    """
     try:
         int(v)
+        return True
     except ValueError:
         return False
-    return True
 
 
 class Webserver:
-    async def get_content_length(self):
-        # get the content length
-        if "content-length" in self.lowercase_headers:
-            return int(self.lowercase_headers["content-length"])
+    """
+    Lightweight, async-native HTTP server for Tina4 Python.
 
-        return 0
+    Implements a minimal but fully functional web server using ``asyncio.start_server``.
+    Features include:
 
-    async def get_content_body(self, content_length):
-        # get lines of content where at the end of the request
-        content = self.content_raw
+    - Static file serving from ``src/public/``
+    - Full request parsing (headers, query strings, cookies)
+    - Support for:
+        - ``application/x-www-form-urlencoded``
+        - ``application/json``
+        - ``multipart/form-data`` (with file uploads → base64 encoded)
+        - ``text/plain``
+    - Session management via :class:`tina4_python.Session.Session`
+    - Automatic CORS headers
+    - Built-in routing via :class:`tina4_python.Router.Router`
+    - Graceful error handling with customizable 500 page
+    - ASGI-like response capability (for WebSocket or advanced use)
 
-        if "content-type" in self.lowercase_headers:
-            if self.lowercase_headers["content-type"] == "application/x-www-form-urlencoded":
-                body = {}
-                content_data = content.decode("utf-8").split("&")
-                for data in content_data:
-                    data = data.split("=", 1)
-                    body[data[0]] = unquote_plus(data[1])
-                return body, {}
-            elif self.lowercase_headers["content-type"] == "application/json":
-                # print("CONTENT", content, self.request)
-                try:
-                    return json.loads(content), {}
-                except Exception:
-                    return content.decode("utf-8"), {}
+    The server is deliberately simple and fast — ideal for micro-services,
+    APIs, and full-stack Tina4 applications.
+    """
 
-            elif self.lowercase_headers["content-type"] == "text/plain":
-                return content.decode("utf-8"), {}
-            else:
-                content_data = self.lowercase_headers["content-type"].split("; ")
-
-                if content_data[0] == "multipart/form-data":
-                    boundary = content_data[1].split("=")[1] + "\r\n"
-                    content = b"\r\n" + content
-                    data_array = content.split(str.encode(boundary))
-                    body = {}
-                    files = {}
-                    for data in data_array:
-                        data = data.split(b"\r\n\r\n")
-                        data_names = data[0].decode("utf-8").split("; ")
-
-                        if data_names[0] == "Content-Disposition: form-data":
-                            key_name = data_names[1].split("=")[1][1:-1]
-
-                            if len(data_names) == 2:
-                                data_value = data[1].split(b"\r\n")[0]
-                                body[key_name] = unquote_plus(data_value.decode("utf-8"))
-                            else:
-                                data_value = data[1].split(b"\r\n--")[0]
-                                file_data = data_names[2].split("\r\n")
-                                file_name = "Unknown"
-                                content_type = "Unknown"
-                                meta_data = {}
-                                for file_info in file_data:
-                                    file_info1 = file_info.split("=")
-                                    if len(file_info1) > 1:
-                                        meta_data[file_info1[0]] = file_info1[1].strip()
-                                    file_info2 = file_info.split(":")
-                                    if len(file_info2) > 1:
-                                        meta_data[file_info2[0]] = file_info2[1].strip()
-
-                                if "filename" in meta_data:
-                                    file_name = meta_data["filename"][1:-1]
-                                if "Content-Type" in meta_data:
-                                    content_type = meta_data["Content-Type"]
-
-                                if key_name in body:
-                                    body[key_name] = [body[key_name]]
-                                    body[key_name].append({"file_name": file_name, "content_type": content_type,"content": base64.encodebytes(data_value).decode("utf-8").replace(
-                                        "\n", "")})
-                                else:
-                                    body[key_name] = {"file_name": file_name, "content_type": content_type,"content": base64.encodebytes(data_value).decode("utf-8").replace(
-                                        "\n", "")}
-
-                                if key_name in files:
-                                    files[key_name] = [files[key_name]]
-                                    files[key_name].append({"file_name": file_name, "content_type": content_type,"content": base64.encodebytes(data_value).decode("utf-8").replace(
-                                        "\n", "")})
-                                else:
-                                    files[key_name] = {"file_name": file_name, "content_type": content_type,"content": base64.encodebytes(data_value).decode("utf-8").replace(
-                                        "\n", "")}
-
-                    return body, files
-
-        return {"data": base64.encodebytes(content).decode("utf-8").replace("\n", "")}, {}
-
-    async def send_basic_headers(self, headers):
-        self.send_header("Access-Control-Allow-Origin", "*", headers)
-        self.send_header("Access-Control-Allow-Headers",
-                         "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
-       
-        self.send_header("Access-Control-Allow-Credentials", "True", headers)
-        # self.send_header("Content-Length", str(len(response.content)), headers)
-        self.send_header("Connection", "Keep-Alive", headers)
-        self.send_header("Keep-Alive", "timeout=5, max=30", headers)
-        self.send_header("Timing-Allow-Origin", "*", headers)
-
-    async def get_response(self, method, transport, asgi_response=False):
+    # ------------------------------------------------------------------
+    # Construction & configuration
+    # ------------------------------------------------------------------
+    def __init__(self, host_name: str = "0.0.0.0", port: int = 8000):
         """
-        Get response
-        :param method: GET, POST, PATCH, DELETE, PUT
-        :return:
+        Initialise the web server.
+
+        Args:
+            host_name (str): Interface to bind (default: all interfaces).
+            port (int): Port to listen on (default: 8000).
         """
-        headers = []
-        if method == "OPTIONS":
-            self.send_header("Access-Control-Allow-Origin", "*", headers)
-            self.send_header("Timing-Allow-Origin", "*", headers)
-            self.send_header("Access-Control-Allow-Headers",
-                             "Origin, X-Requested-With, Content-Type, Accept, Authorization", headers)
-            self.send_header("Access-Control-Allow-Credentials", "True", headers)
+        self.host_name = host_name
+        self.port = port
 
-            headers = await self.get_headers(headers, self.response_protocol, Constant.HTTP_OK)
+        # Request state (populated per connection)
+        self.method: str | None = None
+        self.path: str | None = None
+        self.request_raw: bytes | None = None
+        self.content_raw: bytes | None = None
+        self.headers: dict | None = None
+        self.lowercase_headers: dict | None = None
+        self.cookies: dict = {}
+        self.session: Session | None = None
+        self.request : dict | None = None
 
-            if asgi_response:
-                return None, headers
-            else:
-                return headers
+        # Response helpers
+        self.response_protocol = "HTTP/1.1"
 
-        params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
+        # Core components
+        self.router_handler: Router = Router()  # will be replaced by Tina4.initialize()
+        self.server: asyncio.Server | None = None
+        self.running = False
 
-        new_params = {}
-        new_params.update(params)
+    # ------------------------------------------------------------------
+    # Low-level request parsing helpers
+    # ------------------------------------------------------------------
+    async def get_content_length(self) -> int:
+        """
+        Return the request body length from the ``Content-Length`` header.
 
-        for key, value in params.items():
-            regex = r"(\w+)"
-            matches = re.finditer(regex, key)
+        Returns:
+            int: Body length in bytes (0 if header missing).
+        """
+        return int(self.lowercase_headers.get("content-length", 0))
 
-            var_names = []
-            for matchNum, match in enumerate(matches, start=0):
-                if is_int(match.group()):
-                    var_names.append(int(match.group()))
+    async def get_content_body(self, content_length: int) -> tuple[dict | str | bytes, dict]:
+        """
+        Parse the request body according to ``Content-Type``.
+
+        Supported types:
+            - application/x-www-form-urlencoded → dict
+            - application/json                 → dict (or raw string on error)
+            - text/plain                       → str
+            - multipart/form-data              → (fields dict, files dict)
+            - everything else                  → base64-encoded raw data
+
+        Files are returned as base64 strings inside the ``files`` dict
+        (compatible with Tina4's PHP heritage).
+
+        Returns:
+            tuple: (parsed_body, parsed_files)
+        """
+        content = self.content_raw or b""
+
+        # No body
+        if content_length == 0 or not content:
+            return {}, {}
+
+        ctype = self.lowercase_headers.get("content-type", "")
+
+        # ------------------------------------------------------------------
+        # application/x-www-form-urlencoded
+        # ------------------------------------------------------------------
+        if ctype.startswith("application/x-www-form-urlencoded"):
+            body = {}
+            for pair in content.decode("utf-8").split("&"):
+                if "=" not in pair:
+                    continue
+                key, _, value = pair.partition("=")
+                body[key] = unquote_plus(value)
+            return body, {}
+
+        # ------------------------------------------------------------------
+        # application/json
+        # ------------------------------------------------------------------
+        if ctype.startswith("application/json"):
+            try:
+                return json.loads(content), {}
+            except json.JSONDecodeError:
+                return content.decode("utf-8", errors="replace"), {}
+
+        # ------------------------------------------------------------------
+        # text/plain
+        # ------------------------------------------------------------------
+        if ctype.startswith("text/plain"):
+            return content.decode("utf-8", errors="replace"), {}
+
+        # ------------------------------------------------------------------
+        # multipart/form-data
+        # ------------------------------------------------------------------
+        if ctype.startswith("multipart/form-data"):
+            boundary_line = ctype.split("boundary=", 1)[-1]
+            boundary = f"--{boundary_line}".encode()
+            parts = content.split(boundary)[1:-1]  # drop prologue/epilogue
+
+            fields: dict = {}
+            files: dict = {}
+
+            for part in parts:
+                if b"\r\n\r\n" not in part:
+                    continue
+                header_block, body = part.split(b"\r\n\r\n", 1)
+                headers = header_block.decode("utf-8", errors="replace")
+
+                # Extract disposition
+                disposition_match = re.search(r'name="([^"]+)"', headers)
+                filename_match = re.search(r'filename="([^"]*)"', headers)
+                ctype_match = re.search(r"Content-Type: ([^\r\n]+)", headers)
+
+                name = disposition_match.group(1) if disposition_match else "unknown"
+                filename = filename_match.group(1) if filename_match else None
+                mime = ctype_match.group(1).strip() if ctype_match else "application/octet-stream"
+
+                # Remove trailing boundary markers
+                body = body.split(b"\r\n--")[0].rstrip(b"\r\n")
+
+                if filename is None:
+                    # Regular field
+                    value = unquote_plus(body.decode("utf-8", errors="replace"))
+                    fields[name] = value
                 else:
-                    var_names.append(match.group())
+                    # File upload
+                    encoded = base64.b64encode(body).decode().replace("\n", "")
+                    file_entry = {
+                        "file_name": filename,
+                        "content_type": mime,
+                        "content": encoded,
+                    }
+                    if name in files:
+                        if not isinstance(files[name], list):
+                            files[name] = [files[name]]
+                        files[name].append(file_entry)
+                    else:
+                        files[name] = file_entry
 
-            if len(var_names) > 1:
-                start_var = new_params
-                counter = 0
-                while counter < len(var_names):
-                    var_name = var_names[counter]
-                    if not is_int(var_name):
-                        if isinstance(start_var, dict) and var_name in start_var:
-                            start_var = start_var[var_name]
+            return fields, files
+
+        # ------------------------------------------------------------------
+        # Fallback – raw base64
+        # ------------------------------------------------------------------
+        return {"data": base64.b64encode(content).decode().replace("\n", "")}, {}
+
+    # ------------------------------------------------------------------
+    # Header helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def send_header(header: str, value: str, headers_list: list):
+        """
+        Append a raw ``header: value`` line to the response header list.
+
+        Args:
+            header (str): Header name.
+            value (str): Header value.
+            headers_list (list): Mutable list collecting header lines.
+        """
+        headers_list.append(f"{header}: {value}")
+
+    async def send_basic_headers(self, headers_list: list):
+        """
+        Add permissive CORS and keep-alive headers (used for most responses).
+
+        Args:
+            headers_list (list): List to which headers are appended.
+        """
+        self.send_header("Access-Control-Allow-Origin", "*", headers_list)
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Origin, X-Requested-With, Content-Type, Accept, Authorization",
+            headers_list,
+        )
+        self.send_header("Access-Control-Allow-Credentials", "true", headers_list)
+        self.send_header("Connection", "Keep-Alive", headers_list)
+        self.send_header("Keep-Alive", "timeout=5, max=30", headers_list)
+        self.send_header("Timing-Allow-Origin", "*", headers_list)
+
+    @staticmethod
+    async def get_headers(header_lines: list, protocol: str, status_code: int) -> bytes:
+        """
+        Convert collected header lines into final HTTP response header bytes.
+
+        Args:
+            header_lines (list): List of ``"Header: value"`` strings.
+            protocol (str): e.g. ``"HTTP/1.1"``.
+            status_code (int): Numeric HTTP status.
+
+        Returns:
+            bytes: Complete header block terminated by ``\\r\\n\\r\\n``.
+        """
+        status_text = Constant.LOOKUP_HTTP_CODE.get(status_code, "Unknown")
+        result = f"{protocol} {status_code} {status_text}\r\n"
+        for line in header_lines:
+            result += f"{line}\r\n"
+        result += "\r\n"
+        return result.encode()
+
+    # ------------------------------------------------------------------
+    # Core request → response flow
+    # ------------------------------------------------------------------
+    async def get_response(self, method: str, transport: asyncio.StreamWriter, asgi_response: bool = False):
+        """
+        Main request dispatcher.
+
+        - Handles OPTIONS pre-flight
+        - Parses query string with nested/array support (e.g. ``user[name]=john``)
+        - Builds the unified ``request`` object used throughout Tina4
+        - Calls the router
+        - Serialises the :class:`tina4_python.Response` object
+
+        Args:
+            method (str): HTTP method.
+            transport (asyncio.StreamWriter): Writer for direct response (ASGI mode).
+            asgi_response (bool): If True, returns raw response object instead of bytes.
+
+        Returns:
+            bytes | tuple: Final HTTP response or (response_object, header_lines).
+        """
+        # ------------------------------------------------------------------
+        # OPTIONS → CORS pre-flight
+        # ------------------------------------------------------------------
+        if method == "OPTIONS":
+            headers = []
+            self.send_header("Access-Control-Allow-Origin", "*", headers)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS", headers)
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                "Origin, X-Requested-With, Content-Type, Accept, Authorization",
+                headers,
+            )
+            self.send_header("Access-Control-Allow-Credentials", "true", headers)
+
+            headers_bytes = await self.get_headers(headers, self.response_protocol, HTTP_OK)
+            return headers_bytes if not asgi_response else (None, headers)
+
+        # ------------------------------------------------------------------
+        # Query string parsing with nested support
+        # ------------------------------------------------------------------
+        params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
+        # Advanced nested parsing (user[0][name]=john → dict/list structure)
+        for key, value in list(params.items()):
+            matches = re.finditer(r"(\w+|\d+)", key)
+            keys = [m.group(0) for m in matches]
+            if len(keys) > 1:
+                current = params
+                for i, k in enumerate(keys):
+                    is_last = i == len(keys) - 1
+                    if not is_int(k):
+                        if k not in current:
+                            current[k] = {} if not is_last and keys[i + 1].isdigit() else value if is_last else []
+                        current = current[k]
+                    else:
+                        idx = int(k)
+                        if not isinstance(current, list):
+                            current = current[list(current.keys())[-1]] if current else []
+                        while len(current) <= idx:
+                            current.append({})
+                        if is_last:
+                            current[idx] = value
                         else:
-                            if counter + 1 < len(var_names) and is_int(var_names[counter + 1]):
-                                if var_name not in start_var:
-                                    start_var[var_name] = []
-                                start_var = start_var[var_name]
-                            else:
-                                if counter - 1 > 0 and is_int(var_names[counter - 1]):
-                                    index = int(var_names[counter - 1])
-                                    new_value = {var_name: value}
-                                    if index in range(len(start_var)):
-                                        start_var[index].update(new_value)
-                                    else:
-                                        while len(start_var) < index:
-                                            start_var.append({})
-                                        start_var.append(new_value)
-                                    start_var = start_var[index]
-                                else:
-                                    if isinstance(start_var, dict):
-                                        if counter + 1 == len(var_names):
-                                            start_var[var_name] = value
-                                        else:
-                                            start_var[var_name] = {}
-                                        start_var = start_var[var_name]
+                            current = current[idx]
 
-                    counter += 1
-
-        params.update(new_params)
-
+        # ------------------------------------------------------------------
+        # Body parsing (POST, PUT, PATCH, etc.)
+        # ------------------------------------------------------------------
         content_length = await self.get_content_length()
-        if method != Constant.TINA4_GET:
+        if method != TINA4_GET:
             body, files = await self.get_content_body(content_length)
         else:
-            body = None
-            files = None
+            body, files = None, None
 
-        request = {"params": params, "body": body, "files": files, "raw_data": self.request, "url": self.path, "session": self.session,
-                   "headers": self.lowercase_headers, "raw_request": self.request_raw, "raw_content": self.content_raw,
-                   "transport": transport, "asgi_response": asgi_response}
-
+        # ------------------------------------------------------------------
+        # Unified request object (exposed globally for convenience)
+        # ------------------------------------------------------------------
+        request = {
+            "params": params,
+            "body": body,
+            "files": files,
+            "raw_data": self.request,
+            "url": self.path,
+            "session": self.session,
+            "headers": self.lowercase_headers,
+            "raw_request": self.request_raw,
+            "raw_content": self.content_raw,
+            "transport": transport,
+            "asgi_response": asgi_response,
+        }
         tina4_python.tina4_current_request = request
 
-        response = await self.router_handler.resolve(method, self.path, request, self.lowercase_headers, self.session)
+        # ------------------------------------------------------------------
+        # Route resolution
+        # ------------------------------------------------------------------
+        response = await self.router_handler.resolve(
+            method, self.path, request, self.lowercase_headers, self.session
+        )
 
-        if HTTP_REDIRECT != response.http_code:
-            self.send_header("Content-Type", response.content_type, headers)
+        # ------------------------------------------------------------------
+        # Header assembly
+        # ------------------------------------------------------------------
+        headers = []
+
+        if response.http_code != HTTP_REDIRECT:
+            self.send_header("Content-Type", response.content_type or "text/html", headers)
             await self.send_basic_headers(headers)
 
-            if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
-                self.send_header("Set-Cookie",
-                                 os.getenv("TINA4_SESSION", "PY_SESS") + '=' + self.cookies[
-                                     os.getenv("TINA4_SESSION", "PY_SESS")], headers)
+            # Preserve session cookie
+            session_name = os.getenv("TINA4_SESSION", "PY_SESS")
+            if session_name in self.cookies:
+                self.send_header("Set-Cookie", f"{session_name}={self.cookies[session_name]}", headers)
 
-        # add the custom headers from the response
-        for response_header in response.headers:
-            self.send_header(response_header, response.headers[response_header], headers)
+            # Custom headers from route
+            for name, value in response.headers.items():
+                self.send_header(name, str(value), headers)
 
         if asgi_response:
             return response, headers
 
-        headers = await self.get_headers(headers, self.response_protocol, response.http_code)
+        header_bytes = await self.get_headers(headers, self.response_protocol, response.http_code)
 
-        if isinstance(response.content, str):
-            return headers + response.content.encode()
-        else:
-            return headers + response.content
+        if isinstance(response.content, (bytes, bytearray)):
+            return header_bytes + response.content
+        return header_bytes + response.content.encode("utf-8")
 
-    @staticmethod
-    def send_header(header, value, headers):
-        headers.append(header + ": " + value)
+    # ------------------------------------------------------------------
+    # Raw data reception
+    # ------------------------------------------------------------------
+    async def get_data(self, reader: asyncio.StreamReader) -> tuple:
+        """
+        Read the initial request line + headers + body (if Content-Length present).
 
-    @staticmethod
-    async def get_headers(response_headers, response_protocol, response_code):
-        headers = response_protocol + " " + str(response_code) + " " + Constant.LOOKUP_HTTP_CODE[
-            response_code] + "\r\n"
-        for header in response_headers:
-            headers += header + "\r\n"
-        headers += "\r\n"
-
-        return headers.encode()
-
-    async def run_server(self):
-        self.server = await asyncio.start_server(self.handle_client, self.host_name, self.port)
-        await self.server.serve_forever()
-
-    async def get_data(self, reader):
+        Returns:
+            tuple: (request_line, headers_dict, lowercase_headers, body_text, full_raw, body_raw)
+        """
+        # Read until header/body separator
         try:
-            raw_data = await reader.readuntil(b"\r\n\r\n")
-        except Exception:
-            raw_data = await reader.read(128)
+            head = await reader.readuntil(b"\r\n\r\n")
+        except asyncio.IncompleteReadError:
+            head = await reader.read(1024)
 
-        protocol = raw_data.decode("utf-8").split("\r\n", 1)[0]
-        header_array = raw_data.decode("utf-8").split("\r\n\r\n")[0]
-        header_array = header_array.split("\r\n")
+        # Parse request line & headers
+        text = head.decode("utf-8", errors="replace")
+        lines = text.split("\r\n")
+        request_line = lines[0]
         headers = {}
-        for header in header_array:
-            split = header.split(":", 1)
-            if len(split) == 2:
-                headers[split[0]] = split[1].strip()
+        for line in lines[1:]:
+            if ":" in line:
+                key, value = line.split(":", 1)
+                headers[key.strip()] = value.strip()
 
         lowercase_headers = {k.lower(): v for k, v in headers.items()}
-        content = ""
-        content_data = b''
+
+        # Read body if Content-Length present
+        body_raw = b""
         if "content-length" in lowercase_headers:
-            content_length = int(lowercase_headers["content-length"])
-            count = 0
-            read_size = 64
-            content_data = b''
-            while len(content_data) < content_length:
-                read = await reader.read(read_size)
-                count += len(read)
-                content_data += read
-                raw_data += read
-                # print('COUNT', count, len(read))
-                if len(read) < read_size and len(content_data) == content_length:
+            length = int(lowercase_headers["content-length"])
+            while len(body_raw) < length:
+                chunk = await reader.read(length - len(body_raw))
+                if not chunk:
                     break
-            try:
-                content = content_data.decode("utf-8")
-            except Exception:  # probably binary or multipart form?
-                content = content_data
+                body_raw += chunk
 
-        return protocol, headers, lowercase_headers, content, raw_data, content_data
+        full_raw = head + body_raw
+        return request_line, headers, lowercase_headers, body_raw.decode("utf-8", errors="replace"), full_raw, body_raw
 
-    async def handle_client(self, reader, writer):
+    # ------------------------------------------------------------------
+    # Client connection handler
+    # ------------------------------------------------------------------
+    async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """
+        Entry point for each incoming connection.
+
+        Handles static files, sessions, routing, errors, and WebSockets.
+        """
         try:
-            # Get the client request
-            protocol, headers_list, lowercase_headers, request, request_raw, content_raw = await self.get_data(reader)
-            # Strange blank request ?
-            if protocol == '':
-                return
-            # Decode the request
+            (
+                request_line,
+                headers,
+                lowercase_headers,
+                _,
+                request_raw,
+                content_raw,
+            ) = await self.get_data(reader)
+
+            if not request_line.strip():
+                return  # Empty keep-alive probe
+
             self.request_raw = request_raw
             self.content_raw = content_raw
-            self.request = request
-            self.headers = headers_list
+            self.headers = headers
             self.lowercase_headers = lowercase_headers
 
-            protocol = protocol.split(" ")
-            # print(protocol, headers_list)
-            self.method = protocol[0]
-            self.path = protocol[1]
+            parts = request_line.split(" ")
+            self.method = parts[0].upper()
+            self.path = parts[1]
 
-
-            method_list = [Constant.TINA4_GET, Constant.TINA4_DELETE, Constant.TINA4_PUT, Constant.TINA4_ANY,
-                           Constant.TINA4_POST, Constant.TINA4_PATCH, Constant.TINA4_OPTIONS]
-
-            contains_method = [ele for ele in method_list if (ele in self.method)]
-
+            # ------------------------------------------------------------------
+            # Fast static file serving (GET only, no WebSocket)
+            # ------------------------------------------------------------------
             request_handled = False
-            # return static content asap
-            if self.method == "GET" and "sec-websocket-key" not in self.lowercase_headers:
-                # split URL and extract query string
-                url = Router.clean_url(self.path)
-                url_parts = url.split('?')
-                url = url_parts[0]
+            if self.method == "GET" and "sec-websocket-key" not in lowercase_headers:
+                clean_url = Router.clean_url(self.path)
+                file_path = os.path.join(tina4_python.root_path, "src", "public", clean_url.lstrip("/"))
+                file_path = os.path.abspath(file_path)
 
-                # Serve statics
-                static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
-                Debug.info("Attempting to serve static file: " + static_file)
-                if os.path.isfile(static_file):
-                    mime_type = mimetypes.guess_type(url)[0]
-                    with open(static_file, 'rb') as file:
+                # Security: prevent directory traversal
+                if os.path.commonpath([file_path, os.path.abspath(os.path.join(tina4_python.root_path, "src", "public"))]) == os.path.abspath(os.path.join(tina4_python.root_path, "src", "public")):
+                    if os.path.isfile(file_path):
+                        mime_type, _ = mimetypes.guess_type(file_path)
+                        mime_type = mime_type or "application/octet-stream"
+
+                        with open(file_path, "rb") as f:
+                            content = f.read()
+
                         headers = []
                         self.send_header("Content-Type", mime_type, headers)
                         await self.send_basic_headers(headers)
-                        content = file.read()
-                        headers = await self.get_headers(headers, self.response_protocol, HTTP_OK)
-                        writer.write(headers + content)
+                        header_bytes = await self.get_headers(headers, self.response_protocol, HTTP_OK)
+                        writer.write(header_bytes + content)
                         await writer.drain()
-                        if writer is not None:
-                            writer.close()
+                        writer.close()
                         request_handled = True
 
-            if not request_handled:
-                # parse cookies
-                cookie_list = {}
-                content = ""
-                if "cookie" in self.lowercase_headers:
-                    cookie_list_temp = self.lowercase_headers["cookie"].split(";")
-                    for cookie_value in cookie_list_temp:
-                        cookie = cookie_value.split("=", 1)
-                        cookie_list[cookie[0].strip()] = cookie[1].strip()
+            if request_handled:
+                return
 
-                self.cookies = cookie_list
+            # ------------------------------------------------------------------
+            # Cookie & session initialisation
+            # ------------------------------------------------------------------
+            self.cookies = {}
+            if "cookie" in lowercase_headers:
+                for part in lowercase_headers["cookie"].split(";"):
+                    if "=" in part:
+                        name, val = part.strip().split("=", 1)
+                        self.cookies[name] = val
 
-                # initialize the session
-                self.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
-                                       os.getenv("TINA4_SESSION_FOLDER", tina4_python.root_path + os.sep + "sessions"),
-                                       os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
-                                       )
+            session_name = os.getenv("TINA4_SESSION", "PY_SESS")
+            session_folder = os.getenv("TINA4_SESSION_FOLDER", os.path.join(tina4_python.root_path, "sessions"))
+            self.session = Session(session_name, session_folder)
 
-                if os.getenv("TINA4_SESSION", "PY_SESS") in self.cookies:
-                    self.session.load(self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
-                else:
-                    self.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = self.session.start()
+            if session_name in self.cookies:
+                self.session.load(self.cookies[session_name])
+            else:
+                self.cookies[session_name] = self.session.start()
 
-                if "sec-websocket-key" not in self.lowercase_headers:
-                    try:
-                        if self.method != "" and contains_method:
-                            content = await (self.get_response(self.method, writer))
-                        if content != "":
-                            writer.write(content)
-                            await writer.drain()
-                        writer.close()
-                    except BrokenPipeError as e:
-                        Debug.warning("Socket connection broken: " + str(e))
-                        # socket got terminated
-                        pass
-                else:
-                    # for sockets
-                    await (self.get_response(self.method, writer))
+            # ------------------------------------------------------------------
+            # Route or WebSocket
+            # ------------------------------------------------------------------
+            if "sec-websocket-key" in lowercase_headers:
+                await self.get_response(self.method, writer)
+            else:
+                response_bytes = await self.get_response(self.method, writer)
+                if response_bytes:
+                    writer.write(response_bytes)
+                    await writer.drain()
+                writer.close()
 
+        except Exception as exc:  # Global safety net
+            error_msg = tina4_python.global_exception_handler(exc)
+            Debug.error(f"Unhandled exception: {exc}")
 
-        except Exception as e:
-            error_string = tina4_python.global_exception_handler(e)
             headers = []
             await self.send_basic_headers(headers)
-            headers = await self.get_headers(headers, self.response_protocol, HTTP_SERVER_ERROR)
-            url = Router.clean_url(self.path)
+            header_bytes = await self.get_headers(headers, self.response_protocol, HTTP_SERVER_ERROR)
 
-            content_type = "text/html"
-            if "content-type" in self.lowercase_headers:
-                content_type = self.lowercase_headers["content-type"].lower()
-
-            if content_type == "application/json":
-                html = json.dumps({"error": "500 - Internal Server Error",
-                                   "data": {"server": {"url": url}, "error_message": error_string}})
+            accept = self.lowercase_headers.get("accept", "")
+            if "application/json" in accept or "application/json" in self.lowercase_headers.get("content-type", ""):
+                payload = json.dumps({"error": "500 - Internal Server Error", "message": error_msg})
+                writer.write(header_bytes + payload.encode())
             else:
-                html = Template.render_twig_template("errors/500.twig",
-                                                     {"server": {"url": url}, "error_message": error_string})
+                html = Template.render_twig_template(
+                    "errors/500.twig",
+                    {"server": {"url": self.path or "/"}, "error_message": error_msg},
+                )
+                writer.write(header_bytes + html.encode())
 
-            writer.write(headers + html.encode())
             await writer.drain()
             writer.close()
 
-    def __init__(self, host_name, port):
-        self.content_raw = None
-        self.session = Session
-        self.cookies = {}
-        self.method = None
-        self.response_protocol = "HTTP/1.1"
-        self.headers = None
-        self.lowercase_headers = None
-        self.request = None
-        self.request_raw = None
-        self.path = None
-        self.server_socket = None
-        self.host_name = host_name
-        self.port = port
-        self.router_handler = None
-        self.running = False
-        self.server = None
+    # ------------------------------------------------------------------
+    # Server lifecycle
+    # ------------------------------------------------------------------
+    async def run_server(self):
+        """
+        Start the asyncio server. Called internally by :meth:`serve_forever`.
+        """
+        self.server = await asyncio.start_server(self.handle_client, self.host_name, self.port)
+        addr = self.server.sockets[0].getsockname()
+        if addr[0] == "0.0.0.0" or addr[0] == "127.0.0.1" or addr[0] == "::1":
+            hostname = "localhost"
+        else:
+            hostname = addr[0]
+        Debug.info(f"Tina4 Python server running on http://{hostname}:{addr[1]}")
+        await self.server.serve_forever()
 
     async def serve_forever(self):
+        """
+        Public method to start the server (used by Tina4's ``initialize()``).
+        """
         await self.run_server()
 
     def server_close(self):
-        self.running = False
-        self.server_socket.close()
+        """
+        Gracefully shut down the server (currently a placeholder).
+        """
+        if self.server:
+            self.server.close()
+            self.running = False

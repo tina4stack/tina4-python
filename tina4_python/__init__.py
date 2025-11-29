@@ -4,16 +4,31 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E403,F401,E402
+"""
+Tina4 Python – Lightweight full-stack framework.
+
+Features:
+- Decorator-based routing (@get, @post, etc.)
+- Built-in Twig templating
+- Zero-config ORM + migrations
+- Auto Swagger UI (/docs or /swagger)
+- One-liner CRUD scaffolding
+- WebSocket support
+- Live SASS compilation
+- Hot-reload with jurigged (optional)
+
+Just `pip install tina4-python` and run your project – everything just works.
+"""
 import asyncio
-import gettext
-import logging
 import os
 import shutil
 import importlib
 import sys
 import threading
+import re
 import traceback
 import sass
+import gettext
 from pathlib import Path
 from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler, FileSystemEvent
@@ -26,11 +41,15 @@ from tina4_python.Router import Router
 from tina4_python.Localization import localize
 from tina4_python.Auth import Auth
 from tina4_python.Debug import Debug
+from tina4_python.Debug import setup_logging
 from tina4_python.ShellColors import ShellColors
 from tina4_python.Session import Session
 from tina4_python.HtmlElement import add_html_helpers
-add_html_helpers(globals())
+from tina4_python import ShellColors
+from tina4_python.Constant import TINA4_LOG_INFO, TINA4_LOG_ALL
 
+# Make HTML helper functions available globally (html(), div(), etc.)
+add_html_helpers(globals())
 
 _ = gettext.gettext
 
@@ -42,6 +61,7 @@ MSG_SERVER_STOPPED = _('Server stopped.')
 MSG_STARTING_WEBSERVER = _('Starting webserver on {port}')
 MSG_ENTRY_POINT_NAME = _('Entry point name ... {name}')
 
+# Load correct .env file based on environment
 if os.getenv('environment') is not None:
     environment = ".env." + os.getenv('environment')
 else:
@@ -49,33 +69,60 @@ else:
 
 load_env(environment)
 
-debug_level = os.getenv("TINA4_DEBUG_LEVEL", Constant.TINA4_LOG_ALL)
+debug_level = os.getenv("TINA4_DEBUG_LEVEL", TINA4_LOG_ALL).strip()
+
+if not debug_level or debug_level in ("", "NONE", "NULL"):
+    debug_level = TINA4_LOG_INFO
+    os.environ["TINA4_DEBUG_LEVEL"] = TINA4_LOG_INFO
+
+setup_logging()
+
+TINA4_BANNER = ShellColors.bright_magenta + """
+  _______             __ __
+ /_  __(_)___  ____ _/ // /
+  / / / / __ \/ __ `/ // /_
+ / / / / / / / /_/ /__  __/
+/_/ /_/_/ /_/\__,_/  /_/
+""" + ShellColors.end
+
+print(TINA4_BANNER)
 print(ShellColors.bright_yellow + "Setting debug mode", debug_level, ShellColors.end)
 
+# Optional live-coding hot reload
 if importlib.util.find_spec("jurigged"):
     import jurigged
 
-# Define the variable to be used for global routes
+# Core paths
 library_path = os.path.dirname(os.path.realpath(__file__))
 root_path = os.path.realpath(os.getcwd())
 sys.path.append(root_path)
 
+# Ensure logs folder exists
 if not os.path.exists(root_path + os.sep + "logs"):
     os.makedirs(root_path + os.sep + "logs")
 
 localize()
 
-Debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path),
-      Constant.TINA4_LOG_INFO)
+Debug.info(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path))
 
-tina4_routes = {}
-tina4_current_request = {}
-tina4_api_key = None
+# Global runtime containers
+tina4_routes = {}  # Registry of all registered routes
+tina4_current_request = {}  # Current request context (used in helpers)
+tina4_api_key = None  # Optional global API key
 tina4_auth = Auth(root_path)
 
 
-# Set up the global exception handler
 def global_exception_handler(exception):
+    """Global uncaught exception handler.
+
+    Shows full traceback when debug mode is enabled.
+
+    Args:
+        exception (Exception): The exception that was raised
+
+    Returns:
+        str: User-facing error message
+    """
     debug_level = Constant.TINA4_LOG_DEBUG
     error = str(exception)
     tb_str = ''.join(traceback.format_exception(None, exception, exception.__traceback__))
@@ -88,32 +135,37 @@ def global_exception_handler(exception):
         error_string = "An exception happened"
     return error_string
 
+
 def start_in_thread(target, exception_hook=None):
-    """
-    Starts a method in a thread
-    :param exception_hook:
-    :param target:
-    :return:
+    """Run a function in a background daemon thread.
+
+    Used for watchers (SASS, etc.).
+
+    Args:
+        target (callable): Function to execute
+        exception_hook (callable, optional): Custom excepthook for the thread
     """
     if exception_hook is not None:
         threading.excepthook = exception_hook
     thread = threading.Thread(target=target)
     thread.start()
 
+
+# Test JWT token on startup (debug only)
 token = tina4_auth.get_token({"name": "Tina4"})
-Debug("TEST TOKEN", token, Constant.TINA4_LOG_DEBUG)
-Debug("VALID TOKEN", tina4_auth.valid(token + "a"), Constant.TINA4_LOG_DEBUG)
-Debug("VALID TOKEN", tina4_auth.valid(token), Constant.TINA4_LOG_DEBUG)
-Debug("PAYLOAD", tina4_auth.get_payload(token), Constant.TINA4_LOG_DEBUG)
+Debug.debug("TEST TOKEN", token)
+Debug.debug("VALID TOKEN", tina4_auth.valid(token + "a"))
+Debug.debug("VALID TOKEN", tina4_auth.valid(token))
+Debug.debug("PAYLOAD", tina4_auth.get_payload(token))
 
 if "API_KEY" in os.environ:
     tina4_api_key = os.environ["API_KEY"]
 
-# Hack for local development
+# Dev-mode path fix
 if root_path.count("tina4_python") > 0:
     root_path = root_path.split("tina4_python")[0][:-1]
 
-# Make the beginning files for the tina4stack
+# Create default project structure on first run
 if not os.path.exists(root_path + os.sep + "src"):
     os.makedirs(root_path + os.sep + "src" + os.sep + "routes")
     os.makedirs(root_path + os.sep + "src" + os.sep + "scss")
@@ -121,73 +173,71 @@ if not os.path.exists(root_path + os.sep + "src"):
     os.makedirs(root_path + os.sep + "src" + os.sep + "app")
 
     with open(root_path + os.sep + "src" + os.sep + "__init__.py", 'w') as init_file:
-        init_file.write('# Start your project here')
-        init_file.write('\n')
+        init_file.write('# Start your project here\n')
+
     if not os.path.isfile(root_path + os.sep + "app.py") and not os.path.isdir(root_path + os.sep + "tina4_python"):
         with open(root_path + os.sep + "app.py", 'w') as app_file:
-            app_file.write('# Starting point for tina4_python, you shouldn''t need to change anything here')
-            app_file.write('\n')
-            app_file.write('from tina4_python import *')
-            app_file.write('\n')
+            app_file.write('# Starting point for tina4_python, you shouldn\'t need to change anything here\n')
+            app_file.write('from tina4_python import *\n')
 
 if not os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
     os.makedirs(root_path + os.sep + "src" + os.sep + "app")
 
-# copy over templates if needed - required for errors
+# Copy default templates & public assets
 if not os.path.exists(root_path + os.sep + "src" + os.sep + "templates"):
     source_dir = library_path + os.sep + "templates"
     destination_dir = root_path + os.sep + "src" + os.sep + "templates"
     shutil.copytree(source_dir, destination_dir)
 
-# copy over public if needed - required for static files like images and logos
 if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
     source_dir = library_path + os.sep + "public"
     destination_dir = root_path + os.sep + "src" + os.sep + "public"
     shutil.copytree(source_dir, destination_dir)
 
-# please keep in place otherwise autoloading of files does not work nicely, if you want this to work
-# add __init__.py files in your folders
-# ignore F403
+# Auto-import everything from src folders
 if os.path.exists(root_path + os.sep + "src"):
     try:
         exec("from src import *")
     except ImportError as e:
-        Debug("Cannot import src folder", str(e), Constant.TINA4_LOG_ERROR)
+        Debug.error("Cannot import src folder", str(e))
 else:
-    Debug("Missing src folder", Constant.TINA4_LOG_WARNING)
+    Debug.warning("Missing src folder")
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "routes"):
     try:
         exec("from src.routes import *")
     except ImportError as e:
-        Debug("Cannot import src.routes folder", str(e), Constant.TINA4_LOG_ERROR)
+        Debug.error("Cannot import src.routes folder", str(e))
 else:
-    Debug("Missing src/routes folder", Constant.TINA4_LOG_WARNING)
+    Debug.warning("Missing src/routes folder")
 
 if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
     try:
         exec("from src.app import *")
     except ImportError as e:
-        Debug("Cannot import src.app folder", str(e), Constant.TINA4_LOG_ERROR)
+        Debug.error("Cannot import src.app folder", str(e))
 else:
-    Debug("Missing src/app folder", Constant.TINA4_LOG_WARNING)
+    Debug.warning("Missing src/app folder")
 
 
-# compile sass
 def compile_scss():
+    """Compile all SCSS/SASS files → compressed CSS."""
     try:
         if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
-            Debug("Compiling scss", Constant.TINA4_LOG_DEBUG)
+            Debug.debug("Compiling scss")
             sass.compile(dirname=(root_path + os.sep + 'src' + os.sep + 'scss',
                                   root_path + os.sep + 'src' + os.sep + 'public' + os.sep + 'css'),
                          output_style='compressed')
     except sass.CompileError as E:
-        Debug('Error compiling SASS ', E, Constant.TINA4_LOG_ERROR)
+        Debug.error('Error compiling SASS ', E)
 
 
 compile_scss()
 
+
 class SassCompiler(PatternMatchingEventHandler):
+    """Live SASS watcher – recompiles on any .scss/.sass change."""
+
     def on_modified(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
             compile_scss()
@@ -199,25 +249,25 @@ if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
     observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
     observer.start()
 else:
-    Debug("Missing scss folder", Constant.TINA4_LOG_WARNING)
-
-
-# end compile sass
+    Debug.warning("Missing scss folder")
 
 
 def file_get_contents(file_path):
+    """Read file content as string (used by Twig & Swagger)."""
     return Path(file_path).read_text()
 
 
-# Add swagger routes
+# Swagger UI routes
 @get(os.getenv("SWAGGER_ROUTE", "/swagger") + "/swagger.json")
 async def get_swagger_json(request, response):
+    """Return OpenAPI 3.0 JSON specification."""
     json = Swagger.get_json(request)
     return response(json)
 
 
 @get(os.getenv("SWAGGER_ROUTE", "/swagger"))
 async def get_swagger(request, response):
+    """Serve interactive Swagger UI page."""
     html = file_get_contents(
         root_path + os.sep + "src" + os.sep + "public" + os.sep + "swagger" + os.sep + "index.html")
 
@@ -226,13 +276,7 @@ async def get_swagger(request, response):
 
 
 async def app(scope, receive, send):
-    """
-    Runs normal hypercorn, uvicorn, granian
-    :param scope:
-    :param receive:
-    :param send:
-    :return:
-    """
+    """ASGI entry point – compatible with Hypercorn (default), Uvicorn, Granian, etc."""
     body = b""
     while True and scope['type'] == 'http' or scope['type'] == 'websocket':
         if scope['type'] != 'websocket':
@@ -292,7 +336,6 @@ async def app(scope, receive, send):
 
             webserver.cookies = cookie_list
 
-            # initialize the session
             webserver.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
                                         os.getenv("TINA4_SESSION_FOLDER", root_path + os.sep + "sessions"),
                                         os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
@@ -330,66 +373,107 @@ async def app(scope, receive, send):
 
 
 def run_web_server(in_hostname="localhost", in_port=7145):
-    Debug(Messages.MSG_STARTING_WEBSERVER.format(port=in_port), Constant.TINA4_LOG_INFO)
+    """Start the web server (convenient wrapper).
+
+    Example:
+        run_web_server("0.0.0.0", 8000)
+    """
+    Debug.info(Messages.MSG_STARTING_WEBSERVER.format(port=in_port))
     webserver(in_hostname, in_port)
 
 
 def webserver(host_name, port):
-    """
-    Runs the correct webserver
-    :param host_name:
-    :param port:
-    :return:
-    """
-    if os.getenv('TINA4_DEFAULT_WEBSERVER', 'FALSE').upper() == 'TRUE':
-        Debug("Using default webserver", Constant.TINA4_LOG_INFO)
-        # runs the built-in webserver (websockets) don't work on windows
-        web_server = Webserver(host_name, int(port))  # HTTPServer((host_name, int(port)), Webserver)
+    """Choose and start the appropriate ASGI server."""
+    if os.getenv('TINA4_DEFAULT_WEBSERVER', 'TRUE').upper() == 'TRUE':
+        Debug.info("Using default webserver")
+        web_server = Webserver(host_name, int(port))
         web_server.router_handler = Router()
-        # Fix the display to make it clickable
-        if host_name == "0.0.0.0":
-            host_name = "localhost"
-        Debug(Messages.MSG_SERVER_STARTED.format(host_name=host_name, port=port), Constant.TINA4_LOG_INFO)
+
         try:
             asyncio.run(web_server.serve_forever())
         except KeyboardInterrupt:
             pass
         web_server.server_close()
     else:
-        # Runs a hyper corn server
-        Debug("Using hypercorn webserver", Constant.TINA4_LOG_INFO)
+        Debug.info("Using Uvicorn webserver")
         try:
-            from hypercorn.config import Config
-            from hypercorn.asyncio import serve
-            config = Config()
-            config.bind = [host_name + ":" + str(port)]
-            asyncio.run(serve(app, config))
+            import uvicorn
+            uvicorn.run(app, port=int(port))
         except Exception as e:
-            Debug("Not running Hypercorn webserver", str(e), Constant.TINA4_LOG_WARNING)
+            Debug.info("Not running Uvicorn webserver", str(e))
 
-    Debug(Messages.MSG_SERVER_STOPPED, Constant.TINA4_LOG_INFO)
+    Debug.info(Messages.MSG_SERVER_STOPPED)
 
+
+# Live coding hot-reload (jurigged)
 if importlib.util.find_spec("jurigged"):
-    Debug("Jurigged enabled", Constant.TINA4_LOG_INFO)
+    Debug.info("Jurigged enabled")
     jurigged.watch(["./src/app", "./src/orm", "./src/routes", "./src/templates"])
 
-# Start up a webserver based on params passed on the command line
-HOSTNAME = "localhost"
-PORT = 7145
-if len(sys.argv) > 1:
-    PORT = sys.argv[1]
-    if ":" in PORT:
-        SERVER_CONFIG = PORT.split(":")
-        HOSTNAME = SERVER_CONFIG[0]
-        PORT = SERVER_CONFIG[1]
+# ──────────────────────────────────────────────────────────────
+# Smart Auto-Start: Only start server if user didn't define control functions
+# ──────────────────────────────────────────────────────────────
+_CONTROL_FUNCTIONS = {
+    "main", "run", "start", "cli", "console",
+    "migrate", "migrations", "seed", "seeds", "test", "tests"
+}
 
-if PORT != "stop" and PORT != "manual":
+
+def _has_control_methods():
+    """Scan the actual main file content for 'def main(', 'def migrate(', etc."""
+    main_module = sys.modules.get('__main__')
+    if not main_module or not hasattr(main_module, '__file__'):
+        return False  # REPL / Jupyter
+
+    file_path = main_module.__file__
+    if not file_path or not file_path.endswith('.py'):
+        return False
     try:
-        PORT = int(PORT)
-        run_web_server(HOSTNAME, PORT)
+        content = Path(file_path).read_text(encoding="utf-8")
     except Exception as e:
-        Debug("Not running webserver", str(e), Constant.TINA4_LOG_WARNING)
-else:
-    Debug("Webserver is set to manual start, please call " + ShellColors.bright_red +
-          "run_web_server(<HOSTNAME>, <PORT>)" + ShellColors.end + " in your code",
-          Constant.TINA4_LOG_WARNING)
+        return False  # Can't read file → assume no control function
+
+    # Regex: looks for "def " + name + "(" anywhere in the file
+    pattern = re.compile(r"^\s*def\s+(" + "|".join(re.escape(name) for name in _CONTROL_FUNCTIONS) + r")\s*\(",
+                         re.MULTILINE)
+
+    return bool(pattern.search(content))
+
+
+def _auto_start_server():
+    """This runs once at the very end – after user's code is fully loaded"""
+    should_we_start = not _has_control_methods()
+    Debug.info("Tina4 - Should we start ?", should_we_start)
+    if not should_we_start:
+        control_funcs = [name for name in _CONTROL_FUNCTIONS if name in sys.modules['__main__'].__dict__]
+        if control_funcs:
+            Debug.info(
+                f"Auto-start disabled — detected control function(s): {', '.join(control_funcs)}\n"
+                f"       → Call {ShellColors.bright_cyan}run_web_server(){ShellColors.end} manually when ready.",
+                Constant.TINA4_LOG_WARNING
+            )
+        return
+
+    # Parse optional host:port from command line
+    hostname = "localhost"
+    port = 7145
+
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].strip()
+        if arg.lower() == "stop":
+            Debug.info("Auto-start blocked via 'stop' argument", Constant.TINA4_LOG_INFO)
+            return
+        if ":" in arg:
+            h, _, p = arg.partition(":")
+            hostname = h or hostname
+            if p.isdigit():
+                port = int(p)
+        elif arg.isdigit():
+            port = int(arg)
+    try:
+        run_web_server(hostname, port)
+    except Exception as e:
+        Debug.error(f"Failed to auto-start server: {e}")
+
+
+_auto_start_server()

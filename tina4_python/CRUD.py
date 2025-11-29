@@ -178,7 +178,6 @@ class CRUD:
 
             twig_file = self.ensure_crud_template(crud_name + ".twig")
 
-
             async def get_record(request, response):
                 limit = int(request.params.get("limit", options.get("limit", 10)))
                 offset = int(request.params.get("offset", options.get("offset", 0)))

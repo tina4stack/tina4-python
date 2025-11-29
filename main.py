@@ -4,7 +4,4 @@
 # Copy-right 2007 - current Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
-import tina4_python
-
-
-
+from tina4_python import *

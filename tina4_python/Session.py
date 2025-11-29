@@ -72,10 +72,10 @@ class SessionFileHandler(SessionHandler):
                         if key != "expires":
                             session.set(key, payload[key])
                 else:
-                    Debug("Session expired, starting a new one", Constant.TINA4_LOG_DEBUG)
+                    Debug.debug("Session expired, starting a new one")
                     session.start(_hash)
         else:
-            Debug("Cannot load session, starting a new one", Constant.TINA4_LOG_DEBUG)
+            Debug.debug("Cannot load session, starting a new one")
             session.start(_hash)
 
     @staticmethod
@@ -97,8 +97,8 @@ class SessionFileHandler(SessionHandler):
                 file.write(token)
                 file.close()
                 return True
-        except Exception as E:
-            Debug("Session save failure", E, Constant.TINA4_LOG_ERROR)
+        except Exception as e:
+            Debug.error("Session save failure", e)
             return False
 
 class SessionRedisHandler(SessionHandler):
@@ -108,7 +108,7 @@ class SessionRedisHandler(SessionHandler):
         try:
             redis = importlib.import_module("redis")
         except Exception as e:
-            Debug("Redis not installed, install with pip install redis or poetry add redis", str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("Redis not installed, install with pip install redis or poetry add redis", str(e))
             sys.exit(1)
 
         if os.getenv("TINA4_SESSION_REDIS_SECRET", "") != "":
@@ -143,11 +143,11 @@ class SessionRedisHandler(SessionHandler):
                     if key != "expires":
                         session.set(key, payload[key])
             else:
-                Debug("Session expired, starting a new one", Constant.TINA4_LOG_WARNING)
+                Debug.warning("Session expired, starting a new one")
                 _hash = None
                 session.start(_hash)
-        except Exception:
-            Debug("Redis not available, sessions will fail", Constant.TINA4_LOG_ERROR)
+        except Exception as e:
+            Debug.error("Redis not available, sessions will fail", e)
 
 
     @staticmethod
@@ -177,7 +177,7 @@ class SessionRedisHandler(SessionHandler):
             r.set(session.session_hash, token)
             return True
         except Exception as e:
-            Debug("Session save failure", str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("Session save failure", str(e))
             return False
 
 class SessionValkeyHandler(SessionHandler):
@@ -187,7 +187,7 @@ class SessionValkeyHandler(SessionHandler):
         try:
             valkey = importlib.import_module("valkey")
         except Exception as e:
-            Debug("Valkey not installed, install with pip/uv", str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("Valkey not installed, install with pip/uv", str(e))
             sys.exit(1)
 
         params = {
@@ -227,10 +227,10 @@ class SessionValkeyHandler(SessionHandler):
                     if key != "expires":
                         session.set(key, payload[key])
             else:
-                Debug("Session expired, starting a new one", Constant.TINA4_LOG_DEBUG)
+                Debug.error("Session expired, starting a new one")
                 session.start(_hash)
-        except Exception:
-            Debug("Valkey not available, sessions will fail", Constant.TINA4_LOG_ERROR)
+        except Exception as e:
+            Debug.error("Valkey not available, sessions will fail", str(e))
 
 
     @staticmethod
@@ -260,7 +260,7 @@ class SessionValkeyHandler(SessionHandler):
             r.set(session.session_hash, token)
             return True
         except Exception as e:
-            Debug("Session save failure", str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("Session save failure", str(e))
             return False
 
 class Session:

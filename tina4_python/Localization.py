@@ -36,7 +36,7 @@ def localize():
     if len(sys.argv) > 2 and sys.argv[2] in available_languages:
         user_language = sys.argv[2]
 
-    Debug("Language: " + user_language, Constant.TINA4_LOG_INFO)
+    Debug.info("Language: " + user_language)
     # Initialize the translation system
     translation = gettext.translation('messages', translation_path, languages=[user_language])
     translation.install()

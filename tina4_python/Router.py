@@ -67,7 +67,7 @@ class Router:
         Response.content_type = Constant.TEXT_HTML
         result = Response
 
-        Debug("Root Path " + tina4_python.root_path + " " + url, method, Constant.TINA4_LOG_DEBUG)
+        Debug.debug("Root Path " + tina4_python.root_path + " " + url, method)
         tina4_python.tina4_current_request["url"] = url
         tina4_python.tina4_current_request["headers"] = headers
 
@@ -111,7 +111,7 @@ class Router:
 
         # Serve statics
         static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
-        Debug("Attempting to serve static file: " + static_file, Constant.TINA4_LOG_DEBUG)
+        Debug.debug("Attempting to serve static file: " + static_file)
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
             with open(static_file, 'rb') as file:
@@ -122,7 +122,7 @@ class Router:
         for route in tina4_python.tina4_routes.values():
             if route["method"] != method:
                 continue
-            Debug("Matching route " + route['route'] + " to " + url, Constant.TINA4_LOG_DEBUG)
+            Debug.debug("Matching route " + route['route'] + " to " + url)
             if Router.match(url, route['route']):
                 if not "noauth" in route:
                     if "secure" in route or ("swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]):
@@ -234,9 +234,9 @@ class Router:
             # see if we can find the twig file
             for twig_file in twig_files:
                 if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
-                    Debug("Looking for twig file",
+                    Debug.debug("Looking for twig file",
                           tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
-                          Constant.TINA4_LOG_DEBUG)
+                          )
 
                     result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
                     result.headers["Cache-Control"] = "max-age=-1, public"
@@ -256,7 +256,7 @@ class Router:
     @staticmethod
     async def resolve(method, url, request, headers, session):
         url = Router.clean_url(url)
-        Debug(method, "Resolving URL: " + url, Constant.TINA4_LOG_DEBUG)
+        Debug.debug(method, "Resolving URL: " + url)
         return await Router.get_result(url, method, request, headers, session)
 
     # cleans the url of double slashes
@@ -267,7 +267,6 @@ class Router:
     # adds a route to the router
     @staticmethod
     def add(method, route, callback):
-
         # Normalize route (remove trailing slash for comparison)
         norm_route = route.rstrip("/")
 
@@ -275,11 +274,11 @@ class Router:
         for cb, data in tina4_python.tina4_routes.items():
             if method in data and data["method"].upper() == method.upper() and \
                     data["route"].rstrip("/") == norm_route:
-                Debug(f"Route already exists: {method} {route}", Constant.TINA4_LOG_WARNING)
+                Debug.debug(f"Route already exists: {method} {route}")
                 # Optionally raise or return False
                 return  # or raise ValueError("Route already defined")
 
-        Debug("Adding a route: " + route, Constant.TINA4_LOG_DEBUG)
+        Debug.debug("Adding a route: " + route)
 
         is_secure = False
         if method == Constant.TINA4_GET:

@@ -55,6 +55,11 @@ def generate_xml(xml_dict):
     dom = minidom.parseString(xml_str)
     return dom.toprettyxml(indent="  ")
 
+@get("/")
+async def get_root(request, response):
+
+    return response("Hello, World!")
+
 @get("/some/page")
 async def some_page(request, response):
     global dba
@@ -193,7 +198,8 @@ async def some_generic_post(request, response):
 
     return response(generate_xml(xml_response), HTTP_OK, APPLICATION_XML)
 
-
+Debug.info("Routes")
 from .routes import meme
 from .routes import test_queue
 from .routes import crud
+Debug.info("Done Routes")

@@ -17,16 +17,18 @@ dependencies = [
     "bcrypt (>=4.2.1,<5.0.0)",
     "litequeue (>=0.9,<0.10)",
     "simple-websocket (>=1.1.0,<2.0.0)",
-    "hypercorn (>=0.17.3,<0.18.0)",
     "asyncer>=0.0.8",
+    "uvicorn>=0.38.0",
 ]
 
 [dependency-groups]
 dev = [
     "flake8>=7.2.0",
     "jurigged>=0.6.0",
+    "mkdocs>=1.6.1",
     "mysql-connector-python>=9.3.0",
     "psycopg2-binary>=2.9.10",
+    "pydoc-markdown>=4.8.2",
     "pytest>=8.3.5",
     "ruff>=0.11.9",
     "safety>=3.5.0",
@@ -41,4 +43,17 @@ include = [
     "tina4_python/**/*"
 ]
 
+[[tool.pydoc-markdown.loaders]]
+type = "python"
+search_path = [ "./tina4_python" ]
+
+[tool.pydoc-markdown.renderer]
+type = "mkdocs"
+site_name= "Tina4Python"
+
+[[tool.pydoc-markdown.renderer.pages]]
+title = "API Documentation"
+name = "index"
+
+contents = [ "*" ]
 

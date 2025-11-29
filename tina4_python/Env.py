@@ -7,6 +7,7 @@ import os
 import hashlib
 from datetime import datetime
 from dotenv import load_dotenv
+from tina4_python.Debug import Debug
 
 
 # check .env for information
@@ -23,6 +24,7 @@ def load_env(path: str = '.env'):
             f.write("TINA4_DEBUG_LEVEL=[TINA4_LOG_ALL]\n")
     # Load the .env
     load_dotenv(path)
+    Debug.info(os.environ)
     # check for defaults we need
     if "TINA4_LANGUAGE" not in os.environ:
         with open(path, 'a') as f:

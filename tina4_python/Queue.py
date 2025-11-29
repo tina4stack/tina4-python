@@ -591,7 +591,7 @@ class Consumer(object):
 
         try:
             counter = 0
-            Debug("Consuming", self.queues)
+            Debug.debug("Consuming", self.queues)
             while True:
                 for queue in self.queues:
                     try:
@@ -601,7 +601,7 @@ class Consumer(object):
                             callback = self.consumer_callback
                         queue.consume(self.acknowledge, callback)
                     except Exception as e:
-                        Debug("Queue Consumer Exception", str(e))
+                        Debug.error("Queue Consumer Exception", str(e))
                     counter += 1
                 if iterations is not None and counter >= iterations:
                     break

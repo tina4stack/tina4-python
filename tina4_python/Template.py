@@ -26,9 +26,9 @@ class Template:
     @staticmethod
     def init_twig(path):
         if hasattr(Template, "twig"):
-            Debug("Twig found on " + path, Constant.TINA4_LOG_DEBUG)
+            Debug.debug("Twig found on " + path)
             return Template.twig
-        Debug("Initializing Twig on " + path, Constant.TINA4_LOG_DEBUG)
+        Debug.debug("Initializing Twig on " + path)
         twig_path = Path(path)
         Template.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
         Template.twig.add_extension('jinja2.ext.debug')
@@ -50,7 +50,7 @@ class Template:
             Template.twig.globals['dump'] = Template.dump
         else:
             Template.twig.globals['dump'] = Template.production_dump
-        Debug("Twig Initialized on " + path, Constant.TINA4_LOG_INFO)
+        Debug.debug("Twig Initialized on " + path)
         return Template.twig
 
     @staticmethod
@@ -142,7 +142,7 @@ class Template:
                 content = template.render(data)
 
         except Exception as e:
-            Debug("Error rendering twig file", template_or_file_name, e, Constant.TINA4_LOG_ERROR)
+            Debug.error("Error rendering twig file", template_or_file_name, e)
             content = str(e)
 
         return content

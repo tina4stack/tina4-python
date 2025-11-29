@@ -32,3 +32,4 @@
 /migrations/__test_user_item.sql
 /tina4_python.egg-info/
 /src/templates/crud/
+/.venv/

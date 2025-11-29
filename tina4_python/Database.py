@@ -134,8 +134,7 @@ class Database:
             else:
                 sys.exit("Could not load database driver for " + params[0])
 
-        Debug("DATABASE:", self.database_module.__name__, self.host, self.port, self.database_path, self.username,
-              Constant.TINA4_LOG_DEBUG)
+        Debug.debug("DATABASE:", self.database_module.__name__, self.host, self.port, self.database_path, self.username)
 
     def table_exists(self, table_name):
         """
@@ -189,7 +188,7 @@ class Database:
             next_id = int(record["max_id"]) + 1
             return next_id
         except Exception as e:
-            Debug("Get next id", str(e), TINA4_LOG_ERROR)
+            Debug.error("Get next id", str(e))
             return None
 
     def database_exists(self, database_name):
@@ -309,7 +308,7 @@ class Database:
             counter.execute(self.parse_place_holders(count_sql), final_params)
             total = counter.fetchone()[0]
         except Exception as e:
-            Debug("COUNT ERROR", count_sql, final_params, str(e), TINA4_LOG_ERROR)
+            Debug.error ("COUNT ERROR", count_sql, final_params, str(e))
             total = 0
         finally:
             counter.close()
@@ -338,7 +337,7 @@ class Database:
             cursor.execute(final_sql, final_params)
             return self.get_database_result(cursor, total, limit, skip, final_sql)
         except Exception as e:
-            Debug("FETCH ERROR", final_sql, final_params, str(e), TINA4_LOG_ERROR)
+            Debug.error("FETCH ERROR", final_sql, final_params, str(e))
             return DatabaseResult(None, [], str(e))
         finally:
             cursor.close()
@@ -410,7 +409,7 @@ class Database:
                 # On success return an empty result set with no error
                 return DatabaseResult(None, [], None, 0, 0, 0, sql, self)
         except Exception as e:
-            Debug("EXECUTE ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("EXECUTE ERROR:", sql, str(e))
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
         finally:
@@ -433,7 +432,7 @@ class Database:
             # On success return an empty result set with no error
             return DatabaseResult(None, [], None)
         except Exception as e:
-            Debug("EXECUTE MANY ERROR:", sql, str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("EXECUTE MANY ERROR:", sql, str(e))
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
         finally:
@@ -457,10 +456,9 @@ class Database:
             elif self.database_engine == POSTGRES:
                 self.dba.rollback()  # start fresh
             else:
-                Debug("START TRANSACTION ERROR:", "Database engine unrecognised/not supported",
-                      Constant.TINA4_LOG_ERROR)
+                Debug.error("START TRANSACTION ERROR:", "Database engine unrecognised/not supported")
         except Exception as e:
-            Debug("START TRANSACTION ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("START TRANSACTION ERROR:", str(e))
 
     def commit(self):
         """
@@ -470,7 +468,7 @@ class Database:
         try:
             self.dba.commit()
         except Exception as e:
-            Debug("COMMIT TRANSACTION ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("COMMIT TRANSACTION ERROR:", str(e))
 
     def rollback(self):
         """
@@ -480,7 +478,7 @@ class Database:
         try:
             self.dba.rollback()
         except Exception as e:
-            Debug("ROLLBACK TRANSACTION ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("ROLLBACK TRANSACTION ERROR:", str(e))
 
     def close(self):
         """
@@ -490,7 +488,7 @@ class Database:
         try:
             self.dba.close()
         except Exception as e:
-            Debug("DATABASE CLOSE ERROR:", str(e), Constant.TINA4_LOG_ERROR)
+            Debug.error("DATABASE CLOSE ERROR:", str(e))
 
     def sanitize(self, record):
         """
@@ -542,7 +540,7 @@ class Database:
                     self.execute(f"SET IDENTITY_INSERT {table_name} OFF")
                 records.records += result.records
                 if result.error is not None:
-                    Debug("INSERT ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
+                    Debug.error("INSERT ERROR:", sql, result.error)
                     return False
 
             records.columns = result.columns
@@ -592,7 +590,7 @@ class Database:
                 if result.error is None:
                     return True
                 else:
-                    Debug("DELETE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
+                    Debug.error("DELETE ERROR:", sql, result.error)
                     return False
 
         return False
@@ -649,7 +647,7 @@ class Database:
                 if result.error is None:
                     return True
                 else:
-                    Debug("UPDATE ERROR:", sql, result.error, Constant.TINA4_LOG_ERROR)
+                    Debug.error("UPDATE ERROR:", sql, result.error)
                     return False
 
         return False
