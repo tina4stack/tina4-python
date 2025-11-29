@@ -414,7 +414,7 @@ if importlib.util.find_spec("jurigged"):
 # Smart Auto-Start: Only start server if user didn't define control functions
 # ──────────────────────────────────────────────────────────────
 _CONTROL_FUNCTIONS = {
-    "main", "run", "start", "cli", "console",
+    "main", "run", "start", "cli", "console", "app",
     "migrate", "migrations", "seed", "seeds", "test", "tests"
 }
 

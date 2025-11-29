@@ -55,10 +55,7 @@ def generate_xml(xml_dict):
     dom = minidom.parseString(xml_str)
     return dom.toprettyxml(indent="  ")
 
-@get("/")
-async def get_root(request, response):
 
-    return response("Hello, World!")
 
 @get("/some/page")
 async def some_page(request, response):
@@ -149,7 +146,7 @@ async def redirect(request, response):
 
 
 @cached(False)
-@get("/")
+@get("/mee")
 async def index_html(request, response):
     request.session.set("name", "Tina4 222")
 
