@@ -21,8 +21,9 @@ Just `pip install tina4-python` and run your project – everything just works.
 """
 import asyncio
 import os
+if os.getenv("TINA4_DEBUG_LEVEL", "") == "":
+    os.environ["TINA4_DEBUG_LEVEL"] = "INFO"
 
-os.environ["TINA4_DEBUG_LEVEL"] = "INFO"
 import shutil
 import importlib
 import sys
@@ -81,11 +82,12 @@ setup_logging()
 Debug.info("Environment is", environment)
 
 TINA4_BANNER = ShellColors.bright_magenta + """
-  _______             __ __
- /_  __(_)___  ____ _/ // /
-  / / / / __ \/ __ `/ // /_
- / / / / / / / /_/ /__  __/
-/_/ /_/_/ /_/\__,_/  /_/
+████████╗██╗███╗   ██╗ █████╗ ██╗  ██╗
+╚══██╔══╝██║████╗  ██║██╔══██╗██║  ██║
+   ██║   ██║██╔██╗ ██║███████║███████║
+   ██║   ██║██║╚██╗██║██╔══██║╚════██║
+   ██║   ██║██║ ╚████║██║  ██║     ██║
+   ╚═╝   ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝     ╚═╝
 """ + ShellColors.end
 
 print(TINA4_BANNER)
@@ -398,12 +400,17 @@ def webserver(host_name, port):
             pass
         web_server.server_close()
     else:
-        Debug.info("Using Uvicorn webserver")
+        # Runs a hyper corn server
+        Debug.debug("Using hypercorn webserver")
         try:
-            import uvicorn
-            uvicorn.run(app, port=int(port))
+            from hypercorn.config import Config
+            from hypercorn.asyncio import serve
+            config = Config()
+            config.bind = [host_name + ":" + str(port)]
+            asyncio.run(serve(app, config))
         except Exception as e:
-            Debug.info("Not running Uvicorn webserver", str(e))
+            Debug.error("Not running Hypercorn webserver", str(e))
+
 
     Debug.info(Messages.MSG_SERVER_STOPPED)
 
@@ -426,11 +433,12 @@ def _has_control_methods():
     """Scan the actual main file content for 'def main(', 'def migrate(', etc."""
     main_module = sys.modules.get('__main__')
     if not main_module or not hasattr(main_module, '__file__'):
-        return False  # REPL / Jupyter
+        return True  # REPL / Jupyter
 
     file_path = main_module.__file__
+    Debug.debug(f"Checking {file_path} for control functions")
 
-    if "bin/tina4" in file_path:
+    if "bin/tina4" in file_path or "uvicorn.exe" in file_path or "uvicorn" in file_path or "tina4.exe" in file_path:
         return True
 
     if not file_path or not file_path.endswith('.py'):
@@ -440,7 +448,7 @@ def _has_control_methods():
     except Exception as e:
         return False  # Can't read file → assume no control function
 
-    # Regex: looks for "def " + name + "(" anywhere in the file
+    # Regex: looks for "def" + name + "(" anywhere in the file
     pattern = re.compile(r"^\s*def\s+(" + "|".join(re.escape(name) for name in _CONTROL_FUNCTIONS) + r")\s*\(",
                          re.MULTILINE)
 
@@ -455,13 +463,11 @@ def _auto_start_server():
         control_funcs = [name for name in _CONTROL_FUNCTIONS if name in sys.modules['__main__'].__dict__]
         if control_funcs:
             Debug.debug(
-                f"Auto-start disabled — detected control function(s): {', '.join(control_funcs)}\n"
-                f"       → Call {ShellColors.bright_cyan}run_web_server(){ShellColors.end} manually when ready.",
-                Constant.TINA4_LOG_WARNING
+                f"Auto-start disabled — detected control function(s) or other common ASGI webserver: {', '.join(control_funcs)}"
             )
         return
 
-    # Parse optional host:port from command line
+    # Parse optional host:port from command-line
     hostname = "localhost"
     port = 7145
 

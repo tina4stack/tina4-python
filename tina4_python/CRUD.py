@@ -19,7 +19,6 @@ import os
 import shutil
 import json
 
-
 class CRUD:
     """
     CRUD - Automatic Create, Read, Update & Delete interface generator for Tina4.

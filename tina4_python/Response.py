@@ -92,9 +92,9 @@ class Response:
         global http_code
         global content_type
         headers = {}
-        http_code = Constant.HTTP_REDIRECT
+        http_code = Constant.HTTP_REDIRECT_OTHER
         headers["Location"] = redirect_url
-        content = ""
+        content = "Moo"
         content_type = Constant.TEXT_HTML
         return Response("", http_code, content_type, headers)
 
