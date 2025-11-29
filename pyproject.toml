@@ -43,6 +43,9 @@ include = [
     "tina4_python/**/*"
 ]
 
+[project.scripts]
+tina4 = "tina4_python.cli:main"
+
 [[tool.pydoc-markdown.loaders]]
 type = "python"
 search_path = [ "./tina4_python" ]

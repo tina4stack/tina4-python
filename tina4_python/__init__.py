@@ -21,6 +21,8 @@ Just `pip install tina4-python` and run your project – everything just works.
 """
 import asyncio
 import os
+
+os.environ["TINA4_DEBUG_LEVEL"] = "INFO"
 import shutil
 import importlib
 import sys
@@ -76,6 +78,7 @@ if not debug_level or debug_level in ("", "NONE", "NULL"):
     os.environ["TINA4_DEBUG_LEVEL"] = TINA4_LOG_INFO
 
 setup_logging()
+Debug.info("Environment is", environment)
 
 TINA4_BANNER = ShellColors.bright_magenta + """
   _______             __ __
@@ -86,7 +89,7 @@ TINA4_BANNER = ShellColors.bright_magenta + """
 """ + ShellColors.end
 
 print(TINA4_BANNER)
-print(ShellColors.bright_yellow + "Setting debug mode", debug_level, ShellColors.end)
+print(ShellColors.cyan + "INFO: Setting debug mode:", debug_level, ShellColors.end)
 
 # Optional live-coding hot reload
 if importlib.util.find_spec("jurigged"):
@@ -103,7 +106,7 @@ if not os.path.exists(root_path + os.sep + "logs"):
 
 localize()
 
-Debug.info(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path))
+Debug.debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_path=library_path))
 
 # Global runtime containers
 tina4_routes = {}  # Registry of all registered routes
@@ -372,19 +375,19 @@ async def app(scope, receive, send):
                     })
 
 
-def run_web_server(in_hostname="localhost", in_port=7145):
+def run_web_server(hostname="localhost", port=7145):
     """Start the web server (convenient wrapper).
 
     Example:
         run_web_server("0.0.0.0", 8000)
     """
-    Debug.info(Messages.MSG_STARTING_WEBSERVER.format(port=in_port))
-    webserver(in_hostname, in_port)
+    Debug.info(Messages.MSG_STARTING_WEBSERVER.format(port=port))
+    webserver(hostname, port)
 
 
 def webserver(host_name, port):
     """Choose and start the appropriate ASGI server."""
-    if os.getenv('TINA4_DEFAULT_WEBSERVER', 'TRUE').upper() == 'TRUE':
+    if os.getenv('TINA4_DEFAULT_WEBSERVER', 'FALSE').upper() == 'TRUE':
         Debug.info("Using default webserver")
         web_server = Webserver(host_name, int(port))
         web_server.router_handler = Router()
@@ -407,7 +410,7 @@ def webserver(host_name, port):
 
 # Live coding hot-reload (jurigged)
 if importlib.util.find_spec("jurigged"):
-    Debug.info("Jurigged enabled")
+    Debug.debug("Jurigged enabled")
     jurigged.watch(["./src/app", "./src/orm", "./src/routes", "./src/templates"])
 
 # ──────────────────────────────────────────────────────────────
@@ -426,6 +429,10 @@ def _has_control_methods():
         return False  # REPL / Jupyter
 
     file_path = main_module.__file__
+
+    if "bin/tina4" in file_path:
+        return True
+
     if not file_path or not file_path.endswith('.py'):
         return False
     try:
@@ -443,11 +450,11 @@ def _has_control_methods():
 def _auto_start_server():
     """This runs once at the very end – after user's code is fully loaded"""
     should_we_start = not _has_control_methods()
-    Debug.info("Tina4 - Should we start ?", should_we_start)
+    Debug.debug("Tina4 - Can we start the webservice ?", should_we_start)
     if not should_we_start:
         control_funcs = [name for name in _CONTROL_FUNCTIONS if name in sys.modules['__main__'].__dict__]
         if control_funcs:
-            Debug.info(
+            Debug.debug(
                 f"Auto-start disabled — detected control function(s): {', '.join(control_funcs)}\n"
                 f"       → Call {ShellColors.bright_cyan}run_web_server(){ShellColors.end} manually when ready.",
                 Constant.TINA4_LOG_WARNING

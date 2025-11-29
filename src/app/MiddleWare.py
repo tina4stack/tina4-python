@@ -16,7 +16,7 @@ class MiddleWare:
     def after_route(request, response):
         print(response.content)
 
-        response.content = generate_xml(response.content)
+        # response.content = generate_xml(response.content)
         return request, response
 
     @staticmethod

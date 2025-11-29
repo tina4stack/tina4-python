@@ -20,5 +20,7 @@ setup(
     install_requires=[
         "tina4_python>0.1.31",
     ],
-    entry_points={"mkdocs.plugins": ["tina4_python = plugin:MetaPlugin"]},
+    entry_points={"mkdocs.plugins": ["tina4_python = plugin:MetaPlugin"],"console_scripts": [
+        "tina4 = tina4_python.cli:main",
+    ]},
 )
