@@ -19,18 +19,41 @@ import os
 import shutil
 import json
 
+
 class CRUD:
+    """
+    CRUD - Automatic Create, Read, Update & Delete interface generator for Tina4.
+
+    Takes a DatabaseResult object (usually from await conn.query(...)) and instantly
+    turns it into a fully functional, searchable, paginated HTML + JSON CRUD interface
+    using a single Twig template.
+
+    Features
+    --------
+    • Zero-configuration table detection from any SELECT query
+    • Automatic RESTful route registration (GET/POST/DELETE)
+    • Built-in server-side search & pagination
+    • Safe JSON serialization (Decimal → float, datetime → ISO, bytes → base64)
+    • Per-table template auto-copy for easy customization
+    • Works with SQLite, PostgreSQL, MySQL/MariaDB, MSSQL, Firebird and more
+
+    Example
+    -------
+    result = await conn.query("SELECT * FROM articles")
+    return await result.crud.to_crud(request, {"primary_key": "id", "limit": 25})
+    """
 
     def __init__(self):
-        self.records = []
-        self.dba = None
-        self.columns = []
-        self.search = ""
-        self.search_columns = []
-        self.total_count = 0
-        self.sql = None
-        self.error = ""
-        self.table_name = None
+        """Initialize the CRUD helper with empty state."""
+        self.records = []               # List of raw record dictionaries from the last fetch
+        self.dba = None                 # Reference to the underlying Database connection
+        self.columns = []               # Column names (list or dict with metadata)
+        self.search = ""                  # Current search term
+        self.search_columns = []        # Explicit list of columns to search (optional)
+        self.total_count = 0            # Total records matching the query (ignoring pagination)
+        self.sql = None                 # Original SQL used for the result set
+        self.error = ""                 # Error message if something went wrong
+        self.table_name = None          # Detected or overridden table name
 
     def strip_sql_pagination(self, sql: str) -> str:
         """
@@ -45,6 +68,12 @@ class CRUD:
           - Oracle (older): WHERE ROWNUM <= 10 (partial support)
 
         Safe for nested subqueries, comments, and mixed cases.
+
+        Args:
+            sql (str): The SQL statement to clean.
+
+        Returns:
+            str: SQL without any pagination clauses.
         """
 
         if not sql or not sql.strip():
@@ -114,9 +143,16 @@ class CRUD:
 
     def get_table_name(self, query):
         """
-        Gets the table name
-        :param query:
-        :return:
+        Extract the main table name from a SELECT query.
+
+        Looks for the last FROM clause that is not inside a sub-query.
+        Result is cached in self.table_name.
+
+        Args:
+            query (str): SQL query string.
+
+        Returns:
+            str | None: Table name or None if not detectable.
         """
 
         if self.table_name is not None:
@@ -130,9 +166,17 @@ class CRUD:
 
     def ensure_crud_template(self, filename: str):
         """
-        Checks to see if the template exists otherwise copies it over
-        :param filename:
-        :return:
+        Ensure a CRUD Twig template exists in src/templates/crud/.
+
+        If the template does not exist it is copied from the package default
+        (templates/components/crud.twig) so developers can customize it per table
+        without touching the core library.
+
+        Args:
+            filename (str): Desired filename inside src/templates/crud (e.g. "articles.twig").
+
+        Returns:
+            str: Full filesystem path to the (now existing) template.
         """
         root = tina4_python.root_path
         target_dir = os.path.join(root, "src", "templates", "crud")
@@ -153,6 +197,30 @@ class CRUD:
         return target_path
 
     def to_crud(self, request, options=None):
+        """
+        Generate a complete CRUD interface for the current result set.
+
+        Automatically registers four routes under the current request URL:
+          • GET    /url/table_name           → JSON for DataTables (with search & pagination)
+          • POST   /url/table_name           → create record
+          • POST   /url/table_name/{id}      → update record
+          • DELETE /url/table_name/{id}      → delete record
+
+        Returns the rendered HTML page using the table-specific Twig template.
+
+        Args:
+            request: Tina4 Request object (provides base URL and params).
+            options (dict, optional): Configuration dictionary:
+                - primary_key (str): default "id"
+                - limit (int): default 10
+                - offset (int): default 0
+                - search (str): default ""
+                - search_columns (list): columns to search
+                - name (str): custom route/template name (defaults to table name)
+
+        Returns:
+            str: Rendered HTML page (or JSON on AJAX calls).
+        """
         try:
             table_name = self.get_table_name(self.sql)
 
@@ -192,7 +260,6 @@ class CRUD:
                 self.search = search
                 options["search"] = search
 
-
                 # Use defined columns or fallback
                 if not "search_columns" in options:
                     search_columns = self.columns
@@ -227,13 +294,13 @@ class CRUD:
                 Debug.info("CRUD UPDATE", table_name, request.params, request.body)
                 self.dba.update(table_name, request.body, primary_key=options["primary_key"])
                 self.dba.commit()
-                return response({"message": f"<script>showMessage('{table_nice_name}  Record updated');</script>", "post": request.body}, HTTP_OK, APPLICATION_JSON)
+                return response({"message": f"<script>showMessage('{table_nice_name} Record updated');</script>", "post": request.body}, HTTP_OK, APPLICATION_JSON)
 
             async def delete_record(request, response):
                 Debug.info("CRUD DELETE", table_name, request.params)
                 self.dba.delete(table_name, {options["primary_key"] : request.params[options["primary_key"]]})
                 self.dba.commit()
-                return response({"message": f"<script>showMessage('{table_nice_name}  Record deleted');</script>"}, HTTP_OK, APPLICATION_JSON)
+                return response({"message": f"<script>showMessage('{table_nice_name} Record deleted');</script>"}, HTTP_OK, APPLICATION_JSON)
 
             Router.add(TINA4_GET, os.path.join(request.url, crud_name).replace("\\", "/"), get_record)
             Router.add(TINA4_POST, os.path.join(request.url, crud_name).replace("\\", "/"), post_record)
@@ -243,7 +310,6 @@ class CRUD:
             fields = []
             for column in self.columns:
                 fields.append({"name": column, "label": Template.get_nice_label(column)})
-
 
             html = Template.render(twig_file.replace(os.path.join(tina4_python.root_path, "src", "templates"), "").replace("\\", "/"),
                                    {"columns": fields, "records": self.to_array(),
@@ -255,12 +321,20 @@ class CRUD:
         except Exception as e:
             return "Error rendering CRUD: "+str(e)
 
-
-
     def to_array(self, _filter=None):
         """
-        Creates an array or list of the items
-        :return:
+        Convert the internal records to a JSON-serializable list of dictionaries.
+
+        Handles non-JSON-native types:
+          • Decimal      → float
+          • datetime/date → ISO 8601 string
+          • bytes/memoryview → base64 encoded string
+
+        Args:
+            _filter (callable, optional): Function applied to each record dict before returning.
+
+        Returns:
+            list[dict]: Serializable records.
         """
         if self.error is not None:
             return {"error": self.error}
@@ -291,19 +365,24 @@ class CRUD:
             return []
 
     def to_list(self, _filter=None):
+        """Alias of to_array() for readability."""
         return self.to_array(_filter)
 
     def to_json(self, _filter=None):
+        """Return records as a JSON encoded string."""
         return json.dumps(self.to_array(_filter))
 
     def __iter__(self):
+        """Allow iteration over records (yields results from to_array())."""
         return iter(self.to_array())
 
     def __getitem__(self, item):
+        """Support indexing like a list: crud[0] → first raw record."""
         if item < len(self.records):
             return self.records[item]
         else:
             return {}
 
     def __str__(self):
+        """String representation is the JSON output."""
         return self.to_json()

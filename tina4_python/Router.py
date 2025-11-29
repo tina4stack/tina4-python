@@ -120,9 +120,10 @@ class Router:
         old_stdout = None
         buffer = io.StringIO()
         for route in tina4_python.tina4_routes.values():
-            if route["method"] != method:
+            if "method" not in route or route["method"] != method:
                 continue
-            Debug.debug("Matching route " + route['route'] + " to " + url)
+
+            Debug.debug(method, "Matching route " + route['route'] + " to " + url)
             if Router.match(url, route['route']):
                 if not "noauth" in route:
                     if "secure" in route or ("swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]):
@@ -268,13 +269,13 @@ class Router:
     @staticmethod
     def add(method, route, callback):
         # Normalize route (remove trailing slash for comparison)
-        norm_route = route.rstrip("/")
+        norm_route = route.rstrip("/").lower()
 
         # Check if the same method + route already exists
         for cb, data in tina4_python.tina4_routes.items():
-            if method in data and data["method"].upper() == method.upper() and \
-                    data["route"].rstrip("/") == norm_route:
-                Debug.debug(f"Route already exists: {method} {route}")
+            if "method" in data and data["method"].upper() == method.upper() and \
+                    data["route"].rstrip("/").lower() == norm_route:
+                Debug.error(f"Route already exists: {method} {route}")
                 # Optionally raise or return False
                 return  # or raise ValueError("Route already defined")
 
