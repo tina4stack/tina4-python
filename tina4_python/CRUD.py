@@ -1,3 +1,10 @@
+#
+# Tina4 - This is not a 4ramework.
+# Copy-right 2007 - current Tina4
+# License: MIT https://opensource.org/licenses/MIT
+#
+# flake8: noqa: E501
+
 import base64
 import datetime
 from decimal import Decimal
@@ -5,7 +12,7 @@ from decimal import Decimal
 from tina4_python.Debug import Debug
 import re
 from tina4_python.Template import Template
-from tina4_python.Constant import *
+from tina4_python.Constant import TINA4_DELETE, TINA4_POST, TINA4_GET, HTTP_OK, APPLICATION_JSON
 from tina4_python.Router import Router
 import tina4_python
 import os
