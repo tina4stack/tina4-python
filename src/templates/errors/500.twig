@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>500 Error - {{ server.url }}</title>
+</head>
+<body style="text-align: center">
+<h2>Oops, somebody pushed some code that broke stuff on {{ server.url }}!</h2>
+<img src="{{ baseURL }}/images/500.png" alt="500 Error - {{ server.url }}">
+<pre>{{ error_message }}</pre>
+</body>
+</html>

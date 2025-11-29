@@ -5,9 +5,9 @@ Tina4 CLI Tool – Quick commands for starting projects and running servers.
 Usage: tina4 [COMMAND] [ARGS...]
 
 Commands:
-  start PROJECT_NAME    Scaffold a new Tina4 project
-  run [PORT]            Run the development server (default: 8000)
-  --help                Show this help
+  init PROJECT_NAME     Scaffold a new Tina4 project
+  start [PORT]          Run the development server (default: 8000)
+  help                  Show this help
 """
 
 import os
@@ -82,7 +82,7 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "start":
+    if args.command == "init":
         create_project(args.project_name)
     elif args.command == "run":
         run_server(args.port)

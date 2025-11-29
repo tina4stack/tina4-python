@@ -443,4 +443,40 @@ brew install websocat
 websocat http://localhost:7145/websocket
 ```
 
+<h1>HELLO</h1>
+
+<script src="/js/reconnecting-websocket.js"></script>
+
+{% set hello = formToken({"name": "Ross"}) %}
+
+<form method="post" onsubmit="return false">
+    <input type="text" name="message" id="message">
+    <button onclick="sendMessage(document.forms[0].message.value)">Submit</button>
+
+    {{ dump(request.session) }}
+</form>
+
+<script>
+
+    var socket = new ReconnectingWebSocket("ws://{{ request.headers.host }}/websocket");
+
+    // Connection opened
+    socket.addEventListener("open", (event) => {
+        console.log("Websocket connected!");
+        //start the queue
+
+
+    });
+
+    // Listen for messages
+    socket.addEventListener("message", (event) => {
+        console.log("Message from server ", event.data);
+    });
+
+    function sendMessage(message) {
+        socket.send(message)
+    }
+
+</script>
+
 
