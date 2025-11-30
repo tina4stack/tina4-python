@@ -4,6 +4,7 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+import os
 import json
 import inspect
 from datetime import datetime, date
@@ -107,6 +108,74 @@ class Response:
 
         return Response(Template.render(template_name, data=data), http_code, content_type)
 
+    @staticmethod
+    def file(file_path: str, root_path: str = "src/public"):
+        """
+        Serve a static file from the file system.
+
+        Args:
+            file_path (str): The requested file path (e.g., "images/logo.png", "css/style.css")
+            root_path (str): Base directory to serve files from (defaults to src/public)
+
+        Returns:
+            Response: A properly configured Response object with file content and correct MIME type
+        """
+        global content, content_type, http_code
+
+        # Resolve full path and prevent directory traversal
+        full_path = os.path.abspath(os.path.join(root_path, file_path.lstrip("/")))
+
+        # Security: ensure the requested file is inside the root_path
+        if not full_path.startswith(os.path.abspath(root_path)):
+            http_code = Constant.HTTP_FORBIDDEN
+            content_type = Constant.TEXT_PLAIN
+            content = "403 - Forbidden"
+            return Response(content, http_code, content_type)
+
+        # Check if file exists
+        if not os.path.isfile(full_path):
+            http_code = Constant.HTTP_NOT_FOUND
+            content_type = Constant.TEXT_PLAIN
+            content = "404 - File Not Found"
+            return Response(content, http_code, content_type)
+
+        # Determine MIME type
+        extension = os.path.splitext(file_path)[1].lower()
+        mime_map = {
+            ".html": Constant.TEXT_HTML,
+            ".css":  Constant.TEXT_CSS,
+            ".js":   Constant.TEXT_JAVASCRIPT,
+            ".json": Constant.APPLICATION_JSON,
+            ".png":  "image/png",
+            ".jpg":  "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".gif":  "image/gif",
+            ".svg":  "image/svg+xml",
+            ".ico":  "image/x-icon",
+            ".woff": "font/woff",
+            ".woff2":"font/woff2",
+            ".ttf":  "font/ttf",
+            ".pdf":  "application/pdf",
+            ".txt":  Constant.TEXT_PLAIN,
+        }
+        content_type = mime_map.get(extension, "application/octet-stream")
+
+        # Read file content (binary for non-text, text for text)
+        try:
+            if content_type.startswith("text/") or content_type in ["application/json", "image/svg+xml"]:
+                with open(full_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            else:
+                with open(full_path, "rb") as f:
+                    content = f.read()
+        except Exception as e:
+            http_code = Constant.HTTP_BAD_REQUEST
+            content_type = Constant.TEXT_PLAIN
+            content = f"Error reading file: {str(e)}"
+            return Response(content, http_code, content_type)
+
+        http_code = Constant.HTTP_OK
+        return Response(content, http_code, content_type)
 
     @staticmethod
     def add_header(key, value):

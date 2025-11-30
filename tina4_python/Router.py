@@ -142,7 +142,7 @@ class Router:
 
             Debug.debug(method, "Matching route " + route['route'] + " to " + url)
             if Router.match(url, route['route']):
-                Debug.debug(route, method, validated, Router.requires_auth(route, method, validated))
+
                 if not "noauth" in route and not validated:
                     if Router.requires_auth(route, method, validated):
                         return Response.Response("Forbidden - Access denied", Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)

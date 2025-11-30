@@ -87,6 +87,7 @@ LOOKUP_HTTP_CODE = {
 TEXT_HTML         = "text/html"          #: HTML documents and templates
 TEXT_CSS          = "text/css"           #: Cascading Style Sheets
 TEXT_PLAIN        = "text/plain"         #: Plain text files
+TEXT_JAVASCRIPT   = "text/javascript"    #: Javascript files
 APPLICATION_JSON  = "application/json"   #: JSON API responses
 APPLICATION_XML   = "application/xml"    #: XML data (RSS, SOAP, etc.)
 
