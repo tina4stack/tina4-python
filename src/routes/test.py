@@ -1,4 +1,5 @@
-@get("/hello/{id}")
-async def get_hello_id (id, request, response):
 
-    return response({"id": id, "params": request.params["id"]})
+@get("/hello/world/{id}")
+@template("index.twig")
+async def get_twig_something (id, request, response):
+    return {"id": id}

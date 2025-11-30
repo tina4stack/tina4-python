@@ -19,6 +19,7 @@ from jinja2 import Environment, FileSystemLoader, Undefined
 from tina4_python.Session import Session
 from random import random as RANDOM
 from typing import Dict, Any
+from functools import wraps
 
 
 class Template:
@@ -211,3 +212,26 @@ class Template:
             return {"content": value, "content_type": mime_type}
 
         return {"content": value, "content_type": mime_type}
+
+
+def template(twig_file: str):
+    """
+    Auto-render a Twig template when the handler returns a dict.
+    Works perfectly with direct parameter injection.
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            result = await func(*args, **kwargs)
+
+            # If the route returns a dict → render the template
+            if isinstance(result, dict):
+                html = Template.render(twig_file, result)
+                from tina4_python.Response import Response
+                return Response(html, Constant.HTTP_OK, Constant.TEXT_HTML)
+
+            # Anything else (redirects, JSON, etc.) is passed through unchanged
+            return result
+
+        return wrapper
+    return decorator

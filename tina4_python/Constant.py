@@ -71,6 +71,8 @@ LOOKUP_HTTP_CODE = {
     HTTP_NO_CONTENT:      "No Content",
     HTTP_PARTIAL_CONTENT: "Partial Content",
     HTTP_REDIRECT:        "Redirect",
+    HTTP_REDIRECT_MOVED:  "Redirect Moved",
+    HTTP_REDIRECT_OTHER:  "Redirect Other",
     HTTP_BAD_REQUEST:     "Bad Request",
     HTTP_UNAUTHORIZED:    "Unauthorized",
     HTTP_FORBIDDEN:       "Forbidden",

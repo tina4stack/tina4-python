@@ -200,23 +200,24 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
     shutil.copytree(source_dir, destination_dir)
 
 # Declare built ins so we don't always have to import stuff
-
 import builtins
 from .Router import get, post, put, patch, delete, middleware, cached, noauth, secured
 from .Debug import Debug
-from .Template import Template
 from .Database import Database
 from .ORM import ORM
+from .Template import template
 from .Swagger import description, secure, summary, example, tags, params
 from .FieldTypes import IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField
+from .Constant import TEXT_HTML, TEXT_PLAIN, TEXT_CSS, TINA4_POST, TINA4_DELETE, TINA4_ANY, TINA4_PUT, TINA4_PATCH, TINA4_OPTIONS, TINA4_LOG_ALL, TINA4_LOG_WARNING, TINA4_LOG_ERROR, TINA4_LOG_DEBUG, TINA4_GET, TINA4_LOG_INFO, HTTP_OK, HTTP_SERVER_ERROR, HTTP_FORBIDDEN, HTTP_NO_CONTENT, HTTP_PARTIAL_CONTENT, HTTP_CREATED, HTTP_UNAUTHORIZED, HTTP_ACCEPTED, HTTP_REDIRECT, HTTP_REDIRECT_MOVED, HTTP_REDIRECT_OTHER, HTTP_BAD_REQUEST, HTTP_NOT_FOUND, LOOKUP_HTTP_CODE, APPLICATION_JSON, APPLICATION_XML
 
 # Make them globally available in every Tina4 project — zero imports
-for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured, IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField, description, secure, summary, example, tags, params):
+for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured,
+             IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField,
+             description, secure, summary, example, tags, params, template):
     if deco.__name__ not in builtins.__dict__:
         builtins.__dict__[deco.__name__] = deco
 
 builtins.Debug = Debug
-builtins.Template = Template
 builtins.Database = Database
 builtins.ORM = ORM
 
