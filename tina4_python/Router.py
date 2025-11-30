@@ -5,6 +5,7 @@
 #
 # flake8: noqa: E501
 import json
+import inspect
 import mimetypes
 import re
 import os
@@ -167,7 +168,37 @@ class Router:
                         Request, Response = await middleware_runner.call_any_methods(Request, Response)
 
                 try:
-                    result = await router_response(request=Request, response=Response.Response)
+                    sig = inspect.signature(router_response)
+                    path_args = []  # List of (name, value) for path params
+
+                    # Identify expected path params (positional args before 'request' and 'response')
+                    for param_name, param in sig.parameters.items():
+                        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.POSITIONAL_ONLY) and \
+                                param_name not in ('request', 'response'):
+                            if param_name in Router.variables:
+                                value = Router.variables[param_name]
+                                # Optional: Type conversion based on annotation (e.g., int)
+                                if param.annotation != inspect.Parameter.empty:
+                                    try:
+                                        if param.annotation == int:
+                                            value = int(value)
+                                        elif param.annotation == str:
+                                            value = str(value)
+                                        # Add more types as needed (float, bool, etc.)
+                                    except ValueError:
+                                        raise ValueError(f"Invalid type for path param '{param_name}': expected {param.annotation.__name__}, got '{Router.variables[param_name]}'")
+                                path_args.append(value)
+                                # Apply default if missing and has default
+                            elif param.default != inspect.Parameter.empty:
+                                path_args.append(param.default)
+                            else:
+                                raise TypeError(f"Missing required path parameter: {param_name}")
+
+                    # Dynamically invoke with injected args + kwargs for request/response
+                    if path_args:
+                        result = await router_response(*path_args, request=Request, response=Response.Response)
+                    else:
+                        result = await router_response(request=Request, response=Response.Response)
                 except Exception as e:
                     error_string = tina4_python.global_exception_handler(e)
                     if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):

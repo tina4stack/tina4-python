@@ -28,16 +28,25 @@ except ImportError as e:
     sys.exit(1)
 
 
+from pathlib import Path
+
 def create_project(project_name: str):
     """Scaffold a new Tina4 project directory."""
     project_dir = Path(project_name)
+
     if project_dir.exists():
-        print(f"Error: Directory '{project_name}' already exists.")
-        sys.exit(1)
+        print(f"Warning: Directory '{project_name}' already exists.")
 
-    project_dir.mkdir()
+    project_dir.mkdir(exist_ok=True)
 
-    # Create minimal index.py (based on your Hello World example)
+
+    main_py_path = project_dir / "main.py"
+    if main_py_path.exists():
+        print(f"Removing existing 'main.py' in '{project_name}'...")
+        main_py_path.unlink()  # deletes the file
+
+
+    # Create minimal app.py (renamed from index.py for clarity)
     index_content = '''from tina4_python import run_web_server
 from tina4_python.Router import get
 
@@ -60,7 +69,9 @@ if __name__ == "__main__":
     with open(project_dir / "requirements.txt", "w") as f:
         f.write(reqs_content)
 
-    print(f"✅ Project '{project_name}' created!\nRun this next:\ncd {project_name} && pip install -r requirements.txt && python app.py")
+    print(f"✅ Project '{project_name}' created!\n"
+          f"Run this next:\n"
+          f"   cd {project_name} && python app.py")
 
 
 def run_server(port: int = 8000):
@@ -192,7 +203,7 @@ def main():
     start_parser.add_argument("project_name", help="Name of the project directory")
 
     # Subcommand: run
-    run_parser = subparsers.add_parser("run", help="Run the dev server")
+    run_parser = subparsers.add_parser("start", help="Run the dev server")
     run_parser.add_argument("port", nargs="?", type=int, default=7145, help="Port to run on (default: 7145)")
 
     # migrate
@@ -206,7 +217,7 @@ def main():
 
     if args.command == "init":
         create_project(args.project_name)
-    elif args.command == "run":
+    elif args.command == "start":
         run_server(args.port)
     elif args.command == "migrate":
         run_migrations()

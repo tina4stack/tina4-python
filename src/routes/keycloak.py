@@ -1,4 +1,6 @@
 import os
+from email.policy import default
+
 from tina4_python.Debug import Debug
 from tina4_python.Router import post, get
 from keycloak import KeycloakOpenID
@@ -28,3 +30,8 @@ async def dashboard(request, response):
     userinfo = request.session.get("userinfo")
 
     return response(userinfo)
+
+@get("/inline/{id}")
+async def get_inline_id (id, request, response):
+
+    return response({"id": id, "params": request.params["id"]})
