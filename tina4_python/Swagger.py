@@ -50,6 +50,10 @@ class Swagger:
         Swagger.set_swagger_value(callback, "example", example)
 
     @staticmethod
+    def add_example_response(example: Any, callback: Callable) -> None:
+        Swagger.set_swagger_value(callback, "example_response", example)
+
+    @staticmethod
     def add_params(params: List[str] | Dict[str, str], callback: Callable) -> None:
         Swagger.set_swagger_value(callback, "params", params)
 
@@ -110,6 +114,7 @@ class Swagger:
             secure: bool,
             query_params: List[str] | Dict,
             example: Any,
+            example_response: Any
     ) -> Dict[str, Any]:
 
         """Build a complete OpenAPI 3.0 operation object"""
@@ -127,8 +132,8 @@ class Swagger:
                     "description": "Successful response",
                     "content": {
                         "application/json": {
-                            "example": example
-                        } if example else {}
+                            "example": example_response
+                        } if example_response else {}
                     }
                 },
                 "400": {
@@ -177,6 +182,7 @@ class Swagger:
             "description": "",
             "summary": "",
             "example": None,
+            "example_response": None,
             "secure": False
         }
         for key, value in defaults.items():
@@ -212,7 +218,8 @@ class Swagger:
                 description=swagger["description"],
                 secure=swagger["secure"],
                 query_params=swagger["params"],
-                example=swagger["example"]
+                example=swagger["example"],
+                example_response=swagger["example_response"]
             )
 
             # CRITICAL FIX: Re-apply security if route is marked secure
@@ -308,6 +315,12 @@ def example(example_data: Any):
         return callback
     return decorator
 
+def example_response(example_data: Any):
+    def decorator(callback):
+        Swagger.add_example_response(example_data, callback)
+        return callback
+    return decorator
+
 
 def params(params_list: List[str] | Dict[str, str]):
     def decorator(callback):
@@ -322,6 +335,7 @@ def describe(
         tags: List[str] | str = None,
         params: List[str] | Dict = None,
         example: Any = None,
+        example_response: Any = None,
         secure: bool = False
 ):
     """All-in-one decorator - most convenient"""
@@ -336,6 +350,8 @@ def describe(
             Swagger.add_params(params, callback)
         if example is not None:
             Swagger.add_example(example, callback)
+        if example_response is not None:
+            Swagger.add_example(example_response, callback)
         if secure:
             Swagger.add_secure(callback)
         return callback

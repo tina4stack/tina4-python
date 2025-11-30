@@ -1,3 +1,4 @@
+from tina4_python import get, template
 
 @get("/hello/world/{id}")
 @template("index.twig")
