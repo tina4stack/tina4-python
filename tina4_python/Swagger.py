@@ -7,7 +7,8 @@
 import os
 import re
 import tina4_python
-from tina4_python import Constant, Debug
+from tina4_python import Constant
+from tina4_python.Debug import Debug
 
 
 class Swagger:
@@ -135,7 +136,6 @@ class Swagger:
     def get_json(request):
         paths = {}
         for route in tina4_python.tina4_routes.values():
-
             if "swagger" in route:
                 if route["swagger"] is not None:
                     swagger = Swagger.parse_swagger(route["swagger"])
@@ -223,6 +223,24 @@ def example(example):
 def params(params):
     def actual_params(callback):
         Swagger.add_params(params, callback)
+        return callback
+
+    return actual_params
+
+def describe(description=None,summary=None,tags=None,params=None,example=None,secure=None):
+    def actual_params(callback):
+        if description is not None:
+            Swagger.add_descripton(description, callback)
+        if summary is not None:
+            Swagger.add_summary(summary, callback)
+        if tags is not None:
+            Swagger.add_tags(tags, callback)
+        if params is not None:
+            Swagger.add_params(params, callback)
+        if example is not None:
+            Swagger.add_example(example, callback)
+        if secure is not None:
+            Swagger.add_secure(callback)
         return callback
 
     return actual_params

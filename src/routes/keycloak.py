@@ -1,14 +1,13 @@
 import os
-from email.policy import default
-
-from tina4_python.Debug import Debug
-from tina4_python.Router import post, get
 from keycloak import KeycloakOpenID
+from tina4_python import description, example, tags, post, get
 
 
 @post("/login")
+@description("Login to keycloak")
+@example({"email": "Email Address", "password": "password"})
+@tags(["hello", "world"])
 async def post_login(request, response):
-
     keycloak_openid = KeycloakOpenID(server_url=os.getenv("KEYCLOAK_URL", ""),
                                      client_id=os.getenv("KEYCLOAK_CLIENT_ID", "admin"),
                                      realm_name=os.getenv("KEYCLOAK_REALM", "production"),
@@ -25,9 +24,10 @@ async def post_login(request, response):
     request.session.set("userinfo", userinfo)
     return response.redirect("/dashboard")
 
+
 @get("/dashboard")
+@description("Moo")
 async def dashboard(request, response):
     userinfo = request.session.get("userinfo")
 
     return response(userinfo)
-

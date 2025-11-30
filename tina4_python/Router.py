@@ -316,15 +316,20 @@ class Router:
             is_secure = True
 
         # Add or update the route
-        tina4_python.tina4_routes[callback] = {
-            "route": route,
-            "callback": callback,
-            "method": method,
-            "swagger": None,
-            "cached": False,
-            "noauth": False,
-            "secure": is_secure
-        }
+        if callback not in tina4_python.tina4_routes:
+            tina4_python.tina4_routes[callback] = {
+                "route": route,
+                "callback": callback,
+                "method": method,
+                "swagger": None,
+                "cached": False,
+                "noauth": False,
+                "secure": is_secure
+            }
+        else:
+            tina4_python.tina4_routes[callback]["route"] = route
+            tina4_python.tina4_routes[callback]["method"] = method
+            tina4_python.tina4_routes[callback]["secure"] = is_secure
 
         if '{' in route:
             route_variables = re.findall(r'{(.*?)}', route)
