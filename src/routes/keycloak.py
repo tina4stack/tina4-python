@@ -31,7 +31,3 @@ async def dashboard(request, response):
 
     return response(userinfo)
 
-@get("/inline/{id}")
-async def get_inline_id (id, request, response):
-
-    return response({"id": id, "params": request.params["id"]})

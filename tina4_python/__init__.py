@@ -199,6 +199,27 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
     destination_dir = root_path + os.sep + "src" + os.sep + "public"
     shutil.copytree(source_dir, destination_dir)
 
+# Declare built ins so we don't always have to import stuff
+
+import builtins
+from .Router import get, post, put, patch, delete, middleware, cached, noauth, secured
+from .Debug import Debug
+from .Template import Template
+from .Database import Database
+from .ORM import ORM
+from .Swagger import description, secure, summary, example, tags, params
+from .FieldTypes import IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField
+
+# Make them globally available in every Tina4 project — zero imports
+for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured, IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField, description, secure, summary, example, tags, params):
+    if deco.__name__ not in builtins.__dict__:
+        builtins.__dict__[deco.__name__] = deco
+
+builtins.Debug = Debug
+builtins.Template = Template
+builtins.Database = Database
+builtins.ORM = ORM
+
 # Auto-import everything from src folders
 if os.path.exists(root_path + os.sep + "src"):
     try:
@@ -377,17 +398,65 @@ async def app(scope, receive, send):
                     })
 
 
-def run_web_server(hostname="localhost", port=7145):
-    """Start the web server (convenient wrapper).
+def run_web_server(hostname="localhost", port=7145, debug: bool = False):
+    """
+    Start the Tina4 web server with automatic route discovery.
+
+    Features:
+        • Automatically imports all Python files in ./src/ (recursive)
+        • Triggers @get, @post, etc. decorators with zero manual imports
+        • Hot-reload support via Hypercorn when debug=True
+        • Fully backward compatible with existing projects
 
     Example:
-        run_web_server("0.0.0.0", 8000)
+        run_web_server("0.0.0.0", 8000, debug=True)
     """
+    import os
+    import sys
+    import importlib
+    from pathlib import Path
+
+    # ------------------------------------------------------------------
+    # 1. Auto-discover and load all route modules from src/
+    # ------------------------------------------------------------------
+    def _autoload_routes(root_dir: str = "src"):
+        root_path = Path(root_dir).resolve()
+        if not root_path.is_dir():
+            Debug.info(f"No '{root_dir}' directory found—skipping autoload.")
+            return
+
+        for py_file in root_path.rglob("*.py"):
+            # Skip __init__.py and files starting with underscore
+            if py_file.name.startswith("_"):
+                continue
+
+            try:
+                # Convert file path → dotted module name
+                rel = py_file.relative_to(Path.cwd())
+                module_name = ".".join(rel.with_suffix("").parts)
+
+                if module_name in sys.modules:
+                    # Hot-reload support when debug=True
+                    if debug:
+                        importlib.reload(sys.modules[module_name])
+                        Debug.info(f"Reloaded module: {module_name}")
+                else:
+                    importlib.import_module(module_name)
+                    Debug.info(f"Autoloaded routes: {module_name}")
+            except Exception as e:
+                Debug.error(f"Failed to load {py_file}: {e}")
+
+    # Run autoloader (only once per process, but safe to call again)
+    _autoload_routes("src")
+
+    # ------------------------------------------------------------------
+    # 2. Start the actual web server (unchanged logic)
+    # ------------------------------------------------------------------
     Debug.info(Messages.MSG_STARTING_WEBSERVER.format(port=port))
-    webserver(hostname, port)
+    webserver(hostname, port, debug=debug)  # Pass debug flag down
 
 
-def webserver(host_name, port):
+def webserver(host_name, port, debug: bool = False):
     """Choose and start the appropriate ASGI server."""
     if os.getenv('TINA4_DEFAULT_WEBSERVER', 'FALSE').upper() == 'TRUE':
         Debug.info("Using default webserver")
@@ -400,17 +469,22 @@ def webserver(host_name, port):
             pass
         web_server.server_close()
     else:
-        # Runs a hyper corn server
+        # Runs a hypercorn server
         Debug.debug("Using hypercorn webserver")
         try:
             from hypercorn.config import Config
             from hypercorn.asyncio import serve
             config = Config()
             config.bind = [host_name + ":" + str(port)]
+            if debug:
+                config.use_reloader = True  # Enables hot-reload like uvicorn --reload
+                config.log_level = "debug"
+                Debug.info("Hypercorn running in debug mode with auto-reload")
             asyncio.run(serve(app, config))
         except Exception as e:
             Debug.error("Not running Hypercorn webserver", str(e))
 
+    Debug.info(Messages.MSG_SERVER_STOPPED)
 
     Debug.info(Messages.MSG_SERVER_STOPPED)
 
@@ -490,3 +564,4 @@ def _auto_start_server():
 
 
 _auto_start_server()
+

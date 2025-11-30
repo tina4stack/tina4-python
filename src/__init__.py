@@ -1,4 +1,8 @@
-from tina4_python.Database import Database
+
 dba = Database("sqlite3:data.db")
 
-from .routes import keycloak
+
+@get("/inline/{id}")
+async def get_inline_id (id, request, response):
+
+    return response({"id": id, "params": request.params["id"]})
