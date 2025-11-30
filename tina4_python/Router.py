@@ -56,6 +56,22 @@ class Router:
 
         return matching
 
+    @staticmethod
+    def requires_auth(route: dict, method: str, validated: bool) -> bool:
+        """
+        Returns True if the request should be blocked due to missing auth
+        """
+        # Route explicitly marked as secure (via @secure() or legacy)
+        explicitly_secured = bool(
+            route.get("secure") or
+            (isinstance(route.get("swagger"), dict) and route["swagger"].get("secure"))
+        )
+
+        # Write methods always need auth unless explicitly public
+        is_write_method = method not in [Constant.TINA4_GET, Constant.TINA4_OPTIONS]
+
+        return explicitly_secured or (is_write_method and not validated)
+
     # Renders the URL and returns the content
     @staticmethod
     async def get_result(url, method, request, headers, session):
@@ -126,13 +142,10 @@ class Router:
 
             Debug.debug(method, "Matching route " + route['route'] + " to " + url)
             if Router.match(url, route['route']):
-                if not "noauth" in route:
-                    if "secure" in route or ("swagger" in route and route["swagger"] is not None and "secure" in route["swagger"]):
-                        if (("secure" in route and route["secure"]) or ("swagger" in route and route["swagger"] is not None and route["swagger"]["secure"])) and not validated:
-                            return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
-                    else:
-                        if not validated and method not in [Constant.TINA4_OPTIONS, Constant.TINA4_GET]:
-                            return Response.Response(content, Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
+                Debug.debug(route, method, validated, Router.requires_auth(route, method, validated))
+                if not "noauth" in route and not validated:
+                    if Router.requires_auth(route, method, validated):
+                        return Response.Response("Forbidden - Access denied", Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
 
 
                 router_response = route["callback"]
@@ -317,19 +330,12 @@ class Router:
 
         # Add or update the route
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {
-                "route": route,
-                "callback": callback,
-                "method": method,
-                "swagger": None,
-                "cached": False,
-                "noauth": False,
-                "secure": is_secure
-            }
-        else:
-            tina4_python.tina4_routes[callback]["route"] = route
-            tina4_python.tina4_routes[callback]["method"] = method
-            tina4_python.tina4_routes[callback]["secure"] = is_secure
+            tina4_python.tina4_routes[callback] = {"swagger": None,"cached": False,"noauth": False}
+
+        tina4_python.tina4_routes[callback]["callback"] = callback
+        tina4_python.tina4_routes[callback]["route"] = route
+        tina4_python.tina4_routes[callback]["method"] = method
+        tina4_python.tina4_routes[callback]["secure"] = is_secure
 
         if '{' in route:
             route_variables = re.findall(r'{(.*?)}', route)

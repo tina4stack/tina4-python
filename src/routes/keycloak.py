@@ -7,6 +7,7 @@ from tina4_python import description, example, tags, post, get
 @description("Login to keycloak")
 @example({"email": "Email Address", "password": "password"})
 @tags(["hello", "world"])
+@secure()
 async def post_login(request, response):
     keycloak_openid = KeycloakOpenID(server_url=os.getenv("KEYCLOAK_URL", ""),
                                      client_id=os.getenv("KEYCLOAK_CLIENT_ID", "admin"),
@@ -19,7 +20,7 @@ async def post_login(request, response):
         Debug.info("Login success", userinfo)
     except Exception as e:
         Debug.error("Login failed", str(e))
-        return response.redirect("/")
+        return response.redirect("/hello/world/test")
 
     request.session.set("userinfo", userinfo)
     return response.redirect("/dashboard")
