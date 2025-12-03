@@ -21,4 +21,4 @@ async def search(request, response):
 @get("/uploads/{file}")
 async def serve_upload(file: str, request, response):
     print("Ok")
-    return response.file(file)
+    return response.file(file, "")

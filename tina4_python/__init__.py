@@ -513,7 +513,7 @@ def _has_control_methods():
     file_path = main_module.__file__
     Debug.debug(f"Checking {file_path} for control functions")
 
-    if "bin/tina4" in file_path or "uvicorn.exe" in file_path or "uvicorn" in file_path or "tina4.exe" in file_path:
+    if "tina4" in file_path or "uvicorn" in file_path in file_path or "hypercorn" in file_path:
         return True
 
     if not file_path or not file_path.endswith('.py'):

@@ -44,6 +44,8 @@ class Template:
         Template.twig.filters['json_decode'] = Template.json_decode
         Template.twig.globals['json_decode'] = Template.json_decode
         Template.twig.filters['nice_label'] = Template.get_nice_label
+        Template.twig.globals['datetime_format'] = Template.datetime_format
+        Template.twig.filters['datetime_format'] = Template.datetime_format
         Template.twig.globals['formToken'] = Template.get_form_token
         Template.twig.filters['formToken'] = Template.get_form_token_input
         if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv(
@@ -53,6 +55,12 @@ class Template:
             Template.twig.globals['dump'] = Template.production_dump
         Debug.debug("Twig Initialized on " + path)
         return Template.twig
+
+    @staticmethod
+    def datetime_format(value, format="%H:%M %d-%m-%y"):
+        if value.strip().upper() == "NOW":
+            value = date.today()
+        return value.strftime(format)
 
     @staticmethod
     def production_dump(param):
