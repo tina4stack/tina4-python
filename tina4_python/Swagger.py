@@ -22,7 +22,7 @@ class Swagger:
     def set_swagger_value(callback: Callable, key_name: str, value: Any) -> None:
         """Internal helper to attach swagger metadata to a route callback"""
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {}
+            tina4_python.tina4_routes[callback] = {"route":[], "method":[]}
         if "swagger" not in tina4_python.tina4_routes[callback]:
             tina4_python.tina4_routes[callback]["swagger"] = {}
         tina4_python.tina4_routes[callback]["swagger"][key_name] = value

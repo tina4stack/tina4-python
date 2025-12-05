@@ -40,21 +40,23 @@ class Router:
 
         # splitting URL and route and putting them into lists to compare
         url_segments = url.strip('/').split('/')
-        route_segments = route_path.strip('/').split('/')
+        for route in route_path:
+            route_segments = route.strip('/').split('/')
 
-        if len(url_segments) == len(route_segments):
-            matching = True
-            for i, segment in enumerate(route_segments):
-                if '{' in segment:  # parameter part
-                    param_name = re.search(r'{(.*?)}', segment).group(1)
-                    variables[param_name] = url_segments[i]
-                elif segment != url_segments[i]:  # non-parameter part
-                    matching = False
-                    break
+            if len(url_segments) == len(route_segments):
+                matching = True
+                for i, segment in enumerate(route_segments):
+                    if '{' in segment:  # parameter part
+                        param_name = re.search(r'{(.*?)}', segment).group(1)
+                        variables[param_name] = url_segments[i]
+                    elif segment != url_segments[i]:  # non-parameter part
+                        matching = False
+                        break
 
-        Router.variables = variables
+            Router.variables = variables
 
-        return matching
+            return matching
+        return False
 
     @staticmethod
     def requires_auth(route: dict, method: str, validated: bool) -> bool:
@@ -137,10 +139,10 @@ class Router:
         old_stdout = None
         buffer = io.StringIO()
         for route in tina4_python.tina4_routes.values():
-            if "method" not in route or route["method"] != method:
+            if "method" not in route or method not in route["method"]:
                 continue
 
-            Debug.debug(method, "Matching route " + route['route'] + " to " + url)
+            Debug.debug(method, "Matching route ", route['route'], " to ",  url)
             if Router.match(url, route['route']):
 
                 if not "noauth" in route and not validated:
@@ -316,13 +318,13 @@ class Router:
 
         # Check if the same method + route already exists
         for cb, data in tina4_python.tina4_routes.items():
-            if "method" in data and data["method"].upper() == method.upper() and \
-                    data["route"].rstrip("/").lower() == norm_route:
+            if method in data["method"] and \
+                    any(r.rstrip("/").lower() == norm_route for r in data["route"]):
                 Debug.error(f"Route already exists: {method} {route}")
                 # Optionally raise or return False
-                return  # or raise ValueError("Route already defined")
+                return False
 
-        Debug.debug("Adding a route: " + route)
+        Debug.debug("Adding a route:",route, method)
 
         is_secure = False
         if method == Constant.TINA4_GET:
@@ -330,16 +332,19 @@ class Router:
 
         # Add or update the route
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {"swagger": None,"cached": False,"noauth": False}
+            tina4_python.tina4_routes[callback] = {"swagger": None,"cached": False,"noauth": False, "route": [], "method": []}
 
         tina4_python.tina4_routes[callback]["callback"] = callback
-        tina4_python.tina4_routes[callback]["route"] = route
-        tina4_python.tina4_routes[callback]["method"] = method
+        if route not in tina4_python.tina4_routes[callback]["route"]:
+            tina4_python.tina4_routes[callback]["route"].append(route)
+        if method not in tina4_python.tina4_routes[callback]["method"]:
+            tina4_python.tina4_routes[callback]["method"].append(method)
         tina4_python.tina4_routes[callback]["secure"] = is_secure
 
         if '{' in route:
             route_variables = re.findall(r'{(.*?)}', route)
             tina4_python.tina4_routes[callback]["params"] = route_variables
+            return True
 
 
 

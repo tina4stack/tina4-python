@@ -188,7 +188,8 @@ class Response:
         global headers
         headers[key] = value
 
-    def wsdl(self, wsdl_instance):
+    @staticmethod
+    def wsdl(wsdl_instance):
         """
         Sets the response for a WSDL/SOAP handler.
 
@@ -203,7 +204,5 @@ class Response:
             Self (the Response object) with updated content, headers, and status.
         """
         xml_content = wsdl_instance.handle()
-        self.headers['Content-Type'] = 'text/xml'
-        self.content = xml_content
-        self.http_code = 200  # Adjust if handle() can return different statuses
-        return self
+
+        return Response(xml_content, Constant.HTTP_OK, Constant.APPLICATION_XML)

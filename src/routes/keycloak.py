@@ -1,13 +1,10 @@
 import os
 from keycloak import KeycloakOpenID
-from tina4_python import description, example, tags, post, get
+from tina4_python import description, example, tags, post, get, Debug, secure
 
 
 @post("/login")
-@description("Login to keycloak")
-@example({"email": "Email Address", "password": "password"})
-@tags(["hello", "world"])
-@secure()
+
 async def post_login(request, response):
     keycloak_openid = KeycloakOpenID(server_url=os.getenv("KEYCLOAK_URL", ""),
                                      client_id=os.getenv("KEYCLOAK_CLIENT_ID", "admin"),

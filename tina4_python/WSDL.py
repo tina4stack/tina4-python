@@ -150,19 +150,19 @@ class WSDL:
         ET.register_namespace('soap', "http://schemas.xmlsoap.org/wsdl/soap/")
         return ET.tostring(wsdl, encoding='unicode', method='xml')
 
-    async def handle(self) -> str:
+    def handle(self) -> str:
         """
         Main handler: Check for ?wsdl or process SOAP request.
 
         Returns:
             XML content as string (WSDL or SOAP response/fault).
         """
-        if 'wsdl' in self.request.query:
+        if 'wsdl' in self.request.params:
             return self.generate_wsdl()
 
         # Process SOAP request (assume POST with XML body)
         try:
-            body = await self.request.text()
+            body = self.request.body
             root = ET.fromstring(body)
             soap_ns = {'soap': 'http://schemas.xmlsoap.org/soap/envelope/'}
             body_elem = root.find('soap:Body', soap_ns)
@@ -193,8 +193,8 @@ class WSDL:
                 result = self.on_result(result)
 
             # Build SOAP response
-            envelope = ET.Element(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Envelope'))
-            body = ET.SubElement(envelope, QName('http://schemas.xmlsoap.org/soap/envelope/', 'Body'))
+            envelope = ET.Element(str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Envelope')))
+            body = ET.SubElement(envelope, str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Body')))
             res_elem = ET.SubElement(body, f"{operation}Response")
             for key, value in result.items():
                 elem = ET.SubElement(res_elem, key)
@@ -215,9 +215,9 @@ class WSDL:
         Returns:
             Fault XML as string.
         """
-        envelope = ET.Element(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Envelope'))
-        body = ET.SubElement(envelope, QName('http://schemas.xmlsoap.org/soap/envelope/', 'Body'))
-        fault = ET.SubElement(body, QName('http://schemas.xmlsoap.org/soap/envelope/', 'Fault'))
+        envelope = ET.Element(str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Envelope')))
+        body = ET.SubElement(envelope, str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Body')))
+        fault = ET.SubElement(body, str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Fault')))
         ET.SubElement(fault, 'faultcode').text = 'Server'
         ET.SubElement(fault, 'faultstring').text = message
 
