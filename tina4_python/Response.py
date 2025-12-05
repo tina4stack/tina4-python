@@ -95,7 +95,7 @@ class Response:
         headers = {}
         http_code = Constant.HTTP_REDIRECT_OTHER
         headers["Location"] = redirect_url
-        content = "Moo"
+        content = "Redirecting to "+redirect_url
         content_type = Constant.TEXT_HTML
         return Response("", http_code, content_type, headers)
 
@@ -187,3 +187,23 @@ class Response:
         """
         global headers
         headers[key] = value
+
+    def wsdl(self, wsdl_instance):
+        """
+        Sets the response for a WSDL/SOAP handler.
+
+        This method handles WSDL and SOAP responses by calling the handle method of the provided
+        WSDL instance, setting the content type to 'text/xml', and updating the response content
+        and status code accordingly.
+
+        Args:
+            wsdl_instance: Instance of a WSDL subclass (e.g., CIS(request)).
+
+        Returns:
+            Self (the Response object) with updated content, headers, and status.
+        """
+        xml_content = wsdl_instance.handle()
+        self.headers['Content-Type'] = 'text/xml'
+        self.content = xml_content
+        self.http_code = 200  # Adjust if handle() can return different statuses
+        return self

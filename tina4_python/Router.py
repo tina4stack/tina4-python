@@ -482,3 +482,22 @@ def noauth():
 
     return actual_noauth
 
+def wsdl(path):
+    """
+    Decorator for WSDL/SOAP routes. Registers the function as a handler for both GET (for ?wsdl queries) and POST (for SOAP operations) requests on the specified path(s).
+
+    The handler should handle both types internally, e.g., return WSDL XML on GET with ?wsdl, or process SOAP on POST.
+
+    Example:
+    @wsdl('/cis')
+    async def wsdl_cis(request, response):
+        return await response.wsdl(CIS(request))
+    """
+    def decorator(callback):
+        route_paths = path.split('|')
+        for route_path in route_paths:
+            Router.add(Constant.TINA4_GET, route_path, callback)
+            Router.add(Constant.TINA4_POST, route_path, callback)
+        return callback
+
+    return decorator

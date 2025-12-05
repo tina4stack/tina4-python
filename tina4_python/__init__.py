@@ -201,7 +201,7 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
 
 # Declare built ins so we don't always have to import stuff
 import builtins
-from .Router import get, post, put, patch, delete, middleware, cached, noauth, secured
+from .Router import get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl
 from .Debug import Debug
 from .Database import Database
 from .ORM import ORM
@@ -211,7 +211,7 @@ from .FieldTypes import IntegerField, StringField, JSONBField, TextField, BlobFi
 from .Constant import TEXT_HTML, TEXT_PLAIN, TEXT_CSS, TINA4_POST, TINA4_DELETE, TINA4_ANY, TINA4_PUT, TINA4_PATCH, TINA4_OPTIONS, TINA4_LOG_ALL, TINA4_LOG_WARNING, TINA4_LOG_ERROR, TINA4_LOG_DEBUG, TINA4_GET, TINA4_LOG_INFO, HTTP_OK, HTTP_SERVER_ERROR, HTTP_FORBIDDEN, HTTP_NO_CONTENT, HTTP_PARTIAL_CONTENT, HTTP_CREATED, HTTP_UNAUTHORIZED, HTTP_ACCEPTED, HTTP_REDIRECT, HTTP_REDIRECT_MOVED, HTTP_REDIRECT_OTHER, HTTP_BAD_REQUEST, HTTP_NOT_FOUND, LOOKUP_HTTP_CODE, APPLICATION_JSON, APPLICATION_XML
 
 # Make them globally available in every Tina4 project — zero imports
-for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured,
+for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl,
              IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField,
              description, secure, summary, example, example_response, tags, params, describe, template):
     if deco.__name__ not in builtins.__dict__:
