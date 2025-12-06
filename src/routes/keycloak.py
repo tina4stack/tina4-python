@@ -17,14 +17,14 @@ async def post_login(request, response):
         Debug.info("Login success", userinfo)
     except Exception as e:
         Debug.error("Login failed", str(e))
-        return response.redirect("/hello/world/test")
+        return response.redirect("/")
 
     request.session.set("userinfo", userinfo)
     return response.redirect("/dashboard")
 
 
 @get("/dashboard")
-@description("Moo")
+@description("Dashboard")
 async def dashboard(request, response):
     userinfo = request.session.get("userinfo")
 

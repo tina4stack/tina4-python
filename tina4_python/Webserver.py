@@ -213,6 +213,8 @@ class Webserver:
 
             return fields, files
 
+        if ctype in ("text/xml", "application/xml", "application/soap+xml"):
+            return content, {}
         # ------------------------------------------------------------------
         # Fallback – raw base64
         # ------------------------------------------------------------------

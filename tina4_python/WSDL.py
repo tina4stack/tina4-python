@@ -1,224 +1,308 @@
-from typing import Dict, Any, Callable
+from typing import get_origin, get_args, List, Optional, Dict, Any
 import xml.etree.ElementTree as ET
-from xml.etree.ElementTree import QName
+from xml.etree.ElementTree import Element, SubElement, QName
+import inspect
 
+
+# --------------------------------------------------------------
+# Decorator: declare exact response structure
+# --------------------------------------------------------------
+def wsdl_operation(return_schema: dict):
+    """
+    Example:
+        @wsdl_operation({
+            "SessionId": str,
+            "Expires": str,
+            "Roles": List[str],
+            "Error": Optional[str]
+        })
+        def Login(self, Username: str, Password: str): ...
+    """
+
+    def decorator(func):
+        func._wsdl_return_schema = return_schema
+        return func
+
+    return decorator
+
+
+# --------------------------------------------------------------
+# Main WSDL Class – Fixed & Complete
+# --------------------------------------------------------------
 class WSDL:
-    """
-    Base class for implementing WSDL-compliant web services in Tina4Python.
-
-    This class handles SOAP request parsing, method dispatching, response generation,
-    and WSDL XML output when '?wsdl' is queried. It provides a foundation for defining
-    SOAP services comparable to frameworks like FastAPI or Flask with SOAP extensions.
-
-    Key Features:
-    - Parses incoming SOAP envelopes to extract operation and parameters.
-    - Dispatches to subclass methods based on operation name.
-    - Converts method return dict to SOAP response XML.
-    - Generates basic WSDL XML describing the service, operations, and simple types.
-    - Supports pre/post hooks: on_request and on_result for request/response manipulation.
-
-    Limitations and Suggestions:
-    - Assumes all parameters and return values are strings for simplicity. For complex types,
-      extend generate_wsdl() using type hints or pydantic models.
-    - WSDL types are basic; consider integrating with libraries like spyne for advanced schemas if needed.
-    - Error handling is minimal; extend soap_fault() for custom faults.
-    - XML namespaces are hardcoded; customize as required.
-
-    Usage Example:
-    Define a subclass with operation methods:
-
-    class CIS(WSDL):
-        def on_request(self, request):
-            # Optional: Validate or modify the request (e.g., check headers)
-            pass
-
-        def on_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
-            # Optional: Modify the result dict before XML conversion
-            return result
-
-        def GetSession(self, params: Callable[[str], Any]) -> Dict[str, Any]:
-            client_id = params("ClientId")
-            password = params("Password")
-            # Implement business logic here
-            if not client_id or not password:
-                return {"Error": "Invalid credentials"}
-            return {"SessionId": "XXXX"}
-
-    In your route (using @wsdl decorator):
-    @wsdl("/cis")
-    async def wsdl_cis(request, response):
-        return await response.wsdl(CIS(request))
-
-    This setup allows handling SOAP POST requests and GET ?wsdl for the spec.
-    Test with tools like SoapUI or curl for SOAP envelopes.
-    """
+    XSD_TYPES = {
+        str: "xsd:string",
+        int: "xsd:integer",
+        float: "xsd:double",
+        bool: "xsd:boolean",
+    }
 
     def __init__(self, request):
-        """
-        Initialize with the incoming request object.
-
-        Args:
-            request: The request object from Tina4Python.
-        """
         self.request = request
+        self._array_types = set()  # Track registered ArrayOfX
 
-    def get_operations(self) -> list[str]:
-        """
-        Retrieve list of operation names (public callable methods excluding hooks).
-
-        Returns:
-            List of operation names.
-        """
-        excluded = {'on_request', 'on_result', 'handle', 'get_operations', 'generate_wsdl', 'soap_fault'}
+    def get_operations(self):
+        excluded = {
+            '__init__', 'handle', 'generate_wsdl', 'soap_fault',
+            'get_operations', 'on_request', 'on_result'
+        }
         return [
             name for name in dir(self)
-            if callable(getattr(self, name)) and not name.startswith('_') and name not in excluded
+            if callable(getattr(self, name))
+               and not name.startswith('_')
+               and name not in excluded
         ]
 
+    # ----------------------------------------------------------
+    # Core helpers
+    # ----------------------------------------------------------
+    def _xsd_type(self, py_type):
+        origin = get_origin(py_type)
+        args = get_args(py_type)
+
+        # Optional[T] → T
+        if origin is Optional:
+            py_type = args[0] if args else str
+
+        if py_type in self.XSD_TYPES:
+            return self.XSD_TYPES[py_type]
+        return "xsd:string"
+
+    def _register_array_type(self, schema_elem: Element, item_py_type) -> str:
+        item_xsd = self._xsd_type(item_py_type)
+        base = item_xsd.split(":")[-1].capitalize()  # string → String
+        array_name = f"ArrayOf{base}"
+
+        if array_name in self._array_types:
+            return f"tns:{array_name}"
+
+        complex = SubElement(schema_elem, "xsd:complexType", {"name": array_name})
+        seq = SubElement(complex, "xsd:sequence")
+        SubElement(seq, "xsd:element", {
+            "name": "item",
+            "type": item_xsd,
+            "minOccurs": "0",
+            "maxOccurs": "unbounded",
+            "nillable": "true"
+        })
+
+        self._array_types.add(array_name)
+        return f"tns:{array_name}"
+
+    def _add_fields_to_sequence(self, sequence: Element, schema: dict, schema_elem: Element):
+        for field_name, field_type in schema.items():
+            origin = get_origin(field_type)
+            args = get_args(field_type)
+
+            min_occurs = "0" if origin is Optional else "1"
+            actual_type = args[0] if origin is Optional and args else field_type
+
+            if origin in (list, List):
+                item_type = args[0] if args else str
+                array_type = self._register_array_type(schema_elem, item_type)
+                SubElement(sequence, "xsd:element", {
+                    "name": field_name,
+                    "type": array_type,
+                    "minOccurs": min_occurs,
+                    "nillable": "true"
+                })
+            else:
+                SubElement(sequence, "xsd:element", {
+                    "name": field_name,
+                    "type": self._xsd_type(actual_type),
+                    "minOccurs": min_occurs,
+                    "nillable": "true"
+                })
+
+    # ----------------------------------------------------------
+    # WSDL Generation
+    # ----------------------------------------------------------
     def generate_wsdl(self) -> str:
-        """
-        Generate WSDL XML describing the service.
+        url = str(self.request.url)
+        base_url = url.split('?')[0].rstrip('/')  # remove ?wsdl and trailing slash
 
-        This produces a basic document/literal wrapped style WSDL.
-        Assumes operations take/return simple string-based messages.
-        Extend for complex types based on method signatures.
+        # Respect X-Forwarded-* headers (critical for nginx, traefik, cloudflare, etc.)
+        proto = self.request.headers.get("X-Forwarded-Proto",
+                                         self.request.headers.get("X-Forwarded-Protocol", "http"))
+        host = self.request.headers.get("X-Forwarded-Host",
+                                        self.request.headers.get("Host"))
 
-        Returns:
-            WSDL XML as string.
-        """
-        location = str(self.request.url).split('?')[0]  # Service endpoint URL without query
+        if host:
+            location = f"{proto}://{host}{base_url}"
+        else:
+            location = base_url
+
+        # FALLBACK: if class defines SERVICE_URL, use that wins
+        if hasattr(self.__class__, "SERVICE_URL"):
+            location = self.__class__.SERVICE_URL.rstrip("/")
+
         service_name = self.__class__.__name__
-        tns = f"http://example.com/{service_name}"  # Target namespace; customize as needed
+        tns = f"http://tempuri.org/{service_name.lower()}"
 
-        # Root definitions
-        wsdl = ET.Element("definitions", {
+        root = Element("definitions", {
             "name": service_name,
             "targetNamespace": tns,
             "xmlns": "http://schemas.xmlsoap.org/wsdl/",
-            "xmlns:soap": "http://schemas.xmlsoap.org/wsdl/soap/",
             "xmlns:tns": tns,
-            "xmlns:xsd": "http://www.w3.org/2001/XMLSchema"
+            "xmlns:soap": "http://schemas.xmlsoap.org/wsdl/soap/",
+            "xmlns:xsd": "http://www.w3.org/2001/XMLSchema",
         })
 
-        # Types section (basic; assumes string params/returns)
-        types = ET.SubElement(wsdl, "types")
-        schema = ET.SubElement(types, "xsd:schema", {"targetNamespace": tns})
+        # <types>
+        types = SubElement(root, "types")
+        schema = SubElement(types, "xsd:schema", {
+            "targetNamespace": tns,
+            "elementFormDefault": "qualified"
+        })
+
+        for op_name in self.get_operations():
+            method = getattr(self, op_name)
+
+            # --- Request message ---
+            req_elem = SubElement(schema, "xsd:element", {"name": op_name})
+            req_complex = SubElement(req_elem, "xsd:complexType")
+            req_seq = SubElement(req_complex, "xsd:sequence")
+
+            sig = inspect.signature(method)
+            params = {
+                name: param.annotation if param.annotation != param.empty else str
+                for name, param in sig.parameters.items()
+                if param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+            }
+            if not params:
+                SubElement(req_seq, "xsd:element", {"name": "dummy", "type": "xsd:string", "minOccurs": "0"})
+            else:
+                self._add_fields_to_sequence(req_seq, params, schema)
+
+            # --- Response message ---
+            resp_elem = SubElement(schema, "xsd:element", {"name": f"{op_name}Response"})
+            resp_complex = SubElement(resp_elem, "xsd:complexType")
+            resp_seq = SubElement(resp_complex, "xsd:sequence")
+
+            result_wrapper = SubElement(resp_seq, "xsd:element", {"name": f"{op_name}Result"})
+            return_schema = getattr(method, "_wsdl_return_schema", None)
+
+            if return_schema:
+                wrapper_complex = SubElement(result_wrapper, "xsd:complexType")
+                wrapper_seq = SubElement(wrapper_complex, "xsd:sequence")
+                self._add_fields_to_sequence(wrapper_seq, return_schema, schema)
+            else:
+                # Fallback for undecorated methods
+                SubElement(result_wrapper, "xsd:complexType").append(
+                    SubElement(SubElement(SubElement(result_wrapper, "xsd:complexType"), "xsd:sequence"),
+                               "xsd:element",
+                               {"name": "item", "type": "xsd:string", "minOccurs": "0", "maxOccurs": "unbounded"})
+                )
+
+        # <message>, <portType>, <binding>, <service>
         for op in self.get_operations():
-            # Input type (wrapper for parameters)
-            input_type = ET.SubElement(schema, "xsd:element", {"name": op})
-            ET.SubElement(input_type, "xsd:complexType")  # Add sequence/elements if params known
+            for suffix, elem_name in [("Request", op), ("Response", f"{op}Response")]:
+                msg = SubElement(root, "message", {"name": f"{op}{suffix}"})
+                SubElement(msg, "part", {"name": "parameters", "element": f"tns:{elem_name}"})
 
-            # Response type (wrapper for result)
-            output_type = ET.SubElement(schema, "xsd:element", {"name": f"{op}Response"})
-            ET.SubElement(output_type, "xsd:complexType")  # Extend with actual fields
+        port_type = SubElement(root, "portType", {"name": f"{service_name}PortType"})
+        binding = SubElement(root, "binding", {"name": f"{service_name}Binding", "type": f"tns:{service_name}PortType"})
+        SubElement(binding, "soap:binding", {"style": "document", "transport": "http://schemas.xmlsoap.org/soap/http"})
 
-        # Messages
         for op in self.get_operations():
-            # Request message
-            msg_req = ET.SubElement(wsdl, "message", {"name": f"{op}Request"})
-            ET.SubElement(msg_req, "part", {"name": "parameters", "element": f"tns:{op}"})
+            # portType
+            o = SubElement(port_type, "operation", {"name": op})
+            SubElement(o, "input", {"message": f"tns:{op}Request"})
+            SubElement(o, "output", {"message": f"tns:{op}Response"})
 
-            # Response message
-            msg_res = ET.SubElement(wsdl, "message", {"name": f"{op}Response"})
-            ET.SubElement(msg_res, "part", {"name": "parameters", "element": f"tns:{op}Response"})
+            # binding
+            bo = SubElement(binding, "operation", {"name": op})
+            SubElement(bo, "soap:operation", {"soapAction": f"{tns}#{op}"})
+            for io in ("input", "output"):
+                SubElement(SubElement(bo, io), "soap:body", {"use": "literal"})
 
-        # PortType
-        port_type = ET.SubElement(wsdl, "portType", {"name": f"{service_name}PortType"})
-        for op in self.get_operations():
-            operation = ET.SubElement(port_type, "operation", {"name": op})
-            ET.SubElement(operation, "input", {"message": f"tns:{op}Request"})
-            ET.SubElement(operation, "output", {"message": f"tns:{op}Response"})
+        service = SubElement(root, "service", {"name": f"{service_name}Service"})
+        port = SubElement(service, "port", {"name": f"{service_name}Port", "binding": f"tns:{service_name}Binding"})
+        SubElement(port, "soap:address", {"location": location})
 
-        # Binding
-        binding = ET.SubElement(wsdl, "binding", {"name": f"{service_name}Binding", "type": f"tns:{service_name}PortType"})
-        ET.SubElement(binding, "soap:binding", {"style": "document", "transport": "http://schemas.xmlsoap.org/soap/http"})
-        for op in self.get_operations():
-            operation = ET.SubElement(binding, "operation", {"name": op})
-            ET.SubElement(operation, "soap:operation", {"soapAction": f"{tns}/{op}"})
-            input = ET.SubElement(operation, "input")
-            ET.SubElement(input, "soap:body", {"use": "literal"})
-            output = ET.SubElement(operation, "output")
-            ET.SubElement(output, "soap:body", {"use": "literal"})
+        return ET.tostring(root, encoding="unicode", method="xml")
 
-        # Service
-        service = ET.SubElement(wsdl, "service", {"name": f"{service_name}Service"})
-        port = ET.SubElement(service, "port", {"name": f"{service_name}Port", "binding": f"tns:{service_name}Binding"})
-        ET.SubElement(port, "soap:address", {"location": location})
-
-        # Convert to string
-        ET.register_namespace('', "http://schemas.xmlsoap.org/wsdl/")
-        ET.register_namespace('soap', "http://schemas.xmlsoap.org/wsdl/soap/")
-        return ET.tostring(wsdl, encoding='unicode', method='xml')
 
     def handle(self) -> str:
-        """
-        Main handler: Check for ?wsdl or process SOAP request.
-
-        Returns:
-            XML content as string (WSDL or SOAP response/fault).
-        """
-        if 'wsdl' in self.request.params:
+        if "wsdl" in self.request.params:
             return self.generate_wsdl()
 
-        # Process SOAP request (assume POST with XML body)
         try:
-            body = self.request.body
-            root = ET.fromstring(body)
-            soap_ns = {'soap': 'http://schemas.xmlsoap.org/soap/envelope/'}
-            body_elem = root.find('soap:Body', soap_ns)
-            if body_elem is None:
-                raise ValueError("Invalid SOAP envelope")
+            root = ET.fromstring(self.request.raw_content)
 
-            operation_elem = list(body_elem)[0]
-            operation = QName(operation_elem.tag).localname
+            # Find SOAP Body (works with any prefix: ns0, soapenv, etc.)
+            _SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
+            body = root.find(f".//{{{_SOAP_NS}}}Body")
+            if body is None or len(body) == 0:
+                raise ValueError("No SOAP Body")
 
-            # Params as callable: params(key) -> value or None
-            def params(key: str) -> Any:
-                elem = operation_elem.find(key)
-                return elem.text if elem is not None else None
+            operation_elem = body[0]
+            operation_name = operation_elem.tag.split("}")[-1]
 
-            # Pre-hook
-            if hasattr(self, 'on_request'):
+            # Extract all child elements → {local_name: text}
+            args = {}
+            for child in operation_elem:
+                key = child.tag.split("}")[-1]           # strip namespace
+                value = (child.text or "").strip()
+                args[key] = None if value == "" else value
+
+            # Call method with real named arguments
+            method = getattr(self, operation_name)
+            import inspect
+            sig = inspect.signature(method)
+
+            # Build kwargs only with parameters the method actually wants
+            kwargs = {}
+            for param_name, param in sig.parameters.items():
+                if param_name == "self":
+                    continue
+                if param_name in args:
+                    kwargs[param_name] = args[param_name]
+                elif param.default is param.empty:
+                    raise TypeError(f"Missing required parameter: {param_name}")
+
+            # Hooks
+            if hasattr(self, "on_request"):
                 self.on_request(self.request)
 
-            # Dispatch to operation
-            if operation in self.get_operations():
-                method = getattr(self, operation)
-                result = method(params)
-            else:
-                raise ValueError(f"Operation '{operation}' not found")
+            result = method(**kwargs)
 
-            # Post-hook
-            if hasattr(self, 'on_result'):
+            if hasattr(self, "on_result"):
                 result = self.on_result(result)
 
-            # Build SOAP response
-            envelope = ET.Element(str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Envelope')))
-            body = ET.SubElement(envelope, str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Body')))
-            res_elem = ET.SubElement(body, f"{operation}Response")
-            for key, value in result.items():
-                elem = ET.SubElement(res_elem, key)
-                elem.text = str(value)
+            # Build response
+            envelope = ET.Element("soapenv:Envelope", {
+                "xmlns:soapenv": _SOAP_NS,
+                "xmlns:tns": f"http://tempuri.org/{self.__class__.__name__.lower()}"
+            })
+            body_el = ET.SubElement(envelope, "soapenv:Body")
+            resp = ET.SubElement(body_el, f"{operation_name}Response")
+            result_el = ET.SubElement(resp, f"{operation_name}Result")
 
-            return ET.tostring(envelope, encoding='unicode', method='xml')
+            for key, value in (result or {}).items():
+                if value is None:
+                    el = ET.SubElement(result_el, key)
+                    el.set("{http://www.w3.org/2001/XMLSchema-instance}nil", "true")
+                elif isinstance(value, (list, tuple)):
+                    item_tag = key.rstrip("[]") + "Item" if key.endswith("[]") else "item"
+                    for v in value:
+                        el = ET.SubElement(result_el, item_tag)
+                        el.text = str(v)
+                else:
+                    el = ET.SubElement(result_el, key)
+                    el.text = str(value)
+
+            return ET.tostring(envelope, encoding="unicode", xml_declaration=True)
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return self.soap_fault(str(e))
 
     def soap_fault(self, message: str) -> str:
-        """
-        Generate SOAP fault response.
-
-        Args:
-            message: Fault message.
-
-        Returns:
-            Fault XML as string.
-        """
-        envelope = ET.Element(str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Envelope')))
-        body = ET.SubElement(envelope, str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Body')))
-        fault = ET.SubElement(body, str(QName('http://schemas.xmlsoap.org/soap/envelope/', 'Fault')))
-        ET.SubElement(fault, 'faultcode').text = 'Server'
-        ET.SubElement(fault, 'faultstring').text = message
-
-        return ET.tostring(envelope, encoding='unicode', method='xml')
+        env = Element(QName("http://schemas.xmlsoap.org/soap/envelope/", "Envelope"))
+        body = SubElement(env, QName("http://schemas.xmlsoap.org/soap/envelope/", "Body"))
+        fault = SubElement(body, QName("http://schemas.xmlsoap.org/soap/envelope/", "Fault"))
+        SubElement(fault, "faultcode").text = "Server"
+        SubElement(fault, "faultstring").text = message
+        return ET.tostring(env, encoding="unicode")

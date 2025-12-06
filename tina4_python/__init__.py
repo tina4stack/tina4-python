@@ -22,7 +22,7 @@ Just `pip install tina4-python` and run your project – everything just works.
 import asyncio
 import os
 if os.getenv("TINA4_DEBUG_LEVEL", "") == "":
-    os.environ["TINA4_DEBUG_LEVEL"] = "INFO"
+    os.environ["TINA4_DEBUG_LEVEL"] = "DEBUG"
 
 import shutil
 import importlib
