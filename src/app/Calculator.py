@@ -14,6 +14,8 @@ class Calculator(WSDL):
         "Error": Optional[str]
     })
     def SumList(self, Numbers: List[int]):
+
+        Debug.info(f"SumList: {Numbers}")
         return {
             "Numbers": Numbers,
             "Total": sum(Numbers),

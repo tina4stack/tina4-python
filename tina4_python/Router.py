@@ -327,7 +327,7 @@ class Router:
 
         # Check if the same method + route already exists
         for cb, data in tina4_python.tina4_routes.items():
-            if method in data["methods"] and \
+            if "method" in data and method in data["methods"] and \
                     any(r.rstrip("/").lower() == norm_route for r in data["routes"]):
                 Debug.error(f"Route already exists: {method} {route}")
                 # Optionally raise or return False
@@ -345,8 +345,16 @@ class Router:
                                                    "methods": []}
 
         tina4_python.tina4_routes[callback]["callback"] = callback
+
+        if not "routes" in tina4_python.tina4_routes[callback]:
+            tina4_python.tina4_routes[callback]["routes"] = []
+
         if route not in tina4_python.tina4_routes[callback]["routes"]:
             tina4_python.tina4_routes[callback]["routes"].append(route)
+
+        if not "methods" in tina4_python.tina4_routes[callback]:
+            tina4_python.tina4_routes[callback]["methods"] = []
+
         if method not in tina4_python.tina4_routes[callback]["methods"]:
             tina4_python.tina4_routes[callback]["methods"].append(method)
 

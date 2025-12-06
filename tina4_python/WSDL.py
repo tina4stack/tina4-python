@@ -311,17 +311,33 @@ class WSDL:
             operation_elem = body[0]
             operation_name = operation_elem.tag.split("}")[-1]
 
-            # ─── Extract parameters (supports repeated elements correctly) ───
+
             args = {}
             for child in operation_elem:
-                key = child.tag.split("}")[-1]
-                text = (child.text or "").strip()
-                if key in args:
-                    if not isinstance(args[key], list):
-                        args[key] = [args[key]]
-                    args[key].append(None if text == "" else text)
+                key = child.tag.split("}")[-1]  # e.g. "Numbers" or "item"
+
+                # Case 1: Direct child (flat repeated style)
+                if child.text is not None and child.text.strip() != "":
+                    text_value = child.text.strip()
+                    if key in args:
+                        if not isinstance(args[key], list):
+                            args[key] = [args[key]]
+                        args[key].append(None if text_value == "" else text_value)
+                    else:
+                        args[key] = None if text_value == "" else text_value
                 else:
-                    args[key] = None if text == "" else text
+                    # Case 2: Has children → likely an array with <item> elements
+                    items = []
+                    for item in child:
+                        item_key = item.tag.split("}")[-1]
+                        if item_key == "item":
+                            val = (item.text or "").strip()
+                            items.append(None if val == "" else val)
+                    if items:
+                        args[key] = items
+                    elif len(child) == 0:
+                        # Empty complex type (e.g. <Numbers></Numbers>)
+                        args[key] = []
 
             method = getattr(self, operation_name)
             sig = inspect.signature(method)

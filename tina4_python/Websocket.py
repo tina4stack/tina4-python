@@ -7,7 +7,6 @@
 import importlib
 import os
 from asyncio.trsock import TransportSocket
-
 from tina4_python.Debug import Debug
 
 class Websocket:
