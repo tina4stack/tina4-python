@@ -204,34 +204,34 @@ class Swagger:
                 continue
 
             swagger = Swagger.parse_swagger_metadata(route_info["swagger"].copy())
-            route = route_info["route"]
-            method = route_info["method"]
 
-            if route not in paths:
-                paths[route] = {}
+            for route in route_info.get("routes", []):
+                for method in route_info.get("methods", []):
+                    operation = Swagger.get_swagger_entry(
+                        route=route,
+                        method=method,
+                        tags=swagger["tags"],
+                        summary=swagger["summary"],
+                        description=swagger["description"],
+                        secure=swagger["secure"],
+                        query_params=swagger["params"],
+                        example=swagger["example"],
+                        example_response=swagger["example_response"]
+                    )
 
-            operation = Swagger.get_swagger_entry(
-                route=route,
-                method=method,
-                tags=swagger["tags"],
-                summary=swagger["summary"],
-                description=swagger["description"],
-                secure=swagger["secure"],
-                query_params=swagger["params"],
-                example=swagger["example"],
-                example_response=swagger["example_response"]
-            )
+                    # CRITICAL FIX: Re-apply security if route is marked secure
+                    if swagger["secure"]:
+                        operation["security"] = [
+                            {"bearerAuth": []},
+                            {"basicAuth": []}
+                        ]
+                    else:
+                        operation["security"] = []  # public endpoint
 
-            # CRITICAL FIX: Re-apply security if route is marked secure
-            if swagger["secure"]:
-                operation["security"] = [
-                    {"bearerAuth": []},
-                    {"basicAuth": []}
-                ]
-            else:
-                operation["security"] = []  # public endpoint
+                    if route not in paths:
+                        paths[route] = {}
 
-            paths[route][method.lower()] = operation
+                    paths[route][method.lower()] = operation
 
         # Determine server URL
         host = request.headers.get("host", os.getenv("HOST_NAME", "localhost:8000"))
