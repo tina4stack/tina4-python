@@ -43,6 +43,7 @@ password = "Password123"
 dba_type = "psycopg2:localhost/5432:test"
 user_name = "postgres"
 password = "password"
+dba_type = "sqlite3:test.db"
 
 
 def test_auth_payload():
@@ -64,7 +65,7 @@ def database_connect(driver, username="root", password="secret"):
 
 
 def test_database_sqlite():
-    dba_type = "sqlite3:test2.db"
+    dba_type = "sqlite3:test.db"
     dba = database_connect(dba_type, user_name, password)
     assert dba.database_engine == SQLITE
 
@@ -291,6 +292,7 @@ def test_orm():
     if dba.table_exists("test_user_item"):
         dba.execute("drop table test_user_item")
         dba.commit()
+
     if dba.table_exists("test_user"):
         dba.execute("drop table test_user")
         dba.commit()
@@ -312,9 +314,13 @@ def test_orm():
         user_id = ForeignKeyField(IntegerField("id"), references_table=TestUser())
         date_created = DateTimeField()
 
+
+
     migrate(dba)
     # attach the database connection
     orm(dba)
+    Debug.info(TestUser().create_table())
+    Debug.info(TestUserItem().create_table())
 
     print("START")
 

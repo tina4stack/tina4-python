@@ -513,6 +513,9 @@ def _has_control_methods():
     file_path = main_module.__file__
     Debug.debug(f"Checking {file_path} for control functions")
 
+    if "pytest" in file_path:
+        return True
+
     if "tina4-python" not in file_path and ("tina4" in file_path or "uvicorn" in file_path in file_path or "hypercorn" in file_path):
         return True
 

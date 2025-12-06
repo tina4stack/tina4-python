@@ -1,7 +1,13 @@
 from tina4_python import get, template, wsdl
 from ..app.CIS import CIS
 
+@get("/test")
+async def test(request):
+    pass
 
+@get("/test")
+async def test(request):
+    pass
 
 
 @get("/hello/world/{id}")

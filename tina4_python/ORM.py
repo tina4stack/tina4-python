@@ -197,6 +197,9 @@ class ORM:
         return self.to_json()
 
     def __create_table__(self, table_name, execute=False):
+        if self.__dba__ is None:
+            Debug.warning("Create Table", table_name, "database not assigned to ORM , use orm(dba)")
+            return False
         sql = "create table " + table_name + " ("
         counter = 0
         for field, field_definition in self.__field_definitions__.items():
@@ -213,6 +216,7 @@ class ORM:
 
         if execute:
             self.__dba__.execute(sql)
+            return None
         else:
             return sql
 
@@ -221,7 +225,7 @@ class ORM:
         Creates the table for the ORM structure
         :return:
         """
-        self.__dba__.create_table(self.__table_name__, True)
+        return self.__create_table__(self.__table_name__, True)
 
     def __build_sql(self, column_names="*", join="", filter="", group_by="", having="", order_by=""):
         """

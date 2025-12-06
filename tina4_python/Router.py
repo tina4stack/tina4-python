@@ -37,6 +37,8 @@ class Router:
     def match(url, route_path):
         matching = False
         variables = {}
+        if isinstance(route_path, str):
+            route_path = [route_path]
 
         # splitting URL and route and putting them into lists to compare
         url_segments = url.strip('/').split('/')
@@ -139,16 +141,16 @@ class Router:
         old_stdout = None
         buffer = io.StringIO()
         for route in tina4_python.tina4_routes.values():
-            if "method" not in route or method not in route["method"]:
+            if "methods" not in route or method not in route["methods"]:
                 continue
 
-            Debug.debug(method, "Matching route ", route['route'], " to ",  url)
-            if Router.match(url, route['route']):
+            Debug.debug(method, "Matching route ", route['routes'], " to ", url)
+            if Router.match(url, route['routes']):
 
                 if not "noauth" in route and not validated:
                     if Router.requires_auth(route, method, validated):
-                        return Response.Response("Forbidden - Access denied", Constant.HTTP_FORBIDDEN, Constant.TEXT_HTML)
-
+                        return Response.Response("Forbidden - Access denied", Constant.HTTP_FORBIDDEN,
+                                                 Constant.TEXT_HTML)
 
                 router_response = route["callback"]
 
@@ -175,7 +177,8 @@ class Router:
                 if "middleware" in route:
                     middleware_runner = MiddleWare(route["middleware"]["class"])
 
-                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(route["middleware"]["methods"]) > 0:
+                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(
+                            route["middleware"]["methods"]) > 0:
                         for method in route["middleware"]["methods"]:
                             Request, Response = middleware_runner.call_direct_method(Request, Response, method)
                     else:
@@ -188,7 +191,8 @@ class Router:
 
                     # Identify expected path params (positional args before 'request' and 'response')
                     for param_name, param in sig.parameters.items():
-                        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.POSITIONAL_ONLY) and \
+                        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                          inspect.Parameter.POSITIONAL_ONLY) and \
                                 param_name not in ('request', 'response'):
                             if param_name in Router.variables:
                                 value = Router.variables[param_name]
@@ -201,7 +205,8 @@ class Router:
                                             value = str(value)
                                         # Add more types as needed (float, bool, etc.)
                                     except ValueError:
-                                        raise ValueError(f"Invalid type for path param '{param_name}': expected {param.annotation.__name__}, got '{Router.variables[param_name]}'")
+                                        raise ValueError(
+                                            f"Invalid type for path param '{param_name}': expected {param.annotation.__name__}, got '{Router.variables[param_name]}'")
                                 path_args.append(value)
                                 # Apply default if missing and has default
                             elif param.default != inspect.Parameter.empty:
@@ -216,7 +221,8 @@ class Router:
                         result = await router_response(request=Request, response=Response.Response)
                 except Exception as e:
                     error_string = tina4_python.global_exception_handler(e)
-                    if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):
+                    if Constant.TINA4_LOG_DEBUG in os.getenv(
+                            "TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):
                         html = Template.render_twig_template("errors/500.twig",
                                                              {"server": {"url": url}, "error_message": error_string})
                         return Response.Response(html, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
@@ -231,7 +237,8 @@ class Router:
                 if "middleware" in route:
                     middleware_runner = MiddleWare(route["middleware"]["class"])
 
-                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(route["middleware"]["methods"]) > 0:
+                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(
+                            route["middleware"]["methods"]) > 0:
                         for method in route["middleware"]["methods"]:
                             Request, result = middleware_runner.call_direct_method(Request, result, method)
                     else:
@@ -256,11 +263,13 @@ class Router:
 
         if result is None and old_stdout is not None:
             result = Response
+
             result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
             sys.stdout = old_stdout
             if buffer.getvalue() != "":
                 try:
-                    return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON, result.headers)
+                    return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON,
+                                             result.headers)
                 except Exception:
                     return Response.Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML, result.headers)
             else:
@@ -281,8 +290,8 @@ class Router:
             for twig_file in twig_files:
                 if os.path.isfile(tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file):
                     Debug.debug("Looking for twig file",
-                          tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
-                          )
+                                tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
+                                )
 
                     result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
                     result.headers["Cache-Control"] = "max-age=-1, public"
@@ -318,37 +327,39 @@ class Router:
 
         # Check if the same method + route already exists
         for cb, data in tina4_python.tina4_routes.items():
-            if method in data["method"] and \
-                    any(r.rstrip("/").lower() == norm_route for r in data["route"]):
+            if method in data["methods"] and \
+                    any(r.rstrip("/").lower() == norm_route for r in data["routes"]):
                 Debug.error(f"Route already exists: {method} {route}")
                 # Optionally raise or return False
                 return False
 
-        Debug.debug("Adding a route:",route, method)
+        Debug.debug("Adding a route:", route, method)
 
         is_secure = False
-        if method == Constant.TINA4_GET:
+        if method != Constant.TINA4_GET:
             is_secure = True
 
         # Add or update the route
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {"swagger": None,"cached": False,"noauth": False, "route": [], "method": []}
+            tina4_python.tina4_routes[callback] = {"swagger": None, "cached": False, "noauth": False, "routes": [],
+                                                   "methods": []}
 
         tina4_python.tina4_routes[callback]["callback"] = callback
-        if route not in tina4_python.tina4_routes[callback]["route"]:
-            tina4_python.tina4_routes[callback]["route"].append(route)
-        if method not in tina4_python.tina4_routes[callback]["method"]:
-            tina4_python.tina4_routes[callback]["method"].append(method)
+        if route not in tina4_python.tina4_routes[callback]["routes"]:
+            tina4_python.tina4_routes[callback]["routes"].append(route)
+        if method not in tina4_python.tina4_routes[callback]["methods"]:
+            tina4_python.tina4_routes[callback]["methods"].append(method)
+
         tina4_python.tina4_routes[callback]["secure"] = is_secure
 
         if '{' in route:
             route_variables = re.findall(r'{(.*?)}', route)
             tina4_python.tina4_routes[callback]["params"] = route_variables
-            return True
+
+        return True
 
 
-
-def get(path: str):
+def get(path: str|list):
     """
     Get router
     :param path:
@@ -356,7 +367,11 @@ def get(path: str):
     """
 
     def actual_get(callback):
-        route_paths = path.split('|')
+        if not isinstance(path, list):
+            route_paths = path.split('|')
+        else:
+            route_paths = path
+
         for route_path in route_paths:
             Router.add(Constant.TINA4_GET, route_path, callback)
         return callback
@@ -364,7 +379,7 @@ def get(path: str):
     return actual_get
 
 
-def post(path):
+def post(path: str|list):
     """
     Post router
     :param path:
@@ -372,7 +387,10 @@ def post(path):
     """
 
     def actual_post(callback):
-        route_paths = path.split('|')
+        if not isinstance(path, list):
+            route_paths = path.split('|')
+        else:
+            route_paths = path
         for route_path in route_paths:
             Router.add(Constant.TINA4_POST, route_path, callback)
         return callback
@@ -380,7 +398,7 @@ def post(path):
     return actual_post
 
 
-def put(path):
+def put(path: str|list):
     """
     Put router
     :param path:
@@ -388,7 +406,10 @@ def put(path):
     """
 
     def actual_put(callback):
-        route_paths = path.split('|')
+        if not isinstance(path, list):
+            route_paths = path.split('|')
+        else:
+            route_paths = path
         for route_path in route_paths:
             Router.add(Constant.TINA4_PUT, route_path, callback)
         return callback
@@ -396,7 +417,7 @@ def put(path):
     return actual_put
 
 
-def patch(path):
+def patch(path:str|list):
     """
     Patch router
     :param path:
@@ -404,7 +425,10 @@ def patch(path):
     """
 
     def actual_patch(callback):
-        route_paths = path.split('|')
+        if not isinstance(path, list):
+            route_paths = path.split('|')
+        else:
+            route_paths = path
         for route_path in route_paths:
             Router.add(Constant.TINA4_PATCH, route_path, callback)
         return callback
@@ -412,7 +436,7 @@ def patch(path):
     return actual_patch
 
 
-def delete(path):
+def delete(path:str|list):
     """
     Delete router
     :param path:
@@ -420,7 +444,10 @@ def delete(path):
     """
 
     def actual_delete(callback):
-        route_paths = path.split('|')
+        if not isinstance(path, list):
+            route_paths = path.split('|')
+        else:
+            route_paths = path
         for route_path in route_paths:
             Router.add(Constant.TINA4_DELETE, route_path, callback)
         return callback
@@ -461,11 +488,13 @@ def middleware(middleware, specific_methods=[]):
 
     return actual_middleware
 
+
 def secured():
     """
     Makes a route secure - secured vs secure with swagger
     :return:
     """
+
     def actual_secure(callback):
         if callback not in tina4_python.tina4_routes:
             tina4_python.tina4_routes[callback] = {}
@@ -474,11 +503,13 @@ def secured():
 
     return actual_secure
 
+
 def noauth():
     """
     Defines a route with no auth
     :return:
     """
+
     def actual_noauth(callback):
         if callback not in tina4_python.tina4_routes:
             tina4_python.tina4_routes[callback] = {}
@@ -486,6 +517,7 @@ def noauth():
         return callback
 
     return actual_noauth
+
 
 def wsdl(path):
     """
@@ -498,6 +530,7 @@ def wsdl(path):
     async def wsdl_cis(request, response):
         return await response.wsdl(CIS(request))
     """
+
     def decorator(callback):
         route_paths = path.split('|')
         for route_path in route_paths:
