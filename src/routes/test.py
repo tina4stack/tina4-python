@@ -1,5 +1,5 @@
 from tina4_python import get, template, wsdl
-from ..app.CIS import CIS
+from ..app.CIS import CIS, Calculator
 
 @get("/test")
 async def test(request):
@@ -20,3 +20,8 @@ async def get_twig_something (id, request, response):
 async def wsdl_cis(request, response):
 
     return response.wsdl(CIS(request))
+
+@wsdl("/calculator")
+async def wsdl_cis(request, response):
+
+    return response.wsdl(Calculator(request))
