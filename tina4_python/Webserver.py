@@ -12,9 +12,11 @@ import re
 import mimetypes
 from urllib.parse import unquote_plus, urlparse, parse_qsl
 import tina4_python
-from tina4_python import Constant
 from tina4_python.Constant import (
+    LOOKUP_HTTP_CODE,
     HTTP_REDIRECT,
+    HTTP_REDIRECT_OTHER,
+    HTTP_REDIRECT_MOVED,
     HTTP_OK,
     HTTP_SERVER_ERROR,
     TINA4_GET
@@ -266,7 +268,7 @@ class Webserver:
         Returns:
             bytes: Complete header block terminated by ``\\r\\n\\r\\n``.
         """
-        status_text = Constant.LOOKUP_HTTP_CODE.get(status_code, "Unknown")
+        status_text = LOOKUP_HTTP_CODE.get(status_code, "Unknown")
         result = f"{protocol} {status_code} {status_text}\r\n"
         for line in header_lines:
             result += f"{line}\r\n"
@@ -377,7 +379,7 @@ class Webserver:
         # ------------------------------------------------------------------
         headers = []
 
-        if response.http_code != HTTP_REDIRECT:
+        if response.http_code not in (HTTP_REDIRECT, HTTP_REDIRECT_OTHER, HTTP_REDIRECT_MOVED):
             self.send_header("Content-Type", response.content_type or "text/html", headers)
             await self.send_basic_headers(headers)
 
@@ -386,9 +388,9 @@ class Webserver:
             if session_name in self.cookies:
                 self.send_header("Set-Cookie", f"{session_name}={self.cookies[session_name]}", headers)
 
-            # Custom headers from route
-            for name, value in response.headers.items():
-                self.send_header(name, str(value), headers)
+        # Custom headers from route
+        for name, value in response.headers.items():
+            self.send_header(name, str(value), headers)
 
         if asgi_response:
             return response, headers

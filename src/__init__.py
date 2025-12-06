@@ -1,10 +1,12 @@
+import asyncio
+from tina4_python import get, post, Database, secured, HTTP_OK
+from tina4_python.MiddleWare import MiddleWare
 
 dba = Database("sqlite3:data.db")
 
 
 @get("/inline/{id}")
-async def get_inline_id (id, request, response):
-
+async def get_inline_id(id, request, response):
     return response({"id": id, "params": request.params["id"]})
 
 
@@ -12,11 +14,7 @@ async def get_inline_id (id, request, response):
 async def user_post(id: str, post_id: str, request, response):  # Path params before request/response
     return response(f"User {id}'s post {post_id}")
 
-@get("/search")
-async def search(request, response):
-    query = request.params.get("q", "default")
-    page = int(request.params.get("page", 1))
-    return response(request.raw_content)
+
 
 @get("/uploads/{file}")
 async def serve_upload(file: str, request, response):
@@ -29,34 +27,46 @@ async def serve_upload(file: str, request, response):
 async def hello(request, response):
     return response("Hello, Tina4 Python!")
 
+
 @post("/submit")
 async def submit(request, response):
-    data = await request.body()
-    return response(f"Received: {data}")
+    data = request.body
+    return response(data)
+
 
 # 3. All methods
 @get("/users")
 async def list_users(request, response):
     return response({"users": ["Alice", "Bob"]})
 
+@get("/api/users")
+@description("Users")
+async def list_users(request, response):
+    return response({"users": ["Alice", "Bob"]})
+
 @post("/users")
+@description("Create a new user")
 async def create_user(request, response):
-    data = await request.body()
+    data = request.body
     return response({"created": data.get("name")})
+
 
 @put("/users/{id}")
 async def update_user(id: str, request, response):
-    data = await request.body()
+    data = request.body
     return response(f"Updated user {id} with {data}")
+
 
 @delete("/users/{id}")
 async def delete_user(id: str, request, response):
     return response(f"Deleted user {id}")
 
+
 # 4–5. Path & Query params
 @get("/users/{id}/posts/{post_id}")
 async def user_post(id: str, post_id: str, request, response):
     return response(f"User {id}'s post {post_id}")
+
 
 @get("/search")
 async def search(request, response):
@@ -64,42 +74,49 @@ async def search(request, response):
     page = request.params.get("page", "1")
     return response(f"Searching '{q}' on page {page}")
 
+
 # 6. Admin prefix
 @get("/admin/dashboard")
 async def admin_dashboard(request, response):
     return response("Admin Dashboard")
 
+
 # 7. Middleware
 class AuthMiddleware:
     @staticmethod
     def before_route(request, response):
-        if request.headers.get("Authorization") != "Bearer valid-jwt-token":
-            response.status_code = 401
-            return request, "Unauthorized"
+        if request.headers.get("authorization") != "Bearer 38168ba8aad6c91ba13d959c3f91c7a7":
+            response.http_code = 401
+            response.content = "Unauthorized"
+            return request, response
         return request, response
 
     @staticmethod
     def after_route(request, response):
-        response.headers["X-Custom"] = "Processed"
+        response.add_header("X-Custom", "Processed")
         return request, response
+
 
 @middleware(AuthMiddleware)
 @get("/protected")
 async def protected_route(request, response):
-    return response("Secure data")
+    print("Protected")
+    return response("Secure data", HTTP_OK)
+
 
 # 8. Error handling
 @get("/divide/{num}")
-async def divide(request, response, num: str):
+async def divide(num: str, request, response):
     try:
         result = 100 / float(num)
         return response(str(result))
     except ValueError:
-        response.status_code = 400
-        return response("Invalid number")
+
+        return response("Invalid number", 400)
     except ZeroDivisionError:
-        response.status_code = 400
-        return response("Cannot divide by zero")
+
+        return response("Cannot divide by zero", 400)
+
 
 # 9. Async
 @get("/async-db")
@@ -108,18 +125,25 @@ async def async_db(request, response):
     await asyncio.sleep(0.01)
     return response([{"id": 1, "name": "John"}])
 
+
 # 10. Responses
 @get("/api/health")
 async def health(request, response):
     return response({"status": "ok", "timestamp": "now"})
 
+
 @get("/old-page")
 async def old_page(request, response):
     return response.redirect("/new-page")
 
+@get("/new-page")
+async def new_page(request, response):
+    return response("New Page")
+
 @get("/page/about")
 async def about_page(request, response):
-    return response.render("about.html", {"title": "About Us", "name": "John Doe"})
+    return response.render("index.twig", {"title": "About Us", "name": "John Doe"})
+
 
 # 12. Secured
 @get("/profile")
@@ -127,8 +151,10 @@ async def about_page(request, response):
 async def profile(request, response):
     return response({"user": "authenticated"})
 
+
 # 14. WebSocket
 from tina4_python.Websocket import Websocket
+
 
 @get("/chat")
 async def get_websocket(request, response):

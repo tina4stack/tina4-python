@@ -69,7 +69,7 @@ class Response:
             content_in = json.dumps({"error": "Cannot decode object of type " + str(type(content_in))})
             content_type = Constant.APPLICATION_JSON
 
-        if content is not None and isinstance(content_in, str):
+        if content is not None and isinstance(content_in, str) and http_code_in == Constant.HTTP_OK:
             content_in = content + content_in
 
         self.headers = headers_in if headers_in is not None else headers
@@ -82,9 +82,10 @@ class Response:
         content = self.content
 
     @staticmethod
-    def redirect(redirect_url):
+    def redirect(redirect_url, http_code_in=Constant.HTTP_REDIRECT):
         """
         Redirects a request to redirect_url
+        :param http_code_in:
         :param redirect_url:
         :return:
         """
@@ -93,11 +94,11 @@ class Response:
         global http_code
         global content_type
         headers = {}
-        http_code = Constant.HTTP_REDIRECT_OTHER
+        http_code = http_code_in
         headers["Location"] = redirect_url
-        content = "Redirecting to "+redirect_url
+        content = "Redirecting..."
         content_type = Constant.TEXT_HTML
-        return Response("", http_code, content_type, headers)
+        return Response("Redirecting...", http_code, content_type, headers)
 
 
     @staticmethod

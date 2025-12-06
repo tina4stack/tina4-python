@@ -180,10 +180,16 @@ class Router:
                     if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(
                             route["middleware"]["methods"]) > 0:
                         for method in route["middleware"]["methods"]:
-                            Request, Response = middleware_runner.call_direct_method(Request, Response, method)
+                            Request, result = middleware_runner.call_direct_method(Request, result, method)
+                            if result.http_code != Constant.HTTP_NOT_FOUND:
+                                return Response.Response(result.content, result.http_code, result.content_type)
                     else:
-                        Request, Response = await middleware_runner.call_before_methods(Request, Response)
-                        Request, Response = await middleware_runner.call_any_methods(Request, Response)
+                        Request, result = await middleware_runner.call_before_methods(Request, result)
+                        if result.http_code != Constant.HTTP_NOT_FOUND:
+                            return Response.Response(result.content, result.http_code, result.content_type)
+                        Request, result = await middleware_runner.call_any_methods(Request, result)
+                        if result.http_code != Constant.HTTP_NOT_FOUND:
+                            return Response.Response(result.content, result.http_code, result.content_type)
 
                 try:
                     sig = inspect.signature(router_response)
@@ -237,13 +243,11 @@ class Router:
                 if "middleware" in route:
                     middleware_runner = MiddleWare(route["middleware"]["class"])
 
-                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(
-                            route["middleware"]["methods"]) > 0:
-                        for method in route["middleware"]["methods"]:
-                            Request, result = middleware_runner.call_direct_method(Request, result, method)
-                    else:
-                        Request, result = await middleware_runner.call_after_methods(Request, result)
-                        Request, result = await middleware_runner.call_any_methods(Request, result)
+                    Request, result = await middleware_runner.call_after_methods(Request, result)
+                    # We expect a 200 status here to carry on otherwise we just return immediately
+                    if result.http_code != Constant.HTTP_OK:
+                        return Response.Response(result.content, result.http_code, result.content_type)
+
 
                 if result is not None:
                     result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
@@ -327,7 +331,7 @@ class Router:
 
         # Check if the same method + route already exists
         for cb, data in tina4_python.tina4_routes.items():
-            if "method" in data and method in data["methods"] and \
+            if "methods" in data and method in data["methods"] and \
                     any(r.rstrip("/").lower() == norm_route for r in data["routes"]):
                 Debug.error(f"Route already exists: {method} {route}")
                 # Optionally raise or return False
@@ -345,6 +349,10 @@ class Router:
                                                    "methods": []}
 
         tina4_python.tina4_routes[callback]["callback"] = callback
+
+        # see if we already have flagged the security for a GET route
+        if "secure" in tina4_python.tina4_routes[callback] and method == Constant.TINA4_GET:
+            is_secure = tina4_python.tina4_routes[callback]["secure"]
 
         if not "routes" in tina4_python.tina4_routes[callback]:
             tina4_python.tina4_routes[callback]["routes"] = []
@@ -473,14 +481,14 @@ def cached(is_cached, max_age=60):
 
     def actual_cached(callback):
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {}
+            tina4_python.tina4_routes[callback] = {"routes" : [], "methods": []}
         tina4_python.tina4_routes[callback]["cache"] = {"cached": is_cached, "max_age": max_age}
         return callback
 
     return actual_cached
 
 
-def middleware(middleware, specific_methods=[]):
+def middleware(middleware, specific_methods=None):
     """
     Sets middleware for the route and methods that need to be called
     :param middleware:
@@ -488,9 +496,12 @@ def middleware(middleware, specific_methods=[]):
     :return:
     """
 
+    if specific_methods is None:
+        specific_methods = []
+
     def actual_middleware(callback):
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {}
+            tina4_python.tina4_routes[callback] = {"routes" : [], "methods": []}
         tina4_python.tina4_routes[callback]["middleware"] = {"class": middleware, "methods": specific_methods}
         return callback
 
@@ -505,7 +516,7 @@ def secured():
 
     def actual_secure(callback):
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {}
+            tina4_python.tina4_routes[callback] = {"routes" : [], "methods": []}
         tina4_python.tina4_routes[callback]["secure"] = True
         return callback
 
