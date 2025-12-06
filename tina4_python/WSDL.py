@@ -381,9 +381,9 @@ class WSDL:
     # ------------------------------------------------------------------
     def soap_fault(self, message: str) -> str:
         """Return a minimal but valid SOAP Fault."""
-        env = Element(QName("http://schemas.xmlsoap.org/soap/envelope/", "Envelope"))
-        body = SubElement(env, QName("http://schemas.xmlsoap.org/soap/envelope/", "Body"))
-        fault = SubElement(body, QName("http://schemas.xmlsoap.org/soap/envelope/", "Fault"))
+        env = Element(str(QName("http://schemas.xmlsoap.org/soap/envelope/", "Envelope")))
+        body = SubElement(env, str(QName("http://schemas.xmlsoap.org/soap/envelope/", "Body")))
+        fault = SubElement(body, str(QName("http://schemas.xmlsoap.org/soap/envelope/", "Fault")))
         SubElement(fault, "faultcode").text = "Server"
         SubElement(fault, "faultstring").text = message
         return ET.tostring(env, encoding="unicode")
