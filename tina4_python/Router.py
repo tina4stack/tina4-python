@@ -167,6 +167,9 @@ class Router:
                 Request.raw_request = request["raw_request"] if "raw_request" in request else None
                 Request.raw_content = request["raw_content"] if "raw_content" in request else None
                 Request.url = url
+                Request.asgi_scope = request["asgi_scope"] if "asgi_scope" in request else None
+                Request.asgi_reader = request["asgi_reader"] if "asgi_reader" in request else None
+                Request.asgi_writer = request["asgi_writer"] if "asgi_writer" in request else None
                 Request.asgi_response = request["asgi_response"] if "asgi_response" in request else None
 
                 tina4_python.tina4_current_request = Request

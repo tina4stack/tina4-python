@@ -1,6 +1,5 @@
 import asyncio
-from tina4_python import get, post, Database, secured, HTTP_OK
-from tina4_python.MiddleWare import MiddleWare
+from tina4_python import get, post, put, delete, middleware, description, Database, secured, HTTP_OK
 
 dba = Database("sqlite3:data.db")
 
@@ -162,7 +161,7 @@ async def get_websocket(request, response):
     try:
         while True:
             data = await ws.receive()
-            await ws.send(data)
+            await ws.send("Echo: "+data)
     except Exception as e:
         pass
     return response("")

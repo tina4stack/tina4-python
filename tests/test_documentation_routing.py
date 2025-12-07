@@ -5,7 +5,6 @@ Based on: https://tina4stack.github.io/tina4python/routing.html (2025 version)
 Tests EVERY feature-by-feature using the real, current Tina4 Python API.
 """
 
-import json
 import pytest
 import requests
 from urllib.parse import urljoin
@@ -14,7 +13,7 @@ from tina4_python import tina4_auth
 # ------------------------------------------------------------------
 # Configuration – adjust only if your Tina4 runs on a different port
 # ------------------------------------------------------------------
-import os
+
 BASE_URL = "http://localhost:7145"
 session = requests.Session()
 
@@ -237,14 +236,13 @@ def test_static_image():
 # ------------------------------------------------------------------
 # 14. WebSocket Route
 # ------------------------------------------------------------------
-from tina4_python.Websocket import Websocket
-@pytest.mark.skip
+
 def test_websocket_connection():
     from simple_websocket import Client
     try:
-        ws = Client.connect("ws://localhost:7145/chat")
+        ws = Client.connect("ws://127.0.0.1:7145/chat")
         ws.send("Hello Tina4!")
-        reply = ws.recv()
+        reply = ws.receive()
         assert reply == "Echo: Hello Tina4!"
         ws.close()
     except Exception as e:

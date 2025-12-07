@@ -278,7 +278,7 @@ class Webserver:
     # ------------------------------------------------------------------
     # Core request → response flow
     # ------------------------------------------------------------------
-    async def get_response(self, method: str, transport: asyncio.StreamWriter, asgi_response: bool = False):
+    async def get_response(self, method: str, scope ,reader: asyncio.StreamReader, writer: asyncio.StreamWriter, asgi_response: bool = False):
         """
         Main request dispatcher.
 
@@ -290,11 +290,17 @@ class Webserver:
 
         Args:
             method (str): HTTP method.
-            transport (asyncio.StreamWriter): Writer for direct response (ASGI mode).
+            reader (asyncio.StreamReader): Reader for direct response (ASGI mode).
+            writer (asyncio.StreamWriter): Writer for direct response (ASGI mode).
             asgi_response (bool): If True, returns raw response object instead of bytes.
 
         Returns:
             bytes | tuple: Final HTTP response or (response_object, header_lines).
+            :param scope:
+            :param method:
+            :param asgi_response:
+            :param writer:
+            :param reader:
         """
         # ------------------------------------------------------------------
         # OPTIONS → CORS pre-flight
@@ -362,7 +368,9 @@ class Webserver:
             "headers": self.lowercase_headers,
             "raw_request": self.request_raw,
             "raw_content": self.content_raw,
-            "transport": transport,
+            "asgi_scope": scope,
+            "asgi_reader": reader,
+            "asgi_writer": writer,
             "asgi_response": asgi_response,
         }
         tina4_python.tina4_current_request = request
@@ -526,9 +534,9 @@ class Webserver:
             # Route or WebSocket
             # ------------------------------------------------------------------
             if "sec-websocket-key" in lowercase_headers:
-                await self.get_response(self.method, writer)
+                await self.get_response(self.method, reader, writer)
             else:
-                response_bytes = await self.get_response(self.method, writer)
+                response_bytes = await self.get_response(self.method, reader, writer)
                 if response_bytes:
                     writer.write(response_bytes)
                     await writer.drain()

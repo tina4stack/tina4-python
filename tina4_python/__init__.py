@@ -373,7 +373,7 @@ async def app(scope, receive, send):
             else:
                 webserver.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = webserver.session.start()
 
-            tina4_response, tina4_headers = await webserver.get_response(webserver.method, (scope, receive, send), True)
+            tina4_response, tina4_headers = await webserver.get_response(webserver.method, scope=scope, reader=receive, writer=send,  asgi_response=True)
 
             if message["type"] != "websocket":
                 response_headers = []
@@ -412,7 +412,6 @@ def run_web_server(hostname="localhost", port=7145, debug: bool = False):
     Example:
         run_web_server("0.0.0.0", 8000, debug=True)
     """
-    import os
     import sys
     import importlib
     from pathlib import Path
