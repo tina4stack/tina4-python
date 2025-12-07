@@ -29,7 +29,54 @@ You've just built your first Tina4 app — zero configuration, zero classes, zer
 pip install tina4-python
 ```
 
-## Documentation
+## Routing
+
+Here are some basic GET routes
+
+```python
+# .src/__init__.py
+from tina4_python import get
+
+# simple get route
+@get("/hello")
+async def get_hello(request, response):
+    return response("Hello, Tina4 Python!")
+
+# simple get route with inline params
+@get("/hello/{world}")
+async def get_hello_world(world, request, response):
+    return response(f"Hello, {world} ")
+
+# simple route responding with json
+@get("/hello/json")
+async def get_hello_json(world, request, response):
+    cars = [{"brand": "BMW"}, {"brand": "Toyota"}]
+
+    return response(cars)
+
+# respond with a file
+@get("/hello/{filename}")
+async def get_hello_file(filename, request, response):
+   
+    return response.file(filename, './src/public')
+
+# respond with a redirection to another location
+@get("/hello/redirect")
+async def get_hello_redirect(request, response):
+    
+    return response.redirect("/hello/world")
+
+@get("/hello/template")
+async def get_hello_template(request, response):
+    
+    # renders any template in .src/templates
+    return response.render("index.twig", {"data": request.params})
+
+```
+
+
+
+## Further Documentation
 
 https://tina4.com/
 
