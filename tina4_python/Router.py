@@ -19,45 +19,154 @@ from tina4_python.MiddleWare import MiddleWare
 
 
 class Router:
-    variables = None
+    variables = {}
+
+    @staticmethod
+    def _parse_route_segment(segment):
+        """
+        Parse route segment like {id}, {username:str}, {price:float}, {file:path}
+        Returns (param_name, converter) where converter is 'str', 'int', 'float', 'path'
+        """
+        match = re.match(r'^\{(\w+)(?::(\w+))?\}?$', segment.strip())
+        if not match:
+            return None, None
+        name = match.group(1)
+        conv = (match.group(2) or 'str').lower()
+        if conv not in ('str', 'int', 'float', 'path'):
+            conv = 'str'
+        return name, conv
+
+    @staticmethod
+    def clean_url(url):
+        """Normalize URL: strip query, domain, collapse slashes, trim whitespace"""
+        if not url:
+            return "/"
+        url = url.split('?')[0]
+        url = re.sub(r'^https?://[^/]+', '', url)  # remove domain if present
+        url = re.sub(r'\s+', '', url)              # remove all whitespace
+        url = re.sub(r'/+', '/', url)              # collapse multiple slashes
+        url = url.strip('/')
+        if not url:
+            return "/"
+        return "/" + url + "/"
 
     @staticmethod
     def get_variables(url, route_path):
+        """Legacy helper - extracts variables with type conversion"""
         variables = {}
-        url_segments = url.strip('/').split('/')
-        route_segments = route_path.strip('/').split('/')
-        for i, segment in enumerate(route_segments):
-            if '{' in segment:  # parameter part
-                param_name = re.search(r'{(.*?)}', segment).group(1)
-                variables[param_name] = url_segments[i]
+        url_path = Router.clean_url(url).rstrip('/')
+        url_segments = [s for s in url_path.strip('/').split('/') if s]
+        route_segments = [s for s in route_path.strip('/').split('/') if s]
+
+        for i, route_seg in enumerate(route_segments):
+            param_name, converter = Router._parse_route_segment(route_seg)
+            if param_name:
+                if i >= len(url_segments):
+                    return {}
+                raw = url_segments[i]
+                try:
+                    if converter == 'int':
+                        variables[param_name] = int(raw)
+                    elif converter == 'float':
+                        variables[param_name] = float(raw)
+                    elif converter == 'path':
+                        remaining = '/'.join(url_segments[i:])
+                        variables[param_name] = remaining
+                        break
+                    else:
+                        variables[param_name] = raw
+                except ValueError:
+                    return {}
+            else:
+                if i >= len(url_segments) or route_seg != url_segments[i]:
+                    return {}
         return variables
 
-    # Matches the URL to the route and extracts the parameters
     @staticmethod
     def match(url, route_path):
-        matching = False
-        variables = {}
-        if isinstance(route_path, str):
-            route_path = [route_path]
+        """
+        Robust URL matching with full support for:
+        - Fixed segments
+        - {param}, {param:int}, {param:float}, {param:path} (greedy)
+        - Trailing slashes (both URL and route)
+        - Leading/trailing whitespace and multiple slashes
+        - Root path "/" and empty URLs
+        """
+        if isinstance(route_path, (str, list)):
+            route_paths = route_path if isinstance(route_path, list) else [route_path]
+        else:
+            return False
 
-        # splitting URL and route and putting them into lists to compare
-        url_segments = url.strip('/').split('/')
-        for route in route_path:
-            route_segments = route.strip('/').split('/')
+        # === Normalize incoming URL ===
+        url_norm = url.split('?')[0]                    # remove query string
+        url_norm = re.sub(r'\s+', '', url_norm)         # remove whitespace
+        url_norm = re.sub(r'/+', '/', url_norm)         # collapse slashes
+        url_norm = url_norm.strip('/')
+        if not url_norm:
+            url_norm = '/'                              # root path
+        else:
+            url_norm = '/' + url_norm + '/'
+        url_segments = [seg for seg in url_norm.strip('/').split('/') if seg]
 
-            if len(url_segments) == len(route_segments):
-                matching = True
-                for i, segment in enumerate(route_segments):
-                    if '{' in segment:  # parameter part
-                        param_name = re.search(r'{(.*?)}', segment).group(1)
-                        variables[param_name] = url_segments[i]
-                    elif segment != url_segments[i]:  # non-parameter part
-                        matching = False
+        for route in route_paths:
+            # === Normalize route ===
+            route_norm = route.strip()
+            route_norm = re.sub(r'\s+', '', route_norm)
+            route_norm = re.sub(r'/+', '/', route_norm)
+            route_norm = route_norm.strip('/')
+            if not route_norm:
+                route_norm = '/'
+            else:
+                route_norm = '/' + route_norm + '/'
+
+            route_segments = [seg for seg in route_norm.strip('/').split('/') if seg]
+
+            variables = {}
+            match = True
+            url_idx = 0
+
+            for route_idx, route_seg in enumerate(route_segments):
+                param_name, converter = Router._parse_route_segment(route_seg)
+
+                if param_name:  # Parameter segment
+                    if converter == 'path':
+                        # Greedy: consume everything from here to end
+                        remaining = url_segments[url_idx:]
+                        value = '/'.join(remaining) if remaining else ""
+                        variables[param_name] = value
+                        if route_idx != len(route_segments) - 1:
+                            match = False  # {path:path} must be last
+                        break
+                    else:
+                        if url_idx >= len(url_segments):
+                            match = False
+                            break
+                        raw_val = url_segments[url_idx]
+                        try:
+                            if converter == 'int':
+                                variables[param_name] = int(raw_val)
+                            elif converter == 'float':
+                                variables[param_name] = float(raw_val)
+                            else:
+                                variables[param_name] = raw_val
+                        except ValueError:
+                            match = False
+                            break
+                else:  # Fixed segment
+                    if url_idx >= len(url_segments) or url_segments[url_idx] != route_seg:
+                        match = False
                         break
 
-            Router.variables = variables
+                url_idx += 1
 
-            return matching
+            # Final check: all URL segments consumed unless {path:path} was used
+            if match:
+                has_path_param = any(Router._parse_route_segment(s)[1] == 'path' for s in route_segments)
+                if has_path_param or url_idx == len(url_segments):
+                    Router.variables = variables
+                    return True
+
+        Router.variables = {}
         return False
 
     @staticmethod
@@ -372,7 +481,7 @@ class Router:
         tina4_python.tina4_routes[callback]["secure"] = is_secure
 
         if '{' in route:
-            route_variables = re.findall(r'{(.*?)}', route)
+            route_variables = re.findall(r'\{(\w+)(?::\w+)?\}', route)
             tina4_python.tina4_routes[callback]["params"] = route_variables
 
         return True
