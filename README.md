@@ -74,8 +74,6 @@ async def get_hello_template(request, response):
 
 ```
 
-
-
 ## Further Documentation
 
 https://tina4.com/
