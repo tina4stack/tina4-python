@@ -5,6 +5,7 @@
 #
 # flake8: noqa: E501
 import base64
+import os
 import re
 import sys
 import importlib
@@ -29,6 +30,16 @@ class Database:
         params = _connection_string.split(":", 1)
 
         try:
+            if _connection_string is None:
+                _connection_string = os.environ.get("DATABASE_PATH", None)
+            if _username == "":
+                _username = os.environ.get("DATABASE_USERNAME", "")
+            if _password == "":
+                _password = os.environ.get("DATABASE_USERNAME", "")
+
+            if _connection_string is None:
+                raise Exception("Database connection string is missing, try declaring DATABASE_PATH in the .env file.")
+
             self.database_module = importlib.import_module(params[0])
         except Exception:
             install_message = "Please implement " + params[0] + " in Database.py and make a pull request!"
@@ -44,6 +55,7 @@ class Database:
                 install_message = "Your python is missing the mssql module, please install with " + MSSQL_INSTALL
 
             sys.exit("Could not load database driver for " + params[0] + "\n" + install_message)
+
 
         self.database_engine = params[0]
         self.database_path = params[1]
