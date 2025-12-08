@@ -276,7 +276,7 @@ def test_orm():
     dba.close()
 
 # Optional queue test — skip if no RabbitMQ
-@pytest.mark.skip(reason="Requires RabbitMQ running")
+@pytest.mark.skip
 def test_queues():
     config = Config()
     config.litequeue_database_name = "test_queue.db"
