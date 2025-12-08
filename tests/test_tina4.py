@@ -8,7 +8,9 @@ import pytest
 from datetime import datetime
 
 import tina4_python
-from tina4_python import *
+from tina4_python import tina4_auth
+from tina4_python.Auth import Auth
+from tina4_python.Router import Router
 from tina4_python.DatabaseTypes import *
 from tina4_python.Database import Database
 from tina4_python.Migration import migrate
