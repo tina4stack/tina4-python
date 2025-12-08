@@ -98,3 +98,16 @@ def divide(a: int, b: int) -> float:
     if b == 0:
         raise ZeroDivisionError("division by zero")
     return a / b
+
+@get("/session/set")
+async def get_session_set(request, response):
+    request.session.set("name", "Joe")
+    request.session.set("info", {"info": ["one", "two", "three"]})
+    return response("Session Set!")
+
+@get("/session/get")
+async def get_session_set(request, response):
+    name = request.session.get("name")
+    info = request.session.get("info")
+
+    return response({"name": name, "info": info})

@@ -226,17 +226,56 @@ builtins.ORM = ORM
 
 
 def compile_scss():
-    """Compile all SCSS/SASS files → compressed CSS."""
+    """Auto-compile ALL .scss files → single compressed default.css (no default.scss needed)"""
+    scss_dir = Path(root_path) / "src" / "scss"
+    css_dir = Path(root_path) / "src" / "public" / "css"
+    output_file = css_dir / "default.css"
+
+    if not scss_dir.exists():
+        Debug.info("No src/scss folder — skipping SCSS compile")
+        return
+
+    # Find all .scss files (ignore _partials.scss unless imported)
+    scss_files = list(scss_dir.rglob("*.scss"))
+    if not scss_files:
+        Debug.info("No .scss files found — skipping")
+        return
+
+    css_dir.mkdir(parents=True, exist_ok=True)
+
     try:
-        if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
-            Debug.debug("Compiling scss")
-            sass.compile(dirname=(root_path + os.sep + 'src' + os.sep + 'scss',
-                                  root_path + os.sep + 'src' + os.sep + 'public' + os.sep + 'css'),
-                         output_style='compressed')
-    except sass.CompileError as E:
-        Debug.error('Error compiling SASS ', E)
+        Debug.debug(f"Found {len(scss_files)} SCSS files — compiling to default.css")
 
+        # Build one big string with all content + @import for partials
+        all_scss = ""
+        partials = []
 
+        for file in scss_files:
+            if file.name.startswith("_"):
+                partials.append(file.name)
+            else:
+                # Main files: add @import for partials + content
+                content = file.read_text(encoding="utf-8")
+                all_scss += f"/* === {file.name} === */\n{content}\n\n"
+
+        # Auto-import all partials at the top
+        for partial in sorted(partials):
+            all_scss = f"@import \"{partial}\";\n" + all_scss
+
+        # Compile the whole thing
+        compiled = sass.compile(
+            string=all_scss,
+            output_style='compressed',
+            include_paths=[str(scss_dir)]
+        )
+
+        output_file.write_text(compiled, encoding="utf-8")
+        Debug.debug(f"Compiled {len(scss_files)} files → {output_file} ({len(compiled)} bytes)")
+
+    except Exception as e:
+        Debug.error("SCSS auto-compile failed:", str(e))
+
+# Run it on startup
 compile_scss()
 
 
