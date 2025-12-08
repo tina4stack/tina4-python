@@ -30,48 +30,138 @@ except ImportError as e:
 
 from pathlib import Path
 
-def create_project(project_name: str):
-    """Scaffold a new Tina4 project directory."""
-    project_dir = Path(project_name)
+def create_project(project_name: str) -> None:
+    """Scaffold a new Tina4 project (supports '.' for current directory) + Dockerfile."""
+    project_path = Path(project_name).resolve()
 
-    if project_dir.exists():
-        print(f"Warning: Directory '{project_name}' already exists.")
+    # Allow "." or "./" → scaffold in the current folder
+    if project_name in (".", "./"):
+        project_path = Path.cwd()
+    else:
+        project_path.mkdir(parents=True, exist_ok=True)
 
-    project_dir.mkdir(exist_ok=True)
+    # ------------------------------------------------------------------
+    # app.py
+    # ------------------------------------------------------------------
+    app_py = project_path / "app.py"
+    if app_py.exists():
+        print(f"Overwriting existing 'app.py' in {project_path}")
+    else:
+        print(f"Creating project in {project_path}")
 
-
-    main_py_path = project_dir / "main.py"
-    if main_py_path.exists():
-        print(f"Removing existing 'main.py' in '{project_name}'...")
-        main_py_path.unlink()  # deletes the file
-
-
-    # Create minimal app.py (renamed from index.py for clarity)
-    index_content = '''from tina4_python import run_web_server
+    app_content = '''\
+from tina4_python import run_web_server
 from tina4_python.Router import get
 
 @get("/")
-async def get_hello_world(request, response):
-    return response("Hello World from {project_name}!")
-
-def app():
-    run_web_server()
+async def index(request, response):
+    return response(f"Hello Tina4!")
 
 if __name__ == "__main__":
-    app()
-'''.format(project_name=project_name.title())
+    run_web_server()
+'''
+    app_py.write_text(app_content, encoding="utf-8")
 
-    with open(project_dir / "app.py", "w") as f:
-        f.write(index_content)
+    # ------------------------------------------------------------------
+    # requirements.txt (fallback for non-uv users)
+    # ------------------------------------------------------------------
+    req_file = project_path / "requirements.txt"
+    if not req_file.exists():
+        req_file.write_text("tina4-python\n", encoding="utf-8")
 
-    # Create requirements.txt
-    reqs_content = "tina4-python\n"
-    with open(project_dir / "requirements.txt", "w") as f:
-        f.write(reqs_content)
+    # ------------------------------------------------------------------
+    # pyproject.toml + uv.lock (optional – nice to have)
+    # ------------------------------------------------------------------
+    pyproject = project_path / "pyproject.toml"
+    if not pyproject.exists():
+        pyproject.write_text("""\
+[project]
+name = "tina4-project"
+version = "0.1.0"
+dependencies = [
+    "tina4-python",
+]
 
-    print(f"✅ Project '{project_name}' created!\n"
-          f"Run this next:\n"
-          f"   cd {project_name} && python app.py")
+[build-system]
+requires = ["setuptools>=45"]
+build-backend = "setuptools.build_meta"
+""", encoding="utf-8")
+
+    # ------------------------------------------------------------------
+    # Dockerfile (multi-stage with uv – production ready)
+    # ------------------------------------------------------------------
+    dockerfile_path = project_path / "Dockerfile"
+    if dockerfile_path.exists():
+        print("Dockerfile already exists – skipping creation")
+    else:
+        dockerfile_content = '''\
+# === Build Stage ===
+FROM python:3.13-alpine AS builder
+
+# Install build dependencies + uv
+RUN apk add --no-cache \\
+    build-base \\
+    libffi-dev \\
+    python3-dev \\
+    cargo
+
+# Install uv (official installer)
+ADD https://astral.sh/uv/install.sh /uv-installer.sh
+RUN sh /uv-installer.sh && rm /uv-installer.sh
+ENV PATH="/root/.local/bin:$PATH"
+
+WORKDIR /app
+
+# Copy dependency definition
+COPY pyproject.toml uv.lock* ./
+
+# Install dependencies into system python (editable install works with uv too)
+RUN uv pip install --system -e .
+
+# Copy source code
+COPY . .
+
+# === Runtime Stage ===
+FROM python:3.13-alpine
+
+# Runtime packages only
+RUN apk add --no-cache libffi libstdc++ libgcc
+
+WORKDIR /app
+
+# Copy installed packages + binaries
+COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/python3.13/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy application code
+COPY --from=builder /app /app
+
+EXPOSE 8080
+
+# Swagger defaults (override with env vars in docker-compose/k8s if needed)
+ENV SWAGGER_TITLE="Tina4 API"
+ENV SWAGGER_VERSION="0.1.0"
+ENV SWAGGER_DESCRIPTION="Auto-generated API documentation"
+
+# Start the server on all interfaces
+CMD ["python3", "app.py", "0.0.0.0:8080", "-u"]
+'''
+        dockerfile_path.write_text(dockerfile_content, encoding="utf-8")
+        print("Dockerfile created (multi-stage + uv)")
+
+    # ------------------------------------------------------------------
+    # Final message
+    # ------------------------------------------------------------------
+    print("Project ready!")
+    if project_path != Path.cwd():
+        print(f"\nNext steps:")
+        print(f"   cd {project_path.relative_to(Path.cwd())}")
+        print(f"   python app.py          # local development")
+        print(f"   docker build -t {project_path.name} . && docker run -p 8080:8080 {project_path.name}")
+    else:
+        print("\nYou are already in the project folder. Run:")
+        print("   python app.py                     # development")
+        print("   docker build -t myapp . && docker run -p 8080:8080 myapp")
 
 
 def run_server(port: int = 8000):
@@ -213,6 +303,10 @@ def main():
     run_create = subparsers.add_parser("migrate:create", help="Create a new migration file")
     run_create.add_argument("description", nargs="+", help="Description, e.g. create users table")
 
+    test_parser = subparsers.add_parser("test", help="Run all @tests in the project")
+    test_parser.add_argument("--quiet", "-q", action="store_true", help="Only show failures")
+    test_parser.add_argument("--failfast", "-x", action="store_true", help="Stop on first failure")
+
     args = parser.parse_args()
 
     if args.command == "init":
@@ -224,6 +318,9 @@ def main():
     elif args.command == "migrate:create":
         description = " ".join(args.description)
         create_sql_migration(description)
+    elif args.command == "test":
+        from tina4_python.Testing import run_all_tests
+        run_all_tests(quiet=args.quiet, failfast=args.failfast)
     else:
         # Default: run server if no command
         parser.print_help()

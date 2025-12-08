@@ -202,49 +202,27 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
 # Declare built ins so we don't always have to import stuff
 import builtins
 from .Router import get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl
+from .Testing import tests, assert_equal, assert_raises
 from .Debug import Debug
 from .Database import Database
 from .ORM import ORM
+from .Api import Api
 from .Template import template
 from .Swagger import description, secure, summary, example, example_response, tags, params, describe
 from .FieldTypes import IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField
 from .Constant import TEXT_HTML, TEXT_PLAIN, TEXT_CSS, TINA4_POST, TINA4_DELETE, TINA4_ANY, TINA4_PUT, TINA4_PATCH, TINA4_OPTIONS, TINA4_LOG_ALL, TINA4_LOG_WARNING, TINA4_LOG_ERROR, TINA4_LOG_DEBUG, TINA4_GET, TINA4_LOG_INFO, HTTP_OK, HTTP_SERVER_ERROR, HTTP_FORBIDDEN, HTTP_NO_CONTENT, HTTP_PARTIAL_CONTENT, HTTP_CREATED, HTTP_UNAUTHORIZED, HTTP_ACCEPTED, HTTP_REDIRECT, HTTP_REDIRECT_MOVED, HTTP_REDIRECT_OTHER, HTTP_BAD_REQUEST, HTTP_NOT_FOUND, LOOKUP_HTTP_CODE, APPLICATION_JSON, APPLICATION_XML
 
 # Make them globally available in every Tina4 project — zero imports
-for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl,
+for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl, tests, assert_equal, assert_raises,
              IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField,
              description, secure, summary, example, example_response, tags, params, describe, template):
     if deco.__name__ not in builtins.__dict__:
         builtins.__dict__[deco.__name__] = deco
 
 builtins.Debug = Debug
+builtins.Api = Api
 builtins.Database = Database
 builtins.ORM = ORM
-
-# Auto-import everything from src folders
-if os.path.exists(root_path + os.sep + "src"):
-    try:
-        exec("from src import *")
-    except ImportError as e:
-        Debug.error("Cannot import src folder", str(e))
-else:
-    Debug.warning("Missing src folder")
-
-if os.path.exists(root_path + os.sep + "src" + os.sep + "routes"):
-    try:
-        exec("from src.routes import *")
-    except ImportError as e:
-        Debug.error("Cannot import src.routes folder", str(e))
-else:
-    Debug.warning("Missing src/routes folder")
-
-if os.path.exists(root_path + os.sep + "src" + os.sep + "app"):
-    try:
-        exec("from src.app import *")
-    except ImportError as e:
-        Debug.error("Cannot import src.app folder", str(e))
-else:
-    Debug.warning("Missing src/app folder")
 
 
 def compile_scss():
@@ -420,31 +398,47 @@ def run_web_server(hostname="localhost", port=7145, debug: bool = False):
     # 1. Auto-discover and load all route modules from src/
     # ------------------------------------------------------------------
     def _autoload_routes(root_dir: str = "src"):
+        """
+        Automatically imports all Python modules under src/
+        Ignores:
+          - src/public
+          - src/public
+          - src/templates
+          - src/scss
+          - any file/folder starting with _
+        """
         root_path = Path(root_dir).resolve()
         if not root_path.is_dir():
-            Debug.info(f"No '{root_dir}' directory found—skipping autoload.")
+            Debug.info(f"No '{root_dir}' directory found — skipping autoload.")
             return
 
+        # Folders to completely ignore (and anything inside them)
+        ignored_folders = {"public", "templates", "scss"}
+
         for py_file in root_path.rglob("*.py"):
-            # Skip __init__.py and files starting with underscore
-            if py_file.name.startswith("_"):
+            # Skip files/folders starting with underscore
+            if any(part.startswith("_") for part in py_file.parts):
+                continue
+
+            # Skip entire ignored folders (public, templates, scss)
+            if any(ignored in py_file.parts for ignored in ignored_folders):
                 continue
 
             try:
-                # Convert file path → dotted module name
-                rel = py_file.relative_to(Path.cwd())
-                module_name = ".".join(rel.with_suffix("").parts)
+                # Build dotted module name: src/api/users.py → src.api.users
+                rel_parts = py_file.relative_to(Path.cwd()).with_suffix("").parts
+                module_name = ".".join(rel_parts)
 
                 if module_name in sys.modules:
-                    # Hot-reload support when debug=True
-                    if debug:
+                    if debug:  # debug is global in tina4_python
                         importlib.reload(sys.modules[module_name])
-                        Debug.info(f"Reloaded module: {module_name}")
+                        Debug.info(f"Hot-reloaded: {module_name}")
                 else:
                     importlib.import_module(module_name)
-                    Debug.info(f"Autoloaded routes: {module_name}")
+                    Debug.info(f"Autoloaded: {module_name}")
+
             except Exception as e:
-                Debug.error(f"Failed to load {py_file}: {e}")
+                Debug.error(f"Failed to autoload {py_file}: {e}")
 
     # Run autoloader (only once per process, but safe to call again)
     _autoload_routes("src")
@@ -489,6 +483,7 @@ def webserver(host_name, port, debug: bool = False):
     Debug.info(Messages.MSG_SERVER_STOPPED)
 
 
+
 # Live coding hot-reload (jurigged)
 if importlib.util.find_spec("jurigged"):
     Debug.debug("Jurigged enabled")
@@ -515,7 +510,10 @@ def _has_control_methods():
     if "pytest" in file_path:
         return True
 
-    if "tina4-python" not in file_path and ("tina4" in file_path or "uvicorn" in file_path in file_path or "hypercorn" in file_path):
+    if "tina4-python" in file_path:
+        return True
+
+    if "tina4" in file_path or "uvicorn" in file_path in file_path or "hypercorn" in file_path:
         return True
 
     if not file_path or not file_path.endswith('.py'):

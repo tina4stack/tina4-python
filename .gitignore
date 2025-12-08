@@ -34,3 +34,5 @@
 /src/templates/crud/
 /.venv/
 /publish.bat
+/Dockerfile
+/data.db

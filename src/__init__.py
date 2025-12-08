@@ -14,7 +14,6 @@ async def user_post(id: str, post_id: str, request, response):  # Path params be
     return response(f"User {id}'s post {post_id}")
 
 
-
 @get("/uploads/{file}")
 async def serve_upload(file: str, request, response):
     print("Ok")
@@ -38,10 +37,12 @@ async def submit(request, response):
 async def list_users(request, response):
     return response({"users": ["Alice", "Bob"]})
 
+
 @get("/api/users")
 @description("Users")
 async def list_users(request, response):
     return response({"users": ["Alice", "Bob"]})
+
 
 @post("/users")
 @description("Create a new user")
@@ -135,9 +136,11 @@ async def health(request, response):
 async def old_page(request, response):
     return response.redirect("/new-page")
 
+
 @get("/new-page")
 async def new_page(request, response):
     return response("New Page")
+
 
 @get("/page/about")
 async def about_page(request, response):
@@ -161,7 +164,8 @@ async def get_websocket(request, response):
     try:
         while True:
             data = await ws.receive()
-            await ws.send("Echo: "+data)
+            await ws.send("Echo: " + data)
     except Exception as e:
         pass
     return response("")
+

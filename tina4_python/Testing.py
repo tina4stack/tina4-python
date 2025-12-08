@@ -1,5 +1,5 @@
 # tina4_python/Testing.py
-# The ONLY version you will ever need — now with beautiful colors
+# Tina4 — The most beautiful, correct, and complete inline testing system
 
 from pathlib import Path
 import importlib
@@ -29,7 +29,6 @@ class _Current:
 def _call(func, args):
     if func is None:
         raise RuntimeError("No function under test")
-
     code = func.__code__
     params = code.co_varnames[:code.co_argcount]
 
@@ -45,10 +44,10 @@ def _call(func, args):
 
 def assert_equal(args: tuple, expected, msg=""):
     def test():
-        return _call(_Current.func, args) == expected
-    name = getattr(_Current.func, "__qualname__", getattr(_Current.func, "__name__", ""))
+        return _call(_Current.func, args)
+    name = getattr(_Current.func, "__qualname__", getattr(_Current.func, "__name__", "unknown"))
     message = msg or f"{name}{args} == {expected}"
-    return test, True, message
+    return test, expected, message  # ← return actual expected value
 
 def assert_raises(exc, args: tuple, msg=""):
     def test():
@@ -59,7 +58,7 @@ def assert_raises(exc, args: tuple, msg=""):
             return True
         except:
             return False
-    name = getattr(_Current.func, "__qualname__", getattr(_Current.func, "__name__", ""))
+    name = getattr(_Current.func, "__qualname__", getattr(_Current.func, "__name__", "unknown"))
     message = msg or f"{name}{args} raises {exc.__name__}"
     return test, True, message
 
@@ -88,28 +87,29 @@ def run_all_tests(quiet=False, failfast=False):
         _Current.func = func
 
         for case in cases:
-            test_callable, expected, message = case
+            test_callable, expected_value, message = case
 
             try:
-                result = test_callable()
-                if result == expected:
+                actual_value = test_callable()  # ← actual return value from your function
+
+                if actual_value == expected_value:
                     passed += 1
                     if not quiet:
                         print(f"  {Colors.GREEN}Success: {Colors.RESET}{message}")
                 else:
                     failed += 1
                     if not quiet:
-                        print(f"  {Colors.RED}Failed: {Colors.RESET}{message} {Colors.YELLOW}got {result!r}{Colors.RESET}")
+                        print(f"  {Colors.RED}Failed: {Colors.RESET}{message} {Colors.YELLOW}→ got {actual_value!r}{Colors.RESET}")
             except Exception as e:
                 failed += 1
                 if not quiet:
-                    print(f"  {Colors.RED}Error: {Colors.RESET}{message} {Colors.YELLOW}{e}{Colors.RESET}")
+                    print(f"  {Colors.RED}Error: {Colors.RESET}{message} {Colors.YELLOW}→ {e}{Colors.RESET}")
 
         _Current.func = None
 
     if not quiet:
         if failed == 0:
-            print(f"\n{Colors.GREEN}All {passed} tests passed!{Colors.RESET}")
+            print(f"\n{Colors.GREEN}{Colors.BOLD}All {passed} tests passed!{Colors.RESET}")
         else:
-            print(f"\n{Colors.RED}{failed} failed, {passed} passed{Colors.RESET}")
+            print(f"\n{Colors.RED}{Colors.BOLD}{failed} failed, {passed} passed{Colors.RESET}")
     sys.exit(failed)
