@@ -227,9 +227,9 @@ class ForeignKeyField:
             self.value = self.default_value
         return str(self.value)
 
-    def __init__(self, field_type=BaseField, references_table=None, column_name=None, default_value = None, protected_field=False):
+    def __init__(self, field_type=BaseField, references=None, column_name=None, default_value = None, protected_field=False):
         self.field_type = field_type
-        self.references_table = references_table
+        self.references_table = references
         self.references_column = field_type.column_name
         self.default_value = default_value
         self.auto_increment = False

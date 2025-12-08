@@ -501,7 +501,7 @@ class Database:
                 record[key] = json.dumps(record[key])
         return record
 
-    def insert(self, table_name, data, primary_key="id"):
+    def insert(self, table_name, data:dict|list, primary_key="id"):
         """
         Insert data based on table name and data provided - single or multiple records
         :param str table_name: Name of table
@@ -595,7 +595,7 @@ class Database:
 
         return False
 
-    def update(self, table_name, data, primary_key="id"):
+    def update(self, table_name, data:dict|list, primary_key="id"):
         """
         Update data based on table name and record/primary key provided - single or multiple records
         :param str table_name: Name of table
