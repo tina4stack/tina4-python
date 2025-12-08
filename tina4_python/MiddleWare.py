@@ -21,9 +21,9 @@ class MiddleWare:
             getattr(middleware_class, method)) and not method.startswith("__")]
 
         for method in self.methods_list:
-            if method.startswith("before"):
+            if method.startswith("before") and "after" not in method:
                 self.before_methods.append(method)
-            elif method.startswith("after"):
+            elif method.startswith("after") and "before" not in method:
                 self.after_methods.append(method)
             else:
                 self.any_methods.append(method)

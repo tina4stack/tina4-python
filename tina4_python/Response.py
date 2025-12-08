@@ -39,6 +39,9 @@ class Response:
         global http_code
         global content_type
 
+        if http_code_in is None:
+            http_code_in = Constant.HTTP_OK
+
         if (not isinstance(content_in, bool) and not isinstance(content_in, object)
                 and not isinstance(content_in, bytes)
                 and not isinstance(content_in, str)

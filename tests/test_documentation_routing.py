@@ -258,6 +258,7 @@ def test_404_not_found():
     assert "Not Found" in r.text or "404" in r.text
 
 
-# ------------------------------------------------------------------
-# Run with: pytest tests/test_tina4_official_guide.py -v -s
-# ------------------------------------------------------------------
+def test_middleware_responses():
+    r = get("/middleware")
+    assert r.status_code == 200
+    assert "Before[Before / After Something]Route[Before / After Something]After" in r.text

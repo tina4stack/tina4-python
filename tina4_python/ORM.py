@@ -13,6 +13,7 @@ from tina4_python.Constant import TINA4_LOG_ERROR
 from tina4_python.Debug import Debug
 from tina4_python.FieldTypes import *
 
+
 def find_all_sub_classes(a_class):
     return a_class.__subclasses__()
 
@@ -33,13 +34,12 @@ def orm(dba):
             # import and set the database object
             try:
                 Debug('from src.orm.' + mod_name + ' import ' + mod_name)
-                exec('from src.orm.' + mod_name + ' import ' + mod_name+"\n"+mod_name + ".__dba__ = dba")
+                exec('from src.orm.' + mod_name + ' import ' + mod_name + "\n" + mod_name + ".__dba__ = dba")
             except Exception as e:
                 Debug("Failed to import " + mod_name, str(e))
     classes = find_all_sub_classes(ORM)
     for a_class in classes:
         a_class.__dba__ = dba
-
 
 
 def json_serialize(obj):
@@ -81,7 +81,8 @@ class ORM:
         self.__field_definitions__ = {}
         for key in dir(self):
             if not key.startswith('__') and not key.startswith('_') and key not in ['save', 'load', 'delete', 'to_json',
-                                                                                    'to_dict', 'create_table', 'select', 'fetch', 'fetch_one']:
+                                                                                    'to_dict', 'create_table', 'select',
+                                                                                    'fetch', 'fetch_one']:
                 self.__field_definitions__[key] = getattr(self, key)
                 counter += 1
 
@@ -114,8 +115,6 @@ class ORM:
         else:
             self.__table_exists = False
 
-
-
     def __populate_orm(self, init_object):
         """
         Populates an ORM object from an input object, also transforms camel case objects to snake case ...
@@ -136,7 +135,7 @@ class ORM:
 
         for key, value in init_object.items():
             snake_case_name = self.__get_snake_case_name__(key)
-            if  snake_case_name in self.__field_definitions__:
+            if snake_case_name in self.__field_definitions__:
                 try:
                     field_value = self.__field_definitions__[snake_case_name]
                     field_value.value = value
@@ -144,7 +143,6 @@ class ORM:
                         setattr(self, snake_case_name, field_value)
                 except Exception as e:
                     print("Could not set value for", snake_case_name, str(e))
-
 
     def __get_primary_keys(self):
         primary_keys = []
@@ -175,7 +173,9 @@ class ORM:
         for key, value in self.__field_definitions__.items():
             current_value = getattr(self, key)
 
-            if current_value is not None and not isinstance(current_value, ForeignKeyField) and value.auto_increment and self.__is_class(current_value):
+            if current_value is not None and not isinstance(current_value,
+                                                            ForeignKeyField) and value.auto_increment and self.__is_class(
+                    current_value):
                 if current_value.value is None:
                     new_id = self.__dba__.get_next_id(table_name=self.__table_name__, column_name=value.column_name)
 
@@ -191,7 +191,6 @@ class ORM:
                 data[key] = str(current_value)
 
         return data
-
 
     def __str__(self):
         return self.to_json()
@@ -246,9 +245,14 @@ class ORM:
         else:
             cols = ",\n".join(column_names)
 
-        group_by = [g.strip() for g in group_by.split(',')] if isinstance(group_by, str) and group_by else group_by if isinstance(group_by, list) else []
-        having = [h.strip() for h in having.split(',')] if isinstance(having, str) and having else having if isinstance(having, list) else []
-        order_by = [o.strip() for o in order_by.split(',')] if isinstance(order_by, str) and order_by else order_by if isinstance(order_by, list) else []
+        group_by = [g.strip() for g in group_by.split(',')] if isinstance(group_by,
+                                                                          str) and group_by else group_by if isinstance(
+            group_by, list) else []
+        having = [h.strip() for h in having.split(',')] if isinstance(having, str) and having else having if isinstance(
+            having, list) else []
+        order_by = [o.strip() for o in order_by.split(',')] if isinstance(order_by,
+                                                                          str) and order_by else order_by if isinstance(
+            order_by, list) else []
 
         sql = f"select {cols}\nfrom {self.__table_name__} as t"
         if join: sql += f"\n{join}"
@@ -273,7 +277,8 @@ class ORM:
         sql = self.__build_sql(column_names, join, filter, group_by, having, order_by)
         return self.__dba__.fetch_one(sql, params=params)
 
-    def fetch(self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10, skip=0):
+    def fetch(self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10,
+              skip=0):
         """
         Fetch multiple records from the database
         :param column_names:
@@ -290,7 +295,8 @@ class ORM:
         sql = self.__build_sql(column_names, join, filter, group_by, having, order_by)
         return self.__dba__.fetch(sql, params=params, limit=limit, skip=skip)
 
-    def select (self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10, skip=0):
+    def select(self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10,
+               skip=0):
         return self.fetch(column_names, filter, params, join, group_by, having, order_by, limit, skip)
 
     def load(self, query="", params=[]):
@@ -368,7 +374,8 @@ class ORM:
             record = self.__dba__.fetch_one(sql, input_params)
             for key, value in data.items():
                 if key in self.__field_definitions__:
-                    if type(value) == JSONBField and (isinstance(value, dict) or isinstance(value, list)) or (isinstance(value, str) and value.startswith("{") and value.endswith("}")):
+                    if type(value) == JSONBField and (isinstance(value, dict) or isinstance(value, list)) or (
+                            isinstance(value, str) and value.startswith("{") and value.endswith("}")):
                         data[key] = ast.literal_eval(value)
 
             if record["count_records"] == 0:
@@ -415,5 +422,3 @@ class ORM:
         else:
             self.__dba__.commit()
             return True
-
-

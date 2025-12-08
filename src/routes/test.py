@@ -111,3 +111,25 @@ async def get_session_set(request, response):
     info = request.session.get("info")
 
     return response({"name": name, "info": info})
+
+class RunSomething:
+
+    @staticmethod
+    def before_something(request, response):
+        response.content += "Before"
+        return request, response
+
+    @staticmethod
+    def after_something(request, response):
+        response.content += "After"
+        return request, response
+
+    @staticmethod
+    def before_and_after_something(request, response):
+        response.content += "[Before / After Something]"
+        return request, response
+
+@middleware(RunSomething)
+@get("/middleware")
+async def get_middleware(request, response):
+    return response("Route")

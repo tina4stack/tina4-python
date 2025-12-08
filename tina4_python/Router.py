@@ -43,8 +43,8 @@ class Router:
             return "/"
         url = url.split('?')[0]
         url = re.sub(r'^https?://[^/]+', '', url)  # remove domain if present
-        url = re.sub(r'\s+', '', url)              # remove all whitespace
-        url = re.sub(r'/+', '/', url)              # collapse multiple slashes
+        url = re.sub(r'\s+', '', url)  # remove all whitespace
+        url = re.sub(r'/+', '/', url)  # collapse multiple slashes
         url = url.strip('/')
         if not url:
             return "/"
@@ -98,12 +98,12 @@ class Router:
             return False
 
         # === Normalize incoming URL ===
-        url_norm = url.split('?')[0]                    # remove query string
-        url_norm = re.sub(r'\s+', '', url_norm)         # remove whitespace
-        url_norm = re.sub(r'/+', '/', url_norm)         # collapse slashes
+        url_norm = url.split('?')[0]  # remove query string
+        url_norm = re.sub(r'\s+', '', url_norm)  # remove whitespace
+        url_norm = re.sub(r'/+', '/', url_norm)  # collapse slashes
         url_norm = url_norm.strip('/')
         if not url_norm:
-            url_norm = '/'                              # root path
+            url_norm = '/'  # root path
         else:
             url_norm = '/' + url_norm + '/'
         url_segments = [seg for seg in url_norm.strip('/').split('/') if seg]
@@ -285,6 +285,9 @@ class Router:
 
                 old_stdout = sys.stdout  # Memorize the default stdout stream
                 sys.stdout = buffer = io.StringIO()
+                error_set = (Constant.HTTP_REDIRECT, Constant.HTTP_REDIRECT_MOVED, Constant.HTTP_REDIRECT_OTHER,
+                             Constant.HTTP_FORBIDDEN, Constant.HTTP_BAD_REQUEST, Constant.HTTP_UNAUTHORIZED,
+                             Constant.HTTP_SERVER_ERROR)
 
                 if "middleware" in route:
                     middleware_runner = MiddleWare(route["middleware"]["class"])
@@ -293,14 +296,14 @@ class Router:
                             route["middleware"]["methods"]) > 0:
                         for method in route["middleware"]["methods"]:
                             Request, result = middleware_runner.call_direct_method(Request, result, method)
-                            if result.http_code != Constant.HTTP_NOT_FOUND:
+                            if result.http_code in error_set:
                                 return Response.Response(result.content, result.http_code, result.content_type)
                     else:
                         Request, result = await middleware_runner.call_before_methods(Request, result)
-                        if result.http_code != Constant.HTTP_NOT_FOUND:
+                        if result.http_code in error_set:
                             return Response.Response(result.content, result.http_code, result.content_type)
                         Request, result = await middleware_runner.call_any_methods(Request, result)
-                        if result.http_code != Constant.HTTP_NOT_FOUND:
+                        if result.http_code in error_set:
                             return Response.Response(result.content, result.http_code, result.content_type)
 
                 try:
@@ -355,11 +358,20 @@ class Router:
                 if "middleware" in route:
                     middleware_runner = MiddleWare(route["middleware"]["class"])
 
-                    Request, result = await middleware_runner.call_after_methods(Request, result)
-                    # We expect a 200 status here to carry on otherwise we just return immediately
-                    if result.http_code != Constant.HTTP_OK:
-                        return Response.Response(result.content, result.http_code, result.content_type)
+                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(
+                            route["middleware"]["methods"]) > 0:
+                        for method in route["middleware"]["methods"]:
+                            Request, result = middleware_runner.call_direct_method(Request, result, method)
+                            if result.http_code in error_set:
+                                return Response.Response(result.content, result.http_code, result.content_type)
+                    else:
+                        Request, result = await middleware_runner.call_any_methods(Request, result)
+                        if result.http_code in error_set:
+                            return Response.Response(result.content, result.http_code, result.content_type)
 
+                        Request, result = await middleware_runner.call_after_methods(Request, result)
+                        if result.http_code in error_set:
+                            return Response.Response(result.content, result.http_code, result.content_type)
 
                 if result is not None:
                     result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
@@ -487,7 +499,7 @@ class Router:
         return True
 
 
-def get(path: str|list):
+def get(path: str | list):
     """
     Get router
     :param path:
@@ -507,7 +519,7 @@ def get(path: str|list):
     return actual_get
 
 
-def post(path: str|list):
+def post(path: str | list):
     """
     Post router
     :param path:
@@ -526,7 +538,7 @@ def post(path: str|list):
     return actual_post
 
 
-def put(path: str|list):
+def put(path: str | list):
     """
     Put router
     :param path:
@@ -545,7 +557,7 @@ def put(path: str|list):
     return actual_put
 
 
-def patch(path:str|list):
+def patch(path: str | list):
     """
     Patch router
     :param path:
@@ -564,7 +576,7 @@ def patch(path:str|list):
     return actual_patch
 
 
-def delete(path:str|list):
+def delete(path: str | list):
     """
     Delete router
     :param path:
@@ -593,7 +605,7 @@ def cached(is_cached, max_age=60):
 
     def actual_cached(callback):
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {"routes" : [], "methods": []}
+            tina4_python.tina4_routes[callback] = {"routes": [], "methods": []}
         tina4_python.tina4_routes[callback]["cache"] = {"cached": is_cached, "max_age": max_age}
         return callback
 
@@ -613,7 +625,7 @@ def middleware(middleware, specific_methods=None):
 
     def actual_middleware(callback):
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {"routes" : [], "methods": []}
+            tina4_python.tina4_routes[callback] = {"routes": [], "methods": []}
         tina4_python.tina4_routes[callback]["middleware"] = {"class": middleware, "methods": specific_methods}
         return callback
 
@@ -628,7 +640,7 @@ def secured():
 
     def actual_secure(callback):
         if callback not in tina4_python.tina4_routes:
-            tina4_python.tina4_routes[callback] = {"routes" : [], "methods": []}
+            tina4_python.tina4_routes[callback] = {"routes": [], "methods": []}
         tina4_python.tina4_routes[callback]["secure"] = True
         return callback
 
