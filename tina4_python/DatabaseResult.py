@@ -56,6 +56,10 @@ class DatabaseResult(CRUD):
         self.error = _error
 
     def to_paginate(self):
+        """
+        Pagination result with all the needed information
+        :return:
+        """
 
         return {"recordsTotal": self.total_count, "recordsOffset": self.skip, "recordCount": self.count,
                 "recordsFiltered": self.total_count, "fields": self.columns, "data": self.to_array(),
@@ -63,11 +67,16 @@ class DatabaseResult(CRUD):
 
 
 
-    def to_csv(self):
+    def to_csv(self, quoting=csv.QUOTE_ALL):
+        """
+        Makes a csv file
+        :param quoting:
+        :return:
+        """
         if not self.columns:
             return ''
         output = io.StringIO()
-        writer = csv.writer(output)
+        writer = csv.writer(output, quoting=quoting)
         writer.writerow(self.columns)
         if self.records:
             first_record = self.records[0]

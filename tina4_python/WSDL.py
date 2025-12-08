@@ -432,7 +432,9 @@ class Calculator(WSDL):
         }
 
 # Tina4 route
-@Tina4.get("/soap/calculator")
-def soap_endpoint(request):
-    return Calculator(request).handle()
+
+@wsdl("/calculator") # implies /calculator?wsdl
+async def wsdl_cis(request, response):
+
+    return response.wsdl(Calculator(request))
 """
