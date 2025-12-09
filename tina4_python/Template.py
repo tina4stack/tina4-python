@@ -23,10 +23,11 @@ from functools import wraps
 
 
 class Template:
+    twig = None
     # initializes the twig template engine
     @staticmethod
     def init_twig(path):
-        if hasattr(Template, "twig"):
+        if hasattr(Template, "twig") and Template.twig is not None:
             Debug.debug("Twig found on " + path)
             return Template.twig
         Debug.debug("Initializing Twig on " + path)
@@ -93,7 +94,9 @@ class Template:
         return value
 
     @staticmethod
-    def get_form_token(payload={}):
+    def get_form_token(payload=None):
+        if payload is None:
+            payload = {}
         return tina4_python.tina4_auth.get_token(payload)
 
     @staticmethod

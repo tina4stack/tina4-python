@@ -222,7 +222,7 @@ def test_secured_route_with_token():
 # 13. Static Files Auto-Served
 # ------------------------------------------------------------------
 def test_static_css():
-    r = get("/css/test.css")
+    r = get("/css/default.css")
     assert r.status_code == 200
     assert r.headers["content-type"] == "text/css"
 

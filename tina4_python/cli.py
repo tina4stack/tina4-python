@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+#
+# Tina4 - This is not a 4ramework.
+# Copy-right 2007 - current Tina4
+# License: MIT https://opensource.org/licenses/MIT
+#
+# flake8: noqa: E501
 """
 Tina4 CLI Tool – Quick commands for starting projects and running servers.
 
@@ -53,9 +59,10 @@ def create_project(project_name: str) -> None:
 from tina4_python import run_web_server
 from tina4_python.Router import get
 
-@get("/")
+@get("/health-check")
 async def index(request, response):
-    return response(f"Hello Tina4!")
+
+    return response(f"OK")
 
 if __name__ == "__main__":
     run_web_server()
