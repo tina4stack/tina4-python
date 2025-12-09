@@ -17,15 +17,27 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
         with:
-          version: "latest"  # Or specific version
+          version: "latest"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"  # Match Tina4 requirement
+          python-version: "3.12"
 
       - name: Install dependencies
-        run: uv sync  # Or uv install if no lockfile
+        run: uv sync
+
+      - name: Initialize Tina4
+        run: uv run tina4 init .
+
+      - name: Start Tina4 server
+        run: |
+          uv run tina4 start &
+          sleep 10  # Wait for server to start
 
       - name: Run tests
-        run: uv run pytest tests/  # Adjust path if needed
+        run: uv run pytest tests/
+
+      - name: Stop server
+        if: always()
+        run: pkill -f "uv run tina4 start" || true
