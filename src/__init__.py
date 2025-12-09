@@ -1,8 +1,10 @@
 import asyncio
+from tina4_python.Migration import migrate
 from tina4_python import get, post, put, delete, middleware, description, Database, secured, HTTP_OK
 
 dba = Database("sqlite3:data.db")
 
+migrate(dba)
 
 @get("/inline/{id}")
 async def get_inline_id(id, request, response):
@@ -10,19 +12,19 @@ async def get_inline_id(id, request, response):
 
 
 @get("/users/{id}/posts/{post_id}")
-async def user_post(id: str, post_id: str, request, response):  # Path params before request/response
+async def user_post(id: str, post_id: str, response):  # Path params before request/response
     return response(f"User {id}'s post {post_id}")
 
 
 @get("/uploads/{file}")
-async def serve_upload(file: str, request, response):
+async def serve_upload(file: str, response):
     print("Ok")
     return response.file(file, "")
 
 
 # 1–2. Basic routes
 @get("/hello")
-async def hello(request, response):
+async def hello(response):
     return response("Hello, Tina4 Python!")
 
 

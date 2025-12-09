@@ -1,2 +1,0 @@
--- Migration: first migration
--- Created: 000001_first_migration.sql

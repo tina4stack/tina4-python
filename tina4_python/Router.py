@@ -27,7 +27,7 @@ class Router:
         Parse route segment like {id}, {username:str}, {price:float}, {file:path}
         Returns (param_name, converter) where converter is 'str', 'int', 'float', 'path'
         """
-        match = re.match(r'^\{(\w+)(?::(\w+))?\}?$', segment.strip())
+        match = re.match(r'^\{(\w+)(?::(\w+))?}?$', segment.strip())
         if not match:
             return None, None
         name = match.group(1)
@@ -308,38 +308,26 @@ class Router:
 
                 try:
                     sig = inspect.signature(router_response)
-                    path_args = []  # List of (name, value) for path params
+                    kwargs = {}
 
-                    # Identify expected path params (positional args before 'request' and 'response')
                     for param_name, param in sig.parameters.items():
-                        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                                          inspect.Parameter.POSITIONAL_ONLY) and \
-                                param_name not in ('request', 'response'):
-                            if param_name in Router.variables:
-                                value = Router.variables[param_name]
-                                # Optional: Type conversion based on annotation (e.g., int)
-                                if param.annotation != inspect.Parameter.empty:
-                                    try:
-                                        if param.annotation == int:
-                                            value = int(value)
-                                        elif param.annotation == str:
-                                            value = str(value)
-                                        # Add more types as needed (float, bool, etc.)
-                                    except ValueError:
-                                        raise ValueError(
-                                            f"Invalid type for path param '{param_name}': expected {param.annotation.__name__}, got '{Router.variables[param_name]}'")
-                                path_args.append(value)
-                                # Apply default if missing and has default
-                            elif param.default != inspect.Parameter.empty:
-                                path_args.append(param.default)
-                            else:
-                                raise TypeError(f"Missing required path parameter: {param_name}")
+                        if param_name in Router.variables:
+                            value = Router.variables[param_name]
+                            if param.annotation != inspect.Parameter.empty and callable(param.annotation):
+                                try:
+                                    value = param.annotation(value)
+                                except ValueError:
+                                    raise ValueError(
+                                        f"Invalid type for path param '{param_name}': expected {param.annotation.__name__}, got '{Router.variables[param_name]}'")
+                            kwargs[param_name] = value
+                        elif param_name == 'request':
+                            kwargs[param_name] = Request
+                        elif param_name == 'response':
+                            kwargs[param_name] = Response.Response
+                        elif param.default == inspect.Parameter.empty:
+                            raise TypeError(f"Missing required parameter: {param_name}")
 
-                    # Dynamically invoke with injected args + kwargs for request/response
-                    if path_args:
-                        result = await router_response(*path_args, request=Request, response=Response.Response)
-                    else:
-                        result = await router_response(request=Request, response=Response.Response)
+                    result = await router_response(**kwargs)
                 except Exception as e:
                     error_string = tina4_python.global_exception_handler(e)
                     if Constant.TINA4_LOG_DEBUG in os.getenv(
@@ -493,7 +481,7 @@ class Router:
         tina4_python.tina4_routes[callback]["secure"] = is_secure
 
         if '{' in route:
-            route_variables = re.findall(r'\{(\w+)(?::\w+)?\}', route)
+            route_variables = re.findall(r'\{(\w+)(?::\w+)?}', route)
             tina4_python.tina4_routes[callback]["params"] = route_variables
 
         return True
