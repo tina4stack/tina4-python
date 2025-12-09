@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      - name: Add Test API_KEY
+        run: echo "API_KEY=38168ba8aad6c91ba13d959c3f91c7a7" > .env
+
       - name: Initialize Tina4
         run: uv run tina4 init .
 
