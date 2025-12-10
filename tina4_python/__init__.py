@@ -224,6 +224,16 @@ builtins.Api = Api
 builtins.Database = Database
 builtins.ORM = ORM
 
+# Auto-import everything from src folders
+if os.path.exists(root_path + os.sep + "src"):
+    try:
+        exec("from src import *")
+        Debug.info("Initializing src folder")
+    except ImportError as e:
+        Debug.error("Cannot import src folder", str(e))
+else:
+    Debug.warning("Missing src folder")
+
 
 def compile_scss():
     """Auto-compile ALL .scss files → single compressed default.css (no default.scss needed)"""
@@ -440,7 +450,6 @@ def run_web_server(hostname="localhost", port=7145, debug: bool = False):
         """
         Automatically imports all Python modules under src/
         Ignores:
-          - src/public
           - src/public
           - src/templates
           - src/scss
