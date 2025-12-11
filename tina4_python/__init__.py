@@ -81,16 +81,17 @@ if not debug_level or debug_level in ("", "NONE", "NULL"):
 setup_logging()
 Debug.info("Environment is", environment)
 
-TINA4_BANNER = ShellColors.bright_magenta + """
-████████╗██╗███╗   ██╗ █████╗ ██╗  ██╗
-╚══██╔══╝██║████╗  ██║██╔══██╗██║  ██║
-   ██║   ██║██╔██╗ ██║███████║███████║
-   ██║   ██║██║╚██╗██║██╔══██║╚════██║
-   ██║   ██║██║ ╚████║██║  ██║     ██║
-   ╚═╝   ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝     ╚═╝
-""" + ShellColors.end
-
 try:
+    TINA4_BANNER = ShellColors.bright_magenta + """
+    ████████╗██╗███╗   ██╗ █████╗ ██╗  ██╗
+    ╚══██╔══╝██║████╗  ██║██╔══██╗██║  ██║
+       ██║   ██║██╔██╗ ██║███████║███████║
+       ██║   ██║██║╚██╗██║██╔══██║╚════██║
+       ██║   ██║██║ ╚████║██║  ██║     ██║
+       ╚═╝   ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝     ╚═╝
+    """ + ShellColors.end
+
+
     print(TINA4_BANNER)
 except Exception as e:
     print(ShellColors.bright_magenta +"TINA4"+ShellColors.end)

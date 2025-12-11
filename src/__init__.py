@@ -1,10 +1,32 @@
 import asyncio
 from tina4_python.Migration import migrate
-from tina4_python import get, post, put, delete, middleware, description, Database, secured, HTTP_OK
+from tina4_python import get, post, put, delete, middleware, description, Database, secured, HTTP_OK, noauth
 
 dba = Database("sqlite3:data.db")
 
 migrate(dba)
+
+@post("/swagger/new-post-noauth")
+@description("Noauth Post")
+@noauth()
+async def new_post_noauth(response):
+
+    return response("NOAUTH Post")
+
+@post("/swagger/new-post-secure")
+@description("Secure Post")
+@secured()
+async def new_post_secure(response):
+
+    return response("SECURED Post")
+
+@get("/swagger/new-get-secure")
+@description("Secure Get")
+@secured()
+async def new_post_get(response):
+
+    return response("SECURED Get")
+
 
 @get("/inline/{id}")
 async def get_inline_id(id, request, response):

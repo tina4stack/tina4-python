@@ -1,5 +1,5 @@
 #
-# Tina4 - This is not a 4ramework.
+# Tina4 - This is not a framework.
 # Copyright 2007 - present Tina4
 # License: MIT https://opensource.org/licenses/MIT
 #
@@ -10,8 +10,6 @@ from typing import List, Dict, Any, Optional, Callable
 
 import tina4_python
 from tina4_python import Constant
-from tina4_python.Debug import Debug
-
 
 class Swagger:
     """
@@ -38,6 +36,10 @@ class Swagger:
     @staticmethod
     def add_secure(callback: Callable) -> None:
         Swagger.set_swagger_value(callback, "secure", True)
+
+    @staticmethod
+    def add_noauth(callback: Callable) -> None:
+        Swagger.set_swagger_value(callback, "secure", False)
 
     @staticmethod
     def add_tags(tags: List[str] | str, callback: Callable) -> None:
@@ -149,7 +151,7 @@ class Swagger:
                     "content": {"application/json": {}}
                 }
             },
-            "security": [{"bearerAuth": []}] if secure else []
+            "security": [{"bearerAuth": []}, {"basicAuth": []}] if secure else []
         }
 
         # Clean None responses
@@ -183,7 +185,7 @@ class Swagger:
             "summary": "",
             "example": None,
             "example_response": None,
-            "secure": False
+            # Note: 'secure' default is now set per-method in get_json
         }
         for key, value in defaults.items():
             if key not in swagger or swagger[key] is None:
@@ -207,20 +209,35 @@ class Swagger:
 
             for route in route_info.get("routes", []):
                 for method in route_info.get("methods", []):
+                    # Apply per-method secure default if not explicitly set
+                    secured = swagger.get("secure")
+                    if secured is None:
+                        secured = method != Constant.TINA4_GET
+
+                    route_noauth = route_info.get("noauth")
+                    route_secure = route_info.get("secure")
+
+                    if route_secure is not None and route_secure:
+                        secured = True
+
+                    if route_noauth is not None and route_noauth:
+                       secured = False
+
+                    swagger["secure"] = secured  # Update for this operation
                     operation = Swagger.get_swagger_entry(
                         route=route,
                         method=method,
                         tags=swagger["tags"],
                         summary=swagger["summary"],
                         description=swagger["description"],
-                        secure=swagger["secure"],
+                        secure=secure,
                         query_params=swagger["params"],
                         example=swagger["example"],
                         example_response=swagger["example_response"]
                     )
 
                     # CRITICAL FIX: Re-apply security if route is marked secure
-                    if swagger["secure"]:
+                    if secure:
                         operation["security"] = [
                             {"bearerAuth": []},
                             {"basicAuth": []}
@@ -298,6 +315,13 @@ def summary(text: str):
 def secure():
     def decorator(callback):
         Swagger.add_secure(callback)
+        return callback
+    return decorator
+
+
+def noauth():
+    def decorator(callback):
+        Swagger.add_noauth(callback)
         return callback
     return decorator
 

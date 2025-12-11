@@ -1,5 +1,3 @@
-from tina4_python import run_web_server
+import tina4_python
 
 
-if __name__ == "__main__":
-    run_web_server()
