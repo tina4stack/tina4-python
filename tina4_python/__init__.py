@@ -133,7 +133,6 @@ def global_exception_handler(exception):
     Returns:
         str: User-facing error message
     """
-    debug_level = Constant.TINA4_LOG_DEBUG
     error = str(exception)
     tb_str = ''.join(traceback.format_exception(None, exception, exception.__traceback__))
     error_string = "Exception Error: " + error + "\n" + tb_str + "\nYou are seeing this error because Tina4 is in debug mode"
