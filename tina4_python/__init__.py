@@ -90,7 +90,11 @@ TINA4_BANNER = ShellColors.bright_magenta + """
    ╚═╝   ╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝     ╚═╝
 """ + ShellColors.end
 
-print(TINA4_BANNER)
+try:
+    print(TINA4_BANNER)
+except Exception as e:
+    print(ShellColors.bright_magenta +"TINA4"+ShellColors.end)
+
 print(ShellColors.cyan + "INFO: Setting debug mode:", debug_level, ShellColors.end)
 
 # Optional live-coding hot reload

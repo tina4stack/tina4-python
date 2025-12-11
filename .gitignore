@@ -37,3 +37,4 @@
 /Dockerfile
 /data.db
 /test_queue.db-shm
+/publish.sh
