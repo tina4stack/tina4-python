@@ -231,7 +231,7 @@ builtins.ORM = ORM
 # Auto-import everything from src folders
 if os.path.exists(root_path + os.sep + "src"):
     try:
-        exec("from src import *")
+        exec("from .src import *")
         Debug.info("Initializing src folder")
     except ImportError as e:
         Debug.error("Cannot import src folder", str(e))
