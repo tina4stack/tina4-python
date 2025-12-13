@@ -11,7 +11,7 @@ import importlib
 import time
 from tina4_python import Debug
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Dict, Any, Generator, List
 
 # Extracted from https://github.com/stevesimmons/uuid7 under MIT license
 time_ns = time.time_ns
@@ -101,7 +101,13 @@ class Queue:
                 delivery_callback(self.producer, e, None)
             return e
 
-    def consume(self, acknowledge=True, consumer_callback=None):
+    def consume(self, acknowledge: bool = True) -> Generator[Message, None, None]:
+        """
+        Generator that yields messages one by one.
+        Use like:
+            for msg in queue.consume():
+                print(msg.data)
+        """
         prefix = self.get_prefix()
         try:
             if self.config.queue_type == "litequeue":
@@ -113,35 +119,37 @@ class Queue:
                         self.consumer.done(msg.message_id)
                         msg = self.consumer.get(msg.message_id)
                         response.status = int(msg.status)
+                    yield response
+
             elif self.config.queue_type == "mongo-queue-service":
                 msg = self.consumer.next(channel=prefix + self.topic)
                 if msg:
                     data = msg.payload
-                    status = 2 if acknowledge else 1
+                    response = Message(data["message_id"], data["msg"], data["user_id"], 2 if acknowledge else 1, msg.queued_at, "0")
                     if acknowledge:
                         msg.complete()
-                    response = Message(data["message_id"], data["msg"], data["user_id"], status, msg.queued_at, "0")
+                    yield response
+
             elif self.config.queue_type == "rabbitmq":
-                method, _, body = self.producer.basic_get(queue=prefix + self.topic, auto_ack=acknowledge)
+                method, _, body = self.consumer.basic_get(queue=prefix + self.topic, auto_ack=acknowledge)
                 if method:
                     data = json.loads(body)
-                    status = 2 if acknowledge else 1
-                    response = Message(data["message_id"], data["msg"], data["user_id"], status, data["in_time"], method.delivery_tag)
+                    response = Message(data["message_id"], data["msg"], data["user_id"], 2 if acknowledge else 1, data["in_time"], method.delivery_tag)
+                    yield response
+
             elif self.config.queue_type == "kafka":
-                msg = self.consumer.poll(1.0)
+                msg = self.consumer.poll(0.1)  # non-blocking poll
                 if msg and not msg.error():
                     data = json.loads(msg.value().decode('utf-8'))
-                    status = 2 if acknowledge else 1
-                    response = Message(data["message_id"], data["msg"], data["user_id"], status, data["in_time"], msg.offset())
-                else:
-                    return
-            if consumer_callback:
-                consumer_callback(self.consumer, None, response)
-            if self.callback:
-                self.callback(response)
+                    response = Message(data["message_id"], data["msg"], data["user_id"], 2 if acknowledge else 1, data["in_time"], str(msg.offset()))
+                    if acknowledge:
+                        self.consumer.commit()
+                    yield response
+
         except Exception as e:
             Debug.error(f"Error consuming {self.topic}: {e}")
 
+    # init methods remain unchanged
     def init_litequeue(self):
         try:
             litequeue = importlib.import_module("litequeue")
@@ -155,16 +163,35 @@ class Queue:
         try:
             mongo_queue = importlib.import_module("mongo_queue")
             pymongo = importlib.import_module("pymongo")
-            config = self.config.mongo_queue_config or {"host": "localhost", "port": 27017, "timeout": 300, "max_attempts": 5}
-            client_args = {"host": config["host"], "port": config["port"]}
-            if "username" in config and "password" in config:
-                client_args.update(username=config["username"], password=config["password"])
-            client = pymongo.MongoClient(**client_args).queue
-            queue = mongo_queue.queue.Queue(client[self.get_prefix() + self.topic],
-                                            consumer_id=self.topic, timeout=config["timeout"], max_attempts=config["max_attempts"])
+
+            # Use provided config or fall back to defaults
+            config = self.config.mongo_queue_config or {}
+            host = config.get("host", "localhost")
+            port = config.get("port", 27017)
+            timeout = config.get("timeout", 300)
+            max_attempts = config.get("max_attempts", 5)  # ← default value
+            username = config.get("username")
+            password = config.get("password")
+
+            client_args = {"host": host, "port": port}
+            if username and password:
+                client_args.update(username=username, password=password)
+
+            client = pymongo.MongoClient(**client_args)
+            db = client.queue  # default database name used by mongo_queue
+
+            collection_name = self.get_prefix() + self.topic
+            queue = mongo_queue.queue.Queue(
+                db[collection_name],
+                consumer_id=self.topic,
+                timeout=timeout,
+                max_attempts=max_attempts
+            )
             self.producer = self.consumer = queue
+            Debug.info(f"Mongo queue initialized: {collection_name}")
         except Exception as e:
             Debug.error("Failed to init mongo-queue-service", e)
+            raise
 
     def init_rabbitmq(self):
         try:
@@ -205,18 +232,24 @@ class Producer:
         return self.queue.produce(value, user_id, delivery_callback or self.delivery_callback)
 
 class Consumer:
-    def __init__(self, queues, consumer_callback=None, acknowledge=True):
-        self.queues = [queues] if not isinstance(queues, list) else queues
-        self.consumer_callback = consumer_callback
+    def __init__(self, queues: List[Queue], acknowledge: bool = True, poll_interval: float = 1.0):
+        self.queues = queues if isinstance(queues, list) else [queues]
         self.acknowledge = acknowledge
+        self.poll_interval = poll_interval
 
-    def run(self, sleep=1, iterations=None):
-        counter = 0
-        Debug.debug("Consuming", [q.topic for q in self.queues])
+    def messages(self) -> Generator[Message, None, None]:
+        """Generator that yields messages from all configured queues forever"""
+        Debug.debug("Consuming from queues", [q.topic for q in self.queues])
         while True:
             for queue in self.queues:
-                queue.consume(self.acknowledge, self.consumer_callback)
-            counter += 1
-            if iterations and counter >= iterations:
-                break
-            time.sleep(sleep)
+                for message in queue.consume(self.acknowledge):
+                    yield message
+            time.sleep(self.poll_interval)
+
+    def run_forever(self):
+        """Simple blocking runner — easy to use"""
+        for message in self.messages():
+            Debug.info(f"Received message: {message.message_id} -> {message.data}")
+            # Do something with message here
+            # Or just pass to a callback if needed
+

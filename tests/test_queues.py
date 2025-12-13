@@ -3,20 +3,36 @@ import time
 import pytest
 from tina4_python.Queue import Queue, Config, Message, Producer, Consumer
 
-@pytest.fixture
+# Helper to clean up SQLite files completely
+def cleanup_db(db_name):
+    for suffix in ["", "-wal", "-shm", "-journal"]:
+        file_path = f"{db_name}{suffix}"
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except PermissionError:
+                time.sleep(0.1)
+                try:
+                    os.remove(file_path)
+                except:
+                    pass  # best effort
+
+@pytest.fixture(scope="function")
 def litequeue_config():
+    # Unique DB name per test run to avoid locks
+    db_name = f"test_queue_{int(time.time() * 1000)}.db"
     config = Config()
     config.queue_type = "litequeue"
-    config.litequeue_database_name = "test_queue.db"
+    config.litequeue_database_name = db_name
     config.prefix = "test"
-    return config
+    yield config
+    cleanup_db(config.litequeue_database_name)
 
-@pytest.fixture
+@pytest.fixture(scope="function")
 def lite_queue(litequeue_config):
     q = Queue(config=litequeue_config, topic="test-topic")
     yield q
-    if os.path.exists(litequeue_config.litequeue_database_name):
-        os.remove(litequeue_config.litequeue_database_name)
+    cleanup_db(litequeue_config.litequeue_database_name)
 
 def test_init_litequeue(lite_queue):
     assert lite_queue.producer is not None
@@ -28,44 +44,38 @@ def test_produce_litequeue(lite_queue):
     assert isinstance(response, Message)
     assert response.data == "hello world"
     assert response.user_id == "user123"
-    assert response.status == 0  # Initial status
-    assert len(response.message_id) == 36  # UUID length
+    assert response.status == 0
+    assert len(response.message_id) == 36
 
 def test_produce_with_callback(lite_queue):
-    delivered = None
+    delivered = [None]
+
     def delivery_cb(producer, err, msg):
-        nonlocal delivered
-        delivered = (err, msg)
+        delivered[0] = (err, msg)
+
     response = lite_queue.produce("callback test", user_id="user456", delivery_callback=delivery_cb)
-    assert delivered[0] is None  # No error
-    assert isinstance(delivered[1], Message)
-    assert delivered[1].data == "callback test"
+    assert delivered[0][0] is None
+    assert isinstance(delivered[0][1], Message)
+    assert delivered[0][1].data == "callback test"
 
 def test_consume_litequeue(lite_queue):
-    # Produce a message first
     lite_queue.produce("consume me", user_id="user789")
 
-    consumed = None
-    def consumer_cb(consumer, err, msg):
-        nonlocal consumed
-        consumed = (err, msg)
-
-    lite_queue.consume(acknowledge=True, consumer_callback=consumer_cb)
-    assert consumed[0] is None
-    assert isinstance(consumed[1], Message)
-    assert consumed[1].data == "consume me"
-    assert consumed[1].status == 2  # Acknowledged status
+    # Use generator directly — no callback needed
+    messages = list(lite_queue.consume(acknowledge=True))
+    assert len(messages) == 1
+    msg = messages[0]
+    assert isinstance(msg, Message)
+    assert msg.data == "consume me"
+    assert msg.status == 2  # Acknowledged
 
 def test_consume_no_ack(lite_queue):
     lite_queue.produce("no ack test", user_id="user000")
 
-    consumed = None
-    def consumer_cb(consumer, err, msg):
-        nonlocal consumed
-        consumed = msg
-
-    lite_queue.consume(acknowledge=False, consumer_callback=consumer_cb)
-    assert consumed.status == 1  # Not acknowledged
+    messages = list(lite_queue.consume(acknowledge=False))
+    assert len(messages) == 1
+    msg = messages[0]
+    assert msg.status == 1  # Not acknowledged
 
 def test_producer_wrapper(litequeue_config):
     q = Queue(config=litequeue_config, topic="producer-test")
@@ -78,23 +88,22 @@ def test_consumer_wrapper(litequeue_config):
     q = Queue(config=litequeue_config, topic="consumer-test")
     q.produce("to consume", user_id="consume_user")
 
+    consumer = Consumer(q, acknowledge=True)
+
     collected = []
-    def consumer_cb(consumer, err, msg):
+    # Poll a few times to get the message
+    for msg in consumer.messages():
         collected.append(msg)
+        if len(collected) >= 1:
+            break
 
-    consumer = Consumer(q, consumer_callback=consumer_cb, acknowledge=True)
-
-    # Run for a few iterations to simulate consumption
-    consumer.run(sleep=1, iterations=1)
-
-    assert len(collected) == 1
-    assert collected[0].data == "to consume"
+    assert len(collected) >= 1
+    assert any(m.data == "to consume" for m in collected)
 
 def test_error_handling(lite_queue):
-    # Simulate invalid produce (e.g., bad value)
     with pytest.raises(Exception):
-        lite_queue.produce(None)  # Assuming JSON dumps fails on None
+        lite_queue.produce(None)
 
-    # Consume on empty queue (should not raise, just do nothing)
-    lite_queue.consume()
-
+    # Consume on empty queue — should yield nothing, no error
+    messages = list(lite_queue.consume())
+    assert len(messages) == 0
