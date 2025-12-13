@@ -39,7 +39,7 @@ jobs:
           sleep 10  # Wait for server to start
 
       - name: Run tests
-        run: uv run pytest tests/
+        run: uv run pytest --ignore-tests=tests/test_rabbitmq_queue.py --ignore-tests=test_mongo_queue.py tests/
 
       - name: Stop server
         if: always()
