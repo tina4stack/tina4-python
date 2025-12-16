@@ -207,8 +207,6 @@ class Template:
                 return {"content": content, "content_type": mime_type}
             except json.JSONDecodeError as e:
                 return {"content": str(e), "content_type": ""}
-
-
         mime_type = "jpeg"
         # Check magic bytes on value
         if value[:4] == '/9j/':
