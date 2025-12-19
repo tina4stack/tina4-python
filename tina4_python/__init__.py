@@ -137,8 +137,7 @@ def global_exception_handler(exception):
     tb_str = ''.join(traceback.format_exception(None, exception, exception.__traceback__))
     error_string = "Exception Error: " + error + "\n" + tb_str + "\nYou are seeing this error because Tina4 is in debug mode"
     Debug.error(error_string)
-    if (os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL]) == "[TINA4_LOG_ALL]"
-            or debug_level in os.getenv("TINA4_DEBUG_LEVEL", [Constant.TINA4_LOG_ALL])):
+    if debug_level == "ALL" or debug_level is None or debug_level == "DEBUG":
         pass
     else:
         error_string = "An exception happened"
@@ -427,6 +426,11 @@ async def app(scope, receive, send):
                     await send({
                         'type': 'http.response.body',
                         'body': tina4_response.content,
+                    })
+            else:
+                if message["type"] == "websocket" and tina4_response.http_code != 200:
+                    await send({
+                        'type': 'websocket.close',
                     })
 
 
