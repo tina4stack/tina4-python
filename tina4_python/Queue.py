@@ -48,7 +48,7 @@ class Config:
 @dataclass(frozen=False)
 class Message:
     message_id: str
-    data: str
+    data: str|dict
     user_id: str
     status: int
     time_stamp: int
