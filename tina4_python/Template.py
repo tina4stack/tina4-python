@@ -146,10 +146,11 @@ class Template:
 
         twig = Template.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
         try:
-            if twig.get_template(template_or_file_name):
-                template = twig.get_template(template_or_file_name)
-                content = template.render(data)
-            else:
+            try:
+                if twig.get_template(template_or_file_name):
+                    template = twig.get_template(template_or_file_name)
+                    content = template.render(data)
+            except:
                 template = twig.from_string(template_or_file_name)
                 content = template.render(data)
 

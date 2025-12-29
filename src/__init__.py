@@ -6,6 +6,13 @@ dba = Database("sqlite3:data.db")
 
 migrate(dba)
 
+@get("/system/employees")
+async def get_employees(request, response):
+
+    employees = dba.fetch("select * from employee order by last_name")
+
+    return response.render(  "index.twig", {"employees": employees.to_crud(request, {"card_view": True})})
+
 @post("/swagger/new-post-noauth")
 @description("Noauth Post")
 @noauth()

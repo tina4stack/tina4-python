@@ -65,7 +65,7 @@ async def index(request, response):
     return response(f"OK")
 
 if __name__ == "__main__":
-    run_web_server()
+    run_web_server("0.0.0.0", 7145)
 '''
     app_py.write_text(app_content, encoding="utf-8")
 
@@ -143,7 +143,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code
 COPY --from=builder /app /app
 
-EXPOSE 8080
+EXPOSE 7145
 
 # Swagger defaults (override with env vars in docker-compose/k8s if needed)
 ENV SWAGGER_TITLE="Tina4 API"
@@ -151,7 +151,7 @@ ENV SWAGGER_VERSION="0.1.0"
 ENV SWAGGER_DESCRIPTION="Auto-generated API documentation"
 
 # Start the server on all interfaces
-CMD ["python3", "app.py", "0.0.0.0:8080", "-u"]
+CMD ["python3", "app.py", "0.0.0.0:7145", "-u"]
 '''
         dockerfile_path.write_text(dockerfile_content, encoding="utf-8")
         print("Dockerfile created (multi-stage + uv)")
@@ -164,11 +164,11 @@ CMD ["python3", "app.py", "0.0.0.0:8080", "-u"]
         print(f"\nNext steps:")
         print(f"   cd {project_path.relative_to(Path.cwd())}")
         print(f"   python app.py          # local development")
-        print(f"   docker build -t {project_path.name} . && docker run -p 8080:8080 {project_path.name}")
+        print(f"   docker build -t {project_path.name} . && docker run -p 7145:7145 {project_path.name}")
     else:
         print("\nYou are already in the project folder. Run:")
         print("   python app.py                     # development")
-        print("   docker build -t myapp . && docker run -p 8080:8080 myapp")
+        print("   docker build -t myapp . && docker run -p 7145:7145 myapp")
 
 
 def run_server(port: int = 8000):

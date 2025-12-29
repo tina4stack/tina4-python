@@ -536,10 +536,6 @@ def webserver(host_name, port, debug: bool = False):
 
     Debug.info(Messages.MSG_SERVER_STOPPED)
 
-    Debug.info(Messages.MSG_SERVER_STOPPED)
-
-
-
 # Live coding hot-reload (jurigged)
 if importlib.util.find_spec("jurigged"):
     Debug.debug("Jurigged enabled")
