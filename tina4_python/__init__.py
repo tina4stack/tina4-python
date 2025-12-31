@@ -239,54 +239,59 @@ else:
 
 
 def compile_scss():
-    """Auto-compile ALL .scss files → single compressed default.css (no default.scss needed)"""
+    """Auto-compile each main .scss file → its own .css file in mirrored public/css structure"""
     scss_dir = Path(root_path) / "src" / "scss"
-    css_dir = Path(root_path) / "src" / "public" / "css"
-    output_file = css_dir / "default.css"
+    css_base_dir = Path(root_path) / "src" / "public" / "css"
 
     if not scss_dir.exists():
         Debug.info("No src/scss folder — skipping SCSS compile")
         return
 
-    # Find all .scss files (ignore _partials.scss unless imported)
+    # Find all .scss files
     scss_files = list(scss_dir.rglob("*.scss"))
     if not scss_files:
         Debug.info("No .scss files found — skipping")
         return
 
-    css_dir.mkdir(parents=True, exist_ok=True)
+    # Identify main files (not starting with _)
+    main_files = [f for f in scss_files if not f.name.startswith("_")]
+
+    if not main_files:
+        Debug.info("No main .scss files (non-partials) found — nothing to compile")
+        return
 
     try:
-        Debug.debug(f"Found {len(scss_files)} SCSS files — compiling to default.css")
+        Debug.debug(f"Found {len(main_files)} main SCSS files to compile individually")
 
-        # Build one big string with all content + @import for partials
-        all_scss = ""
-        partials = []
+        compiled_count = 0
+        for main_file in sorted(main_files):
+            # Compute relative path from scss_dir
+            rel_path = main_file.relative_to(scss_dir)
+            # Target CSS path: same structure, but .css extension
+            css_file = css_base_dir / rel_path.with_suffix(".css")
 
-        for file in scss_files:
-            if file.name.startswith("_"):
-                partials.append(file.name)
-            else:
-                # Main files: add @import for partials + content
-                content = file.read_text(encoding="utf-8")
-                all_scss += f"/* === {file.name} === */\n{content}\n\n"
+            # Ensure parent directories exist
+            css_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # Auto-import all partials at the top
-        for partial in sorted(partials):
-            all_scss = f"@import \"{partial}\";\n" + all_scss
+            try:
+                # Compile using filename= (better relative import resolution)
+                compiled = sass.compile(
+                    filename=str(main_file),  # Key change: use filename instead of string
+                    output_style="compressed",
+                    include_paths=[str(scss_dir)]  # Still needed for bare @import "partial";
+                )
 
-        # Compile the whole thing
-        compiled = sass.compile(
-            string=all_scss,
-            output_style='compressed',
-            include_paths=[str(scss_dir)]
-        )
+                css_file.write_text(compiled, encoding="utf-8")
+                compiled_count += 1
+                Debug.debug(f"Compiled {rel_path} → {css_file.relative_to(root_path)} ({len(compiled)} bytes)")
 
-        output_file.write_text(compiled, encoding="utf-8")
-        Debug.debug(f"Compiled {len(scss_files)} files → {output_file} ({len(compiled)} bytes)")
+            except sass.CompileError as e:
+                Debug.error(f"Failed to compile {main_file}: {e}")
+
+        Debug.info(f"Successfully compiled {compiled_count}/{len(main_files)} main SCSS files to individual CSS")
 
     except Exception as e:
-        Debug.error("SCSS auto-compile failed:", str(e))
+        Debug.error("Unexpected error during SCSS auto-compile:", str(e))
 
 # Run it on startup
 compile_scss()
