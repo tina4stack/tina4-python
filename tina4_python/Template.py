@@ -15,7 +15,7 @@ from tina4_python import Constant
 from tina4_python.Debug import Debug
 from pathlib import Path
 from datetime import datetime, date
-from jinja2 import Environment, FileSystemLoader, Undefined
+from jinja2 import Environment, FileSystemLoader, Undefined, TemplateNotFound
 from tina4_python.Session import Session
 from random import random as RANDOM
 from typing import Dict, Any
@@ -150,7 +150,7 @@ class Template:
                 if twig.get_template(template_or_file_name):
                     template = twig.get_template(template_or_file_name)
                     content = template.render(data)
-            except:
+            except TemplateNotFound:
                 template = twig.from_string(template_or_file_name)
                 content = template.render(data)
 
