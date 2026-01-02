@@ -402,15 +402,16 @@ class Database:
         :return: DatabaseResult
         """
         if params is None:
-            params = {}
+            params = []
 
         self.check_connected()
-        if params != {}:
+        if params != []:
             sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
-            params = get_field_type_values(params)
+            if params != []:
+                params = get_field_type_values(params)
             cursor.execute(sql, params)
             if "returning" in sql.lower():
                 return self.get_database_result(cursor, 1, 1, 0, sql)
@@ -436,17 +437,18 @@ class Database:
         :return: DatabaseResult
         """
         if params is None:
-            params = {}
+            params = []
 
         self.check_connected()
 
-        if params != {}:
+        if params != []:
             sql = self.parse_place_holders(sql)
 
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
-            params = get_field_type_values(params)
+            if params != []:
+                params = get_field_type_values(params)
             cursor.executemany(sql, params)
             # On success return an empty result set with no error
             return DatabaseResult(None, [], None)
@@ -538,13 +540,18 @@ class Database:
                 columns = ", ".join(data[0].keys())
                 placeholders = ", ".join(['?'] * len(data[0]))
 
-                pk_key = primary_key in columns
-                if not pk_key or (
-                        primary_key in columns and (record[primary_key] is None or record[primary_key] == "")):
+                # Determine if we need to auto-generate the primary key
+                need_auto_id = (
+                        primary_key not in columns or
+                        (primary_key in record and (record[primary_key] is None or record[primary_key] == ""))
+                )
+
+                if need_auto_id:
+                    record[primary_key] = self.get_next_id(table_name, primary_key)
                     if primary_key not in columns:
                         columns += f", {primary_key}"
                         placeholders += ", ?"
-                    record[primary_key] = self.get_next_id(table_name, primary_key)
+
 
                 sql = f"INSERT INTO {table_name} ({columns}) VALUES ({placeholders})"
 
