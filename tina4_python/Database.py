@@ -405,7 +405,8 @@ class Database:
             params = {}
 
         self.check_connected()
-        sql = self.parse_place_holders(sql)
+        if params != {}:
+            sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
@@ -427,15 +428,21 @@ class Database:
         finally:
             cursor.close()
 
-    def execute_many(self, sql, params=[]):
+    def execute_many(self, sql, params=None):
         """
         Execute a query based on a single sql statement with a different number of params
         :param sql: A plain SQL statement or one with params in it designated by ?
         :param params: A list of params in order of precedence
         :return: DatabaseResult
         """
+        if params is None:
+            params = {}
+
         self.check_connected()
-        sql = self.parse_place_holders(sql)
+
+        if params != {}:
+            sql = self.parse_place_holders(sql)
+
         cursor = self.dba.cursor()
         # Running an execute statement and committing any changes to the database
         try:
