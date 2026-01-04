@@ -103,51 +103,70 @@ class Queue:
 
     def consume(self, acknowledge: bool = True) -> Generator[Message, None, None]:
         """
-        Generator that yields messages one by one.
+        Generator that continuously yields messages from the queue as they arrive.
         Use like:
             for msg in queue.consume():
                 print(msg.data)
+        If a callback was provided in __init__, it will also be called for each message.
         """
         prefix = self.get_prefix()
         try:
-            if self.config.queue_type == "litequeue":
-                msg = self.consumer.pop()
-                if msg:
-                    data = json.loads(msg.data)
-                    response = Message(msg.message_id, data["msg"], data["user_id"], msg.status, msg.in_time, "0")
-                    if acknowledge:
-                        self.consumer.done(msg.message_id)
-                        msg = self.consumer.get(msg.message_id)
-                        response.status = int(msg.status)
-                    yield response
+            message_found = True
+            while message_found:
+                response = None
+                message_found = False
 
-            elif self.config.queue_type == "mongo-queue-service":
-                msg = self.consumer.next(channel=prefix + self.topic)
-                if msg:
-                    data = msg.payload
-                    response = Message(data["message_id"], data["msg"], data["user_id"], 2 if acknowledge else 1, msg.queued_at, "0")
-                    if acknowledge:
-                        msg.complete()
-                    yield response
+                if self.config.queue_type == "litequeue":
+                    msg = self.consumer.pop()
+                    if msg:
+                        message_found = True
+                        data = json.loads(msg.data)
+                        response = Message(msg.message_id, data["msg"], data["user_id"], msg.status, msg.in_time, "0")
+                        if acknowledge:
+                            self.consumer.done(msg.message_id)
+                            updated = self.consumer.get(msg.message_id)
+                            if updated:
+                                response.status = int(updated.status)
 
-            elif self.config.queue_type == "rabbitmq":
-                method, _, body = self.consumer.basic_get(queue=prefix + self.topic, auto_ack=acknowledge)
-                if method:
-                    data = json.loads(body)
-                    response = Message(data["message_id"], data["msg"], data["user_id"], 2 if acknowledge else 1, data["in_time"], method.delivery_tag)
-                    yield response
+                elif self.config.queue_type == "mongo-queue-service":
+                    msg = self.consumer.next(channel=prefix + self.topic)
+                    if msg:
+                        message_found = True
+                        data = msg.payload
+                        response = Message(data["message_id"], data["msg"], data["user_id"], 2 if acknowledge else 1, msg.queued_at, "0")
+                        if acknowledge:
+                            msg.complete()
 
-            elif self.config.queue_type == "kafka":
-                msg = self.consumer.poll(0.1)  # non-blocking poll
-                if msg and not msg.error():
-                    data = json.loads(msg.value().decode('utf-8'))
-                    response = Message(data["message_id"], data["msg"], data["user_id"], 2 if acknowledge else 1, data["in_time"], str(msg.offset()))
-                    if acknowledge:
-                        self.consumer.commit()
+                elif self.config.queue_type == "rabbitmq":
+                    method, _, body = self.consumer.basic_get(queue=prefix + self.topic, auto_ack=acknowledge)
+                    if method:
+                        message_found = True
+                        data = json.loads(body)
+                        response = Message(data["message_id"], data["msg"], data["user_id"], 2 if acknowledge else 1, data["in_time"], method.delivery_tag)
+
+                elif self.config.queue_type == "kafka":
+                    msg = self.consumer.poll(0.1)
+                    if msg and not msg.error():
+                        message_found = True
+                        data = json.loads(msg.value().decode('utf-8'))
+                        response = Message(data["message_id"], data["msg"], data["user_id"], 2 if acknowledge else 1, data["in_time"], str(msg.offset()))
+                        if acknowledge:
+                            self.consumer.commit()
+
+                if response is not None:
                     yield response
+                    if self.callback:
+                        try:
+                            self.callback(response)
+                        except Exception as e:
+                            Debug.error("Failed to run queue callback", str(e))
+                else:
+                    # No message available right now — brief sleep to avoid busy loop
+                    time.sleep(0.05)
 
         except Exception as e:
             Debug.error(f"Error consuming {self.topic}: {e}")
+            raise  # Re-raise to stop consumption on fatal error
 
     # init methods remain unchanged
     def init_litequeue(self):
@@ -238,18 +257,21 @@ class Consumer:
         self.poll_interval = poll_interval
 
     def messages(self) -> Generator[Message, None, None]:
-        """Generator that yields messages from all configured queues forever"""
         Debug.debug("Consuming from queues", [q.topic for q in self.queues])
         while True:
+            emptied_count = 0
             for queue in self.queues:
+                drained = False
                 for message in queue.consume(self.acknowledge):
                     yield message
-            time.sleep(self.poll_interval)
+                    drained = True
+                if not drained:
+                    emptied_count += 1
+            if emptied_count == len(self.queues):
+                time.sleep(self.poll_interval)
 
     def run_forever(self):
         """Simple blocking runner — easy to use"""
         for message in self.messages():
             Debug.info(f"Received message: {message.message_id} -> {message.data}")
-            # Do something with message here
-            # Or just pass to a callback if needed
 
