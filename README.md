@@ -87,6 +87,10 @@ https://tina4.com/
 MIT © 2007 – 2025 Tina4 Stack  
 https://opensource.org/licenses/MIT
 
+## Testing 
+
+uv run pytest --verbose
+
 ---
 
 **Tina4** – The framework that keeps out of the way of your coding.

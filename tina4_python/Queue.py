@@ -55,7 +55,7 @@ class Message:
     delivery_tag: str
 
 class Queue:
-    def __init__(self, config=None, topic="default-queue", callback=None):
+    def __init__(self, config=None, topic="default-queue", callback=None, batch_size=1):
         if config is None:
             config = Config()
         self.config = config
@@ -63,6 +63,7 @@ class Queue:
         self.callback = callback
         self.producer = None
         self.consumer = None
+        self.batch_size = batch_size
         init_method = f"init_{config.queue_type.replace('-', '_')}"
         getattr(self, init_method)()
 
@@ -101,7 +102,7 @@ class Queue:
                 delivery_callback(self.producer, e, None)
             return e
 
-    def consume(self, acknowledge: bool = True) -> Generator[Message, None, None]:
+    def consume(self, acknowledge: bool = True) -> Generator[Message | List[Message], None, None]:
         """
         Generator that continuously yields messages from the queue as they arrive.
         Use like:
@@ -110,9 +111,12 @@ class Queue:
         If a callback was provided in __init__, it will also be called for each message.
         """
         prefix = self.get_prefix()
+        is_batch = self.batch_size > 1
+        count_messages = 0
         try:
             message_found = True
-            while message_found:
+            batch = []
+            while message_found and count_messages < self.batch_size:
                 response = None
                 message_found = False
 
@@ -153,8 +157,9 @@ class Queue:
                         if acknowledge:
                             self.consumer.commit()
 
-                if response is not None:
-                    yield response
+                if message_found:
+                    count_messages += 1
+                    batch.append(response)
                     if self.callback:
                         try:
                             self.callback(response)
@@ -164,6 +169,11 @@ class Queue:
                     # No message available right now — brief sleep to avoid busy loop
                     time.sleep(0.05)
 
+            if len(batch) > 0:
+                if not is_batch:
+                    yield batch[0]
+                else:
+                    yield batch
         except Exception as e:
             Debug.error(f"Error consuming {self.topic}: {e}")
             raise  # Re-raise to stop consumption on fatal error

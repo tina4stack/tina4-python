@@ -112,6 +112,50 @@ def test_consumer_wrapper(mongo_config):
     assert len(collected) == 1
     assert collected[0].data == "to consume mongo"
 
+def test_batch_mode():
+    callback_calls = []
+
+    def my_callback(msg: Message):
+        callback_calls.append(msg.data)
+
+    # Create queue with batch_size=5 and callback
+    queue = Queue(topic="batch-test", batch_size=5, callback=my_callback)
+
+    # Produce 12 messages
+    for i in range(12):
+        queue.produce(f"Message {i+1}", user_id="tester")
+        time.sleep(0.2)
+
+    # Consume in batch mode
+    batches = []
+    total_messages = 0
+
+    consumer = Consumer([queue], acknowledge=True)
+
+    for item in consumer.messages():
+        assert isinstance(item, list)
+        assert all(isinstance(m, Message) for m in item)
+        batch_size = len(item)
+        batches.append(batch_size)
+        total_messages += batch_size
+
+
+        # Extract data for easier checking
+        batch_data = [msg.data for msg in item]
+        print("BATCH_DATA", batch_data)
+        expected_data = [f"Message {total_messages - batch_size + j + 1}" for j in range(batch_size)]
+        assert batch_data == expected_data
+
+        if total_messages >= 12:
+            break
+
+    # Verify we got the expected batch sizes: 5 + 5 + 2
+    assert batches == [5, 5, 2]
+    assert total_messages == 12
+    assert len(callback_calls) == 12  # Callback called once per message
+    assert sorted(callback_calls) == sorted([f"Message {i+1}" for i in range(12)])
+
+
 def test_error_handling(mongo_config):
     topic = unique_topic("error")
     clear_mongo_channel(topic, prefix=mongo_config.prefix)
