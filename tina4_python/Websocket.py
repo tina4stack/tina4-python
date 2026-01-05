@@ -32,12 +32,12 @@ class Websocket:
             else:
                 if os.name == "nt":
                     connection = await self.server.AioServer.accept(
-                        sock=TransportSocket(self.request.transport.transport._sock), # not working properly
+                        sock=TransportSocket(self.request.asgi_writer.transport._sock), # not working properly
                         headers=self.request.headers
                     )
                 else:
                     connection = await self.server.AioServer.accept(
-                        sock=self.request.transport.get_extra_info('socket').dup(),
+                        sock=self.request.asgi_writer.get_extra_info('socket').dup(),
                         headers=self.request.headers
                     )
             return connection

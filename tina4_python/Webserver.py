@@ -534,9 +534,9 @@ class Webserver:
             # Route or WebSocket
             # ------------------------------------------------------------------
             if "sec-websocket-key" in lowercase_headers:
-                await self.get_response(self.method, reader, writer)
+                await self.get_response(self.method, scope={'type': 'websocket'}, reader=reader, writer=writer)
             else:
-                response_bytes = await self.get_response(self.method, reader, writer)
+                response_bytes = await self.get_response(self.method, scope={'type': 'http'}, reader=reader, writer=writer)
                 if response_bytes:
                     writer.write(response_bytes)
                     await writer.drain()

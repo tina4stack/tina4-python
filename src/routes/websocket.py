@@ -6,7 +6,6 @@ from tina4_python.Websocket import Websocket
 subscribers = defaultdict(set)
 
 @get("/ws/chat")
-@secured()
 async def chat_ws(request, response):
     ws = await Websocket(request).connection()
     try:
