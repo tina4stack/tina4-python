@@ -413,8 +413,19 @@ async def app(scope, receive, send):
             if message["type"] != "websocket":
                 response_headers = []
                 for header in tina4_headers:
-                    header = header.split(":")
-                    response_headers.append([header[0].strip().encode(), header[1].strip().encode()])
+                    # ensure header is a str
+                    if isinstance(header, bytes):
+                        header = header.decode()
+                    else:
+                        header = str(header)
+
+                    # split only on the first ':' to preserve ':' in values (e.g. URLs with ports)
+                    name, sep, value = header.partition(":")
+                    if not sep:
+                        # malformed header, skip it
+                        continue
+
+                    response_headers.append([name.strip().encode(), value.lstrip().encode()])
 
                 await send({
                     'type': 'http.response.start',

@@ -317,7 +317,17 @@ class Webserver:
             self.send_header("Access-Control-Allow-Credentials", "true", headers)
 
             headers_bytes = await self.get_headers(headers, self.response_protocol, HTTP_OK)
-            return headers_bytes if not asgi_response else (None, headers)
+            class _Tina4Response:
+                def __init__(self, content: str = "", http_code: int = HTTP_OK, content_type: str = "text/plain", headers: dict | None = None):
+                    self.content = content
+                    self.http_code = http_code
+                    self.content_type = content_type
+                    self.headers = headers or {}
+
+            if not asgi_response:
+                return headers_bytes
+
+            return _Tina4Response(content="", http_code=HTTP_OK, content_type="text/plain", headers={}), headers
 
         # ------------------------------------------------------------------
         # Query string parsing with nested support
