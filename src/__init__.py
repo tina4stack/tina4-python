@@ -27,6 +27,12 @@ async def new_post_secure(response):
 
     return response("SECURED Post")
 
+@get("/system/organizations")
+async def get_organisations(request, response):
+
+    return response(request.params)
+
+
 @get("/swagger/new-get-secure")
 @description("Secure Get")
 @secured()

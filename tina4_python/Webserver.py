@@ -334,28 +334,61 @@ class Webserver:
         # ------------------------------------------------------------------
         params = dict(parse_qsl(urlparse(self.path).query, keep_blank_values=True))
         # Advanced nested parsing (user[0][name]=john → dict/list structure)
-        for key, value in list(params.items()):
-            matches = re.finditer(r"(\w+|\d+)", key)
-            keys = [m.group(0) for m in matches]
-            if len(keys) > 1:
-                current = params
-                for i, k in enumerate(keys):
-                    is_last = i == len(keys) - 1
-                    if not is_int(k):
-                        if k not in current:
-                            current[k] = {} if not is_last and keys[i + 1].isdigit() else value if is_last else []
-                        current = current[k]
-                    else:
-                        idx = int(k)
-                        if not isinstance(current, list):
-                            current = current[list(current.keys())[-1]] if current else []
-                        while len(current) <= idx:
-                            current.append({})
-                        if is_last:
-                            current[idx] = value
-                        else:
-                            current = current[idx]
 
+        added_params = {}
+        for key, value in params.items():
+            # Split key into parts: columns[0][search][value] → ['columns', '0', 'search', 'value']
+            parts = re.findall(r'[^[\]]+', key)
+
+            if not parts:
+                added_params[key] = value
+                continue
+
+            current = added_params
+            for i, part in enumerate(parts):
+                is_last = i == len(parts) - 1
+
+                # Array index
+                if is_int(part):
+                    idx = int(part)
+
+                    # If current is not list yet → convert or initialize
+                    if not isinstance(current, list):
+                        # If it was a dict with numeric keys, convert to list
+                        if isinstance(current, dict) and all(is_int(k) for k in current):
+                            old_dict = current
+                            current = [None] * (max(map(int, old_dict.keys()), default=-1) + 1)
+                            for k, v in old_dict.items():
+                                current[int(k)] = v
+                        else:
+                            current = []
+
+                    # Extend list if needed
+                    while len(current) <= idx:
+                        current.append({})
+
+                    if is_last:
+                        current[idx] = value
+                    else:
+                        current = current[idx]
+
+                # Object key
+                else:
+                    if not isinstance(current, dict):
+                        current = {}
+
+                    if part not in current:
+                        # Decide type of next level
+                        next_part = parts[i + 1] if i + 1 < len(parts) else None
+                        current[part] = {} if next_part and not is_int(next_part) else []
+
+                    if is_last:
+                        current[part] = value
+                    else:
+                        current = current[part]
+
+        # merge the 2 dictionaries
+        params = params | added_params
         # ------------------------------------------------------------------
         # Body parsing (POST, PUT, PATCH, etc.)
         # ------------------------------------------------------------------
