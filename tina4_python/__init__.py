@@ -122,6 +122,15 @@ tina4_api_key = None  # Optional global API key
 tina4_auth = Auth(root_path)
 
 
+def container_broken(error_msg):
+    """
+    Makes a "broken" file in the root path of the container to be used with health check
+    :param error_msg:
+    :return:
+    """
+    with open(os.path.join(root_path, "broken"), 'w', encoding='utf-8') as f:
+        f.write(error_msg)
+
 def global_exception_handler(exception):
     """Global uncaught exception handler.
 

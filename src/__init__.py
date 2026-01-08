@@ -29,7 +29,7 @@ async def new_post_secure(response):
 
 @get("/system/organizations")
 async def get_organisations(request, response):
-
+    d = d /0
     return response(request.params)
 
 

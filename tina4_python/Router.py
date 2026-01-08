@@ -329,14 +329,15 @@ class Router:
 
                     result = await router_response(**kwargs)
                 except Exception as e:
-                    error_string = tina4_python.global_exception_handler(e)
+                    error_msg = tina4_python.global_exception_handler(e)
+                    tina4_python.container_broken(error_msg)
                     if Constant.TINA4_LOG_DEBUG in os.getenv(
                             "TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):
                         html = Template.render_twig_template("errors/500.twig",
-                                                             {"server": {"url": url}, "error_message": error_string})
+                                                             {"server": {"url": url}, "error_message": error_msg})
                         return Response.Response(html, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
                     else:
-                        return Response.Response(error_string, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
+                        return Response.Response(error_msg, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
 
                 # we have found a result ... make sure we reflect this if the user didn't actually put the correct http response code in
                 if result is not None:

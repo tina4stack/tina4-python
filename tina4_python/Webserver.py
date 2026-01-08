@@ -604,6 +604,8 @@ class Webserver:
                 )
                 writer.write(header_bytes + html.encode())
 
+            tina4_python.container_broken(error_msg)
+
             await writer.drain()
             writer.close()
 
