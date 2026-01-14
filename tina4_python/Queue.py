@@ -197,12 +197,17 @@ class Queue:
             config = self.config.mongo_queue_config or {}
             host = config.get("host", "localhost")
             port = config.get("port", 27017)
+            uri = config.get("uri", None)
             timeout = config.get("timeout", 300)
             max_attempts = config.get("max_attempts", 5)  # ← default value
             username = config.get("username")
             password = config.get("password")
 
-            client_args = {"host": host, "port": port}
+            if uri is None:
+                client_args = {"host": host, "port": port}
+            else:
+                client_args = {"host": uri}
+
             if username and password:
                 client_args.update(username=username, password=password)
 

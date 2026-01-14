@@ -1,6 +1,6 @@
 [project]
 name = "tina4-python"
-version = "0.2.164"
+version = "0.2.165"
 description = "Tina4Python - This is not another framework for Python"
 authors = [
     {name = "Andre van Zuydam",email = "andrevanzuydam@gmail.com"}
