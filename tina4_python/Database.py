@@ -11,8 +11,7 @@ import sys
 import importlib
 import json
 from decimal import Decimal
-from tina4_python import Debug, Constant
-from tina4_python.Constant import TINA4_LOG_ERROR
+from tina4_python import Debug
 from tina4_python.DatabaseResult import DatabaseResult
 from tina4_python.DatabaseTypes import *
 from tina4_python.FieldTypes import get_field_type_values
@@ -41,7 +40,7 @@ class Database:
                 raise Exception("Database connection string is missing, try declaring DATABASE_PATH in the .env file.")
 
             self.database_module = importlib.import_module(params[0])
-        except Exception:
+        except Exception as e:
             install_message = "Please implement " + params[0] + " in Database.py and make a pull request!"
             if params[0] == SQLITE:
                 install_message = "Your python is missing the sqlite3 module, please reinstall or update"
@@ -54,7 +53,7 @@ class Database:
             elif params[0] == MSSQL:
                 install_message = "Your python is missing the mssql module, please install with " + MSSQL_INSTALL
 
-            sys.exit("Could not load database driver for " + params[0] + "\n" + install_message)
+            sys.exit("Could not load database driver for " + params[0] + "\n" + install_message+ "\n"+str(e))
 
 
         self.database_engine = params[0]
@@ -186,7 +185,7 @@ class Database:
 
     def get_next_id(self, table_name, column_name="id"):
         """
-        Gets the next id using max method in sql for databases which don't have good sequences
+        Gets the next id using max method in SQL for databases which don't have good sequences
         :param str table_name: Name of the table
         :param str column_name: Name of the column in that table to increment
         :return: int : The next id in the sequence
@@ -294,7 +293,7 @@ class Database:
                     cols = []
                     for c in raw:
                         name = c.strip().split()[-1].split(".")[-1]
-                        name = re.sub(r'^[`"\[\(].*[`"\]\)]$', '', name).strip('`"[]')
+                        name = re.sub(r'^[`"\[(].*[`"\])]$', '', name).strip('`"[]')
                         if name and name != "*":
                             cols.append(name)
 
@@ -326,18 +325,28 @@ class Database:
             counter.close()
 
         # 4. FINAL PAGINATION – applied AFTER the filter
-        if self.database_engine == "FIREBIRD":
+        if self.database_engine == FIREBIRD:
             final_sql = f"SELECT FIRST {limit} SKIP {skip} * FROM ({final_sql}) AS t"
-        elif self.database_engine in ("MYSQL", "SQLITE"):
+        elif self.database_engine in (MYSQL, SQLITE):
             final_sql = f"SELECT * FROM ({final_sql}) AS t LIMIT {limit} OFFSET {skip}"
-        elif self.database_engine == "POSTGRES":
+        elif self.database_engine == POSTGRES:
             final_sql = f"SELECT * FROM ({final_sql}) AS t LIMIT {limit} OFFSET {skip}"
-        elif self.database_engine == "MSSQL":
-            # MSSQL needs ORDER BY for OFFSET/FETCH
+        elif self.database_engine == MSSQL:
             inner = final_sql.strip()
-            if not re.search(r"\border\s+by\b", inner, re.I):
-                inner += " ORDER BY (SELECT NULL)"
-            final_sql = f"SELECT * FROM ({inner}) AS t OFFSET {skip} ROWS FETCH NEXT {limit} ROWS ONLY"
+            # Detect and extract ORDER BY if present
+            order_by_match = re.search(r"(?i)\border\s+by\s+.+?$", inner, re.DOTALL)
+            has_order_by = order_by_match is not None
+
+            # Clean inner query: remove trailing ORDER BY if it exists
+            if has_order_by:
+                inner_clean = re.sub(r"(?i)\s+order\s+by\s+.+?$", "", inner, flags=re.DOTALL).strip()
+                order_by_part = order_by_match.group(0)
+            else:
+                inner_clean = inner
+                order_by_part = "ORDER BY (SELECT NULL)"
+
+            # Build final paginated query
+            final_sql = f"SELECT * FROM ({inner_clean}) AS t {order_by_part} OFFSET {skip} ROWS FETCH NEXT {limit} ROWS ONLY"
         else:
             final_sql = f"SELECT * FROM ({final_sql}) AS t LIMIT {limit} OFFSET {skip}"
 
@@ -356,7 +365,7 @@ class Database:
 
     def fetch_one(self, sql, params=[], skip=0):
         """
-        Fetch a single record based on a sql statement, take note that BLOB and byte record data is converted into base64 automatically
+        Fetch a single record based on a SQL statement, take note that BLOB and byte record data is converted into base64 automatically
         :param str sql: A plain SQL statement or one with params in it designated by ?
         :param list params: A list of params in order of precedence
         :param int skip: Offset of records to skip
@@ -384,8 +393,8 @@ class Database:
 
     def parse_place_holders(self, sql):
         """
-        Sanitizes a sql statement to replace param chars with the appropriate placeholders
-        MYSQL expects %s and firebird, posgres and sqlite expect ?
+        Sanitizes a SQL statement to replace param chars with the appropriate placeholders
+        MYSQL expects %s and firebird, PostgresSQL and sqlite expect ?
         :param sql:
         :return:
         """
@@ -396,7 +405,7 @@ class Database:
 
     def execute(self, sql, params=None):
         """
-        Execute a query based on a sql statement
+        Execute a query based on a SQL statement
         :param str sql: A plain SQL statement or one with params in it designated by ?
         :param list params: A list of params in order of precedence
         :return: DatabaseResult
@@ -431,7 +440,7 @@ class Database:
 
     def execute_many(self, sql, params=None):
         """
-        Execute a query based on a single sql statement with a different number of params
+        Execute a query based on a single SQL statement with a different number of params
         :param sql: A plain SQL statement or one with params in it designated by ?
         :param params: A list of params in order of precedence
         :return: DatabaseResult
@@ -513,7 +522,7 @@ class Database:
 
     def sanitize(self, record):
         """
-        Changes dictionaries and list values into json for updating and inserting
+        Changes dictionaries and list values into JSON for updating and inserting
         :param record:
         :return:
         """
