@@ -60,8 +60,11 @@ class Template:
     @staticmethod
     def datetime_format(value, format="%H:%M %d-%m-%y"):
         if value.strip().upper() == "NOW":
-            value = date.today()
-        return value.strftime(format)
+            value = datetime.now()
+        try:
+            return value.strftime(format)
+        except AttributeError:
+            return value
 
     @staticmethod
     def production_dump(param):
