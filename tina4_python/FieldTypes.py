@@ -9,6 +9,7 @@ import ast
 import inspect
 from datetime import datetime
 from tina4_python.DatabaseTypes import MSSQL, POSTGRES, FIREBIRD
+from tina4_python import Debug
 
 class BaseField:
     primary_key = False
@@ -83,15 +84,21 @@ class BaseField:
             self.decimal_places = decimal_places
 
         if column_name is None:
-            frame = inspect.stack()[1]
-            # Parse python syntax of the assignment line
-            st = ast.parse(frame.code_context[0].strip())
-            stmt = st.body[0]
-            # Assume class being instanced as simple assign statement
-            assert (isinstance(stmt, ast.Assign))
-            # Parse the target the class is assigned to
-            target = stmt.targets[0]
-            self.column_name = target.id
+            try:
+                frame = inspect.stack()[1]
+                # Parse python syntax of the assignment line
+                st = ast.parse(frame.code_context[0].strip())
+                stmt = st.body[0]
+                # Assume class being instanced as simple assign statement
+                assert (isinstance(stmt, ast.Assign))
+                # Parse the target the class is assigned to
+                target = stmt.targets[0]
+                if hasattr(target, 'id'):
+                    self.column_name = target.id
+                else:
+                    raise Exception("Sorry we can't determine the column name for ORM ")
+            except Exception as e:
+                Debug.error("Error determining field column for ORM Object", str(e))
         else:
             self.column_name = column_name
 

@@ -1,10 +1,37 @@
 import asyncio
 from tina4_python.Migration import migrate
-from tina4_python import get, post, put, delete, middleware, description, Database, secured, HTTP_OK, noauth
+from tina4_python import get, post, put, delete, middleware, description, Database, secured, HTTP_OK, noauth, Debug, orm
+
+
+
 
 dba = Database("sqlite3:data.db")
 
 migrate(dba)
+orm(dba)
+
+# from .orm.User import User
+# user = User({"id": 1, "username": "john", "email": "john@doe.com"})
+# user.id = 1
+# user.username = "moo"
+# user.email = "test"
+#
+# if not dba.table_exists("user"):
+#     Debug.info (user.create_table())
+#     dba.execute(user.create_table())
+#
+# user.save()
+
+
+@get("/users/landing")
+async def get_users_landing(request, response):
+    from .orm.User import User
+
+    crud_users = User().select("*").to_crud(request, {"card_view": True})
+
+    return response.render("{{crud_users}}", {"crud_users": crud_users})
+
+
 
 @get("/system/employees")
 async def get_employees(request, response):

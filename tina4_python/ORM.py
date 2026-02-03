@@ -5,12 +5,10 @@
 #
 # flake8: noqa: E501
 import base64
-from datetime import datetime, date
-import ast
+from datetime import date
 import json
 import os
 from tina4_python.Constant import TINA4_LOG_ERROR
-from tina4_python.Debug import Debug
 from tina4_python.FieldTypes import *
 
 
@@ -186,7 +184,10 @@ class ORM:
 
                 data[key] = current_value.value
             elif isinstance(value, IntegerField):
-                data[key] = int(current_value)
+                try:
+                    data[key] = int(current_value)
+                except Exception as e:
+                    Debug.error("Could not save", current_value, "to", key)
             else:
                 data[key] = str(current_value)
 

@@ -252,6 +252,21 @@ class CRUD:
 
             twig_file = self.ensure_crud_template(crud_name + ".twig")
 
+            def parse_request_for_images(request):
+                """
+                Parses request for images and files
+                :param request:
+                :return:
+                """
+                # if there are files in the request the  then I assign the file value to the request body
+                if request.files:
+                    for input_name in request.files:
+                        prefix = ""
+                        if "image" in request.files[input_name]["content_type"]:
+                            prefix ="data:"+request.files[input_name]["content_type"]+";base64,"
+                        request.body[input_name] = prefix+request.files[input_name]["content"]
+                return request
+
             async def get_record(request, response):
                 limit = int(request.params.get("limit", options.get("limit", 10)))
                 offset = int(request.params.get("offset", options.get("offset", 0)))
@@ -285,12 +300,21 @@ class CRUD:
 
             async def post_record(request, response):
                 Debug.info("CRUD CREATE", table_name, request.body)
+
+                request = parse_request_for_images(request)
+
                 self.dba.insert(table_name, request.body, primary_key=options["primary_key"])
                 self.dba.commit()
                 return response({"message": f"<script>showMessage('{table_nice_name} Record added');</script>"}, HTTP_OK, APPLICATION_JSON)
 
             async def update_record(request, response):
                 Debug.info("CRUD UPDATE", table_name, request.params, request.body)
+                # Add the primary key if it is taken out of the form
+                if options["primary_key"] not in request.body:
+                    request.body[options["primary_key"]] = request.params[options["primary_key"]]
+
+                request = parse_request_for_images(request)
+
                 self.dba.update(table_name, request.body, primary_key=options["primary_key"])
                 self.dba.commit()
                 return response({"message": f"<script>showMessage('{table_nice_name} Record updated');</script>", "post": request.body}, HTTP_OK, APPLICATION_JSON)

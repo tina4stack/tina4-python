@@ -217,7 +217,7 @@ from .Router import get, post, put, patch, delete, middleware, cached, noauth, s
 from .Testing import tests, assert_equal, assert_raises
 from .Debug import Debug
 from .Database import Database
-from .ORM import ORM
+from .ORM import ORM, orm
 from .Api import Api
 from .Template import template
 from .Swagger import description, secure, summary, example, example_response, tags, params, describe
@@ -231,10 +231,14 @@ for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured,
     if deco.__name__ not in builtins.__dict__:
         builtins.__dict__[deco.__name__] = deco
 
+
+
 builtins.Debug = Debug
 builtins.Api = Api
 builtins.Database = Database
 builtins.ORM = ORM
+builtins.orm = orm
+
 
 # Auto-import everything from src folders
 if os.path.exists(root_path + os.sep + "src"):

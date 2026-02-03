@@ -59,7 +59,7 @@
                                         {# --- Only show image if it's base64-like and long enough --- #}
                                         {% if is_image and value|length > 50 and value is string %}
                                             {% set src = value %}
-                                            {% if value[:10] != 'data:image/' %}
+                                            {% if value[:11] != 'data:image/' %}
                                                 {% set src = 'data:image/' ~ mime_type ~ ';base64,' ~ value %}
                                             {% endif %}
 
@@ -131,7 +131,7 @@
                                 {# --- Only show image if it's base64-like and long enough --- #}
                                 {% if is_image  %}
                                     {% set src = value %}
-                                    {% if value[:10] != 'data:image/' %}
+                                    {% if value[:11] != 'data:image/' %}
                                         {% set src = 'data:image/' ~ mime_type ~ ';base64,' ~ value %}
                                     {% endif %}
 
@@ -253,7 +253,7 @@
 
                 html += `
     <div class="mb-3">
-        <label class="form-label fw-bold">${label}</label>
+        <label class="form-label">${label}</label>
         <div class="border rounded p-3 bg-light text-center">
             <img src="${imageSrc}"
                  alt="Current ${label}"
@@ -317,7 +317,33 @@
             value = '';
             type = `{{ column.type|default('text') }}`;
 
-            html += `<div class="mb-3">
+            if (field.indexOf('image') !== -1) {
+                let imageSrc = value;
+                if (value.length > 0 && !value.startsWith('data:image/')) {
+                    imageSrc = `data:image/${mimeType};base64,${value}`;
+                }
+
+                html += `
+                    <div class="mb-3">
+                        <label class="form-label">${label}</label>
+                        <div class="border rounded p-3 bg-light text-center">
+                            <img src="${imageSrc}"
+                                 alt="Current ${label}"
+                                 class="img-thumbnail mb-3"
+                                 style="max-height: 180px; max-width: 100%;">
+                            <div>
+                                <input type="file"
+                                       accept="image/*"
+                                       class="form-control form-control-sm"
+                                       id="${field}"
+                                       name="${field}">
+                                <small class="text-muted">Choose new image (optional)</small>
+                            </div>
+                        </div>
+                    </div>`;
+            } else {
+
+                html += `<div class="mb-3">
                     <label for="${field}" class="form-label">${label}</label>
                     <input type="${type === 'password' ? 'password' : 'text'}"
                            class="form-control"
@@ -326,6 +352,7 @@
                            placeholder="${label}"
                            value='${value}'>
                 </div>`;
+            }
             {% endfor %}
 
             modalBody.innerHTML = html;
