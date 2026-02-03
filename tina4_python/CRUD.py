@@ -8,6 +8,7 @@
 import base64
 import datetime
 from decimal import Decimal
+from shlex import join
 
 from tina4_python.Debug import Debug
 import re
@@ -335,7 +336,7 @@ class CRUD:
                 fields.append({"name": column, "label": Template.get_nice_label(column)})
 
             html = Template.render(twig_file.replace(os.path.join(tina4_python.root_path, "src", "templates"), "").replace("\\", "/"),
-                                   {"columns": fields, "records": self.to_array(),
+                                   {"columns": fields, "records": self.to_array(base64_encode=False),
                                     "table_name": crud_name,
                                     "total_records": self.total_count,
                                     "options": options})
@@ -344,7 +345,7 @@ class CRUD:
         except Exception as e:
             return "Error rendering CRUD: "+str(e)
 
-    def to_array(self, _filter=None):
+    def to_array(self, _filter=None, base64_encode = True):
         """
         Convert the internal records to a JSON-serializable list of dictionaries.
 
@@ -358,6 +359,8 @@ class CRUD:
 
         Returns:
             list[dict]: Serializable records.
+            :param _filter:
+            :param base64_encode: Override default base64 encoding
         """
         if self.error is not None:
             return {"error": self.error}
@@ -372,9 +375,15 @@ class CRUD:
                     elif isinstance(record[key], (datetime.date, datetime.datetime)):
                         json_record[key] = record[key].isoformat()
                     elif isinstance(record[key], memoryview):
-                        json_record[key] = base64.b64encode(record[key].tobytes()).decode('utf-8')
-                    elif isinstance(record[key], bytes):
-                        json_record[key] = base64.b64encode(record[key]).decode('utf-8')
+                        if base64_encode:
+                            json_record[key] = base64.b64encode(record[key].tobytes()).decode('utf-8')
+                        else:
+                            json_record[key] = record[key].tobytes().decode("utf-8")
+                    elif isinstance(record[key], bytes) and base64_encode:
+                        if base64_encode:
+                            json_record[key] = base64.b64encode(record[key]).decode('utf-8')
+                        else:
+                            json_record[key] = record[key].decode("utf-8")
                     else:
                         json_record[key] = record[key]
 
@@ -387,13 +396,13 @@ class CRUD:
         else:
             return []
 
-    def to_list(self, _filter=None):
+    def to_list(self, _filter=None, base64_encode = True):
         """Alias of to_array() for readability."""
-        return self.to_array(_filter)
+        return self.to_array(_filter, base64_encode=base64_encode)
 
-    def to_json(self, _filter=None):
+    def to_json(self, _filter=None, base64_encode = True):
         """Return records as a JSON encoded string."""
-        return json.dumps(self.to_array(_filter))
+        return json.dumps(self.to_array(_filter, base64_encode=base64_encode))
 
     def __iter__(self):
         """Allow iteration over records (yields results from to_array())."""
