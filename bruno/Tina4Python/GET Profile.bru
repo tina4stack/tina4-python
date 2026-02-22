@@ -1,22 +1,22 @@
 meta {
-  name: Generic Post
+  name: GET Profile
   type: http
-  seq: 2
+  seq: 3
 }
 
-post {
-  url: {{URL}}/submit
-  body: text
+get {
+  url: {{URL}}/profile
+  body: json
   auth: inherit
 }
 
 headers {
-  ~Authorization: Bearer 38168ba8aad6c91ba13d959c3f91c7a7
+  Authorization: Bearer 38168ba8aad6c91ba13d959c3f91c7a7
 }
 
 body:json {
   {
-    
+   "hello": "world" 
   }
 }
 

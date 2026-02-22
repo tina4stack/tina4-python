@@ -1,4 +1,4 @@
-from tina4_python import get, template, wsdl
+from tina4_python import get, template, wsdl, noauth
 from ..app.Calculator import Calculator
 
 @get("/test")

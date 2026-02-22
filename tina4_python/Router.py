@@ -202,7 +202,7 @@ class Router:
         tina4_python.tina4_current_request["headers"] = headers
 
         validated = False
-        # we can add other methods later but right now we validate posts
+        # we can add other methods later but right now we validate gets, posts and other risky methods
         if method in [Constant.TINA4_GET, Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH,
                       Constant.TINA4_DELETE]:
             content_type = "text/html"
@@ -256,8 +256,8 @@ class Router:
             Debug.debug(method, "Matching route ", route['routes'], " to ", url)
             if Router.match(url, route['routes']):
 
-                if not "noauth" in route and not validated:
-                    if Router.requires_auth(route, method, validated):
+                if "noauth" not in route or "noauth" in route and not route["noauth"] and not validated:
+                    if not validated and Router.requires_auth(route, method, validated):
                         return Response.Response("Forbidden - Access denied", Constant.HTTP_FORBIDDEN,
                                                  Constant.TEXT_HTML)
 

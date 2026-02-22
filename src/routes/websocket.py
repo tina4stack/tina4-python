@@ -1,6 +1,6 @@
 import json
 from collections import defaultdict
-from tina4_python import get,secured
+from tina4_python import get, Debug
 from tina4_python.Websocket import Websocket
 
 subscribers = defaultdict(set)

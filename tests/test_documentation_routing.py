@@ -46,8 +46,9 @@ def test_basic_get_route():
 # 2. POST Route with body parsing
 # ------------------------------------------------------------------
 def test_post_route_with_body():
+    token = "38168ba8aad6c91ba13d959c3f91c7a7"  # dummy
     payload = {"name": "Alice", "age": 30}
-    r = post("/submit", json=payload)
+    r = post("/submit", json=payload, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200
     assert "Alice" in r.text
     assert "30" in r.text
@@ -71,14 +72,18 @@ def test_post_create_user():
 
 
 def test_put_update_user():
-    r = put("/users/123", json={"name": "David"})
+    token = "38168ba8aad6c91ba13d959c3f91c7a7"  # dummy
+    headers={"Authorization": f"Bearer {token}"}
+    r = put("/users/123", json={"name": "David"}, headers=headers)
     assert r.status_code == 200
     assert "David" in r.text
     assert "123" in r.text
 
 
 def test_delete_user():
-    r = delete("/users/999")
+    token = "38168ba8aad6c91ba13d959c3f91c7a7"  # dummy
+    headers={"Authorization": f"Bearer {token}"}
+    r = delete("/users/999", headers=headers)
     assert r.status_code == 200
     assert "999" in r.text
 

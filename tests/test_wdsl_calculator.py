@@ -13,7 +13,8 @@ SOAP_URL = f"{BASE_URL}/calculator"
 # SOAP headers
 HEADERS = {
     "Content-Type": "text/xml; charset=utf-8",
-    "SOAPAction": '""'
+    "SOAPAction": '""',
+    "Authorization" : "Bearer 38168ba8aad6c91ba13d959c3f91c7a7"
 }
 
 # ------------------------------------------------------------------
@@ -29,7 +30,7 @@ def send_soap(payload: str) -> ET.Element:
 # 1. WSDL is served and valid
 # ------------------------------------------------------------------
 def test_wsdl_is_served_and_valid():
-    resp = requests.get(WSDL_URL)
+    resp = requests.get(WSDL_URL , headers=HEADERS)
     assert resp.status_code == 200
     assert "application/xml" in resp.headers["Content-Type"]
     xml = resp.text
