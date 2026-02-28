@@ -320,6 +320,10 @@ class Database:
             total = counter.fetchone()[0]
         except Exception as e:
             Debug.error ("COUNT ERROR", count_sql, final_params, str(e))
+            try:
+                self.dba.rollback()
+            except Exception:
+                pass
             total = 0
         finally:
             counter.close()
@@ -359,6 +363,10 @@ class Database:
             return self.get_database_result(cursor, total, limit, skip, final_sql)
         except Exception as e:
             Debug.error("FETCH ERROR", final_sql, final_params, str(e))
+            try:
+                self.dba.rollback()
+            except Exception:
+                pass
             return DatabaseResult(None, [], str(e))
         finally:
             cursor.close()
@@ -433,6 +441,10 @@ class Database:
                 return DatabaseResult(None, [], None, 0, 0, 0, sql, self)
         except Exception as e:
             Debug.error("EXECUTE ERROR:", sql, str(e))
+            try:
+                self.dba.rollback()
+            except Exception:
+                pass
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
         finally:
@@ -463,6 +475,10 @@ class Database:
             return DatabaseResult(None, [], None)
         except Exception as e:
             Debug.error("EXECUTE MANY ERROR:", sql, str(e))
+            try:
+                self.dba.rollback()
+            except Exception:
+                pass
             # Return the error in the result
             return DatabaseResult(None, [], str(e))
         finally:
