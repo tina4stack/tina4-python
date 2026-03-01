@@ -243,7 +243,11 @@ builtins.orm = orm
 # Auto-import everything from src folders
 if os.path.exists(root_path + os.sep + "src"):
     try:
-        exec("from src import *")
+        import importlib
+        src_module = importlib.import_module("src")
+        for attr in dir(src_module):
+            if not attr.startswith("_"):
+                globals()[attr] = getattr(src_module, attr)
         Debug.info("Initializing src folder")
     except ImportError as e:
         Debug.error("Cannot import src folder", str(e))
@@ -594,7 +598,7 @@ def _has_control_methods():
     if "tina4-python" in file_path:
         return True
 
-    if "tina4" in file_path or "uvicorn" in file_path in file_path or "hypercorn" in file_path:
+    if "tina4" in file_path or "uvicorn" in file_path or "hypercorn" in file_path:
         return True
 
     if not file_path or not file_path.endswith('.py'):

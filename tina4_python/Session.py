@@ -271,8 +271,12 @@ class Session:
         self.session_path = _default_path
         self.session_values = {}
         self.session_hash = ""
-        self.default_handler = _default_handler
-        exec("self.default_handler = "+_default_handler)
+        _handlers = {
+            "SessionFileHandler": SessionFileHandler,
+            "SessionRedisHandler": SessionRedisHandler,
+            "SessionValkeyHandler": SessionValkeyHandler,
+        }
+        self.default_handler = _handlers.get(_default_handler, SessionFileHandler)
 
     def start(self, _hash=None):
         # create a file for the session?

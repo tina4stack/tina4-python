@@ -38,7 +38,14 @@ class Router:
 
     @staticmethod
     def clean_url(url):
-        """Normalize URL: strip query, domain, collapse slashes, trim whitespace"""
+        """Collapse double slashes in a URL path."""
+        if not url:
+            return "/"
+        return re.sub(r'/+', '/', url)
+
+    @staticmethod
+    def _normalize_url(url):
+        """Full URL normalization: strip query, domain, collapse slashes, add trailing slash."""
         if not url:
             return "/"
         url = url.split('?')[0]
@@ -54,7 +61,7 @@ class Router:
     def get_variables(url, route_path):
         """Legacy helper - extracts variables with type conversion"""
         variables = {}
-        url_path = Router.clean_url(url).rstrip('/')
+        url_path = Router._normalize_url(url).rstrip('/')
         url_segments = [s for s in url_path.strip('/').split('/') if s]
         route_segments = [s for s in route_path.strip('/').split('/') if s]
 
@@ -188,18 +195,17 @@ class Router:
     # Renders the URL and returns the content
     @staticmethod
     async def get_result(url, method, request, headers, session):
-        from tina4_python import Request
-        from tina4_python import Response
+        from tina4_python.Request import Request
+        from tina4_python.Response import Response
 
-        Response.headers = {}
-        Response.content = ""
-        Response.http_code = Constant.HTTP_NOT_FOUND
-        Response.content_type = Constant.TEXT_HTML
-        result = Response
+        # Reset per-request response context (clears pending headers from add_header)
+        Response.reset_context()
+
+        result = None
+        route_matched = False
 
         Debug.debug("Root Path " + tina4_python.root_path + " " + url, method)
-        tina4_python.tina4_current_request["url"] = url
-        tina4_python.tina4_current_request["headers"] = headers
+        tina4_python.tina4_current_request = {"url": url, "headers": headers}
 
         validated = False
         # we can add other methods later but right now we validate gets, posts and other risky methods
@@ -245,9 +251,8 @@ class Router:
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
             with open(static_file, 'rb') as file:
-                return Response.Response(file.read(), Constant.HTTP_OK, mime_type)
+                return Response(file.read(), Constant.HTTP_OK, mime_type)
 
-        old_stdout = None
         buffer = io.StringIO()
         for route in tina4_python.tina4_routes.values():
             if "methods" not in route or method not in route["methods"]:
@@ -255,33 +260,37 @@ class Router:
 
             Debug.debug(method, "Matching route ", route['routes'], " to ", url)
             if Router.match(url, route['routes']):
+                route_matched = True
+                # Snapshot variables immediately to prevent race between concurrent requests
+                matched_vars = dict(Router.variables)
 
-                if "noauth" not in route or "noauth" in route and not route["noauth"] and not validated:
+                if not route.get("noauth", False):
                     if not validated and Router.requires_auth(route, method, validated):
-                        return Response.Response("Forbidden - Access denied", Constant.HTTP_FORBIDDEN,
+                        return Response("Forbidden - Access denied", Constant.HTTP_FORBIDDEN,
                                                  Constant.TEXT_HTML)
 
                 router_response = route["callback"]
 
-                # Add the inline variables & construct a Request variable
-                request["params"].update(Router.variables)
+                # Add the inline variables & construct a per-request Request object
+                request["params"].update(matched_vars)
 
-                Request.request = request  # Add the request object
-                Request.headers = headers  # Add the headers
-                Request.params = request["params"]
-                Request.body = request["body"] if "body" in request else None
-                Request.files = request["files"] if "files" in request else None
-                Request.session = session
-                Request.raw_data = request["raw_data"] if "raw_data" in request else None
-                Request.raw_request = request["raw_request"] if "raw_request" in request else None
-                Request.raw_content = request["raw_content"] if "raw_content" in request else None
-                Request.url = url
-                Request.asgi_scope = request["asgi_scope"] if "asgi_scope" in request else None
-                Request.asgi_reader = request["asgi_reader"] if "asgi_reader" in request else None
-                Request.asgi_writer = request["asgi_writer"] if "asgi_writer" in request else None
-                Request.asgi_response = request["asgi_response"] if "asgi_response" in request else None
+                req = Request()
+                req.request = request
+                req.headers = headers
+                req.params = request["params"]
+                req.body = request.get("body")
+                req.files = request.get("files")
+                req.session = session
+                req.raw_data = request.get("raw_data")
+                req.raw_request = request.get("raw_request")
+                req.raw_content = request.get("raw_content")
+                req.url = url
+                req.asgi_scope = request.get("asgi_scope")
+                req.asgi_reader = request.get("asgi_reader")
+                req.asgi_writer = request.get("asgi_writer")
+                req.asgi_response = request.get("asgi_response")
 
-                tina4_python.tina4_current_request = Request
+                tina4_python.tina4_current_request = req
 
                 old_stdout = sys.stdout  # Memorize the default stdout stream
                 sys.stdout = buffer = io.StringIO()
@@ -289,112 +298,112 @@ class Router:
                              Constant.HTTP_FORBIDDEN, Constant.HTTP_BAD_REQUEST, Constant.HTTP_UNAUTHORIZED,
                              Constant.HTTP_SERVER_ERROR)
 
-                if "middleware" in route:
-                    middleware_runner = MiddleWare(route["middleware"]["class"])
-
-                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(
-                            route["middleware"]["methods"]) > 0:
-                        for method in route["middleware"]["methods"]:
-                            Request, result = middleware_runner.call_direct_method(Request, result, method)
-                            if result.http_code in error_set:
-                                return Response.Response(result.content, result.http_code, result.content_type)
-                    else:
-                        Request, result = await middleware_runner.call_before_methods(Request, result)
-                        if result.http_code in error_set:
-                            return Response.Response(result.content, result.http_code, result.content_type)
-                        Request, result = await middleware_runner.call_any_methods(Request, result)
-                        if result.http_code in error_set:
-                            return Response.Response(result.content, result.http_code, result.content_type)
-
                 try:
-                    sig = inspect.signature(router_response)
-                    kwargs = {}
+                    if "middleware" in route:
+                        middleware_runner = MiddleWare(route["middleware"]["class"])
+                        # Pre-route middleware needs a response to pass; create a default
+                        mw_response = Response("", Constant.HTTP_OK, Constant.TEXT_HTML)
 
-                    for param_name, param in sig.parameters.items():
-                        if param_name in Router.variables:
-                            value = Router.variables[param_name]
-                            if param.annotation != inspect.Parameter.empty and callable(param.annotation):
-                                try:
-                                    value = param.annotation(value)
-                                except ValueError:
-                                    raise ValueError(
-                                        f"Invalid type for path param '{param_name}': expected {param.annotation.__name__}, got '{Router.variables[param_name]}'")
-                            kwargs[param_name] = value
-                        elif param_name == 'request':
-                            kwargs[param_name] = Request
-                        elif param_name == 'response':
-                            kwargs[param_name] = Response.Response
-                        elif param.default == inspect.Parameter.empty:
-                            raise TypeError(f"Missing required parameter: {param_name}")
-
-                    result = await router_response(**kwargs)
-                except Exception as e:
-                    error_msg = tina4_python.global_exception_handler(e)
-                    tina4_python.container_broken(error_msg)
-                    if Constant.TINA4_LOG_DEBUG in os.getenv(
-                            "TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):
-                        html = Template.render_twig_template("errors/500.twig",
-                                                             {"server": {"url": url}, "error_message": error_msg})
-                        return Response.Response(html, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
-                    else:
-                        return Response.Response(error_msg, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
-
-                # we have found a result ... make sure we reflect this if the user didn't actually put the correct http response code in
-                if result is not None:
-                    if result.http_code == Constant.HTTP_NOT_FOUND:
-                        result.http_code = Constant.HTTP_OK
-
-                if "middleware" in route:
-                    middleware_runner = MiddleWare(route["middleware"]["class"])
-
-                    if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(
-                            route["middleware"]["methods"]) > 0:
-                        for method in route["middleware"]["methods"]:
-                            Request, result = middleware_runner.call_direct_method(Request, result, method)
-                            if result.http_code in error_set:
-                                return Response.Response(result.content, result.http_code, result.content_type)
-                    else:
-                        Request, result = await middleware_runner.call_any_methods(Request, result)
-                        if result.http_code in error_set:
-                            return Response.Response(result.content, result.http_code, result.content_type)
-
-                        Request, result = await middleware_runner.call_after_methods(Request, result)
-                        if result.http_code in error_set:
-                            return Response.Response(result.content, result.http_code, result.content_type)
-
-                if result is not None:
-                    result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
-                    if "cache" in route and route["cache"] is not None:
-                        if not route["cache"]["cached"]:
-                            result.headers["Cache-Control"] = "max-age=1, must-revalidate"
-                            result.headers["Pragma"] = "no-cache"
+                        if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(
+                                route["middleware"]["methods"]) > 0:
+                            for mw_method in route["middleware"]["methods"]:
+                                req, mw_response = middleware_runner.call_direct_method(req, mw_response, mw_method)
+                                if mw_response.http_code in error_set:
+                                    return Response(mw_response.content, mw_response.http_code, mw_response.content_type)
                         else:
-                            result.headers["Cache-Control"] = "max-age=" + str(
-                                route["cache"]["max_age"]) + ", must-revalidate"
+                            req, mw_response = await middleware_runner.call_before_methods(req, mw_response)
+                            if mw_response.http_code in error_set:
+                                return Response(mw_response.content, mw_response.http_code, mw_response.content_type)
+                            req, mw_response = await middleware_runner.call_any_methods(req, mw_response)
+                            if mw_response.http_code in error_set:
+                                return Response(mw_response.content, mw_response.http_code, mw_response.content_type)
+
+                    try:
+                        sig = inspect.signature(router_response)
+                        kwargs = {}
+
+                        for param_name, param in sig.parameters.items():
+                            if param_name in matched_vars:
+                                value = matched_vars[param_name]
+                                if param.annotation != inspect.Parameter.empty and callable(param.annotation):
+                                    try:
+                                        value = param.annotation(value)
+                                    except ValueError:
+                                        raise ValueError(
+                                            f"Invalid type for path param '{param_name}': expected {param.annotation.__name__}, got '{matched_vars[param_name]}'")
+                                kwargs[param_name] = value
+                            elif param_name == 'request':
+                                kwargs[param_name] = req
+                            elif param_name == 'response':
+                                kwargs[param_name] = Response
+                            elif param.default == inspect.Parameter.empty:
+                                raise TypeError(f"Missing required parameter: {param_name}")
+
+                        result = await router_response(**kwargs)
+                    except Exception as e:
+                        error_msg = tina4_python.global_exception_handler(e)
+                        tina4_python.container_broken(error_msg)
+                        if Constant.TINA4_LOG_DEBUG in os.getenv(
+                                "TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv("TINA4_DEBUG_LEVEL"):
+                            html = Template.render_twig_template("errors/500.twig",
+                                                                 {"server": {"url": url}, "error_message": error_msg})
+                            return Response(html, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
+                        else:
+                            return Response(error_msg, Constant.HTTP_SERVER_ERROR, Constant.TEXT_HTML)
+
+                    # we have found a result ... make sure we reflect this if the user didn't actually put the correct http response code in
+                    if result is not None:
+                        if result.http_code == Constant.HTTP_NOT_FOUND:
+                            result.http_code = Constant.HTTP_OK
+
+                    if result is not None and "middleware" in route:
+                        middleware_runner = MiddleWare(route["middleware"]["class"])
+
+                        if "methods" in route["middleware"] and route["middleware"]["methods"] is not None and len(
+                                route["middleware"]["methods"]) > 0:
+                            for mw_method in route["middleware"]["methods"]:
+                                req, result = middleware_runner.call_direct_method(req, result, mw_method)
+                                if result.http_code in error_set:
+                                    return Response(result.content, result.http_code, result.content_type)
+                        else:
+                            req, result = await middleware_runner.call_any_methods(req, result)
+                            if result.http_code in error_set:
+                                return Response(result.content, result.http_code, result.content_type)
+
+                            req, result = await middleware_runner.call_after_methods(req, result)
+                            if result.http_code in error_set:
+                                return Response(result.content, result.http_code, result.content_type)
+
+                    if result is not None:
+                        result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
+                        if "cache" in route and route["cache"] is not None:
+                            if not route["cache"]["cached"]:
+                                result.headers["Cache-Control"] = "max-age=1, must-revalidate"
+                                result.headers["Pragma"] = "no-cache"
+                            else:
+                                result.headers["Cache-Control"] = "max-age=" + str(
+                                    route["cache"]["max_age"]) + ", must-revalidate"
+                                result.headers["Pragma"] = "cache"
+                        else:
+                            result.headers["Cache-Control"] = "max-age=-1, must-revalidate"
                             result.headers["Pragma"] = "cache"
-                    else:
-                        result.headers["Cache-Control"] = "max-age=-1, must-revalidate"
-                        result.headers["Pragma"] = "cache"
+                finally:
+                    sys.stdout = old_stdout
 
                 break
 
-        if result is None and old_stdout is not None:
-            result = Response
-
-            result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
-            sys.stdout = old_stdout
-            if buffer.getvalue() != "":
+        # Callback returned None but captured stdout output
+        if result is None and route_matched:
+            output = buffer.getvalue()
+            if output:
+                fresh_headers = {"FreshToken": tina4_python.tina4_auth.get_token({"path": url})}
                 try:
-                    return Response.Response(json.loads(buffer.getvalue()), Constant.HTTP_OK, Constant.APPLICATION_JSON,
-                                             result.headers)
+                    return Response(json.loads(output), Constant.HTTP_OK, Constant.APPLICATION_JSON, fresh_headers)
                 except Exception:
-                    return Response.Response(buffer.getvalue(), Constant.HTTP_OK, Constant.TEXT_HTML, result.headers)
-            else:
-                result = Response
-                result.http_code = Constant.HTTP_NOT_FOUND
+                    return Response(output, Constant.HTTP_OK, Constant.TEXT_HTML, fresh_headers)
 
-        # If no route is matched, serve 404
-        if result.http_code == Constant.HTTP_NOT_FOUND:
+        # If no route matched or result is still None, try twig templates then 404
+        if result is None:
             # Serve twigs if the files exist
             twig_files = []
             if url == "/":
@@ -410,17 +419,19 @@ class Router:
                                 tina4_python.root_path + os.sep + "src" + os.sep + "templates" + os.sep + twig_file,
                                 )
 
-                    result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
-                    result.headers["Cache-Control"] = "max-age=-1, public"
-                    result.headers["Pragma"] = "no-cache"
+                    twig_headers = {
+                        "FreshToken": tina4_python.tina4_auth.get_token({"path": url}),
+                        "Cache-Control": "max-age=-1, public",
+                        "Pragma": "no-cache"
+                    }
                     content = Template.render_twig_template(twig_file, {"request": tina4_python.tina4_current_request})
                     if content != "":
-                        return Response.Response(content, Constant.HTTP_OK, Constant.TEXT_HTML, result.headers)
+                        return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML, twig_headers)
 
-        if result.http_code == Constant.HTTP_NOT_FOUND:
+        if result is None:
             content = Template.render_twig_template(
                 "errors/404.twig", {"server": {"url": url}})
-            return Response.Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
+            return Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
 
         result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
         return result
@@ -430,11 +441,6 @@ class Router:
         url = Router.clean_url(url)
         Debug.debug(method, "Resolving URL: " + url)
         return await Router.get_result(url, method, request, headers, session)
-
-    # cleans the url of double slashes
-    @staticmethod
-    def clean_url(url):
-        return url.replace('//', '/')
 
     # adds a route to the router
     @staticmethod

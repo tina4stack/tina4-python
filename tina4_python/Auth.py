@@ -151,7 +151,7 @@ class Auth:
                              ``secrets`` folder will be created).
         """
         self.root_path = root_path
-        self.secret = os.environ.get("SECRET", "{self.secret}")
+        self.secret = os.environ.get("SECRET", "tina4-default-secret")
         self.private_key = os.path.join(root_path, "secrets", "private.key")
         self.public_key = os.path.join(root_path, "secrets", "public.key")
         self.self_signed = os.path.join(root_path, "secrets", "domain.cert")

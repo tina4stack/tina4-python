@@ -4,18 +4,24 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
-request = None
-body = None
-params = {}
-headers = {}
-cookies = {}
-url = None
-session = None
-files = {}
-raw_request = None
-raw_data = None
-raw_content = None
-asgi_scope = None
-asgi_reader = None
-asgi_writer = None
-asgi_response = None
+
+
+class Request:
+    """Per-request object holding all request data. Instantiated fresh for each incoming request."""
+
+    def __init__(self):
+        self.request = None
+        self.body = None
+        self.params = {}
+        self.headers = {}
+        self.cookies = {}
+        self.url = None
+        self.session = None
+        self.files = {}
+        self.raw_request = None
+        self.raw_data = None
+        self.raw_content = None
+        self.asgi_scope = None
+        self.asgi_reader = None
+        self.asgi_writer = None
+        self.asgi_response = None

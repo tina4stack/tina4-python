@@ -34,7 +34,7 @@ class Database:
             if _username == "":
                 _username = os.environ.get("DATABASE_USERNAME", "")
             if _password == "":
-                _password = os.environ.get("DATABASE_USERNAME", "")
+                _password = os.environ.get("DATABASE_PASSWORD", "")
 
             if _connection_string is None:
                 raise Exception("Database connection string is missing, try declaring DATABASE_PATH in the .env file.")
@@ -270,7 +270,7 @@ class Database:
         """
         if params is None:
             params = []
-        if params is list:
+        if isinstance(params, list):
             params = params.copy()
         else:
             params = list(params)
@@ -298,8 +298,8 @@ class Database:
                             cols.append(name)
 
             if cols:
-                if self.database_engine == "POSTGRES":
-                    like_op = "LIKE"
+                if self.database_engine == POSTGRES:
+                    like_op = "ILIKE"
                 else:
                     like_op = "LIKE"
 
@@ -371,7 +371,7 @@ class Database:
         finally:
             cursor.close()
 
-    def fetch_one(self, sql, params=[], skip=0):
+    def fetch_one(self, sql, params=None, skip=0):
         """
         Fetch a single record based on a SQL statement, take note that BLOB and byte record data is converted into base64 automatically
         :param str sql: A plain SQL statement or one with params in it designated by ?
@@ -379,6 +379,8 @@ class Database:
         :param int skip: Offset of records to skip
         :return: dict : A dictionary containing the single record
         """
+        if params is None:
+            params = []
         # Calling the fetch method with limit as 1 and returning the result
         record = self.fetch(sql, params=params, limit=1, skip=skip)
         if record.error is None and record.count == 1:
@@ -386,15 +388,14 @@ class Database:
             for key in record.records[0]:
                 if isinstance(record.records[0][key], Decimal):
                     data[key] = float(record.records[0][key])
-                if isinstance(record.records[0][key], (datetime.date, datetime.datetime)):
+                elif isinstance(record.records[0][key], (datetime.date, datetime.datetime)):
                     data[key] = record.records[0][key].isoformat()
-                if isinstance(record.records[0][key], bytes):
+                elif isinstance(record.records[0][key], bytes):
                     data[key] = base64.b64encode(record.records[0][key]).decode('utf-8')
+                elif isinstance(record.records[0][key], str) and self.is_json(record.records[0][key]):
+                    data[key] = json.loads(record.records[0][key])
                 else:
-                    if isinstance(record.records[0][key], str) and self.is_json(record.records[0][key]):
-                        data[key] = json.loads(record.records[0][key])
-                    else:
-                        data[key] = record.records[0][key]
+                    data[key] = record.records[0][key]
             return data
         else:
             return None
@@ -562,8 +563,8 @@ class Database:
 
             result = None
             for record in data:
-                columns = ", ".join(data[0].keys())
-                placeholders = ", ".join(['?'] * len(data[0]))
+                columns = ", ".join(record.keys())
+                placeholders = ", ".join(['?'] * len(record))
 
                 # Determine if we need to auto-generate the primary key
                 need_auto_id = (
@@ -687,11 +688,7 @@ class Database:
 
                     params = set_values + [pk_value]
 
-                    if self.database_engine == MSSQL:
-                        self.execute(f"SET IDENTITY_UPDATE {table_name} ON")
                     result = self.execute(sql, params)
-                    if self.database_engine == MSSQL:
-                        self.execute(f"SET IDENTITY_UPDATE {table_name} OFF")
                     if result.error is not None:
                         break
 

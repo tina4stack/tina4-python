@@ -4,6 +4,7 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+import ast
 import base64
 from datetime import date
 import json
@@ -17,6 +18,7 @@ def find_all_sub_classes(a_class):
 
 
 def orm(dba):
+    import importlib
     from tina4_python import root_path
     Debug("Initializing ORM")
     orm_path = root_path + os.sep + "src" + os.sep + "orm"
@@ -32,7 +34,9 @@ def orm(dba):
             # import and set the database object
             try:
                 Debug('from src.orm.' + mod_name + ' import ' + mod_name)
-                exec('from src.orm.' + mod_name + ' import ' + mod_name + "\n" + mod_name + ".__dba__ = dba")
+                module = importlib.import_module('src.orm.' + mod_name)
+                orm_class = getattr(module, mod_name)
+                orm_class.__dba__ = dba
             except Exception as e:
                 Debug("Failed to import " + mod_name, str(e))
     classes = find_all_sub_classes(ORM)
@@ -263,7 +267,7 @@ class ORM:
         if order_by: sql += "\norder by " + ", ".join(order_by)
         return sql
 
-    def fetch_one(self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by=""):
+    def fetch_one(self, column_names="*", filter="", params=None, join="", group_by="", having="", order_by=""):
         """
         Fetch one record from the database
         :param column_names:
@@ -275,10 +279,12 @@ class ORM:
         :param order_by:
         :return:
         """
+        if params is None:
+            params = []
         sql = self.__build_sql(column_names, join, filter, group_by, having, order_by)
         return self.__dba__.fetch_one(sql, params=params)
 
-    def fetch(self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10,
+    def fetch(self, column_names="*", filter="", params=None, join="", group_by="", having="", order_by="", limit=10,
               skip=0):
         """
         Fetch multiple records from the database
@@ -293,20 +299,24 @@ class ORM:
         :param skip:
         :return:
         """
+        if params is None:
+            params = []
         sql = self.__build_sql(column_names, join, filter, group_by, having, order_by)
         return self.__dba__.fetch(sql, params=params, limit=limit, skip=skip)
 
-    def select(self, column_names="*", filter="", params=[], join="", group_by="", having="", order_by="", limit=10,
+    def select(self, column_names="*", filter="", params=None, join="", group_by="", having="", order_by="", limit=10,
                skip=0):
         return self.fetch(column_names, filter, params, join, group_by, having, order_by, limit, skip)
 
-    def load(self, query="", params=[]):
+    def load(self, query="", params=None):
         """
         Loads a single record into the object based on the primary key or query if query is set
         :param query:
         :param params:
         :return:
         """
+        if params is None:
+            params = []
         if not self.__table_exists:
             Debug("ORM: Load Error - Table", self.__table_name__, "does not exist", TINA4_LOG_ERROR)
             return False
@@ -315,11 +325,13 @@ class ORM:
             sql = f"select * from {self.__table_name__} where "
             primary_keys = self.__get_primary_keys()
             values = self.to_dict()
+            params = []
             counter = 0
             for key in primary_keys:
                 if counter > 0:
                     sql += " and "
-                sql += key + " = '" + str(values[key]) + "'"
+                sql += key + " = ?"
+                params.append(values[key])
                 counter += 1
         else:
             sql = f"select * from {self.__table_name__} where {query}"
@@ -396,7 +408,9 @@ class ORM:
 
         return result
 
-    def delete(self, query="", params=[]):
+    def delete(self, query="", params=None):
+        if params is None:
+            params = []
         if not self.__table_exists:
             Debug("ORM: Load Error - Table", self.__table_name__, "does not exist", TINA4_LOG_ERROR)
             return False
@@ -404,11 +418,13 @@ class ORM:
             sql = f"delete from {self.__table_name__} where "
             primary_keys = self.__get_primary_keys()
             values = self.to_dict()
+            params = []
             counter = 0
             for key in primary_keys:
                 if counter > 0:
                     sql += " and "
-                sql += key + " = '" + str(values[key]) + "'"
+                sql += key + " = ?"
+                params.append(values[key])
                 counter += 1
         else:
             sql = f"delete from {self.__table_name__} where {query}"

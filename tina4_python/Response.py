@@ -7,6 +7,7 @@
 import os
 import json
 import inspect
+import contextvars
 from datetime import datetime, date
 from types import ModuleType
 from tina4_python import Constant
@@ -14,10 +15,9 @@ from tina4_python import DatabaseResult
 from tina4_python.ORM import ORM
 from tina4_python.Template import Template
 
-headers = {}
-content = ""
-http_code = Constant.HTTP_OK
-content_type = Constant.TEXT_HTML
+# Per-coroutine header accumulation for add_header() calls before Response creation
+_pending_headers = contextvars.ContextVar('_pending_headers', default=None)
+
 
 class Response:
 
@@ -32,12 +32,14 @@ class Response:
         else:
             return obj
 
+    @staticmethod
+    def reset_context():
+        """Reset per-request response state. Called by Router before each request."""
+        _pending_headers.set({})
+
     def __init__(self, content_in=None, http_code_in=None, content_type_in=None,
                  headers_in=None):
-        global headers
-        global content
-        global http_code
-        global content_type
+        content_type = content_type_in if content_type_in is not None else Constant.TEXT_HTML
 
         if http_code_in is None:
             http_code_in = Constant.HTTP_OK
@@ -72,17 +74,19 @@ class Response:
             content_in = json.dumps({"error": "Cannot decode object of type " + str(type(content_in))})
             content_type = Constant.APPLICATION_JSON
 
-        if content is not None and isinstance(content_in, str) and http_code_in == Constant.HTTP_OK:
-            content_in = content + content_in
+        # Merge any headers added via add_header() before this Response was created
+        pending = _pending_headers.get()
+        if headers_in is not None:
+            merged_headers = dict(headers_in)
+        elif pending:
+            merged_headers = dict(pending)
+        else:
+            merged_headers = {}
 
-        self.headers = headers_in if headers_in is not None else headers
-        self.content = content_in if content_in is not None else content
-        self.http_code = http_code_in if http_code_in is not None else http_code
-        self.content_type = content_type_in if content_type_in is not None else content_type
-        headers = self.headers
-        http_code = self.http_code
-        content_type = self.content_type
-        content = self.content
+        self.headers = merged_headers
+        self.content = content_in if content_in is not None else ""
+        self.http_code = http_code_in
+        self.content_type = content_type
 
     @staticmethod
     def redirect(redirect_url, http_code_in=Constant.HTTP_REDIRECT):
@@ -92,25 +96,12 @@ class Response:
         :param redirect_url:
         :return:
         """
-        global headers
-        global content
-        global http_code
-        global content_type
-        headers = {}
-        http_code = http_code_in
-        headers["Location"] = redirect_url
-        content = "Redirecting..."
-        content_type = Constant.TEXT_HTML
-        return Response("Redirecting...", http_code, content_type, headers)
-
+        headers = {"Location": redirect_url}
+        return Response("Redirecting...", http_code_in, Constant.TEXT_HTML, headers)
 
     @staticmethod
     def render(template_name, data=None):
-        global content, content_type, http_code
-        http_code = Constant.HTTP_OK
-        content_type = Constant.TEXT_HTML
-
-        return Response(Template.render(template_name, data=data), http_code, content_type)
+        return Response(Template.render(template_name, data=data), Constant.HTTP_OK, Constant.TEXT_HTML)
 
     @staticmethod
     def file(file_path: str, root_path: str = "src/public"):
@@ -124,24 +115,16 @@ class Response:
         Returns:
             Response: A properly configured Response object with file content and correct MIME type
         """
-        global content, content_type, http_code
-
         # Resolve full path and prevent directory traversal
         full_path = os.path.abspath(os.path.join(root_path, file_path.lstrip("/")))
 
         # Security: ensure the requested file is inside the root_path
         if not full_path.startswith(os.path.abspath(root_path)):
-            http_code = Constant.HTTP_FORBIDDEN
-            content_type = Constant.TEXT_PLAIN
-            content = "403 - Forbidden"
-            return Response(content, http_code, content_type)
+            return Response("403 - Forbidden", Constant.HTTP_FORBIDDEN, Constant.TEXT_PLAIN)
 
         # Check if file exists
         if not os.path.isfile(full_path):
-            http_code = Constant.HTTP_NOT_FOUND
-            content_type = Constant.TEXT_PLAIN
-            content = "404 - File Not Found"
-            return Response(content, http_code, content_type)
+            return Response("404 - File Not Found", Constant.HTTP_NOT_FOUND, Constant.TEXT_PLAIN)
 
         # Determine MIME type
         extension = os.path.splitext(file_path)[1].lower()
@@ -173,24 +156,23 @@ class Response:
                 with open(full_path, "rb") as f:
                     content = f.read()
         except Exception as e:
-            http_code = Constant.HTTP_BAD_REQUEST
-            content_type = Constant.TEXT_PLAIN
-            content = f"Error reading file: {str(e)}"
-            return Response(content, http_code, content_type)
+            return Response(f"Error reading file: {str(e)}", Constant.HTTP_BAD_REQUEST, Constant.TEXT_PLAIN)
 
-        http_code = Constant.HTTP_OK
-        return Response(content, http_code, content_type)
+        return Response(content, Constant.HTTP_OK, content_type)
 
     @staticmethod
     def add_header(key, value):
         """
-        Adds a header for the response
+        Adds a header for the response (concurrency-safe via contextvars)
         :param key:
         :param value:
         :return:
         """
-        global headers
-        headers[key] = value
+        h = _pending_headers.get()
+        if h is None:
+            h = {}
+            _pending_headers.set(h)
+        h[key] = value
 
     @staticmethod
     def wsdl(wsdl_instance):
