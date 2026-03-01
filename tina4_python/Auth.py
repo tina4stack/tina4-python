@@ -151,7 +151,10 @@ class Auth:
                              ``secrets`` folder will be created).
         """
         self.root_path = root_path
-        self.secret = os.environ.get("SECRET", "tina4-default-secret")
+        self.secret = os.environ.get("SECRET", "{self.secret}")
+        if self.secret == "{self.secret}":
+            from tina4_python.Debug import Debug
+            Debug.warning("No SECRET env var set - using default secret. Set SECRET in your .env for production.")
         self.private_key = os.path.join(root_path, "secrets", "private.key")
         self.public_key = os.path.join(root_path, "secrets", "public.key")
         self.self_signed = os.path.join(root_path, "secrets", "domain.cert")
