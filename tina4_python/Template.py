@@ -49,6 +49,8 @@ class Template:
         Template.twig.filters['datetime_format'] = Template.datetime_format
         Template.twig.globals['formToken'] = Template.get_form_token
         Template.twig.filters['formToken'] = Template.get_form_token_input
+        Template.twig.globals['form_token'] = Template.get_form_token
+        Template.twig.filters['form_token'] = Template.get_form_token_input
         if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv(
                 "TINA4_DEBUG_LEVEL"):
             Template.twig.globals['dump'] = Template.dump
