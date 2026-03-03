@@ -164,6 +164,20 @@ CMD ["python3", "app.py", "0.0.0.0:7145", "-u"]
         print("Dockerfile created (multi-stage + uv)")
 
     # ------------------------------------------------------------------
+    # CLAUDE.md (AI assistant guidelines)
+    # ------------------------------------------------------------------
+    claude_md_dest = project_path / "CLAUDE.md"
+    if claude_md_dest.exists():
+        print("CLAUDE.md already exists – skipping creation")
+    else:
+        claude_md_src = Path(__file__).parent / "CLAUDE.md"
+        if claude_md_src.exists():
+            claude_md_dest.write_text(claude_md_src.read_text(encoding="utf-8"), encoding="utf-8")
+            print("CLAUDE.md created (AI assistant guidelines)")
+        else:
+            print("Warning: CLAUDE.md template not found in package")
+
+    # ------------------------------------------------------------------
     # Final message
     # ------------------------------------------------------------------
     print("Project ready!")
