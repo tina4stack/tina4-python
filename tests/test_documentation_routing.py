@@ -3,6 +3,9 @@
 OFFICIAL Tina4 Python Routing Guide – Full Compliance Test Suite
 Based on: https://tina4stack.github.io/tina4python/routing.html (2025 version)
 Tests EVERY feature-by-feature using the real, current Tina4 Python API.
+
+These are integration tests that require a running Tina4 server with
+the example src/ routes. They are skipped in CI automatically.
 """
 
 import pytest
@@ -16,6 +19,21 @@ from tina4_python import tina4_auth
 
 BASE_URL = "http://localhost:7145"
 session = requests.Session()
+
+
+def _server_has_routes():
+    """Check if the server is running with the expected routes."""
+    try:
+        r = session.get(urljoin(BASE_URL, "/hello"), timeout=2)
+        return r.status_code == 200
+    except (requests.ConnectionError, requests.Timeout):
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _server_has_routes(),
+    reason="Integration test: requires running Tina4 server with example routes"
+)
 
 def get(path, **kwargs):
     return session.get(urljoin(BASE_URL, path), **kwargs)

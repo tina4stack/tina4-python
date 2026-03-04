@@ -1,4 +1,10 @@
 # tests/test_soap_calculator.py
+"""
+Integration tests for WSDL/SOAP calculator endpoint.
+
+These tests require a running Tina4 server with the Calculator WSDL
+service. They are skipped in CI automatically.
+"""
 import pytest
 import requests
 import xml.etree.ElementTree as ET
@@ -9,6 +15,21 @@ import xml.etree.ElementTree as ET
 BASE_URL = "http://localhost:7145"
 WSDL_URL = f"{BASE_URL}/calculator?wsdl"
 SOAP_URL = f"{BASE_URL}/calculator"
+
+
+def _wsdl_available():
+    """Check if the WSDL endpoint is reachable."""
+    try:
+        r = requests.get(WSDL_URL, timeout=2)
+        return r.status_code == 200
+    except (requests.ConnectionError, requests.Timeout):
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _wsdl_available(),
+    reason="Integration test: requires running Tina4 server with Calculator WSDL"
+)
 
 # SOAP headers
 HEADERS = {
