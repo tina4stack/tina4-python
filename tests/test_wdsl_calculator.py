@@ -18,10 +18,10 @@ SOAP_URL = f"{BASE_URL}/calculator"
 
 
 def _wsdl_available():
-    """Check if the WSDL endpoint is reachable."""
+    """Check if the WSDL Calculator endpoint is reachable and serving XML."""
     try:
-        r = requests.get(WSDL_URL, timeout=2)
-        return r.status_code == 200
+        r = requests.get(WSDL_URL, headers=HEADERS, timeout=2)
+        return r.status_code == 200 and "Calculator" in r.text
     except (requests.ConnectionError, requests.Timeout):
         return False
 

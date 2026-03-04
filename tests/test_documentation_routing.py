@@ -22,9 +22,11 @@ session = requests.Session()
 
 
 def _server_has_routes():
-    """Check if the server is running with the expected routes."""
+    """Check if the server is running with the full example routes."""
     try:
-        r = session.get(urljoin(BASE_URL, "/hello"), timeout=2)
+        # Check for a route that only exists in the full example project,
+        # not in the default tina4 init scaffold
+        r = session.get(urljoin(BASE_URL, "/admin/dashboard"), timeout=2)
         return r.status_code == 200
     except (requests.ConnectionError, requests.Timeout):
         return False
