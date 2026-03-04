@@ -62,6 +62,7 @@ async def create_user(request, response):
 - **POST/PUT/PATCH/DELETE** require `Authorization: Bearer <token>`
 - Use `@noauth()` to make a write route public
 - Use `@secured()` to protect a GET route
+- Make sure you use formToken filter in forms when you need to POST data.
 
 ```python
 from tina4_python.Router import post, noauth, secured
@@ -104,6 +105,14 @@ Add custom headers before returning:
 from tina4_python.Response import Response
 Response.add_header("X-Custom", "value")
 ```
+
+## Sessions
+
+TINA4_TOKEN_LIMIT is used to set the session time, recommend 15-30 minutes
+
+### Authentication & Security
+- Use `tina4_python.tina4_auth.hash_password()` to hash passwords — never use hashlib directly.
+- Use `tina4_python.tina4_auth.check_password(hash, password)` to verify passwords.
 
 ## Templates (Twig)
 
