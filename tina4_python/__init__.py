@@ -610,7 +610,20 @@ def webserver(host_name, port, debug: bool = False):
                     config.use_reloader = True
                     Debug.info("Hypercorn debug mode with auto-reload (install jurigged for faster reloads)")
                 config.log_level = "debug"
-            asyncio.run(serve(app, config))
+            import signal
+
+            shutdown_event = asyncio.Event()
+
+            def _signal_handler(*_):
+                shutdown_event.set()
+
+            async def _serve():
+                loop = asyncio.get_running_loop()
+                loop.add_signal_handler(signal.SIGINT, _signal_handler)
+                loop.add_signal_handler(signal.SIGTERM, _signal_handler)
+                await serve(app, config, shutdown_trigger=shutdown_event.wait)
+
+            asyncio.run(_serve())
         except Exception as e:
             Debug.error("Not running Hypercorn webserver", str(e))
 
