@@ -4,6 +4,29 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""Jinja2-based template engine for Tina4.
+
+The ``Template`` class wraps Jinja2 to provide Twig-compatible HTML
+rendering with automatic template discovery from ``src/templates/``.
+
+Features:
+    - Automatic ``FileSystemLoader`` setup scanning ``src/templates/``
+    - Built-in filters: ``json_decode``, ``base64_encode``, ``date``,
+      ``slugify``, and more
+    - Built-in globals: ``url``, ``root``, ``session``, ``uniqid``, ``localize``
+    - Custom filter, global, test, and extension registration via
+      ``add_filter()``, ``add_global()``, ``add_test()``, ``add_extension()``
+    - Static file detection and binary serving
+    - Label formatting helpers (``get_nice_label``)
+
+Template paths are relative to ``src/templates/``. The engine
+supports ``.twig`` and ``.html`` extensions.
+
+Example::
+
+    html = Template.render("/pages/home.twig", {"title": "Welcome"})
+    Template.add_filter("shout", lambda s: s.upper())
+"""
 import ast
 import html
 import os
@@ -24,6 +47,56 @@ from functools import wraps
 
 class Template:
     twig = None
+    _custom_filters = {}
+    _custom_globals = {}
+    _custom_tests = {}
+    _custom_extensions = []
+
+    @staticmethod
+    def add_filter(name, func):
+        """Register a custom Jinja2 filter."""
+        Template._custom_filters[name] = func
+        if Template.twig is not None:
+            Template.twig.filters[name] = func
+
+    @staticmethod
+    def add_global(name, value):
+        """Register a custom Jinja2 global (function or value)."""
+        Template._custom_globals[name] = value
+        if Template.twig is not None:
+            Template.twig.globals[name] = value
+
+    @staticmethod
+    def add_test(name, func):
+        """Register a custom Jinja2 test for use with {% if x is testname %}."""
+        Template._custom_tests[name] = func
+        if Template.twig is not None:
+            Template.twig.tests[name] = func
+
+    @staticmethod
+    def add_extension(extension):
+        """Register a Jinja2 extension class."""
+        if extension not in Template._custom_extensions:
+            Template._custom_extensions.append(extension)
+        if Template.twig is not None:
+            Template.twig.add_extension(extension)
+
+    @staticmethod
+    def get_environment():
+        """Return the underlying Jinja2 Environment instance, initializing if needed."""
+        if Template.twig is None:
+            Template.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
+        return Template.twig
+
+    @staticmethod
+    def _reset():
+        """Reset the template engine state. Used for testing."""
+        Template.twig = None
+        Template._custom_filters = {}
+        Template._custom_globals = {}
+        Template._custom_tests = {}
+        Template._custom_extensions = []
+
     # initializes the twig template engine
     @staticmethod
     def init_twig(path):
@@ -51,11 +124,22 @@ class Template:
         Template.twig.filters['formToken'] = Template.get_form_token_input
         Template.twig.globals['form_token'] = Template.get_form_token
         Template.twig.filters['form_token'] = Template.get_form_token_input
-        if Constant.TINA4_LOG_DEBUG in os.getenv("TINA4_DEBUG_LEVEL") or Constant.TINA4_LOG_ALL in os.getenv(
-                "TINA4_DEBUG_LEVEL"):
+        debug_level = os.getenv("TINA4_DEBUG_LEVEL", "")
+        if Constant.TINA4_LOG_DEBUG in debug_level or Constant.TINA4_LOG_ALL in debug_level:
             Template.twig.globals['dump'] = Template.dump
         else:
             Template.twig.globals['dump'] = Template.production_dump
+
+        # Apply any custom filters, globals, tests, and extensions registered before init
+        for name, func in Template._custom_filters.items():
+            Template.twig.filters[name] = func
+        for name, value in Template._custom_globals.items():
+            Template.twig.globals[name] = value
+        for name, func in Template._custom_tests.items():
+            Template.twig.tests[name] = func
+        for ext in Template._custom_extensions:
+            Template.twig.add_extension(ext)
+
         Debug.debug("Twig Initialized on " + path)
         return Template.twig
 

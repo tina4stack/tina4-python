@@ -4,14 +4,86 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""HTML element builder for constructing HTML markup programmatically in Python.
+
+This module provides two main APIs:
+
+1. **HTMLElement** -- a builder-pattern class that represents a single HTML tag
+   with attributes and nested content.  Elements are composable: you can nest
+   them, concatenate them with ``+``, and call ``str()`` to get the final HTML.
+
+2. **add_html_helpers()** -- a convenience function that injects shorthand
+   factory functions (``_div``, ``_p``, ``_a``, etc.) into a given globals
+   dict so you can write HTML in a concise, declarative style.
+
+Quick start::
+
+    from tina4_python.HtmlElement import HTMLElement, add_html_helpers
+
+    # Low-level API
+    el = HTMLElement("a", {"href": "/home"}, ["Home"])
+    print(el)  # <a href="/home">Home</a>
+
+    # Builder / callable style
+    el = HTMLElement("div")(HTMLElement("p")("Hello"))
+    print(el)  # <div><p>Hello</p></div>
+
+    # Helper-function style (after calling add_html_helpers)
+    add_html_helpers(globals())
+    print(_div({"class": "card"}, _p("Hello")))
+    # <div class="card"><p>Hello</p></div>
+"""
+
+__all__ = ["HTMLElement", "add_html_helpers"]
+
 
 class HTMLElement:
+    """Builder-pattern HTML element that renders to an HTML string.
+
+    Each instance represents a single HTML tag with optional attributes and
+    child content.  Content can be plain strings, other ``HTMLElement``
+    instances, or any object whose ``__str__`` produces valid markup.
+
+    The class supports a **callable/builder** style: calling an element adds
+    content and/or attributes, then returns ``self`` so calls can be chained::
+
+        HTMLElement("div")(HTMLElement("p")("Hello"), class_="card")
+
+    **Void (self-closing) tags** such as ``<br>``, ``<img>``, and ``<input>``
+    are rendered without a closing tag and ignore any child content.  The full
+    set is listed in :attr:`VOID_TAGS`.
+
+    Concatenation with ``+`` joins the HTML output of both operands, making it
+    easy to compose sibling elements::
+
+        HTMLElement("p")("A") + HTMLElement("p")("B")
+        # '<p>A</p><p>B</p>'
+
+    Attributes:
+        VOID_TAGS: Set of HTML tag names that must not have a closing tag.
+        tag_name: Lowercase tag name (e.g. ``"div"``).
+        attributes: Dict of attribute key/value pairs.
+        content: List of child nodes (strings or ``HTMLElement`` instances).
+    """
+
     VOID_TAGS = {
         "area", "base", "br", "col", "embed", "hr", "img", "input",
         "keygen", "link", "meta", "param", "source", "track", "wbr"
     }
 
     def __init__(self, tag_name="div", attributes=None, content=None):
+        """Create an HTML element.
+
+        Args:
+            tag_name: HTML tag name (e.g. ``"div"``, ``"img"``).  Defaults to
+                ``"div"``.  The value is lowercased and stripped automatically.
+            attributes: Optional dict (or iterable of key-value pairs) of HTML
+                attributes.  Boolean ``True`` renders a valueless attribute
+                (e.g. ``disabled``); ``False``/``None`` values are omitted.
+            content: Initial child content -- a single item, or a list/tuple
+                of items.  Items can be strings, ``HTMLElement`` instances, or
+                any object with a useful ``__str__``.
+        """
         self.tag_name = str(tag_name or "div").lower().strip() or "div"
 
         if attributes is None:
@@ -33,6 +105,18 @@ class HTMLElement:
 
     @staticmethod
     def escape(text):
+        """Escape a value for safe inclusion in HTML attribute values.
+
+        Replaces ``&``, ``<``, ``>``, ``"``, and ``'`` with their HTML entity
+        equivalents.
+
+        Args:
+            text: The value to escape.  Non-string values are converted via
+                ``str()`` first.
+
+        Returns:
+            The escaped string.
+        """
         if not isinstance(text, str):
             text = str(text)
         return (text.replace("&", "&amp;")
@@ -42,12 +126,33 @@ class HTMLElement:
                 .replace("'", "&#39;"))
 
     def add(self, *items):
+        """Append one or more child items to this element's content.
+
+        ``None`` values are silently skipped.
+
+        Args:
+            *items: Child nodes to append (strings, ``HTMLElement`` instances,
+                or any object with ``__str__``).
+
+        Returns:
+            ``self``, enabling method chaining.
+        """
         for item in items:
             if item is not None:
                 self.content.append(item)
         return self
 
     def render_attributes(self):
+        """Serialize ``self.attributes`` into an HTML attribute string.
+
+        Boolean ``True`` values produce valueless attributes (e.g.
+        ``disabled``).  ``False`` and ``None`` values are omitted entirely.
+        All other values are escaped and double-quoted.
+
+        Returns:
+            A string like ``' class="btn" disabled'`` (leading space included),
+            or ``""`` when there are no attributes.
+        """
         if not self.attributes:
             return ""
         attrs = []
@@ -62,6 +167,15 @@ class HTMLElement:
         return " " + " ".join(attrs) if attrs else ""
 
     def __str__(self):
+        """Render the element to an HTML string.
+
+        Void tags (e.g. ``<br>``, ``<img>``) are rendered without a closing
+        tag.  If ``tag_name`` is falsy, only the concatenated children are
+        returned (useful as a fragment container).
+
+        Returns:
+            The complete HTML markup for this element and all its descendants.
+        """
         if not self.tag_name:
             return "".join(str(c) for c in self.content if c is not None)
 
@@ -73,6 +187,21 @@ class HTMLElement:
         return f"{open_tag}{content_str}</{self.tag_name}>"
 
     def __call__(self, *content, **attributes):
+        """Add content and/or attributes by calling the element like a function.
+
+        This enables the builder pattern::
+
+            HTMLElement("div")(HTMLElement("p")("text"), class_="wrapper")
+
+        Args:
+            *content: Child nodes to append (same types as :meth:`add`).
+            **attributes: HTML attributes to merge into the existing dict.
+                Use trailing underscores for Python-reserved words
+                (e.g. ``class_="btn"`` becomes ``class="btn"``).
+
+        Returns:
+            ``self``, enabling further chaining.
+        """
         if attributes:
             self.attributes.update(attributes)
         if content:
@@ -80,18 +209,66 @@ class HTMLElement:
         return self
 
     def __repr__(self):
+        """Return the HTML string representation (same as ``__str__``)."""
         return self.__str__()
 
     def __add__(self, other):
+        """Concatenate this element's HTML with another value (``self + other``).
+
+        Returns:
+            A string containing this element's HTML followed by ``str(other)``.
+        """
         return str(self) + str(other)
 
     def __radd__(self, other):
+        """Concatenate another value's string with this element (``other + self``).
+
+        Returns:
+            A string containing ``str(other)`` followed by this element's HTML.
+        """
         return str(other) + str(self)
 
 def add_html_helpers(globals_dict):
-# Final fixed _make helper
+    """Inject underscore-prefixed HTML helper functions into a namespace.
+
+    After calling ``add_html_helpers(globals())``, you can build HTML with
+    concise factory functions like ``_div``, ``_p``, ``_a``, etc.  Each helper
+    accepts an optional leading dict of attributes followed by any number of
+    child content items::
+
+        add_html_helpers(globals())
+
+        page = _html(
+            _head(_title("My Page")),
+            _body(
+                _h1({"class": "title"}, "Hello"),
+                _p("Welcome to my site"),
+            ),
+        )
+        print(page)
+
+    The helpers cover all standard HTML5 tags grouped by category: document
+    structure, sections, headings/text, lists, tables, forms, media, embedded,
+    text semantics, and interactive elements.
+
+    Args:
+        globals_dict: The dict to inject helpers into -- typically
+            ``globals()`` from the calling module.
+    """
 
     def _make(tag):
+        """Create a factory function for the given HTML tag.
+
+        The returned helper accepts positional arguments where the **first
+        dict** encountered is treated as attributes and all other arguments
+        (including lists/tuples, which are flattened) become child content.
+
+        Args:
+            tag: The HTML tag name (e.g. ``"div"``).
+
+        Returns:
+            A callable ``helper(*args) -> HTMLElement`` for that tag.
+        """
         def helper(*args):
             attrs = {}
             content = []

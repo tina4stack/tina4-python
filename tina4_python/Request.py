@@ -4,6 +4,14 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""HTTP request object for Tina4 route handlers.
+
+The ``Request`` class encapsulates all data from an incoming HTTP request
+including URL, headers, body, cookies, session, query params, and uploaded
+files. A fresh instance is created for each request by the web server.
+"""
+
+__all__ = ["Request"]
 
 
 class Request:

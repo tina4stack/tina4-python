@@ -4,6 +4,33 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""JWT authentication and password hashing for Tina4.
+
+Provides the ``Auth`` class which handles:
+    - RS256 JWT token creation and validation using auto-generated
+      self-signed certificates (stored in the ``cert/`` directory)
+    - Configurable token expiry (default 24 hours, override via
+      ``TINA4_TOKEN_EXPIRES_IN`` environment variable)
+    - Password hashing and verification using bcrypt
+    - Payload extraction from valid or expired tokens
+
+The framework creates a global ``tina4_python.tina4_auth`` instance at
+startup. Sessions, secured routes, and middleware all delegate to this
+instance for token operations.
+
+Example::
+
+    from tina4_python import tina4_auth
+
+    token = tina4_auth.get_token({"user_id": 42})
+    is_valid = tina4_auth.valid(token)
+    payload = tina4_auth.get_payload(token)
+    hashed = tina4_auth.get_password("secret")
+    ok = tina4_auth.check_password("secret", hashed)
+"""
+
+__all__ = ["Auth", "AuthJSONSerializer"]
+
 import datetime
 import os
 import jwt
@@ -271,7 +298,7 @@ class Auth:
         try:
             payload = jwt.decode(token, key=public_key, algorithms=["RS256"])
             return payload
-        except jwt.InvalidSignatureError:
+        except Exception:
             return None
 
     def validate(self, token: str) -> bool:

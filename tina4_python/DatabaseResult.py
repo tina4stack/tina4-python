@@ -4,17 +4,40 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""Database query result container with serialisation and CRUD support.
+
+``DatabaseResult`` wraps the rows returned by a database query and extends
+``CRUD`` so that any result set can be converted to JSON, paginated HTML,
+or a full CRUD interface with a single method call.
+
+Serialisation formats:
+    - ``to_array()`` / ``to_list()`` — Python list of dicts (JSON-safe)
+    - ``to_json()`` — JSON string
+    - ``to_paginate()`` — dict ready for DataTables-style pagination
+    - ``to_csv()`` — CSV text with headers
+    - ``to_crud(request, options)`` — full HTML + REST CRUD interface
+
+Example::
+
+    result = db.fetch("select * from products", limit=25)
+    print(result.to_json())         # JSON array
+    print(result.to_csv())          # CSV text
+    paginated = result.to_paginate()  # {recordsTotal, data, ...}
+"""
+
+__all__ = ["DatabaseResult"]
+
 import csv
 import io
 from tina4_python.CRUD import CRUD
 
 class DatabaseResult(CRUD):
-    def __init__(self, _records=None, _columns=None, _error=None, count=None, limit=None, skip=None, sql=None, dba=None):
+    def __init__(self, records_list=None, columns=None, error=None, count=None, limit=None, skip=None, sql=None, dba=None):
         """
         DatabaseResult constructor
-        :param _records:
-        :param _columns:
-        :param _error:
+        :param records_list:
+        :param columns:
+        :param error:
         :param count:
         :param limit:
         :param skip:
@@ -35,15 +58,15 @@ class DatabaseResult(CRUD):
         else:
             self.skip = 0
 
-        if _records is not None:
-            self.records = _records
+        if records_list is not None:
+            self.records = records_list
         else:
             self.records = []
 
         self.count = len(self.records)
 
-        if _columns is not None:
-            self.columns = _columns
+        if columns is not None:
+            self.columns = columns
         else:
             self.columns = []
 
@@ -53,7 +76,7 @@ class DatabaseResult(CRUD):
         if dba is not None:
             self.dba = dba
 
-        self.error = _error
+        self.error = error
 
     def to_paginate(self):
         """

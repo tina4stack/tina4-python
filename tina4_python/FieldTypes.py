@@ -4,6 +4,35 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""ORM field type definitions for Tina4 models.
+
+Each field class (``IntegerField``, ``StringField``, etc.) maps a Python
+type to a database column definition. Fields auto-detect their column
+name from the assignment target when used inside an ORM subclass.
+
+Available fields:
+    - ``IntegerField`` — integer columns
+    - ``NumericField`` — decimal / float columns
+    - ``StringField`` — varchar columns
+    - ``TextField`` — alias for StringField
+    - ``DateTimeField`` — timestamp columns
+    - ``BlobField`` — binary data columns
+    - ``JSONBField`` — JSON/binary columns (JSONB on Postgres)
+    - ``ForeignKeyField`` — foreign key references with cascading
+"""
+
+__all__ = [
+    "BaseField",
+    "DateTimeField",
+    "IntegerField",
+    "NumericField",
+    "StringField",
+    "TextField",
+    "BlobField",
+    "JSONBField",
+    "ForeignKeyField",
+    "get_field_type_values",
+]
 
 import ast
 import inspect

@@ -4,6 +4,27 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""HTTP client for consuming external REST APIs.
+
+The ``Api`` class is a lightweight wrapper around ``requests`` that
+simplifies common patterns when calling third-party services from
+Tina4 applications.
+
+Features:
+    - Base URL with automatic path joining
+    - Bearer token and custom ``Authorization`` header support
+    - HTTP Basic authentication
+    - Persistent and per-request custom headers
+    - Automatic JSON serialisation of request bodies
+    - SSL verification toggle
+    - Consistent response dict: ``{status_code, data, headers}``
+
+Example::
+
+    api = Api("https://api.example.com", token="sk-...")
+    result = api.get("/users")
+    user = api.post("/users", {"name": "Alice"})
+"""
 
 import json
 from typing import Optional, Dict, Any, Union, List
