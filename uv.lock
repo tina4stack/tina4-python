@@ -1546,7 +1546,7 @@ wheels = [
 
 [[package]]
 name = "tina4-python"
-version = "0.2.182"
+version = "0.2.185"
 source = { editable = "." }
 dependencies = [
     { name = "asyncer" },
@@ -1554,6 +1554,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "hypercorn" },
     { name = "jinja2" },
+    { name = "jurigged" },
     { name = "libsass" },
     { name = "litequeue" },
     { name = "pyjwt" },
@@ -1566,7 +1567,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "flake8" },
-    { name = "jurigged" },
     { name = "mkdocs" },
     { name = "mysql-connector-python" },
     { name = "psycopg2-binary" },
@@ -1585,6 +1585,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=44.0.0,<45.0.0" },
     { name = "hypercorn", specifier = ">=0.18.0" },
     { name = "jinja2", specifier = ">=3.1.5,<4.0.0" },
+    { name = "jurigged", specifier = ">=0.6.0" },
     { name = "libsass", specifier = ">=0.23.0,<0.24.0" },
     { name = "litequeue", specifier = ">=0.9,<0.10" },
     { name = "pyjwt", specifier = ">=2.10.1,<3.0.0" },
@@ -1597,7 +1598,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "flake8", specifier = ">=7.2.0" },
-    { name = "jurigged", specifier = ">=0.6.0" },
     { name = "mkdocs", specifier = ">=1.6.1" },
     { name = "mysql-connector-python", specifier = ">=9.3.0" },
     { name = "psycopg2-binary", specifier = ">=2.9.10" },
