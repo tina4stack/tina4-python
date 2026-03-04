@@ -591,15 +591,14 @@ def webserver(host_name, port, debug: bool = False):
             from hypercorn.asyncio import serve
             import logging as _logging
 
-            # Make Hypercorn's "Running on" banner show localhost instead of 0.0.0.0
-            class _HypercornFilter(_logging.Filter):
+            # Suppress Hypercorn's "Running on" banner (we print our own)
+            class _SuppressRunningOn(_logging.Filter):
                 def filter(self, record):
-                    if hasattr(record, 'msg') and isinstance(record.msg, str):
-                        record.msg = record.msg.replace("0.0.0.0", "localhost").replace("::", "localhost")
-                    return True
+                    msg = getattr(record, 'msg', '')
+                    return 'Running on' not in str(msg)
 
             _hc_logger = _logging.getLogger("hypercorn.error")
-            _hc_logger.addFilter(_HypercornFilter())
+            _hc_logger.addFilter(_SuppressRunningOn())
 
             config = Config()
             config.bind = [host_name + ":" + str(port)]
