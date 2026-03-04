@@ -565,7 +565,9 @@ def run_web_server(hostname="localhost", port=7145, debug: bool = False):
     # ------------------------------------------------------------------
     # 2. Start the actual web server (unchanged logic)
     # ------------------------------------------------------------------
-    Debug.info(Messages.MSG_STARTING_WEBSERVER.format(port=port))
+    # Show a clickable URL in the banner (0.0.0.0 isn't useful for devs)
+    display_host = "localhost" if hostname in ("0.0.0.0", "::") else hostname
+    Debug.info(f"Server started http://{display_host}:{port}")
     webserver(hostname, port, debug=debug)  # Pass debug flag down
 
 
@@ -587,6 +589,18 @@ def webserver(host_name, port, debug: bool = False):
         try:
             from hypercorn.config import Config
             from hypercorn.asyncio import serve
+            import logging as _logging
+
+            # Make Hypercorn's "Running on" banner show localhost instead of 0.0.0.0
+            class _HypercornFilter(_logging.Filter):
+                def filter(self, record):
+                    if hasattr(record, 'msg') and isinstance(record.msg, str):
+                        record.msg = record.msg.replace("0.0.0.0", "localhost").replace("::", "localhost")
+                    return True
+
+            _hc_logger = _logging.getLogger("hypercorn.error")
+            _hc_logger.addFilter(_HypercornFilter())
+
             config = Config()
             config.bind = [host_name + ":" + str(port)]
             if debug and _dev_mode:
