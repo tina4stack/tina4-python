@@ -28,6 +28,8 @@ __all__ = [
     "livereload_websocket_handler",
     "inject_dev_scripts",
     "start_watcher",
+    "set_shutdown_event",
+    "trigger_shutdown",
 ]
 
 import asyncio
@@ -46,6 +48,21 @@ _clients_lock = threading.Lock()
 
 # Reference to the asyncio event loop (set when the first WebSocket connects)
 _event_loop = None
+
+# Shutdown event — shared with the server so WebSocket handlers exit on Ctrl+C
+_shutdown_event = None
+
+
+def set_shutdown_event(event):
+    """Register the server shutdown event (called from __init__ at startup)."""
+    global _shutdown_event
+    _shutdown_event = event
+
+
+def trigger_shutdown():
+    """Signal all DevReload WebSocket handlers to exit."""
+    if _shutdown_event is not None:
+        _shutdown_event.set()
 
 # Debounce timer
 _debounce_timer = None
@@ -165,17 +182,27 @@ async def livereload_websocket_handler(scope, receive, send):
 
     try:
         while True:
-            # Wait for either a file change notification or a client message
+            # Wait for file change, client message, or server shutdown
             receive_task = asyncio.ensure_future(receive())
             queue_task = asyncio.ensure_future(queue.get())
+            wait_set = {receive_task, queue_task}
+
+            shutdown_task = None
+            if _shutdown_event is not None:
+                shutdown_task = asyncio.ensure_future(_shutdown_event.wait())
+                wait_set.add(shutdown_task)
 
             done, pending = await asyncio.wait(
-                {receive_task, queue_task},
+                wait_set,
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
             for task in pending:
                 task.cancel()
+
+            # Server shutting down — exit immediately
+            if shutdown_task is not None and shutdown_task in done:
+                return
 
             for task in done:
                 if task is receive_task:
