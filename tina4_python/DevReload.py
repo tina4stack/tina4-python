@@ -178,15 +178,12 @@ async def livereload_websocket_handler(scope, receive, send):
                 task.cancel()
 
             for task in done:
-                result = task.result()
-
-                # Client sent something (ping or disconnect)
-                if result == receive_task.result() if receive_task in done else False:
+                if task is receive_task:
+                    result = task.result()
                     if result.get("type") == "websocket.disconnect":
                         return
-                # File change notification from watcher
-                elif queue_task in done:
-                    msg = result
+                elif task is queue_task:
+                    msg = task.result()
                     try:
                         await send({
                             "type": "websocket.send",
@@ -194,6 +191,8 @@ async def livereload_websocket_handler(scope, receive, send):
                         })
                     except Exception:
                         return
+    except asyncio.CancelledError:
+        pass  # Server shutting down — exit cleanly
     except Exception:
         pass
     finally:
