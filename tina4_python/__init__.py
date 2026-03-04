@@ -677,6 +677,10 @@ def _has_control_methods():
     except Exception as e:
         return False  # Can't read file → assume no control function
 
+    # If user explicitly calls run_web_server, don't auto-start
+    if "run_web_server" in content:
+        return True
+
     # Regex: looks for "def" + name + "(" anywhere in the file
     pattern = re.compile(r"^\s*def\s+(" + "|".join(re.escape(name) for name in _CONTROL_FUNCTIONS) + r")\s*\(",
                          re.MULTILINE)
