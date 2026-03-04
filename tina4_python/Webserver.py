@@ -446,6 +446,27 @@ class Webserver:
         if asgi_response:
             return response, headers
 
+        # Inject DevReload scripts for non-ASGI HTML responses (debug mode only)
+        if (isinstance(response.content, str)
+                and response.content_type
+                and 'text/html' in response.content_type):
+            try:
+                from tina4_python import _dev_mode
+                if _dev_mode:
+                    from tina4_python.DevReload import inject_dev_scripts, get_error_overlay_assets
+                    response.content = inject_dev_scripts(response.content)
+                    if response.http_code == 500:
+                        overlay = get_error_overlay_assets()
+                        closing = "</body>"
+                        lower = response.content.lower()
+                        idx = lower.rfind(closing)
+                        if idx != -1:
+                            response.content = response.content[:idx] + overlay + response.content[idx:]
+                        else:
+                            response.content += overlay
+            except (ImportError, AttributeError):
+                pass
+
         header_bytes = await self.get_headers(headers, self.response_protocol, response.http_code)
 
         if isinstance(response.content, (bytes, bytearray)):
@@ -602,6 +623,22 @@ class Webserver:
                     "errors/500.twig",
                     {"server": {"url": self.path or "/"}, "error_message": error_msg},
                 )
+                # Inject DevReload scripts into error pages (debug mode only)
+                try:
+                    from tina4_python import _dev_mode
+                    if _dev_mode:
+                        from tina4_python.DevReload import inject_dev_scripts, get_error_overlay_assets
+                        html = inject_dev_scripts(html)
+                        overlay = get_error_overlay_assets()
+                        closing = "</body>"
+                        lower = html.lower()
+                        idx = lower.rfind(closing)
+                        if idx != -1:
+                            html = html[:idx] + overlay + html[idx:]
+                        else:
+                            html += overlay
+                except (ImportError, AttributeError):
+                    pass
                 writer.write(header_bytes + html.encode())
 
             tina4_python.container_broken(error_msg)

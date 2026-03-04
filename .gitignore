@@ -27,6 +27,11 @@
 /tests/.env
 /tests/app.py
 /test.db
+*.db-wal
+*.db-shm
+*.db-journal
+test_queue*.db
+/queue.db
 /logs/
 /migrations/__test_user.sql
 /migrations/__test_user_item.sql
@@ -36,7 +41,6 @@
 /publish.bat
 /Dockerfile
 /data.db
-/test_queue.db-shm
 /publish.sh
 /src/scss/
 /broken

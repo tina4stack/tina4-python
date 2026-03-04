@@ -4,6 +4,20 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""Database driver identifiers and install instructions.
+
+Maps short driver names to their Python module paths and provides
+human-readable installation commands for each supported database.
+"""
+
+__all__ = [
+    "SQLITE",
+    "FIREBIRD", "FIREBIRD_INSTALL",
+    "MYSQL", "MYSQL_INSTALL",
+    "POSTGRES", "POSTGRES_INSTALL",
+    "MSSQL", "MSSQL_INSTALL",
+]
+
 SQLITE = "sqlite3"
 FIREBIRD = "firebird.driver"
 FIREBIRD_INSTALL = "pip install firebird-driver or poetry add firebird-driver"

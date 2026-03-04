@@ -18,6 +18,24 @@ They are intentionally simple strings/integers to allow direct comparison
 and use in decorators, routing, and response handling.
 """
 
+__all__ = [
+    # Logging levels
+    "TINA4_LOG_INFO", "TINA4_LOG_WARNING", "TINA4_LOG_DEBUG",
+    "TINA4_LOG_ERROR", "TINA4_LOG_ALL",
+    # HTTP methods
+    "TINA4_GET", "TINA4_POST", "TINA4_ANY", "TINA4_PATCH",
+    "TINA4_PUT", "TINA4_DELETE", "TINA4_OPTIONS",
+    # HTTP status codes
+    "HTTP_OK", "HTTP_CREATED", "HTTP_ACCEPTED", "HTTP_NO_CONTENT",
+    "HTTP_PARTIAL_CONTENT", "HTTP_REDIRECT_MOVED", "HTTP_REDIRECT",
+    "HTTP_REDIRECT_OTHER", "HTTP_BAD_REQUEST", "HTTP_UNAUTHORIZED",
+    "HTTP_FORBIDDEN", "HTTP_NOT_FOUND", "HTTP_SERVER_ERROR",
+    "LOOKUP_HTTP_CODE",
+    # MIME types
+    "TEXT_HTML", "TEXT_CSS", "TEXT_PLAIN", "TEXT_JAVASCRIPT",
+    "APPLICATION_JSON", "APPLICATION_XML",
+]
+
 # ----------------------------------------------------------------------
 # Logging Levels
 # ----------------------------------------------------------------------

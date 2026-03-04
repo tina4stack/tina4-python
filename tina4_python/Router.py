@@ -4,6 +4,42 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""URL routing engine for the Tina4 Python web framework.
+
+This module contains two public layers:
+
+1. **``Router`` class** -- the core routing engine that registers routes,
+   matches incoming URLs against registered patterns, resolves handlers,
+   enforces authentication, runs middleware, and returns ``Response`` objects.
+
+2. **Decorator functions** (``get``, ``post``, ``put``, ``patch``, ``delete``,
+   ``cached``, ``middleware``, ``secured``, ``noauth``, ``wsdl``) -- the
+   user-facing API for declaring route handlers in ``src/routes/`` files.
+
+Route patterns support fixed segments, typed parameters (``{id}``,
+``{id:int}``, ``{price:float}``), and greedy path parameters
+(``{file:path}``).  Multiple paths can be bound to the same handler by
+passing a pipe-delimited string (``"/a|/b"``) or a list.
+
+Typical usage::
+
+    from tina4_python.Router import get, post
+
+    @get("/api/hello")
+    async def hello(request, response):
+        return response({"message": "Hello, world!"})
+
+    @post("/api/items")
+    async def create_item(request, response):
+        return response(request.body, 201)
+"""
+
+__all__ = [
+    "Router",
+    "get", "post", "put", "patch", "delete", "any",
+    "cached", "middleware", "secured", "noauth", "wsdl",
+]
+
 import json
 import inspect
 import mimetypes
@@ -19,13 +55,44 @@ from tina4_python.MiddleWare import MiddleWare
 
 
 class Router:
+    """Core URL routing engine for Tina4.
+
+    ``Router`` is used as a static-only utility class -- it is never
+    instantiated.  All state lives in ``tina4_python.tina4_routes`` (the
+    global route registry) and in the class-level ``variables`` dict that
+    holds the most recently matched path parameters.
+
+    Key responsibilities:
+
+    * **Route registration** -- :meth:`add` stores handler callbacks, their
+      HTTP methods, URL patterns, and metadata (security, caching, etc.).
+    * **URL matching** -- :meth:`match` compares an incoming URL against one
+      or more route patterns with full support for typed path parameters.
+    * **Request resolution** -- :meth:`get_result` orchestrates the full
+      request lifecycle: static file serving, route matching, auth checks,
+      middleware execution, handler invocation, template fallback, and
+      error handling.
+    """
+
     variables = {}
 
     @staticmethod
     def _parse_route_segment(segment):
-        """
-        Parse route segment like {id}, {username:str}, {price:float}, {file:path}
-        Returns (param_name, converter) where converter is 'str', 'int', 'float', 'path'
+        """Parse a single route-pattern segment into a parameter name and type.
+
+        Recognises segments of the form ``{name}``, ``{name:type}`` where
+        *type* is one of ``str``, ``int``, ``float``, or ``path``.  If the
+        segment does not contain a parameter placeholder the method returns
+        ``(None, None)``.
+
+        Args:
+            segment: A single path segment from a route pattern, e.g.
+                ``"users"``, ``"{id}"``, or ``"{price:float}"``.
+
+        Returns:
+            A ``(param_name, converter)`` tuple.  *converter* is one of
+            ``'str'``, ``'int'``, ``'float'``, or ``'path'``.  Both values
+            are ``None`` when the segment is a fixed (literal) segment.
         """
         match = re.match(r'^\{(\w+)(?::(\w+))?}?$', segment.strip())
         if not match:
@@ -38,7 +105,15 @@ class Router:
 
     @staticmethod
     def clean_url(url):
-        """Collapse double slashes in a URL path."""
+        """Normalise a URL path by collapsing consecutive slashes.
+
+        Args:
+            url: The raw URL path string (e.g. ``"//api///items"``).
+
+        Returns:
+            A cleaned path with all runs of ``/`` reduced to a single
+            ``/``.  Returns ``"/"`` when *url* is falsy.
+        """
         if not url:
             return "/"
         return re.sub(r'/+', '/', url)
@@ -59,7 +134,23 @@ class Router:
 
     @staticmethod
     def get_variables(url, route_path):
-        """Legacy helper - extracts variables with type conversion"""
+        """Extract path parameters from a URL given a route pattern.
+
+        This is a legacy convenience helper.  For each parameterised
+        segment in *route_path* (e.g. ``{id:int}``), the corresponding
+        segment in *url* is extracted and converted to the declared type.
+
+        Args:
+            url: The actual request URL (may include a query string which
+                is stripped before matching).
+            route_path: The route pattern to match against (e.g.
+                ``"/api/users/{id:int}"``).
+
+        Returns:
+            A dict mapping parameter names to their (type-converted)
+            values.  Returns an empty dict if the URL does not conform to
+            the pattern or a type conversion fails.
+        """
         variables = {}
         url_path = Router._normalize_url(url).rstrip('/')
         url_segments = [s for s in url_path.strip('/').split('/') if s]
@@ -91,13 +182,27 @@ class Router:
 
     @staticmethod
     def match(url, route_path):
-        """
-        Robust URL matching with full support for:
-        - Fixed segments
-        - {param}, {param:int}, {param:float}, {param:path} (greedy)
-        - Trailing slashes (both URL and route)
-        - Leading/trailing whitespace and multiple slashes
-        - Root path "/" and empty URLs
+        """Test whether a request URL matches one or more route patterns.
+
+        Performs robust URL matching with full support for:
+
+        * Fixed (literal) path segments.
+        * Typed parameters: ``{param}``, ``{param:int}``, ``{param:float}``.
+        * Greedy path parameters: ``{param:path}`` (must be the last segment).
+        * Trailing / leading slashes, whitespace, and multiple consecutive
+          slashes are all normalised before comparison.
+
+        On a successful match the extracted variables are stored in
+        ``Router.variables`` so they can be consumed by the caller.
+
+        Args:
+            url: The incoming request URL (query string is stripped).
+            route_path: A single route-pattern string or a list of patterns
+                to try.  The first matching pattern wins.
+
+        Returns:
+            ``True`` if *url* matches any of the supplied patterns,
+            ``False`` otherwise.
         """
         if isinstance(route_path, (str, list)):
             route_paths = route_path if isinstance(route_path, list) else [route_path]
@@ -178,8 +283,23 @@ class Router:
 
     @staticmethod
     def requires_auth(route: dict, method: str, validated: bool) -> bool:
-        """
-        Returns True if the request should be blocked due to missing auth
+        """Determine whether a request should be blocked for missing auth.
+
+        A request requires authentication when:
+
+        * The route is explicitly marked secure (via ``@secured()`` or the
+          legacy swagger ``secure`` flag), **or**
+        * The HTTP method is a write operation (anything other than GET /
+          OPTIONS) and the request has not been validated.
+
+        Args:
+            route: The route metadata dict from ``tina4_python.tina4_routes``.
+            method: The HTTP method string (e.g. ``Constant.TINA4_POST``).
+            validated: Whether the request already passed token validation.
+
+        Returns:
+            ``True`` if access should be denied, ``False`` if the request
+            may proceed.
         """
         # Route explicitly marked as secure (via @secure() or legacy)
         explicitly_secured = bool(
@@ -192,9 +312,34 @@ class Router:
 
         return explicitly_secured or (is_write_method and not validated)
 
-    # Renders the URL and returns the content
     @staticmethod
     async def get_result(url, method, request, headers, session):
+        """Resolve a URL to a ``Response`` by running the full request lifecycle.
+
+        Processing order:
+
+        1. Validate bearer / form tokens when present.
+        2. Serve a static file from ``src/public/`` if one matches.
+        3. Iterate registered routes and find the first match.
+        4. Enforce authentication (``requires_auth``).
+        5. Execute pre-route middleware, invoke the handler, execute
+           post-route middleware.
+        6. Fall back to Twig templates (``src/templates/``) if no route
+           matched.
+        7. Return a 404 response as the last resort.
+
+        Args:
+            url: The cleaned URL path (no double slashes).
+            method: HTTP method constant.
+            request: Raw request dict with ``params``, ``body``, ``files``,
+                etc.
+            headers: Dict of HTTP headers (lowercase keys).
+            session: The session object for the current connection.
+
+        Returns:
+            A ``Response`` object containing the rendered content, HTTP
+            status code, content type, and any extra headers.
+        """
         from tina4_python.Request import Request
         from tina4_python.Response import Response
 
@@ -438,13 +583,41 @@ class Router:
 
     @staticmethod
     async def resolve(method, url, request, headers, session):
+        """Public entry point: clean the URL and delegate to :meth:`get_result`.
+
+        Args:
+            method: HTTP method constant (e.g. ``Constant.TINA4_GET``).
+            url: Raw request URL (may contain double slashes).
+            request: The raw request dict.
+            headers: Dict of HTTP headers (lowercase keys).
+            session: The session object for the current connection.
+
+        Returns:
+            A ``Response`` object ready to be sent to the client.
+        """
         url = Router.clean_url(url)
         Debug.debug(method, "Resolving URL: " + url)
         return await Router.get_result(url, method, request, headers, session)
 
-    # adds a route to the router
     @staticmethod
     def add(method, route, callback):
+        """Register a route handler in the global route table.
+
+        Duplicate (method, route) combinations are rejected with an error
+        log.  Non-GET methods are marked secure by default so they require
+        a valid bearer token unless the route is explicitly annotated with
+        ``@noauth()``.
+
+        Args:
+            method: HTTP method constant (e.g. ``Constant.TINA4_GET``).
+            route: URL pattern string (e.g. ``"/api/users/{id:int}"``).
+            callback: The async handler function to invoke when the route
+                matches.
+
+        Returns:
+            ``True`` if the route was successfully registered, ``False`` if
+            a duplicate was detected.
+        """
         # Normalize route (remove trailing slash for comparison)
         norm_route = route.rstrip("/").lower()
 
@@ -495,10 +668,24 @@ class Router:
 
 
 def get(path: str | list):
-    """
-    Get router
-    :param path:
-    :return:
+    """Decorator that registers an async handler for HTTP GET requests.
+
+    GET routes are public by default (no bearer token required).  Use
+    ``@secured()`` to require authentication.
+
+    Args:
+        path: A URL pattern string, a pipe-delimited string of patterns
+            (e.g. ``"/a|/b"``), or a list of pattern strings.
+
+    Returns:
+        A decorator that registers *callback* for the given path(s) and
+        returns it unchanged.
+
+    Example::
+
+        @get("/api/users/{id:int}")
+        async def get_user(id, request, response):
+            return response({"id": id})
     """
 
     def actual_get(callback):
@@ -515,10 +702,24 @@ def get(path: str | list):
 
 
 def post(path: str | list):
-    """
-    Post router
-    :param path:
-    :return:
+    """Decorator that registers an async handler for HTTP POST requests.
+
+    POST routes require a valid bearer token by default.  Use ``@noauth()``
+    to make a POST route publicly accessible.
+
+    Args:
+        path: A URL pattern string, a pipe-delimited string of patterns,
+            or a list of pattern strings.
+
+    Returns:
+        A decorator that registers *callback* for the given path(s) and
+        returns it unchanged.
+
+    Example::
+
+        @post("/api/users")
+        async def create_user(request, response):
+            return response(request.body, 201)
     """
 
     def actual_post(callback):
@@ -534,10 +735,24 @@ def post(path: str | list):
 
 
 def put(path: str | list):
-    """
-    Put router
-    :param path:
-    :return:
+    """Decorator that registers an async handler for HTTP PUT requests.
+
+    PUT routes require a valid bearer token by default.  Use ``@noauth()``
+    to make a PUT route publicly accessible.
+
+    Args:
+        path: A URL pattern string, a pipe-delimited string of patterns,
+            or a list of pattern strings.
+
+    Returns:
+        A decorator that registers *callback* for the given path(s) and
+        returns it unchanged.
+
+    Example::
+
+        @put("/api/users/{id:int}")
+        async def update_user(id, request, response):
+            return response({"id": id, "updated": True})
     """
 
     def actual_put(callback):
@@ -553,10 +768,24 @@ def put(path: str | list):
 
 
 def patch(path: str | list):
-    """
-    Patch router
-    :param path:
-    :return:
+    """Decorator that registers an async handler for HTTP PATCH requests.
+
+    PATCH routes require a valid bearer token by default.  Use ``@noauth()``
+    to make a PATCH route publicly accessible.
+
+    Args:
+        path: A URL pattern string, a pipe-delimited string of patterns,
+            or a list of pattern strings.
+
+    Returns:
+        A decorator that registers *callback* for the given path(s) and
+        returns it unchanged.
+
+    Example::
+
+        @patch("/api/users/{id:int}")
+        async def patch_user(id, request, response):
+            return response({"id": id, "patched": True})
     """
 
     def actual_patch(callback):
@@ -572,10 +801,24 @@ def patch(path: str | list):
 
 
 def delete(path: str | list):
-    """
-    Delete router
-    :param path:
-    :return:
+    """Decorator that registers an async handler for HTTP DELETE requests.
+
+    DELETE routes require a valid bearer token by default.  Use ``@noauth()``
+    to make a DELETE route publicly accessible.
+
+    Args:
+        path: A URL pattern string, a pipe-delimited string of patterns,
+            or a list of pattern strings.
+
+    Returns:
+        A decorator that registers *callback* for the given path(s) and
+        returns it unchanged.
+
+    Example::
+
+        @delete("/api/users/{id:int}")
+        async def delete_user(id, request, response):
+            return response({"deleted": True})
     """
 
     def actual_delete(callback):
@@ -591,11 +834,19 @@ def delete(path: str | list):
 
 
 def cached(is_cached, max_age=60):
-    """
-    Sets whether the route is cached or not
-    :param is_cached:
-    :param max_age:
-    :return:
+    """Decorator that controls HTTP cache headers for a route.
+
+    When enabled, the ``Cache-Control`` and ``Pragma`` response headers
+    are set to allow client/proxy caching for *max_age* seconds.
+
+    Args:
+        is_cached: ``True`` to enable caching, ``False`` to force
+            revalidation on every request.
+        max_age: Maximum cache lifetime in seconds (default ``60``).
+
+    Returns:
+        A decorator that annotates the route and returns *callback*
+        unchanged.
     """
 
     def actual_cached(callback):
@@ -608,11 +859,23 @@ def cached(is_cached, max_age=60):
 
 
 def middleware(middleware, specific_methods=None):
-    """
-    Sets middleware for the route and methods that need to be called
-    :param middleware:
-    :param specific_methods:
-    :return:
+    """Decorator that attaches a middleware class to a route.
+
+    The middleware class may define ``before_route``, ``after_route``, and
+    arbitrary named methods.  When *specific_methods* is provided, only
+    those named methods are invoked; otherwise the framework calls the
+    ``before_*`` / ``after_*`` / ``any_*`` hooks automatically.
+
+    Args:
+        middleware: A middleware class (not an instance) with static
+            handler methods.
+        specific_methods: Optional list of method names on the middleware
+            class to call explicitly.  Defaults to ``None`` (use the
+            standard before/any/after lifecycle).
+
+    Returns:
+        A decorator that annotates the route and returns *callback*
+        unchanged.
     """
 
     if specific_methods is None:
@@ -628,9 +891,22 @@ def middleware(middleware, specific_methods=None):
 
 
 def secured():
-    """
-    Makes a route secure - secured vs secure with swagger
-    :return:
+    """Decorator that marks a route as requiring authentication.
+
+    By default only non-GET methods require a bearer token.  Apply this
+    decorator to a GET route to enforce token validation on read requests
+    as well.
+
+    Returns:
+        A decorator that sets the ``secure`` flag on the route and returns
+        *callback* unchanged.
+
+    Example::
+
+        @secured()
+        @get("/api/admin/stats")
+        async def admin_stats(request, response):
+            return response({"secret": True})
     """
 
     def actual_secure(callback):
@@ -643,9 +919,22 @@ def secured():
 
 
 def noauth():
-    """
-    Defines a route with no auth
-    :return:
+    """Decorator that exempts a route from authentication checks.
+
+    Apply this to POST/PUT/PATCH/DELETE routes that should be publicly
+    accessible without a bearer token (e.g. webhooks, public form
+    submissions).
+
+    Returns:
+        A decorator that sets the ``noauth`` flag on the route and returns
+        *callback* unchanged.
+
+    Example::
+
+        @noauth()
+        @post("/api/webhook")
+        async def public_webhook(request, response):
+            return response({"ok": True})
     """
 
     def actual_noauth(callback):

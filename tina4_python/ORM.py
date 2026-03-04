@@ -4,6 +4,48 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""Active Record ORM module for Tina4 Python.
+
+This module provides an Active Record-style ORM that maps Python classes to
+database tables. Each ORM subclass represents a single database table, and
+each instance represents a single row. Table names are derived automatically
+from the class name using snake_case conversion (e.g., ``UserProfile`` becomes
+``user_profile``), or can be set explicitly via ``__table_name__``.
+
+Field definitions use typed descriptors (``IntegerField``, ``StringField``,
+etc.) declared as class attributes. If no fields are declared, a default
+``id`` IntegerField with auto-increment and primary key is created.
+
+Typical usage::
+
+    from tina4_python import ORM, IntegerField, StringField
+    from tina4_python.Database import Database
+    from tina4_python.ORM import orm
+
+    # Initialize the database and bind it to all ORM subclasses
+    orm(Database("sqlite3:app.db"))
+
+    # Define a model
+    class Customer(ORM):
+        id    = IntegerField(primary_key=True, auto_increment=True)
+        name  = StringField()
+        email = StringField()
+
+    # Create and persist a record
+    customer = Customer({"name": "Alice", "email": "alice@example.com"})
+    customer.save()
+
+    # Load an existing record
+    customer = Customer()
+    if customer.load("email = ?", ["alice@example.com"]):
+        print(customer.name.value)
+
+    # Query multiple records
+    result = Customer().fetch(filter="name like ?", params=["%Ali%"], limit=20)
+"""
+
+__all__ = ["ORM", "orm", "find_all_sub_classes"]
+
 import ast
 import base64
 from datetime import date
@@ -14,10 +56,49 @@ from tina4_python.FieldTypes import *
 
 
 def find_all_sub_classes(a_class):
+    """Return all direct subclasses of the given class.
+
+    This is used during ORM initialization to discover all user-defined
+    model classes so their ``__dba__`` attribute can be set to the active
+    database connection.
+
+    Args:
+        a_class: The parent class whose direct subclasses are returned.
+
+    Returns:
+        list: A list of class objects that directly subclass ``a_class``.
+    """
     return a_class.__subclasses__()
 
 
 def orm(dba):
+    """Initialize the ORM layer by binding a database connection to all models.
+
+    This function should be called once at application startup (typically in
+    ``app.py``). It performs two tasks:
+
+    1. Scans the ``src/orm/`` directory for Python modules, imports each one,
+       and sets its ``__dba__`` class attribute to the provided database
+       connection.
+    2. Iterates over all discovered ``ORM`` subclasses (including those
+       registered outside ``src/orm/``) and assigns them the same database
+       connection.
+
+    After calling this function every ORM subclass can perform database
+    operations (``save``, ``load``, ``fetch``, etc.) without needing an
+    explicit database reference.
+
+    Args:
+        dba: A ``tina4_python.Database.Database`` instance that provides the
+            database connection used by all ORM models.
+
+    Example::
+
+        from tina4_python.Database import Database
+        from tina4_python.ORM import orm
+
+        orm(Database("sqlite3:app.db"))
+    """
     import importlib
     from tina4_python import root_path
     Debug("Initializing ORM")
@@ -45,7 +126,22 @@ def orm(dba):
 
 
 def json_serialize(obj):
-    """JSON serializer for objects not serializable by default json code"""
+    """Custom JSON serializer for types not handled by the default encoder.
+
+    Used as the ``default`` argument to ``json.dumps`` when converting ORM
+    instances to JSON. Handles ``datetime``/``date`` objects (via ISO-8601)
+    and ``bytes`` objects (via Base64 encoding).
+
+    Args:
+        obj: The object to serialize.
+
+    Returns:
+        str: An ISO-8601 date string for date/datetime objects, or a
+            Base64-encoded string for bytes objects.
+
+    Raises:
+        TypeError: If ``obj`` is not a supported type.
+    """
     if isinstance(obj, (datetime, date)):
         return obj.isoformat()
     elif isinstance(obj, bytes):
@@ -54,15 +150,60 @@ def json_serialize(obj):
 
 
 class ORM:
+    """Active Record ORM base class for Tina4 Python.
+
+    Subclass ``ORM`` to define a database-backed model. Each subclass maps to
+    a single database table. Declare columns as class-level field descriptors
+    (``IntegerField``, ``StringField``, etc.) and the ORM handles table
+    creation, querying, inserting, updating, and deleting automatically.
+
+    Table name resolution (in priority order):
+        1. The ``__table_name__`` class attribute, if set explicitly.
+        2. The ``table_name`` keyword passed to ``__init__``.
+        3. Automatic snake_case conversion of the class name
+           (e.g., ``OrderItem`` -> ``order_item``).
+
+    The database connection is stored on the class-level ``__dba__`` attribute
+    and is shared by all instances. It is normally assigned by calling the
+    module-level ``orm(dba)`` function at startup.
+
+    Class Attributes:
+        __table_name__: Explicit table name override. ``None`` means
+            auto-derive from the class name.
+        __dba__: The shared ``Database`` instance. Set by ``orm(dba)``.
+        __field_definitions__: Dict mapping field names to their
+            ``FieldType`` descriptor instances. Populated in ``__init__``.
+
+    Example::
+
+        from tina4_python import ORM, IntegerField, StringField
+
+        class Product(ORM):
+            id    = IntegerField(primary_key=True, auto_increment=True)
+            name  = StringField()
+            price = IntegerField(default_value=0)
+
+        # After orm(dba) has been called:
+        p = Product({"name": "Widget", "price": 999})
+        p.save()
+    """
     __table_name__ = None
     __dba__ = None
     __field_definitions__ = {}
 
     def __get_snake_case_name__(self, name):
-        """
-        Gets the table name
-        :param name:
-        :return:
+        """Convert a CamelCase or mixed-case name to snake_case.
+
+        If the name already contains underscores it is simply lowered.
+        Otherwise each uppercase letter (after the first character) is
+        preceded by an underscore. Used to derive table names from class
+        names and to map incoming camelCase JSON keys to snake_case fields.
+
+        Args:
+            name: The string to convert (e.g., ``"UserProfile"``).
+
+        Returns:
+            str: The snake_case equivalent (e.g., ``"user_profile"``).
         """
         if "_" in name:
             return name.lower()
@@ -77,6 +218,32 @@ class ORM:
         return snake_case_name
 
     def __init__(self, init_object=None, table_name=None):
+        """Initialize an ORM instance, optionally populating it from data.
+
+        During construction the following steps occur:
+
+        1. All public, non-method attributes (the field descriptors) are
+           collected into ``__field_definitions__``. If no fields are found
+           a default ``id`` IntegerField is created.
+        2. The table name is resolved (see class docstring for precedence).
+        3. If ``init_object`` is provided its key/value pairs are mapped onto
+           the matching fields (camelCase keys are converted to snake_case).
+        4. If a database connection is available and the table does not yet
+           exist, a ``CREATE TABLE`` SQL statement is generated (and logged
+           as a warning).
+
+        Args:
+            init_object: Optional initial data to populate the instance.
+                Can be a ``dict`` or a JSON string. Keys are matched to
+                field names after snake_case conversion.
+            table_name: Optional explicit table name. Overrides automatic
+                derivation from the class name.
+
+        Example::
+
+            user = User({"name": "Alice", "email": "alice@example.com"})
+            empty_user = User()
+        """
         from tina4_python import root_path
         # save the initial declarations
         counter = 0
@@ -118,10 +285,17 @@ class ORM:
             self.__table_exists = False
 
     def __populate_orm(self, init_object):
-        """
-        Populates an ORM object from an input object, also transforms camel case objects to snake case ...
-        :param init_object:
-        :return:
+        """Populate field values from a dict or JSON string.
+
+        First resets all fields to ``None``, then iterates over the
+        key/value pairs in ``init_object``, converts each key to
+        snake_case, and assigns matching field values. This allows
+        incoming camelCase JSON payloads to map seamlessly to
+        snake_case Python field names.
+
+        Args:
+            init_object: A ``dict`` or JSON string whose keys correspond
+                (after snake_case conversion) to the model's field names.
         """
         for field, field_definition in self.__field_definitions__.items():
             if hasattr(self, field):
@@ -147,6 +321,15 @@ class ORM:
                     print("Could not set value for", snake_case_name, str(e))
 
     def __get_primary_keys(self):
+        """Return a list of field names that are marked as primary keys.
+
+        Iterates over ``__field_definitions__`` and collects the names of
+        all fields whose ``primary_key`` attribute is ``True``.
+
+        Returns:
+            list[str]: Field names that form the composite (or single)
+                primary key for this model's table.
+        """
         primary_keys = []
         for key, value in self.__field_definitions__.items():
             if value.primary_key:
@@ -155,19 +338,53 @@ class ORM:
         return primary_keys
 
     def to_json(self):
-        """
-        Returns a json string
-        :return:
+        """Serialize the ORM instance to a JSON string.
+
+        Converts all field values to a dict via ``to_dict()`` and then
+        serializes the dict to JSON using ``json_serialize`` as the
+        fallback serializer for non-standard types (dates, bytes).
+
+        Returns:
+            str: A JSON-encoded string representation of this instance.
+
+        Example::
+
+            user = User({"name": "Alice"})
+            print(user.to_json())  # '{"id": 1, "name": "Alice"}'
         """
         return json.dumps(self.to_dict(), default=json_serialize)
 
     def __is_class(self, class_name):
+        """Check whether the given value is a user-defined class instance.
+
+        Uses a heuristic: the string representation of the type starts
+        with ``"<class"`` and the object has a ``__weakref__`` attribute.
+        This distinguishes field descriptor objects from plain scalar
+        values.
+
+        Args:
+            class_name: The value to test.
+
+        Returns:
+            bool: ``True`` if the value appears to be a class instance.
+        """
         return str(type(class_name)).startswith("<class") and hasattr(class_name, '__weakref__')
 
     def to_dict(self):
-        """
-        Returns a Python dictionary
-        :return:
+        """Convert the ORM instance to a plain Python dictionary.
+
+        Iterates over all defined fields and extracts their current values.
+        Auto-increment fields that have no value yet will be assigned the
+        next available ID from the database. ``IntegerField`` values are
+        cast to ``int``; all other values are cast to ``str``.
+
+        Returns:
+            dict: A mapping of field names to their current scalar values.
+
+        Example::
+
+            user = User({"name": "Alice"})
+            user.to_dict()  # {"id": 1, "name": "Alice"}
         """
         # print(inspect.currentframe().f_back.f_code.co_qualname)
         data = {}
@@ -201,6 +418,22 @@ class ORM:
         return self.to_json()
 
     def __create_table__(self, table_name, execute=False):
+        """Generate (and optionally execute) a CREATE TABLE SQL statement.
+
+        Builds DDL from the model's ``__field_definitions__``, including
+        column types and a composite primary key clause when applicable.
+
+        Args:
+            table_name: The name of the table to create.
+            execute: If ``True``, execute the SQL against the database
+                immediately. If ``False`` (default), return the SQL string
+                without executing.
+
+        Returns:
+            str or None or False: The SQL string when ``execute`` is
+                ``False``; ``None`` when the statement is executed
+                successfully; ``False`` if no database connection exists.
+        """
         if self.__dba__ is None:
             Debug.warning("Create Table", table_name, "database not assigned to ORM , use orm(dba)")
             return False
@@ -225,22 +458,41 @@ class ORM:
             return sql
 
     def create_table(self):
-        """
-        Creates the table for the ORM structure
-        :return:
+        """Create the database table for this model if it does not exist.
+
+        Executes the DDL generated by ``__create_table__`` against the
+        bound database connection. Column definitions and primary keys
+        are derived from the model's field descriptors.
+
+        Returns:
+            None or False: ``None`` on success; ``False`` if no database
+                connection is available.
         """
         return self.__create_table__(self.__table_name__, True)
 
     def __build_sql(self, column_names="*", join="", filter="", group_by="", having="", order_by=""):
-        """
-        Helper method to build the SQL query
-        :param column_names:
-        :param join:
-        :param filter:
-        :param group_by:
-        :param having:
-        :param order_by:
-        :return:
+        """Build a SELECT SQL query string from individual clauses.
+
+        Assembles a complete SQL statement targeting this model's table
+        (aliased as ``t``). All clause arguments are optional; omitted
+        clauses are simply left out of the generated SQL.
+
+        Args:
+            column_names: Columns to select. Accepts ``"*"``, a
+                comma-separated string, or a list of column expressions.
+            join: A raw SQL JOIN clause (e.g.,
+                ``"join orders o on o.user_id = t.id"``).
+            filter: A WHERE condition string (without the ``WHERE``
+                keyword).
+            group_by: GROUP BY columns as a comma-separated string or
+                list.
+            having: HAVING conditions as a comma-separated string or
+                list.
+            order_by: ORDER BY columns as a comma-separated string or
+                list.
+
+        Returns:
+            str: The assembled SQL query string.
         """
         if isinstance(column_names, str):
             if column_names in ("", "*"):
@@ -268,16 +520,31 @@ class ORM:
         return sql
 
     def fetch_one(self, column_names="*", filter="", params=None, join="", group_by="", having="", order_by=""):
-        """
-        Fetch one record from the database
-        :param column_names:
-        :param filter:
-        :param params:
-        :param join:
-        :param group_by:
-        :param having:
-        :param order_by:
-        :return:
+        """Fetch a single record from the database.
+
+        Builds a SELECT query via ``__build_sql`` and delegates to the
+        database adapter's ``fetch_one`` method. Useful when you expect
+        exactly one result (e.g., lookup by unique key).
+
+        Args:
+            column_names: Columns to select (``"*"``, comma string, or
+                list). Defaults to ``"*"``.
+            filter: WHERE clause (without the ``WHERE`` keyword).
+            params: List of bind-parameter values for placeholders (``?``)
+                in the filter.
+            join: Raw SQL JOIN clause.
+            group_by: GROUP BY columns.
+            having: HAVING conditions.
+            order_by: ORDER BY columns.
+
+        Returns:
+            dict or None: A single record as a dictionary, or ``None`` if
+                no matching row is found.
+
+        Example::
+
+            row = User().fetch_one(filter="email = ?",
+                                   params=["alice@example.com"])
         """
         if params is None:
             params = []
@@ -286,18 +553,36 @@ class ORM:
 
     def fetch(self, column_names="*", filter="", params=None, join="", group_by="", having="", order_by="", limit=10,
               skip=0):
-        """
-        Fetch multiple records from the database
-        :param column_names:
-        :param filter:
-        :param params:
-        :param join:
-        :param group_by:
-        :param having:
-        :param order_by:
-        :param limit:
-        :param skip:
-        :return:
+        """Fetch multiple records from the database with pagination.
+
+        Builds a SELECT query and delegates to the database adapter's
+        ``fetch`` method. Supports limit/offset pagination.
+
+        Args:
+            column_names: Columns to select (``"*"``, comma string, or
+                list). Defaults to ``"*"``.
+            filter: WHERE clause (without the ``WHERE`` keyword).
+            params: List of bind-parameter values for ``?`` placeholders.
+            join: Raw SQL JOIN clause.
+            group_by: GROUP BY columns.
+            having: HAVING conditions.
+            order_by: ORDER BY columns.
+            limit: Maximum number of rows to return. Defaults to ``10``.
+            skip: Number of rows to skip (offset). Defaults to ``0``.
+
+        Returns:
+            A database result object with helper methods such as
+            ``to_json()``, ``to_array()``, ``to_paginate()``, and
+            ``to_csv()``. Access rows via ``result.records``.
+
+        Example::
+
+            result = Product().fetch(
+                filter="price > ?", params=[100],
+                order_by="price desc", limit=20
+            )
+            for row in result.records:
+                print(row["name"])
         """
         if params is None:
             params = []
@@ -306,14 +591,62 @@ class ORM:
 
     def select(self, column_names="*", filter="", params=None, join="", group_by="", having="", order_by="", limit=10,
                skip=0):
+        """Alias for ``fetch()`` -- query multiple records with pagination.
+
+        Provided for convenience and readability. All arguments are
+        forwarded directly to ``fetch()``.
+
+        Args:
+            column_names: Columns to select. Defaults to ``"*"``.
+            filter: WHERE clause (without ``WHERE``).
+            params: Bind-parameter values for ``?`` placeholders.
+            join: Raw SQL JOIN clause.
+            group_by: GROUP BY columns.
+            having: HAVING conditions.
+            order_by: ORDER BY columns.
+            limit: Maximum rows to return. Defaults to ``10``.
+            skip: Row offset. Defaults to ``0``.
+
+        Returns:
+            A database result object (same as ``fetch()``).
+        """
         return self.fetch(column_names, filter, params, join, group_by, having, order_by, limit, skip)
 
     def load(self, query="", params=None):
-        """
-        Loads a single record into the object based on the primary key or query if query is set
-        :param query:
-        :param params:
-        :return:
+        """Load a single database record into this ORM instance.
+
+        When called without arguments the record is located using the
+        current values of the primary key field(s). When ``query`` is
+        provided it is used as a WHERE clause instead, allowing lookup
+        by arbitrary columns.
+
+        On success the instance's field values are replaced with the
+        data from the database row. ``JSONBField`` values are
+        automatically parsed from their stored string representation.
+
+        Args:
+            query: Optional WHERE clause (without the ``WHERE`` keyword).
+                If empty, the primary key values already set on the
+                instance are used to locate the row.
+            params: List of bind-parameter values for ``?`` placeholders
+                in ``query``.
+
+        Returns:
+            bool: ``True`` if a matching record was found and loaded;
+                ``False`` if no record was found, the table does not
+                exist, or the database is not initialized.
+
+        Example::
+
+            user = User()
+            user.id.value = 42
+            if user.load():
+                print(user.name.value)
+
+            # Or load by a custom query:
+            user = User()
+            if user.load("email = ?", ["alice@example.com"]):
+                print(user.name.value)
         """
         if params is None:
             params = []
@@ -362,9 +695,25 @@ class ORM:
             return False
 
     def save(self):
-        """
-        Saves the ORM object to the database
-        :return:
+        """Persist this ORM instance to the database (insert or update).
+
+        Determines whether a row with the current primary key(s) already
+        exists. If it does the row is updated; otherwise a new row is
+        inserted. After a successful write the transaction is committed
+        and ``load()`` is called to refresh the instance with any
+        database-generated values (e.g., auto-increment IDs, defaults).
+
+        ``JSONBField`` values are serialized before writing.
+
+        Returns:
+            bool: ``True`` on success; ``False`` if the table does not
+                exist or an error occurs during the operation.
+
+        Example::
+
+            user = User({"name": "Alice", "email": "alice@example.com"})
+            if user.save():
+                print("Saved with id", user.id.value)
         """
         if not self.__table_exists:
             Debug("ORM: Save Error - Table", self.__table_name__, "does not exist", TINA4_LOG_ERROR)
@@ -409,6 +758,35 @@ class ORM:
         return result
 
     def delete(self, query="", params=None):
+        """Delete one or more records from the database.
+
+        When called without arguments the row matching the current primary
+        key value(s) is deleted. When ``query`` is provided it is used as
+        a WHERE clause, allowing bulk or conditional deletes.
+
+        On success the transaction is committed; on failure it is rolled
+        back.
+
+        Args:
+            query: Optional WHERE clause (without the ``WHERE`` keyword).
+                If empty, the instance's primary key values are used.
+            params: List of bind-parameter values for ``?`` placeholders
+                in ``query``.
+
+        Returns:
+            bool: ``True`` if the delete succeeded and was committed;
+                ``False`` if the table does not exist or an error
+                occurred (transaction is rolled back).
+
+        Example::
+
+            user = User()
+            user.id.value = 42
+            user.delete()
+
+            # Or delete by a custom query:
+            User().delete("active = ?", [False])
+        """
         if params is None:
             params = []
         if not self.__table_exists:

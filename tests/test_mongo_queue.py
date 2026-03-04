@@ -1,10 +1,30 @@
 # test_mongo_queue.py
 import time
 import pytest
+
+pymongo = pytest.importorskip("pymongo", reason="pymongo not installed")
 from pymongo import MongoClient
 from tina4_python.Queue import Queue, Config, Message, Producer, Consumer
 
 MONGO_DB_NAME = "test_queue_db"
+
+
+def _mongo_available():
+    """Check if MongoDB is reachable."""
+    try:
+        client = MongoClient("mongodb://localhost:27017", serverSelectionTimeoutMS=1000)
+        client.server_info()
+        client.close()
+        return True
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _mongo_available(),
+    reason="MongoDB not running on localhost:27017"
+)
+
 
 def clear_mongo_channel(channel_name, prefix="test"):
     client = MongoClient("mongodb://localhost:27017")
@@ -12,6 +32,7 @@ def clear_mongo_channel(channel_name, prefix="test"):
     collection_name = f"{prefix}_{channel_name}"
     if collection_name in db.list_collection_names():
         db[collection_name].delete_many({})
+
 
 @pytest.fixture(scope="function")
 def mongo_config():

@@ -4,6 +4,25 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""Internationalization (i18n) support for Tina4.
+
+Uses Python's built-in ``gettext`` module to provide string
+translations. Translation files (``.mo`` / ``.po``) are stored in
+``tina4_python/translations/`` and selected via the
+``TINA4_LANGUAGE`` environment variable (default: ``en``).
+
+Supported languages are configured in the ``available_languages``
+list inside ``localize()``. A command-line argument can also override
+the language selection.
+
+Example::
+
+    import os
+    os.environ["TINA4_LANGUAGE"] = "fr"
+    from tina4_python.Localization import localize
+    _ = localize()
+    print(_("Hello"))  # → "Bonjour"
+"""
 import gettext
 import os
 import sys

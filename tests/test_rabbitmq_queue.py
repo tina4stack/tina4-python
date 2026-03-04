@@ -1,11 +1,33 @@
 # test_rabbitmq_queue.py
 import time
 import pytest
-import pika
+
+pika = pytest.importorskip("pika", reason="pika not installed")
 from tina4_python.Queue import Queue, Config, Message, Producer, Consumer
 
 RABBITMQ_HOST = "localhost"
 RABBITMQ_PORT = 5672
+
+
+def _rabbitmq_available():
+    """Check if RabbitMQ is reachable."""
+    try:
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT,
+                                      connection_attempts=1, retry_delay=0,
+                                      socket_timeout=1)
+        )
+        connection.close()
+        return True
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _rabbitmq_available(),
+    reason="RabbitMQ not running on localhost:5672"
+)
+
 
 def clear_rabbitmq_queue(queue_name):
     """Delete and recreate the queue to ensure it's empty"""

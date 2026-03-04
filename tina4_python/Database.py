@@ -4,6 +4,42 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""Multi-driver database abstraction layer for Tina4.
+
+This module provides the ``Database`` class — a unified interface for
+connecting to and querying relational databases. Driver selection is
+automatic based on the connection-string prefix:
+
+Supported drivers:
+    - ``sqlite`` — SQLite 3 (built-in, file-based)
+    - ``mysql`` — MySQL / MariaDB via ``mysql-connector-python``
+    - ``postgres`` — PostgreSQL via ``psycopg2``
+    - ``firebird`` — Firebird via ``firebirdsql``
+    - ``mssql`` — Microsoft SQL Server via ``pymssql``
+    - ``odbc`` — Generic ODBC via ``pyodbc``
+
+Key features:
+    - Connection-string parsing (``driver:host/port:schema``)
+    - Parameter-based queries with ``?`` placeholders
+    - Built-in pagination via ``fetch(sql, limit, skip)``
+    - Full-text search across specified columns
+    - CRUD helpers: ``insert``, ``update``, ``delete``
+    - Transaction support: ``begin``, ``commit``, ``rollback``
+    - Metadata introspection: ``get_database_tables``, ``get_table_info``
+    - Automatic JSON/Decimal/datetime serialisation in results
+
+Example::
+
+    from tina4_python.Database import Database
+
+    db = Database("sqlite:my_app.db")
+    result = db.fetch("select * from users", limit=10, skip=0)
+    for row in result:
+        print(row)
+"""
+
+__all__ = ["Database"]
+
 import base64
 import os
 import re
@@ -19,24 +55,24 @@ import datetime
 
 class Database:
 
-    def __init__(self, _connection_string, _username="", _password=""):
+    def __init__(self, connection_string, username="", password=""):
         """
         Initializes a database connection
-        :param _connection_string:
+        :param connection_string:
         """
         # split out the connection string
         # driver:host/port:schema/path
-        params = _connection_string.split(":", 1)
+        params = connection_string.split(":", 1)
 
         try:
-            if _connection_string is None:
-                _connection_string = os.environ.get("DATABASE_PATH", None)
-            if _username == "":
-                _username = os.environ.get("DATABASE_USERNAME", "")
-            if _password == "":
-                _password = os.environ.get("DATABASE_PASSWORD", "")
+            if connection_string is None:
+                connection_string = os.environ.get("DATABASE_PATH", None)
+            if username == "":
+                username = os.environ.get("DATABASE_USERNAME", "")
+            if password == "":
+                password = os.environ.get("DATABASE_PASSWORD", "")
 
-            if _connection_string is None:
+            if connection_string is None:
                 raise Exception("Database connection string is missing, try declaring DATABASE_PATH in the .env file.")
 
             self.database_module = importlib.import_module(params[0])
@@ -58,8 +94,8 @@ class Database:
 
         self.database_engine = params[0]
         self.database_path = params[1]
-        self.username = _username
-        self.password = _password
+        self.username = username
+        self.password = password
 
         if self.database_engine == SQLITE:
             self.dba = self.database_module.connect(self.database_path)

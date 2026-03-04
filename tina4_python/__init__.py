@@ -49,7 +49,7 @@ from tina4_python.ShellColors import ShellColors
 from tina4_python.Session import Session
 from tina4_python.HtmlElement import add_html_helpers
 from tina4_python import ShellColors
-from tina4_python.Constant import TINA4_LOG_INFO, TINA4_LOG_ALL
+from tina4_python.Constant import TINA4_LOG_INFO, TINA4_LOG_ALL, TINA4_LOG_DEBUG
 
 # Make HTML helper functions available globally (html(), div(), etc.)
 add_html_helpers(globals())
@@ -79,6 +79,10 @@ if not debug_level or debug_level in ("", "NONE", "NULL"):
     os.environ["TINA4_DEBUG_LEVEL"] = TINA4_LOG_INFO
 
 setup_logging()
+
+# Dev mode flag — used to enable live-reload and error overlay
+_dev_mode = debug_level in (TINA4_LOG_ALL, "ALL", TINA4_LOG_DEBUG, "DEBUG")
+
 Debug.info("Environment is", environment)
 
 try:
@@ -98,9 +102,8 @@ except Exception as e:
 
 print(ShellColors.cyan + "INFO: Setting debug mode:", debug_level, ShellColors.end)
 
-# Optional live-coding hot reload
-if importlib.util.find_spec("jurigged"):
-    import jurigged
+# Optional live-coding hot reload (imported lazily in dev mode only)
+_has_jurigged = importlib.util.find_spec("jurigged") is not None
 
 # Core paths
 library_path = os.path.dirname(os.path.realpath(__file__))
@@ -314,21 +317,24 @@ def compile_scss():
 compile_scss()
 
 
-class SassCompiler(PatternMatchingEventHandler):
-    """Live SASS watcher – recompiles on any .scss/.sass change."""
-
-    def on_modified(self, event: FileSystemEvent) -> None:
-        if not event.is_directory:
-            compile_scss()
-
-
-if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
-    observer = Observer()
-    event_handler = SassCompiler(patterns=["*.sass", "*.scss"])
-    observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
-    observer.start()
+# File watcher: DevReload (debug) or SCSS-only (production)
+if _dev_mode:
+    from tina4_python.DevReload import inject_dev_scripts, start_watcher, livereload_websocket_handler, get_error_overlay_assets
+    _dev_observer = start_watcher(root_path, compile_scss_fn=compile_scss)
 else:
-    Debug.warning("Missing scss folder")
+    class SassCompiler(PatternMatchingEventHandler):
+        """Live SASS watcher – recompiles on any .scss/.sass change."""
+        def on_modified(self, event: FileSystemEvent) -> None:
+            if not event.is_directory:
+                compile_scss()
+
+    if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
+        observer = Observer()
+        event_handler = SassCompiler(patterns=["*.sass", "*.scss"])
+        observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
+        observer.start()
+    else:
+        Debug.warning("Missing scss folder")
 
 
 def file_get_contents(file_path):
@@ -356,6 +362,13 @@ async def get_swagger(request, response):
 
 async def app(scope, receive, send):
     """ASGI entry point – compatible with Hypercorn (default), Uvicorn, Granian, etc."""
+    # DevReload WebSocket intercept (debug mode only)
+    if (_dev_mode
+        and scope.get('type') == 'websocket'
+        and scope.get('path', '') == '/__dev_reload'):
+        await livereload_websocket_handler(scope, receive, send)
+        return
+
     body = b""
     while True and scope['type'] == 'http' or scope['type'] == 'websocket':
         if scope['type'] != 'websocket':
@@ -428,6 +441,23 @@ async def app(scope, receive, send):
             tina4_response, tina4_headers = await webserver.get_response(webserver.method, scope=scope, reader=receive, writer=send,  asgi_response=True)
 
             if message["type"] != "websocket":
+                # Inject DevReload scripts into HTML responses (debug mode only)
+                if (_dev_mode
+                    and isinstance(tina4_response.content, str)
+                    and tina4_response.content_type
+                    and 'text/html' in tina4_response.content_type):
+                    tina4_response.content = inject_dev_scripts(tina4_response.content)
+                    # Also inject error overlay assets for 500 errors
+                    if tina4_response.http_code == 500:
+                        overlay = get_error_overlay_assets()
+                        closing = "</body>"
+                        lower = tina4_response.content.lower()
+                        idx = lower.rfind(closing)
+                        if idx != -1:
+                            tina4_response.content = tina4_response.content[:idx] + overlay + tina4_response.content[idx:]
+                        else:
+                            tina4_response.content += overlay
+
                 response_headers = []
                 for header in tina4_headers:
                     # ensure header is a str
@@ -559,20 +589,33 @@ def webserver(host_name, port, debug: bool = False):
             from hypercorn.asyncio import serve
             config = Config()
             config.bind = [host_name + ":" + str(port)]
-            if debug:
-                config.use_reloader = True  # Enables hot-reload like uvicorn --reload
+            if debug and _dev_mode:
+                if _has_jurigged:
+                    config.use_reloader = False  # jurigged handles hot-patching
+                    Debug.info("Hypercorn debug mode (jurigged handles hot-reload)")
+                else:
+                    config.use_reloader = True
+                    Debug.info("Hypercorn debug mode with auto-reload (install jurigged for faster reloads)")
                 config.log_level = "debug"
-                Debug.info("Hypercorn running in debug mode with auto-reload")
             asyncio.run(serve(app, config))
         except Exception as e:
             Debug.error("Not running Hypercorn webserver", str(e))
 
     Debug.info(Messages.MSG_SERVER_STOPPED)
 
-# Live coding hot-reload (jurigged)
-if importlib.util.find_spec("jurigged"):
-    Debug.debug("Jurigged enabled")
-    jurigged.watch(["./src/app", "./src/orm", "./src/routes", "./src/templates"])
+# Live coding hot-reload (jurigged) — only in dev mode
+if _dev_mode and _has_jurigged:
+    import jurigged
+    _watch_dirs = [
+        os.path.join(root_path, "src", d)
+        for d in ("app", "orm", "routes", "templates")
+        if os.path.isdir(os.path.join(root_path, "src", d))
+    ]
+    if _watch_dirs:
+        jurigged.watch(_watch_dirs)
+        Debug.debug(f"Jurigged enabled (watching {len(_watch_dirs)} directories)")
+    else:
+        Debug.debug("Jurigged available but no src/ subdirectories found to watch")
 
 # ──────────────────────────────────────────────────────────────
 # Smart Auto-Start: Only start server if user didn't define control functions

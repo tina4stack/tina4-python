@@ -4,6 +4,28 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""Automatic CRUD interface generator for Tina4 database results.
+
+The ``CRUD`` class turns any SQL result set into a searchable, paginated
+HTML + JSON interface with automatic RESTful route registration. It is
+the base class of ``DatabaseResult``, so every query result inherits
+these capabilities.
+
+Features:
+    - Zero-configuration table detection from SELECT queries
+    - Automatic route registration (GET, POST, DELETE) for a full CRUD UI
+    - Built-in server-side search and pagination
+    - Safe JSON serialisation (Decimal, datetime, bytes → base64)
+    - Per-table Twig template auto-copy for customisation
+    - Works with all supported database drivers
+
+Example::
+
+    result = db.fetch("select * from articles")
+    html = result.to_crud(request, {"primary_key": "id", "limit": 25})
+"""
+
+__all__ = ["CRUD"]
 
 import base64
 import datetime
@@ -345,7 +367,7 @@ class CRUD:
         except Exception as e:
             return "Error rendering CRUD: "+str(e)
 
-    def to_array(self, _filter=None, base64_encode = True):
+    def to_array(self, filter_fn=None, base64_encode = True):
         """
         Convert the internal records to a JSON-serializable list of dictionaries.
 
@@ -355,11 +377,11 @@ class CRUD:
           • bytes/memoryview → base64 encoded string
 
         Args:
-            _filter (callable, optional): Function applied to each record dict before returning.
+            filter_fn (callable, optional): Function applied to each record dict before returning.
 
         Returns:
             list[dict]: Serializable records.
-            :param _filter:
+            :param filter_fn:
             :param base64_encode: Override default base64 encoding
         """
         if self.error is not None:
@@ -379,7 +401,7 @@ class CRUD:
                             json_record[key] = base64.b64encode(record[key].tobytes()).decode('utf-8')
                         else:
                             json_record[key] = record[key].tobytes().decode("utf-8")
-                    elif isinstance(record[key], bytes) and base64_encode:
+                    elif isinstance(record[key], bytes):
                         if base64_encode:
                             json_record[key] = base64.b64encode(record[key]).decode('utf-8')
                         else:
@@ -387,8 +409,8 @@ class CRUD:
                     else:
                         json_record[key] = record[key]
 
-                if _filter is not None:
-                    json_record = _filter(json_record)
+                if filter_fn is not None:
+                    json_record = filter_fn(json_record)
 
                 json_records.append(json_record)
 
@@ -396,13 +418,13 @@ class CRUD:
         else:
             return []
 
-    def to_list(self, _filter=None, base64_encode = True):
+    def to_list(self, filter_fn=None, base64_encode = True):
         """Alias of to_array() for readability."""
-        return self.to_array(_filter, base64_encode=base64_encode)
+        return self.to_array(filter_fn, base64_encode=base64_encode)
 
-    def to_json(self, _filter=None, base64_encode = True):
+    def to_json(self, filter_fn=None, base64_encode = True):
         """Return records as a JSON encoded string."""
-        return json.dumps(self.to_array(_filter, base64_encode=base64_encode))
+        return json.dumps(self.to_array(filter_fn, base64_encode=base64_encode))
 
     def __iter__(self):
         """Allow iteration over records (yields results from to_array())."""

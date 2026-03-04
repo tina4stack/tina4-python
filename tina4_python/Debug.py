@@ -4,6 +4,30 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""Centralised logging and debug output for Tina4 Python.
+
+This module provides a dual-output logging system:
+
+- **Console handler** -- coloured output whose verbosity is controlled by the
+  ``TINA4_DEBUG_LEVEL`` environment variable (default ``All``).
+- **File handler** -- a rotating log file at ``./logs/debug.log`` that always
+  captures *all* levels (DEBUG and above), regardless of the console setting.
+
+The module exposes a single callable singleton, ``Debug``, which can be used
+either as a function or via its convenience static methods::
+
+    from tina4_python.Debug import Debug
+
+    Debug("Server started on port", port)       # default INFO level
+    Debug.error("Something went wrong:", err)   # ERROR level
+    Debug.warning("Disk space low")             # WARNING level
+    Debug.debug("Verbose trace info")           # DEBUG level
+
+Valid values for the ``TINA4_DEBUG_LEVEL`` env var (case-insensitive):
+``All``, ``Debug``, ``Info``, ``Warning``, ``Error``.
+"""
+
+__all__ = ["Debug", "setup_logging"]
 
 import os
 import sys
@@ -21,6 +45,17 @@ from tina4_python.ShellColors import ShellColors
 
 
 class ColoredFormatter(logging.Formatter):
+    """Custom logging formatter that applies ANSI colour codes to log output.
+
+    Each log level is mapped to a colour from ``ShellColors`` so that console
+    output is easy to scan visually.  Both the message body and the level name
+    are wrapped in the appropriate colour escape sequences.
+
+    Attributes:
+        LEVEL_COLORS (dict): Mapping of ``logging`` level constants to ANSI
+            colour escape strings.
+    """
+
     LEVEL_COLORS = {
         logging.DEBUG: ShellColors.green,
         logging.INFO: ShellColors.cyan,
@@ -30,6 +65,14 @@ class ColoredFormatter(logging.Formatter):
     }
 
     def format(self, record):
+        """Format a log record with ANSI colour codes.
+
+        Args:
+            record (logging.LogRecord): The log record to format.
+
+        Returns:
+            str: The formatted, colour-coded log string.
+        """
         color = self.LEVEL_COLORS.get(record.levelno, "")
         record.msg = f"{color}{record.msg}{ShellColors.end}"
         record.levelname = f"{color}{record.levelname}{ShellColors.end}"
@@ -37,6 +80,20 @@ class ColoredFormatter(logging.Formatter):
 
 
 def setup_logging():
+    """Initialise the ``TINA4`` logger with console and file handlers.
+
+    This function is idempotent -- if the logger already has handlers
+    attached it returns immediately, so it is safe to call multiple times.
+
+    Behaviour:
+
+    * Reads the ``TINA4_DEBUG_LEVEL`` environment variable (falling back to
+      ``All``) and maps it to a Python ``logging`` level for the console handler.
+    * Creates a ``StreamHandler`` on ``sys.stdout`` with coloured output via
+      ``ColoredFormatter``.
+    * Creates a ``RotatingFileHandler`` at ``./logs/debug.log`` (5 MB per file,
+      10 backups) that always logs at ``DEBUG`` level.
+    """
     logger = logging.getLogger("TINA4")
     if logger.handlers:
         return
@@ -81,10 +138,35 @@ def setup_logging():
 
 
 class _Debug:
+    """Callable singleton that wraps the ``TINA4`` logger.
+
+    Instances of this class act as both a function and an object with static
+    convenience methods (``info``, ``error``, ``warning``, ``debug``).
+    The module creates a single global instance named ``Debug`` (see bottom
+    of module) which is the public API.
+
+    Examples::
+
+        Debug("Processing request", request_id)            # INFO (default)
+        Debug("trace data", data, level=TINA4_LOG_DEBUG)   # explicit level
+        Debug.error("Unexpected failure:", exc)             # static shortcut
+    """
+
     def __init__(self):
+        """Create the debug wrapper around the ``TINA4`` logger."""
         self.logger = logging.getLogger("TINA4")
 
     def __call__(self, *messages, level=TINA4_LOG_INFO):
+        """Log one or more values at the given level.
+
+        All positional arguments are stringified and joined with spaces.
+
+        Args:
+            *messages: Values to log.  Each is converted to ``str`` and
+                concatenated with a single space separator.
+            level (str): One of the ``TINA4_LOG_*`` constants from
+                ``tina4_python.Constant``.  Defaults to ``TINA4_LOG_INFO``.
+        """
         msg = " ".join(str(m) for m in messages)
         mapping = {
             TINA4_LOG_ALL:     self.logger.debug,
@@ -98,18 +180,42 @@ class _Debug:
 
     @staticmethod
     def info(*m):
+        """Log a message at INFO level.
+
+        Args:
+            *m: Values to log.  Each is converted to ``str`` and joined
+                with a single space.
+        """
         logging.getLogger("TINA4").info(" ".join(str(x) for x in m))
 
     @staticmethod
     def error(*m):
+        """Log a message at ERROR level.
+
+        Args:
+            *m: Values to log.  Each is converted to ``str`` and joined
+                with a single space.
+        """
         logging.getLogger("TINA4").error(" ".join(str(x) for x in m))
 
     @staticmethod
     def warning(*m):
+        """Log a message at WARNING level.
+
+        Args:
+            *m: Values to log.  Each is converted to ``str`` and joined
+                with a single space.
+        """
         logging.getLogger("TINA4").warning(" ".join(str(x) for x in m))
 
     @staticmethod
     def debug(*m):
+        """Log a message at DEBUG level.
+
+        Args:
+            *m: Values to log.  Each is converted to ``str`` and joined
+                with a single space.
+        """
         logging.getLogger("TINA4").debug(" ".join(str(x) for x in m))
 
 

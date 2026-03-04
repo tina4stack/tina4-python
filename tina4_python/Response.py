@@ -4,6 +4,33 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""HTTP response builder for Tina4 route handlers.
+
+The ``Response`` class is passed as the ``response`` callback in every
+route handler. Calling it constructs a properly formatted HTTP response
+with the correct status code, content type, and headers.
+
+Supported response body types:
+    - ``str`` — returned as-is (HTML or plain text)
+    - ``dict`` / ``list`` — JSON-serialised automatically
+    - ``DatabaseResult`` — converted via ``to_paginate()``
+    - ``ORM`` instances — converted via ``to_dict()``
+    - Twig template strings — rendered through the template engine
+    - File paths — served as binary downloads with correct MIME type
+
+The module also provides ``add_header()`` for setting custom response
+headers from anywhere in a route handler via a coroutine-safe context
+variable.
+
+Example::
+
+    @get("/hello")
+    async def hello(request, response):
+        return response({"message": "Hello!"}, 200, "application/json")
+"""
+
+__all__ = ["Response"]
+
 import os
 import json
 import inspect

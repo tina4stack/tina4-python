@@ -15,16 +15,20 @@ from tina4_python.DatabaseTypes import *
 from tina4_python.Database import Database
 from tina4_python.Migration import migrate
 from tina4_python.ORM import ORM, IntegerField, StringField, DateTimeField, ForeignKeyField, TextField, orm, JSONBField, NumericField
-from tina4_python.Queue import Config, Queue, Producer, Consumer
 
 # Use SQLite for reliable, fast tests — works on every machine
 DBA_TYPE = "sqlite3:test.db"
 USERNAME = ""
 PASSWORD = ""
 
-def database_connect(driver=DBA_TYPE, username=USERNAME, password=PASSWORD):
-    print(f"Connecting to {driver}")
-    return Database(driver, username, password)
+
+@pytest.fixture(scope="module")
+def dba():
+    """Single shared database connection for all DB tests in this module."""
+    connection = Database(DBA_TYPE, USERNAME, PASSWORD)
+    yield connection
+    connection.close()
+
 
 def test_auth_payload():
     auth = tina4_auth.get_token({"id": 1, "username": "hello", "date_created": datetime.now()})
@@ -39,13 +43,10 @@ def test_route_match_variable():
     assert Router.match('/url/hello', '/url/{name}') is True, "Route with variable should match"
     assert Router.match('/url/123', '/url/{id}') is True, "Route with number should match"
 
-def test_database_sqlite():
-    dba = database_connect()
+def test_database_sqlite(dba):
     assert dba.database_engine == SQLITE
 
-def test_database_execute():
-    dba = database_connect()
-
+def test_database_execute(dba):
     # Clean up
     dba.execute("drop table if exists test_record")
     dba.commit()
@@ -74,11 +75,8 @@ def test_database_execute():
     )
     assert result.error is None
     dba.commit()
-    dba.close()
 
-def test_database_insert():
-    dba = database_connect()
-
+def test_database_insert(dba):
     # Clean
     dba.execute("delete from test_record where id >= 4")
     dba.commit()
@@ -99,12 +97,14 @@ def test_database_insert():
     result = dba.insert("nonexistent_table", {"id": 99})
     assert result is False
 
-    # Auto-increment
+    # Auto-increment (SQLite reuses gaps without AUTOINCREMENT keyword)
     result = dba.insert("test_record", {"name": "Auto1"})
-    assert result.records[0]["id"] > 6
+    first_auto_id = result.records[0]["id"]
+    assert first_auto_id > 0
 
     result = dba.insert("test_record", {"name": "Auto2"})
     last_id = result.records[0]["id"]
+    assert last_id > first_auto_id
 
     # NULL or empty id → auto-increment
     result = dba.insert("test_record", {"id": None, "name": "NullID"})
@@ -114,11 +114,8 @@ def test_database_insert():
     assert result.records[0]["id"] == last_id + 2
 
     dba.commit()
-    dba.close()
 
-def test_database_update():
-    dba = database_connect()
-
+def test_database_update(dba):
     # Update single
     result = dba.update("test_record", {"id": 1, "name": "Updated1"})
     assert result is True
@@ -132,11 +129,7 @@ def test_database_update():
     result = dba.update("test_record", {"id": 1, "nonexistent": "x"})
     assert result is False
 
-    dba.close()
-
-def test_database_fetch():
-    dba = database_connect()
-
+def test_database_fetch(dba):
     result = dba.fetch("select * from test_record order by id", limit=3)
     assert result.count >= 3
     assert isinstance(result.records, list)
@@ -156,11 +149,7 @@ def test_database_fetch():
     result = dba.fetch("select * from test_record", search_columns=["name"], search="Updated")
     assert result.count >= 2
 
-    dba.close()
-
-def test_database_bytes_insert():
-    dba = database_connect()
-
+def test_database_bytes_insert(dba):
     try:
         with open("./src/public/images/logo.png", "rb") as f:
             image = f.read()
@@ -172,11 +161,7 @@ def test_database_bytes_insert():
     except FileNotFoundError:
         print("logo.png not found — skipping image test")
 
-    dba.close()
-
-def test_database_delete():
-    dba = database_connect()
-
+def test_database_delete(dba):
     result = dba.delete("test_record", {"id": 1})
     assert result is True
     dba.commit()
@@ -188,17 +173,13 @@ def test_database_delete():
     result = dba.delete("nonexistent", {"id": 1})
     assert result is False
 
-    dba.close()
-
 def test_password():
     auth = Auth(tina4_python.root_path)
     password = auth.hash_password("123456")
     assert auth.check_password(password, "123456") is True
     assert auth.check_password(password, "wrong") is False
 
-def test_database_transactions():
-    dba = database_connect()
-
+def test_database_transactions(dba):
     dba.start_transaction()
     dba.insert("test_record", {"name": "TXN"})
     dba.rollback()
@@ -213,11 +194,7 @@ def test_database_transactions():
     result = dba.fetch("select * from test_record where name = 'TXN2'")
     assert result.count == 1
 
-    dba.close()
-
-def test_orm():
-    dba = database_connect()
-
+def test_orm(dba):
     # Clean slate
     for table in ["tina4_migration", "test_user_item", "test_user"]:
         dba.execute(f"drop table if exists {table}")
@@ -274,24 +251,3 @@ def test_orm():
     item.save()
 
     assert item.id == 1
-
-    dba.close()
-
-# Optional queue test — skip if no RabbitMQ
-@pytest.mark.skip
-def test_queues():
-    config = Config()
-    config.litequeue_database_name = "test_queue.db"
-    config.prefix = "test"
-
-    def callback(queue, err, data):
-        print("Received:", data)
-
-    queue = Queue(config)
-    producer = Producer(queue, callback)
-    producer.produce({"hello": "world"}, "test")
-
-    consumer = Consumer(queue, callback)
-    consumer.run(1, 1)  # run for 1 second
-
-    assert True  # if we get here without crash → good

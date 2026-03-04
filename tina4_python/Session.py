@@ -4,6 +4,35 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
+"""Session management with pluggable storage backends.
+
+This module provides a session system for the Tina4 web framework. Sessions
+store key-value data across HTTP requests, persisted as JWT tokens via a
+configurable backend.
+
+Available backends:
+    - ``SessionFileHandler``: Stores JWT tokens as files on disk (default).
+    - ``SessionRedisHandler``: Stores JWT tokens in a Redis server.
+    - ``SessionValkeyHandler``: Stores JWT tokens in a Valkey server.
+
+All backends extend ``SessionHandler``, which defines the shared interface
+(load, set, get, unset, close, save). The ``Session`` class is the public
+API that delegates to whichever backend was chosen at construction time.
+
+Typical usage inside a route handler::
+
+    session = request.session
+    session.set("user_id", 42)
+    uid = session.get("user_id")   # -> 42
+    session.unset("user_id")
+    session.close()                # destroy the session entirely
+"""
+
+__all__ = [
+    "Session", "SessionHandler", "SessionFileHandler",
+    "SessionRedisHandler", "SessionValkeyHandler",
+]
+
 import os
 from http import cookies
 import sys
@@ -14,56 +43,131 @@ from tina4_python.Debug import Debug
 from tina4_python import Constant
 
 class SessionHandler(object):
-    """
-    Base class for session handling.
+    """Abstract base class that defines the session backend interface.
+
+    Every session backend (file, Redis, Valkey) must subclass this and
+    override ``load``, ``close``, and ``save``.  The default ``set``,
+    ``get``, and ``unset`` implementations work with the in-memory
+    ``session.session_values`` dict and call ``session.save()`` to persist
+    changes; backends typically inherit them as-is.
     """
 
     @staticmethod
-    def load(session, _hash):
+    def load(session, session_hash):
+        """Load session data from the backend into ``session.session_values``.
+
+        Subclasses must override this method. The implementation should
+        read the persisted JWT for *session_hash*, validate it, and
+        populate the session via ``session.set(key, value)`` for each
+        stored key.
+
+        Args:
+            session: The ``Session`` instance to populate.
+            session_hash: Unique identifier (MD5 hex digest) for the session.
+        """
         pass
 
     @staticmethod
-    def set(session, _key, _value):
+    def set(session, key, value):
+        """Store a key-value pair in the session and persist it.
+
+        Args:
+            session: The ``Session`` instance.
+            key: The name of the session variable.
+            value: The value to store (must be JSON-serialisable).
+
+        Returns:
+            True on success, False if an error occurred.
+        """
         try:
-            session.session_values[_key] = _value
+            session.session_values[key] = value
             session.save()
             return True
         except Exception:
             return False
 
     @staticmethod
-    def unset(session, _key):
-        if _key in session.session_values:
-            del session.session_values[_key]
+    def unset(session, key):
+        """Remove a key from the session and persist the change.
+
+        Args:
+            session: The ``Session`` instance.
+            key: The name of the session variable to remove.
+
+        Returns:
+            True if the key existed and was removed, False otherwise.
+        """
+        if key in session.session_values:
+            del session.session_values[key]
             session.save()
             return True
         else:
             return False
 
     @staticmethod
-    def get(session, _key):
-        if _key in session.session_values:
-            return session.session_values[_key]
+    def get(session, key):
+        """Retrieve a value from the session by key.
+
+        Args:
+            session: The ``Session`` instance.
+            key: The name of the session variable to retrieve.
+
+        Returns:
+            The stored value, or None if the key does not exist.
+        """
+        if key in session.session_values:
+            return session.session_values[key]
         else:
             return None
 
     @staticmethod
     def close(session):
+        """Destroy the session, removing all persisted data.
+
+        Subclasses must override this to delete the session's stored JWT
+        (e.g. remove the file, clear the Redis/Valkey key).
+
+        Args:
+            session: The ``Session`` instance to destroy.
+
+        Returns:
+            True on success, False on failure.
+        """
         pass
 
     @staticmethod
     def save(session):
+        """Persist the current ``session.session_values`` to the backend.
+
+        Subclasses must override this. The implementation should encode
+        ``session.session_values`` as a JWT and write it to the backend
+        keyed by ``session.session_hash``.
+
+        Args:
+            session: The ``Session`` instance to persist.
+
+        Returns:
+            True on success, False on failure.
+        """
         pass
 
 class SessionFileHandler(SessionHandler):
+    """File-system session backend.
+
+    Each session is stored as a single file whose name is the session hash
+    and whose content is a signed JWT token. Files are written to the
+    directory specified by ``session.session_path`` (default ``sessions/``).
+
+    On ``load``, the file is read and the JWT is validated via
+    ``tina4_python.tina4_auth``. If the token has expired or the file is
+    missing, a fresh session is started automatically.
     """
-    Session File Handler
-    """
+
     @staticmethod
-    def load(session, _hash):
-        session.session_hash = _hash
-        if os.path.isfile(session.session_path + os.sep + _hash):
-            with open(session.session_path + os.sep + _hash, "r") as file:
+    def load(session, session_hash):
+        session.session_hash = session_hash
+        if os.path.isfile(session.session_path + os.sep + session_hash):
+            with open(session.session_path + os.sep + session_hash, "r") as file:
                 token = file.read()
                 file.close()
                 if tina4_python.tina4_auth.valid(token):
@@ -73,17 +177,19 @@ class SessionFileHandler(SessionHandler):
                             session.set(key, payload[key])
                 else:
                     Debug.debug("Session expired, starting a new one")
-                    session.start(_hash)
+                    session.start(session_hash)
         else:
             Debug.debug("Cannot load session, starting a new one")
-            session.start(_hash)
+            session.start(session_hash)
 
     @staticmethod
     def close(session):
         try:
-            if os.path.isfile(session.session_path + os.sep + session.session_hash):
-                os.remove(session.session_path + os.sep + session.session_hash)
-            return True
+            file_path = session.session_path + os.sep + session.session_hash
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+                return True
+            return False
         except Exception:
             return False
 
@@ -102,6 +208,19 @@ class SessionFileHandler(SessionHandler):
             return False
 
 class SessionRedisHandler(SessionHandler):
+    """Redis session backend.
+
+    Stores session JWT tokens in a Redis key-value store. The Redis
+    connection is configured via environment variables:
+
+    - ``TINA4_SESSION_REDIS_HOST`` (default ``localhost``)
+    - ``TINA4_SESSION_REDIS_PORT`` (default ``6379``)
+    - ``TINA4_SESSION_REDIS_SECRET`` (optional password)
+
+    Requires the ``redis`` Python package (``pip install redis``).
+    A new Redis connection is created for each operation via
+    ``__init_redis()``.
+    """
 
     @staticmethod
     def __init_redis():
@@ -122,21 +241,22 @@ class SessionRedisHandler(SessionHandler):
                                          decode_responses=True)
         return redis_instance
 
-    """
-    Session Redis Handler
-    """
     @staticmethod
-    def load(session, _hash):
-        """
-        Loads the redis session
-        :param session:
-        :param _hash:
-        :return:
+    def load(session, session_hash):
+        """Load session data from Redis.
+
+        Reads the JWT stored under *session_hash*, validates it, and
+        populates ``session.session_values``. If the token is expired or
+        missing, a new session is started.
+
+        Args:
+            session: The ``Session`` instance to populate.
+            session_hash: The Redis key identifying this session.
         """
         try:
-            session.session_hash = _hash
+            session.session_hash = session_hash
             r = SessionRedisHandler.__init_redis()
-            token = r.get(_hash)
+            token = r.get(session_hash)
             if tina4_python.tina4_auth.valid(token):
                 payload = tina4_python.tina4_auth.get_payload(token)
                 for key in payload:
@@ -144,18 +264,21 @@ class SessionRedisHandler(SessionHandler):
                         session.set(key, payload[key])
             else:
                 Debug.warning("Session expired, starting a new one")
-                _hash = None
-                session.start(_hash)
+                session_hash = None
+                session.start(session_hash)
         except Exception as e:
             Debug.error("Redis not available, sessions will fail", e)
 
 
     @staticmethod
     def close(session):
-        """
-        Closes the redis session
-        :param session:
-        :return:
+        """Destroy the session by clearing its Redis key.
+
+        Args:
+            session: The ``Session`` instance to destroy.
+
+        Returns:
+            True on success, False on failure.
         """
         r = SessionRedisHandler.__init_redis()
         try:
@@ -166,10 +289,13 @@ class SessionRedisHandler(SessionHandler):
 
     @staticmethod
     def save(session):
-        """
-        Saves the redis session
-        :param session:
-        :return:
+        """Persist session data to Redis as a signed JWT.
+
+        Args:
+            session: The ``Session`` instance whose values are persisted.
+
+        Returns:
+            True on success, False on failure.
         """
         r = SessionRedisHandler.__init_redis()
         try:
@@ -181,6 +307,20 @@ class SessionRedisHandler(SessionHandler):
             return False
 
 class SessionValkeyHandler(SessionHandler):
+    """Valkey session backend.
+
+    Stores session JWT tokens in a Valkey key-value store (a Redis-compatible
+    server). The connection is configured via environment variables:
+
+    - ``TINA4_SESSION_VALKEY_HOST`` (default ``localhost``)
+    - ``TINA4_SESSION_VALKEY_PORT`` (default ``6379``)
+    - ``TINA4_SESSION_VALKEY_SECRET`` (optional password)
+    - ``TINA4_SESSION_VALKEY_USER`` (default ``default``)
+    - ``TINA4_SESSION_VALKEY_SSL`` (set to ``True`` to enable TLS)
+
+    Requires the ``valkey`` Python package (``pip install valkey``).
+    A new connection is created for each operation via ``__init_valkey()``.
+    """
 
     @staticmethod
     def __init_valkey():
@@ -206,21 +346,22 @@ class SessionValkeyHandler(SessionHandler):
 
         return valkey_instance
 
-    """
-    Session Valkey Handler
-    """
     @staticmethod
-    def load(session, _hash):
-        """
-        Loads the Valkey session
-        :param session:
-        :param _hash:
-        :return:
+    def load(session, session_hash):
+        """Load session data from Valkey.
+
+        Reads the JWT stored under *session_hash*, validates it, and
+        populates ``session.session_values``. If the token is expired or
+        missing, a new session is started.
+
+        Args:
+            session: The ``Session`` instance to populate.
+            session_hash: The Valkey key identifying this session.
         """
         try:
-            session.session_hash = _hash
+            session.session_hash = session_hash
             r = SessionValkeyHandler.__init_valkey()
-            token = r.get(_hash)
+            token = r.get(session_hash)
             if tina4_python.tina4_auth.valid(token):
                 payload = tina4_python.tina4_auth.get_payload(token)
                 for key in payload:
@@ -228,17 +369,20 @@ class SessionValkeyHandler(SessionHandler):
                         session.set(key, payload[key])
             else:
                 Debug.error("Session expired, starting a new one")
-                session.start(_hash)
+                session.start(session_hash)
         except Exception as e:
             Debug.error("Valkey not available, sessions will fail", str(e))
 
 
     @staticmethod
     def close(session):
-        """
-        Closes the Valkey session
-        :param session:
-        :return:
+        """Destroy the session by clearing its Valkey key.
+
+        Args:
+            session: The ``Session`` instance to destroy.
+
+        Returns:
+            True on success, False on failure.
         """
         r = SessionValkeyHandler.__init_valkey()
         try:
@@ -249,10 +393,13 @@ class SessionValkeyHandler(SessionHandler):
 
     @staticmethod
     def save(session):
-        """
-        Saves the Valkey session
-        :param session:
-        :return:
+        """Persist session data to Valkey as a signed JWT.
+
+        Args:
+            session: The ``Session`` instance whose values are persisted.
+
+        Returns:
+            True on success, False on failure.
         """
         r = SessionValkeyHandler.__init_valkey()
         try:
@@ -264,83 +411,156 @@ class SessionValkeyHandler(SessionHandler):
             return False
 
 class Session:
+    """Public API for session management in Tina4.
 
-    def __init__(self, _default_name="PY_SESS", _default_path="sessions", _default_handler="SessionFileHandler"):
-        self.session_name = _default_name
+    A ``Session`` holds an in-memory dict of key-value pairs
+    (``session_values``) that are persisted to a pluggable backend as a
+    signed JWT token.  The backend is selected at construction time via the
+    *default_handler* parameter.
+
+    Attributes:
+        session_name: Cookie name used to track the session ID (default
+            ``PY_SESS``).
+        cookie: A ``http.cookies.SimpleCookie`` instance for the session
+            cookie.
+        session_path: Directory path used by ``SessionFileHandler`` to
+            store session files.
+        session_values: Dict of the current session's key-value data.
+        session_hash: The unique identifier (MD5 hex digest) for this
+            session, used as the storage key / filename.
+        default_handler: The ``SessionHandler`` subclass that performs
+            persistence operations.
+    """
+
+    def __init__(self, default_name="PY_SESS", default_path="sessions", default_handler="SessionFileHandler"):
+        """Initialise a new Session instance.
+
+        Args:
+            default_name: The cookie name used to identify the session
+                (default ``PY_SESS``).
+            default_path: File-system directory where ``SessionFileHandler``
+                stores session files (default ``sessions``).
+            default_handler: Name of the backend class to use. One of
+                ``"SessionFileHandler"`` (default),
+                ``"SessionRedisHandler"``, or
+                ``"SessionValkeyHandler"``.
+        """
+        self.session_name = default_name
         self.cookie = cookies.SimpleCookie()
-        self.session_path = _default_path
+        self.session_path = default_path
         self.session_values = {}
         self.session_hash = ""
-        _handlers = {
+        handlers = {
             "SessionFileHandler": SessionFileHandler,
             "SessionRedisHandler": SessionRedisHandler,
             "SessionValkeyHandler": SessionValkeyHandler,
         }
-        self.default_handler = _handlers.get(_default_handler, SessionFileHandler)
+        self.default_handler = handlers.get(default_handler, SessionFileHandler)
 
-    def start(self, _hash=None):
-        # create a file for the session?
-        # set the cookie for the session
+    def start(self, session_hash=None):
+        """Create or reinitialise a session and persist it.
+
+        Generates a signed JWT from the current ``session_values``,
+        derives a session hash (MD5 of the JWT) if one is not provided,
+        and saves the session to the backend.
+
+        Args:
+            session_hash: An existing session identifier to reuse. If
+                None, a new hash is generated from the JWT token.
+
+        Returns:
+            The session hash string identifying this session.
+        """
         token = tina4_python.tina4_auth.get_token(payload_data=self.session_values)
-        if _hash is None:
+        if session_hash is None:
             file_hash = hashlib.md5(token.encode()).hexdigest()
         else:
-            file_hash = _hash
+            file_hash = session_hash
         self.session_hash = file_hash
         self.save()
 
         return file_hash
 
-    def load(self, _hash):
-        """
-        Loads a session based on the hash
-        :param _hash:
-        :return:
-        """
-        self.default_handler.load(self, _hash)
+    def load(self, session_hash):
+        """Load an existing session from the backend.
 
-    def set(self, _key, _value):
+        Delegates to the configured backend handler to read the persisted
+        JWT, validate it, and populate ``session_values``.
+
+        Args:
+            session_hash: The unique session identifier to load.
         """
-        Sets a session key value
-        :param _key:
-        :param _value:
-        :return:
+        self.default_handler.load(self, session_hash)
+
+    def set(self, key, value):
+        """Store a key-value pair in the session.
+
+        The value is saved in memory and immediately persisted to the
+        backend.
+
+        Args:
+            key: The session variable name.
+            value: The value to store (must be JSON-serialisable).
+
+        Returns:
+            True on success, False on failure.
         """
-        return self.default_handler.set(self, _key, _value)
+        return self.default_handler.set(self, key, value)
 
 
-    def unset(self, _key):
-        """
-        Unsets the session key
-        :param _key:
-        :return:
-        """
-        return self.default_handler.unset(self, _key)
+    def unset(self, key):
+        """Remove a key from the session.
 
-    def get(self, _key):
+        Args:
+            key: The session variable name to remove.
+
+        Returns:
+            True if the key existed and was removed, False otherwise.
         """
-        Returns false if session cannot be retrieved
-        :param _key:
-        :return:
+        return self.default_handler.unset(self, key)
+
+    def get(self, key):
+        """Retrieve a session value by key.
+
+        Args:
+            key: The session variable name to look up.
+
+        Returns:
+            The stored value, or None if the key does not exist.
         """
-        return self.default_handler.get(self, _key)
+        return self.default_handler.get(self, key)
 
     def close(self):
-        """
-        Close the session and remove the file or record
-        :return:
+        """Destroy the session, removing all persisted data.
+
+        After calling this, the session hash and stored JWT are deleted
+        from the backend.
+
+        Returns:
+            True on success, False on failure.
         """
         return self.default_handler.close(self)
 
     def save(self):
-        """
-        Saves the session information
-        :return:
+        """Persist the current session data to the backend.
+
+        Encodes ``session_values`` as a signed JWT and writes it to the
+        configured backend.
+
+        Returns:
+            True on success, False on failure.
         """
         return self.default_handler.save(self)
 
     def __iter__(self):
+        """Iterate over session key-value pairs.
+
+        Yields all entries in ``session_values`` except the internal
+        ``expires`` key used by the JWT layer.
+
+        Yields:
+            Tuples of ``(key, value)`` for each session variable.
+        """
         for key, value in self.session_values.items():
             if key != "expires":
                 yield key, value
-
