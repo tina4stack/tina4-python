@@ -44,6 +44,9 @@ from tina4_python.Debug import Debug
 _clients: set = set()
 _clients_lock = threading.Lock()
 
+# Reference to the asyncio event loop (set when the first WebSocket connects)
+_event_loop = None
+
 # Debounce timer
 _debounce_timer = None
 _debounce_lock = threading.Lock()
@@ -52,15 +55,22 @@ _debounce_lock = threading.Lock()
 def _notify_clients(change_type: str):
     """Send a change notification to all connected browser clients.
 
+    Called from a watchdog thread, so we must use ``call_soon_threadsafe``
+    to schedule the ``put_nowait`` on the asyncio event loop.
+
     Args:
         change_type: Either ``"reload"`` (full page) or ``"css-reload"``
             (stylesheet-only refresh).
     """
     msg = json.dumps({"type": change_type})
     with _clients_lock:
-        for queue in _clients:
+        loop = _event_loop
+        for queue in list(_clients):
             try:
-                queue.put_nowait(msg)
+                if loop is not None and loop.is_running():
+                    loop.call_soon_threadsafe(queue.put_nowait, msg)
+                else:
+                    queue.put_nowait(msg)
             except Exception:
                 pass
 
@@ -141,8 +151,13 @@ async def livereload_websocket_handler(scope, receive, send):
         receive: ASGI receive callable.
         send: ASGI send callable.
     """
+    global _event_loop
+
     # Accept the WebSocket handshake
     await send({"type": "websocket.accept"})
+
+    # Capture the running event loop so watchdog threads can schedule on it
+    _event_loop = asyncio.get_running_loop()
 
     queue = asyncio.Queue()
     with _clients_lock:
