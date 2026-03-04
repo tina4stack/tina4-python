@@ -603,12 +603,7 @@ def webserver(host_name, port, debug: bool = False):
             config = Config()
             config.bind = [host_name + ":" + str(port)]
             if debug and _dev_mode:
-                if _has_jurigged:
-                    config.use_reloader = False  # jurigged handles hot-patching
-                    Debug.info("Hypercorn debug mode (jurigged handles hot-reload)")
-                else:
-                    config.use_reloader = True
-                    Debug.info("Hypercorn debug mode with auto-reload (install jurigged for faster reloads)")
+                config.use_reloader = False  # DevReload handles file watching
                 config.log_level = "debug"
             if _dev_mode:
                 import signal
