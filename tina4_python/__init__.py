@@ -610,7 +610,23 @@ def webserver(host_name, port, debug: bool = False):
                     config.use_reloader = True
                     Debug.info("Hypercorn debug mode with auto-reload (install jurigged for faster reloads)")
                 config.log_level = "debug"
-            asyncio.run(serve(app, config))
+            if _dev_mode:
+                import signal
+                from tina4_python.DevReload import set_shutdown_event, trigger_shutdown
+
+                async def _serve_dev():
+                    shutdown_event = asyncio.Event()
+                    set_shutdown_event(shutdown_event)
+
+                    loop = asyncio.get_running_loop()
+                    loop.add_signal_handler(signal.SIGINT, trigger_shutdown)
+                    loop.add_signal_handler(signal.SIGTERM, trigger_shutdown)
+
+                    await serve(app, config, shutdown_trigger=shutdown_event.wait)
+
+                asyncio.run(_serve_dev())
+            else:
+                asyncio.run(serve(app, config))
         except KeyboardInterrupt:
             pass
         except Exception as e:
