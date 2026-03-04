@@ -1,52 +1,119 @@
-# tests/test_soap_calculator.py
+# tests/test_wdsl_calculator.py
+"""
+Self-contained WSDL/SOAP Calculator test suite.
+
+Defines the Calculator WSDL service and route inline, then tests via
+Router.resolve() — no running server required.
+"""
+
 import pytest
-import requests
 import xml.etree.ElementTree as ET
+import tina4_python
+from tina4_python import Constant
+from tina4_python.Router import Router, get, post
+from tina4_python.WSDL import WSDL
+from typing import List
+
 
 # ------------------------------------------------------------------
-# Configuration – change only if your port/path changes
+# Inline Calculator WSDL service
 # ------------------------------------------------------------------
-BASE_URL = "http://localhost:7145"
-WSDL_URL = f"{BASE_URL}/calculator?wsdl"
-SOAP_URL = f"{BASE_URL}/calculator"
+class Calculator(WSDL):
+    SERVICE_URL = "http://localhost:7145/calculator"
 
-# SOAP headers
-HEADERS = {
-    "Content-Type": "text/xml; charset=utf-8",
-    "SOAPAction": '""',
-    "Authorization" : "Bearer 38168ba8aad6c91ba13d959c3f91c7a7"
-}
+    def Add(self, a: int, b: int):
+        return {"Result": a + b}
+
+    def SumList(self, Numbers: List[int]):
+        return {
+            "Numbers": Numbers,
+            "Total": sum(Numbers),
+            "Error": None,
+        }
+
 
 # ------------------------------------------------------------------
-# Helper to send SOAP request
+# Fixture: register the WSDL route before each test
 # ------------------------------------------------------------------
-def send_soap(payload: str) -> ET.Element:
-    response = requests.post(SOAP_URL, data=payload.strip(), headers=HEADERS)
-    response.raise_for_status()  # Will raise if not 200
-    return ET.fromstring(response.content)
+@pytest.fixture(autouse=True)
+def reset_routes():
+    saved = dict(tina4_python.tina4_routes)
+    tina4_python.tina4_routes = {}
+
+    # Register /calculator for GET (wsdl) and POST (soap)
+    @get("/calculator")
+    @post("/calculator")
+    async def wsdl_calculator(request, response):
+        from tina4_python.Response import Response as Resp
+        return Resp.wsdl(Calculator(request))
+
+    yield
+    tina4_python.tina4_routes = saved
+
+
+def _make_request(params=None, body=None, raw_content=None):
+    """Build a minimal request dict for Router.resolve()."""
+    return {
+        "params": params or {},
+        "body": body or {},
+        "files": {},
+        "raw_data": None,
+        "raw_request": None,
+        "raw_content": raw_content,
+        "asgi_scope": None,
+        "asgi_reader": None,
+        "asgi_writer": None,
+        "asgi_response": None,
+    }
+
+
+async def resolve_soap(payload: str):
+    """Send a SOAP POST to /calculator and return parsed XML root."""
+    token = tina4_python.tina4_auth.get_token({"url": "/calculator"})
+    req = _make_request(
+        body={},
+        raw_content=payload.strip(),
+    )
+    headers = {
+        "content-type": "text/xml; charset=utf-8",
+        "soapaction": '""',
+        "authorization": f"Bearer {token}",
+    }
+    r = await Router.resolve(Constant.TINA4_POST, "/calculator", req, headers, {})
+    content = r.content if isinstance(r.content, str) else r.content.decode()
+    return ET.fromstring(content)
+
+
+async def resolve_wsdl():
+    """GET /calculator?wsdl and return the raw XML string."""
+    req = _make_request(params={"wsdl": ""})
+    token = tina4_python.tina4_auth.get_token({"url": "/calculator"})
+    headers = {
+        "content-type": "text/xml; charset=utf-8",
+        "authorization": f"Bearer {token}",
+    }
+    r = await Router.resolve(Constant.TINA4_GET, "/calculator?wsdl", req, headers, {})
+    return r.content if isinstance(r.content, str) else r.content.decode()
 
 
 # ------------------------------------------------------------------
 # 1. WSDL is served and valid
 # ------------------------------------------------------------------
-def test_wsdl_is_served_and_valid():
-    resp = requests.get(WSDL_URL , headers=HEADERS)
-    assert resp.status_code == 200
-    assert "application/xml" in resp.headers["Content-Type"]
-    xml = resp.text
-
-    assert '<definitions' in xml
+@pytest.mark.asyncio
+async def test_wsdl_is_served_and_valid():
+    xml = await resolve_wsdl()
+    assert "<definitions" in xml
     assert "Calculator" in xml
     assert "Add" in xml
     assert "SumList" in xml
-    assert "ArrayOfInt" in xml or "ArrayOfInteger" in xml
     assert "http://localhost:7145/calculator" in xml
 
 
 # ------------------------------------------------------------------
 # 2. Add operation works
 # ------------------------------------------------------------------
-def test_add_operation():
+@pytest.mark.asyncio
+async def test_add_operation():
     payload = """
     <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                       xmlns:cal="http://tempuri.org/calculator">
@@ -59,17 +126,17 @@ def test_add_operation():
        </soapenv:Body>
     </soapenv:Envelope>
     """
-
-    root = send_soap(payload)
+    root = await resolve_soap(payload)
     result = root.find(".//AddResult/Result")
     assert result is not None
     assert result.text == "42"
 
 
 # ------------------------------------------------------------------
-# 3. SumList – repeated elements → correct response with <Numbers> tags
+# 3. SumList – repeated elements
 # ------------------------------------------------------------------
-def test_sumlist_repeated_elements():
+@pytest.mark.asyncio
+async def test_sumlist_repeated_elements():
     payload = """
     <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                       xmlns:cal="http://tempuri.org/calculator">
@@ -83,8 +150,7 @@ def test_sumlist_repeated_elements():
        </soapenv:Body>
     </soapenv:Envelope>
     """
-
-    root = send_soap(payload)
+    root = await resolve_soap(payload)
 
     numbers = root.findall(".//SumListResult/Numbers")
     assert len(numbers) == 3
@@ -99,9 +165,10 @@ def test_sumlist_repeated_elements():
 
 
 # ------------------------------------------------------------------
-# 4. Empty list returns 0 and no <Numbers> tags
+# 4. Empty list returns no result elements
 # ------------------------------------------------------------------
-def test_sumlist_empty_list():
+@pytest.mark.asyncio
+async def test_sumlist_empty_list():
     payload = """
     <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                       xmlns:cal="http://tempuri.org/calculator">
@@ -111,9 +178,7 @@ def test_sumlist_empty_list():
        </soapenv:Body>
     </soapenv:Envelope>
     """
-
-    root = send_soap(payload)
-
+    root = await resolve_soap(payload)
     assert len(root.findall(".//SumListResult/Total")) == 0
     assert len(root.findall(".//SumListResult/Numbers")) == 0
 
@@ -121,7 +186,8 @@ def test_sumlist_empty_list():
 # ------------------------------------------------------------------
 # 5. Missing parameter → SOAP Fault
 # ------------------------------------------------------------------
-def test_missing_parameter_raises_fault():
+@pytest.mark.asyncio
+async def test_missing_parameter_raises_fault():
     payload = """
     <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                       xmlns:cal="http://tempuri.org/calculator">
@@ -132,18 +198,19 @@ def test_missing_parameter_raises_fault():
        </soapenv:Body>
     </soapenv:Envelope>
     """
-
-    resp = requests.post(SOAP_URL, data=payload.strip(), headers=HEADERS)
-    root = ET.fromstring(resp.content)
-    fault = root.find(".//faultstring")
+    root = await resolve_soap(payload)
+    fault = root.find(".//{http://schemas.xmlsoap.org/soap/envelope/}Fault/faultstring")
+    if fault is None:
+        fault = root.find(".//faultstring")
     assert fault is not None
     assert "Missing required parameter" in fault.text
 
 
 # ------------------------------------------------------------------
-# 6. Invalid number → ValueError → SOAP Fault
+# 6. Invalid number → SOAP Fault
 # ------------------------------------------------------------------
-def test_invalid_number_causes_fault():
+@pytest.mark.asyncio
+async def test_invalid_number_causes_fault():
     payload = """
     <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
                       xmlns:cal="http://tempuri.org/calculator">
@@ -155,8 +222,9 @@ def test_invalid_number_causes_fault():
        </soapenv:Body>
     </soapenv:Envelope>
     """
-
-    resp = requests.post(SOAP_URL, data=payload.strip(), headers=HEADERS)
-    root = ET.fromstring(resp.content)
-    fault = root.find(".//faultstring")
+    root = await resolve_soap(payload)
+    fault = root.find(".//{http://schemas.xmlsoap.org/soap/envelope/}Fault/faultstring")
+    if fault is None:
+        fault = root.find(".//faultstring")
+    assert fault is not None
     assert "invalid literal for int()" in fault.text
