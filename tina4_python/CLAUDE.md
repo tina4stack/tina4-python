@@ -235,6 +235,9 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 | WebSockets | `Websocket` from `tina4_python.Websocket` |
 | SCSS compilation | Drop `.scss` in `src/scss/` — auto-compiled |
 | Static file serving | Put files in `src/public/` — auto-served |
+| Translations / i18n | `localize()` from `tina4_python.Localization` |
+| HTML generation in code | `HTMLElement` from `tina4_python.HtmlElement` |
+| Inline testing | `@tests`, `assert_equal`, `assert_raises` from `tina4_python.Testing` |
 
 **Bad — writing a custom queue:**
 ```python
@@ -946,6 +949,72 @@ class SecureService(WSDL):
         return result
 ```
 
+## Localization (i18n)
+
+Tina4 supports translations via Python's `gettext` module. Translation files live in `tina4_python/translations/`.
+
+Set the language in `.env`:
+```bash
+TINA4_LANGUAGE=en   # Supported: en, fr, af
+```
+
+Use in code:
+```python
+from tina4_python.Localization import localize
+
+_ = localize()
+print(_("Hello"))  # Returns translated string based on TINA4_LANGUAGE
+```
+
+## HTML Element Builder
+
+Build HTML programmatically without string concatenation:
+
+```python
+from tina4_python.HtmlElement import HTMLElement, add_html_helpers
+
+# Direct usage
+el = HTMLElement("div", {"class": "card"}, ["Hello"])
+print(el)  # <div class="card">Hello</div>
+
+# Builder pattern
+el = HTMLElement("div")(HTMLElement("p")("Text"))
+
+# Helper functions — injects _div(), _p(), _a(), _span(), etc.
+add_html_helpers(globals())
+html = _div({"class": "card"}, _p("Hello"))
+```
+
+Supports all HTML tags, void tags (`<br>`, `<img>`, `<input>`, etc.), and auto-escaping.
+
+## Inline Testing
+
+Tina4 includes a decorator-based test framework for inline test cases:
+
+```python
+from tina4_python.Testing import tests, assert_equal, assert_raises
+
+@tests(
+    assert_equal((5, 3), 8),
+    assert_raises(ValueError, (None,))
+)
+def add(a, b=None):
+    if b is None:
+        raise ValueError("b required")
+    return a + b
+```
+
+Run all decorated tests:
+```bash
+uv run tina4 test                     # Discovers @tests in src/**/*.py
+```
+
+Or programmatically:
+```python
+from tina4_python.Testing import run_all_tests
+run_all_tests(quiet=False, failfast=False)
+```
+
 ## Swagger / OpenAPI
 
 Routes with decorators appear at `/swagger`:
@@ -967,14 +1036,35 @@ async def create_user(request, response):
 Key `.env` settings:
 
 ```bash
-SECRET=your-jwt-secret          # JWT signing (default uses insecure placeholder)
-API_KEY=your-api-key            # Static bearer token for API auth
-TINA4_DATABASE_NAME=sqlite3:app.db
-TINA4_DEBUG_LEVEL=All           # All, Debug, Info, Warning, Error
-TINA4_LANGUAGE=en               # Language for framework messages
-TINA4_SESSION_HANDLER=SessionFileHandler  # SessionFileHandler, SessionRedisHandler, SessionValkeyHandler, SessionMongoHandler
-SWAGGER_TITLE=My API
+# Authentication
+SECRET=your-jwt-secret            # JWT signing (default uses insecure placeholder)
+API_KEY=your-api-key              # Static bearer token for API auth
+TINA4_TOKEN_LIMIT=2               # Token lifetime in minutes (default: 2)
+TINA4_TOKEN_EXPIRES_IN=2          # Alternative token expiry setting
+
+# Database
+DATABASE_NAME=sqlite3:app.db      # Connection string (driver:connection_details)
+DATABASE_PATH=sqlite3:app.db      # Alternative to DATABASE_NAME
+DATABASE_USERNAME=                 # DB username (for PostgreSQL, MySQL, etc.)
+DATABASE_PASSWORD=                 # DB password
+
+# Framework
+TINA4_DEBUG_LEVEL=All             # All, Debug, Info, Warning, Error
+TINA4_LANGUAGE=en                 # Language for framework messages (en, fr, af)
+TINA4_DEFAULT_WEBSERVER=FALSE     # Set to TRUE to use Tina4's built-in webserver instead of ASGI
 HOST_NAME=localhost:7145
+
+# Sessions
+TINA4_SESSION_HANDLER=SessionFileHandler  # SessionFileHandler, SessionRedisHandler, SessionValkeyHandler, SessionMongoHandler
+
+# Swagger/OpenAPI
+SWAGGER_TITLE=My API              # API title (default: "Tina4 Python API")
+SWAGGER_VERSION=1.0.0             # API version
+SWAGGER_DESCRIPTION=              # API description
+SWAGGER_CONTACT_TEAM=             # Contact name
+SWAGGER_CONTACT_URL=              # Contact URL
+SWAGGER_CONTACT_EMAIL=            # Contact email
+SWAGGER_DEV_URL=http://localhost:7145  # Dev server URL for Swagger
 ```
 
 ### Debug levels
