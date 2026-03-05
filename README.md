@@ -22,6 +22,7 @@ You've just built your first Tina4 app — zero configuration, zero classes, zer
 - Built-in Twig templating, migrations, WebSockets, authentication and middleware
 - Works with SQLite, PostgreSQL, MySQL, MariaDB, MSSQL, Firebird
 - Hot reload in development (`uv run python -m jurigged app.py`)
+- **Built-in MCP server** — any AI tool (Claude, Cursor, Copilot) can interact with your running app ([docs](MCP.md))
 
 ## Install
 
@@ -74,6 +75,27 @@ async def get_hello_template(request, response):
 
 ```
 
+## AI-Native: Built-in MCP Server
+
+Tina4 includes an embedded [MCP (Model Context Protocol)](MCP.md) server.  In debug mode it
+activates automatically — connect any MCP-compatible AI tool and it can read your logs,
+browse files, update templates, query the database, and even write code (with granular
+permission controls).
+
+```json
+{
+  "mcpServers": {
+    "my-app": {
+      "url": "http://localhost:7145/__mcp",
+      "headers": { "Authorization": "Bearer YOUR_API_KEY" }
+    }
+  }
+}
+```
+
+26 tools across 7 categories with per-category on/off toggles.
+See the full [MCP documentation](MCP.md) for details.
+
 ## Further Documentation
 
 https://tina4.com/
@@ -84,7 +106,7 @@ https://tina4.com/
 
 ## License
 
-MIT © 2007 – 2025 Tina4 Stack  
+MIT © 2007 – 2026 Tina4 Stack  
 https://opensource.org/licenses/MIT
 
 ## Testing 
