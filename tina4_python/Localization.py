@@ -29,7 +29,7 @@ import sys
 from tina4_python.Debug import Debug
 
 
-AVAILABLE_LANGUAGES = ['en', 'fr', 'af']
+AVAILABLE_LANGUAGES = ['en', 'fr', 'af', 'zh', 'ja', 'es']
 
 
 def localize():

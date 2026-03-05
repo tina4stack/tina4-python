@@ -108,6 +108,11 @@ class Template:
         Template.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
         Template.twig.add_extension('jinja2.ext.debug')
         Template.twig.add_extension('jinja2.ext.do')
+        # i18n translation function — available as _() global and | translate filter
+        from tina4_python.Localization import localize
+        _translate = localize()
+        Template.twig.globals['_'] = _translate
+        Template.twig.filters['translate'] = _translate
         Template.twig.globals['RANDOM'] = RANDOM
         Template.twig.globals['json'] = json
         Template.twig.globals['base64encode'] = Template.base64encode

@@ -98,7 +98,8 @@ class Response:
                 content_in = "False"
 
         if isinstance(content_in, ModuleType):
-            content_in = json.dumps({"error": "Cannot decode object of type " + str(type(content_in))})
+            from tina4_python import Messages
+            content_in = json.dumps({"error": Messages.MSG_CANNOT_DECODE.format(type=str(type(content_in)))})
             content_type = Constant.APPLICATION_JSON
 
         # Merge any headers added via add_header() before this Response was created
@@ -124,7 +125,8 @@ class Response:
         :return:
         """
         headers = {"Location": redirect_url}
-        return Response("Redirecting...", http_code_in, Constant.TEXT_HTML, headers)
+        from tina4_python import Messages
+        return Response(Messages.MSG_REDIRECTING, http_code_in, Constant.TEXT_HTML, headers)
 
     @staticmethod
     def render(template_name, data=None):
@@ -146,12 +148,13 @@ class Response:
         full_path = os.path.abspath(os.path.join(root_path, file_path.lstrip("/")))
 
         # Security: ensure the requested file is inside the root_path
+        from tina4_python import Messages
         if not full_path.startswith(os.path.abspath(root_path)):
-            return Response("403 - Forbidden", Constant.HTTP_FORBIDDEN, Constant.TEXT_PLAIN)
+            return Response(Messages.MSG_FORBIDDEN, Constant.HTTP_FORBIDDEN, Constant.TEXT_PLAIN)
 
         # Check if file exists
         if not os.path.isfile(full_path):
-            return Response("404 - File Not Found", Constant.HTTP_NOT_FOUND, Constant.TEXT_PLAIN)
+            return Response(Messages.MSG_FILE_NOT_FOUND, Constant.HTTP_NOT_FOUND, Constant.TEXT_PLAIN)
 
         # Determine MIME type
         extension = os.path.splitext(file_path)[1].lower()
@@ -183,7 +186,7 @@ class Response:
                 with open(full_path, "rb") as f:
                     content = f.read()
         except Exception as e:
-            return Response(f"Error reading file: {str(e)}", Constant.HTTP_BAD_REQUEST, Constant.TEXT_PLAIN)
+            return Response(Messages.MSG_FILE_READ_ERROR.format(error=str(e)), Constant.HTTP_BAD_REQUEST, Constant.TEXT_PLAIN)
 
         return Response(content, Constant.HTTP_OK, content_type)
 

@@ -73,23 +73,25 @@ class Database:
                 password = os.environ.get("DATABASE_PASSWORD", "")
 
             if connection_string is None:
-                raise Exception("Database connection string is missing, try declaring DATABASE_PATH in the .env file.")
+                from tina4_python import Messages
+                raise Exception(Messages.MSG_DB_MISSING_CONNECTION)
 
             self.database_module = importlib.import_module(params[0])
         except Exception as e:
-            install_message = "Please implement " + params[0] + " in Database.py and make a pull request!"
+            from tina4_python import Messages
+            install_message = Messages.MSG_DB_UNIMPLEMENTED.format(driver=params[0])
             if params[0] == SQLITE:
-                install_message = "Your python is missing the sqlite3 module, please reinstall or update"
+                install_message = Messages.MSG_DB_MISSING_SQLITE
             elif params[0] == MYSQL:
-                install_message = "Your python is missing the mysql module, please install with " + MYSQL_INSTALL
+                install_message = Messages.MSG_DB_MISSING_MYSQL.format(install_cmd=MYSQL_INSTALL)
             elif params[0] == POSTGRES:
-                install_message = "Your python is missing the postgres module, please install with " + POSTGRES_INSTALL
+                install_message = Messages.MSG_DB_MISSING_POSTGRES.format(install_cmd=POSTGRES_INSTALL)
             elif params[0] == FIREBIRD:
-                install_message = "Your python is missing the firebird module, please install with " + FIREBIRD_INSTALL
+                install_message = Messages.MSG_DB_MISSING_FIREBIRD.format(install_cmd=FIREBIRD_INSTALL)
             elif params[0] == MSSQL:
-                install_message = "Your python is missing the mssql module, please install with " + MSSQL_INSTALL
+                install_message = Messages.MSG_DB_MISSING_MSSQL.format(install_cmd=MSSQL_INSTALL)
 
-            sys.exit("Could not load database driver for " + params[0] + "\n" + install_message+ "\n"+str(e))
+            sys.exit(Messages.MSG_DB_DRIVER_NOT_FOUND.format(driver=params[0]) + "\n" + install_message + "\n" + str(e))
 
 
         self.database_engine = params[0]

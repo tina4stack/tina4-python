@@ -26,6 +26,7 @@ from pathlib import Path
 
 try:
     from tina4_python import run_web_server
+    from tina4_python import Messages
     from tina4_python.Router import get
     from tina4_python.Migration import migrate
     from tina4_python.Debug import Debug
@@ -51,9 +52,9 @@ def create_project(project_name: str) -> None:
     # ------------------------------------------------------------------
     app_py = project_path / "app.py"
     if app_py.exists():
-        print(f"Overwriting existing 'app.py' in {project_path}")
+        print(Messages.MSG_CLI_OVERWRITING.format(path=project_path))
     else:
-        print(f"Creating project in {project_path}")
+        print(Messages.MSG_CLI_CREATING.format(path=project_path))
 
     app_content = '''\
 import os
@@ -106,7 +107,7 @@ build-backend = "setuptools.build_meta"
     # ------------------------------------------------------------------
     dockerfile_path = project_path / "Dockerfile"
     if dockerfile_path.exists():
-        print("Dockerfile already exists – skipping creation")
+        print(Messages.MSG_CLI_DOCKERFILE_EXISTS)
     else:
         dockerfile_content = '''\
 # === Build Stage ===
@@ -161,42 +162,41 @@ ENV SWAGGER_DESCRIPTION="Auto-generated API documentation"
 CMD ["python3", "app.py", "0.0.0.0:7145", "-u"]
 '''
         dockerfile_path.write_text(dockerfile_content, encoding="utf-8")
-        print("Dockerfile created (multi-stage + uv)")
+        print(Messages.MSG_CLI_DOCKERFILE_CREATED)
 
     # ------------------------------------------------------------------
     # CLAUDE.md (AI assistant guidelines)
     # ------------------------------------------------------------------
     claude_md_dest = project_path / "CLAUDE.md"
     if claude_md_dest.exists():
-        print("CLAUDE.md already exists – skipping creation")
+        print(Messages.MSG_CLI_CLAUDE_EXISTS)
     else:
         claude_md_src = Path(__file__).parent / "CLAUDE.md"
         if claude_md_src.exists():
             claude_md_dest.write_text(claude_md_src.read_text(encoding="utf-8"), encoding="utf-8")
-            print("CLAUDE.md created (AI assistant guidelines)")
+            print(Messages.MSG_CLI_CLAUDE_CREATED)
         else:
-            print("Warning: CLAUDE.md template not found in package")
+            print(Messages.MSG_CLI_CLAUDE_NOT_FOUND)
 
     # ------------------------------------------------------------------
     # Final message
     # ------------------------------------------------------------------
-    print("Project ready!")
+    print(Messages.MSG_CLI_PROJECT_READY)
     if project_path != Path.cwd():
-        print(f"\nNext steps:")
+        print(f"\n{Messages.MSG_CLI_NEXT_STEPS}")
         print(f"   cd {project_path.relative_to(Path.cwd())}")
         print(f"   python app.py          # local development")
         print(f"   docker build -t {project_path.name} . && docker run -p 7145:7145 {project_path.name}")
     else:
-        print("\nYou are already in the project folder. Run:")
+        print(f"\n{Messages.MSG_CLI_ALREADY_IN_FOLDER}")
         print("   python app.py                     # development")
         print("   docker build -t myapp . && docker run -p 7145:7145 myapp")
 
 
 def run_server(port: int = 8000):
     """Run the Tina4 dev server."""
-    # Your existing run_web_server handles the rest
-    print(f"🚀 Starting Tina4 server on http://localhost:{port}")
-    run_web_server(port=port)  # Assuming it accepts a port arg; adjust if needed
+    print(Messages.MSG_CLI_STARTING_SERVER.format(port=port))
+    run_web_server(port=port)
 
 # ----------------------------------------------------------------------
 # Create SQL migration with auto-increment
@@ -210,8 +210,8 @@ def create_sql_migration(description: str):
     migrations_dir.mkdir(exist_ok=True)
 
     if not description or description.strip() == "":
-        print("Error: Migration description cannot be empty")
-        print("Example: tina4 migrate:create create users table")
+        print(Messages.MSG_CLI_MIGRATION_EMPTY)
+        print(Messages.MSG_CLI_MIGRATION_EXAMPLE)
         sys.exit(1)
 
     # Normalize description: lowercase, replace spaces/special chars with underscore
@@ -234,7 +234,7 @@ def create_sql_migration(description: str):
 """
 
     filepath.write_text(template)
-    print(f"Migration created: {filepath}")
+    print(Messages.MSG_CLI_MIGRATION_CREATED.format(filepath=filepath))
 
 # ----------------------------------------------------------------------
 # Migration helpers (official Tina4 way)
@@ -260,7 +260,7 @@ def run_migrations():
         if not file_path.exists():
             continue
 
-        print(f"Trying to load dba from: {candidate}")
+        print(Messages.MSG_CLI_TRYING_LOAD.format(candidate=candidate))
 
         # Dynamic import
         import importlib.util
@@ -273,43 +273,43 @@ def run_migrations():
         try:
             spec.loader.exec_module(module)
         except Exception as e:
-            print(f"  → Failed to execute {candidate}: {e}")
+            print(f"  \u2192 {Messages.MSG_CLI_FAILED_EXECUTE.format(candidate=candidate, error=e)}")
             continue
 
         if hasattr(module, "dba") and getattr(module, "dba") is not None:
             dba = getattr(module, "dba")
             loaded_file = candidate
-            print(f"  → Found dba in {candidate}")
+            print(f"  \u2192 {Messages.MSG_CLI_FOUND_DBA.format(candidate=candidate)}")
             break
         else:
-            print(f"  → No dba found in {candidate}")
+            print(f"  \u2192 {Messages.MSG_CLI_NO_DBA.format(candidate=candidate)}")
 
     # Final check
     if not dba:
-        print("\nCould not find a 'dba' instance in any of the following files:")
+        print(f"\n{Messages.MSG_CLI_NO_DBA_ANYWHERE}")
         for c in candidates:
             if Path(c).exists():
-                print(f"  - {c} (exists but no dba)")
+                print(f"  - {Messages.MSG_CLI_FILE_EXISTS_NO_DBA.format(file=c)}")
             else:
-                print(f"  - {c} (not found)")
-        print("\nMake sure you have something like:")
+                print(f"  - {Messages.MSG_CLI_FILE_NOT_FOUND.format(file=c)}")
+        print(f"\n{Messages.MSG_CLI_DBA_HINT}")
         print("    from tina4_python.Database import Database")
         print("    dba = Database(...)")
         print("in one of your main files.")
         sys.exit(1)
 
-    print(f"Using database: {getattr(dba, 'connection_params', 'Unknown')}")
-    print("Running migrations...\n")
+    print(Messages.MSG_CLI_USING_DB.format(connection=getattr(dba, 'connection_params', 'Unknown')))
+    print(Messages.MSG_CLI_RUNNING_MIGRATIONS + "\n")
     try:
         migrate(dba)
-        print("All migrations completed successfully!")
+        print(Messages.MSG_CLI_MIGRATIONS_DONE)
     except Exception as e:
-        print(f"Migration error: {e}")
+        print(Messages.MSG_CLI_MIGRATION_ERROR.format(error=e))
         sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Tina4 Python CLI – This is not a framework.",
+        description="Tina4 Python CLI \u2013 This is not a framework.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )

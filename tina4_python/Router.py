@@ -361,7 +361,7 @@ class Router:
                 content_type = headers["content-type"]
 
             if content_type == "application/json":
-                content = {"error": "403 - Forbidden", "data": {"server": {"url": url}}}
+                content = {"error": Messages.MSG_ROUTER_FORBIDDEN, "data": {"server": {"url": url}}}
             else:
                 content = Template.render_twig_template(
                     "errors/403.twig", {"server": {"url": url}})
@@ -475,14 +475,14 @@ class Router:
                                         value = param.annotation(value)
                                     except ValueError:
                                         raise ValueError(
-                                            f"Invalid type for path param '{param_name}': expected {param.annotation.__name__}, got '{matched_vars[param_name]}'")
+                                            Messages.MSG_ROUTER_INVALID_PARAM.format(param_name=param_name, expected=param.annotation.__name__, got=matched_vars[param_name]))
                                 kwargs[param_name] = value
                             elif param_name == 'request':
                                 kwargs[param_name] = req
                             elif param_name == 'response':
                                 kwargs[param_name] = Response
                             elif param.default == inspect.Parameter.empty:
-                                raise TypeError(f"Missing required parameter: {param_name}")
+                                raise TypeError(Messages.MSG_ROUTER_MISSING_PARAM.format(param_name=param_name))
 
                         result = await router_response(**kwargs)
                     except Exception as e:

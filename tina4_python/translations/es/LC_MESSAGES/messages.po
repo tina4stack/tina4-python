@@ -1,4 +1,4 @@
-# English translations for tina4-python.
+# Spanish translations for tina4-python.
 msgid ""
 msgstr ""
 "Project-Id-Version: tina4-python\n"
@@ -6,18 +6,18 @@ msgstr ""
 "POT-Creation-Date: 2025-03-05 00:00+0200\n"
 "PO-Revision-Date: 2025-03-05 00:00+0200\n"
 "Last-Translator: Tina4 Team\n"
-"Language: en\n"
-"Language-Team: en\n"
+"Language: es\n"
+"Language-Team: es\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
 msgid "Debug: {message}"
-msgstr "Debug: {message}"
+msgstr "Depurar: {message}"
 
 msgid "Warning: {message}"
-msgstr "Warning: {message}"
+msgstr "Advertencia: {message}"
 
 msgid "Error: {message}"
 msgstr "Error: {message}"
@@ -26,208 +26,208 @@ msgid "Info: {message}"
 msgstr "Info: {message}"
 
 msgid "Matching: {matching}"
-msgstr "Matching: {matching}"
+msgstr "Coincidencia: {matching}"
 
 msgid "Variables: {variables}"
 msgstr "Variables: {variables}"
 
 msgid "Root Path {root_path} {url}"
-msgstr "Root Path {root_path} {url}"
+msgstr "Ruta raíz {root_path} {url}"
 
 msgid "Attempting to serve static file: {static_file}"
-msgstr "Attempting to serve static file: {static_file}"
+msgstr "Intentando servir archivo estático: {static_file}"
 
 msgid "Attempting to serve CSS file: {css_file}"
-msgstr "Attempting to serve CSS file: {css_file}"
+msgstr "Intentando servir archivo CSS: {css_file}"
 
 msgid "Attempting to serve image file: {image_file}"
-msgstr "Attempting to serve image file: {image_file}"
+msgstr "Intentando servir archivo de imagen: {image_file}"
 
 msgid "403 - Forbidden"
-msgstr "403 - Forbidden"
+msgstr "403 - Prohibido"
 
 msgid "Invalid type for path param '{param_name}': expected {expected}, got '{got}'"
-msgstr "Invalid type for path param '{param_name}': expected {expected}, got '{got}'"
+msgstr "Tipo inválido para parámetro de ruta '{param_name}': esperado {expected}, obtenido '{got}'"
 
 msgid "Missing required parameter: {param_name}"
-msgstr "Missing required parameter: {param_name}"
+msgstr "Parámetro obligatorio faltante: {param_name}"
 
 msgid "Assuming root path: {root_path}, library path: {library_path}"
-msgstr "Assuming root path: {root_path}, library path: {library_path}"
+msgstr "Ruta raíz asumida: {root_path}, ruta de biblioteca: {library_path}"
 
 msgid "Load all things"
-msgstr "Load all things"
+msgstr "Cargar todo"
 
 msgid "Server started http://{host_name}:{port}"
-msgstr "Server started http://{host_name}:{port}"
+msgstr "Servidor iniciado http://{host_name}:{port}"
 
 msgid "Server stopped."
-msgstr "Server stopped."
+msgstr "Servidor detenido."
 
 msgid "Starting webserver on {port}"
-msgstr "Starting webserver on {port}"
+msgstr "Iniciando servidor web en el puerto {port}"
 
 msgid "Entry point name ... {name}"
-msgstr "Entry point name ... {name}"
+msgstr "Nombre del punto de entrada ... {name}"
 
 msgid "Tina4 Python server running on http://{host_name}:{port}"
-msgstr "Tina4 Python server running on http://{host_name}:{port}"
+msgstr "Servidor Tina4 Python ejecutándose en http://{host_name}:{port}"
 
 msgid "500 - Internal Server Error"
-msgstr "500 - Internal Server Error"
+msgstr "500 - Error interno del servidor"
 
 msgid "Redirecting..."
-msgstr "Redirecting..."
+msgstr "Redirigiendo..."
 
 msgid "404 - File Not Found"
-msgstr "404 - File Not Found"
+msgstr "404 - Archivo no encontrado"
 
 msgid "Error reading file: {error}"
-msgstr "Error reading file: {error}"
+msgstr "Error al leer archivo: {error}"
 
 msgid "Cannot decode object of type {type}"
-msgstr "Cannot decode object of type {type}"
+msgstr "No se puede decodificar objeto de tipo {type}"
 
 msgid "{name} Record added"
-msgstr "{name} Record added"
+msgstr "{name} Registro agregado"
 
 msgid "{name} Record updated"
-msgstr "{name} Record updated"
+msgstr "{name} Registro actualizado"
 
 msgid "{name} Record deleted"
-msgstr "{name} Record deleted"
+msgstr "{name} Registro eliminado"
 
 msgid "Error rendering CRUD: {error}"
-msgstr "Error rendering CRUD: {error}"
+msgstr "Error al renderizar CRUD: {error}"
 
 msgid "Database connection string is missing, try declaring DATABASE_PATH in the .env file."
-msgstr "Database connection string is missing, try declaring DATABASE_PATH in the .env file."
+msgstr "Falta la cadena de conexión a la base de datos, intente declarar DATABASE_PATH en el archivo .env."
 
 msgid "Could not load database driver for {driver}"
-msgstr "Could not load database driver for {driver}"
+msgstr "No se pudo cargar el controlador de base de datos para {driver}"
 
 msgid "Your python is missing the sqlite3 module, please reinstall or update"
-msgstr "Your python is missing the sqlite3 module, please reinstall or update"
+msgstr "Su Python no tiene el módulo sqlite3, por favor reinstale o actualice"
 
 msgid "Your python is missing the mysql module, please install with {install_cmd}"
-msgstr "Your python is missing the mysql module, please install with {install_cmd}"
+msgstr "Su Python no tiene el módulo mysql, por favor instale con {install_cmd}"
 
 msgid "Your python is missing the postgres module, please install with {install_cmd}"
-msgstr "Your python is missing the postgres module, please install with {install_cmd}"
+msgstr "Su Python no tiene el módulo postgres, por favor instale con {install_cmd}"
 
 msgid "Your python is missing the firebird module, please install with {install_cmd}"
-msgstr "Your python is missing the firebird module, please install with {install_cmd}"
+msgstr "Su Python no tiene el módulo firebird, por favor instale con {install_cmd}"
 
 msgid "Your python is missing the mssql module, please install with {install_cmd}"
-msgstr "Your python is missing the mssql module, please install with {install_cmd}"
+msgstr "Su Python no tiene el módulo mssql, por favor instale con {install_cmd}"
 
 msgid "Please implement {driver} in Database.py and make a pull request!"
-msgstr "Please implement {driver} in Database.py and make a pull request!"
+msgstr "¡Por favor implemente {driver} en Database.py y haga un pull request!"
 
 msgid "No SECRET env var set - using default secret. Set SECRET in your .env for production."
-msgstr "No SECRET env var set - using default secret. Set SECRET in your .env for production."
+msgstr "Variable SECRET no configurada - usando secreto predeterminado. Configure SECRET en .env para producción."
 
 msgid "Error creating Websocket, perhaps you need to install simple_websocket ?"
-msgstr "Error creating Websocket, perhaps you need to install simple_websocket ?"
+msgstr "Error al crear Websocket, ¿quizás necesita instalar simple_websocket?"
 
 msgid "Could not establish a socket connection: {error}"
-msgstr "Could not establish a socket connection: {error}"
+msgstr "No se pudo establecer una conexión socket: {error}"
 
 msgid "Migration: Found {path}"
-msgstr "Migration: Found {path}"
+msgstr "Migración: Encontrado {path}"
 
 msgid "Migration: Checking file {file}"
-msgstr "Migration: Checking file {file}"
+msgstr "Migración: Verificando archivo {file}"
 
 msgid "Migration: Running migration for {file}"
-msgstr "Migration: Running migration for {file}"
+msgstr "Migración: Ejecutando migración para {file}"
 
 msgid "PASSED running migration for {file}"
-msgstr "PASSED running migration for {file}"
+msgstr "EXITOSA ejecución de migración para {file}"
 
 msgid "FAILED running migration for {file}"
-msgstr "FAILED running migration for {file}"
+msgstr "FALLIDA ejecución de migración para {file}"
 
 msgid "Migration: Failed to run {file}"
-msgstr "Migration: Failed to run {file}"
+msgstr "Migración: Error al ejecutar {file}"
 
 msgid "Error: tina4_python not installed. Run: pip install tina4-python"
-msgstr "Error: tina4_python not installed. Run: pip install tina4-python"
+msgstr "Error: tina4_python no está instalado. Ejecute: pip install tina4-python"
 
 msgid "Overwriting existing 'app.py' in {path}"
-msgstr "Overwriting existing 'app.py' in {path}"
+msgstr "Sobrescribiendo 'app.py' existente en {path}"
 
 msgid "Creating project in {path}"
-msgstr "Creating project in {path}"
+msgstr "Creando proyecto en {path}"
 
 msgid "Project ready!"
-msgstr "Project ready!"
+msgstr "¡Proyecto listo!"
 
 msgid "Next steps:"
-msgstr "Next steps:"
+msgstr "Próximos pasos:"
 
 msgid "You are already in the project folder. Run:"
-msgstr "You are already in the project folder. Run:"
+msgstr "Ya está en la carpeta del proyecto. Ejecute:"
 
 msgid "Dockerfile already exists – skipping creation"
-msgstr "Dockerfile already exists – skipping creation"
+msgstr "Dockerfile ya existe – omitiendo creación"
 
 msgid "Dockerfile created (multi-stage + uv)"
-msgstr "Dockerfile created (multi-stage + uv)"
+msgstr "Dockerfile creado (multi-etapa + uv)"
 
 msgid "CLAUDE.md already exists – skipping creation"
-msgstr "CLAUDE.md already exists – skipping creation"
+msgstr "CLAUDE.md ya existe – omitiendo creación"
 
 msgid "CLAUDE.md created (AI assistant guidelines)"
-msgstr "CLAUDE.md created (AI assistant guidelines)"
+msgstr "CLAUDE.md creado (directrices del asistente IA)"
 
 msgid "Warning: CLAUDE.md template not found in package"
-msgstr "Warning: CLAUDE.md template not found in package"
+msgstr "Advertencia: plantilla CLAUDE.md no encontrada en el paquete"
 
 msgid "Starting Tina4 server on http://localhost:{port}"
-msgstr "Starting Tina4 server on http://localhost:{port}"
+msgstr "Iniciando servidor Tina4 en http://localhost:{port}"
 
 msgid "Error: Migration description cannot be empty"
-msgstr "Error: Migration description cannot be empty"
+msgstr "Error: la descripción de la migración no puede estar vacía"
 
 msgid "Example: tina4 migrate:create create users table"
-msgstr "Example: tina4 migrate:create create users table"
+msgstr "Ejemplo: tina4 migrate:create create users table"
 
 msgid "Migration created: {filepath}"
-msgstr "Migration created: {filepath}"
+msgstr "Migración creada: {filepath}"
 
 msgid "Trying to load dba from: {candidate}"
-msgstr "Trying to load dba from: {candidate}"
+msgstr "Intentando cargar dba desde: {candidate}"
 
 msgid "Failed to execute {candidate}: {error}"
-msgstr "Failed to execute {candidate}: {error}"
+msgstr "Error al ejecutar {candidate}: {error}"
 
 msgid "Found dba in {candidate}"
-msgstr "Found dba in {candidate}"
+msgstr "dba encontrado en {candidate}"
 
 msgid "No dba found in {candidate}"
-msgstr "No dba found in {candidate}"
+msgstr "No se encontró dba en {candidate}"
 
 msgid "Could not find a 'dba' instance in any of the following files:"
-msgstr "Could not find a 'dba' instance in any of the following files:"
+msgstr "No se pudo encontrar una instancia 'dba' en ninguno de los siguientes archivos:"
 
 msgid "{file} (exists but no dba)"
-msgstr "{file} (exists but no dba)"
+msgstr "{file} (existe pero sin dba)"
 
 msgid "{file} (not found)"
-msgstr "{file} (not found)"
+msgstr "{file} (no encontrado)"
 
 msgid "Make sure you have something like:"
-msgstr "Make sure you have something like:"
+msgstr "Asegúrese de tener algo como:"
 
 msgid "Using database: {connection}"
-msgstr "Using database: {connection}"
+msgstr "Usando base de datos: {connection}"
 
 msgid "Running migrations..."
-msgstr "Running migrations..."
+msgstr "Ejecutando migraciones..."
 
 msgid "All migrations completed successfully!"
-msgstr "All migrations completed successfully!"
+msgstr "¡Todas las migraciones se completaron exitosamente!"
 
 msgid "Migration error: {error}"
-msgstr "Migration error: {error}"
+msgstr "Error de migración: {error}"

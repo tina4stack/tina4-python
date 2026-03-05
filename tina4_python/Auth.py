@@ -181,7 +181,8 @@ class Auth:
         self.secret = os.environ.get("SECRET", "{self.secret}")
         if self.secret == "{self.secret}":
             from tina4_python.Debug import Debug
-            Debug.warning("No SECRET env var set - using default secret. Set SECRET in your .env for production.")
+            from tina4_python import Messages
+            Debug.warning(Messages.MSG_AUTH_NO_SECRET)
         self.private_key = os.path.join(root_path, "secrets", "private.key")
         self.public_key = os.path.join(root_path, "secrets", "public.key")
         self.self_signed = os.path.join(root_path, "secrets", "domain.cert")

@@ -328,7 +328,8 @@ class CRUD:
 
                 self.dba.insert(table_name, request.body, primary_key=options["primary_key"])
                 self.dba.commit()
-                return response({"message": f"<script>showMessage('{table_nice_name} Record added');</script>"}, HTTP_OK, APPLICATION_JSON)
+                from tina4_python import Messages
+                return response({"message": f"<script>showMessage('{Messages.MSG_CRUD_RECORD_ADDED.format(name=table_nice_name)}');</script>"}, HTTP_OK, APPLICATION_JSON)
 
             async def update_record(request, response):
                 Debug.info("CRUD UPDATE", table_name, request.params, request.body)
@@ -340,13 +341,15 @@ class CRUD:
 
                 self.dba.update(table_name, request.body, primary_key=options["primary_key"])
                 self.dba.commit()
-                return response({"message": f"<script>showMessage('{table_nice_name} Record updated');</script>", "post": request.body}, HTTP_OK, APPLICATION_JSON)
+                from tina4_python import Messages
+                return response({"message": f"<script>showMessage('{Messages.MSG_CRUD_RECORD_UPDATED.format(name=table_nice_name)}');</script>", "post": request.body}, HTTP_OK, APPLICATION_JSON)
 
             async def delete_record(request, response):
                 Debug.info("CRUD DELETE", table_name, request.params)
                 self.dba.delete(table_name, {options["primary_key"] : request.params[options["primary_key"]]})
                 self.dba.commit()
-                return response({"message": f"<script>showMessage('{table_nice_name} Record deleted');</script>"}, HTTP_OK, APPLICATION_JSON)
+                from tina4_python import Messages
+                return response({"message": f"<script>showMessage('{Messages.MSG_CRUD_RECORD_DELETED.format(name=table_nice_name)}');</script>"}, HTTP_OK, APPLICATION_JSON)
 
             Router.add(TINA4_GET, os.path.join(request.url, crud_name).replace("\\", "/"), get_record)
             Router.add(TINA4_POST, os.path.join(request.url, crud_name).replace("\\", "/"), post_record)
@@ -365,7 +368,8 @@ class CRUD:
 
             return html
         except Exception as e:
-            return "Error rendering CRUD: "+str(e)
+            from tina4_python import Messages
+            return Messages.MSG_CRUD_RENDER_ERROR.format(error=str(e))
 
     def to_array(self, filter_fn=None, base64_encode = True):
         """

@@ -1,4 +1,4 @@
-# Afrikaans translations for tina4-python.
+# Chinese (Simplified) translations for tina4-python.
 msgid ""
 msgstr ""
 "Project-Id-Version: tina4-python\n"
@@ -6,228 +6,228 @@ msgstr ""
 "POT-Creation-Date: 2025-03-05 00:00+0200\n"
 "PO-Revision-Date: 2025-03-05 00:00+0200\n"
 "Last-Translator: Tina4 Team\n"
-"Language: af\n"
-"Language-Team: af\n"
-"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"Language: zh\n"
+"Language-Team: zh\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
 msgid "Debug: {message}"
-msgstr "Ontfout: {message}"
+msgstr "调试：{message}"
 
 msgid "Warning: {message}"
-msgstr "Waarskuwing: {message}"
+msgstr "警告：{message}"
 
 msgid "Error: {message}"
-msgstr "Fout: {message}"
+msgstr "错误：{message}"
 
 msgid "Info: {message}"
-msgstr "Inligting: {message}"
+msgstr "信息：{message}"
 
 msgid "Matching: {matching}"
-msgstr "Passing: {matching}"
+msgstr "匹配：{matching}"
 
 msgid "Variables: {variables}"
-msgstr "Veranderlikes: {variables}"
+msgstr "变量：{variables}"
 
 msgid "Root Path {root_path} {url}"
-msgstr "Wortelpad {root_path} {url}"
+msgstr "根路径 {root_path} {url}"
 
 msgid "Attempting to serve static file: {static_file}"
-msgstr "Probeer om statiese lêer te bedien: {static_file}"
+msgstr "尝试提供静态文件：{static_file}"
 
 msgid "Attempting to serve CSS file: {css_file}"
-msgstr "Probeer om CSS-lêer te bedien: {css_file}"
+msgstr "尝试提供CSS文件：{css_file}"
 
 msgid "Attempting to serve image file: {image_file}"
-msgstr "Probeer om prentlêer te bedien: {image_file}"
+msgstr "尝试提供图片文件：{image_file}"
 
 msgid "403 - Forbidden"
-msgstr "403 - Verbode"
+msgstr "403 - 禁止访问"
 
 msgid "Invalid type for path param '{param_name}': expected {expected}, got '{got}'"
-msgstr "Ongeldige tipe vir padparameter '{param_name}': verwag {expected}, gekry '{got}'"
+msgstr "路径参数 '{param_name}' 类型无效：期望 {expected}，得到 '{got}'"
 
 msgid "Missing required parameter: {param_name}"
-msgstr "Verpligte parameter ontbreek: {param_name}"
+msgstr "缺少必需参数：{param_name}"
 
 msgid "Assuming root path: {root_path}, library path: {library_path}"
-msgstr "Aangenome wortelpad: {root_path}, biblioteekpad: {library_path}"
+msgstr "假定根路径：{root_path}，库路径：{library_path}"
 
 msgid "Load all things"
-msgstr "Laai alles"
+msgstr "加载所有内容"
 
 msgid "Server started http://{host_name}:{port}"
-msgstr "Bediener begin http://{host_name}:{port}"
+msgstr "服务器已启动 http://{host_name}:{port}"
 
 msgid "Server stopped."
-msgstr "Bediener gestop."
+msgstr "服务器已停止。"
 
 msgid "Starting webserver on {port}"
-msgstr "Begin webbediener op poort {port}"
+msgstr "正在端口 {port} 上启动Web服务器"
 
 msgid "Entry point name ... {name}"
-msgstr "Ingangspuntnaam ... {name}"
+msgstr "入口点名称 ... {name}"
 
 msgid "Tina4 Python server running on http://{host_name}:{port}"
-msgstr "Tina4 Python-bediener loop op http://{host_name}:{port}"
+msgstr "Tina4 Python 服务器运行在 http://{host_name}:{port}"
 
 msgid "500 - Internal Server Error"
-msgstr "500 - Interne bedienerfout"
+msgstr "500 - 内部服务器错误"
 
 msgid "Redirecting..."
-msgstr "Herleiding..."
+msgstr "正在重定向..."
 
 msgid "404 - File Not Found"
-msgstr "404 - Lêer nie gevind nie"
+msgstr "404 - 文件未找到"
 
 msgid "Error reading file: {error}"
-msgstr "Fout met lees van lêer: {error}"
+msgstr "读取文件错误：{error}"
 
 msgid "Cannot decode object of type {type}"
-msgstr "Kan nie objek van tipe {type} dekodeer nie"
+msgstr "无法解码类型为 {type} 的对象"
 
 msgid "{name} Record added"
-msgstr "{name} Rekord bygevoeg"
+msgstr "{name} 记录已添加"
 
 msgid "{name} Record updated"
-msgstr "{name} Rekord opgedateer"
+msgstr "{name} 记录已更新"
 
 msgid "{name} Record deleted"
-msgstr "{name} Rekord verwyder"
+msgstr "{name} 记录已删除"
 
 msgid "Error rendering CRUD: {error}"
-msgstr "Fout met CRUD-weergawe: {error}"
+msgstr "渲染CRUD错误：{error}"
 
 msgid "Database connection string is missing, try declaring DATABASE_PATH in the .env file."
-msgstr "Databasisverbindingstring ontbreek, probeer DATABASE_PATH in die .env-lêer verklaar."
+msgstr "数据库连接字符串缺失，请尝试在 .env 文件中声明 DATABASE_PATH。"
 
 msgid "Could not load database driver for {driver}"
-msgstr "Kon nie databasisdrywer vir {driver} laai nie"
+msgstr "无法加载 {driver} 的数据库驱动"
 
 msgid "Your python is missing the sqlite3 module, please reinstall or update"
-msgstr "Jou Python ontbreek die sqlite3-module, installeer asseblief weer of dateer op"
+msgstr "您的Python缺少sqlite3模块，请重新安装或更新"
 
 msgid "Your python is missing the mysql module, please install with {install_cmd}"
-msgstr "Jou Python ontbreek die mysql-module, installeer asseblief met {install_cmd}"
+msgstr "您的Python缺少mysql模块，请使用 {install_cmd} 安装"
 
 msgid "Your python is missing the postgres module, please install with {install_cmd}"
-msgstr "Jou Python ontbreek die postgres-module, installeer asseblief met {install_cmd}"
+msgstr "您的Python缺少postgres模块，请使用 {install_cmd} 安装"
 
 msgid "Your python is missing the firebird module, please install with {install_cmd}"
-msgstr "Jou Python ontbreek die firebird-module, installeer asseblief met {install_cmd}"
+msgstr "您的Python缺少firebird模块，请使用 {install_cmd} 安装"
 
 msgid "Your python is missing the mssql module, please install with {install_cmd}"
-msgstr "Jou Python ontbreek die mssql-module, installeer asseblief met {install_cmd}"
+msgstr "您的Python缺少mssql模块，请使用 {install_cmd} 安装"
 
 msgid "Please implement {driver} in Database.py and make a pull request!"
-msgstr "Implementeer asseblief {driver} in Database.py en maak 'n pull request!"
+msgstr "请在 Database.py 中实现 {driver} 并提交 pull request！"
 
 msgid "No SECRET env var set - using default secret. Set SECRET in your .env for production."
-msgstr "Geen SECRET-omgewingsveranderlike gestel nie - gebruik verstekgeheim. Stel SECRET in jou .env vir produksie."
+msgstr "未设置 SECRET 环境变量 - 使用默认密钥。请在 .env 中设置 SECRET 用于生产环境。"
 
 msgid "Error creating Websocket, perhaps you need to install simple_websocket ?"
-msgstr "Fout met die skep van Websocket, miskien moet jy simple_websocket installeer?"
+msgstr "创建Websocket错误，也许您需要安装 simple_websocket？"
 
 msgid "Could not establish a socket connection: {error}"
-msgstr "Kon nie 'n socket-verbinding bewerkstellig nie: {error}"
+msgstr "无法建立socket连接：{error}"
 
 msgid "Migration: Found {path}"
-msgstr "Migrasie: Gevind {path}"
+msgstr "迁移：找到 {path}"
 
 msgid "Migration: Checking file {file}"
-msgstr "Migrasie: Kontroleer lêer {file}"
+msgstr "迁移：检查文件 {file}"
 
 msgid "Migration: Running migration for {file}"
-msgstr "Migrasie: Voer migrasie uit vir {file}"
+msgstr "迁移：正在执行 {file} 的迁移"
 
 msgid "PASSED running migration for {file}"
-msgstr "GESLAAG migrasie vir {file}"
+msgstr "通过 {file} 的迁移执行"
 
 msgid "FAILED running migration for {file}"
-msgstr "MISLUK migrasie vir {file}"
+msgstr "失败 {file} 的迁移执行"
 
 msgid "Migration: Failed to run {file}"
-msgstr "Migrasie: Kon nie {file} uitvoer nie"
+msgstr "迁移：执行 {file} 失败"
 
 msgid "Error: tina4_python not installed. Run: pip install tina4-python"
-msgstr "Fout: tina4_python is nie geïnstalleer nie. Voer uit: pip install tina4-python"
+msgstr "错误：tina4_python 未安装。运行：pip install tina4-python"
 
 msgid "Overwriting existing 'app.py' in {path}"
-msgstr "Oorskryf bestaande 'app.py' in {path}"
+msgstr "正在覆盖 {path} 中现有的 'app.py'"
 
 msgid "Creating project in {path}"
-msgstr "Skep projek in {path}"
+msgstr "正在 {path} 中创建项目"
 
 msgid "Project ready!"
-msgstr "Projek gereed!"
+msgstr "项目准备就绪！"
 
 msgid "Next steps:"
-msgstr "Volgende stappe:"
+msgstr "后续步骤："
 
 msgid "You are already in the project folder. Run:"
-msgstr "Jy is reeds in die projekgids. Voer uit:"
+msgstr "您已在项目文件夹中。运行："
 
 msgid "Dockerfile already exists – skipping creation"
-msgstr "Dockerfile bestaan reeds – skepping oorgeslaan"
+msgstr "Dockerfile 已存在 – 跳过创建"
 
 msgid "Dockerfile created (multi-stage + uv)"
-msgstr "Dockerfile geskep (multi-stadium + uv)"
+msgstr "Dockerfile 已创建（多阶段 + uv）"
 
 msgid "CLAUDE.md already exists – skipping creation"
-msgstr "CLAUDE.md bestaan reeds – skepping oorgeslaan"
+msgstr "CLAUDE.md 已存在 – 跳过创建"
 
 msgid "CLAUDE.md created (AI assistant guidelines)"
-msgstr "CLAUDE.md geskep (KI-assistent riglyne)"
+msgstr "CLAUDE.md 已创建（AI助手指南）"
 
 msgid "Warning: CLAUDE.md template not found in package"
-msgstr "Waarskuwing: CLAUDE.md-sjabloon nie in pakket gevind nie"
+msgstr "警告：在包中未找到 CLAUDE.md 模板"
 
 msgid "Starting Tina4 server on http://localhost:{port}"
-msgstr "Begin Tina4-bediener op http://localhost:{port}"
+msgstr "正在启动 Tina4 服务器 http://localhost:{port}"
 
 msgid "Error: Migration description cannot be empty"
-msgstr "Fout: Migrasiebeskrywing kan nie leeg wees nie"
+msgstr "错误：迁移描述不能为空"
 
 msgid "Example: tina4 migrate:create create users table"
-msgstr "Voorbeeld: tina4 migrate:create create users table"
+msgstr "示例：tina4 migrate:create create users table"
 
 msgid "Migration created: {filepath}"
-msgstr "Migrasie geskep: {filepath}"
+msgstr "迁移已创建：{filepath}"
 
 msgid "Trying to load dba from: {candidate}"
-msgstr "Probeer om dba te laai vanaf: {candidate}"
+msgstr "尝试从 {candidate} 加载 dba"
 
 msgid "Failed to execute {candidate}: {error}"
-msgstr "Kon nie {candidate} uitvoer nie: {error}"
+msgstr "执行 {candidate} 失败：{error}"
 
 msgid "Found dba in {candidate}"
-msgstr "dba gevind in {candidate}"
+msgstr "在 {candidate} 中找到 dba"
 
 msgid "No dba found in {candidate}"
-msgstr "Geen dba gevind in {candidate} nie"
+msgstr "在 {candidate} 中未找到 dba"
 
 msgid "Could not find a 'dba' instance in any of the following files:"
-msgstr "Kon nie 'n 'dba'-instansie in enige van die volgende lêers vind nie:"
+msgstr "无法在以下任何文件中找到 'dba' 实例："
 
 msgid "{file} (exists but no dba)"
-msgstr "{file} (bestaan maar geen dba)"
+msgstr "{file}（存在但无 dba）"
 
 msgid "{file} (not found)"
-msgstr "{file} (nie gevind nie)"
+msgstr "{file}（未找到）"
 
 msgid "Make sure you have something like:"
-msgstr "Maak seker jy het iets soos:"
+msgstr "请确保您有类似以下内容："
 
 msgid "Using database: {connection}"
-msgstr "Gebruik databasis: {connection}"
+msgstr "使用数据库：{connection}"
 
 msgid "Running migrations..."
-msgstr "Voer migrasies uit..."
+msgstr "正在运行迁移..."
 
 msgid "All migrations completed successfully!"
-msgstr "Alle migrasies suksesvol voltooi!"
+msgstr "所有迁移已成功完成！"
 
 msgid "Migration error: {error}"
-msgstr "Migrasiefout: {error}"
+msgstr "迁移错误：{error}"

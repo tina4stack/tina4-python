@@ -9,6 +9,7 @@ import sys
 
 from tina4_python import ShellColors
 from tina4_python import Constant
+from tina4_python import Messages
 from tina4_python.Debug import Debug
 from tina4_python.Database import MSSQL, POSTGRES, FIREBIRD, MYSQL
 import tina4_python
@@ -40,13 +41,13 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
         dba.execute(
             "create table if not exists tina4_migration(id integer not null, description varchar(200) default '', content blob, error_message blob, passed integer default 0, primary key(id))")
 
-    Debug.info(ShellColors.bright_blue, "Migration:  Found ", tina4_python.root_path + os.sep + migration_folder, ShellColors.end)
+    Debug.info(ShellColors.bright_blue, Messages.MSG_MIGRATION_FOUND.format(path=tina4_python.root_path + os.sep + migration_folder), ShellColors.end)
     dir_list = os.listdir(tina4_python.root_path + os.sep + migration_folder)
     dir_list.sort()
 
     for file in dir_list:
         if '.sql' in file:
-            Debug.info(ShellColors.green, "Migration:  Checking file", file, ShellColors.end)
+            Debug.info(ShellColors.green, Messages.MSG_MIGRATION_CHECKING.format(file=file), ShellColors.end)
             sql_file = open(tina4_python.root_path + os.sep + migration_folder + os.sep + file)
             file_contents = sql_file.read()
             sql_file.close()
@@ -59,7 +60,7 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                 record = dba.fetch(sql_check, [file, 1])
 
                 if record.count == 0:
-                    Debug.info(ShellColors.bright_red, "Migration:  Running migration for", file, ShellColors.end)
+                    Debug.info(ShellColors.bright_red, Messages.MSG_MIGRATION_RUNNING.format(file=file), ShellColors.end)
                     # get each migration
                     script_content = file_contents.split(";")
 
@@ -75,8 +76,7 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                                 break
 
                     if not error:
-                        # passed print(color + f"{debug_level:5}:"+ShellColors.end, "", end="")
-                        Debug.info(ShellColors.bright_yellow,"Migration:", ShellColors.end, ShellColors.bright_green+"PASSED running migration for", file, ShellColors.end)
+                        Debug.info(ShellColors.bright_yellow, "Migration:", ShellColors.end, ShellColors.bright_green + Messages.MSG_MIGRATION_PASSED.format(file=file), ShellColors.end)
                         dba.commit()
                         next_id = dba.get_next_id("tina4_migration")
                         dba.execute("insert into tina4_migration (id, description, content, passed) values (?, ?, ?, 1) ",
@@ -84,7 +84,7 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                         dba.commit()
                     else:
                         # did not pass
-                        Debug.info(ShellColors.bright_yellow, "Migration:", ShellColors.end, ShellColors.bright_red+"FAILED running migration for", file, error_message, ShellColors.end)
+                        Debug.info(ShellColors.bright_yellow, "Migration:", ShellColors.end, ShellColors.bright_red + Messages.MSG_MIGRATION_FAILED.format(file=file), error_message, ShellColors.end)
                         dba.rollback()
                         next_id = dba.get_next_id("tina4_migration")
                         dba.execute(
@@ -99,9 +99,8 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                     [next_id, file, file_contents, str(e)])
                 dba.commit()
 
-                Debug.error("Migration: Failed to run", file, e)
+                Debug.error(Messages.MSG_MIGRATION_ERROR.format(file=file), e)
                 sys.exit(1)
 
     if dba.database_engine == MSSQL:
         dba.execute("SET IDENTITY_INSERT tina4_migration OFF")
-

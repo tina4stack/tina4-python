@@ -1,0 +1,233 @@
+# Japanese translations for tina4-python.
+msgid ""
+msgstr ""
+"Project-Id-Version: tina4-python\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-03-05 00:00+0200\n"
+"PO-Revision-Date: 2025-03-05 00:00+0200\n"
+"Last-Translator: Tina4 Team\n"
+"Language: ja\n"
+"Language-Team: ja\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "Debug: {message}"
+msgstr "デバッグ：{message}"
+
+msgid "Warning: {message}"
+msgstr "警告：{message}"
+
+msgid "Error: {message}"
+msgstr "エラー：{message}"
+
+msgid "Info: {message}"
+msgstr "情報：{message}"
+
+msgid "Matching: {matching}"
+msgstr "マッチング：{matching}"
+
+msgid "Variables: {variables}"
+msgstr "変数：{variables}"
+
+msgid "Root Path {root_path} {url}"
+msgstr "ルートパス {root_path} {url}"
+
+msgid "Attempting to serve static file: {static_file}"
+msgstr "静的ファイルの配信を試行中：{static_file}"
+
+msgid "Attempting to serve CSS file: {css_file}"
+msgstr "CSSファイルの配信を試行中：{css_file}"
+
+msgid "Attempting to serve image file: {image_file}"
+msgstr "画像ファイルの配信を試行中：{image_file}"
+
+msgid "403 - Forbidden"
+msgstr "403 - アクセス禁止"
+
+msgid "Invalid type for path param '{param_name}': expected {expected}, got '{got}'"
+msgstr "パスパラメータ '{param_name}' の型が無効：期待値 {expected}、取得値 '{got}'"
+
+msgid "Missing required parameter: {param_name}"
+msgstr "必須パラメータが不足：{param_name}"
+
+msgid "Assuming root path: {root_path}, library path: {library_path}"
+msgstr "ルートパス：{root_path}、ライブラリパス：{library_path} と仮定"
+
+msgid "Load all things"
+msgstr "すべてを読み込み"
+
+msgid "Server started http://{host_name}:{port}"
+msgstr "サーバー起動 http://{host_name}:{port}"
+
+msgid "Server stopped."
+msgstr "サーバー停止。"
+
+msgid "Starting webserver on {port}"
+msgstr "ポート {port} でWebサーバーを起動中"
+
+msgid "Entry point name ... {name}"
+msgstr "エントリポイント名 ... {name}"
+
+msgid "Tina4 Python server running on http://{host_name}:{port}"
+msgstr "Tina4 Pythonサーバーが http://{host_name}:{port} で実行中"
+
+msgid "500 - Internal Server Error"
+msgstr "500 - 内部サーバーエラー"
+
+msgid "Redirecting..."
+msgstr "リダイレクト中..."
+
+msgid "404 - File Not Found"
+msgstr "404 - ファイルが見つかりません"
+
+msgid "Error reading file: {error}"
+msgstr "ファイル読み取りエラー：{error}"
+
+msgid "Cannot decode object of type {type}"
+msgstr "型 {type} のオブジェクトをデコードできません"
+
+msgid "{name} Record added"
+msgstr "{name} レコード追加"
+
+msgid "{name} Record updated"
+msgstr "{name} レコード更新"
+
+msgid "{name} Record deleted"
+msgstr "{name} レコード削除"
+
+msgid "Error rendering CRUD: {error}"
+msgstr "CRUDレンダリングエラー：{error}"
+
+msgid "Database connection string is missing, try declaring DATABASE_PATH in the .env file."
+msgstr "データベース接続文字列がありません。.envファイルでDATABASE_PATHを宣言してください。"
+
+msgid "Could not load database driver for {driver}"
+msgstr "{driver} のデータベースドライバを読み込めませんでした"
+
+msgid "Your python is missing the sqlite3 module, please reinstall or update"
+msgstr "Pythonにsqlite3モジュールがありません。再インストールまたは更新してください"
+
+msgid "Your python is missing the mysql module, please install with {install_cmd}"
+msgstr "Pythonにmysqlモジュールがありません。{install_cmd} でインストールしてください"
+
+msgid "Your python is missing the postgres module, please install with {install_cmd}"
+msgstr "Pythonにpostgresモジュールがありません。{install_cmd} でインストールしてください"
+
+msgid "Your python is missing the firebird module, please install with {install_cmd}"
+msgstr "Pythonにfirebirdモジュールがありません。{install_cmd} でインストールしてください"
+
+msgid "Your python is missing the mssql module, please install with {install_cmd}"
+msgstr "Pythonにmssqlモジュールがありません。{install_cmd} でインストールしてください"
+
+msgid "Please implement {driver} in Database.py and make a pull request!"
+msgstr "Database.pyで {driver} を実装してプルリクエストを送信してください！"
+
+msgid "No SECRET env var set - using default secret. Set SECRET in your .env for production."
+msgstr "SECRET環境変数が未設定 - デフォルトシークレットを使用中。本番環境では.envでSECRETを設定してください。"
+
+msgid "Error creating Websocket, perhaps you need to install simple_websocket ?"
+msgstr "Websocket作成エラー、simple_websocketのインストールが必要かもしれません"
+
+msgid "Could not establish a socket connection: {error}"
+msgstr "ソケット接続を確立できませんでした：{error}"
+
+msgid "Migration: Found {path}"
+msgstr "マイグレーション：{path} を発見"
+
+msgid "Migration: Checking file {file}"
+msgstr "マイグレーション：ファイル {file} を確認中"
+
+msgid "Migration: Running migration for {file}"
+msgstr "マイグレーション：{file} のマイグレーションを実行中"
+
+msgid "PASSED running migration for {file}"
+msgstr "成功 {file} のマイグレーション実行"
+
+msgid "FAILED running migration for {file}"
+msgstr "失敗 {file} のマイグレーション実行"
+
+msgid "Migration: Failed to run {file}"
+msgstr "マイグレーション：{file} の実行に失敗"
+
+msgid "Error: tina4_python not installed. Run: pip install tina4-python"
+msgstr "エラー：tina4_pythonがインストールされていません。実行：pip install tina4-python"
+
+msgid "Overwriting existing 'app.py' in {path}"
+msgstr "{path} の既存の 'app.py' を上書き中"
+
+msgid "Creating project in {path}"
+msgstr "{path} にプロジェクトを作成中"
+
+msgid "Project ready!"
+msgstr "プロジェクト準備完了！"
+
+msgid "Next steps:"
+msgstr "次のステップ："
+
+msgid "You are already in the project folder. Run:"
+msgstr "すでにプロジェクトフォルダにいます。実行："
+
+msgid "Dockerfile already exists – skipping creation"
+msgstr "Dockerfileは既に存在します – 作成をスキップ"
+
+msgid "Dockerfile created (multi-stage + uv)"
+msgstr "Dockerfileを作成しました（マルチステージ + uv）"
+
+msgid "CLAUDE.md already exists – skipping creation"
+msgstr "CLAUDE.mdは既に存在します – 作成をスキップ"
+
+msgid "CLAUDE.md created (AI assistant guidelines)"
+msgstr "CLAUDE.mdを作成しました（AIアシスタントガイドライン）"
+
+msgid "Warning: CLAUDE.md template not found in package"
+msgstr "警告：パッケージにCLAUDE.mdテンプレートが見つかりません"
+
+msgid "Starting Tina4 server on http://localhost:{port}"
+msgstr "Tina4サーバーを http://localhost:{port} で起動中"
+
+msgid "Error: Migration description cannot be empty"
+msgstr "エラー：マイグレーションの説明は空にできません"
+
+msgid "Example: tina4 migrate:create create users table"
+msgstr "例：tina4 migrate:create create users table"
+
+msgid "Migration created: {filepath}"
+msgstr "マイグレーション作成：{filepath}"
+
+msgid "Trying to load dba from: {candidate}"
+msgstr "{candidate} からdbaの読み込みを試行中"
+
+msgid "Failed to execute {candidate}: {error}"
+msgstr "{candidate} の実行に失敗：{error}"
+
+msgid "Found dba in {candidate}"
+msgstr "{candidate} でdbaを発見"
+
+msgid "No dba found in {candidate}"
+msgstr "{candidate} でdbaが見つかりません"
+
+msgid "Could not find a 'dba' instance in any of the following files:"
+msgstr "以下のファイルのいずれにも 'dba' インスタンスが見つかりませんでした："
+
+msgid "{file} (exists but no dba)"
+msgstr "{file}（存在するがdbaなし）"
+
+msgid "{file} (not found)"
+msgstr "{file}（見つかりません）"
+
+msgid "Make sure you have something like:"
+msgstr "以下のような記述があることを確認してください："
+
+msgid "Using database: {connection}"
+msgstr "データベースを使用中：{connection}"
+
+msgid "Running migrations..."
+msgstr "マイグレーションを実行中..."
+
+msgid "All migrations completed successfully!"
+msgstr "すべてのマイグレーションが正常に完了しました！"
+
+msgid "Migration error: {error}"
+msgstr "マイグレーションエラー：{error}"

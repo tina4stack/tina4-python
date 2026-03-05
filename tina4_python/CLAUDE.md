@@ -955,7 +955,7 @@ Tina4 supports translations via Python's `gettext` module. Translation files liv
 
 Set the language in `.env`:
 ```bash
-TINA4_LANGUAGE=en   # Supported: en, fr, af
+TINA4_LANGUAGE=en   # Supported: en, fr, af, zh, ja, es
 ```
 
 ### Using localize()
@@ -969,6 +969,9 @@ _ = localize()
 print(_("Server stopped."))  # English: "Server stopped."
                               # French:  "Serveur arrêté."
                               # Afrikaans: "Bediener gestop."
+                              # Chinese:  "服务器已停止。"
+                              # Japanese: "サーバー停止。"
+                              # Spanish:  "Servidor detenido."
 ```
 
 The returned `_()` function also installs itself as a Python builtin, so after calling `localize()` once, `_()` is available globally.
@@ -990,7 +993,7 @@ If `TINA4_LANGUAGE` is set to an unsupported language, the system falls back gra
 
 ```python
 from tina4_python.Localization import AVAILABLE_LANGUAGES
-# ['en', 'fr', 'af']
+# ['en', 'fr', 'af', 'zh', 'ja', 'es']
 ```
 
 ## HTML Element Builder
@@ -1077,7 +1080,7 @@ DATABASE_PASSWORD=                 # DB password
 
 # Framework
 TINA4_DEBUG_LEVEL=All             # All, Debug, Info, Warning, Error
-TINA4_LANGUAGE=en                 # Language for framework messages (en, fr, af)
+TINA4_LANGUAGE=en                 # Language for framework messages (en, fr, af, zh, ja, es)
 TINA4_DEFAULT_WEBSERVER=FALSE     # Set to TRUE to use Tina4's built-in webserver instead of ASGI
 HOST_NAME=localhost:7145
 

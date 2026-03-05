@@ -62,7 +62,8 @@ class Websocket:
             self.server = importlib.import_module("simple_websocket")
             self.request = request
         except Exception as e:
-            Debug.error("Error creating Websocket, perhaps you need to install simple_websocket ?", e)
+            from tina4_python import Messages
+            Debug.error(Messages.MSG_WS_CREATE_ERROR, e)
 
     async def connection(self):
         """Perform the WebSocket handshake and return an active connection.
@@ -98,5 +99,6 @@ class Websocket:
             return connection
 
         except Exception as e:
-            Debug.error("Could not establish a socket connection:", str(e))
+            from tina4_python import Messages
+            Debug.error(Messages.MSG_WS_CONNECTION_ERROR.format(error=str(e)))
             return None

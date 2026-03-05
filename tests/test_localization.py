@@ -93,6 +93,32 @@ def test_available_languages_list():
     assert "en" in AVAILABLE_LANGUAGES
     assert "fr" in AVAILABLE_LANGUAGES
     assert "af" in AVAILABLE_LANGUAGES
+    assert "zh" in AVAILABLE_LANGUAGES
+    assert "ja" in AVAILABLE_LANGUAGES
+    assert "es" in AVAILABLE_LANGUAGES
+
+
+# --- New language tests ---
+
+def test_localize_chinese(monkeypatch):
+    monkeypatch.setenv("TINA4_LANGUAGE", "zh")
+    from tina4_python.Localization import localize
+    _ = localize()
+    assert _("Server stopped.") == "服务器已停止。"
+
+
+def test_localize_japanese(monkeypatch):
+    monkeypatch.setenv("TINA4_LANGUAGE", "ja")
+    from tina4_python.Localization import localize
+    _ = localize()
+    assert _("Server stopped.") == "サーバー停止。"
+
+
+def test_localize_spanish(monkeypatch):
+    monkeypatch.setenv("TINA4_LANGUAGE", "es")
+    from tina4_python.Localization import localize
+    _ = localize()
+    assert _("Server stopped.") == "Servidor detenido."
 
 
 # --- All message keys translate in each language ---
@@ -114,10 +140,17 @@ MESSAGE_KEYS = [
     "Server stopped.",
     "Starting webserver on {port}",
     "Entry point name ... {name}",
+    "403 - Forbidden",
+    "500 - Internal Server Error",
+    "404 - File Not Found",
+    "Redirecting...",
+    "Project ready!",
+    "Running migrations...",
+    "All migrations completed successfully!",
 ]
 
 
-@pytest.mark.parametrize("lang", ["en", "fr", "af"])
+@pytest.mark.parametrize("lang", ["en", "fr", "af", "zh", "ja", "es"])
 def test_all_keys_translate(monkeypatch, lang):
     """Every message key should return a non-empty string for each language."""
     monkeypatch.setenv("TINA4_LANGUAGE", lang)

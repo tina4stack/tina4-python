@@ -616,7 +616,8 @@ class Webserver:
 
             accept = self.lowercase_headers.get("accept", "")
             if "application/json" in accept or "application/json" in self.lowercase_headers.get("content-type", ""):
-                payload = json.dumps({"error": "500 - Internal Server Error", "message": error_msg})
+                from tina4_python import Messages
+                payload = json.dumps({"error": Messages.MSG_INTERNAL_SERVER_ERROR, "message": error_msg})
                 writer.write(header_bytes + payload.encode())
             else:
                 html = Template.render_twig_template(
@@ -659,7 +660,8 @@ class Webserver:
             hostname = "localhost"
         else:
             hostname = addr[0]
-        Debug.info(f"Tina4 Python server running on http://{hostname}:{addr[1]}")
+        from tina4_python import Messages
+        Debug.info(Messages.MSG_SERVER_RUNNING.format(host_name=hostname, port=addr[1]))
         await self.server.serve_forever()
 
     async def serve_forever(self):
