@@ -251,6 +251,30 @@ Response.add_header("X-Custom", "value")
 
 TINA4_TOKEN_LIMIT is used to set the session time, recommend 15-30 minutes
 
+### Session Backends
+
+Set `TINA4_SESSION_HANDLER` to choose a backend:
+
+| Handler | Backend | Required package |
+|---------|---------|-----------------|
+| `SessionFileHandler` (default) | File system | — |
+| `SessionRedisHandler` | Redis | `redis` |
+| `SessionValkeyHandler` | Valkey | `valkey` |
+| `SessionMongoHandler` | MongoDB | `pymongo` |
+
+#### MongoDB session env vars
+
+```bash
+TINA4_SESSION_HANDLER=SessionMongoHandler
+TINA4_SESSION_MONGO_HOST=localhost        # default
+TINA4_SESSION_MONGO_PORT=27017            # default
+TINA4_SESSION_MONGO_URI=                  # full URI (overrides host/port)
+TINA4_SESSION_MONGO_USERNAME=             # optional
+TINA4_SESSION_MONGO_PASSWORD=             # optional
+TINA4_SESSION_MONGO_DB=tina4_sessions     # default database
+TINA4_SESSION_MONGO_COLLECTION=sessions   # default collection
+```
+
 ### Authentication & Security
 - Use `tina4_python.tina4_auth.hash_password()` to hash passwords — never use hashlib directly.
 - Use `tina4_python.tina4_auth.check_password(hash, password)` to verify passwords.
@@ -803,6 +827,7 @@ API_KEY=your-api-key            # Static bearer token for API auth
 TINA4_DATABASE_NAME=sqlite3:app.db
 TINA4_DEBUG_LEVEL=All           # All, Debug, Info, Warning, Error
 TINA4_LANGUAGE=en               # Language for framework messages
+TINA4_SESSION_HANDLER=SessionFileHandler  # SessionFileHandler, SessionRedisHandler, SessionValkeyHandler, SessionMongoHandler
 SWAGGER_TITLE=My API
 HOST_NAME=localhost:7145
 ```
