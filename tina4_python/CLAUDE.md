@@ -115,6 +115,38 @@ async def generate_report(request, response):
 - One ORM model per file in `src/orm/` (filename matches class name)
 - Shared helpers go in `src/app/` (utility modules, service classes)
 
+### 7. Always Use Migrations for Database Changes
+
+**Every** schema change — creating tables, adding columns, modifying indexes, inserting seed data — **must** go through a migration file. Never execute raw DDL in route handlers, app.py, or one-off scripts. Migrations are the single source of truth for the database schema and ensure changes are repeatable, versioned, and safe across environments.
+
+**Bad — creating tables directly in code:**
+```python
+# app.py
+db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)")
+```
+
+**Good — create a migration:**
+```bash
+uv run tina4 migrate:create "create users table"
+```
+```sql
+-- migrations/000001_create_users_table.sql
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL
+);
+```
+```bash
+uv run tina4 migrate
+```
+
+Rules:
+- One logical change per migration file (don't mix unrelated schema changes)
+- Never modify an existing migration that has already been run — create a new one
+- Use `ORM.create_table()` only for rapid prototyping; production schemas must use migrations
+- When adding ORM models, always create a corresponding migration for the table
+- Run `uv run tina4 migrate` after creating migration files to apply them
+
 ---
 
 ## Project Structure
@@ -590,6 +622,8 @@ from tina4_python.FieldTypes import ForeignKeyField
 
 ## Migrations
 
+**CRITICAL:** All database schema changes must go through migrations (see [Principle 7](#7-always-use-migrations-for-database-changes)). Never create or alter tables outside of migration files.
+
 ```bash
 uv run tina4 migrate:create "create users table"   # Creates migrations/000001_create_users_table.sql
 uv run tina4 migrate                                 # Runs all pending migrations
@@ -599,6 +633,16 @@ Or run on startup:
 ```python
 from tina4_python.Migration import migrate
 migrate(db)
+```
+
+When adding a new ORM model, always create a matching migration:
+```bash
+# 1. Create the ORM model in src/orm/Product.py
+# 2. Create the migration
+uv run tina4 migrate:create "create products table"
+# 3. Write the DDL in the generated .sql file
+# 4. Run the migration
+uv run tina4 migrate
 ```
 
 ## Middleware
