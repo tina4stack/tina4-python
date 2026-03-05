@@ -14,6 +14,7 @@ Available backends:
     - ``SessionFileHandler``: Stores JWT tokens as files on disk (default).
     - ``SessionRedisHandler``: Stores JWT tokens in a Redis server.
     - ``SessionValkeyHandler``: Stores JWT tokens in a Valkey server.
+    - ``SessionMongoHandler``: Stores JWT tokens in a MongoDB collection.
 
 All backends extend ``SessionHandler``, which defines the shared interface
 (load, set, get, unset, close, save). The ``Session`` class is the public
@@ -31,6 +32,7 @@ Typical usage inside a route handler::
 __all__ = [
     "Session", "SessionHandler", "SessionFileHandler",
     "SessionRedisHandler", "SessionValkeyHandler",
+    "SessionMongoHandler",
 ]
 
 import os
@@ -410,6 +412,123 @@ class SessionValkeyHandler(SessionHandler):
             Debug.error("Session save failure", str(e))
             return False
 
+class SessionMongoHandler(SessionHandler):
+    """MongoDB session backend.
+
+    Stores session JWT tokens in a MongoDB collection. The MongoDB
+    connection is configured via environment variables:
+
+    - ``TINA4_SESSION_MONGO_HOST`` (default ``localhost``)
+    - ``TINA4_SESSION_MONGO_PORT`` (default ``27017``)
+    - ``TINA4_SESSION_MONGO_URI`` (optional full connection URI, overrides host/port)
+    - ``TINA4_SESSION_MONGO_USERNAME`` (optional username)
+    - ``TINA4_SESSION_MONGO_PASSWORD`` (optional password)
+    - ``TINA4_SESSION_MONGO_DB`` (default ``tina4_sessions``)
+    - ``TINA4_SESSION_MONGO_COLLECTION`` (default ``sessions``)
+
+    Requires the ``pymongo`` Python package (``pip install pymongo``).
+    """
+
+    @staticmethod
+    def __init_mongo():
+        try:
+            pymongo = importlib.import_module("pymongo")
+        except Exception as e:
+            Debug.error("pymongo not installed, install with pip install pymongo or poetry add pymongo", str(e))
+            sys.exit(1)
+
+        uri = os.getenv("TINA4_SESSION_MONGO_URI", "")
+        if uri:
+            client = pymongo.MongoClient(uri)
+        else:
+            params = {
+                "host": os.getenv("TINA4_SESSION_MONGO_HOST", "localhost"),
+                "port": int(os.getenv("TINA4_SESSION_MONGO_PORT", 27017)),
+            }
+            username = os.getenv("TINA4_SESSION_MONGO_USERNAME", "")
+            password = os.getenv("TINA4_SESSION_MONGO_PASSWORD", "")
+            if username and password:
+                params["username"] = username
+                params["password"] = password
+            client = pymongo.MongoClient(**params)
+
+        db_name = os.getenv("TINA4_SESSION_MONGO_DB", "tina4_sessions")
+        collection_name = os.getenv("TINA4_SESSION_MONGO_COLLECTION", "sessions")
+        return client[db_name][collection_name]
+
+    @staticmethod
+    def load(session, session_hash):
+        """Load session data from MongoDB.
+
+        Reads the JWT stored under *session_hash*, validates it, and
+        populates ``session.session_values``. If the token is expired or
+        missing, a new session is started.
+
+        Args:
+            session: The ``Session`` instance to populate.
+            session_hash: The document key identifying this session.
+        """
+        try:
+            session.session_hash = session_hash
+            collection = SessionMongoHandler.__init_mongo()
+            doc = collection.find_one({"_id": session_hash})
+            if doc and "token" in doc:
+                token = doc["token"]
+                if tina4_python.tina4_auth.valid(token):
+                    payload = tina4_python.tina4_auth.get_payload(token)
+                    for key in payload:
+                        if key != "expires":
+                            session.set(key, payload[key])
+                else:
+                    Debug.warning("Session expired, starting a new one")
+                    session.start(session_hash)
+            else:
+                Debug.debug("Cannot load session from MongoDB, starting a new one")
+                session.start(session_hash)
+        except Exception as e:
+            Debug.error("MongoDB not available, sessions will fail", e)
+
+    @staticmethod
+    def close(session):
+        """Destroy the session by removing its MongoDB document.
+
+        Args:
+            session: The ``Session`` instance to destroy.
+
+        Returns:
+            True on success, False on failure.
+        """
+        try:
+            collection = SessionMongoHandler.__init_mongo()
+            collection.delete_one({"_id": session.session_hash})
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def save(session):
+        """Persist session data to MongoDB as a signed JWT.
+
+        Args:
+            session: The ``Session`` instance whose values are persisted.
+
+        Returns:
+            True on success, False on failure.
+        """
+        try:
+            collection = SessionMongoHandler.__init_mongo()
+            token = tina4_python.tina4_auth.get_token(payload_data=session.session_values)
+            collection.update_one(
+                {"_id": session.session_hash},
+                {"$set": {"token": token}},
+                upsert=True
+            )
+            return True
+        except Exception as e:
+            Debug.error("Session save failure", str(e))
+            return False
+
+
 class Session:
     """Public API for session management in Tina4.
 
@@ -442,8 +561,9 @@ class Session:
                 stores session files (default ``sessions``).
             default_handler: Name of the backend class to use. One of
                 ``"SessionFileHandler"`` (default),
-                ``"SessionRedisHandler"``, or
-                ``"SessionValkeyHandler"``.
+                ``"SessionRedisHandler"``,
+                ``"SessionValkeyHandler"``, or
+                ``"SessionMongoHandler"``.
         """
         self.session_name = default_name
         self.cookie = cookies.SimpleCookie()
@@ -454,6 +574,7 @@ class Session:
             "SessionFileHandler": SessionFileHandler,
             "SessionRedisHandler": SessionRedisHandler,
             "SessionValkeyHandler": SessionValkeyHandler,
+            "SessionMongoHandler": SessionMongoHandler,
         }
         self.default_handler = handlers.get(default_handler, SessionFileHandler)
 
