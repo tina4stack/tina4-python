@@ -21,6 +21,7 @@ dependencies = [
     "hypercorn>=0.18.0",
     "requests>=2.32.5",
     "jurigged>=0.6.0",
+    "mcp>=1.9.0",
 ]
 
 [dependency-groups]

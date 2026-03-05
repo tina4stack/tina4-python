@@ -83,6 +83,10 @@ setup_logging()
 # Dev mode flag — used to enable live-reload and error overlay
 _dev_mode = debug_level in (TINA4_LOG_ALL, "ALL", TINA4_LOG_DEBUG, "DEBUG")
 
+# MCP server flag — auto-on in debug, opt-in for production
+_mcp_enabled = _dev_mode or os.getenv("TINA4_MCP", "").strip().lower() in ("true", "1", "yes")
+_mcp_path = os.getenv("TINA4_MCP_PATH", "/__mcp")
+
 Debug.info("Environment is", environment)
 
 try:
@@ -369,6 +373,18 @@ async def app(scope, receive, send):
         await livereload_websocket_handler(scope, receive, send)
         return
 
+    # MCP Server intercept
+    if (_mcp_enabled
+        and _mcp_asgi_app is not None
+        and scope.get('type') == 'http'
+        and scope.get('path', '').startswith(_mcp_path)):
+        # Strip mount prefix so the MCP sub-app sees "/" as its root
+        mcp_scope = dict(scope)
+        mcp_scope['path'] = scope['path'][len(_mcp_path):] or '/'
+        mcp_scope['root_path'] = scope.get('root_path', '') + _mcp_path
+        await _mcp_asgi_app(mcp_scope, receive, send)
+        return
+
     body = b""
     while True and scope['type'] == 'http' or scope['type'] == 'websocket':
         if scope['type'] != 'websocket':
@@ -568,6 +584,10 @@ def run_web_server(hostname="localhost", port=7145, debug: bool = False):
     # Show a clickable URL in the banner (0.0.0.0 isn't useful for devs)
     display_host = "localhost" if hostname in ("0.0.0.0", "::") else hostname
     Debug.info(f"Server started http://{display_host}:{port}")
+    if _mcp_enabled:
+        api_key = os.getenv("API_KEY", "")
+        api_key_display = api_key[:8] + "..." if len(api_key) > 8 else api_key
+        Debug.info(f"[MCP] endpoint: http://{display_host}:{port}{_mcp_path}  API_KEY: {api_key_display}")
     webserver(hostname, port, debug=debug)  # Pass debug flag down
 
 
@@ -617,17 +637,43 @@ def webserver(host_name, port, debug: bool = False):
                     loop.add_signal_handler(signal.SIGINT, trigger_shutdown)
                     loop.add_signal_handler(signal.SIGTERM, trigger_shutdown)
 
-                    await serve(app, config, shutdown_trigger=shutdown_event.wait)
+                    if _mcp_enabled and _mcp_server is not None:
+                        async with _mcp_server.session_manager.run():
+                            await serve(app, config, shutdown_trigger=shutdown_event.wait)
+                    else:
+                        await serve(app, config, shutdown_trigger=shutdown_event.wait)
 
                 asyncio.run(_serve_dev())
             else:
-                asyncio.run(serve(app, config))
+                if _mcp_enabled and _mcp_server is not None:
+                    async def _serve_with_mcp():
+                        async with _mcp_server.session_manager.run():
+                            await serve(app, config)
+                    asyncio.run(_serve_with_mcp())
+                else:
+                    asyncio.run(serve(app, config))
         except KeyboardInterrupt:
             pass
         except Exception as e:
             Debug.error("Not running Hypercorn webserver", str(e))
 
     Debug.info(Messages.MSG_SERVER_STOPPED)
+
+# MCP server — always on in debug, opt-in for production
+_mcp_server = None
+_mcp_asgi_app = None
+if _mcp_enabled:
+    try:
+        from tina4_python.McpServer import create_mcp_server, get_mcp_asgi_app, mcp_auth_middleware
+        _mcp_server = create_mcp_server(root_path)
+        _mcp_asgi_app = mcp_auth_middleware(get_mcp_asgi_app(_mcp_server))
+        Debug.info(f"[MCP] Server enabled at {_mcp_path}")
+    except ImportError as e:
+        Debug.warning(f"[MCP] Could not start MCP server (missing dependency?): {e}")
+        _mcp_enabled = False
+    except Exception as e:
+        Debug.error(f"[MCP] Failed to initialise MCP server: {e}")
+        _mcp_enabled = False
 
 # Live coding hot-reload (jurigged) — only in dev mode
 if _dev_mode and _has_jurigged:

@@ -1011,3 +1011,76 @@ async def dashboard(request, response):
 </div>
 {% endblock %}
 ```
+
+---
+
+## MCP Server (AI Tool Integration)
+
+Tina4 includes a built-in **MCP (Model Context Protocol)** server that lets any AI tool (Claude, Cursor, Copilot, etc.) interact with your running application.
+
+### Activation
+
+- **Debug mode**: MCP is always enabled automatically (like jurigged).
+- **Production**: Set `TINA4_MCP=true` in `.env`.
+- **Endpoint**: `http://localhost:7145/__mcp` (configurable via `TINA4_MCP_PATH`).
+- **Auth**: Every request needs `Authorization: Bearer <API_KEY>`.
+
+### Granular Permission Toggles (.env)
+
+Each tool category can be independently enabled/disabled:
+
+```env
+TINA4_MCP=true                # Master switch
+TINA4_MCP_PATH=/__mcp         # Mount path
+
+# In debug mode, all default to true. In production, all default to false.
+TINA4_MCP_LOGS=true           # Read logs, list routes, server info
+TINA4_MCP_FILES_READ=true     # Read project files, search, list dirs
+TINA4_MCP_FILES_WRITE=true    # Write templates, public assets, scss
+TINA4_MCP_CODE_WRITE=false    # Write routes, app, orm (dangerous)
+TINA4_MCP_DB_READ=true        # SELECT queries, list tables
+TINA4_MCP_DB_WRITE=false      # INSERT/UPDATE/DELETE, migrations
+TINA4_MCP_QUEUE=true          # Queue produce/peek
+```
+
+### Available Tools (26)
+
+**Diagnostics** (`LOGS`): `get_logs`, `get_server_info`, `list_routes`, `get_env`, `get_swagger_spec`
+
+**File Reading** (`FILES_READ`): `read_file`, `list_directory`, `search_files`, `get_project_structure`, `get_route_handler`, `list_orm_models`
+
+**Content Writing** (`FILES_WRITE`): `write_file`, `edit_file`, `delete_file`, `rename_file` — writes to `src/templates/`, `src/public/`, `src/scss/`, `migrations/`
+
+**Code Writing** (`CODE_WRITE`): Same write tools, unlocks `src/routes/`, `src/app/`, `src/orm/`
+
+**Templates** (`FILES_READ`): `render_template`, `list_templates`, `get_template_info`
+
+**Database** (`DB_READ`/`DB_WRITE`): `db_query`, `db_tables`, `db_execute`, `run_migration`
+
+**Operations**: `compile_scss`, `trigger_reload`, `queue_produce`, `queue_peek`
+
+### File Safety
+
+| Category | Directories |
+|----------|-------------|
+| Content writable | `src/templates/`, `src/public/`, `src/scss/`, `migrations/` |
+| Code writable | `src/routes/`, `src/app/`, `src/orm/` |
+| Read-only | `app.py`, `pyproject.toml`, `README.md`, `logs/` |
+| Blocked | `secrets/`, `.env`, `.git/`, `tina4_python/` |
+
+### Connecting from Claude Desktop
+
+Add to your Claude Desktop MCP config:
+
+```json
+{
+  "mcpServers": {
+    "tina4": {
+      "url": "http://localhost:7145/__mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_API_KEY"
+      }
+    }
+  }
+}
+```
