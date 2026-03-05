@@ -668,6 +668,9 @@ except:
     db.rollback()
 ```
 
+**NEVER use `db.execute("COMMIT")` or `db.execute("ROLLBACK")` or `db.execute("BEGIN")`.**
+Always use the proper methods: `db.commit()`, `db.rollback()`, `db.start_transaction()`. Raw SQL transaction commands bypass the framework's connection and transaction state management, leading to unpredictable behaviour and connection leaks.
+
 ## ORM
 
 Define models in `src/orm/` (one class per file, filename matches class name).
