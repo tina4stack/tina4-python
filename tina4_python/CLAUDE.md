@@ -4,6 +4,27 @@ This file helps AI assistants and new developers understand how to build with ti
 
 ---
 
+## MANDATORY: Use Tina4 Built-In Features First — Never Reinvent the Wheel
+
+**Before writing ANY custom utility, helper, background worker, queue, HTTP client, template engine, auth system, or any other infrastructure code, you MUST follow this order:**
+
+1. **Check this file (CLAUDE.md) first.** Tina4 likely already has the feature you need — queues, API client, ORM, CRUD generators, templates, middleware, auth, WSDL, SCSS compilation, file uploads, etc. Use the built-in version.
+
+2. **If you can't find it here, check the online docs at https://tina4.com/python.** Fetch the relevant page and look for the feature there.
+
+3. **Only if the feature genuinely does not exist in tina4_python**, ask the user for permission before writing custom code: *"Tina4 doesn't seem to have a built-in [X]. Should I create a custom implementation, or is there a tina4 feature I'm missing?"*
+
+**NEVER silently create custom implementations for things tina4 already provides.**  Common violations to watch for:
+- Writing your own background thread/task system → **USE `tina4_python.Queue`**
+- Writing your own HTTP client → **USE `tina4_python.Api`**
+- Writing your own template renderer → **USE `tina4_python.Template`**
+- Writing your own auth middleware → **USE `tina4_python.Router.middleware`**
+- Writing your own ORM/database layer → **USE `tina4_python.ORM`**
+- Writing your own CRUD endpoints → **USE `result.to_crud(request)`**
+- Using third-party libraries (Celery, RQ, requests, httpx, Jinja2) for things tina4 handles natively
+
+---
+
 ## IMPORTANT: Coding Principles for AI Assistants
 
 When building with Tina4, follow these principles strictly:
@@ -86,9 +107,11 @@ if __name__ == "__main__":
 
 Never use raw `requests` or `urllib` directly. Use the built-in `Api` class — it handles auth headers, JSON serialisation, error handling, and SSL consistently.
 
-### 5. Use Queues for Long-Running Work
+### 5. Use tina4_python's Built-in Queue — NEVER Write Your Own
 
-Route handlers must respond fast. Any operation that takes more than a second (sending emails, generating reports, calling slow external APIs, processing files) must be pushed to a Queue and processed by a Consumer.
+**CRITICAL: NEVER create custom queue mechanisms, background threads, polling loops, asyncio.create_task() workers, threading.Thread() dispatchers, or any home-grown background processing.** Tina4 has a built-in Queue system — use it. This is non-negotiable.
+
+Route handlers must respond fast. Any operation that takes more than a second (sending emails, generating reports, calling slow external APIs, processing files) must use `tina4_python.Queue.Queue` and `tina4_python.Queue.Producer`.
 
 **Bad — blocking the request:**
 ```python
@@ -100,8 +123,19 @@ async def generate_report(request, response):
     return response({"ok": True}) # User waited 18 seconds!
 ```
 
-**Good — queue it:**
+**Bad — writing a custom queue/worker (NEVER do this):**
 ```python
+# WRONG — do NOT create your own background workers
+import threading, queue
+task_queue = queue.Queue()           # NO!
+threading.Thread(target=worker).start()  # NO!
+asyncio.create_task(background_loop())   # NO!
+```
+
+**Good — use tina4_python's Queue:**
+```python
+from tina4_python.Queue import Queue, Producer
+
 @post("/api/reports")
 async def generate_report(request, response):
     producer = Producer(Queue(topic="reports"))
@@ -109,7 +143,29 @@ async def generate_report(request, response):
     return response({"status": "queued"})
 ```
 
-### 6. One Responsibility Per File
+### 6. Every Input Field MUST Have a Placeholder
+
+**CRITICAL: Every `<input>`, `<textarea>`, and `<select>` element MUST include a `placeholder` attribute** that describes what the user should enter. This is a hard requirement for all forms — no exceptions.
+
+```twig
+{# GOOD — every field has a placeholder #}
+<input name="name" type="text" class="form-control" placeholder="Full name" required>
+<input name="email" type="email" class="form-control" placeholder="you@example.com" required>
+<input name="phone" type="tel" class="form-control" placeholder="+27 12 345 6789">
+<textarea name="message" class="form-control" placeholder="Type your message here..."></textarea>
+<select name="role" class="form-select">
+    <option value="" disabled selected>Select a role...</option>
+    <option value="admin">Admin</option>
+</select>
+
+{# BAD — missing placeholders (NEVER do this) #}
+<input name="name" type="text" class="form-control" required>
+<textarea name="message" class="form-control"></textarea>
+```
+
+For `<select>` elements, use a disabled default `<option>` as the placeholder.
+
+### 7. One Responsibility Per File
 
 - One route resource per file in `src/routes/` (e.g., `users.py`, `products.py`)
 - One ORM model per file in `src/orm/` (filename matches class name)
@@ -630,7 +686,7 @@ async def admin_dashboard(request, response):
 
 ## Queues — Background Processing
 
-**Rule: Any operation that takes more than ~1 second must use a queue.**
+**CRITICAL RULE: Any operation that takes more than ~1 second must use tina4_python's built-in Queue.  NEVER create custom background threads, asyncio tasks, polling loops, or any home-grown queue/worker mechanism.  Always import from `tina4_python.Queue`.**
 
 Supports: litequeue (default/SQLite, zero-config), RabbitMQ, Kafka, MongoDB.
 
@@ -721,6 +777,8 @@ queue = Queue(config=config, topic="tasks")
 - Calling slow external APIs
 - Processing uploaded files (image resize, CSV import)
 - Any operation the user should not wait for
+
+**Reminder: Always use `from tina4_python.Queue import Queue, Producer, Consumer`. Never use `threading`, `asyncio.create_task()`, `multiprocessing`, `concurrent.futures`, or any third-party task queue library (Celery, RQ, Dramatiq, etc.) for background work.**
 
 ## WSDL / SOAP Services
 
@@ -911,7 +969,8 @@ async def create_product(request, response):
 ```twig
 <form id="userForm">
     {{ form_token() }}
-    <input name="name" class="form-control" required>
+    <input name="name" type="text" class="form-control" placeholder="Full name" required>
+    <input name="email" type="email" class="form-control" placeholder="you@example.com" required>
     <button type="button" onclick="saveForm('userForm', '/api/users', 'message')">Save</button>
 </form>
 <div id="message"></div>
