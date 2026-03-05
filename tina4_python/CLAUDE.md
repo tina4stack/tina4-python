@@ -55,7 +55,65 @@ Every HTML page must extend a base template. Never produce standalone HTML files
 - Use `{% block %}` for page-specific content
 - Use `{% include %}` for reusable partials
 
-### 3. Centralise Configuration in app.py
+### 3. Always Add Placeholders to Form Inputs
+
+**Every** `<input>`, `<textarea>`, and `<select>` element must have a meaningful `placeholder` attribute that tells the user what to enter. Inputs without placeholders look incomplete and hurt usability.
+
+**Bad — no placeholders:**
+```twig
+<input type="text" name="email" class="form-control">
+<input type="text" name="phone" class="form-control">
+```
+
+**Good — descriptive placeholders:**
+```twig
+<input type="email" name="email" class="form-control" placeholder="you@example.com">
+<input type="tel" name="phone" class="form-control" placeholder="+27 82 123 4567">
+```
+
+Rules:
+- Use realistic example values as placeholders (e.g. `placeholder="you@example.com"`) rather than repeating the label (e.g. `placeholder="Email"`)
+- Use the correct `type` attribute (`email`, `tel`, `url`, `number`, `date`, etc.) — never use `type="text"` for structured data
+- Always include `<label>` elements alongside inputs for accessibility
+
+### 4. No Inline Styles — Use SCSS/CSS Classes
+
+Never use `style="..."` attributes in Twig templates. All styling must live in SCSS files under `src/scss/` (compiled to `src/public/css/`) or in external CSS. Inline styles are unmaintainable, cannot be overridden cleanly, and bypass the framework's SCSS workflow.
+
+**Bad — inline styles:**
+```twig
+<div style="background: #2c3e50; padding: 20px; border-radius: 8px;">
+    <h1 style="color: white; font-size: 2rem;">Dashboard</h1>
+</div>
+```
+
+**Good — use CSS classes:**
+```twig
+<div class="dashboard-header">
+    <h1 class="dashboard-title">Dashboard</h1>
+</div>
+```
+```scss
+// src/scss/dashboard.scss
+.dashboard-header {
+    background: $primary;
+    padding: 1.25rem;
+    border-radius: 0.5rem;
+}
+
+.dashboard-title {
+    color: $white;
+    font-size: 2rem;
+}
+```
+
+Rules:
+- Use Bootstrap 5 utility classes (e.g. `mt-4`, `text-center`, `d-flex`) for spacing, alignment, and layout instead of inline styles
+- Use SCSS variables for colours, spacing, and font sizes — never hardcode hex values in templates
+- One SCSS file per page or component (e.g. `dashboard.scss`, `user-card.scss`)
+- Prefer semantic class names (`.product-card`, `.nav-sidebar`) over generic ones (`.box`, `.wrapper`)
+
+### 5. Centralise Configuration in app.py
 
 `app.py` is the single entry point. Register all custom filters, global functions, middleware classes, and ORM setup here — before `run_web_server()`.
 
@@ -82,11 +140,11 @@ if __name__ == "__main__":
     run_web_server("0.0.0.0", 7145)
 ```
 
-### 4. Use the Api Class for External HTTP Calls
+### 6. Use the Api Class for External HTTP Calls
 
 Never use raw `requests` or `urllib` directly. Use the built-in `Api` class — it handles auth headers, JSON serialisation, error handling, and SSL consistently.
 
-### 5. Use Queues for Long-Running Work
+### 7. Use Queues for Long-Running Work
 
 Route handlers must respond fast. Any operation that takes more than a second (sending emails, generating reports, calling slow external APIs, processing files) must be pushed to a Queue and processed by a Consumer.
 
@@ -109,13 +167,13 @@ async def generate_report(request, response):
     return response({"status": "queued"})
 ```
 
-### 6. One Responsibility Per File
+### 8. One Responsibility Per File
 
 - One route resource per file in `src/routes/` (e.g., `users.py`, `products.py`)
 - One ORM model per file in `src/orm/` (filename matches class name)
 - Shared helpers go in `src/app/` (utility modules, service classes)
 
-### 7. Always Use Migrations for Database Changes
+### 9. Always Use Migrations for Database Changes
 
 **Every** schema change — creating tables, adding columns, modifying indexes, inserting seed data — **must** go through a migration file. Never execute raw DDL in route handlers, app.py, or one-off scripts. Migrations are the single source of truth for the database schema and ensure changes are repeatable, versioned, and safe across environments.
 
@@ -146,6 +204,41 @@ Rules:
 - Use `ORM.create_table()` only for rapid prototyping; production schemas must use migrations
 - When adding ORM models, always create a corresponding migration for the table
 - Run `uv run tina4 migrate` after creating migration files to apply them
+
+### 10. Use Tina4 Built-in Features — Never Reinvent
+
+Tina4 provides a full toolkit. Before writing custom code, check if the framework already solves the problem. **Never** build your own version of something Tina4 already provides.
+
+| Need | Use this — don't build your own |
+|------|--------------------------------|
+| Background jobs / async work | `Queue`, `Producer`, `Consumer` from `tina4_python.Queue` |
+| HTTP calls to external APIs | `Api` from `tina4_python.Api` |
+| JWT tokens & auth | `tina4_python.tina4_auth` (get_token, valid, get_payload) |
+| Password hashing | `tina4_python.tina4_auth.hash_password()` / `check_password()` |
+| Session management | `request.session` (set, get, unset, close) |
+| Database queries & CRUD | `Database` from `tina4_python.Database` |
+| ORM models | Subclass `ORM` from `tina4_python` |
+| Template rendering | `response.render()` with Twig/Jinja2 |
+| Form token validation | `{{ form_token() }}` in templates + built-in middleware |
+| CRUD admin interfaces | `result.to_crud(request)` or `CRUD.to_crud()` |
+| Swagger/OpenAPI docs | `@description()`, `@tags()`, `@example()` decorators |
+| SOAP/WSDL services | `WSDL` class from `tina4_python.WSDL` |
+| Database migrations | `tina4 migrate:create` + `tina4 migrate` |
+| WebSockets | `Websocket` from `tina4_python.Websocket` |
+| SCSS compilation | Drop `.scss` in `src/scss/` — auto-compiled |
+| Static file serving | Put files in `src/public/` — auto-served |
+
+**Bad — writing a custom queue:**
+```python
+import threading, queue
+task_queue = queue.Queue()  # Don't do this!
+```
+
+**Good — use Tina4's Queue:**
+```python
+from tina4_python.Queue import Queue, Producer
+Producer(Queue(topic="tasks")).produce({"action": "send_email"})
+```
 
 ---
 
@@ -622,7 +715,7 @@ from tina4_python.FieldTypes import ForeignKeyField
 
 ## Migrations
 
-**CRITICAL:** All database schema changes must go through migrations (see [Principle 7](#7-always-use-migrations-for-database-changes)). Never create or alter tables outside of migration files.
+**CRITICAL:** All database schema changes must go through migrations (see [Principle 9](#9-always-use-migrations-for-database-changes)). Never create or alter tables outside of migration files.
 
 ```bash
 uv run tina4 migrate:create "create users table"   # Creates migrations/000001_create_users_table.sql
