@@ -2,6 +2,14 @@
 
 This file helps AI assistants and new developers understand how to build with tina4_python.
 
+## What is Tina4?
+
+Tina4 Python is a lightweight, batteries-included web framework that prioritises convention over configuration. It provides routing, templating (Twig/Jinja2), ORM, database migrations, session management, JWT authentication, Swagger/OpenAPI generation, CRUD scaffolding, queues, WebSockets, WSDL/SOAP support, and SCSS compilation — all out of the box with zero boilerplate.
+
+**Official documentation:** https://tina4.com/python — consult this for detailed guides, examples, and API reference beyond what is covered here.
+
+**Key philosophy:** Tina4 already provides solutions for most common web application needs. Always use the framework's built-in features before writing custom implementations. If you're about to write something from scratch (a queue system, an HTTP client, auth logic, etc.), stop and check if Tina4 already has it — it almost certainly does.
+
 ---
 
 ## IMPORTANT: Coding Principles for AI Assistants
