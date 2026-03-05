@@ -833,6 +833,72 @@ Link in your base template:
 
 Changes to SCSS files trigger CSS-only hot-reload (no full page refresh).
 
+## CLI Snippets & Scaffolding
+
+The `tina4` CLI generates boilerplate so you don't write it from scratch.
+
+### Project scaffolding
+
+```bash
+uv run tina4 init my-project    # Creates app.py, pyproject.toml, Dockerfile, CLAUDE.md
+uv run tina4 start              # Start server on default port 7145
+uv run tina4 start 8080         # Start on custom port
+```
+
+### CRUD Generator
+
+Generate a complete CRUD interface (list, create, update, delete) for any database table with one call:
+
+```python
+from tina4_python.CRUD import CRUD
+
+@get("/admin/users")
+async def admin_users(request, response):
+    return response(CRUD.to_crud(request, {
+        "sql": "SELECT id, name, email FROM users",
+        "title": "User Management",
+        "primary_key": "id",
+    }))
+```
+
+This auto-generates:
+- Searchable, paginated HTML table with Bootstrap 5
+- Create / Edit / Delete modals with form tokens
+- 4 RESTful API routes (GET list, POST create, POST update, DELETE)
+- Per-table Twig template in `src/templates/crud/` (customisable after generation)
+
+### ORM Table Creation
+
+Generate and execute `CREATE TABLE` from your ORM models:
+
+```python
+class Product(ORM):
+    id    = IntegerField(primary_key=True, auto_increment=True)
+    name  = StringField()
+    price = NumericField()
+
+Product().create_table()  # Generates + executes DDL for your database
+```
+
+### Migration Files
+
+```bash
+uv run tina4 migrate:create "add users table"
+# Creates: migrations/000001_add_users_table.sql
+
+uv run tina4 migrate
+# Runs all pending .sql files in order
+```
+
+### When to use each
+
+| Need | Use |
+|------|-----|
+| Quick admin UI for a table | `CRUD.to_crud()` |
+| Schema-first database design | Migration files |
+| Code-first database design | `ORM.create_table()` |
+| New project from scratch | `tina4 init` |
+
 ## Common Patterns
 
 ### REST API with ORM

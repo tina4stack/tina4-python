@@ -60,18 +60,64 @@ class Swagger:
         Swagger.set_swagger_value(callback, "params", params)
 
     @staticmethod
+    def _python_type_to_openapi(value: Any) -> str:
+        """Map a Python value to an OpenAPI type string."""
+        if isinstance(value, bool):
+            return "boolean"
+        if isinstance(value, int):
+            return "integer"
+        if isinstance(value, float):
+            return "number"
+        if isinstance(value, list):
+            return "array"
+        if isinstance(value, dict):
+            return "object"
+        return "string"
+
+    @staticmethod
+    def _schema_from_example(example: Any) -> Dict[str, Any]:
+        """Infer an OpenAPI schema from a Python example value."""
+        if example is None:
+            return {"type": "object"}
+        if isinstance(example, list):
+            items_schema = Swagger._schema_from_example(example[0]) if example else {"type": "object"}
+            return {"type": "array", "items": items_schema, "example": example}
+        if isinstance(example, dict):
+            properties = {}
+            for key, value in example.items():
+                prop = {"type": Swagger._python_type_to_openapi(value)}
+                if isinstance(value, dict):
+                    prop = Swagger._schema_from_example(value)
+                elif isinstance(value, list) and value:
+                    prop = {"type": "array", "items": {"type": Swagger._python_type_to_openapi(value[0])}}
+                properties[key] = prop
+            return {
+                "type": "object",
+                "properties": properties,
+                "example": example
+            }
+        return {"type": Swagger._python_type_to_openapi(example), "example": example}
+
+    @staticmethod
     def get_path_parameters(route_path: str) -> List[Dict[str, Any]]:
-        """Extract {id} style path parameters and return proper OpenAPI parameter objects"""
+        """Extract {id} or {id:int} style path parameters and return proper OpenAPI parameter objects"""
         params = []
+        type_map = {"int": "integer", "float": "number", "path": "string"}
         segments = route_path.strip("/").split("/")
         for segment in segments:
             if segment.startswith("{") and segment.endswith("}"):
-                param_name = segment[1:-1].strip()
+                raw = segment[1:-1].strip()
+                if ":" in raw:
+                    param_name, param_type = raw.split(":", 1)
+                    schema_type = type_map.get(param_type, "string")
+                else:
+                    param_name = raw
+                    schema_type = "string"
                 params.append({
                     "name": param_name,
                     "in": "path",
                     "required": True,
-                    "schema": {"type": "string"},
+                    "schema": {"type": schema_type},
                     "description": f"Path parameter: {param_name}"
                 })
         return params
@@ -134,21 +180,21 @@ class Swagger:
                     "description": "Successful response",
                     "content": {
                         "application/json": {
-                            "example": example_response
+                            "schema": Swagger._schema_from_example(example_response)
                         } if example_response else {}
                     }
                 },
                 "400": {
                     "description": "Bad Request",
-                    "content": {"application/json": {}}
+                    "content": {"application/json": {"schema": {"type": "object", "properties": {"error": {"type": "string"}}}}}
                 },
                 "401": {
                     "description": "Unauthorized",
-                    "content": {"application/json": {}}
+                    "content": {"application/json": {"schema": {"type": "object", "properties": {"error": {"type": "string"}}}}}
                 } if secure else None,
                 "404": {
                     "description": "Not Found",
-                    "content": {"application/json": {}}
+                    "content": {"application/json": {"schema": {"type": "object", "properties": {"error": {"type": "string"}}}}}
                 }
             },
             "security": [{"bearerAuth": []}, {"basicAuth": []}] if secure else []
@@ -159,9 +205,10 @@ class Swagger:
 
         # Add requestBody only for methods that support it
         if method in [Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH]:
-            schema = {"type": "object"}
             if example is not None:
-                schema["example"] = example
+                schema = Swagger._schema_from_example(example)
+            else:
+                schema = {"type": "object"}
 
             operation["requestBody"] = {
                 "required": True,
@@ -206,11 +253,13 @@ class Swagger:
                 continue
 
             swagger = Swagger.parse_swagger_metadata(route_info["swagger"].copy())
+            # Preserve the original swagger-level secure value (may be None)
+            swagger_secure_orig = swagger.get("secure")
 
             for route in route_info.get("routes", []):
                 for method in route_info.get("methods", []):
                     # Apply per-method secure default if not explicitly set
-                    secured = swagger.get("secure")
+                    secured = swagger_secure_orig
                     if secured is None:
                         secured = method != Constant.TINA4_GET
 
@@ -223,21 +272,20 @@ class Swagger:
                     if route_noauth is not None and route_noauth:
                        secured = False
 
-                    swagger["secure"] = secured  # Update for this operation
                     operation = Swagger.get_swagger_entry(
                         route=route,
                         method=method,
                         tags=swagger["tags"],
                         summary=swagger["summary"],
                         description=swagger["description"],
-                        secure=secure,
+                        secure=secured,
                         query_params=swagger["params"],
                         example=swagger["example"],
                         example_response=swagger["example_response"]
                     )
 
-                    # CRITICAL FIX: Re-apply security if route is marked secure
-                    if secure:
+                    # Re-apply security based on resolved auth state
+                    if secured:
                         operation["security"] = [
                             {"bearerAuth": []},
                             {"basicAuth": []}
@@ -273,7 +321,7 @@ class Swagger:
             },
             "servers": [
                 {"url": f"{scheme}://{host}{base_url}", "description": "Current server"},
-                {"url": "http://localhost:7145", "description": "Local development"}
+                {"url": os.getenv("SWAGGER_DEV_URL", "http://localhost:7145"), "description": "Local development"}
             ],
             "components": {
                 "securitySchemes": {
@@ -360,9 +408,19 @@ def describe(
         params: List[str] | Dict = None,
         example: Any = None,
         example_response: Any = None,
-        secure: bool = False
+        secure: bool = None
 ):
-    """All-in-one decorator - most convenient"""
+    """All-in-one decorator - most convenient
+
+    Args:
+        description: Operation description text.
+        summary: Short summary text.
+        tags: Tag name(s) for grouping.
+        params: Query parameter definitions.
+        example: Request body example (for POST/PUT/PATCH).
+        example_response: Response body example.
+        secure: ``True`` to require auth, ``False`` for public, ``None`` (default) to use per-method defaults.
+    """
     def decorator(callback):
         if description is not None:
             Swagger.add_description(description, callback)
@@ -375,8 +433,10 @@ def describe(
         if example is not None:
             Swagger.add_example(example, callback)
         if example_response is not None:
-            Swagger.add_example(example_response, callback)
-        if secure:
+            Swagger.add_example_response(example_response, callback)
+        if secure is True:
             Swagger.add_secure(callback)
+        elif secure is False:
+            Swagger.add_noauth(callback)
         return callback
     return decorator
