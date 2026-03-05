@@ -27,35 +27,37 @@ import gettext
 import os
 import sys
 from tina4_python.Debug import Debug
-from tina4_python import Constant
 
 
-# load environment variables from .env file
-# check .env for information
+AVAILABLE_LANGUAGES = ['en', 'fr', 'af']
+
 
 def localize():
+    """Initialize the translation system and return the translation function.
+
+    Returns:
+        callable: A function that translates strings based on the active language.
+    """
     translation_path = os.path.join(os.path.dirname(__file__), 'translations')
-    available_languages = ['en', 'fr', 'af']
 
-    # get user language from environment variable
-    # default to English
-    if "TINA4_LANGUAGE" in os.environ:
-        user_language = os.environ.get('TINA4_LANGUAGE', 'en')
-    else:
-        user_language = "en"
+    # get user language from environment variable, default to English
+    user_language = os.environ.get('TINA4_LANGUAGE', 'en')
 
-    # check if an argument is a language
-    if len(sys.argv) > 1:
-        try:
-            int(sys.argv[1])
-        except ValueError:
-            if sys.argv[1] in available_languages:
-                user_language = sys.argv[1]
-
-    if len(sys.argv) > 2 and sys.argv[2] in available_languages:
-        user_language = sys.argv[2]
+    # check if a CLI argument specifies a language
+    for arg in sys.argv[1:]:
+        if arg in AVAILABLE_LANGUAGES:
+            user_language = arg
+            break
 
     Debug.info("Setting language: " + user_language)
-    # Initialize the translation system
-    translation = gettext.translation('messages', translation_path, languages=[user_language])
+
+    # Initialize the translation system with fallback to prevent crashes
+    translation = gettext.translation(
+        'messages',
+        translation_path,
+        languages=[user_language],
+        fallback=True
+    )
     translation.install()
+
+    return translation.gettext

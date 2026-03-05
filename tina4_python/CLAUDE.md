@@ -958,12 +958,39 @@ Set the language in `.env`:
 TINA4_LANGUAGE=en   # Supported: en, fr, af
 ```
 
-Use in code:
+### Using localize()
+
+`localize()` initializes the translation system and returns a translation function:
+
 ```python
 from tina4_python.Localization import localize
 
 _ = localize()
-print(_("Hello"))  # Returns translated string based on TINA4_LANGUAGE
+print(_("Server stopped."))  # English: "Server stopped."
+                              # French:  "Serveur arrêté."
+                              # Afrikaans: "Bediener gestop."
+```
+
+The returned `_()` function also installs itself as a Python builtin, so after calling `localize()` once, `_()` is available globally.
+
+### Format strings
+
+Translated strings can contain `{placeholder}` format variables:
+```python
+_ = localize()
+msg = _("Server started http://{host_name}:{port}")
+print(msg.format(host_name="localhost", port=7145))
+```
+
+### Fallback behaviour
+
+If `TINA4_LANGUAGE` is set to an unsupported language, the system falls back gracefully to returning the original English msgid — no crash.
+
+### Available languages
+
+```python
+from tina4_python.Localization import AVAILABLE_LANGUAGES
+# ['en', 'fr', 'af']
 ```
 
 ## HTML Element Builder
