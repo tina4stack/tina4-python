@@ -55,10 +55,13 @@ import datetime
 
 class Database:
 
-    def __init__(self, connection_string, username="", password=""):
+    def __init__(self, connection_string, username="", password="", charset=""):
         """
         Initializes a database connection
         :param connection_string:
+        :param username:
+        :param password:
+        :param charset: Character set for the connection (e.g. "UTF8", "WIN1252")
         """
         # split out the connection string
         # driver:host/port:schema/path
@@ -71,6 +74,8 @@ class Database:
                 username = os.environ.get("DATABASE_USERNAME", "")
             if password == "":
                 password = os.environ.get("DATABASE_PASSWORD", "")
+            if charset == "":
+                charset = os.environ.get("DATABASE_CHARSET", "")
 
             if connection_string is None:
                 from tina4_python import Messages
@@ -98,6 +103,7 @@ class Database:
         self.database_path = params[1]
         self.username = username
         self.password = password
+        self.charset = charset
 
         if self.database_engine == SQLITE:
             self.dba = self.database_module.connect(self.database_path)
@@ -149,28 +155,37 @@ class Database:
             self.database_path = temp_params[1]
 
             if self.database_engine == FIREBIRD:
-                self.dba = self.database_module.connect(
-                    self.host + "/" + str(self.port) + ":" + self.database_path,
-                    user=self.username,
-                    password=self.password
-                )
+                firebird_args = {
+                    "dsn": self.host + "/" + str(self.port) + ":" + self.database_path,
+                    "user": self.username,
+                    "password": self.password,
+                }
+                if self.charset:
+                    firebird_args["charset"] = self.charset
+                self.dba = self.database_module.connect(**firebird_args)
             elif self.database_engine == MYSQL:
-                self.dba = self.database_module.connect(
-                    database=self.database_path,
-                    port=self.port,
-                    host=self.host,
-                    user=self.username,
-                    password=self.password,
-                    consume_results=True
-                )
+                mysql_args = {
+                    "database": self.database_path,
+                    "port": self.port,
+                    "host": self.host,
+                    "user": self.username,
+                    "password": self.password,
+                    "consume_results": True,
+                }
+                if self.charset:
+                    mysql_args["charset"] = self.charset
+                self.dba = self.database_module.connect(**mysql_args)
             elif self.database_engine == POSTGRES:
-                self.dba = self.database_module.connect(
-                    dbname=self.database_path,
-                    port=self.port,
-                    host=self.host,
-                    user=self.username,
-                    password=self.password
-                )
+                postgres_args = {
+                    "dbname": self.database_path,
+                    "port": self.port,
+                    "host": self.host,
+                    "user": self.username,
+                    "password": self.password,
+                }
+                if self.charset:
+                    postgres_args["client_encoding"] = self.charset
+                self.dba = self.database_module.connect(**postgres_args)
             elif self.database_engine == MSSQL:
                 self.dba = self.database_module.connect(
                     server=self.host,
