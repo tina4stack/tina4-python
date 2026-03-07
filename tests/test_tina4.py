@@ -6,6 +6,7 @@
 
 import pytest
 from datetime import datetime
+from unittest.mock import patch, MagicMock
 
 import tina4_python
 from tina4_python import tina4_auth
@@ -251,3 +252,112 @@ def test_orm(dba):
     item.save()
 
     assert item.id == 1
+
+
+# --- Connection argument tests (mocked drivers) ---
+
+def _mock_driver():
+    """Create a mock database driver module with a connect() method."""
+    mock_module = MagicMock()
+    mock_module.__name__ = "mock_driver"
+    mock_module.connect.return_value = MagicMock()
+    return mock_module
+
+
+@patch("importlib.import_module")
+def test_firebird_charset(mock_import):
+    mock_module = _mock_driver()
+    mock_import.return_value = mock_module
+    Database(FIREBIRD + ":localhost/3050:/tmp/TEST.FDB", "SYSDBA", "masterkey", charset="UTF8")
+    mock_module.connect.assert_called_once_with(
+        "localhost/3050:/tmp/TEST.FDB",
+        user="SYSDBA",
+        password="masterkey",
+        charset="UTF8",
+    )
+
+
+@patch("importlib.import_module")
+def test_firebird_no_charset(mock_import):
+    mock_module = _mock_driver()
+    mock_import.return_value = mock_module
+    Database(FIREBIRD + ":localhost/3050:/tmp/TEST.FDB", "SYSDBA", "masterkey")
+    mock_module.connect.assert_called_once_with(
+        "localhost/3050:/tmp/TEST.FDB",
+        user="SYSDBA",
+        password="masterkey",
+    )
+
+
+@patch("importlib.import_module")
+def test_mysql_charset(mock_import):
+    mock_module = _mock_driver()
+    mock_import.return_value = mock_module
+    Database(MYSQL + ":localhost/3306:mydb", "root", "pass", charset="utf8mb4")
+    mock_module.connect.assert_called_once_with(
+        database="mydb",
+        port=3306,
+        host="localhost",
+        user="root",
+        password="pass",
+        consume_results=True,
+        charset="utf8mb4",
+    )
+
+
+@patch("importlib.import_module")
+def test_mysql_no_charset(mock_import):
+    mock_module = _mock_driver()
+    mock_import.return_value = mock_module
+    Database(MYSQL + ":localhost/3306:mydb", "root", "pass")
+    mock_module.connect.assert_called_once_with(
+        database="mydb",
+        port=3306,
+        host="localhost",
+        user="root",
+        password="pass",
+        consume_results=True,
+    )
+
+
+@patch("importlib.import_module")
+def test_postgres_charset(mock_import):
+    mock_module = _mock_driver()
+    mock_import.return_value = mock_module
+    Database(POSTGRES + ":localhost/5432:mydb", "pg", "pass", charset="UTF8")
+    mock_module.connect.assert_called_once_with(
+        dbname="mydb",
+        port=5432,
+        host="localhost",
+        user="pg",
+        password="pass",
+        client_encoding="UTF8",
+    )
+
+
+@patch("importlib.import_module")
+def test_postgres_no_charset(mock_import):
+    mock_module = _mock_driver()
+    mock_import.return_value = mock_module
+    Database(POSTGRES + ":localhost/5432:mydb", "pg", "pass")
+    mock_module.connect.assert_called_once_with(
+        dbname="mydb",
+        port=5432,
+        host="localhost",
+        user="pg",
+        password="pass",
+    )
+
+
+@patch("importlib.import_module")
+def test_charset_from_env(mock_import, monkeypatch):
+    mock_module = _mock_driver()
+    mock_import.return_value = mock_module
+    monkeypatch.setenv("DATABASE_CHARSET", "WIN1252")
+    Database(FIREBIRD + ":localhost/3050:/tmp/TEST.FDB", "SYSDBA", "masterkey")
+    mock_module.connect.assert_called_once_with(
+        "localhost/3050:/tmp/TEST.FDB",
+        user="SYSDBA",
+        password="masterkey",
+        charset="WIN1252",
+    )
