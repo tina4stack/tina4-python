@@ -251,6 +251,38 @@ from tina4_python.Queue import Queue, Producer
 Producer(Queue(topic="tasks")).produce({"action": "send_email"})
 ```
 
+### 11. Key tina4_python Gotchas
+
+1. **Database import**: Use `from tina4_python.Database import Database` (NOT `from tina4_python import Database`)
+2. **noauth/secured import**: Use `from tina4_python import noauth` or `from tina4_python.Router import noauth` (there is NO `tina4_python.Decorators` module)
+3. **Jinja2 template syntax** (common mistakes):
+    - **No ternary operator**: Use `{% if x %}...{% endif %}` NOT `{{ x ? 'a' : 'b' }}`
+    - **elif not elseif**: Use `{% elif %}` NOT `{% elseif %}`
+    - **safe not raw**: Use `{{ var | safe }}` NOT `{{ var | raw }}` for unescaped output
+    - **format filter**: Use `{{ "%.2f" | format(value) }}` for number formatting
+    - **e() filter has NO arguments**: Use `{{ var|e }}` NOT `{{ var|e('js') }}` — Jinja2's `|e` is HTML-only with no mode parameter (that's PHP Twig syntax)
+    - **JS string escaping**: Use `{{ var|replace("'", "\\'") }}` to escape single quotes for inline JS onclick handlers
+    - **No `|escape('js')` or `|e('js')`**: These will throw `escape() takes 1 positional argument but 2 were given`
+    - **Ternary inline**: Use `{{ 's' if count != 1 else '' }}` NOT `{{ count != 1 ? 's' : '' }}`
+    - **Default values**: Use `{{ var|default('fallback') }}` — works on undefined and None
+    - **Chaining filters**: `{{ var|default('')|replace("'", "\\'") }}` — left to right
+    - **Loop variables**: `loop.index` (1-based), `loop.index0` (0-based), `loop.first`, `loop.last`, `loop.length`
+    - **Whitespace control**: `{%- -%}` and `{{- -}}` trim surrounding whitespace
+    - **String concatenation**: Use `~` operator: `{{ "hello " ~ name }}` NOT `{{ "hello " + name }}`
+    - **include with context**: `{% include "partial.twig" %}` inherits parent context automatically
+    - **Macro imports**: `{% from "macros/forms.twig" import field_group %}` — macros do NOT inherit parent context, pass variables explicitly
+4. **DatabaseResult**: `dba.fetch()` returns a `DatabaseResult` object, NOT a plain list
+    - Use `.records` to get list of dicts: `result.records`
+    - Use `.count` for row count (no `len()` support)
+    - Iteration works: `for row in result` or `list(result)`
+    - Other methods: `.to_json()`, `.to_array()`, `.to_csv()`, `.to_paginate()`
+4. **fetch_one()**: Returns a plain dict (or None), NOT a DatabaseResult
+5. **Dict access**: All query results use dict access `row["column"]` not attribute access `row.column`
+6. **Firebird connection string**: `firebird.driver:<host>/<port>:<database_path>` — note the `firebird.driver:` prefix (the module name), NOT `firebird:`
+7. **Running the app**: `uv run python app.py <port> <name>` — port and name are CLI args handled by tina4_python
+8. **SCSS**: Files in `src/scss/` are auto-compiled to `src/public/css/` on startup
+
+
 ---
 
 ## Project Structure
@@ -1313,3 +1345,5 @@ async def dashboard(request, response):
 </div>
 {% endblock %}
 ```
+
+
