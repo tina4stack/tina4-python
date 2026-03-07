@@ -155,14 +155,14 @@ class Database:
             self.database_path = temp_params[1]
 
             if self.database_engine == FIREBIRD:
+                firebird_dsn = self.host + "/" + str(self.port) + ":" + self.database_path
                 firebird_args = {
-                    "dsn": self.host + "/" + str(self.port) + ":" + self.database_path,
                     "user": self.username,
                     "password": self.password,
                 }
                 if self.charset:
                     firebird_args["charset"] = self.charset
-                self.dba = self.database_module.connect(**firebird_args)
+                self.dba = self.database_module.connect(firebird_dsn, **firebird_args)
             elif self.database_engine == MYSQL:
                 mysql_args = {
                     "database": self.database_path,
