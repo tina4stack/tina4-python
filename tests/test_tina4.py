@@ -9,7 +9,7 @@ from datetime import datetime
 from unittest.mock import patch, MagicMock
 
 import tina4_python
-from tina4_python import tina4_auth
+from tina4_python import tina4_auth, Constant
 from tina4_python.Auth import Auth
 from tina4_python.Router import Router
 from tina4_python.DatabaseTypes import *
@@ -361,3 +361,30 @@ def test_charset_from_env(mock_import, monkeypatch):
         password="masterkey",
         charset="WIN1252",
     )
+
+
+# --- Router secured route tests ---
+
+@pytest.mark.asyncio
+async def test_secured_route_returns_403():
+    """A secured GET route without a valid token must return HTTP 403."""
+    # Save and restore global route table
+    saved_routes = dict(tina4_python.tina4_routes)
+    try:
+        # Register a secured GET route
+        async def _secret_handler(request, response):
+            return response("secret data")
+
+        Router.add(Constant.TINA4_GET, "/test-secured-403", _secret_handler)
+        tina4_python.tina4_routes[_secret_handler]["secure"] = True
+
+        result = await Router.get_result(
+            "/test-secured-403",
+            Constant.TINA4_GET,
+            {"params": {}, "body": None},
+            {"content-type": "text/html"},
+            {},
+        )
+        assert result.http_code == Constant.HTTP_FORBIDDEN
+    finally:
+        tina4_python.tina4_routes = saved_routes
