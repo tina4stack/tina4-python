@@ -24,7 +24,7 @@ WORKDIR /app
 # Copy only dependency files to leverage Docker layer caching
 COPY pyproject.toml uv.lock ./
 
-RUN /root/.local/bin/uv pip install --system -e .
+RUN /root/.local/bin/uv pip install --system .
 
 # Copy app source
 COPY . .
