@@ -52,6 +52,7 @@ from tina4_python import Constant
 from tina4_python.Debug import Debug
 from tina4_python.Template import Template
 from tina4_python.MiddleWare import MiddleWare
+from tina4_python import Messages
 
 
 class Router:
