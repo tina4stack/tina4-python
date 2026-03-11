@@ -124,7 +124,9 @@ class Response:
         :param redirect_url:
         :return:
         """
-        headers = {"Location": redirect_url}
+        # Strip CR/LF to prevent HTTP response splitting (header injection)
+        safe_url = redirect_url.replace("\r", "").replace("\n", "")
+        headers = {"Location": safe_url}
         from tina4_python import Messages
         return Response(Messages.MSG_REDIRECTING, http_code_in, Constant.TEXT_HTML, headers)
 
@@ -193,16 +195,21 @@ class Response:
     @staticmethod
     def add_header(key, value):
         """
-        Adds a header for the response (concurrency-safe via contextvars)
+        Adds a header for the response (concurrency-safe via contextvars).
+        CR/LF characters are stripped from both key and value to prevent
+        HTTP response splitting.
         :param key:
         :param value:
         :return:
         """
+        # Sanitise to prevent header injection
+        safe_key = str(key).replace("\r", "").replace("\n", "")
+        safe_value = str(value).replace("\r", "").replace("\n", "")
         h = _pending_headers.get()
         if h is None:
             h = {}
             _pending_headers.set(h)
-        h[key] = value
+        h[safe_key] = safe_value
 
     @staticmethod
     def wsdl(wsdl_instance):

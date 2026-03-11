@@ -239,21 +239,32 @@ class Webserver:
 
     async def send_basic_headers(self, headers_list: list):
         """
-        Add permissive CORS and keep-alive headers (used for most responses).
+        Add CORS, keep-alive, and security headers (used for most responses).
 
         Args:
             headers_list (list): List to which headers are appended.
         """
-        self.send_header("Access-Control-Allow-Origin", "*", headers_list)
+        # CORS — reflect the request Origin when credentials are needed,
+        # otherwise fall back to * for simple cross-origin requests.
+        origin = self.lowercase_headers.get("origin", "")
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin, headers_list)
+            self.send_header("Access-Control-Allow-Credentials", "true", headers_list)
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*", headers_list)
+
         self.send_header(
             "Access-Control-Allow-Headers",
             "Origin, X-Requested-With, Content-Type, Accept, Authorization",
             headers_list,
         )
-        self.send_header("Access-Control-Allow-Credentials", "true", headers_list)
         self.send_header("Connection", "Keep-Alive", headers_list)
         self.send_header("Keep-Alive", "timeout=5, max=30", headers_list)
         self.send_header("Timing-Allow-Origin", "*", headers_list)
+
+        # Security headers
+        self.send_header("X-Content-Type-Options", "nosniff", headers_list)
+        self.send_header("X-Frame-Options", "SAMEORIGIN", headers_list)
 
     @staticmethod
     async def get_headers(header_lines: list, protocol: str, status_code: int) -> bytes:
@@ -307,14 +318,19 @@ class Webserver:
         # ------------------------------------------------------------------
         if method == "OPTIONS":
             headers = []
-            self.send_header("Access-Control-Allow-Origin", "*", headers)
+            # Reflect Origin for credentialed preflight, otherwise wildcard
+            origin = self.lowercase_headers.get("origin", "")
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin, headers)
+                self.send_header("Access-Control-Allow-Credentials", "true", headers)
+            else:
+                self.send_header("Access-Control-Allow-Origin", "*", headers)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS", headers)
             self.send_header(
                 "Access-Control-Allow-Headers",
                 "Origin, X-Requested-With, Content-Type, Accept, Authorization",
                 headers,
             )
-            self.send_header("Access-Control-Allow-Credentials", "true", headers)
 
             headers_bytes = await self.get_headers(headers, self.response_protocol, HTTP_OK)
             class _Tina4Response:
@@ -439,7 +455,14 @@ class Webserver:
         session_name = os.getenv("TINA4_SESSION", "PY_SESS")
         session_activated = not hasattr(self.session, 'activated') or self.session.activated
         if session_activated and session_name in self.cookies:
-            self.send_header("Set-Cookie", f"{session_name}={self.cookies[session_name]}", headers)
+            # Add Secure flag when behind TLS (reverse proxy or direct HTTPS)
+            proto = self.lowercase_headers.get("x-forwarded-proto", "http")
+            secure_flag = "; Secure" if proto == "https" else ""
+            self.send_header(
+                "Set-Cookie",
+                f"{session_name}={self.cookies[session_name]}; Path=/; HttpOnly; SameSite=Lax{secure_flag}",
+                headers,
+            )
 
         # Custom headers from route
         for name, value in response.headers.items():

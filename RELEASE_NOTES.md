@@ -4,6 +4,20 @@ All notable changes to tina4-python are documented here.
 
 ---
 
+## v0.2.197 — 2026-03-11
+
+**Security hardening: HTTP headers and cookie attributes**
+
+### Security fixes
+
+- **Session cookie attributes**: added `Path=/`, `HttpOnly`, `SameSite=Lax` to the session cookie. Added conditional `Secure` flag when behind HTTPS (detected via `X-Forwarded-Proto` header)
+- **CORS fix**: `Access-Control-Allow-Origin: *` combined with `Access-Control-Allow-Credentials: true` is invalid per spec. Now reflects the request `Origin` header when credentials are needed, falls back to `*` for simple requests
+- **Security headers**: added `X-Content-Type-Options: nosniff` and `X-Frame-Options: SAMEORIGIN` to all responses to prevent MIME-sniffing and clickjacking
+- **Cache-Control fix**: replaced non-standard `max-age=-1` with `no-store, no-cache, must-revalidate` for uncached responses. Prevents authenticated content from leaking via shared proxies or browser disk cache
+- **Response splitting prevention**: `Response.redirect()` and `Response.add_header()` now strip CR/LF characters to prevent HTTP header injection attacks
+
+---
+
 ## v0.2.196 — 2026-03-11
 
 **Fix: session cookie not sent on redirect responses**

@@ -529,15 +529,17 @@ class Router:
                             result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
                         if "cache" in route and route["cache"] is not None:
                             if not route["cache"]["cached"]:
-                                result.headers["Cache-Control"] = "max-age=1, must-revalidate"
+                                result.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
                                 result.headers["Pragma"] = "no-cache"
                             else:
                                 result.headers["Cache-Control"] = "max-age=" + str(
                                     route["cache"]["max_age"]) + ", must-revalidate"
                                 result.headers["Pragma"] = "cache"
                         else:
-                            result.headers["Cache-Control"] = "max-age=-1, must-revalidate"
-                            result.headers["Pragma"] = "cache"
+                            # Default: don't cache — prevents sensitive data leaking
+                            # via shared proxies or browser disk cache
+                            result.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+                            result.headers["Pragma"] = "no-cache"
                 finally:
                     sys.stdout = old_stdout
 
@@ -573,7 +575,7 @@ class Router:
                                 )
 
                     twig_headers = {
-                        "Cache-Control": "max-age=-1, public",
+                        "Cache-Control": "no-store, no-cache, must-revalidate",
                         "Pragma": "no-cache"
                     }
                     if has_form_token:
