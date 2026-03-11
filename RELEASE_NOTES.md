@@ -4,6 +4,22 @@ All notable changes to tina4-python are documented here.
 
 ---
 
+## v0.2.195 — 2026-03-11
+
+**Fix: session and FreshToken issues from v0.2.194**
+
+### Bug fixes
+
+- **FreshToken now sent for Authorization header auth**: `tina4helper.js` sends `formToken` via the `Authorization: Bearer` header for AJAX calls. v0.2.194 only checked for `formToken` in body/params, causing the token to expire after `TINA4_TOKEN_LIMIT` minutes without being refreshed. Now any valid Bearer token triggers FreshToken generation
+- **LazySession.start() cookie sync**: calling `session.start()` explicitly (e.g. session regeneration after login) now correctly updates the cookie dict. Previously the new session hash was not synced to the `Set-Cookie` header, causing session data loss on the next request
+- **LazySession.load() cookie sync**: calling `session.load(hash)` explicitly now updates the cookie dict to match the loaded session hash
+
+### Tests
+
+- Added 22 new LazySession tests covering: deferred activation, cookie synchronisation, data persistence across request instances, explicit start/load hash syncing, close/save no-op when not activated
+
+---
+
 ## v0.2.194 — 2026-03-11
 
 **Performance: LazySession + conditional FreshToken**

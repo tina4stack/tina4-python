@@ -745,10 +745,15 @@ class LazySession:
         self._activate().session_hash = value
 
     def start(self, session_hash=None):
-        return self._activate().start(session_hash)
+        result = self._activate().start(session_hash)
+        # Keep cookie dict in sync with the (possibly new) session hash
+        self._cookies[self._name] = result
+        return result
 
     def load(self, session_hash):
-        return self._activate().load(session_hash)
+        self._activate().load(session_hash)
+        # Keep cookie dict in sync with loaded session hash
+        self._cookies[self._name] = self._real.session_hash
 
     def set(self, key, value):
         return self._activate().set(key, value)

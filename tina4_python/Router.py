@@ -373,6 +373,7 @@ class Router:
                 token = headers["authorization"].replace("Bearer", "").strip()
                 if tina4_python.tina4_auth.valid(token):
                     validated = True
+                    has_form_token = True
 
             if request["params"] is not None and "formToken" in request["params"]:
                 token = request["params"]["formToken"]
