@@ -30,7 +30,7 @@ Typical usage inside a route handler::
 """
 
 __all__ = [
-    "Session", "SessionHandler", "SessionFileHandler",
+    "Session", "LazySession", "SessionHandler", "SessionFileHandler",
     "SessionRedisHandler", "SessionValkeyHandler",
     "SessionMongoHandler",
 ]
@@ -685,3 +685,91 @@ class Session:
         for key, value in self.session_values.items():
             if key != "expires":
                 yield key, value
+
+
+class LazySession:
+    """Proxy that defers expensive Session creation until first use.
+
+    Creating and starting a ``Session`` requires RSA key signing (~1ms
+    per call) which dominates request latency for API routes that never
+    touch the session.  ``LazySession`` wraps the session creation
+    parameters and only instantiates the real ``Session`` when a method
+    like ``set()``, ``get()``, or ``load()`` is called.
+
+    The ``activated`` property lets the response builder know whether
+    to emit a ``Set-Cookie`` header.
+    """
+
+    def __init__(self, name, path, handler, cookies):
+        self._name = name
+        self._path = path
+        self._handler = handler
+        self._cookies = cookies
+        self._real = None
+
+    @property
+    def activated(self):
+        """True if the real Session has been created."""
+        return self._real is not None
+
+    def _activate(self):
+        """Create and start/load the real Session on first access."""
+        if self._real is None:
+            self._real = Session(self._name, self._path, self._handler)
+            if self._name in self._cookies:
+                self._real.load(self._cookies[self._name])
+            else:
+                self._cookies[self._name] = self._real.start()
+        return self._real
+
+    # --- Forwarded Session API ---
+
+    @property
+    def session_name(self):
+        return self._name
+
+    @property
+    def session_values(self):
+        if self._real is None:
+            return {}
+        return self._real.session_values
+
+    @property
+    def session_hash(self):
+        if self._real is None:
+            return ""
+        return self._real.session_hash
+
+    @session_hash.setter
+    def session_hash(self, value):
+        self._activate().session_hash = value
+
+    def start(self, session_hash=None):
+        return self._activate().start(session_hash)
+
+    def load(self, session_hash):
+        return self._activate().load(session_hash)
+
+    def set(self, key, value):
+        return self._activate().set(key, value)
+
+    def get(self, key):
+        return self._activate().get(key)
+
+    def unset(self, key):
+        return self._activate().unset(key)
+
+    def close(self):
+        if self._real is not None:
+            return self._real.close()
+        return True
+
+    def save(self):
+        if self._real is not None:
+            return self._real.save()
+        return True
+
+    def __iter__(self):
+        if self._real is not None:
+            return iter(self._real)
+        return iter([])

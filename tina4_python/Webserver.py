@@ -434,9 +434,10 @@ class Webserver:
             self.send_header("Content-Type", response.content_type or "text/html", headers)
             await self.send_basic_headers(headers)
 
-            # Preserve session cookie
+            # Preserve session cookie (only if session was used)
             session_name = os.getenv("TINA4_SESSION", "PY_SESS")
-            if session_name in self.cookies:
+            session_activated = not hasattr(self.session, 'activated') or self.session.activated
+            if session_activated and session_name in self.cookies:
                 self.send_header("Set-Cookie", f"{session_name}={self.cookies[session_name]}", headers)
 
         # Custom headers from route
@@ -585,14 +586,11 @@ class Webserver:
                         name, val = part.strip().split("=", 1)
                         self.cookies[name] = val
 
+            from tina4_python.Session import LazySession
             session_name = os.getenv("TINA4_SESSION", "PY_SESS")
             session_folder = os.getenv("TINA4_SESSION_FOLDER", os.path.join(tina4_python.root_path, "sessions"))
-            self.session = Session(session_name, session_folder)
-
-            if session_name in self.cookies:
-                self.session.load(self.cookies[session_name])
-            else:
-                self.cookies[session_name] = self.session.start()
+            session_handler = os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
+            self.session = LazySession(session_name, session_folder, session_handler, self.cookies)
 
             # ------------------------------------------------------------------
             # Route or WebSocket

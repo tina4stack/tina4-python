@@ -21,8 +21,6 @@ Just `pip install tina4-python` and run your project – everything just works.
 """
 import asyncio
 import os
-if os.getenv("TINA4_DEBUG_LEVEL", "") == "":
-    os.environ["TINA4_DEBUG_LEVEL"] = "DEBUG"
 
 import shutil
 import importlib
@@ -46,7 +44,7 @@ from tina4_python.Auth import Auth
 from tina4_python.Debug import Debug
 from tina4_python.Debug import setup_logging
 from tina4_python.ShellColors import ShellColors
-from tina4_python.Session import Session
+from tina4_python.Session import Session, LazySession
 from tina4_python.HtmlElement import add_html_helpers
 from tina4_python import ShellColors
 from tina4_python.Constant import TINA4_LOG_INFO, TINA4_LOG_ALL, TINA4_LOG_DEBUG
@@ -428,15 +426,13 @@ async def app(scope, receive, send):
 
             webserver.cookies = cookie_list
 
-            webserver.session = Session(os.getenv("TINA4_SESSION", "PY_SESS"),
-                                        os.getenv("TINA4_SESSION_FOLDER", root_path + os.sep + "sessions"),
-                                        os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler")
-                                        )
-
-            if os.getenv("TINA4_SESSION", "PY_SESS") in webserver.cookies:
-                webserver.session.load(webserver.cookies[os.getenv("TINA4_SESSION", "PY_SESS")])
-            else:
-                webserver.cookies[os.getenv("TINA4_SESSION", "PY_SESS")] = webserver.session.start()
+            session_name = os.getenv("TINA4_SESSION", "PY_SESS")
+            webserver.session = LazySession(
+                session_name,
+                os.getenv("TINA4_SESSION_FOLDER", root_path + os.sep + "sessions"),
+                os.getenv("TINA4_SESSION_HANDLER", "SessionFileHandler"),
+                webserver.cookies,
+            )
 
             tina4_response, tina4_headers = await webserver.get_response(webserver.method, scope=scope, reader=receive, writer=send,  asgi_response=True)
 

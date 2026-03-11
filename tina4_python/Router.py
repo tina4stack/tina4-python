@@ -354,6 +354,7 @@ class Router:
         tina4_python.tina4_current_request = {"url": url, "headers": headers}
 
         validated = False
+        has_form_token = False
         # we can add other methods later but right now we validate gets, posts and other risky methods
         if method in [Constant.TINA4_GET, Constant.TINA4_POST, Constant.TINA4_PUT, Constant.TINA4_PATCH,
                       Constant.TINA4_DELETE]:
@@ -377,11 +378,13 @@ class Router:
                 token = request["params"]["formToken"]
                 if tina4_python.tina4_auth.valid(token):
                     validated = True
+                    has_form_token = True
 
             if request["body"] is not None and "formToken" in request["body"]:
                 token = request["body"]["formToken"]
                 if tina4_python.tina4_auth.valid(token):
                     validated = True
+                    has_form_token = True
 
             if request["body"] is not None and "formToken" in request["body"]:
                 request["params"]["formToken"] = request["body"]["formToken"]
@@ -521,7 +524,8 @@ class Router:
                                 return Response(result.content, result.http_code, result.content_type)
 
                     if result is not None:
-                        result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
+                        if has_form_token:
+                            result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
                         if "cache" in route and route["cache"] is not None:
                             if not route["cache"]["cached"]:
                                 result.headers["Cache-Control"] = "max-age=1, must-revalidate"
@@ -542,7 +546,9 @@ class Router:
         if result is None and route_matched:
             output = buffer.getvalue()
             if output:
-                fresh_headers = {"FreshToken": tina4_python.tina4_auth.get_token({"path": url})}
+                fresh_headers = {}
+                if has_form_token:
+                    fresh_headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
                 try:
                     return Response(json.loads(output), Constant.HTTP_OK, Constant.APPLICATION_JSON, fresh_headers)
                 except Exception:
@@ -566,10 +572,11 @@ class Router:
                                 )
 
                     twig_headers = {
-                        "FreshToken": tina4_python.tina4_auth.get_token({"path": url}),
                         "Cache-Control": "max-age=-1, public",
                         "Pragma": "no-cache"
                     }
+                    if has_form_token:
+                        twig_headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
                     content = Template.render_twig_template(twig_file, {"request": tina4_python.tina4_current_request})
                     if content != "":
                         return Response(content, Constant.HTTP_OK, Constant.TEXT_HTML, twig_headers)
@@ -579,7 +586,7 @@ class Router:
                 "errors/404.twig", {"server": {"url": url}})
             return Response(content, Constant.HTTP_NOT_FOUND, Constant.TEXT_HTML)
 
-        result.headers["FreshToken"] = tina4_python.tina4_auth.get_token({"path": url})
+        # FreshToken already set on line 524 inside the route loop
         return result
 
     @staticmethod
