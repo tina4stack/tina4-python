@@ -4,6 +4,20 @@ All notable changes to tina4-python are documented here.
 
 ---
 
+## v0.2.196 — 2026-03-11
+
+**Fix: session cookie not sent on redirect responses**
+
+### Bug fixes
+
+- **Session cookie now sent on 301/302/303 redirects**: when a route saved data to the session and returned `Response.redirect()`, the `Set-Cookie` header was skipped because it was inside the non-redirect code path. This meant the browser never received the session cookie, so the next request (after the redirect) had no session. The cookie is now sent regardless of response code.
+
+### Added
+
+- Session form test pages (`/session-form` and `/session-info`) for manual verification of form POST → session → redirect flow
+
+---
+
 ## v0.2.195 — 2026-03-11
 
 **Fix: session and FreshToken issues from v0.2.194**

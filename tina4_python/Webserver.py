@@ -434,11 +434,12 @@ class Webserver:
             self.send_header("Content-Type", response.content_type or "text/html", headers)
             await self.send_basic_headers(headers)
 
-            # Preserve session cookie (only if session was used)
-            session_name = os.getenv("TINA4_SESSION", "PY_SESS")
-            session_activated = not hasattr(self.session, 'activated') or self.session.activated
-            if session_activated and session_name in self.cookies:
-                self.send_header("Set-Cookie", f"{session_name}={self.cookies[session_name]}", headers)
+        # Preserve session cookie (only if session was used) — must be sent
+        # even on redirects so the browser keeps the session across the redirect
+        session_name = os.getenv("TINA4_SESSION", "PY_SESS")
+        session_activated = not hasattr(self.session, 'activated') or self.session.activated
+        if session_activated and session_name in self.cookies:
+            self.send_header("Set-Cookie", f"{session_name}={self.cookies[session_name]}", headers)
 
         # Custom headers from route
         for name, value in response.headers.items():

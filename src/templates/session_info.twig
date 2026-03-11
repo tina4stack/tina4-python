@@ -1,0 +1,49 @@
+{% extends "base.twig" %}
+
+{% block content %}
+<div class="container mt-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card shadow-sm">
+                <div class="card-header bg-success text-white">
+                    <h4 class="mb-0">Session Data</h4>
+                </div>
+                <div class="card-body">
+                    {% if name or email or message %}
+                    <p class="text-muted">These values were saved in the session by the form post and read back on this page after the redirect.</p>
+                    <table class="table table-bordered">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Key</th>
+                                <th>Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Name</strong></td>
+                                <td>{{ name|default('—') }}</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Email</strong></td>
+                                <td>{{ email|default('—') }}</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Message</strong></td>
+                                <td>{{ message|default('—') }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    {% else %}
+                    <div class="alert alert-warning mb-0">
+                        No session data found. <a href="/session-form">Go fill in the form first</a>.
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="card-footer text-center">
+                    <a href="/session-form" class="btn btn-outline-primary">Back to Form</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
