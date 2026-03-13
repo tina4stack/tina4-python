@@ -44,3 +44,13 @@ test_queue*.db
 /publish.sh
 /src/scss/
 /broken
+__pycache__/
+.DS_Store
+.coverage
+/benchmarks/.env
+/benchmarks/data.db
+/benchmarks/logs/
+/benchmarks/sessions/
+/benchmarks/secrets/
+/benchmarks/results/
+/benchmarks/__pycache__/
