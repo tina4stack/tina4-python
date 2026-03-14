@@ -254,7 +254,8 @@ Producer(Queue(topic="tasks")).produce({"action": "send_email"})
 ### 11. Key tina4_python Gotchas
 
 1. **Database import**: Use `from tina4_python.Database import Database` (NOT `from tina4_python import Database`)
-2. **noauth/secured import**: Use `from tina4_python import noauth` or `from tina4_python.Router import noauth` (there is NO `tina4_python.Decorators` module)
+2. **noauth/secured import**: Use `from tina4_python import noauth` or `from tina4_python.Router import noauth` (there is NO `tina4_python.Decorators` module). **Never** import `noauth` from `tina4_python.Swagger` — that version only affects documentation, not actual auth.
+2b. **Decorator ordering**: Route decorators (`@get`, `@post`, etc.) must be the **innermost** (closest to the function). Swagger/meta decorators (`@description`, `@tags`, `@noauth`, `@secured`) go above. Correct: `@noauth()` → `@description(...)` → `@post(...)` → `def handler`. Wrong: `@post(...)` → `@description(...)` → `def handler` (will crash).
 3. **Jinja2 template syntax** (common mistakes):
     - **No ternary operator**: Use `{% if x %}...{% endif %}` NOT `{{ x ? 'a' : 'b' }}`
     - **elif not elseif**: Use `{% elif %}` NOT `{% elseif %}`
@@ -377,6 +378,7 @@ async def create_user(request, response):
 from tina4_python.Router import post, get, noauth, secured
 
 @noauth()
+@description("Public webhook")
 @post("/api/webhook")
 async def public_webhook(request, response):
     return response({"ok": True})
@@ -386,6 +388,8 @@ async def public_webhook(request, response):
 async def protected_get(request, response):
     return response({"secret": True})
 ```
+
+**Decorator order** (outermost → innermost): `@noauth`/`@secured` → `@description`/`@tags`/`@example` → `@get`/`@post`/`@put`/`@delete`
 
 ## Request Object
 

@@ -501,6 +501,7 @@ def run_web_server(hostname="localhost", port=7145, debug: bool = False):
         • Automatically imports all Python files in ./src/ (recursive)
         • Triggers @get, @post, etc. decorators with zero manual imports
         • Hot-reload support via Hypercorn when debug=True
+        • CLI args override: ``python app.py 8080`` or ``python app.py localhost:8080``
         • Fully backward compatible with existing projects
 
     Example:
@@ -508,6 +509,18 @@ def run_web_server(hostname="localhost", port=7145, debug: bool = False):
     """
     import sys
     import importlib
+
+    # Allow CLI arguments to override hostname/port
+    if len(sys.argv) > 1:
+        arg = sys.argv[1].strip()
+        if ":" in arg:
+            h, _, p = arg.partition(":")
+            if h:
+                hostname = h
+            if p.isdigit():
+                port = int(p)
+        elif arg.isdigit():
+            port = int(arg)
     from pathlib import Path
 
     # ------------------------------------------------------------------

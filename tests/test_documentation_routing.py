@@ -154,6 +154,10 @@ def _register_all_routes():
     async def get_profile(request, response):
         return response("User profile data")
 
+    @post("/submit-secure")
+    async def post_submit_secure(request, response):
+        return response("Secure post")
+
     @middleware(RunSomething)
     @get("/middleware")
     async def get_middleware(request, response):
@@ -380,6 +384,49 @@ async def test_secured_route_with_token():
     )
     assert r.http_code == Constant.HTTP_OK
     assert "user" in str(r.content).lower()
+
+
+# ------------------------------------------------------------------
+# 11b. @noauth() decorator — verify auth bypass without tokens
+# ------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_noauth_post_without_token():
+    """@noauth() POST should succeed without any auth token."""
+    r = await resolve(
+        Constant.TINA4_POST, "/submit",
+        body={"name": "Alice", "age": 30},
+    )
+    assert r.http_code == Constant.HTTP_OK
+    assert "Alice" in str(r.content)
+
+
+@pytest.mark.asyncio
+async def test_noauth_put_without_token():
+    """@noauth() PUT should succeed without any auth token."""
+    r = await resolve(
+        Constant.TINA4_PUT, "/users/42",
+        body={"name": "Updated"},
+    )
+    assert r.http_code == Constant.HTTP_OK
+    assert "Updated" in str(r.content)
+
+
+@pytest.mark.asyncio
+async def test_noauth_delete_without_token():
+    """@noauth() DELETE should succeed without any auth token."""
+    r = await resolve(Constant.TINA4_DELETE, "/users/99")
+    assert r.http_code == Constant.HTTP_OK
+    assert "99" in str(r.content)
+
+
+@pytest.mark.asyncio
+async def test_post_without_noauth_is_forbidden():
+    """A POST route without @noauth() should be forbidden without a token."""
+    r = await resolve(
+        Constant.TINA4_POST, "/submit-secure",
+        body={"data": "test"},
+    )
+    assert r.http_code == Constant.HTTP_FORBIDDEN
 
 
 # ------------------------------------------------------------------

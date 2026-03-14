@@ -21,7 +21,7 @@ class Swagger:
         """Internal helper to attach swagger metadata to a route callback"""
         if callback not in tina4_python.tina4_routes:
             tina4_python.tina4_routes[callback] = {"routes":[], "methods":[]}
-        if "swagger" not in tina4_python.tina4_routes[callback]:
+        if "swagger" not in tina4_python.tina4_routes[callback] or tina4_python.tina4_routes[callback]["swagger"] is None:
             tina4_python.tina4_routes[callback]["swagger"] = {}
         tina4_python.tina4_routes[callback]["swagger"][key_name] = value
 
@@ -370,6 +370,9 @@ def secure():
 def noauth():
     def decorator(callback):
         Swagger.add_noauth(callback)
+        if callback not in tina4_python.tina4_routes:
+            tina4_python.tina4_routes[callback] = {"routes": [], "methods": []}
+        tina4_python.tina4_routes[callback]["noauth"] = True
         return callback
     return decorator
 
