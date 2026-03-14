@@ -4,6 +4,27 @@ All notable changes to tina4-python are documented here.
 
 ---
 
+## v0.2.198 — 2026-03-14
+
+**Fix Swagger noauth crash, CLI port override, decorator docs**
+
+### Bug fixes
+
+- **Fix `set_swagger_value` crash**: using swagger decorators (`@description`, `@tags`, `@example`) above route decorators (`@post`, `@get`) caused `TypeError: 'NoneType' object does not support item assignment`. Root cause: `Router.add()` initializes `swagger: None` but `set_swagger_value` only checked key existence, not `None` value
+- **Fix `Swagger.noauth()` not bypassing auth**: the Swagger version of `noauth()` only set documentation metadata (`secure: False`), but never set the route-level `noauth` flag that the router actually checks. Anyone importing `noauth` from `tina4_python.Swagger` instead of `tina4_python.Router` would silently get no auth bypass
+- **Fix CLI port ignored by `run_web_server()`**: running `python app.py 7112` would use the hardcoded port instead of 7112. CLI arguments (`sys.argv`) were only parsed in the auto-start path, not in `run_web_server()`. Now both paths respect CLI port/host arguments
+
+### Documentation
+
+- **CLAUDE.md**: documented correct decorator ordering (route decorators must be innermost) and warned against importing `noauth` from `Swagger`
+
+### Tests
+
+- Added 4 tests verifying `@noauth()` actually bypasses auth without tokens
+- Added test confirming POST without `@noauth()` returns 403
+
+---
+
 ## v0.2.197 — 2026-03-11
 
 **Security hardening: HTTP headers and cookie attributes**
