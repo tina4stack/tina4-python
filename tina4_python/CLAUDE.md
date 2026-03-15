@@ -815,6 +815,86 @@ uv run tina4 migrate:create "create products table"
 uv run tina4 migrate
 ```
 
+### How migrations work internally
+
+- SQL files live in `migrations/` folder, named `NNNNNN_description.sql` (6-digit sequence)
+- Files are executed **alphabetically** and split on the `;` delimiter
+- State is tracked in the `tina4_migration` table (auto-created per engine)
+- A migration only runs once — if `passed = 1` in the tracking table, it is skipped
+- Failed migrations (passed = 0) are deleted and retried on the next run
+- On **any** error, the migration rolls back and the process exits with `sys.exit(1)` — fix the error before re-running
+
+### Engine-specific DDL patterns
+
+Each database engine has different syntax for auto-increment primary keys, column types, and DDL features. **Always use the correct syntax for your target engine:**
+
+```sql
+-- SQLite
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT,
+    age INTEGER,
+    active INTEGER DEFAULT 1
+);
+
+-- PostgreSQL
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    email VARCHAR(200),
+    age INTEGER,
+    active INTEGER DEFAULT 1
+);
+
+-- MySQL / MariaDB
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER NOT NULL AUTO_INCREMENT,
+    name VARCHAR(200) NOT NULL,
+    email VARCHAR(200),
+    age INTEGER,
+    active INTEGER DEFAULT 1,
+    PRIMARY KEY(id)
+);
+
+-- MSSQL (no IF NOT EXISTS — use table_exists check or handle errors)
+CREATE TABLE users (
+    id INTEGER IDENTITY(1,1) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    email VARCHAR(200),
+    age INTEGER,
+    active INTEGER DEFAULT 1,
+    PRIMARY KEY(id)
+);
+
+-- Firebird (no IF NOT EXISTS, no AUTOINCREMENT — use generators/sequences for auto-IDs)
+CREATE TABLE users (
+    id INTEGER NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    email VARCHAR(200),
+    age INTEGER,
+    active INTEGER DEFAULT 1,
+    PRIMARY KEY(id)
+);
+```
+
+### Firebird idempotency
+
+Firebird does **not** support `IF NOT EXISTS` for `ALTER TABLE ... ADD` statements. The framework handles this automatically — when running on Firebird, it checks `RDB$RELATION_FIELDS` before executing `ALTER TABLE ... ADD <column>` and skips if the column already exists. No special handling is needed in your migration SQL files.
+
+### Common migration mistakes to avoid
+
+1. **Don't use the wrong auto-increment syntax** — `AUTOINCREMENT` (SQLite), `SERIAL` (PostgreSQL), `AUTO_INCREMENT` (MySQL), `IDENTITY(1,1)` (MSSQL) are all different and not interchangeable
+2. **Don't put `BEGIN`/`COMMIT`/`ROLLBACK` in migration SQL** — the framework handles transactions automatically
+3. **Don't use `IF NOT EXISTS` on Firebird or MSSQL** — they don't support it (Firebird ALTER TABLE ADD is handled automatically; for CREATE TABLE, check `table_exists()` or handle the error)
+4. **Don't modify a migration file that has already run** — create a new migration instead
+5. **Don't mix unrelated schema changes** — one logical change per migration file
+6. **Don't use `TEXT` on Firebird** — use `VARCHAR(n)` or `BLOB SUB_TYPE TEXT` instead
+7. **Don't use `REAL`/`FLOAT` on Firebird** — use `DOUBLE PRECISION` instead
+8. **Don't forget to handle `DEFAULT` clause differences** — MSSQL puts `DEFAULT` after `NOT NULL`, Firebird puts it before
+9. **Don't create ORM models without a corresponding migration** — the schema must exist before the ORM can use it
+10. **Don't use database-specific functions** (e.g. `NOW()`, `GETDATE()`, `CURRENT_TIMESTAMP`) without checking engine compatibility
+
 ## Middleware
 
 Middleware methods are classified by name prefix:
