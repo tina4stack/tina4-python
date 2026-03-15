@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>500 Error - {{ server.url }}</title>
+</head>
+<body>
+<!-- AI-readable raw error text (hidden visually, kept in DOM for tooling) -->
+<div id="tina4-error-data" style="display:none">{{ error_message }}</div>
+
+<!-- Rich error overlay -->
+<div id="tina4-error-overlay">
+    <div id="tina4-error-panel">
+        <div class="tina4-error-header">
+            <span class="tina4-error-badge">500</span>
+            <h2>Runtime Error</h2>
+            <span class="tina4-error-url">{{ server.url }}</span>
+            <button class="tina4-error-close" onclick="document.getElementById('tina4-error-overlay').style.display='none'" title="Dismiss (Esc)">&times;</button>
+        </div>
+        <pre class="tina4-error-trace" id="tina4-error-trace">{{ error_message }}</pre>
+        <div class="tina4-error-hint">Press <kbd>Esc</kbd> to dismiss &middot; Fix the error and save to auto-reload</div>
+    </div>
+</div>
+</body>
+</html>
