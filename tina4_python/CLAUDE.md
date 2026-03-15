@@ -280,6 +280,7 @@ Producer(Queue(topic="tasks")).produce({"action": "send_email"})
 4. **fetch_one()**: Returns a plain dict (or None), NOT a DatabaseResult
 5. **Dict access**: All query results use dict access `row["column"]` not attribute access `row.column`
 6. **Firebird connection string**: `firebird.driver:<host>/<port>:<database_path>` — note the `firebird.driver:` prefix (the module name), NOT `firebird:`
+6b. **MongoDB connection string**: `pymongo:<host>/<port>:<database_name>` — uses the same SQL API as all other engines (SQL is translated to MongoDB queries internally). JOINs are not supported. Install: `pip install pymongo`
 7. **Running the app**: `uv run python app.py <port> <name>` — port and name are CLI args handled by tina4_python
 8. **SCSS**: Files in `src/scss/` are auto-compiled to `src/public/css/` on startup
 
@@ -663,8 +664,34 @@ Every `send_request()` returns:
 from tina4_python.Database import Database
 
 db = Database("sqlite3:app.db")        # SQLite
-db = Database("postgresql:host=localhost;dbname=mydb;user=me;password=secret")
+db = Database("psycopg2:localhost/5432:mydb", "user", "password")  # PostgreSQL
+db = Database("mysql.connector:localhost/3306:mydb", "user", "password")  # MySQL
+db = Database("firebird.driver:localhost/3050:/path/to/db", "SYSDBA", "masterkey")  # Firebird
+db = Database("pymssql:localhost/1433:mydb", "sa", "password")  # MSSQL
+db = Database("pymongo:localhost/27017:mydb")  # MongoDB
+db = Database("pymongo:localhost/27017:mydb", "user", "password")  # MongoDB with auth
 ```
+
+### MongoDB support
+
+MongoDB uses the same SQL API as all other engines. The `SQLToMongo` module translates SQL to MongoDB queries transparently:
+
+```python
+db = Database("pymongo:localhost/27017:mydb")
+
+# All standard operations work — SQL is translated to MongoDB internally
+db.execute("CREATE TABLE users (id INTEGER)")  # creates collection
+db.insert("users", {"id": 1, "name": "Alice", "email": "alice@test.com"})
+result = db.fetch("SELECT * FROM users WHERE name = ?", ["Alice"])
+db.execute("UPDATE users SET name = ? WHERE id = ?", ["Bob", 1])
+db.execute("DELETE FROM users WHERE id = ?", [1])
+
+# WHERE operators: =, !=, <>, >, >=, <, <=, LIKE, IN, NOT IN, IS NULL, IS NOT NULL, BETWEEN, AND, OR
+# Pagination, search, fetch_one, table_exists, get_next_id all work
+# RETURNING is emulated (returns affected documents)
+```
+
+**Limitations**: MongoDB is document-based — JOINs are not supported. Use embedded documents or application-level joins instead. Migrations (`CREATE TABLE`) map to collection creation (column definitions are ignored — MongoDB is schema-less).
 
 ### CRUD operations
 

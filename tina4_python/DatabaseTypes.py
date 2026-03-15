@@ -16,6 +16,7 @@ __all__ = [
     "MYSQL", "MYSQL_INSTALL",
     "POSTGRES", "POSTGRES_INSTALL",
     "MSSQL", "MSSQL_INSTALL",
+    "MONGODB", "MONGODB_INSTALL",
 ]
 
 SQLITE = "sqlite3"
@@ -27,3 +28,5 @@ POSTGRES = "psycopg2"
 POSTGRES_INSTALL = "pip install psycopg2-binary or poetry add psycopg2-binary"
 MSSQL = "pymssql"
 MSSQL_INSTALL = "pip install pymssql or poetry add pymssql"
+MONGODB = "pymongo"
+MONGODB_INSTALL = "pip install pymongo or poetry add pymongo"

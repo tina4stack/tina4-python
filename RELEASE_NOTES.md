@@ -4,13 +4,26 @@ All notable changes to tina4-python are documented here.
 
 ---
 
-## v0.2.199 — 2026-03-15
+## v0.2.200 — 2026-03-15
 
-**Pagination optimization, robust RETURNING detection, Firebird migration idempotency**
+**MongoDB SQL translation, pagination optimization, robust RETURNING, Firebird migration idempotency**
+
+### New features
+
+- **MongoDB SQL translation layer**: Use MongoDB as a Database backend with the same SQL API as all other engines. Connection string: `pymongo:host/port:database_name`. The new `SQLToMongo` module translates SQL to MongoDB queries transparently:
+  - `SELECT` → `find()` with filter, projection, sort, skip, limit
+  - `INSERT` → `insert_one()`
+  - `UPDATE` → `update_many()` with `$set`
+  - `DELETE` → `delete_many()`
+  - `CREATE TABLE` / `DROP TABLE` → `create_collection()` / `drop_collection()`
+  - WHERE clause operators: `=`, `!=`, `<>`, `>`, `>=`, `<`, `<=`, `LIKE`, `IN`, `NOT IN`, `IS NULL`, `IS NOT NULL`, `BETWEEN`, `AND`, `OR`
+  - Full-text search via `$regex`
+  - Pagination, RETURNING emulation, `fetch()`, `fetch_one()`, `insert()`, `update()`, `delete()`, `table_exists()`, `get_next_id()`, transactions — all work through the standard Database API
+  - Install: `pip install pymongo`
 
 ### Performance
 
-- **Optimized `Database.fetch()` pagination** across all 5 engines — strips `ORDER BY` from the COUNT query (it doesn't affect the count and breaks MSSQL subqueries). Benchmarks on 10k rows / 30k orders:
+- **Optimized `Database.fetch()` pagination** across all 5 SQL engines — strips `ORDER BY` from the COUNT query (it doesn't affect the count and breaks MSSQL subqueries). Benchmarks on 10k rows / 30k orders:
   - SQLite: **+45%** faster (1.84x)
   - PostgreSQL: **+41%** faster (1.70x)
   - MSSQL: **+30%** faster (1.43x) — also fixes a bug where `ORDER BY` in the COUNT subquery caused MSSQL to return `total=0`
@@ -20,13 +33,14 @@ All notable changes to tina4-python are documented here.
 ### Bug fixes
 
 - **Robust RETURNING clause detection** (`execute()`): replaced fragile `if "returning" in sql.lower()` with `_has_returning_clause()` that strips string literals, quoted identifiers, and comments before matching. Eliminates false positives from column names (`returning_date`), string values (`'returning customer'`), and comments
-- **RETURNING emulation for MySQL and MSSQL**: `_emulate_returning()` translates `INSERT ... RETURNING` into `INSERT` + `SELECT` via `lastrowid`, and `UPDATE/DELETE ... RETURNING` into `SELECT` + mutation. Write `RETURNING` in your SQL and it works on all 5 engines
+- **RETURNING emulation for MySQL and MSSQL**: `_emulate_returning()` translates `INSERT ... RETURNING` into `INSERT` + `SELECT` via `lastrowid`, and `UPDATE/DELETE ... RETURNING` into `SELECT` + mutation. Write `RETURNING` in your SQL and it works on all 6 engines
 - **Firebird migration idempotency** (Issue #34): `ALTER TABLE ... ADD` no longer fails on re-run. New `_firebird_column_exists()` checks `RDB$RELATION_FIELDS` (with `TRIM()` for padded identifiers) via raw cursor to bypass the pagination layer, and `_is_idempotent_skip()` skips the statement if the column already exists
 
 ### Tests
 
-- **`test_pagination.py`** — 45 tests covering basic pagination, column stripping, ordering, sub-selects, joins, search, parameterized queries, edge cases, and SQL generation for all 5 engines
-- **`test_pagination_engines.py`** — 120 end-to-end tests against all 5 live Docker databases with identical test data
+- **`test_mongodb.py`** — 56 tests: 40 unit tests for SQLToMongo parser (SELECT, INSERT, UPDATE, DELETE, WHERE operators, DDL, edge cases) + 16 live tests against MongoDB
+- **`test_pagination.py`** — 45 tests covering basic pagination, column stripping, ordering, sub-selects, joins, search, parameterized queries, edge cases, and SQL generation for all engines
+- **`test_pagination_engines.py`** — 120 end-to-end tests against all 5 live SQL databases with identical test data
 - **`test_migration_firebird.py`** — 15 tests for `_firebird_column_exists` and `_is_idempotent_skip` against live Firebird
 - **`test_returning.py`** — 38 tests: 19 unit tests for false-positive rejection + 19 live tests across SQLite, PostgreSQL, MySQL, MSSQL, and Firebird
 

@@ -51,6 +51,7 @@ from tina4_python import Debug
 from tina4_python.DatabaseResult import DatabaseResult
 from tina4_python.DatabaseTypes import *
 from tina4_python.FieldTypes import get_field_type_values
+from tina4_python.SQLToMongo import SQLToMongo
 import datetime
 
 class Database:
@@ -95,6 +96,8 @@ class Database:
                 install_message = Messages.MSG_DB_MISSING_FIREBIRD.format(install_cmd=FIREBIRD_INSTALL)
             elif params[0] == MSSQL:
                 install_message = Messages.MSG_DB_MISSING_MSSQL.format(install_cmd=MSSQL_INSTALL)
+            elif params[0] == MONGODB:
+                install_message = f"Please install pymongo: {MONGODB_INSTALL}"
 
             sys.exit(Messages.MSG_DB_DRIVER_NOT_FOUND.format(driver=params[0]) + "\n" + install_message + "\n" + str(e))
 
@@ -195,6 +198,16 @@ class Database:
                     database=self.database_path
                 )
                 self.dba.autocommit(False)
+            elif self.database_engine == MONGODB:
+                # pymongo: MongoClient → Database
+                mongo_args = {"host": self.host, "port": self.port}
+                if self.username:
+                    mongo_args["username"] = self.username
+                if self.password:
+                    mongo_args["password"] = self.password
+                self._mongo_client = self.database_module.MongoClient(**mongo_args)
+                self.dba = self._mongo_client[self.database_path]
+                self._mongo_session = None
             else:
                 sys.exit("Could not load database driver for " + params[0])
 
@@ -207,7 +220,9 @@ class Database:
         :return: bool : True if table exists, else False
         """
 
-        if self.database_engine == MSSQL:
+        if self.database_engine == MONGODB:
+            return table_name in self.dba.list_collection_names()
+        elif self.database_engine == MSSQL:
             sql = "select count(*) as count_table from sys.tables WHERE name = '" + table_name.upper() + "'"
         elif self.database_engine == SQLITE:
             sql = "SELECT count(*) as count_table FROM sqlite_master WHERE type='table' AND name='" + table_name + "'"
@@ -244,6 +259,12 @@ class Database:
         :return: int : The next id in the sequence
         """
         try:
+            if self.database_engine == MONGODB:
+                coll = self.dba[table_name]
+                doc = coll.find_one(sort=[(column_name, -1)], projection={column_name: 1})
+                max_val = doc[column_name] if doc and column_name in doc else 0
+                return int(max_val) + 1
+
             sql = "select max(" + column_name + ") as \"max_id\" from " + table_name
             record = self.fetch_one(sql)
             if record["max_id"] is None:
@@ -306,6 +327,12 @@ class Database:
         """
         if self.database_engine == MYSQL:
             self.dba.ping(reconnect=True, attempts=1, delay=0)
+        elif self.database_engine == MONGODB:
+            # pymongo auto-reconnects; ping to confirm
+            try:
+                self._mongo_client.admin.command('ping')
+            except Exception:
+                pass
         else:
             # implement other database requirements if needed
             pass
@@ -329,6 +356,10 @@ class Database:
             params = list(params)
 
         self.check_connected()
+
+        # --- MongoDB: translate SQL to MongoDB queries ---
+        if self.database_engine == MONGODB:
+            return self._mongo_fetch(sql, params, limit, skip, search, search_columns)
 
         final_sql = sql
         final_params = params
@@ -456,7 +487,9 @@ class Database:
         :param sql:
         :return:
         """
-        if self.database_engine == MYSQL or self.database_engine == POSTGRES or self.database_engine == MSSQL:
+        if self.database_engine == MONGODB:
+            return sql  # MongoDB doesn't use SQL placeholders
+        elif self.database_engine == MYSQL or self.database_engine == POSTGRES or self.database_engine == MSSQL:
             return sql.replace("?", "%s")
         else:
             return sql.replace("%s", "?")
@@ -566,6 +599,160 @@ class Database:
 
         return None
 
+    # -------------------------------------------------------------------
+    # MongoDB helpers
+    # -------------------------------------------------------------------
+
+    def _mongo_fetch(self, sql, params, limit, skip, search, search_columns):
+        """Execute a SQL SELECT against MongoDB via SQLToMongo translation."""
+        try:
+            op = SQLToMongo.translate(sql, params)
+        except Exception as e:
+            Debug.error("MONGO SQL PARSE ERROR", sql, str(e))
+            return DatabaseResult(None, [], str(e))
+
+        collection = self.dba[op["collection"]]
+        mongo_filter = op.get("filter", {})
+
+        # Add search conditions
+        if search and search.strip():
+            search_filter = self._mongo_search_filter(search, search_columns, op)
+            if search_filter:
+                if mongo_filter:
+                    mongo_filter = {"$and": [mongo_filter, search_filter]}
+                else:
+                    mongo_filter = search_filter
+
+        try:
+            if op["type"] == "count":
+                total = collection.count_documents(mongo_filter)
+                return DatabaseResult([{"count_records": total}], ["count_records"], None, 1, 1, 0, sql, self)
+
+            # Total count
+            total = collection.count_documents(mongo_filter)
+
+            # Build find kwargs
+            find_kwargs = {}
+            projection = op.get("projection")
+            if projection:
+                find_kwargs["projection"] = projection
+                # Always exclude _id unless explicitly requested
+                if "_id" not in projection:
+                    find_kwargs["projection"]["_id"] = 0
+            else:
+                find_kwargs["projection"] = {"_id": 0}
+
+            cursor = collection.find(mongo_filter, **find_kwargs)
+
+            sort = op.get("sort")
+            if sort:
+                cursor = cursor.sort(list(sort.items()))
+
+            # Use pagination from the op if present, otherwise use method params
+            actual_skip = op.get("skip", skip)
+            actual_limit = op.get("limit", limit)
+            cursor = cursor.skip(actual_skip).limit(actual_limit)
+
+            rows = list(cursor)
+            columns = list(rows[0].keys()) if rows else []
+
+            return DatabaseResult(rows, columns, None, total, actual_limit, actual_skip, sql, self)
+
+        except Exception as e:
+            Debug.error("MONGO FETCH ERROR", sql, str(e))
+            return DatabaseResult(None, [], str(e))
+
+    def _mongo_execute(self, sql, params):
+        """Execute a SQL INSERT/UPDATE/DELETE/CREATE/DROP against MongoDB."""
+        try:
+            op = SQLToMongo.translate(sql, params)
+        except Exception as e:
+            Debug.error("MONGO SQL PARSE ERROR", sql, str(e))
+            return DatabaseResult(None, [], str(e))
+
+        try:
+            op_type = op["type"]
+            collection_name = op["collection"]
+
+            if op_type == "insert":
+                coll = self.dba[collection_name]
+                doc = op["document"]
+                result = coll.insert_one(doc)
+                # Build a result that includes the inserted doc
+                return_doc = dict(doc)
+                if "_id" in return_doc:
+                    return_doc["_id"] = str(return_doc["_id"])
+                columns = list(return_doc.keys())
+                return DatabaseResult([return_doc], columns, None, 1, 1, 0, sql, self)
+
+            elif op_type == "update":
+                coll = self.dba[collection_name]
+                mongo_filter = op.get("filter", {})
+                update_doc = op["update"]
+
+                if op.get("returning"):
+                    # Fetch matching docs before update for RETURNING emulation
+                    pre_docs = list(coll.find(mongo_filter, {"_id": 0}))
+
+                result = coll.update_many(mongo_filter, update_doc)
+
+                if op.get("returning"):
+                    columns = list(pre_docs[0].keys()) if pre_docs else []
+                    return DatabaseResult(pre_docs, columns, None, len(pre_docs), len(pre_docs), 0, sql, self)
+
+                return DatabaseResult(None, [], None, result.modified_count, 0, 0, sql, self)
+
+            elif op_type == "delete":
+                coll = self.dba[collection_name]
+                mongo_filter = op.get("filter", {})
+
+                if op.get("returning"):
+                    # Fetch matching docs before delete for RETURNING emulation
+                    pre_docs = list(coll.find(mongo_filter, {"_id": 0}))
+
+                result = coll.delete_many(mongo_filter)
+
+                if op.get("returning"):
+                    columns = list(pre_docs[0].keys()) if pre_docs else []
+                    return DatabaseResult(pre_docs, columns, None, len(pre_docs), len(pre_docs), 0, sql, self)
+
+                return DatabaseResult(None, [], None, result.deleted_count, 0, 0, sql, self)
+
+            elif op_type == "create_collection":
+                if collection_name not in self.dba.list_collection_names():
+                    self.dba.create_collection(collection_name)
+                return DatabaseResult(None, [], None, 0, 0, 0, sql, self)
+
+            elif op_type == "drop_collection":
+                if collection_name in self.dba.list_collection_names():
+                    self.dba.drop_collection(collection_name)
+                return DatabaseResult(None, [], None, 0, 0, 0, sql, self)
+
+            else:
+                return DatabaseResult(None, [], f"Unsupported MongoDB operation: {op_type}")
+
+        except Exception as e:
+            Debug.error("MONGO EXECUTE ERROR", sql, str(e))
+            return DatabaseResult(None, [], str(e))
+
+    def _mongo_search_filter(self, search, search_columns, op):
+        """Build a MongoDB $or filter for full-text search across columns."""
+        cols = search_columns
+        if not cols:
+            # Try to get columns from the projection
+            proj = op.get("projection", {})
+            cols = [k for k in proj if k != "_id" and proj[k] == 1]
+
+        if not cols:
+            # Fallback: search all fields (not ideal but workable)
+            return {"$where": f"JSON.stringify(this).toLowerCase().indexOf('{search.lower()}') !== -1"}
+
+        conditions = []
+        for col in cols:
+            conditions.append({col: {"$regex": re.escape(search), "$options": "i"}})
+
+        return {"$or": conditions} if conditions else {}
+
     def execute(self, sql, params=None):
         """
         Execute a query based on a SQL statement
@@ -577,6 +764,11 @@ class Database:
             params = []
 
         self.check_connected()
+
+        # --- MongoDB: route through SQLToMongo ---
+        if self.database_engine == MONGODB:
+            return self._mongo_execute(sql, params)
+
         if params != []:
             sql = self.parse_place_holders(sql)
         cursor = self.dba.cursor()
@@ -667,6 +859,9 @@ class Database:
                 self.dba.execute("BEGIN TRANSACTION")
             elif self.database_engine == POSTGRES:
                 self.dba.rollback()  # start fresh
+            elif self.database_engine == MONGODB:
+                self._mongo_session = self._mongo_client.start_session()
+                self._mongo_session.start_transaction()
             else:
                 Debug.error("START TRANSACTION ERROR:", "Database engine unrecognised/not supported")
         except Exception as e:
@@ -678,7 +873,14 @@ class Database:
         :return:
         """
         try:
-            self.dba.commit()
+            if self.database_engine == MONGODB:
+                if self._mongo_session:
+                    self._mongo_session.commit_transaction()
+                    self._mongo_session.end_session()
+                    self._mongo_session = None
+                # MongoDB auto-commits individual operations; no-op otherwise
+            else:
+                self.dba.commit()
         except Exception as e:
             Debug.error("COMMIT TRANSACTION ERROR:", str(e))
 
@@ -688,7 +890,13 @@ class Database:
         :return:
         """
         try:
-            self.dba.rollback()
+            if self.database_engine == MONGODB:
+                if self._mongo_session:
+                    self._mongo_session.abort_transaction()
+                    self._mongo_session.end_session()
+                    self._mongo_session = None
+            else:
+                self.dba.rollback()
         except Exception as e:
             Debug.error("ROLLBACK TRANSACTION ERROR:", str(e))
 
@@ -698,7 +906,10 @@ class Database:
         :return:
         """
         try:
-            self.dba.close()
+            if self.database_engine == MONGODB:
+                self._mongo_client.close()
+            else:
+                self.dba.close()
         except Exception as e:
             Debug.error("DATABASE CLOSE ERROR:", str(e))
 
