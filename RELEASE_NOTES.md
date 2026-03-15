@@ -4,6 +4,38 @@ All notable changes to tina4-python are documented here.
 
 ---
 
+## v0.2.199 — 2026-03-15
+
+**Pagination optimization, robust RETURNING detection, Firebird migration idempotency**
+
+### Performance
+
+- **Optimized `Database.fetch()` pagination** across all 5 engines — strips `ORDER BY` from the COUNT query (it doesn't affect the count and breaks MSSQL subqueries). Benchmarks on 10k rows / 30k orders:
+  - SQLite: **+45%** faster (1.84x)
+  - PostgreSQL: **+41%** faster (1.70x)
+  - MSSQL: **+30%** faster (1.43x) — also fixes a bug where `ORDER BY` in the COUNT subquery caused MSSQL to return `total=0`
+  - MySQL: **+22%** faster (1.27x)
+- **MSSQL ORDER BY alias fix**: table-qualified columns (e.g. `e.salary`) in ORDER BY are now stripped of their table alias when the inner query is wrapped as a subquery, preventing "invalid column name" errors
+
+### Bug fixes
+
+- **Robust RETURNING clause detection** (`execute()`): replaced fragile `if "returning" in sql.lower()` with `_has_returning_clause()` that strips string literals, quoted identifiers, and comments before matching. Eliminates false positives from column names (`returning_date`), string values (`'returning customer'`), and comments
+- **RETURNING emulation for MySQL and MSSQL**: `_emulate_returning()` translates `INSERT ... RETURNING` into `INSERT` + `SELECT` via `lastrowid`, and `UPDATE/DELETE ... RETURNING` into `SELECT` + mutation. Write `RETURNING` in your SQL and it works on all 5 engines
+- **Firebird migration idempotency** (Issue #34): `ALTER TABLE ... ADD` no longer fails on re-run. New `_firebird_column_exists()` checks `RDB$RELATION_FIELDS` (with `TRIM()` for padded identifiers) via raw cursor to bypass the pagination layer, and `_is_idempotent_skip()` skips the statement if the column already exists
+
+### Tests
+
+- **`test_pagination.py`** — 45 tests covering basic pagination, column stripping, ordering, sub-selects, joins, search, parameterized queries, edge cases, and SQL generation for all 5 engines
+- **`test_pagination_engines.py`** — 120 end-to-end tests against all 5 live Docker databases with identical test data
+- **`test_migration_firebird.py`** — 15 tests for `_firebird_column_exists` and `_is_idempotent_skip` against live Firebird
+- **`test_returning.py`** — 38 tests: 19 unit tests for false-positive rejection + 19 live tests across SQLite, PostgreSQL, MySQL, MSSQL, and Firebird
+
+### Benchmarks
+
+- Added `benchmarks/src/bench_pagination.py` — monkey-patches old fetch from git history onto same connection, compares 4 scenarios across 3 page depths on all 5 engines
+
+---
+
 ## v0.2.198 — 2026-03-14
 
 **Fix Swagger noauth crash, CLI port override, decorator docs**

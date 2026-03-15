@@ -5,6 +5,7 @@
 #
 # flake8: noqa: E501
 import os
+import re
 import sys
 
 from tina4_python import ShellColors
@@ -13,6 +14,54 @@ from tina4_python import Messages
 from tina4_python.Debug import Debug
 from tina4_python.Database import MSSQL, POSTGRES, FIREBIRD, MYSQL
 import tina4_python
+
+
+def _firebird_column_exists(dba, table_name, column_name):
+    """Check if a column already exists in a Firebird table via RDB$RELATION_FIELDS.
+
+    Uses a raw cursor to bypass the pagination layer (which wraps queries in
+    subqueries with COUNT(*) OVER()) — system catalogue queries break when wrapped.
+    """
+    cursor = dba.dba.cursor()
+    try:
+        cursor.execute(
+            "SELECT 1 FROM RDB$RELATION_FIELDS "
+            "WHERE TRIM(RDB$RELATION_NAME) = ? AND TRIM(RDB$FIELD_NAME) = ?",
+            [table_name.upper(), column_name.upper()],
+        )
+        row = cursor.fetchone()
+        return row is not None
+    finally:
+        cursor.close()
+
+
+def _is_idempotent_skip(dba, script):
+    """
+    Check if a DDL statement can be safely skipped because the change already exists.
+    Returns True if the statement should be skipped (already applied), False otherwise.
+    Currently handles:
+      - Firebird: ALTER TABLE ... ADD <column> (no IF NOT EXISTS support)
+    """
+    if dba.database_engine != FIREBIRD:
+        return False
+
+    stripped = script.strip()
+    # Match: ALTER TABLE <table> ADD <column> <datatype>...
+    match = re.match(
+        r"(?i)ALTER\s+TABLE\s+(\S+)\s+ADD\s+(\S+)\s+",
+        stripped,
+    )
+    if match:
+        table_name = match.group(1).strip('"')
+        column_name = match.group(2).strip('"')
+        if _firebird_column_exists(dba, table_name, column_name):
+            Debug.info(
+                ShellColors.bright_yellow,
+                f"  Skipping (column already exists): ALTER TABLE {table_name} ADD {column_name}",
+                ShellColors.end,
+            )
+            return True
+    return False
 
 
 def migrate(dba, delimiter=";", migration_folder="migrations"):
@@ -69,6 +118,9 @@ def migrate(dba, delimiter=";", migration_folder="migrations"):
                     error_message = ""
                     for script in script_content:
                         if script.strip() != "":
+                            # Skip DDL that is already applied (e.g. Firebird ALTER TABLE ADD)
+                            if _is_idempotent_skip(dba, script):
+                                continue
                             result = dba.execute(script)
                             if result.error is not None:
                                 error = True

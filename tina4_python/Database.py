@@ -365,14 +365,15 @@ class Database:
                 where_clause = " WHERE (" + " OR ".join(conditions) + ")"
                 final_sql = sql + where_clause
 
-        # 3. TOTAL COUNT (with the same filter!)
-        count_sql = f"SELECT COUNT(*) AS count_records FROM ({final_sql}) AS t"
+        # 3. TOTAL COUNT — strip ORDER BY (doesn't affect count, breaks MSSQL subqueries)
+        count_inner = re.sub(r"(?i)\s+order\s+by\s+.+?$", "", final_sql, flags=re.DOTALL).strip()
+        count_sql = f"SELECT COUNT(*) AS count_records FROM ({count_inner}) AS t"
         counter = self.dba.cursor()
         try:
             counter.execute(self.parse_place_holders(count_sql), final_params)
             total = counter.fetchone()[0]
         except Exception as e:
-            Debug.error ("COUNT ERROR", count_sql, final_params, str(e))
+            Debug.error("COUNT ERROR", count_sql, final_params, str(e))
             try:
                 self.dba.rollback()
             except Exception:
@@ -381,35 +382,30 @@ class Database:
         finally:
             counter.close()
 
-        # 4. FINAL PAGINATION – applied AFTER the filter
+        # 4. PAGINATED DATA query
         if self.database_engine == FIREBIRD:
             final_sql = f"SELECT FIRST {limit} SKIP {skip} * FROM ({final_sql}) AS t"
-        elif self.database_engine in (MYSQL, SQLITE):
-            final_sql = f"SELECT * FROM ({final_sql}) AS t LIMIT {limit} OFFSET {skip}"
-        elif self.database_engine == POSTGRES:
-            final_sql = f"SELECT * FROM ({final_sql}) AS t LIMIT {limit} OFFSET {skip}"
         elif self.database_engine == MSSQL:
             inner = final_sql.strip()
-            # Detect and extract ORDER BY if present
             order_by_match = re.search(r"(?i)\border\s+by\s+.+?$", inner, re.DOTALL)
             has_order_by = order_by_match is not None
-
-            # Clean inner query: remove trailing ORDER BY if it exists
             if has_order_by:
                 inner_clean = re.sub(r"(?i)\s+order\s+by\s+.+?$", "", inner, flags=re.DOTALL).strip()
                 order_by_part = order_by_match.group(0)
+                # Strip table aliases from ORDER BY columns (e.g. "e.salary" -> "salary")
+                # since the inner query is wrapped as subquery "t"
+                order_by_part = re.sub(r'(\b\w+)\.(\w+)', r'\2', order_by_part)
             else:
                 inner_clean = inner
                 order_by_part = "ORDER BY (SELECT NULL)"
-
-            # Build final paginated query
             final_sql = f"SELECT * FROM ({inner_clean}) AS t {order_by_part} OFFSET {skip} ROWS FETCH NEXT {limit} ROWS ONLY"
         else:
+            # SQLite, MySQL, PostgreSQL
             final_sql = f"SELECT * FROM ({final_sql}) AS t LIMIT {limit} OFFSET {skip}"
 
         final_sql = self.parse_place_holders(final_sql)
 
-        # 5. Execute the real query
+        # 5. Execute the data query
         cursor = self.dba.cursor()
         try:
             cursor.execute(final_sql, final_params)
@@ -465,6 +461,111 @@ class Database:
         else:
             return sql.replace("%s", "?")
 
+    @staticmethod
+    def _has_returning_clause(sql):
+        """Detect a SQL RETURNING clause without false positives.
+
+        Strips string literals and comments first, then checks that RETURNING
+        appears as a standalone keyword at the end of an INSERT, UPDATE, or
+        DELETE statement.  This avoids matching column names, table names, or
+        values that happen to contain the word "returning".
+        """
+        # Strip single-quoted string literals ('' escapes inside)
+        cleaned = re.sub(r"'(?:[^']|'')*'", "''", sql)
+        # Strip double-quoted identifiers
+        cleaned = re.sub(r'"(?:[^"]|"")*"', '""', cleaned)
+        # Strip block comments
+        cleaned = re.sub(r'/\*.*?\*/', ' ', cleaned, flags=re.DOTALL)
+        # Strip line comments
+        cleaned = re.sub(r'--[^\n]*', ' ', cleaned)
+
+        # Check the statement type is INSERT, UPDATE, or DELETE
+        stripped = cleaned.strip()
+        if not re.match(r'(?i)^(INSERT|UPDATE|DELETE)\b', stripped):
+            return False
+
+        # Look for RETURNING as a standalone keyword (word boundary on both sides)
+        # It should appear after the main clause, not as part of an identifier
+        return bool(re.search(r'\bRETURNING\b', cleaned, re.IGNORECASE))
+
+    def _emulate_returning(self, sql, params, cursor):
+        """Emulate RETURNING for engines that don't support it natively.
+
+        MySQL and MSSQL don't support the RETURNING clause directly.
+        - For INSERT: uses lastrowid to fetch the inserted row back.
+        - For UPDATE/DELETE: extracts the RETURNING columns and the WHERE
+          clause to SELECT the affected rows before executing the mutation.
+
+        Returns a DatabaseResult, or None if emulation isn't needed/possible.
+        """
+        cleaned_sql = sql.strip()
+        upper_sql = cleaned_sql.upper()
+
+        # Extract the RETURNING column list
+        ret_match = re.search(r'\bRETURNING\b\s+(.+)$', cleaned_sql, re.IGNORECASE | re.DOTALL)
+        if not ret_match:
+            return None
+        returning_cols = ret_match.group(1).strip().rstrip(';')
+
+        # SQL without the RETURNING clause
+        base_sql = cleaned_sql[:ret_match.start()].strip()
+
+        if upper_sql.startswith('INSERT'):
+            # Execute the INSERT (without RETURNING)
+            base_parsed = self.parse_place_holders(base_sql)
+            cursor.execute(base_parsed, params)
+
+            # Fetch the inserted row using lastrowid
+            last_id = cursor.lastrowid
+            if last_id is not None and last_id > 0:
+                # Extract table name from INSERT INTO <table>
+                table_match = re.match(r'(?i)INSERT\s+INTO\s+(\S+)', base_sql)
+                if table_match:
+                    table_name = table_match.group(1)
+                    # For MSSQL use different ID retrieval
+                    if self.database_engine == MSSQL:
+                        select_sql = f"SELECT {returning_cols} FROM {table_name} WHERE id = @@IDENTITY"
+                        cursor.execute(select_sql)
+                    else:
+                        select_sql = self.parse_place_holders(
+                            f"SELECT {returning_cols} FROM {table_name} WHERE id = ?"
+                        )
+                        cursor.execute(select_sql, [last_id])
+                    return self.get_database_result(cursor, 1, 1, 0, sql)
+
+            # Fallback: return lastrowid as "id"
+            return DatabaseResult([{"id": last_id}], [], None, 1, 1, 0, sql, self)
+
+        elif upper_sql.startswith('UPDATE') or upper_sql.startswith('DELETE'):
+            # For UPDATE/DELETE: extract WHERE clause, SELECT matching rows first,
+            # then execute the mutation
+            where_match = re.search(r'\bWHERE\b\s+(.+)$', base_sql, re.IGNORECASE | re.DOTALL)
+
+            if upper_sql.startswith('UPDATE'):
+                table_match = re.match(r'(?i)UPDATE\s+(\S+)', base_sql)
+            else:
+                table_match = re.match(r'(?i)DELETE\s+FROM\s+(\S+)', base_sql)
+
+            if table_match and where_match:
+                table_name = table_match.group(1)
+                where_clause = where_match.group(1).strip()
+                # SELECT the rows that will be affected
+                select_sql = self.parse_place_holders(
+                    f"SELECT {returning_cols} FROM {table_name} WHERE {where_clause}"
+                )
+                cursor.execute(select_sql, params)
+                rows = cursor.fetchall()
+                columns = [col[0].lower() for col in cursor.description]
+                result_rows = [dict(zip(columns, row)) for row in rows]
+
+                # Now execute the actual mutation
+                base_parsed = self.parse_place_holders(base_sql)
+                cursor.execute(base_parsed, params)
+
+                return DatabaseResult(result_rows, columns, None, len(result_rows), len(result_rows), 0, sql, self)
+
+        return None
+
     def execute(self, sql, params=None):
         """
         Execute a query based on a SQL statement
@@ -483,8 +584,19 @@ class Database:
         try:
             if params != []:
                 params = get_field_type_values(params)
+
+            has_returning = self._has_returning_clause(sql)
+
+            if has_returning and self.database_engine in (MYSQL, MSSQL):
+                # Emulate RETURNING for engines that don't support it natively
+                result = self._emulate_returning(sql, params, cursor)
+                if result is not None:
+                    return result
+
             cursor.execute(sql, params)
-            if "returning" in sql.lower():
+
+            if has_returning:
+                # Native RETURNING support (PostgreSQL, SQLite, Firebird)
                 return self.get_database_result(cursor, 1, 1, 0, sql)
             else:
                 # see if we are mysql and if we are insert statement to get the last record
