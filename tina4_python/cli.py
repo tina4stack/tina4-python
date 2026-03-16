@@ -14,6 +14,10 @@ Commands:
   init PROJECT_NAME     Scaffold a new Tina4 project
   start [PORT]          Run the development server (default: 7145)
   migrate               Run pending migrations
+  migrate:create DESC   Create a new migration file
+  seed                  Run all seed files in src/seeds/
+  seed:create NAME      Create a new seed file
+  test                  Run all @tests in the project
   help                  Show this help
 """
 import re
@@ -307,6 +311,116 @@ def run_migrations():
         print(Messages.MSG_CLI_MIGRATION_ERROR.format(error=e))
         sys.exit(1)
 
+# ----------------------------------------------------------------------
+# Seed commands
+# ----------------------------------------------------------------------
+def run_seeds(clear=False):
+    """Run all seed files in src/seeds/ — discovers dba the same way as migrations."""
+    candidates = [
+        "app.py",
+        "main.py",
+        "src/__init__.py",
+        "initialize.py",
+        "project.py",
+    ]
+
+    dba = None
+
+    for candidate in candidates:
+        file_path = Path(candidate)
+        if not file_path.exists():
+            continue
+
+        print(Messages.MSG_CLI_TRYING_LOAD.format(candidate=candidate))
+
+        import importlib.util
+        module_name = file_path.stem if file_path.parent == Path(".") else "src"
+        spec = importlib.util.spec_from_file_location(module_name, file_path)
+        if not spec or not spec.loader:
+            continue
+
+        module = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(module)
+        except Exception as e:
+            print(f"  → {Messages.MSG_CLI_FAILED_EXECUTE.format(candidate=candidate, error=e)}")
+            continue
+
+        if hasattr(module, "dba") and getattr(module, "dba") is not None:
+            dba = getattr(module, "dba")
+            print(f"  → {Messages.MSG_CLI_FOUND_DBA.format(candidate=candidate)}")
+            break
+        else:
+            print(f"  → {Messages.MSG_CLI_NO_DBA.format(candidate=candidate)}")
+
+    if not dba:
+        print(f"\n{Messages.MSG_CLI_NO_DBA_ANYWHERE}")
+        print("\nEnsure you have:")
+        print("    from tina4_python.Database import Database")
+        print("    dba = Database(...)")
+        print("in one of your main files.")
+        sys.exit(1)
+
+    from tina4_python.Seeder import seed as run_seed_files
+    print(f"\nRunning seed files from src/seeds/ (clear={clear})...\n")
+    run_seed_files(dba, seed_folder="src/seeds", clear=clear)
+    print("\nSeeding complete.")
+
+
+def create_seed_file(name: str):
+    """Create a new seed file in src/seeds/."""
+    seeds_dir = Path("src") / "seeds"
+    seeds_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create __init__.py if missing
+    init_file = seeds_dir / "__init__.py"
+    if not init_file.exists():
+        init_file.write_text("", encoding="utf-8")
+
+    # Find next sequence number
+    existing = sorted([
+        f for f in seeds_dir.iterdir()
+        if f.is_file() and f.name[0].isdigit() and f.suffix == ".py"
+    ])
+    numbers = []
+    for f in existing:
+        match = re.match(r"(\d+)", f.name)
+        if match:
+            numbers.append(int(match.group(1)))
+
+    next_num = (max(numbers) + 1) if numbers else 1
+    clean_name = re.sub(r'[^a-z0-9]+', '_', name.strip().lower()).strip("_")
+    filename = f"{next_num:03d}_{clean_name}.py"
+    filepath = seeds_dir / filename
+
+    template = f'''"""Seed: {name.strip()}"""
+from tina4_python.Seeder import seed_orm, seed_table, FakeData
+
+
+def seed(dba):
+    """Seed function — called by `tina4 seed`.
+
+    Args:
+        dba: The database connection instance.
+
+    Examples:
+        # Seed an ORM class
+        # from src.orm.User import User
+        # seed_orm(User, count=50)
+
+        # Seed a raw table
+        # seed_table(dba, "audit_log", {{
+        #     "action": "string",
+        #     "created_at": "datetime",
+        # }}, count=100)
+    """
+    pass  # Replace with your seeding logic
+'''
+
+    filepath.write_text(template, encoding="utf-8")
+    print(f"Created seed file: {filepath}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Tina4 Python CLI \u2013 This is not a framework.",
@@ -331,6 +445,14 @@ def main():
     run_create = subparsers.add_parser("migrate:create", help="Create a new migration file")
     run_create.add_argument("description", nargs="+", help="Description, e.g. create users table")
 
+    # seed
+    seed_parser = subparsers.add_parser("seed", help="Run all seed files in src/seeds/")
+    seed_parser.add_argument("--clear", action="store_true", help="Clear tables before seeding")
+
+    # seed:create
+    seed_create_parser = subparsers.add_parser("seed:create", help="Create a new seed file")
+    seed_create_parser.add_argument("name", nargs="+", help="Name of the seed, e.g. users")
+
     test_parser = subparsers.add_parser("test", help="Run all @tests in the project")
     test_parser.add_argument("--quiet", "-q", action="store_true", help="Only show failures")
     test_parser.add_argument("--failfast", "-x", action="store_true", help="Stop on first failure")
@@ -346,6 +468,11 @@ def main():
     elif args.command == "migrate:create":
         description = " ".join(args.description)
         create_sql_migration(description)
+    elif args.command == "seed":
+        run_seeds(clear=args.clear)
+    elif args.command == "seed:create":
+        seed_name = " ".join(args.name)
+        create_seed_file(seed_name)
     elif args.command == "test":
         from tina4_python.Testing import run_all_tests
         run_all_tests(quiet=args.quiet, failfast=args.failfast)

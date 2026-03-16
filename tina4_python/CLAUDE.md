@@ -116,7 +116,7 @@ Never use `style="..."` attributes in Twig templates. All styling must live in S
 ```
 
 Rules:
-- Use Bootstrap 5 utility classes (e.g. `mt-4`, `text-center`, `d-flex`) for spacing, alignment, and layout instead of inline styles
+- Use Tina4 CSS utility classes (e.g. `mt-4`, `text-center`, `d-flex`) for spacing, alignment, and layout instead of inline styles — Tina4 CSS ships built-in, no external CDN needed
 - Use SCSS variables for colours, spacing, and font sizes — never hardcode hex values in templates
 - One SCSS file per page or component (e.g. `dashboard.scss`, `user-card.scss`)
 - Prefer semantic class names (`.product-card`, `.nav-sidebar`) over generic ones (`.box`, `.wrapper`)
@@ -230,6 +230,7 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 | Form token validation | `{{ form_token() }}` in templates + built-in middleware |
 | CRUD admin interfaces | `result.to_crud(request)` or `CRUD.to_crud()` |
 | Swagger/OpenAPI docs | `@description()`, `@tags()`, `@example()` decorators |
+| GraphQL API | `GraphQL` from `tina4_python.GraphQL` |
 | SOAP/WSDL services | `WSDL` class from `tina4_python.WSDL` |
 | Database migrations | `tina4 migrate:create` + `tina4 migrate` |
 | WebSockets | `Websocket` from `tina4_python.Websocket` |
@@ -467,7 +468,7 @@ Every project must have a `src/templates/base.twig`. All pages extend it.
     <meta charset="UTF-8">
     <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/tina4.min.css">
     <link rel="stylesheet" href="/css/default.css">
     {% block stylesheets %}{% endblock %}
 </head>
@@ -475,7 +476,7 @@ Every project must have a `src/templates/base.twig`. All pages extend it.
 {% block nav %}{% include "partials/nav.twig" ignore missing %}{% endblock %}
 {% block content %}{% endblock %}
 {% block javascripts %}
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/js/tina4.js"></script>
 <script src="/js/tina4helper.js"></script>
 {% endblock %}
 </body>
@@ -570,9 +571,9 @@ async def dashboard(request, response):
     return {"title": "Dashboard", "stats": get_stats()}
 ```
 
-## Frontend — Bootstrap + tina4helper.js
+## Frontend — Tina4 CSS + tina4helper.js
 
-The framework includes Bootstrap 5 by default and `tina4helper.js` for AJAX calls.
+The framework includes Tina4 CSS (~24KB, Bootstrap-compatible class names) and `tina4helper.js` for AJAX calls. No external CDN dependencies — everything ships built-in.
 
 ### tina4helper.js functions
 
@@ -598,7 +599,7 @@ getRoute("/api/partial", function(html) {
 // Post data to a URL, render response into element
 postUrl("/api/save", {name: "Alice"}, "resultDiv");
 
-// Show a Bootstrap alert
+// Show an alert message
 showMessage("Record saved successfully!");
 ```
 
@@ -1095,6 +1096,55 @@ class SecureService(WSDL):
         return result
 ```
 
+## GraphQL
+
+Tina4 includes a zero-dependency GraphQL engine with a recursive-descent parser, schema builder, query executor, and ORM auto-generation.
+
+```python
+from tina4_python.GraphQL import GraphQL
+
+# Auto-generate from ORM
+gql = GraphQL()
+gql.schema.from_orm(User)
+gql.schema.from_orm(Product)
+gql.register_route("/graphql")  # POST = queries, GET = GraphiQL IDE
+```
+
+`from_orm()` creates: type, single query (`user(id: ID)`), list query (`users(limit, offset)`), create/update/delete mutations.
+
+### Manual schema
+
+```python
+gql.schema.add_type("Widget", {"id": "ID", "name": "String", "price": "Float"})
+gql.schema.add_query("widget", {
+    "type": "Widget",
+    "args": {"id": "ID"},
+    "resolve": lambda root, args, ctx: {"id": args["id"], "name": "Cog", "price": 5.0},
+})
+gql.schema.add_mutation("deleteWidget", {
+    "type": "Boolean",
+    "args": {"id": "ID!"},
+    "resolve": lambda root, args, ctx: True,
+})
+```
+
+### Programmatic usage (no HTTP)
+
+```python
+result = gql.execute('{ users(limit: 3) { id name } }', variables={}, context={})
+# {"data": {"users": [...]}}
+```
+
+Supports: queries, mutations, variables, fragments, aliases, `@skip`/`@include` directives, nested selections, list types, inline fragments. Resolver exceptions are captured as GraphQL errors.
+
+| ORM Field | GraphQL Type |
+|-----------|-------------|
+| IntegerField | Int |
+| NumericField | Float |
+| StringField/TextField | String |
+| DateTimeField | String |
+| Primary key | ID |
+
 ## Localization (i18n)
 
 Tina4 supports translations via Python's `gettext` module. Translation files live in `tina4_python/translations/`.
@@ -1298,7 +1348,7 @@ async def admin_users(request, response):
 ```
 
 This auto-generates:
-- Searchable, paginated HTML table with Bootstrap 5
+- Searchable, paginated HTML table with Tina4 CSS
 - Create / Edit / Delete modals with form tokens
 - 4 RESTful API routes (GET list, POST create, POST update, DELETE)
 - Per-table Twig template in `src/templates/crud/` (customisable after generation)
