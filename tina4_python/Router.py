@@ -395,9 +395,13 @@ class Router:
         url_parts = url.split('?')
         url = url_parts[0]
 
-        # Serve statics
+        # Serve statics — check src/public/ first, then framework's built-in public/
         static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
         Debug.debug("Attempting to serve static file: " + static_file)
+        if not os.path.isfile(static_file):
+            fw_static = tina4_python.library_path + os.sep + "public" + url.replace("/", os.sep)
+            if os.path.isfile(fw_static):
+                static_file = fw_static
         if os.path.isfile(static_file):
             mime_type = mimetypes.guess_type(url)[0]
             with open(static_file, 'rb') as file:

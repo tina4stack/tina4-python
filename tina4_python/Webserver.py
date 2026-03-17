@@ -579,8 +579,17 @@ class Webserver:
                 file_path = os.path.join(tina4_python.root_path, "src", "public", clean_url.lstrip("/"))
                 file_path = os.path.abspath(file_path)
 
+                # Fallback: serve from framework's built-in public/ if not in src/public/
+                if not os.path.isfile(file_path):
+                    fw_path = os.path.join(tina4_python.library_path, "public", clean_url.lstrip("/"))
+                    fw_path = os.path.abspath(fw_path)
+                    fw_public = os.path.abspath(os.path.join(tina4_python.library_path, "public"))
+                    if os.path.commonpath([fw_path, fw_public]) == fw_public and os.path.isfile(fw_path):
+                        file_path = fw_path
+
                 # Security: prevent directory traversal
-                if os.path.commonpath([file_path, os.path.abspath(os.path.join(tina4_python.root_path, "src", "public"))]) == os.path.abspath(os.path.join(tina4_python.root_path, "src", "public")):
+                if os.path.commonpath([file_path, os.path.abspath(os.path.join(tina4_python.root_path, "src", "public"))]) == os.path.abspath(os.path.join(tina4_python.root_path, "src", "public")) or \
+                   (os.path.isfile(file_path) and os.path.commonpath([file_path, os.path.abspath(os.path.join(tina4_python.library_path, "public"))]) == os.path.abspath(os.path.join(tina4_python.library_path, "public"))):
                     if os.path.isfile(file_path):
                         mime_type, _ = mimetypes.guess_type(file_path)
                         mime_type = mime_type or "application/octet-stream"

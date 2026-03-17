@@ -14,28 +14,28 @@
                            value="{{ options.search|default('') }}"
                            autocomplete="off">
                     <button class="btn btn-outline-primary" type="button" id="btnSearch{{ table_name }}">
-                        <i class="bi bi-search"></i> Search
+                        Search
                     </button>
                 </div>
             </div>
             <div class="col-md-3 text-end">
                 <nav>
-                    <ul class="pagination pagination-sm mb-0" id="pagination{{ table_name }}"></ul>
+                    <ul class="pagination mb-0" id="pagination{{ table_name }}"></ul>
                 </nav>
             </div>
             <div class="col-md-4 text-end">
                 <button type="button" class="btn btn-success" data-bs-toggle="modal"
                         data-bs-target="#crudModal{{ table_name }}"
                         onclick="addRecord{{ table_name }}()">
-                    <i class="bi bi-plus-lg"></i> Create
+                    + Create
                 </button>
             </div>
         </div>
         {# Main content - table or card view #}
         {% if options.card_view|default(false) %}
-            <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4">
+            <div class="row gap-3">
                 {% for record in records %}
-                    <div class="col">
+                    <div class="col-12 col-md-6 col-lg-4">
                         <div class="card h-100 shadow-sm">
                             <div class="card-body">
                                 <h5 class="card-title">
@@ -68,8 +68,7 @@
                                                     :</strong><br>
                                                 <img src="{{ src }}"
                                                      alt="Image"
-                                                     class="img-thumbnail mt-2"
-                                                     style="max-height: 200px; max-width: 100%; border-radius: 8px; object-fit: cover;">
+                                                     class="img-thumbnail mt-2 crud-img-preview">
                                             </div>
                                         {% else %}
                                             <div class="mb-2">
@@ -103,7 +102,7 @@
 
         {% else %}
             <table class="table table-striped table-hover table-bordered">
-                <thead class="table-light">
+                <thead>
                 <tr>
                     {% for column in columns %}
                         <th scope="col">{{ column.label|default(column.name|nice_label) }}</th>
@@ -137,8 +136,7 @@
 
                                     <img src="{{ src }}"
                                          alt="Image"
-                                         class="img-thumbnail mt-2"
-                                         style="max-height: 200px; max-width: 100%; border-radius: 8px; object-fit: cover;">
+                                         class="img-thumbnail mt-2 crud-img-preview">
                                 {% else %}
                                     {{ value }}
                                 {% endif %}
@@ -158,7 +156,7 @@
                     </tr>
                 {% else %}
                     <tr>
-                        <td colspan="{{ columns|length + 1 }}" class="text-center text-muted py-4">
+                        <td colspan="{{ columns|length + 1 }}" class="text-center text-muted pt-4 pb-4">
                             No records found
                         </td>
                     </tr>
@@ -175,7 +173,7 @@
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="crudModalLabel{{ table_name }}">Edit Record</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close">&times;</button>
                 </div>
                 <form id="crudForm{{ table_name }}" method="POST" onsubmit="return false">
                     <div class="modal-body" id="modalBody{{ table_name }}">
@@ -257,12 +255,11 @@
         <div class="border rounded p-3 bg-light text-center">
             <img src="${imageSrc}"
                  alt="Current ${label}"
-                 class="img-thumbnail mb-3"
-                 style="max-height: 180px; max-width: 100%;">
+                 class="img-thumbnail mb-3 crud-img-preview-sm">
             <div>
                 <input type="file"
                        accept="image/*"
-                       class="form-control form-control-sm"
+                       class="form-control"
                        id="${field}"
                        name="${field}">
                 <small class="text-muted">Choose new image (optional)</small>
@@ -317,26 +314,17 @@
             type = `{{ column.type|default('text') }}`;
 
             if (field.indexOf('image') !== -1) {
-                let imageSrc = value;
-                if (value.length > 0 && !value.startsWith('data:image/')) {
-                    imageSrc = `data:image/${mimeType};base64,${value}`;
-                }
-
                 html += `
                     <div class="mb-3">
                         <label class="form-label">${label}</label>
                         <div class="border rounded p-3 bg-light text-center">
-                            <img src="${imageSrc}"
-                                 alt="Current ${label}"
-                                 class="img-thumbnail mb-3"
-                                 style="max-height: 180px; max-width: 100%;">
                             <div>
                                 <input type="file"
                                        accept="image/*"
-                                       class="form-control form-control-sm"
+                                       class="form-control"
                                        id="${field}"
                                        name="${field}">
-                                <small class="text-muted">Choose new image (optional)</small>
+                                <small class="text-muted">Choose image (optional)</small>
                             </div>
                         </div>
                     </div>`;
