@@ -4,13 +4,14 @@
 # License: MIT https://opensource.org/licenses/MIT
 #
 # flake8: noqa: E501
-"""Jinja2-based template engine for Tina4.
+"""Twig template engine for Tina4.
 
-The ``Template`` class wraps Jinja2 to provide Twig-compatible HTML
-rendering with automatic template discovery from ``src/templates/``.
+The ``Template`` class wraps Tina4's built-in TwigEngine to provide
+Twig/PHP-compatible HTML rendering with automatic template discovery
+from ``src/templates/``.
 
 Features:
-    - Automatic ``FileSystemLoader`` setup scanning ``src/templates/``
+    - Automatic template path setup scanning ``src/templates/``
     - Built-in filters: ``json_decode``, ``base64_encode``, ``date``,
       ``slugify``, and more
     - Built-in globals: ``url``, ``root``, ``session``, ``uniqid``, ``localize``
@@ -36,9 +37,9 @@ import base64
 import tina4_python
 from tina4_python import Constant
 from tina4_python.Debug import Debug
+from tina4_python.TwigEngine import TwigEngine, TemplateNotFound
 from pathlib import Path
 from datetime import datetime, date
-from jinja2 import Environment, FileSystemLoader, Undefined, TemplateNotFound
 from tina4_python.Session import Session
 from random import random as RANDOM
 from typing import Dict, Any
@@ -54,36 +55,34 @@ class Template:
 
     @staticmethod
     def add_filter(name, func):
-        """Register a custom Jinja2 filter."""
+        """Register a custom template filter."""
         Template._custom_filters[name] = func
         if Template.twig is not None:
-            Template.twig.filters[name] = func
+            Template.twig.add_filter(name, func)
 
     @staticmethod
     def add_global(name, value):
-        """Register a custom Jinja2 global (function or value)."""
+        """Register a custom template global (function or value)."""
         Template._custom_globals[name] = value
         if Template.twig is not None:
-            Template.twig.globals[name] = value
+            Template.twig.add_global(name, value)
 
     @staticmethod
     def add_test(name, func):
-        """Register a custom Jinja2 test for use with {% if x is testname %}."""
+        """Register a custom template test for use with {% if x is testname %}."""
         Template._custom_tests[name] = func
         if Template.twig is not None:
-            Template.twig.tests[name] = func
+            Template.twig.add_test(name, func)
 
     @staticmethod
     def add_extension(extension):
-        """Register a Jinja2 extension class."""
+        """Register a template extension (kept for API compatibility)."""
         if extension not in Template._custom_extensions:
             Template._custom_extensions.append(extension)
-        if Template.twig is not None:
-            Template.twig.add_extension(extension)
 
     @staticmethod
     def get_environment():
-        """Return the underlying Jinja2 Environment instance, initializing if needed."""
+        """Return the underlying TwigEngine instance, initializing if needed."""
         if Template.twig is None:
             Template.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
         return Template.twig
@@ -107,55 +106,53 @@ class Template:
         twig_path = Path(path)
         # Search project templates first, then framework built-in templates as fallback
         fw_templates = Path(tina4_python.library_path) / "templates"
-        search_paths = [twig_path]
-        if fw_templates.is_dir() and fw_templates != twig_path:
-            search_paths.append(fw_templates)
-        Template.twig = Environment(loader=FileSystemLoader(search_paths))
-        Template.twig.add_extension('jinja2.ext.debug')
-        Template.twig.add_extension('jinja2.ext.do')
+        search_paths = [str(twig_path)]
+        if fw_templates.is_dir() and str(fw_templates) != str(twig_path):
+            search_paths.append(str(fw_templates))
+        Template.twig = TwigEngine(search_paths)
+
         # i18n translation function — available as _() global and | translate filter
         from tina4_python.Localization import localize
         _translate = localize()
-        Template.twig.globals['_'] = _translate
-        Template.twig.filters['translate'] = _translate
-        Template.twig.globals['RANDOM'] = RANDOM
-        Template.twig.globals['json'] = json
-        Template.twig.globals['base64encode'] = Template.base64encode
-        Template.twig.filters['base64encode'] = Template.base64encode
-        Template.twig.filters['detect_image'] = Template.detect_image
-        Template.twig.filters['json_encode'] = json.dumps
-        Template.twig.globals['json_encode'] = json.dumps
-        Template.twig.filters['json_decode'] = Template.json_decode
-        Template.twig.globals['json_decode'] = Template.json_decode
-        Template.twig.filters['nice_label'] = Template.get_nice_label
-        Template.twig.globals['datetime_format'] = Template.datetime_format
-        Template.twig.filters['datetime_format'] = Template.datetime_format
-        Template.twig.globals['formToken'] = Template.get_form_token
-        Template.twig.filters['formToken'] = Template.get_form_token_input
-        Template.twig.globals['form_token'] = Template.get_form_token
-        Template.twig.filters['form_token'] = Template.get_form_token_input
+        Template.twig.add_global('_', _translate)
+        Template.twig.add_filter('translate', _translate)
+        Template.twig.add_global('RANDOM', RANDOM)
+        Template.twig.add_global('range', range)
+        Template.twig.add_global('json', json)
+        Template.twig.add_global('base64encode', Template.base64encode)
+        Template.twig.add_filter('base64encode', Template.base64encode)
+        Template.twig.add_filter('detect_image', Template.detect_image)
+        Template.twig.add_filter('json_encode', json.dumps)
+        Template.twig.add_global('json_encode', json.dumps)
+        Template.twig.add_filter('json_decode', Template.json_decode)
+        Template.twig.add_global('json_decode', Template.json_decode)
+        Template.twig.add_filter('nice_label', Template.get_nice_label)
+        Template.twig.add_global('datetime_format', Template.datetime_format)
+        Template.twig.add_filter('datetime_format', Template.datetime_format)
+        Template.twig.add_global('formToken', Template.get_form_token)
+        Template.twig.add_filter('formToken', Template.get_form_token_input)
+        Template.twig.add_global('form_token', Template.get_form_token)
+        Template.twig.add_filter('form_token', Template.get_form_token_input)
         debug_level = os.getenv("TINA4_DEBUG_LEVEL", "")
         if Constant.TINA4_LOG_DEBUG in debug_level or Constant.TINA4_LOG_ALL in debug_level:
-            Template.twig.globals['dump'] = Template.dump
+            Template.twig.add_global('dump', Template.dump)
         else:
-            Template.twig.globals['dump'] = Template.production_dump
+            Template.twig.add_global('dump', Template.production_dump)
 
-        # Apply any custom filters, globals, tests, and extensions registered before init
+        # Apply any custom filters, globals, tests registered before init
         for name, func in Template._custom_filters.items():
-            Template.twig.filters[name] = func
+            Template.twig.add_filter(name, func)
         for name, value in Template._custom_globals.items():
-            Template.twig.globals[name] = value
+            Template.twig.add_global(name, value)
         for name, func in Template._custom_tests.items():
-            Template.twig.tests[name] = func
-        for ext in Template._custom_extensions:
-            Template.twig.add_extension(ext)
+            Template.twig.add_test(name, func)
 
         Debug.debug("Twig Initialized on " + path)
         return Template.twig
 
     @staticmethod
     def datetime_format(value, format="%H:%M %d-%m-%y"):
-        if value.strip().upper() == "NOW":
+        if isinstance(value, str) and value.strip().upper() == "NOW":
             value = datetime.now()
         try:
             return value.strftime(format)
@@ -174,14 +171,14 @@ class Template:
 
     @staticmethod
     def dump(param):
-        param = html.unescape(param)
-        if param is not None and not isinstance(param, Undefined):
+        param = html.unescape(str(param)) if param is not None else None
+        if param is not None:
             def json_serialize(obj):
                 if isinstance(obj, (date, datetime)):
                     return obj.isoformat()
                 if isinstance(obj, Session):
                     return obj.session_values
-                raise TypeError("Type %s not serializable to Jinja2 template" % type(obj))
+                raise TypeError("Type %s not serializable" % type(obj))
 
             return "<pre>" + json.dumps(param, indent=True, default=json_serialize) + "</pre>"
         else:
@@ -189,7 +186,7 @@ class Template:
 
     @staticmethod
     def base64encode(param):
-        value =  base64.b64encode(param.encode('utf-8')).decode('utf-8')
+        value = base64.b64encode(param.encode('utf-8')).decode('utf-8')
         return value
 
     @staticmethod
@@ -207,9 +204,9 @@ class Template:
     def convert_special_types(obj):
         """
         Recursively convert non-JSON-serializable objects:
-          • datetime/date → ISO 8601 string
-          • bytes base64 string
-          • dict/list/tuple/set → recursively processed
+          - datetime/date -> ISO 8601 string
+          - bytes -> base64 string
+          - dict/list/tuple/set -> recursively processed
         Safe for deeply nested data (arrays of arrays, dicts in lists, etc.)
         """
         if isinstance(obj, (date, datetime)):
@@ -231,7 +228,7 @@ class Template:
             ]
 
         else:
-            # Primitives: str, int, float, bool, None → pass through
+            # Primitives: str, int, float, bool, None -> pass through
             return obj
 
     @staticmethod
@@ -246,9 +243,8 @@ class Template:
         twig = Template.init_twig(tina4_python.root_path + os.sep + "src" + os.sep + "templates")
         try:
             try:
-                if twig.get_template(template_or_file_name):
-                    template = twig.get_template(template_or_file_name)
-                    content = template.render(data)
+                template = twig.get_template(template_or_file_name)
+                content = template.render(data)
             except TemplateNotFound:
                 template = twig.from_string(template_or_file_name)
                 content = template.render(data)
@@ -265,13 +261,12 @@ class Template:
 
     @staticmethod
     def get_nice_label(field_name: str) -> str:
-        # snake_case / camelCase / PascalCase → words
+        # snake_case / camelCase / PascalCase -> words
         s = re.sub(r'[_.-]+', ' ', field_name)
         s = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', s)
         # Capitalize words & strip id
         words = s.split()
-        return " ".join(word.capitalize() for word in words )
-
+        return " ".join(word.capitalize() for word in words)
 
     @staticmethod
     def detect_image(value: Any) -> Dict[str, str]:
@@ -285,12 +280,12 @@ class Template:
                 content = data.get('content', '')
 
                 if not content:
-                    return  {"content": value, "content_type": ""}
+                    return {"content": value, "content_type": ""}
 
                 content_type = data.get('content_type', '')
                 if content_type.startswith('image/'):
                     mime_type = content_type.split('/')[1]
-                    return  {"content": content, "content_type": mime_type}
+                    return {"content": content, "content_type": mime_type}
 
                 # Fallback to magic bytes if no content_type
                 if content[:4] == '/9j/':
@@ -302,7 +297,7 @@ class Template:
                 elif content[:5] == 'UklGR':
                     mime_type = 'webp'
                 else:
-                    return  {"content": content, "content_type": ""}
+                    return {"content": content, "content_type": ""}
 
                 return {"content": content, "content_type": mime_type}
             except json.JSONDecodeError as e:
@@ -333,11 +328,11 @@ def template(twig_file: str):
         async def wrapper(*args, **kwargs):
             result = await func(*args, **kwargs)
 
-            # If the route returns a dict → render the template
+            # If the route returns a dict -> render the template
             if isinstance(result, dict):
-                html = Template.render(twig_file, result)
+                rendered = Template.render(twig_file, result)
                 from tina4_python.Response import Response
-                return Response(html, Constant.HTTP_OK, Constant.TEXT_HTML)
+                return Response(rendered, Constant.HTTP_OK, Constant.TEXT_HTML)
 
             # Anything else (redirects, JSON, etc.) is passed through unchanged
             return result

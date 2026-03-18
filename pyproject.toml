@@ -1,6 +1,6 @@
 [project]
 name = "tina4-python"
-version = "0.2.204"
+version = "0.2.205"
 description = "Tina4Python - This is not another framework for Python"
 authors = [
     {name = "Andre van Zuydam",email = "andrevanzuydam@gmail.com"}
@@ -8,7 +8,6 @@ authors = [
 readme = "README.md"
 requires-python = ">=3.12,<4.0"
 dependencies = [
-    "jinja2>=3.1.5,<4.0.0",
     "libsass (>=0.23.0,<0.24.0)",
     "python-dotenv (>=1.0.1,<2.0.0)",
     "pyjwt>=2.10.1,<3.0.0",
