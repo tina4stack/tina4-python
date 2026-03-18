@@ -28,11 +28,8 @@ import sys
 import threading
 import re
 import traceback
-import sass
 import gettext
 from pathlib import Path
-from watchdog.observers import Observer
-from watchdog.events import PatternMatchingEventHandler, FileSystemEvent
 from tina4_python.Router import get
 from tina4_python import Messages, Constant
 from tina4_python.Swagger import Swagger
@@ -249,23 +246,12 @@ builtins.seed_orm = seed_orm
 builtins.seed_table = seed_table
 
 
-# Auto-import everything from src folders
-if os.path.exists(root_path + os.sep + "src"):
-    try:
-        import importlib
-        src_module = importlib.import_module("src")
-        for attr in dir(src_module):
-            if not attr.startswith("_"):
-                globals()[attr] = getattr(src_module, attr)
-        Debug.info("Initializing src folder")
-    except ImportError as e:
-        Debug.error("Cannot import src folder", str(e))
-else:
-    Debug.warning("Missing src folder")
+# src/ is loaded lazily inside run_web_server() via _autoload_routes()
 
 
 def compile_scss():
     """Auto-compile each main .scss file → its own .css file in mirrored public/css structure"""
+    import sass  # lazy — only needed when compiling
     scss_dir = Path(root_path) / "src" / "scss"
     css_base_dir = Path(root_path) / "src" / "public" / "css"
 
@@ -319,28 +305,17 @@ def compile_scss():
     except Exception as e:
         Debug.error("Unexpected error during SCSS auto-compile:", str(e))
 
-# Run it on startup
-compile_scss()
-
-
-# File watcher: DevReload (debug) or SCSS-only (production)
+# SCSS compile + watcher: dev mode only
+# In production SCSS is pre-compiled — no need to recompile or watch on startup
 if _dev_mode:
+    compile_scss()
     from tina4_python.DevReload import inject_dev_scripts, start_watcher, livereload_websocket_handler, get_error_overlay_assets
     _dev_observer = start_watcher(root_path, compile_scss_fn=compile_scss)
 else:
-    class SassCompiler(PatternMatchingEventHandler):
-        """Live SASS watcher – recompiles on any .scss/.sass change."""
-        def on_modified(self, event: FileSystemEvent) -> None:
-            if not event.is_directory:
-                compile_scss()
-
-    if os.path.exists(root_path + os.sep + "src" + os.sep + "scss"):
-        observer = Observer()
-        event_handler = SassCompiler(patterns=["*.sass", "*.scss"])
-        observer.schedule(event_handler, path=root_path + os.sep + "src" + os.sep + "scss", recursive=True)
-        observer.start()
-    else:
-        Debug.warning("Missing scss folder")
+    # Compile only if no CSS output exists yet (first deploy / fresh container)
+    css_base = Path(root_path) / "src" / "public" / "css"
+    if not css_base.exists() or not any(css_base.rglob("*.css")):
+        compile_scss()
 
 
 def file_get_contents(file_path):
