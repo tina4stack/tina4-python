@@ -501,23 +501,10 @@ class Router:
             with open(cached_static, 'rb') as file:
                 return Response(file.read(), Constant.HTTP_OK, mime_type)
 
-        # Build candidate route list using prefix index (O(1) lookup vs O(n) scan)
-        url_segments = Router._normalize_request_url(url)
-        first_seg = url_segments[0] if url_segments else ""
-
-        # Collect indexed candidates
-        candidates = set()
-        if first_seg in Router._route_index:
-            candidates.update(Router._route_index[first_seg])
-        candidates.update(Router._wildcard_routes)
-        if not url_segments and "" in Router._route_index:
-            candidates.update(Router._route_index[""])
-
-        # If index is empty (e.g. tests reset tina4_routes directly), fall back to full scan
-        if not Router._route_index and not Router._wildcard_routes:
-            route_iter = tina4_python.tina4_routes.values()
-        else:
-            route_iter = (tina4_python.tina4_routes[cb] for cb in candidates if cb in tina4_python.tina4_routes)
+        # Always use full scan for route matching — simple, correct, and fast
+        # enough for typical route counts. The pre-compiled segments and cached
+        # signatures provide the main per-request speedup.
+        route_iter = list(tina4_python.tina4_routes.values())
 
         buffer = io.StringIO()
         for route in route_iter:

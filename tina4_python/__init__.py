@@ -223,9 +223,9 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
     shutil.copytree(source_dir, destination_dir)
 
 # Declare built-ins so we don't always have to import stuff.
-# Light imports (no heavy deps) are loaded eagerly.
-# Heavy imports (jwt, jinja2, database drivers) are deferred until first use
-# via module __getattr__ and registered as builtins on first access.
+# NOTE: Names that shadow submodule names (Database, ORM, Api, etc.) MUST be
+# imported eagerly — Python's import system resolves submodules before __getattr__.
+# Only names that don't shadow submodules can use lazy __getattr__.
 import builtins
 from .Router import get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl
 from .Testing import tests, assert_equal, assert_raises
@@ -233,57 +233,34 @@ from .Debug import Debug
 from .FieldTypes import IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField
 from .Constant import TEXT_HTML, TEXT_PLAIN, TEXT_CSS, TINA4_POST, TINA4_DELETE, TINA4_ANY, TINA4_PUT, TINA4_PATCH, TINA4_OPTIONS, TINA4_LOG_ALL, TINA4_LOG_WARNING, TINA4_LOG_ERROR, TINA4_LOG_DEBUG, TINA4_GET, TINA4_LOG_INFO, HTTP_OK, HTTP_SERVER_ERROR, HTTP_FORBIDDEN, HTTP_NO_CONTENT, HTTP_PARTIAL_CONTENT, HTTP_CREATED, HTTP_UNAUTHORIZED, HTTP_ACCEPTED, HTTP_REDIRECT, HTTP_REDIRECT_MOVED, HTTP_REDIRECT_OTHER, HTTP_BAD_REQUEST, HTTP_NOT_FOUND, LOOKUP_HTTP_CODE, APPLICATION_JSON, APPLICATION_XML
 
-# Register light builtins immediately
-for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl, tests, assert_equal, assert_raises,
-             IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField):
-    if deco.__name__ not in builtins.__dict__:
-        builtins.__dict__[deco.__name__] = deco
+# These shadow submodule names so they must be imported eagerly
+from .Database import Database
+from .ORM import ORM, orm
+from .Api import Api
+from .Template import template
+from .Swagger import description, secure, summary, example, example_response, tags, params, describe
+from .GraphQL import GraphQL, GraphQLSchema, GraphQLType
+from .Seeder import FakeData, Seeder, seed_orm, seed_table, seed
+
+# Register all as builtins
+for _obj in (get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl,
+             tests, assert_equal, assert_raises,
+             IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField,
+             description, secure, summary, example, example_response, tags, params, describe, template):
+    if _obj.__name__ not in builtins.__dict__:
+        builtins.__dict__[_obj.__name__] = _obj
 
 builtins.Debug = Debug
-
-# Lazy module attributes — resolved on `from tina4_python import X` or `tina4_python.X`
-# Maps attribute name → (submodule_path, attribute_name)
-_LAZY_ATTRS = {
-    "Database": (".Database", "Database"),
-    "ORM": (".ORM", "ORM"),
-    "orm": (".ORM", "orm"),
-    "Api": (".Api", "Api"),
-    "template": (".Template", "template"),
-    "description": (".Swagger", "description"),
-    "secure": (".Swagger", "secure"),
-    "summary": (".Swagger", "summary"),
-    "example": (".Swagger", "example"),
-    "example_response": (".Swagger", "example_response"),
-    "tags": (".Swagger", "tags"),
-    "params": (".Swagger", "params"),
-    "describe": (".Swagger", "describe"),
-    "GraphQL": (".GraphQL", "GraphQL"),
-    "GraphQLSchema": (".GraphQL", "GraphQLSchema"),
-    "GraphQLType": (".GraphQL", "GraphQLType"),
-    "FakeData": (".Seeder", "FakeData"),
-    "Seeder": (".Seeder", "Seeder"),
-    "seed_orm": (".Seeder", "seed_orm"),
-    "seed_table": (".Seeder", "seed_table"),
-    "seed": (".Seeder", "seed"),
-}
-
-def __getattr__(name):
-    """Module-level __getattr__ for lazy imports.
-
-    Called when ``from tina4_python import X`` or ``tina4_python.X`` is used
-    and X isn't already in the module namespace.  Loads the real attribute
-    from the submodule and caches it in both the module dict and builtins.
-    """
-    if name in _LAZY_ATTRS:
-        submod, attr = _LAZY_ATTRS[name]
-        mod = importlib.import_module(submod, package="tina4_python")
-        obj = getattr(mod, attr)
-        # Cache in module dict so __getattr__ isn't called again
-        globals()[name] = obj
-        # Also register as builtin for zero-import convenience
-        builtins.__dict__[name] = obj
-        return obj
-    raise AttributeError(f"module 'tina4_python' has no attribute {name!r}")
+builtins.Database = Database
+builtins.ORM = ORM
+builtins.orm = orm
+builtins.Api = Api
+builtins.GraphQL = GraphQL
+builtins.GraphQLSchema = GraphQLSchema
+builtins.FakeData = FakeData
+builtins.Seeder = Seeder
+builtins.seed_orm = seed_orm
+builtins.seed_table = seed_table
 
 
 # src/ is loaded lazily inside run_web_server() via _autoload_routes()
@@ -374,8 +351,10 @@ async def get_swagger_json(request, response):
 @get(os.getenv("SWAGGER_ROUTE", "/swagger"))
 async def get_swagger(request, response):
     """Serve interactive Swagger UI page."""
-    html = file_get_contents(
-        root_path + os.sep + "src" + os.sep + "public" + os.sep + "swagger" + os.sep + "index.html")
+    swagger_path = root_path + os.sep + "src" + os.sep + "public" + os.sep + "swagger" + os.sep + "index.html"
+    if not os.path.isfile(swagger_path):
+        swagger_path = library_path + os.sep + "public" + os.sep + "swagger" + os.sep + "index.html"
+    html = file_get_contents(swagger_path)
 
     html = html.replace("{SWAGGER_ROUTE}", os.getenv("SWAGGER_ROUTE", "/swagger"))
     return response(html)
@@ -600,7 +579,7 @@ def run_web_server(hostname="localhost", port=7145, debug: bool = False):
     # ------------------------------------------------------------------
     # Show a clickable URL in the banner (0.0.0.0 isn't useful for devs)
     display_host = "localhost" if hostname in ("0.0.0.0", "::") else hostname
-    Debug.info(f"Server started http://{display_host}:{port}")
+    Debug.info(f"Server started http://{display_host}:{port} ({len(tina4_routes)} routes)")
     webserver(hostname, port, debug=debug)  # Pass debug flag down
 
 

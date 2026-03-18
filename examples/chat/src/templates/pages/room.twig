@@ -1,0 +1,83 @@
+{% extends "base.twig" %}
+{% block title %}Chat Room{% endblock %}
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <strong>Chat Room</strong>
+                <span class="badge bg-success">{{ username }}</span>
+            </div>
+            <div class="card-body" id="messages" style="height:400px;overflow-y:auto;background:#f8f9fa">
+            </div>
+            <div class="card-footer">
+                <div class="input-group">
+                    <input type="text" id="msgInput" class="form-control" placeholder="Type a message..." autofocus>
+                    <button class="btn btn-success" onclick="sendMessage()">Send</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block javascripts %}
+<script>
+var username = "{{ username }}";
+var ws;
+
+function connect() {
+    var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    ws = new WebSocket(protocol + "//" + location.host + "/ws");
+
+    ws.onopen = function() {
+        ws.send(JSON.stringify({username: username}));
+        addMessage("system", "Connected to chat");
+    };
+
+    ws.onmessage = function(event) {
+        var data = JSON.parse(event.data);
+        if (data.type === "system") {
+            addMessage("system", data.text);
+        } else {
+            addMessage(data.username, data.text);
+        }
+    };
+
+    ws.onclose = function() {
+        addMessage("system", "Disconnected. Reconnecting...");
+        setTimeout(connect, 2000);
+    };
+}
+
+function addMessage(sender, text) {
+    var el = document.getElementById("messages");
+    var div = document.createElement("div");
+    div.className = "mb-1 p-1";
+    if (sender === "system") {
+        div.innerHTML = '<em class="text-muted">' + text + '</em>';
+    } else {
+        var cls = sender === username ? "text-primary" : "text-dark";
+        div.innerHTML = '<strong class="' + cls + '">' + sender + ':</strong> ' + text;
+    }
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+}
+
+function sendMessage() {
+    var input = document.getElementById("msgInput");
+    var text = input.value.trim();
+    if (text && ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({text: text}));
+        addMessage(username, text);
+        input.value = "";
+    }
+}
+
+document.getElementById("msgInput").addEventListener("keydown", function(e) {
+    if (e.key === "Enter") sendMessage();
+});
+
+connect();
+</script>
+{% endblock %}

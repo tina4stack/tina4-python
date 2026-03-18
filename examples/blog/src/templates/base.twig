@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}Tina4 Blog{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/css/tina4.min.css">
+    {% block stylesheets %}{% endblock %}
+</head>
+<body>
+<nav class="navbar navbar-dark bg-dark">
+    <div class="container">
+        <a class="navbar-brand" href="/">Tina4 Blog</a>
+        <div>
+            <a href="/" class="btn btn-sm btn-outline-light">Home</a>
+            <a href="/admin/posts" class="btn btn-sm btn-outline-light">Admin</a>
+            <a href="/swagger" class="btn btn-sm btn-outline-light">API Docs</a>
+        </div>
+    </div>
+</nav>
+<div class="container mt-4">
+    {% block content %}{% endblock %}
+</div>
+{% block javascripts %}
+<script src="/js/tina4helper.js"></script>
+{% endblock %}
+</body>
+</html>

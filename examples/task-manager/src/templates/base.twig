@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}Task Manager{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/css/tina4.min.css">
+</head>
+<body>
+<nav class="navbar navbar-dark bg-primary">
+    <div class="container">
+        <a class="navbar-brand" href="/tasks">Task Manager</a>
+        <div>
+            {% if username is defined and username %}
+            <span class="text-light me-3">{{ username }}</span>
+            <a href="/logout" class="btn btn-sm btn-outline-light">Logout</a>
+            {% else %}
+            <a href="/login" class="btn btn-sm btn-outline-light">Login</a>
+            <a href="/register" class="btn btn-sm btn-outline-light">Register</a>
+            {% endif %}
+        </div>
+    </div>
+</nav>
+<div class="container mt-4">
+    {% block content %}{% endblock %}
+</div>
+<script src="/js/tina4helper.js"></script>
+</body>
+</html>
