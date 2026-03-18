@@ -99,7 +99,7 @@ class Database:
             elif params[0] == MONGODB:
                 install_message = f"Please install pymongo: {MONGODB_INSTALL}"
 
-            sys.exit(Messages.MSG_DB_DRIVER_NOT_FOUND.format(driver=params[0]) + "\n" + install_message + "\n" + str(e))
+            raise ImportError(Messages.MSG_DB_DRIVER_NOT_FOUND.format(driver=params[0]) + "\n" + install_message + "\n" + str(e))
 
 
         self.database_engine = params[0]
