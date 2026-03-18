@@ -381,8 +381,8 @@ class TestPaginationAllEngines:
     def test_beyond_last_page(self):
         result = self.dba.fetch("SELECT * FROM employee", limit=3, skip=100)
         assert result.count == 0, f"[{self.engine_name}]"
-        # No rows = total is 0 (window function has no rows to emit from)
-        assert result.total_count == 0, f"[{self.engine_name}]"
+        # total_count reflects the full table count (from COUNT(*)) even when skip is beyond the last page
+        assert result.total_count == 10, f"[{self.engine_name}]"
 
     def test_full_page(self):
         result = self.dba.fetch("SELECT * FROM employee", limit=100, skip=0)
