@@ -238,7 +238,7 @@ from .Database import Database
 from .ORM import ORM, orm
 from .Api import Api
 from .Template import template
-from .Swagger import description, secure, summary, example, example_response, tags, params, describe
+from .Swagger import Swagger, description, secure, summary, example, example_response, tags, params, describe
 from .GraphQL import GraphQL, GraphQLSchema, GraphQLType
 from .Seeder import FakeData, Seeder, seed_orm, seed_table, seed
 
