@@ -50,7 +50,6 @@ import io
 import tina4_python
 from tina4_python import Constant
 from tina4_python.Debug import Debug
-from tina4_python.Template import Template
 from tina4_python.MiddleWare import MiddleWare
 from tina4_python import Messages
 
@@ -429,6 +428,7 @@ class Router:
         """
         from tina4_python.Request import Request
         from tina4_python.Response import Response
+        from tina4_python.Template import Template
 
         # Reset per-request response context (clears pending headers from add_header)
         Response.reset_context()

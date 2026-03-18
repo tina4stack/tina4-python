@@ -24,6 +24,7 @@ import os
 
 import shutil
 import importlib
+import importlib.util
 import sys
 import threading
 import re
@@ -32,12 +33,9 @@ import gettext
 from pathlib import Path
 from tina4_python.Router import get
 from tina4_python import Messages, Constant
-from tina4_python.Swagger import Swagger
 from tina4_python.Env import load_env
-from tina4_python.Webserver import Webserver
 from tina4_python.Router import Router
 from tina4_python.Localization import localize
-from tina4_python.Auth import Auth
 from tina4_python.Debug import Debug
 from tina4_python.Debug import setup_logging
 from tina4_python.ShellColors import ShellColors
@@ -117,7 +115,22 @@ Debug.debug(Messages.MSG_ASSUMING_ROOT_PATH.format(root_path=root_path, library_
 tina4_routes = {}  # Registry of all registered routes
 tina4_current_request = {}  # Current request context (used in helpers)
 tina4_api_key = None  # Optional global API key
-tina4_auth = Auth(root_path)
+# Lazy-init Auth — jwt (57ms) + bcrypt only loaded when first accessed
+_tina4_auth = None
+
+def _get_auth():
+    global _tina4_auth
+    if _tina4_auth is None:
+        from tina4_python.Auth import Auth
+        _tina4_auth = Auth(root_path)
+    return _tina4_auth
+
+class _LazyAuth:
+    """Proxy that defers Auth initialization until first attribute access."""
+    def __getattr__(self, name):
+        return getattr(_get_auth(), name)
+
+tina4_auth = _LazyAuth()
 
 
 def container_broken(error_msg):
@@ -209,41 +222,68 @@ if not os.path.exists(root_path + os.sep + "src" + os.sep + "public"):
     destination_dir = root_path + os.sep + "src" + os.sep + "public"
     shutil.copytree(source_dir, destination_dir)
 
-# Declare built ins so we don't always have to import stuff
+# Declare built-ins so we don't always have to import stuff.
+# Light imports (no heavy deps) are loaded eagerly.
+# Heavy imports (jwt, jinja2, database drivers) are deferred until first use
+# via module __getattr__ and registered as builtins on first access.
 import builtins
 from .Router import get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl
 from .Testing import tests, assert_equal, assert_raises
 from .Debug import Debug
-from .Database import Database
-from .ORM import ORM, orm
-from .Api import Api
-from .Template import template
-from .Swagger import description, secure, summary, example, example_response, tags, params, describe
-from .GraphQL import GraphQL, GraphQLSchema, GraphQLType
 from .FieldTypes import IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField
-from .Seeder import FakeData, Seeder, seed_orm, seed_table, seed
 from .Constant import TEXT_HTML, TEXT_PLAIN, TEXT_CSS, TINA4_POST, TINA4_DELETE, TINA4_ANY, TINA4_PUT, TINA4_PATCH, TINA4_OPTIONS, TINA4_LOG_ALL, TINA4_LOG_WARNING, TINA4_LOG_ERROR, TINA4_LOG_DEBUG, TINA4_GET, TINA4_LOG_INFO, HTTP_OK, HTTP_SERVER_ERROR, HTTP_FORBIDDEN, HTTP_NO_CONTENT, HTTP_PARTIAL_CONTENT, HTTP_CREATED, HTTP_UNAUTHORIZED, HTTP_ACCEPTED, HTTP_REDIRECT, HTTP_REDIRECT_MOVED, HTTP_REDIRECT_OTHER, HTTP_BAD_REQUEST, HTTP_NOT_FOUND, LOOKUP_HTTP_CODE, APPLICATION_JSON, APPLICATION_XML
 
-# Make them globally available in every Tina4 project — zero imports
+# Register light builtins immediately
 for deco in (get, post, put, patch, delete, middleware, cached, noauth, secured, wsdl, tests, assert_equal, assert_raises,
-             IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField,
-             description, secure, summary, example, example_response, tags, params, describe, template):
+             IntegerField, StringField, JSONBField, TextField, BlobField, NumericField, DateTimeField):
     if deco.__name__ not in builtins.__dict__:
         builtins.__dict__[deco.__name__] = deco
 
-
-
 builtins.Debug = Debug
-builtins.Api = Api
-builtins.Database = Database
-builtins.ORM = ORM
-builtins.orm = orm
-builtins.GraphQL = GraphQL
-builtins.GraphQLSchema = GraphQLSchema
-builtins.FakeData = FakeData
-builtins.Seeder = Seeder
-builtins.seed_orm = seed_orm
-builtins.seed_table = seed_table
+
+# Lazy module attributes — resolved on `from tina4_python import X` or `tina4_python.X`
+# Maps attribute name → (submodule_path, attribute_name)
+_LAZY_ATTRS = {
+    "Database": (".Database", "Database"),
+    "ORM": (".ORM", "ORM"),
+    "orm": (".ORM", "orm"),
+    "Api": (".Api", "Api"),
+    "template": (".Template", "template"),
+    "description": (".Swagger", "description"),
+    "secure": (".Swagger", "secure"),
+    "summary": (".Swagger", "summary"),
+    "example": (".Swagger", "example"),
+    "example_response": (".Swagger", "example_response"),
+    "tags": (".Swagger", "tags"),
+    "params": (".Swagger", "params"),
+    "describe": (".Swagger", "describe"),
+    "GraphQL": (".GraphQL", "GraphQL"),
+    "GraphQLSchema": (".GraphQL", "GraphQLSchema"),
+    "GraphQLType": (".GraphQL", "GraphQLType"),
+    "FakeData": (".Seeder", "FakeData"),
+    "Seeder": (".Seeder", "Seeder"),
+    "seed_orm": (".Seeder", "seed_orm"),
+    "seed_table": (".Seeder", "seed_table"),
+    "seed": (".Seeder", "seed"),
+}
+
+def __getattr__(name):
+    """Module-level __getattr__ for lazy imports.
+
+    Called when ``from tina4_python import X`` or ``tina4_python.X`` is used
+    and X isn't already in the module namespace.  Loads the real attribute
+    from the submodule and caches it in both the module dict and builtins.
+    """
+    if name in _LAZY_ATTRS:
+        submod, attr = _LAZY_ATTRS[name]
+        mod = importlib.import_module(submod, package="tina4_python")
+        obj = getattr(mod, attr)
+        # Cache in module dict so __getattr__ isn't called again
+        globals()[name] = obj
+        # Also register as builtin for zero-import convenience
+        builtins.__dict__[name] = obj
+        return obj
+    raise AttributeError(f"module 'tina4_python' has no attribute {name!r}")
 
 
 # src/ is loaded lazily inside run_web_server() via _autoload_routes()
@@ -368,6 +408,7 @@ async def app(scope, receive, send):
         elif message["type"] == "http.disconnect" or message["type"] == "websocket.disconnect":
             return
         elif not message.get("more_body"):
+            from tina4_python.Webserver import Webserver
             webserver = Webserver(scope["server"][0], scope["server"][1])
             parsed_headers = {}
             parsed_headers_lowercase = {}
@@ -576,6 +617,7 @@ def webserver(host_name, port, debug: bool = False):
         )
 
     if use_default:
+        from tina4_python.Webserver import Webserver
         Debug.info("Using default webserver")
         web_server = Webserver(host_name, int(port))
         web_server.router_handler = Router()

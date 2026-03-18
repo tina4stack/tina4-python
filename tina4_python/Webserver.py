@@ -24,7 +24,6 @@ from tina4_python.Constant import (
 from tina4_python.Session import Session
 from tina4_python.Router import Router
 from tina4_python.Debug import Debug
-from tina4_python.Template import Template
 
 
 def is_int(v: str) -> bool:
@@ -651,6 +650,7 @@ class Webserver:
                 payload = json.dumps({"error": Messages.MSG_INTERNAL_SERVER_ERROR, "message": error_msg})
                 writer.write(header_bytes + payload.encode())
             else:
+                from tina4_python.Template import Template
                 html = Template.render_twig_template(
                     "errors/500.twig",
                     {"server": {"url": self.path or "/"}, "error_message": error_msg},

@@ -37,8 +37,15 @@ import json
 import os
 import threading
 import time
-from watchdog.observers import Observer
-from watchdog.events import PatternMatchingEventHandler, FileSystemEvent
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import PatternMatchingEventHandler, FileSystemEvent
+    _HAS_WATCHDOG = True
+except ImportError:
+    _HAS_WATCHDOG = False
+    Observer = None
+    PatternMatchingEventHandler = object
+    FileSystemEvent = None
 
 import importlib
 import sys
@@ -536,8 +543,12 @@ def start_watcher(root_path, compile_scss_fn=None):
             If provided, called on ``.scss`` / ``.sass`` changes.
 
     Returns:
-        Observer: The running watchdog Observer instance.
+        Observer: The running watchdog Observer instance, or None.
     """
+    if not _HAS_WATCHDOG:
+        Debug.warning("[DevReload] watchdog not installed — file watcher disabled. Install with: pip install tina4-python[dev-reload]")
+        return None
+
     src_path = os.path.join(root_path, "src")
     if not os.path.exists(src_path):
         Debug.warning("[DevReload] No src/ directory found — watcher not started")

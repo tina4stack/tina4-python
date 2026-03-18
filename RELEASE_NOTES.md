@@ -4,6 +4,35 @@ All notable changes to tina4-python are documented here.
 
 ---
 
+## v0.2.204 — 2026-03-18
+
+**Cold start 95ms → 72ms: lazy imports, remove unused dep, watchdog optional**
+
+### Import time improvements
+
+| Mode | Before | After | Change |
+|------|--------|-------|--------|
+| Production | 95ms | **72ms** | -24% |
+| Development | 228ms | **174ms** | -24% |
+
+- **Lazy-load Template (jinja2)** — Jinja2 (38ms) now imported on first request, not at `import tina4_python`. Router.py and Webserver.py import Template inside functions.
+- **Lazy-load Auth (jwt + bcrypt)** — JWT (57ms) deferred until first auth operation via `_LazyAuth` proxy.
+- **Lazy-load Webserver** — Only imported when `run_web_server()` or the ASGI `app()` is called.
+- **Lazy builtins via `__getattr__`** — `Database`, `ORM`, `Api`, `GraphQL`, `Seeder`, Swagger decorators (`description`, `tags`, etc.) are resolved on first use via Python's module `__getattr__`. Users see zero difference — `from tina4_python import Database` still works.
+- **Removed `asyncer`** — Was listed as a dependency but never imported anywhere (36ms saved from venv install).
+
+### Dependency changes
+
+- **`watchdog` moved to `[dev-reload]` extras** — File watcher only needed in dev mode. Production installs are lighter:
+  ```bash
+  pip install tina4-python                # no watchdog (production)
+  pip install tina4-python[dev-reload]    # watchdog + jurigged (development)
+  ```
+  If watchdog is missing in dev mode, a warning is logged instead of crashing.
+- **`asyncer` removed** — Unused dependency, saves 36ms import + ~0.5MB install.
+
+---
+
 ## v0.2.203 — 2026-03-18
 
 **Router performance: 20x faster route matching, cached signatures, static file cache**
