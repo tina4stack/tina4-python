@@ -4,6 +4,62 @@ All notable changes to tina4-python are documented here.
 
 ---
 
+## v0.2.202 — 2026-03-18
+
+**JWT migrated to HS256, optional DB drivers, hot-reload optional, data seeder**
+
+### ⚠️ Breaking change — JWT algorithm RS256 → HS256
+
+Tina4 previously signed JWTs with an auto-generated RSA key pair (`secrets/private.key` + `secrets/public.key`). This required the `cryptography` package (20 MB of C bindings).
+
+**On first startup after upgrading**, Tina4 will:
+1. Detect the legacy key files and delete them automatically
+2. Print a one-time warning: *"JWT upgraded RS256 → HS256: old key files removed, all existing tokens invalidated."*
+3. Sign all new tokens with HS256 using your `SECRET` env var directly
+
+**What you need to do:**
+- Ensure `SECRET` is set in your `.env` to a strong random string (32+ characters recommended)
+- All currently active sessions will be invalidated — users will need to log in again
+- If you were sharing public keys with external services for token verification, those integrations need updating
+
+The public API is **unchanged** — `get_token()`, `validate()`, `valid()`, `get_payload()` work identically.
+
+### Dependency reductions
+
+- **`cryptography` (20 MB) removed** from base install — no longer needed for JWT
+- **`jurigged` + `blessed` + `wcwidth` (~0.8 MB) moved to optional** `[dev-reload]` extra — hot-patching is opt-in:
+  ```bash
+  pip install tina4-python[dev-reload]   # include hot-patching
+  pip install tina4-python               # lean install
+  ```
+- **Database drivers are now optional extras** — install only what you need:
+  ```bash
+  pip install tina4-python[postgres]     # psycopg2-binary
+  pip install tina4-python[mysql]        # mysql-connector-python
+  pip install tina4-python[mssql]        # pymssql
+  pip install tina4-python[firebird]     # firebird-driver
+  pip install tina4-python[mongo]        # pymongo
+  pip install tina4-python[all-db]       # all drivers
+  ```
+
+### New features
+
+- **Data seeder** (`tina4_python.Seeder`): Zero-dependency fake data generation with ORM and raw table support, column-name heuristics, FK resolution, topological sort, and auto-discovery from `src/seeds/`:
+  ```python
+  fake = FakeData()
+  fake.name()       # "Alice Johnson"
+  fake.email()      # "alice.johnson@example.com"
+  seed_orm(User, count=50)
+  seed_table(db, "products", columns, count=100)
+  ```
+  CLI: `tina4 seed`, `tina4 seed:create <name>`
+
+### Tests
+
+- **`test_seeder.py`** — 105 tests covering FakeData, field heuristics, ORM seeding, table seeding, Seeder builder, CLI, FK resolution, and edge cases
+
+---
+
 ## v0.2.200 — 2026-03-15
 
 **MongoDB SQL translation, pagination optimization, robust RETURNING, Firebird migration idempotency**

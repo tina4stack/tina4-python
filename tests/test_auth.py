@@ -44,24 +44,11 @@ def test_hash_password_different_salts(auth):
     assert auth.check_password(h2, "same") is True
 
 
-# --- Key generation ---
+# --- HS256 secret ---
 
-def test_keys_created(auth):
-    assert os.path.isfile(auth.private_key)
-    assert os.path.isfile(auth.public_key)
-    assert os.path.isfile(auth.self_signed)
-
-
-def test_load_private_key(auth):
-    key = auth.load_private_key()
-    assert key is not None
-    assert auth.loaded_private_key is key  # cached
-
-
-def test_load_public_key(auth):
-    key = auth.load_public_key()
-    assert key is not None
-    assert auth.loaded_public_key is key  # cached
+def test_secret_set(auth):
+    assert auth.secret is not None
+    assert isinstance(auth.secret, str)
 
 
 # --- JWT creation ---
@@ -134,8 +121,7 @@ def test_validate_no_expiry_claim(auth):
     # Manually create a token without expires (bypass get_token auto-add)
     import jwt as pyjwt
     from tina4_python.Auth import AuthJSONSerializer
-    private_key = auth.load_private_key()
-    token = pyjwt.encode({"user": "test"}, key=private_key, algorithm="RS256",
+    token = pyjwt.encode({"user": "test"}, key=auth.secret, algorithm="HS256",
                          json_encoder=AuthJSONSerializer)
     assert auth.validate(token) is False
 

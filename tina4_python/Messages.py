@@ -60,6 +60,7 @@ MSG_DB_UNIMPLEMENTED = _('Please implement {driver} in Database.py and make a pu
 
 # --- Auth messages ---
 MSG_AUTH_NO_SECRET = _('No SECRET env var set - using default secret. Set SECRET in your .env for production.')
+MSG_AUTH_RS256_MIGRATION = _('JWT upgraded RS256 → HS256: old key files removed, all existing tokens invalidated. This is a one-time migration.')
 
 # --- WebSocket messages ---
 MSG_WS_CREATE_ERROR = _('Error creating Websocket, perhaps you need to install simple_websocket ?')

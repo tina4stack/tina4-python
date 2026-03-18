@@ -7,10 +7,9 @@
 """JWT authentication and password hashing for Tina4.
 
 Provides the ``Auth`` class which handles:
-    - RS256 JWT token creation and validation using auto-generated
-      self-signed certificates (stored in the ``cert/`` directory)
-    - Configurable token expiry (default 24 hours, override via
-      ``TINA4_TOKEN_EXPIRES_IN`` environment variable)
+    - HS256 JWT token creation and validation using the ``SECRET`` env var
+    - Configurable token expiry (default 2 minutes, override via
+      ``TINA4_TOKEN_LIMIT`` environment variable)
     - Password hashing and verification using bcrypt
     - Payload extraction from valid or expired tokens
 
@@ -36,11 +35,7 @@ import os
 import jwt
 import bcrypt
 from json import JSONEncoder
-from cryptography import x509
-from cryptography.x509 import NameOID
-from cryptography.hazmat.primitives import serialization, hashes
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.backends import default_backend
+
 
 class AuthJSONSerializer(JSONEncoder):
     """
@@ -62,36 +57,18 @@ class Auth:
 
     Handles:
       - Password hashing/verification (bcrypt)
-      - Automatic creation and loading of an RSA private/public key pair
-      - Self-signed certificate generation for local HTTPS development
-      - Signing JWT tokens with RS256 (private key)
-      - Verifying JWT tokens with RS256 (public key)
+      - Signing JWT tokens with HS256 (SECRET env var)
+      - Verifying JWT tokens with HS256
       - Simple API-KEY fallback validation
 
-    Keys and certificates are stored in ``<root_path>/secrets/``:
-        - private.key   → encrypted PEM private key
-        - public.key    → PEM public key (unencrypted)
-        - domain.cert   → self-signed certificate (for local dev servers)
-
     Environment variables used:
-        - ``SECRET``            → passphrase used to encrypt the private key
+        - ``SECRET``            → HMAC-SHA256 signing secret for JWT
         - ``API_KEY``           → optional static API key (checked before JWT)
         - ``TINA4_TOKEN_LIMIT`` → default token lifetime in minutes (default: 2)
-        - Country/State/City/Organization/Domain variables for the cert
     """
 
-    # ------------------------------------------------------------------
-    # Class-level attributes (set in __init__)
-    # ------------------------------------------------------------------
-    secret: str | None = None          # Passphrase for private key encryption
-    private_key: str = None            # Path to encrypted private key file
-    public_key: str = None             # Path to public key file
-    self_signed: str = None            # Path to self-signed cert file
-    root_path: str = None              # Project root directory
-
-    # Cached key objects (avoid reloading from disk on every request)
-    loaded_private_key = None
-    loaded_public_key = None
+    secret: str | None = None
+    root_path: str = None
 
     # ------------------------------------------------------------------
     # Password handling (bcrypt)
@@ -125,134 +102,47 @@ class Auth:
         return bcrypt.checkpw(password_bytes, password_hash.encode("utf-8"))
 
     # ------------------------------------------------------------------
-    # Private / public key loading (with caching)
-    # ------------------------------------------------------------------
-    def load_private_key(self):
-        """
-        Load (and cache) the RSA private key from ``secrets/private.key``.
-
-        The key is encrypted with the passphrase stored in ``self.secret``
-        (which comes from the environment variable ``SECRET``).
-
-        Returns:
-            cryptography.hazmat.primitives.asymmetric.rsa.RSAPrivateKey
-        """
-        if self.loaded_private_key:
-            return self.loaded_private_key
-
-        with open(self.private_key, "rb") as f:
-            private_key = serialization.load_pem_private_key(
-                f.read(),
-                password=self.secret.encode(),
-                backend=default_backend(),
-            )
-            self.loaded_private_key = private_key
-            return private_key
-
-    def load_public_key(self):
-        """
-        Load (and cache) the RSA public key from ``secrets/public.key``.
-
-        Returns:
-            cryptography.hazmat.primitives.asymmetric.rsa.RSAPublicKey
-        """
-        if self.loaded_public_key:
-            return self.loaded_public_key
-
-        with open(self.public_key, "rb") as f:
-            public_key = serialization.load_pem_public_key(
-                f.read(), backend=default_backend()
-            )
-            self.loaded_public_key = public_key
-            return public_key
-
-    # ------------------------------------------------------------------
-    # Constructor – creates secrets folder & keys if missing
+    # Constructor
     # ------------------------------------------------------------------
     def __init__(self, root_path: str):
         """
-        Initialise the Auth helper and ensure cryptographic material exists.
+        Initialise the Auth helper.
+
+        Detects and removes legacy RS256 key files from older Tina4 installs,
+        printing a one-time migration notice when found.
 
         Args:
-            root_path (str): Absolute path to the project root (where the
-                             ``secrets`` folder will be created).
+            root_path (str): Absolute path to the project root.
         """
+        from tina4_python.Debug import Debug
+        from tina4_python import Messages
+
         self.root_path = root_path
         self.secret = os.environ.get("SECRET", "{self.secret}")
         if self.secret == "{self.secret}":
-            from tina4_python.Debug import Debug
-            from tina4_python import Messages
             Debug.warning(Messages.MSG_AUTH_NO_SECRET)
-        self.private_key = os.path.join(root_path, "secrets", "private.key")
-        self.public_key = os.path.join(root_path, "secrets", "public.key")
-        self.self_signed = os.path.join(root_path, "secrets", "domain.cert")
-
-        # Ensure secrets directory exists
-        os.makedirs(os.path.join(root_path, "secrets"), exist_ok=True)
 
         # ------------------------------------------------------------------
-        # 1. Private key – generate if missing
+        # One-time RS256 → HS256 migration: remove old key files if present
         # ------------------------------------------------------------------
-        if not os.path.isfile(self.private_key):
-            private_key = rsa.generate_private_key(
-                public_exponent=65537,
-                key_size=2048,
-            )
-            with open(self.private_key, "wb") as f:
-                f.write(private_key.private_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PrivateFormat.TraditionalOpenSSL,
-                    encryption_algorithm=serialization.BestAvailableEncryption(self.secret.encode()),
-                ))
-        else:
-            private_key = self.load_private_key()
-
-        # ------------------------------------------------------------------
-        # 2. Public key – derive from private key if missing
-        # ------------------------------------------------------------------
-        if not os.path.isfile(self.public_key):
-            public_key = private_key.public_key()
-            public_pem = public_key.public_bytes(
-                encoding=serialization.Encoding.PEM,
-                format=serialization.PublicFormat.SubjectPublicKeyInfo,
-            )
-            with open(self.public_key, "wb") as f:
-                f.write(public_pem)
-
-        # ------------------------------------------------------------------
-        # 3. Self-signed certificate (useful for local HTTPS servers)
-        # ------------------------------------------------------------------
-        if not os.path.isfile(self.self_signed):
-            subject = issuer = x509.Name(
-                [
-                    x509.NameAttribute(NameOID.COUNTRY_NAME, os.environ.get("COUNTRY", "ZA")),
-                    x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, os.environ.get("STATE", "WESTERN CAPE")),
-                    x509.NameAttribute(NameOID.LOCALITY_NAME, os.environ.get("CITY", "CAPE TOWN")),
-                    x509.NameAttribute(NameOID.ORGANIZATION_NAME, os.environ.get("ORGANIZATION", "Tina4")),
-                    x509.NameAttribute(NameOID.COMMON_NAME, os.environ.get("DOMAIN_NAME", "localhost")),
-                ]
-            )
-            cert = (
-                x509.CertificateBuilder()
-                .subject_name(subject)
-                .issuer_name(issuer)
-                .public_key(private_key.public_key())
-                .serial_number(x509.random_serial_number())
-                .not_valid_before(datetime.datetime.now(datetime.timezone.utc))
-                .not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=99999))
-                .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
-                .sign(private_key, hashes.SHA256())
-            )
-
-            with open(self.self_signed, "wb") as f:
-                f.write(cert.public_bytes(serialization.Encoding.PEM))
+        secrets_dir = os.path.join(root_path, "secrets")
+        legacy_files = [
+            os.path.join(secrets_dir, "private.key"),
+            os.path.join(secrets_dir, "public.key"),
+            os.path.join(secrets_dir, "domain.cert"),
+        ]
+        if any(os.path.isfile(f) for f in legacy_files):
+            for f in legacy_files:
+                if os.path.isfile(f):
+                    os.remove(f)
+            Debug.warning(Messages.MSG_AUTH_RS256_MIGRATION)
 
     # ------------------------------------------------------------------
-    # JWT creation & verification
+    # JWT creation & verification (HS256)
     # ------------------------------------------------------------------
     def get_token(self, payload_data: dict, expiry_minutes: int = 0) -> str:
         """
-        Create a signed JWT (RS256) containing the supplied payload.
+        Create a signed JWT (HS256) containing the supplied payload.
 
         If ``expires`` is not present in ``payload_data`` an expiration claim
         will be added automatically using ``TINA4_TOKEN_LIMIT`` (default 2 minutes)
@@ -265,7 +155,6 @@ class Auth:
         Returns:
             str: Signed JWT (compact serialization).
         """
-        private_key = self.load_private_key()
         now = datetime.datetime.now(datetime.timezone.utc)
 
         if "expires" not in payload_data:
@@ -277,8 +166,8 @@ class Auth:
 
         token = jwt.encode(
             payload=payload_data,
-            key=private_key,
-            algorithm="RS256",
+            key=self.secret,
+            algorithm="HS256",
             json_encoder=AuthJSONSerializer,
         )
         return token
@@ -287,17 +176,19 @@ class Auth:
         """
         Decode a JWT and return its payload (without verification of expiry).
 
-        Used when you only need the claims and will perform your own validation.
-
         Args:
             token (str): JWT to decode.
 
         Returns:
             dict | None: Payload dictionary or ``None`` on invalid signature.
         """
-        public_key = self.load_public_key()
         try:
-            payload = jwt.decode(token, key=public_key, algorithms=["RS256"])
+            payload = jwt.decode(
+                token,
+                key=self.secret,
+                algorithms=["HS256"],
+                options={"verify_exp": False},
+            )
             return payload
         except Exception:
             return None
@@ -308,7 +199,7 @@ class Auth:
 
         Checks:
           1. Optional static ``API_KEY`` environment variable (quick bypass)
-          2. RS256 signature using the public key
+          2. HS256 signature using SECRET
           3. Presence and validity of the ``expires`` claim
 
         Args:
@@ -317,38 +208,29 @@ class Auth:
         Returns:
             bool: ``True`` if the token is valid and not expired.
         """
-        # Simple API-KEY fallback (useful for quick internal scripts)
         if os.environ.get("API_KEY") and token == os.environ.get("API_KEY"):
             return True
 
-        public_key = self.load_public_key()
         try:
-            payload = jwt.decode(token, key=public_key, algorithms=["RS256"])
+            payload = jwt.decode(
+                token,
+                key=self.secret,
+                algorithms=["HS256"],
+                options={"verify_exp": False},
+            )
 
             if "expires" not in payload:
                 return False
 
             expiry_time = datetime.datetime.fromisoformat(payload["expires"])
             if expiry_time.tzinfo is None:
-                # Treat naive datetime as UTC for backward compatibility
                 expiry_time = expiry_time.replace(tzinfo=datetime.timezone.utc)
 
             return datetime.datetime.now(datetime.timezone.utc) <= expiry_time
 
-        except Exception:  # noqa: BLE001 – we intentionally catch everything here
+        except Exception:  # noqa: BLE001
             return False
 
-    # ------------------------------------------------------------------
-    # Alias for backward compatibility
-    # ------------------------------------------------------------------
     def valid(self, token: str) -> bool:
-        """
-        Alias of :meth:`validate`. Kept for older codebases.
-
-        Args:
-            token (str): Bearer token.
-
-        Returns:
-            bool: ``True`` if token is valid.
-        """
+        """Alias of :meth:`validate`. Kept for backward compatibility."""
         return self.validate(token)

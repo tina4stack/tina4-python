@@ -206,7 +206,7 @@ migrate(dba: Database, delimiter=";", migration_folder="migrations")
 - Queue support via `litequeue` (+ RabbitMQ, Kafka, MongoDB backends)
 - WebSocket support via `simple-websocket`
 - Hot reload via `jurigged` + `watchdog`
-- Version: 0.2.200
+- Version: 0.2.202
 
 ## Links
 
