@@ -565,7 +565,17 @@ def run_web_server(hostname="localhost", port=7145, debug: bool = False):
 
 def webserver(host_name, port, debug: bool = False):
     """Choose and start the appropriate ASGI server."""
-    if os.getenv('TINA4_DEFAULT_WEBSERVER', 'FALSE').upper() == 'TRUE':
+    use_default = os.getenv('TINA4_DEFAULT_WEBSERVER', 'FALSE').upper() == 'TRUE'
+
+    # Windows: warn about WebSocket limitations with the raw asyncio server
+    if use_default and os.name == 'nt':
+        Debug.warning(
+            "Raw asyncio server on Windows does not support WebSockets. "
+            "Install hypercorn (`pip install hypercorn`) and remove "
+            "TINA4_DEFAULT_WEBSERVER=TRUE for full WebSocket support."
+        )
+
+    if use_default:
         Debug.info("Using default webserver")
         web_server = Webserver(host_name, int(port))
         web_server.router_handler = Router()

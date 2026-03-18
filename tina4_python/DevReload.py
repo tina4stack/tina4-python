@@ -40,6 +40,10 @@ import time
 from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler, FileSystemEvent
 
+import importlib
+import sys
+from pathlib import Path
+
 from tina4_python.Debug import Debug
 
 # Global set of asyncio.Queue objects — one per connected browser tab
@@ -112,6 +116,67 @@ def _debounced_notify(change_type: str, delay: float = 0.1):
         _debounce_timer.start()
 
 
+def _reload_python_module(file_path: str):
+    """Re-import a Python module when its source file changes.
+
+    For files inside ``src/routes/``, ``src/orm/``, or ``src/app/``,
+    this clears any routes previously registered by the module, then
+    reloads it so that decorators (``@get``, ``@post``, etc.) re-run
+    and re-register in ``tina4_routes``.
+
+    New route files are imported for the first time; deleted files have
+    their routes cleaned up.
+
+    Args:
+        file_path: Absolute path to the changed ``.py`` file.
+    """
+    import tina4_python
+
+    # Only reload files under src/ (routes, orm, app)
+    try:
+        rel = Path(file_path).relative_to(Path.cwd())
+    except ValueError:
+        return  # Outside project directory
+
+    parts = rel.parts
+    if len(parts) < 2 or parts[0] != "src":
+        return
+
+    # Skip __init__.py, __pycache__, private files
+    if any(p.startswith("_") for p in parts):
+        return
+
+    # Skip non-code directories (templates, scss, public)
+    if parts[1] in ("templates", "scss", "public"):
+        return
+
+    # Build dotted module name: src/routes/users.py → src.routes.users
+    module_name = ".".join(rel.with_suffix("").parts)
+
+    # Remove routes previously registered by callbacks defined in this module
+    old_module = sys.modules.get(module_name)
+    if old_module is not None:
+        callbacks_to_remove = []
+        for callback in list(tina4_python.tina4_routes.keys()):
+            cb_module = getattr(callback, "__module__", None)
+            if cb_module == module_name:
+                callbacks_to_remove.append(callback)
+        for cb in callbacks_to_remove:
+            del tina4_python.tina4_routes[cb]
+            Debug.debug(f"[DevReload] Removed route for {cb.__name__} from {module_name}")
+
+    # (Re-)import the module — decorators will re-register routes
+    try:
+        if module_name in sys.modules:
+            importlib.reload(sys.modules[module_name])
+            Debug.info(f"[DevReload] Reloaded module: {module_name}")
+        elif os.path.isfile(file_path):
+            importlib.import_module(module_name)
+            Debug.info(f"[DevReload] Loaded new module: {module_name}")
+    except Exception as e:
+        Debug.error(f"[DevReload] Failed to reload {module_name}: {e}")
+
+
 class DevFileWatcher(PatternMatchingEventHandler):
     """Watchdog handler that triggers live-reload on file changes.
 
@@ -152,6 +217,11 @@ class DevFileWatcher(PatternMatchingEventHandler):
                 except Exception as e:
                     Debug.error(f"[DevReload] SCSS compile error: {e}")
             _debounced_notify("css-reload")
+        elif ext == ".py":
+            # Hot-reload Python routes/orm/app modules so new or changed
+            # decorators (@get, @post, etc.) re-register in tina4_routes
+            _reload_python_module(path)
+            _debounced_notify("reload")
         else:
             _debounced_notify("reload")
 

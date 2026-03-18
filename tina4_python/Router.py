@@ -77,6 +77,27 @@ class Router:
 
     variables = {}
 
+    # Route index: first_segment → list of route callbacks for O(1) prefix lookup
+    _route_index = {}
+    # Routes that start with a parameter (must always be checked)
+    _wildcard_routes = []
+
+    # Static file path cache: url → file_path or False (not a static file)
+    _static_cache = {}
+
+    @staticmethod
+    def reset():
+        """Clear all route state including indexes and caches.
+
+        Call this instead of ``tina4_python.tina4_routes = {}`` to ensure
+        the prefix index and static cache are also cleared.
+        """
+        tina4_python.tina4_routes = {}
+        Router.variables = {}
+        Router._route_index = {}
+        Router._wildcard_routes = []
+        Router._static_cache = {}
+
     @staticmethod
     def _parse_route_segment(segment):
         """Parse a single route-pattern segment into a parameter name and type.
@@ -108,6 +129,8 @@ class Router:
     def clean_url(url):
         """Normalise a URL path by collapsing consecutive slashes.
 
+        Uses string operations instead of regex for speed.
+
         Args:
             url: The raw URL path string (e.g. ``"//api///items"``).
 
@@ -117,17 +140,33 @@ class Router:
         """
         if not url:
             return "/"
-        return re.sub(r'/+', '/', url)
+        # Fast path: no double slashes means nothing to collapse
+        if '//' not in url:
+            return url
+        # String-based collapse (avoids regex)
+        while '//' in url:
+            url = url.replace('//', '/')
+        return url
 
     @staticmethod
     def _normalize_url(url):
         """Full URL normalization: strip query, domain, collapse slashes, add trailing slash."""
         if not url:
             return "/"
-        url = url.split('?')[0]
-        url = re.sub(r'^https?://[^/]+', '', url)  # remove domain if present
-        url = re.sub(r'\s+', '', url)  # remove all whitespace
-        url = re.sub(r'/+', '/', url)  # collapse multiple slashes
+        # Strip query string
+        qmark = url.find('?')
+        if qmark != -1:
+            url = url[:qmark]
+        # Remove domain if present (http:// or https://)
+        if url.startswith('http'):
+            slash_pos = url.find('/', url.find('//') + 2)
+            url = url[slash_pos:] if slash_pos != -1 else "/"
+        # Remove whitespace characters
+        if ' ' in url or '\t' in url or '\n' in url:
+            url = url.replace(' ', '').replace('\t', '').replace('\n', '').replace('\r', '')
+        # Collapse slashes
+        while '//' in url:
+            url = url.replace('//', '/')
         url = url.strip('/')
         if not url:
             return "/"
@@ -182,7 +221,32 @@ class Router:
         return variables
 
     @staticmethod
-    def match(url, route_path):
+    def _normalize_request_url(url):
+        """Normalize an incoming request URL once per request.
+
+        Strips query string, removes whitespace, collapses slashes, strips
+        surrounding slashes, and splits into segments.  Returns the segment list.
+        All string operations — no regex.
+        """
+        # Strip query string
+        qmark = url.find('?')
+        if qmark != -1:
+            url_norm = url[:qmark]
+        else:
+            url_norm = url
+        # Strip whitespace (URLs should never contain spaces)
+        if ' ' in url_norm or '\t' in url_norm or '\n' in url_norm:
+            url_norm = url_norm.replace(' ', '').replace('\t', '').replace('\n', '').replace('\r', '')
+        # Collapse double slashes
+        while '//' in url_norm:
+            url_norm = url_norm.replace('//', '/')
+        url_norm = url_norm.strip('/')
+        if not url_norm:
+            return []
+        return url_norm.split('/')
+
+    @staticmethod
+    def match(url, route_path, compiled_routes=None):
         """Test whether a request URL matches one or more route patterns.
 
         Performs robust URL matching with full support for:
@@ -200,59 +264,83 @@ class Router:
             url: The incoming request URL (query string is stripped).
             route_path: A single route-pattern string or a list of patterns
                 to try.  The first matching pattern wins.
+            compiled_routes: Optional pre-compiled route segments from
+                :meth:`_compile_route` (avoids re-parsing on every request).
 
         Returns:
             ``True`` if *url* matches any of the supplied patterns,
             ``False`` otherwise.
         """
+        url_segments = Router._normalize_request_url(url)
+
+        # Use pre-compiled routes if available (fast path)
+        if compiled_routes is not None:
+            for compiled_segs in compiled_routes:
+                variables = {}
+                matched = True
+                url_idx = 0
+
+                for route_idx, (seg_str, param_name, converter) in enumerate(compiled_segs):
+                    if param_name:
+                        if converter == 'path':
+                            remaining = url_segments[url_idx:]
+                            variables[param_name] = '/'.join(remaining) if remaining else ""
+                            if route_idx != len(compiled_segs) - 1:
+                                matched = False
+                            break
+                        else:
+                            if url_idx >= len(url_segments):
+                                matched = False
+                                break
+                            raw_val = url_segments[url_idx]
+                            try:
+                                if converter == 'int':
+                                    variables[param_name] = int(raw_val)
+                                elif converter == 'float':
+                                    variables[param_name] = float(raw_val)
+                                else:
+                                    variables[param_name] = raw_val
+                            except ValueError:
+                                matched = False
+                                break
+                    else:
+                        if url_idx >= len(url_segments) or url_segments[url_idx] != seg_str:
+                            matched = False
+                            break
+                    url_idx += 1
+
+                if matched:
+                    has_path_param = any(c[2] == 'path' for c in compiled_segs)
+                    if has_path_param or url_idx == len(url_segments):
+                        Router.variables = variables
+                        return True
+
+            Router.variables = {}
+            return False
+
+        # Fallback: parse route_path on the fly (legacy path for external callers)
         if isinstance(route_path, (str, list)):
             route_paths = route_path if isinstance(route_path, list) else [route_path]
         else:
             return False
 
-        # === Normalize incoming URL ===
-        url_norm = url.split('?')[0]  # remove query string
-        url_norm = re.sub(r'\s+', '', url_norm)  # remove whitespace
-        url_norm = re.sub(r'/+', '/', url_norm)  # collapse slashes
-        url_norm = url_norm.strip('/')
-        if not url_norm:
-            url_norm = '/'  # root path
-        else:
-            url_norm = '/' + url_norm + '/'
-        url_segments = [seg for seg in url_norm.strip('/').split('/') if seg]
-
         for route in route_paths:
-            # === Normalize route ===
-            route_norm = route.strip()
-            route_norm = re.sub(r'\s+', '', route_norm)
-            route_norm = re.sub(r'/+', '/', route_norm)
-            route_norm = route_norm.strip('/')
-            if not route_norm:
-                route_norm = '/'
-            else:
-                route_norm = '/' + route_norm + '/'
-
-            route_segments = [seg for seg in route_norm.strip('/').split('/') if seg]
-
+            compiled_segs = Router._compile_route(route)
             variables = {}
-            match = True
+            matched = True
             url_idx = 0
 
-            for route_idx, route_seg in enumerate(route_segments):
-                param_name, converter = Router._parse_route_segment(route_seg)
-
-                if param_name:  # Parameter segment
+            for route_idx, (seg_str, param_name, converter) in enumerate(compiled_segs):
+                if param_name:
                     if converter == 'path':
-                        # Greedy: consume everything from here to end
                         remaining = url_segments[url_idx:]
-                        value = '/'.join(remaining) if remaining else ""
-                        variables[param_name] = value
-                        if route_idx != len(route_segments) - 1:
-                            match = False  # {path:path} must be last
+                        variables[param_name] = '/'.join(remaining) if remaining else ""
+                        if route_idx != len(compiled_segs) - 1:
+                            matched = False
                         break
                     else:
                         if url_idx >= len(url_segments):
-                            match = False
+                            matched = False
                             break
                         raw_val = url_segments[url_idx]
                         try:
@@ -263,18 +351,16 @@ class Router:
                             else:
                                 variables[param_name] = raw_val
                         except ValueError:
-                            match = False
+                            matched = False
                             break
-                else:  # Fixed segment
-                    if url_idx >= len(url_segments) or url_segments[url_idx] != route_seg:
-                        match = False
+                else:
+                    if url_idx >= len(url_segments) or url_segments[url_idx] != seg_str:
+                        matched = False
                         break
-
                 url_idx += 1
 
-            # Final check: all URL segments consumed unless {path:path} was used
-            if match:
-                has_path_param = any(Router._parse_route_segment(s)[1] == 'path' for s in route_segments)
+            if matched:
+                has_path_param = any(c[2] == 'path' for c in compiled_segs)
                 if has_path_param or url_idx == len(url_segments):
                     Router.variables = variables
                     return True
@@ -395,25 +481,51 @@ class Router:
         url_parts = url.split('?')
         url = url_parts[0]
 
-        # Serve statics — check src/public/ first, then framework's built-in public/
-        static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
-        Debug.debug("Attempting to serve static file: " + static_file)
-        if not os.path.isfile(static_file):
-            fw_static = tina4_python.library_path + os.sep + "public" + url.replace("/", os.sep)
-            if os.path.isfile(fw_static):
-                static_file = fw_static
-        if os.path.isfile(static_file):
+        # Serve statics — use cache to skip filesystem calls for known non-static URLs
+        cached_static = Router._static_cache.get(url)
+        if cached_static is None:
+            # Not in cache yet — check filesystem
+            static_file = tina4_python.root_path + os.sep + "src" + os.sep + "public" + url.replace("/", os.sep)
+            if not os.path.isfile(static_file):
+                fw_static = tina4_python.library_path + os.sep + "public" + url.replace("/", os.sep)
+                if os.path.isfile(fw_static):
+                    static_file = fw_static
+            if os.path.isfile(static_file):
+                Router._static_cache[url] = static_file
+                cached_static = static_file
+            else:
+                Router._static_cache[url] = False  # Mark as not a static file
+        if cached_static and cached_static is not False:
+            Debug.debug("Serving static file: " + cached_static)
             mime_type = mimetypes.guess_type(url)[0]
-            with open(static_file, 'rb') as file:
+            with open(cached_static, 'rb') as file:
                 return Response(file.read(), Constant.HTTP_OK, mime_type)
 
+        # Build candidate route list using prefix index (O(1) lookup vs O(n) scan)
+        url_segments = Router._normalize_request_url(url)
+        first_seg = url_segments[0] if url_segments else ""
+
+        # Collect indexed candidates
+        candidates = set()
+        if first_seg in Router._route_index:
+            candidates.update(Router._route_index[first_seg])
+        candidates.update(Router._wildcard_routes)
+        if not url_segments and "" in Router._route_index:
+            candidates.update(Router._route_index[""])
+
+        # If index is empty (e.g. tests reset tina4_routes directly), fall back to full scan
+        if not Router._route_index and not Router._wildcard_routes:
+            route_iter = tina4_python.tina4_routes.values()
+        else:
+            route_iter = (tina4_python.tina4_routes[cb] for cb in candidates if cb in tina4_python.tina4_routes)
+
         buffer = io.StringIO()
-        for route in tina4_python.tina4_routes.values():
+        for route in route_iter:
             if "methods" not in route or method not in route["methods"]:
                 continue
 
             Debug.debug(method, "Matching route ", route['routes'], " to ", url)
-            if Router.match(url, route['routes']):
+            if Router.match(url, route['routes'], compiled_routes=route.get("_compiled_routes")):
                 route_matched = True
                 # Snapshot variables immediately to prevent race between concurrent requests
                 matched_vars = dict(Router.variables)
@@ -473,25 +585,46 @@ class Router:
                                 return Response(mw_response.content, mw_response.http_code, mw_response.content_type)
 
                     try:
-                        sig = inspect.signature(router_response)
+                        # Use cached signature info from registration time
+                        cached_sig = route.get("_signature")
                         kwargs = {}
 
-                        for param_name, param in sig.parameters.items():
-                            if param_name in matched_vars:
-                                value = matched_vars[param_name]
-                                if param.annotation != inspect.Parameter.empty and callable(param.annotation):
-                                    try:
-                                        value = param.annotation(value)
-                                    except ValueError:
-                                        raise ValueError(
-                                            Messages.MSG_ROUTER_INVALID_PARAM.format(param_name=param_name, expected=param.annotation.__name__, got=matched_vars[param_name]))
-                                kwargs[param_name] = value
-                            elif param_name == 'request':
-                                kwargs[param_name] = req
-                            elif param_name == 'response':
-                                kwargs[param_name] = Response
-                            elif param.default == inspect.Parameter.empty:
-                                raise TypeError(Messages.MSG_ROUTER_MISSING_PARAM.format(param_name=param_name))
+                        if cached_sig is not None:
+                            for param_name, annotation, has_default in cached_sig:
+                                if param_name in matched_vars:
+                                    value = matched_vars[param_name]
+                                    if annotation is not None and callable(annotation):
+                                        try:
+                                            value = annotation(value)
+                                        except ValueError:
+                                            raise ValueError(
+                                                Messages.MSG_ROUTER_INVALID_PARAM.format(param_name=param_name, expected=annotation.__name__, got=matched_vars[param_name]))
+                                    kwargs[param_name] = value
+                                elif param_name == 'request':
+                                    kwargs[param_name] = req
+                                elif param_name == 'response':
+                                    kwargs[param_name] = Response
+                                elif not has_default:
+                                    raise TypeError(Messages.MSG_ROUTER_MISSING_PARAM.format(param_name=param_name))
+                        else:
+                            # Fallback for routes registered without cached signature
+                            sig = inspect.signature(router_response)
+                            for param_name, param in sig.parameters.items():
+                                if param_name in matched_vars:
+                                    value = matched_vars[param_name]
+                                    if param.annotation != inspect.Parameter.empty and callable(param.annotation):
+                                        try:
+                                            value = param.annotation(value)
+                                        except ValueError:
+                                            raise ValueError(
+                                                Messages.MSG_ROUTER_INVALID_PARAM.format(param_name=param_name, expected=param.annotation.__name__, got=matched_vars[param_name]))
+                                    kwargs[param_name] = value
+                                elif param_name == 'request':
+                                    kwargs[param_name] = req
+                                elif param_name == 'response':
+                                    kwargs[param_name] = Response
+                                elif param.default == inspect.Parameter.empty:
+                                    raise TypeError(Messages.MSG_ROUTER_MISSING_PARAM.format(param_name=param_name))
 
                         result = await router_response(**kwargs)
                     except Exception as e:
@@ -615,6 +748,33 @@ class Router:
         return await Router.get_result(url, method, request, headers, session)
 
     @staticmethod
+    def _compile_route(route_pattern):
+        """Pre-compile a route pattern into normalised segments with parsed parameter info.
+
+        This is called once at registration time so that :meth:`match` does
+        not need to re-normalise and re-parse the route pattern on every
+        incoming request.
+
+        Returns:
+            A list of ``(segment_str, param_name, converter)`` tuples.
+            For fixed segments *param_name* and *converter* are both ``None``.
+        """
+        norm = route_pattern.strip()
+        if ' ' in norm or '\t' in norm or '\n' in norm:
+            norm = norm.replace(' ', '').replace('\t', '').replace('\n', '').replace('\r', '')
+        while '//' in norm:
+            norm = norm.replace('//', '/')
+        norm = norm.strip('/')
+        if not norm:
+            return []
+        segments = norm.split('/')
+        compiled = []
+        for seg in segments:
+            param_name, converter = Router._parse_route_segment(seg)
+            compiled.append((seg, param_name, converter))
+        return compiled
+
+    @staticmethod
     def add(method, route, callback):
         """Register a route handler in the global route table.
 
@@ -657,6 +817,16 @@ class Router:
 
         tina4_python.tina4_routes[callback]["callback"] = callback
 
+        # Cache inspect.signature() at registration time (avoid per-request overhead)
+        if "_signature" not in tina4_python.tina4_routes[callback]:
+            sig = inspect.signature(callback)
+            params_info = []
+            for param_name, param in sig.parameters.items():
+                annotation = param.annotation if param.annotation != inspect.Parameter.empty else None
+                has_default = param.default != inspect.Parameter.empty
+                params_info.append((param_name, annotation, has_default))
+            tina4_python.tina4_routes[callback]["_signature"] = params_info
+
         # see if we already have flagged the security for a GET route
         if "secure" in tina4_python.tina4_routes[callback] and method == Constant.TINA4_GET:
             is_secure = tina4_python.tina4_routes[callback]["secure"]
@@ -666,6 +836,11 @@ class Router:
 
         if route not in tina4_python.tina4_routes[callback]["routes"]:
             tina4_python.tina4_routes[callback]["routes"].append(route)
+
+        # Pre-compile route segments at registration time
+        if "_compiled_routes" not in tina4_python.tina4_routes[callback]:
+            tina4_python.tina4_routes[callback]["_compiled_routes"] = []
+        tina4_python.tina4_routes[callback]["_compiled_routes"].append(Router._compile_route(route))
 
         if not "methods" in tina4_python.tina4_routes[callback]:
             tina4_python.tina4_routes[callback]["methods"] = []
@@ -678,6 +853,24 @@ class Router:
         if '{' in route:
             route_variables = re.findall(r'\{(\w+)(?::\w+)?}', route)
             tina4_python.tina4_routes[callback]["params"] = route_variables
+
+        # Build route index by first segment for O(1) prefix lookup
+        compiled = tina4_python.tina4_routes[callback]["_compiled_routes"][-1]
+        if compiled:
+            first_seg, first_param, _ = compiled[0]
+            if first_param is not None:
+                # Route starts with a parameter — must check on every request
+                if callback not in [entry for entry in Router._wildcard_routes]:
+                    Router._wildcard_routes.append(callback)
+            else:
+                Router._route_index.setdefault(first_seg, [])
+                if callback not in Router._route_index[first_seg]:
+                    Router._route_index[first_seg].append(callback)
+        else:
+            # Root route "/"
+            Router._route_index.setdefault("", [])
+            if callback not in Router._route_index[""]:
+                Router._route_index[""].append(callback)
 
         return True
 

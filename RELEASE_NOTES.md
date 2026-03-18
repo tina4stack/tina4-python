@@ -4,6 +4,41 @@ All notable changes to tina4-python are documented here.
 
 ---
 
+## v0.2.203 — 2026-03-18
+
+**Router performance: 20x faster route matching, cached signatures, static file cache**
+
+### Route resolution optimizations
+
+- **Prefix index for route lookup** — Routes are indexed by their first path segment at registration time. A request to `/api/users/42` only checks routes starting with `api`, not all registered routes. 404 misses return in <1µs instead of scanning every route.
+  - Route hit: **20x faster** (85µs → 4µs with 100 routes)
+  - 404 miss: **376x faster** (157µs → 0.4µs)
+- **Pre-compiled route segments** — Route patterns are parsed once at `@get()`/`@post()` time into segment tuples. No regex or string parsing happens per-request.
+- **Cached `inspect.signature()`** — Handler signatures are introspected once at registration, not on every incoming request.
+- **Static file path cache** — `os.path.isfile()` is called once per unique URL path. Subsequent requests for the same static file (or known non-static URL) skip the filesystem entirely.
+- **Regex-free URL normalization** — `clean_url()`, `_normalize_url()`, and request URL parsing now use `str.replace()` loops instead of `re.sub()`. **4.5x faster** per URL.
+
+### New APIs
+
+- **`Router.reset()`** — Clears all routes, indexes, and caches. Preferred over `tina4_python.tina4_routes = {}` in tests.
+
+### Routing microbenchmark
+
+New `benchmarks/bench_routing.py` measures per-request overhead of the router hot path. Run with:
+```bash
+python benchmarks/bench_routing.py --routes 200 --requests 10000
+```
+
+### Windows WebSocket warning
+
+When using the raw asyncio server (`TINA4_DEFAULT_WEBSERVER=TRUE`) on Windows, a warning is now logged explaining that WebSockets require Hypercorn. Install hypercorn and remove the env var for full WebSocket support.
+
+### Cookie/session integration tests
+
+New `tests/test_cookie_session_integration.py` with 10 end-to-end tests covering the full HTTP cookie/session lifecycle: Set-Cookie headers, cross-request session persistence, session isolation, FreshToken headers, formToken round-trips, cookie parsing, and invalid session recovery.
+
+---
+
 ## v0.2.202 — 2026-03-18
 
 **JWT migrated to HS256, optional DB drivers, hot-reload optional, data seeder**
