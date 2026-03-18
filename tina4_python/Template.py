@@ -105,7 +105,12 @@ class Template:
             return Template.twig
         Debug.debug("Initializing Twig on " + path)
         twig_path = Path(path)
-        Template.twig = Environment(loader=FileSystemLoader(Path(twig_path)))
+        # Search project templates first, then framework built-in templates as fallback
+        fw_templates = Path(tina4_python.library_path) / "templates"
+        search_paths = [twig_path]
+        if fw_templates.is_dir() and fw_templates != twig_path:
+            search_paths.append(fw_templates)
+        Template.twig = Environment(loader=FileSystemLoader(search_paths))
         Template.twig.add_extension('jinja2.ext.debug')
         Template.twig.add_extension('jinja2.ext.do')
         # i18n translation function — available as _() global and | translate filter
