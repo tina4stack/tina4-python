@@ -1126,17 +1126,17 @@ textarea.input { resize: vertical; font-family: var(--mono); }
 </div>
 
 <div class="dev-tabs">
-    <button class="dev-tab active" onclick="showTab('routes')">Routes <span class="count" id="routes-count">0</span></button>
-    <button class="dev-tab" onclick="showTab('queue')">Queue <span class="count" id="queue-count">0</span></button>
-    <button class="dev-tab" onclick="showTab('mailbox')">Mailbox <span class="count" id="mailbox-count">0</span></button>
-    <button class="dev-tab" onclick="showTab('messages')">Messages <span class="count" id="messages-count">0</span></button>
-    <button class="dev-tab" onclick="showTab('database')">Database <span class="count" id="db-count">0</span></button>
-    <button class="dev-tab" onclick="showTab('requests')">Requests <span class="count" id="req-count">0</span></button>
-    <button class="dev-tab" onclick="showTab('errors')">Errors <span class="count" id="err-count">0</span></button>
-    <button class="dev-tab" onclick="showTab('websockets')">WS <span class="count" id="ws-count">0</span></button>
-    <button class="dev-tab" onclick="showTab('system')">System</button>
-    <button class="dev-tab" onclick="showTab('tools')">Tools</button>
-    <button class="dev-tab" onclick="showTab('chat')">Tina4</button>
+    <button class="dev-tab active" onclick="showTab('routes', event)">Routes <span class="count" id="routes-count">0</span></button>
+    <button class="dev-tab" onclick="showTab('queue', event)">Queue <span class="count" id="queue-count">0</span></button>
+    <button class="dev-tab" onclick="showTab('mailbox', event)">Mailbox <span class="count" id="mailbox-count">0</span></button>
+    <button class="dev-tab" onclick="showTab('messages', event)">Messages <span class="count" id="messages-count">0</span></button>
+    <button class="dev-tab" onclick="showTab('database', event)">Database <span class="count" id="db-count">0</span></button>
+    <button class="dev-tab" onclick="showTab('requests', event)">Requests <span class="count" id="req-count">0</span></button>
+    <button class="dev-tab" onclick="showTab('errors', event)">Errors <span class="count" id="err-count">0</span></button>
+    <button class="dev-tab" onclick="showTab('websockets', event)">WS <span class="count" id="ws-count">0</span></button>
+    <button class="dev-tab" onclick="showTab('system', event)">System</button>
+    <button class="dev-tab" onclick="showTab('tools', event)">Tools</button>
+    <button class="dev-tab" onclick="showTab('chat', event)">Tina4</button>
 </div>
 
 <div class="dev-content">
@@ -1371,11 +1371,11 @@ let currentTab = 'routes';
 let queueFilter = '';
 let mailboxFolder = '';
 
-function showTab(tab) {
+function showTab(tab, e) {
     currentTab = tab;
     document.querySelectorAll('.dev-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.dev-panel').forEach(p => p.classList.add('hidden'));
-    event.target.closest('.dev-tab').classList.add('active');
+    if (e) e.target.closest('.dev-tab').classList.add('active');
     document.getElementById('panel-' + tab).classList.remove('hidden');
     const loaders = {routes:loadRoutes, queue:loadQueue, mailbox:loadMailbox, messages:loadMessages, database:loadTables, requests:loadRequests, errors:loadErrors, websockets:loadWebSockets, system:loadSystem, tools:function(){}};
     if (loaders[tab]) loaders[tab]();
@@ -1680,7 +1680,7 @@ function askAboutError(btn) {
     document.querySelectorAll('.dev-panel').forEach(p => p.classList.add('hidden'));
     document.querySelectorAll('.dev-tab').forEach(t => { if(t.textContent.includes('Tina4')) t.classList.add('active'); });
     document.getElementById('panel-chat').classList.remove('hidden');
-    const msg = 'I have this error in my Tina4 app, help me fix it:\n\n' + error + '\n\nTraceback:\n' + trace;
+    const msg = 'I have this error in my Tina4 app, help me fix it:\\n\\n' + error + '\\n\\nTraceback:\\n' + trace;
     document.getElementById('chat-input').value = msg;
     sendChat();
 }
