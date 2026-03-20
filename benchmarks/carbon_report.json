@@ -1,0 +1,68 @@
+{
+  "region": "ZA",
+  "benchmarks": [
+    {
+      "benchmark": "JSON Hello World",
+      "sci": 0.0002284246125096651,
+      "grade": "A+",
+      "energy": 1.5411225965283316e-07,
+      "duration": 0
+    },
+    {
+      "benchmark": "Single DB Query",
+      "sci": 0.00014980822458343169,
+      "grade": "A+",
+      "energy": 1.010719310299754e-07,
+      "duration": 0
+    },
+    {
+      "benchmark": "Multiple DB Queries",
+      "sci": 0.00017735952930416856,
+      "grade": "A+",
+      "energy": 1.1966027669658136e-07,
+      "duration": 0
+    },
+    {
+      "benchmark": "Template Rendering",
+      "sci": 0.0001296909321551367,
+      "grade": "A+",
+      "energy": 8.749939037509575e-08,
+      "duration": 0
+    },
+    {
+      "benchmark": "Large JSON Payload",
+      "sci": 0.00013485588991884778,
+      "grade": "A+",
+      "energy": 9.098389633834453e-08,
+      "duration": 0
+    },
+    {
+      "benchmark": "Plaintext Response",
+      "sci": 0.00022501285240574237,
+      "grade": "A+",
+      "energy": 1.5181093446999466e-07,
+      "duration": 0
+    },
+    {
+      "benchmark": "CRUD Cycle",
+      "sci": 0.00014406199021830217,
+      "grade": "A+",
+      "energy": 9.719566010750002e-08,
+      "duration": 0
+    },
+    {
+      "benchmark": "Paginated Query",
+      "sci": 0.00013584559207323102,
+      "grade": "A+",
+      "energy": 9.165212748012836e-08,
+      "duration": 0
+    },
+    {
+      "benchmark": "Framework Startup",
+      "sci": 0.00016701763601904677,
+      "grade": "A+",
+      "energy": 1.1268311629953266e-07,
+      "duration": 0
+    }
+  ]
+}

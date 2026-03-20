@@ -1,0 +1,16 @@
+.git
+.venv
+.idea
+.pytest_cache
+__pycache__
+*.pyc
+sessions/
+logs/
+data/
+secrets/
+*.db
+*.db-wal
+*.db-shm
+.env
+.DS_Store
+.coverage

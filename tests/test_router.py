@@ -1,234 +1,97 @@
-#
-# Tina4 - This is not a 4ramework.
-# Copy-right 2007 - current Tina4
-# License: MIT https://opensource.org/licenses/MIT
-#
-
-from tina4_python.Router import Router
-
-
-# --- _parse_route_segment ---
-
-def test_parse_simple_param():
-    name, conv = Router._parse_route_segment("{id}")
-    assert name == "id"
-    assert conv == "str"
-
-
-def test_parse_typed_int():
-    name, conv = Router._parse_route_segment("{id:int}")
-    assert name == "id"
-    assert conv == "int"
-
-
-def test_parse_typed_float():
-    name, conv = Router._parse_route_segment("{price:float}")
-    assert name == "price"
-    assert conv == "float"
-
-
-def test_parse_typed_path():
-    name, conv = Router._parse_route_segment("{file:path}")
-    assert name == "file"
-    assert conv == "path"
-
-
-def test_parse_unknown_type_defaults_str():
-    name, conv = Router._parse_route_segment("{val:unknown}")
-    assert name == "val"
-    assert conv == "str"
-
-
-def test_parse_fixed_segment():
-    name, conv = Router._parse_route_segment("users")
-    assert name is None
-    assert conv is None
-
-
-# --- clean_url ---
-
-def test_clean_url_double_slash():
-    assert Router.clean_url("//api//test") == "/api/test"
-
-
-def test_clean_url_empty():
-    assert Router.clean_url("") == "/"
-
-
-def test_clean_url_none():
-    assert Router.clean_url(None) == "/"
-
-
-def test_clean_url_normal():
-    assert Router.clean_url("/api/users") == "/api/users"
-
-
-# --- _normalize_url ---
-
-def test_normalize_url_basic():
-    assert Router._normalize_url("/users") == "/users/"
-
-
-def test_normalize_url_root():
-    assert Router._normalize_url("/") == "/"
-
-
-def test_normalize_url_empty():
-    assert Router._normalize_url("") == "/"
-
-
-def test_normalize_url_strips_query():
-    assert Router._normalize_url("/users?page=1") == "/users/"
-
-
-def test_normalize_url_strips_domain():
-    assert Router._normalize_url("https://example.com/api/test") == "/api/test/"
-
-
-def test_normalize_url_collapses_slashes():
-    assert Router._normalize_url("//api///test//") == "/api/test/"
-
-
-# --- match ---
-
-def test_match_exact():
-    assert Router.match("/users", "/users") is True
-
-
-def test_match_trailing_slash():
-    assert Router.match("/users/", "/users") is True
-
-
-def test_match_variable():
-    assert Router.match("/users/42", "/users/{id}") is True
-
-
-def test_match_typed_int():
-    assert Router.match("/users/42", "/users/{id:int}") is True
-    assert Router.variables.get("id") == 42
-
-
-def test_match_typed_int_invalid():
-    assert Router.match("/users/abc", "/users/{id:int}") is False
-
-
-def test_match_typed_float():
-    assert Router.match("/products/19.99", "/products/{price:float}") is True
-    assert Router.variables.get("price") == 19.99
-
-
-def test_match_typed_float_invalid():
-    assert Router.match("/products/abc", "/products/{price:float}") is False
-
-
-def test_match_typed_path():
-    assert Router.match("/files/docs/readme.md", "/files/{filepath:path}") is True
-    assert Router.variables.get("filepath") == "docs/readme.md"
-
-
-def test_match_path_greedy():
-    assert Router.match("/static/css/main/style.css", "/static/{file:path}") is True
-    assert Router.variables.get("file") == "css/main/style.css"
-
-
-def test_match_multiple_variables():
-    assert Router.match("/users/42/posts/7", "/users/{user_id}/posts/{post_id}") is True
-    assert Router.variables.get("user_id") == "42"
-    assert Router.variables.get("post_id") == "7"
-
-
-def test_match_no_match():
-    assert Router.match("/users/42", "/posts/{id}") is False
-
-
-def test_match_root():
-    assert Router.match("/", "/") is True
-
-
-def test_match_different_lengths():
-    assert Router.match("/users/42/extra", "/users/{id}") is False
-
-
-def test_match_list_of_routes():
-    assert Router.match("/api/v1", ["/api/v1", "/api/v2"]) is True
-
-
-def test_match_list_second_route():
-    assert Router.match("/api/v2", ["/api/v1", "/api/v2"]) is True
-
-
-def test_match_list_none():
-    assert Router.match("/api/v3", ["/api/v1", "/api/v2"]) is False
-
-
-def test_match_with_query_string():
-    assert Router.match("/users?page=1", "/users") is True
-
-
-# --- get_variables ---
-
-def test_get_variables_basic():
-    result = Router.get_variables("/users/42", "/users/{id}")
-    assert result == {"id": "42"}
-
-
-def test_get_variables_typed_int():
-    result = Router.get_variables("/users/42", "/users/{id:int}")
-    assert result == {"id": 42}
-
-
-def test_get_variables_typed_float():
-    result = Router.get_variables("/items/9.99", "/items/{price:float}")
-    assert result == {"price": 9.99}
-
-
-def test_get_variables_typed_path():
-    result = Router.get_variables("/files/a/b/c.txt", "/files/{path:path}")
-    assert result == {"path": "a/b/c.txt"}
-
-
-def test_get_variables_multiple():
-    result = Router.get_variables("/users/5/posts/10", "/users/{uid}/posts/{pid}")
-    assert result == {"uid": "5", "pid": "10"}
-
-
-def test_get_variables_mismatch():
-    result = Router.get_variables("/other/5", "/users/{id}")
-    assert result == {}
-
-
-def test_get_variables_invalid_int():
-    result = Router.get_variables("/users/abc", "/users/{id:int}")
-    assert result == {}
-
-
-def test_get_variables_too_few_segments():
-    result = Router.get_variables("/users", "/users/{id}")
-    assert result == {}
-
-
-# --- requires_auth ---
-
-def test_requires_auth_secured_route():
-    route = {"secure": True}
-    assert Router.requires_auth(route, "GET", False) is True
-
-
-def test_requires_auth_write_method():
-    route = {}
-    assert Router.requires_auth(route, "POST", False) is True
-
-
-def test_requires_auth_write_validated():
-    route = {}
-    assert Router.requires_auth(route, "POST", True) is False
-
-
-def test_requires_auth_get_not_secured():
-    route = {}
-    assert Router.requires_auth(route, "GET", False) is False
-
-
-def test_requires_auth_swagger_secure():
-    route = {"swagger": {"secure": True}}
-    assert Router.requires_auth(route, "GET", False) is True
+# Tests for tina4_python.core.router (v3)
+import pytest
+from tina4_python.core.router import Router, get, post, put, patch, delete, _compile_pattern
+
+
+@pytest.fixture(autouse=True)
+def clear_routes():
+    Router.clear()
+    yield
+    Router.clear()
+
+
+class TestPatternCompilation:
+
+    def test_exact_match(self):
+        pattern, params = _compile_pattern("/api/users")
+        assert pattern.match("/api/users")
+        assert pattern.match("/api/users/")
+        assert params == []
+
+    def test_single_param(self):
+        pattern, params = _compile_pattern("/api/users/{id}")
+        m = pattern.match("/api/users/42")
+        assert m and m.group(1) == "42"
+        assert params == ["id"]
+
+    def test_multiple_params(self):
+        pattern, params = _compile_pattern("/api/posts/{post_id}/comments/{comment_id}")
+        m = pattern.match("/api/posts/5/comments/12")
+        assert m and m.group(1) == "5" and m.group(2) == "12"
+
+    def test_int_param(self):
+        pattern, _ = _compile_pattern("/api/users/{id:int}")
+        assert pattern.match("/api/users/42")
+        assert not pattern.match("/api/users/abc")
+
+    def test_path_param(self):
+        pattern, _ = _compile_pattern("/files/{path:path}")
+        m = pattern.match("/files/docs/readme.md")
+        assert m and m.group(1) == "docs/readme.md"
+
+    def test_no_match_different_path(self):
+        pattern, _ = _compile_pattern("/api/users")
+        assert not pattern.match("/api/products")
+
+    def test_no_match_extra_segments(self):
+        pattern, _ = _compile_pattern("/api/users")
+        assert not pattern.match("/api/users/extra")
+
+
+class TestRouterRegistration:
+
+    def test_register_get(self):
+        @get("/api/test")
+        async def handler(req, res): pass
+        routes = Router.all()
+        assert any(r["path"] == "/api/test" and r["method"] == "GET" for r in routes)
+
+    def test_register_post(self):
+        @post("/api/test")
+        async def handler(req, res): pass
+        route, _ = Router.match("POST", "/api/test")
+        assert route is not None
+
+    def test_register_put_with_params(self):
+        @put("/api/test/{id}")
+        async def handler(req, res): pass
+        route, params = Router.match("PUT", "/api/test/42")
+        assert route is not None
+        assert params["id"] == "42"
+
+    def test_register_delete(self):
+        @delete("/api/test/{id}")
+        async def handler(req, res): pass
+        route, _ = Router.match("DELETE", "/api/test/1")
+        assert route is not None
+
+    def test_match_correct_method(self):
+        @get("/api/data")
+        async def get_handler(req, res): pass
+        @post("/api/data")
+        async def post_handler(req, res): pass
+        route_get, _ = Router.match("GET", "/api/data")
+        route_post, _ = Router.match("POST", "/api/data")
+        assert route_get["handler"] is get_handler
+        assert route_post["handler"] is post_handler
+
+    def test_no_match_returns_none(self):
+        route, params = Router.match("GET", "/nonexistent")
+        assert route is None
+        assert params == {}
+
+    def test_wrong_method_no_match(self):
+        @get("/api/only-get")
+        async def handler(req, res): pass
+        route, _ = Router.match("POST", "/api/only-get")
+        assert route is None

@@ -1,0 +1,109 @@
+# Tina4 DotEnv — Zero-dependency .env file parser.
+"""
+Parse .env files into os.environ. No third-party libraries.
+
+Usage:
+    from tina4_python.dotenv import load_env, get_env, require_env
+
+    load_env()                           # Load .env from current directory
+    load_env(".env.staging")             # Load specific file
+    db_url = get_env("DATABASE_URL")     # Get with None default
+    secret = require_env("JWT_SECRET")   # Raises on missing
+"""
+import os
+from pathlib import Path
+
+
+def load_env(file_path: str = ".env", override: bool = False) -> dict:
+    """Load environment variables from a .env file.
+
+    Supports:
+        KEY=value
+        KEY="value with spaces"
+        KEY='single quoted'
+        KEY=value # inline comments
+        # full line comments
+        empty lines
+        export KEY=value (export prefix stripped)
+        multi-word unquoted values
+
+    Args:
+        file_path: Path to .env file (default: ".env")
+        override: If True, overwrite existing env vars (default: False)
+
+    Returns:
+        Dict of loaded key-value pairs
+    """
+    env_file = Path(file_path)
+    loaded = {}
+
+    if not env_file.is_file():
+        return loaded
+
+    for line_num, raw_line in enumerate(env_file.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw_line.strip()
+
+        # Skip empty lines and comments
+        if not line or line.startswith("#"):
+            continue
+
+        # Strip optional "export " prefix
+        if line.startswith("export "):
+            line = line[7:].strip()
+
+        # Split on first "="
+        if "=" not in line:
+            continue
+
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+
+        if not key:
+            continue
+
+        # Remove surrounding quotes
+        if len(value) >= 2:
+            if (value[0] == '"' and value[-1] == '"') or \
+               (value[0] == "'" and value[-1] == "'"):
+                value = value[1:-1]
+            else:
+                # Remove inline comments (only for unquoted values)
+                comment_idx = value.find(" #")
+                if comment_idx != -1:
+                    value = value[:comment_idx].rstrip()
+
+        loaded[key] = value
+
+        # Set in os.environ
+        if override or key not in os.environ:
+            os.environ[key] = value
+
+    return loaded
+
+
+def get_env(key: str, default: str = None) -> str | None:
+    """Get environment variable with optional default."""
+    return os.environ.get(key, default)
+
+
+def require_env(*keys: str) -> dict:
+    """Validate that required environment variables exist.
+
+    Args:
+        *keys: Variable names that must be set
+
+    Returns:
+        Dict of key-value pairs for the required variables
+
+    Raises:
+        SystemExit: If any required variables are missing (fail fast)
+    """
+    missing = [k for k in keys if not os.environ.get(k)]
+    if missing:
+        print(f"[FATAL] Missing required environment variables:")
+        for k in missing:
+            print(f"  - {k}: not set")
+        raise SystemExit(1)
+
+    return {k: os.environ[k] for k in keys}

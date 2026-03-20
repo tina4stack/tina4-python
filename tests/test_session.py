@@ -1,188 +1,181 @@
-#
-# Tina4 - This is not a 4ramework.
-# Copy-right 2007 - current Tina4
-# License: MIT https://opensource.org/licenses/MIT
-#
-
-import os
-import shutil
+# Tests for tina4_python.session
+import time
 import pytest
-from tina4_python.Session import Session, SessionHandler, SessionFileHandler
+from tina4_python.session import Session, FileSessionHandler, DatabaseSessionHandler
+from tina4_python.database import Database
 
 
-TEST_SESSION_PATH = "test_sessions"
+@pytest.fixture
+def session(tmp_path):
+    handler = FileSessionHandler(str(tmp_path / "sessions"))
+    return Session(handler=handler, ttl=300)
 
 
-@pytest.fixture(autouse=True)
-def clean_session_dir():
-    """Ensure clean session directory for each test."""
-    if os.path.exists(TEST_SESSION_PATH):
-        shutil.rmtree(TEST_SESSION_PATH)
-    yield
-    if os.path.exists(TEST_SESSION_PATH):
-        shutil.rmtree(TEST_SESSION_PATH)
+# ── File Session Tests ─────────────────────────────────────────
 
 
-# --- Session init ---
+class TestFileSession:
+    def test_start_generates_id(self, session):
+        sid = session.start()
+        assert sid is not None
+        assert len(sid) > 10
 
-def test_session_init_defaults():
-    session = Session()
-    assert session.session_name == "PY_SESS"
-    assert session.session_values == {}
-    assert session.session_hash == ""
-    assert session.default_handler is SessionFileHandler
+    def test_start_with_id(self, session):
+        sid = session.start("my-session-id")
+        assert sid == "my-session-id"
 
+    def test_set_and_get(self, session):
+        session.start()
+        session.set("user_id", 42)
+        assert session.get("user_id") == 42
 
-def test_session_init_custom():
-    session = Session(default_name="MY_SESS", default_path=TEST_SESSION_PATH)
-    assert session.session_name == "MY_SESS"
-    assert session.session_path == TEST_SESSION_PATH
+    def test_get_missing_key(self, session):
+        session.start()
+        assert session.get("nope") is None
+        assert session.get("nope", "default") == "default"
 
+    def test_has(self, session):
+        session.start()
+        session.set("key", "val")
+        assert session.has("key") is True
+        assert session.has("nope") is False
 
-def test_session_init_unknown_handler():
-    session = Session(default_handler="NonExistent")
-    assert session.default_handler is SessionFileHandler  # fallback
+    def test_unset(self, session):
+        session.start()
+        session.set("key", "val")
+        session.unset("key")
+        assert session.get("key") is None
 
+    def test_all(self, session):
+        session.start()
+        session.set("a", 1)
+        session.set("b", 2)
+        assert session.all() == {"a": 1, "b": 2}
 
-# --- SessionHandler base class ---
+    def test_clear(self, session):
+        session.start()
+        session.set("a", 1)
+        session.clear()
+        assert session.all() == {}
 
-def test_session_handler_set():
-    session = Session(default_path=TEST_SESSION_PATH)
-    result = SessionHandler.set(session, "user", "alice")
-    assert result is True
-    assert session.session_values["user"] == "alice"
+    def test_save_and_resume(self, tmp_path):
+        handler = FileSessionHandler(str(tmp_path / "sessions"))
+        s1 = Session(handler=handler, ttl=300)
+        sid = s1.start()
+        s1.set("name", "Alice")
+        s1.save()
 
+        s2 = Session(handler=handler, ttl=300)
+        s2.start(sid)
+        assert s2.get("name") == "Alice"
 
-def test_session_handler_get():
-    session = Session(default_path=TEST_SESSION_PATH)
-    session.session_values["color"] = "blue"
-    assert SessionHandler.get(session, "color") == "blue"
+    def test_destroy(self, tmp_path):
+        handler = FileSessionHandler(str(tmp_path / "sessions"))
+        s = Session(handler=handler, ttl=300)
+        sid = s.start()
+        s.set("key", "val")
+        s.save()
+        s.destroy()
 
+        s2 = Session(handler=handler, ttl=300)
+        s2.start(sid)
+        assert s2.get("key") is None
 
-def test_session_handler_get_missing():
-    session = Session(default_path=TEST_SESSION_PATH)
-    assert SessionHandler.get(session, "missing") is None
+    def test_regenerate(self, session):
+        old_id = session.start()
+        session.set("key", "val")
+        new_id = session.regenerate()
+        assert new_id != old_id
+        assert session.get("key") == "val"
 
+    def test_flash(self, session):
+        session.start()
+        session.flash("message", "Hello!")
+        assert session.flash("message") == "Hello!"
+        assert session.flash("message") is None  # Gone after first read
 
-def test_session_handler_unset():
-    session = Session(default_path=TEST_SESSION_PATH)
-    session.session_values["key"] = "value"
-    result = SessionHandler.unset(session, "key")
-    assert result is True
-    assert "key" not in session.session_values
+    def test_expired_session(self, tmp_path):
+        handler = FileSessionHandler(str(tmp_path / "sessions"))
+        s = Session(handler=handler, ttl=1)
+        sid = s.start()
+        s.set("key", "val")
+        s.save()
 
+        time.sleep(1.1)
 
-def test_session_handler_unset_missing():
-    session = Session(default_path=TEST_SESSION_PATH)
-    result = SessionHandler.unset(session, "nonexistent")
-    assert result is False
-
-
-# --- Session set/get/unset (via file handler) ---
-
-def test_session_set_and_get():
-    session = Session(default_path=TEST_SESSION_PATH)
-    session.session_hash = "test_hash"
-    session.set("username", "bob")
-    assert session.get("username") == "bob"
-
-
-def test_session_unset():
-    session = Session(default_path=TEST_SESSION_PATH)
-    session.session_hash = "test_hash"
-    session.set("temp", "data")
-    assert session.get("temp") == "data"
-    session.unset("temp")
-    assert session.get("temp") is None
-
-
-# --- Session start ---
-
-def test_session_start():
-    session = Session(default_path=TEST_SESSION_PATH)
-    file_hash = session.start()
-    assert isinstance(file_hash, str)
-    assert len(file_hash) == 32  # md5 hex digest
-    assert session.session_hash == file_hash
-
-
-def test_session_start_with_hash():
-    session = Session(default_path=TEST_SESSION_PATH)
-    file_hash = session.start("custom_hash")
-    assert file_hash == "custom_hash"
-    assert session.session_hash == "custom_hash"
-
-
-# --- Session save/load (file handler) ---
-
-def test_session_save_creates_file():
-    session = Session(default_path=TEST_SESSION_PATH)
-    session.session_hash = "save_test"
-    session.set("key", "value")
-    result = session.save()
-    assert result is True
-    assert os.path.isfile(os.path.join(TEST_SESSION_PATH, "save_test"))
+        s2 = Session(handler=handler, ttl=1)
+        s2.start(sid)
+        assert s2.get("key") is None  # Expired
 
 
-def test_session_load():
-    # Create and save a session
-    session1 = Session(default_path=TEST_SESSION_PATH)
-    session1.session_hash = "load_test"
-    session1.set("name", "alice")
-    session1.save()
+class TestFileSessionNegative:
+    def test_empty_session(self, session):
+        session.start()
+        assert session.all() == {}
 
-    # Load in a new session instance
-    session2 = Session(default_path=TEST_SESSION_PATH)
-    session2.load("load_test")
-    assert session2.get("name") == "alice"
+    def test_save_without_changes(self, session):
+        session.start()
+        session.save()  # Should not error
 
 
-def test_session_load_nonexistent():
-    session = Session(default_path=TEST_SESSION_PATH)
-    # Loading a nonexistent hash should start a new session without error
-    session.load("nonexistent_hash")
-    assert session.session_hash is not None
+# ── Database Session Tests ─────────────────────────────────────
 
 
-# --- Session close ---
+class TestDatabaseSession:
+    @pytest.fixture
+    def db_session(self, tmp_path):
+        db = Database(f"sqlite:///{tmp_path / 'session.db'}")
+        handler = DatabaseSessionHandler(db)
+        s = Session(handler=handler, ttl=300)
+        yield s
+        db.close()
 
-def test_session_close():
-    session = Session(default_path=TEST_SESSION_PATH)
-    session.session_hash = "close_test"
-    session.set("data", "temp")
-    session.save()
-    file_path = os.path.join(TEST_SESSION_PATH, "close_test")
-    assert os.path.isfile(file_path)
+    def test_set_and_get(self, db_session):
+        db_session.start()
+        db_session.set("user_id", 1)
+        db_session.save()
+        assert db_session.get("user_id") == 1
 
-    result = session.close()
-    assert result is True
-    assert not os.path.isfile(file_path)
+    def test_persist_and_resume(self, tmp_path):
+        db = Database(f"sqlite:///{tmp_path / 'session.db'}")
+        handler = DatabaseSessionHandler(db)
 
+        s1 = Session(handler=handler, ttl=300)
+        sid = s1.start()
+        s1.set("role", "admin")
+        s1.save()
 
-def test_session_close_nonexistent():
-    session = Session(default_path=TEST_SESSION_PATH)
-    session.session_hash = "never_saved"
-    result = session.close()
-    assert result is False
+        s2 = Session(handler=handler, ttl=300)
+        s2.start(sid)
+        assert s2.get("role") == "admin"
+        db.close()
 
+    def test_destroy(self, tmp_path):
+        db = Database(f"sqlite:///{tmp_path / 'session.db'}")
+        handler = DatabaseSessionHandler(db)
+        s = Session(handler=handler, ttl=300)
+        sid = s.start()
+        s.set("key", "val")
+        s.save()
+        s.destroy()
 
-# --- Session iteration ---
+        s2 = Session(handler=handler, ttl=300)
+        s2.start(sid)
+        assert s2.get("key") is None
+        db.close()
 
-def test_session_iter():
-    session = Session(default_path=TEST_SESSION_PATH)
-    session.session_hash = "iter_test"
-    session.set("a", 1)
-    session.set("b", 2)
-    result = dict(session)
-    assert "a" in result
-    assert "b" in result
-    assert result["a"] == 1
-    assert result["b"] == 2
+    def test_update_existing(self, tmp_path):
+        db = Database(f"sqlite:///{tmp_path / 'session.db'}")
+        handler = DatabaseSessionHandler(db)
+        s = Session(handler=handler, ttl=300)
+        sid = s.start()
+        s.set("count", 1)
+        s.save()
 
+        s.set("count", 2)
+        s.save()
 
-def test_session_iter_excludes_expires():
-    session = Session(default_path=TEST_SESSION_PATH)
-    session.session_values = {"user": "alice", "expires": "2099-01-01"}
-    result = dict(session)
-    assert "user" in result
-    assert "expires" not in result
+        s2 = Session(handler=handler, ttl=300)
+        s2.start(sid)
+        assert s2.get("count") == 2
+        db.close()

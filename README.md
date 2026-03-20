@@ -1,45 +1,73 @@
-# Tina4 Python — This is not a framework
+<p align="center">
+  <img src="https://tina4.com/img/tina4-logo.svg" alt="Tina4" width="200">
+</p>
 
-Laravel joy. Python speed. 10x less code.
+<h1 align="center">Tina4 Python</h1>
+<h3 align="center">This is not a framework</h3>
+
+<p align="center">
+  Laravel joy. Python speed. 10x less code. Zero third-party dependencies.
+</p>
+
+<p align="center">
+  <a href="https://tina4.com">Documentation</a> &bull;
+  <a href="#getting-started">Getting Started</a> &bull;
+  <a href="#features">Features</a> &bull;
+  <a href="#cli-reference">CLI Reference</a> &bull;
+  <a href="https://tina4.com">tina4.com</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/tests-622%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/carbonah-A%2B%20rated-00cc44" alt="Carbonah A+">
+  <img src="https://img.shields.io/badge/zero--dep-core-blue" alt="Zero Dependencies">
+  <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+">
+  <img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="MIT License">
+</p>
+
+---
 
 ## Quickstart
 
 ```bash
 pip install tina4-python
-tina4 init my_project
-cd my_project
-python app.py
+tina4 init my-app
+cd my-app
+tina4 serve
+# -> http://localhost:7145
 ```
 
-You've just built your first Tina4 app — zero configuration, zero classes, zero boilerplate!
+That's it. Zero configuration, zero classes, zero boilerplate.
 
-> **Prefer uv?** Replace `pip install tina4-python` with `uv add tina4-python`, then use `uv run tina4 start` to launch the dev server.
+> **Prefer uv?** Replace `pip install tina4-python` with `uv add tina4-python`, then use `uv run tina4 serve`.
 
-## Features
+---
 
-- **ASGI compliant** — works with any ASGI server (uvicorn, hypercorn, daphne)
-- **Full async** — every route handler is `async` by default
-- **Routing** — decorator-based with path parameters, type hints, and auto-discovery
-- **Twig/Jinja2 templates** — with inheritance, partials, custom filters, and globals
-- **tina4-css** — lightweight CSS framework (~24 KB) ships built-in, Bootstrap-compatible class names
-- **ORM** — define models with typed fields, save/load/select/delete with one line
-- **Database** — SQLite, PostgreSQL, MySQL, MariaDB, MSSQL, Firebird, MongoDB
-- **Migrations** — versioned SQL files, CLI scaffolding
-- **Data seeder** — zero-dependency fake data generation with ORM and table support
-- **Sessions** — file, Redis, Valkey, or MongoDB backends
-- **JWT authentication** — HS256 tokens signed with your `SECRET` env var, form tokens
-- **Swagger/OpenAPI** — auto-generated docs at `/swagger`
-- **CRUD scaffolding** — instant searchable admin UI with one line of code
-- **GraphQL** — zero-dependency engine with ORM auto-schema and GraphiQL IDE
-- **Middleware** — before/after hooks per route or globally
-- **Queues** — background processing with litequeue, RabbitMQ, Kafka, or MongoDB
-- **WebSockets** — built-in support via `simple-websocket`
-- **WSDL/SOAP** — auto-generated WSDL from Python classes
-- **REST client** — built-in `Api` class for external HTTP calls
-- **SCSS compilation** — auto-compiled to CSS on save
-- **Live reload** — browser auto-refreshes during development
-- **Inline testing** — decorator-based test cases with `@tests`
-- **Localization** — i18n via gettext (English, French, Afrikaans, Chinese, Japanese, Spanish)
+## What's Included
+
+Every feature is built from scratch -- no pip install, no node_modules, no third-party runtime dependencies in core.
+
+| Category | Features |
+|----------|----------|
+| **HTTP** | ASGI server, decorator routing, path params (`{id:int}`, `{p:path}`), middleware pipeline, CORS, rate limiting, graceful shutdown |
+| **Templates** | Frond engine (Twig-compatible), inheritance, partials, 35+ filters, macros, fragment caching, sandboxing |
+| **ORM** | Active Record, typed fields with validation, soft delete, relationships (`has_one`/`has_many`/`belongs_to`), scopes, result caching, multi-database |
+| **Database** | SQLite, PostgreSQL, MySQL, MSSQL, Firebird, MongoDB, ODBC -- unified 13-method adapter interface |
+| **Auth** | Zero-dep JWT (HS256), sessions (file, Redis, Valkey, MongoDB, database), password hashing, form tokens |
+| **API** | Swagger/OpenAPI auto-generation, GraphQL with ORM auto-schema and GraphiQL IDE, WSDL/SOAP with auto WSDL |
+| **Background** | DB-backed queue with priority, delayed jobs, retry, batch processing, multi-queue |
+| **Real-time** | Native asyncio WebSocket (RFC 6455), per-path routing, connection manager |
+| **Frontend** | tina4-css (~24 KB), frond.js helper, SCSS compiler, live reload, CSS hot-reload |
+| **DX** | Dev admin dashboard (11 tabs), error overlay, request inspector, AI tool integration, Carbonah green benchmarks |
+| **Data** | Migrations with rollback, 50+ fake data generators, ORM and table seeders |
+| **Mail** | SMTP send (plain/HTML/attachments), IMAP read/search, dev mailbox capture |
+| **Other** | REST client, localization (6 languages), in-memory cache (TTL/tags/LRU), event system, inline testing, configurable error pages, HTML element builder |
+
+**622 tests across 28 modules. All Carbonah benchmarks rated A+.**
+
+For full documentation visit **[tina4.com](https://tina4.com)**.
+
+---
 
 ## Install
 
@@ -53,9 +81,9 @@ Or with [uv](https://docs.astral.sh/uv/) (recommended):
 uv add tina4-python
 ```
 
-### Optional extras
+### Optional database drivers
 
-Install only the database driver you need:
+Install only what you need:
 
 ```bash
 pip install tina4-python[postgres]    # PostgreSQL (psycopg2-binary)
@@ -63,179 +91,275 @@ pip install tina4-python[mysql]       # MySQL / MariaDB (mysql-connector-python)
 pip install tina4-python[mssql]       # Microsoft SQL Server (pymssql)
 pip install tina4-python[firebird]    # Firebird (firebird-driver)
 pip install tina4-python[mongo]       # MongoDB (pymongo)
-pip install tina4-python[all-db]      # all of the above
-pip install tina4-python[dev-reload]  # hot-patching via jurigged
+pip install tina4-python[odbc]        # ODBC (pyodbc)
+pip install tina4-python[all-db]      # All of the above
+pip install tina4-python[dev-reload]  # Hot-patching via jurigged
 ```
 
-## Routing
+---
 
-Routes live in `src/routes/` and are auto-discovered on startup.
+## Getting Started
+
+### 1. Create a project
+
+```bash
+tina4 init my-app
+cd my-app
+```
+
+This creates:
+
+```
+my-app/
+├── app.py              # Entry point
+├── .env                # Configuration
+├── src/
+│   ├── routes/         # API + page routes (auto-discovered)
+│   ├── orm/            # Database models
+│   ├── app/            # Service classes and shared helpers
+│   ├── templates/      # Frond/Twig templates
+│   ├── seeds/          # Database seeders
+│   ├── scss/           # SCSS (auto-compiled to public/css/)
+│   └── public/         # Static assets served at /
+├── migrations/         # SQL migration files
+└── tests/              # pytest tests
+```
+
+### 2. Create a route
+
+Create `src/routes/hello.py`:
 
 ```python
-# src/routes/hello.py
-from tina4_python import get
+from tina4_python.core.router import get, post
 
-@get("/hello")
-async def get_hello(request, response):
-    return response("Hello, Tina4 Python!")
+@get("/api/hello")
+async def hello(request, response):
+    return response({"message": "Hello from Tina4!"})
 
-@get("/hello/{name}")
-async def get_hello_name(name, request, response):
-    return response(f"Hello, {name}!")
-
-@get("/hello/json")
-async def get_hello_json(request, response):
-    return response([{"brand": "BMW"}, {"brand": "Toyota"}])
-
-@get("/hello/template")
-async def get_hello_template(request, response):
-    return response.render("index.twig", {"data": request.params})
+@get("/api/hello/{name}")
+async def hello_name(name, request, response):
+    return response({"message": f"Hello, {name}!"})
 ```
 
-## ORM
+Visit `http://localhost:7145/api/hello` -- routes are auto-discovered, no imports needed.
 
-```python
-# src/orm/User.py
-from tina4_python import ORM, IntegerField, StringField
+### 3. Add a database
 
-class User(ORM):
-    id    = IntegerField(primary_key=True, auto_increment=True)
-    name  = StringField()
-    email = StringField()
+Edit `.env`:
 
-User({"name": "Alice", "email": "alice@example.com"}).save()
+```bash
+DATABASE_URL=sqlite:///data/app.db
 ```
 
-## Database
-
-```python
-from tina4_python.Database import Database
-
-db = Database("sqlite3:app.db")
-db = Database("psycopg2:localhost/5432:mydb", "user", "password")      # PostgreSQL
-db = Database("mysql.connector:localhost/3306:mydb", "user", "password") # MySQL
-db = Database("pymongo:localhost/27017:mydb")                            # MongoDB
-
-result = db.fetch("SELECT * FROM users WHERE age > ?", [18])
-```
-
-## Migrations
+Create and run a migration:
 
 ```bash
 tina4 migrate:create "create users table"
-# Edit the generated SQL file in migrations/
+```
+
+Edit the generated SQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+```bash
 tina4 migrate
 ```
 
-## Data Seeder
+### 4. Create an ORM model
 
-Generate fake data for development and testing:
+Create `src/orm/User.py`:
 
 ```python
-from tina4_python.Seeder import FakeData, seed_orm, seed_table
+from tina4_python.orm import ORM, IntField, StrField, DateTimeField
 
-fake = FakeData()
-fake.name()    # "Alice Johnson"
-fake.email()   # "alice.johnson@example.com"
-fake.phone()   # "+27 82 123 4567"
-
-# Seed an ORM model
-seed_orm(User, count=50)
-
-# Seed a raw table
-seed_table(db, "products", columns, count=100)
+class User(ORM):
+    table_name = "users"
+    id = IntField(primary_key=True, auto_increment=True)
+    name = StrField(required=True, min_length=1, max_length=100)
+    email = StrField(regex=r'^[^@]+@[^@]+\.[^@]+$')
+    created_at = DateTimeField()
 ```
 
-CLI:
+### 5. Build a REST API
+
+Create `src/routes/users.py`:
+
+```python
+from tina4_python.core.router import get, post, noauth
+
+@get("/api/users")
+async def list_users(request, response):
+    from src.orm.User import User
+    return response(User().select(limit=100).to_array())
+
+@get("/api/users/{id:int}")
+async def get_user(id, request, response):
+    from src.orm.User import User
+    user = User()
+    if user.load("id = ?", [id]):
+        return response(user.to_dict())
+    return response({"error": "Not found"}, 404)
+
+@noauth()
+@post("/api/users")
+async def create_user(request, response):
+    from src.orm.User import User
+    user = User(request.body)
+    user.save()
+    return response(user.to_dict(), 201)
+```
+
+### 6. Add a template
+
+Create `src/templates/base.twig`:
+
+```twig
+<!DOCTYPE html>
+<html>
+<head>
+    <title>{% block title %}My App{% endblock %}</title>
+    <link rel="stylesheet" href="/css/tina4.min.css">
+    {% block stylesheets %}{% endblock %}
+</head>
+<body>
+    {% block content %}{% endblock %}
+    <script src="/js/frond.js"></script>
+    {% block javascripts %}{% endblock %}
+</body>
+</html>
+```
+
+Create `src/templates/pages/home.twig`:
+
+```twig
+{% extends "base.twig" %}
+{% block content %}
+<div class="container mt-4">
+    <h1>{{ title }}</h1>
+    <ul>
+    {% for user in users %}
+        <li>{{ user.name }} -- {{ user.email }}</li>
+    {% endfor %}
+    </ul>
+</div>
+{% endblock %}
+```
+
+Render it from a route:
+
+```python
+@get("/")
+async def home(request, response):
+    from src.orm.User import User
+    users = User().select(limit=20).to_array()
+    return response.render("pages/home.twig", {"title": "Users", "users": users})
+```
+
+### 7. Seed, test, deploy
 
 ```bash
-tina4 seed                        # run all files in src/seeds/
-tina4 seed:create "initial users" # scaffold a new seed file
+tina4 seed                          # Run seeders from src/seeds/
+tina4 test                          # Run test suite
+tina4 build                         # Build distributable
 ```
 
-## CRUD Scaffolding
+For the complete step-by-step guide, visit **[tina4.com](https://tina4.com)**.
 
-Generate a searchable, paginated admin UI with one call:
+---
+
+## Features
+
+### Routing
 
 ```python
-from tina4_python.CRUD import CRUD
+from tina4_python.core.router import get, post, put, delete, noauth, secured, middleware
 
-@get("/admin/users")
-async def admin_users(request, response):
-    return response(CRUD.to_crud(request, {
-        "sql": "SELECT id, name, email FROM users",
-        "title": "User Management",
-        "primary_key": "id",
-    }))
+@get("/api/items")               # Public by default
+async def list_items(request, response):
+    return response({"items": []})
+
+@noauth()                         # Make a write route public
+@post("/api/webhook")
+async def webhook(request, response):
+    return response({"ok": True})
+
+@secured()                        # Protect a GET route
+@get("/api/admin/stats")
+async def admin_stats(request, response):
+    return response({"secret": True})
 ```
 
-## Sessions
+Path parameter types: `{id}` (string), `{id:int}`, `{price:float}`, `{path:path}` (greedy).
 
-Built-in session management with pluggable backends:
+### ORM
 
-| Handler | Backend | Package |
-|---------|---------|---------|
-| `SessionFileHandler` (default) | File system | — |
-| `SessionRedisHandler` | Redis | `redis` |
-| `SessionValkeyHandler` | Valkey | `valkey` |
-| `SessionMongoHandler` | MongoDB | `pymongo` |
+Active Record with typed fields, validation, soft delete, relationships, scopes, and multi-database support.
 
 ```python
-request.session.set("user_id", 42)
-user_id = request.session.get("user_id")
+from tina4_python.orm import ORM, IntField, StrField, Field, orm_bind
+
+class User(ORM):
+    table_name = "users"
+    id = IntField(primary_key=True, auto_increment=True)
+    name = StrField(required=True, min_length=1, max_length=100)
+    email = StrField(regex=r'^[^@]+@[^@]+\.[^@]+$')
+    role = StrField(choices=["admin", "user", "guest"], default="user")
+    age = Field(int, min_value=0, max_value=150)
+
+# CRUD
+user = User({"name": "Alice", "email": "alice@example.com"})
+user.save()
+user.load("email = ?", ["alice@example.com"])
+user.delete()
+
+# Relationships
+orders = user.has_many("Order", "user_id")
+profile = user.has_one("Profile", "user_id")
+
+# Soft delete, scopes, caching
+user.soft_delete()
+active_admins = User.scope("active").scope("admin").select()
+users = User.cached("SELECT * FROM users", ttl=300)
+
+# Multi-database
+orm_bind(main_db)                     # Default
+orm_bind(audit_db, name="audit")      # Named
+
+class AuditLog(ORM):
+    _db = "audit"                     # Uses named connection
 ```
 
-## JWT Authentication
+### Database
 
-Tokens are signed with HS256 using your `SECRET` env var. Set it in `.env`:
-
-```bash
-SECRET=your-strong-random-secret-32-chars-min
-```
+Unified interface across 7 engines:
 
 ```python
-from tina4_python import tina4_auth
+from tina4_python.database import Database
 
-token = tina4_auth.get_token({"user_id": 42})
-is_valid = tina4_auth.valid(token)
-payload = tina4_auth.get_payload(token)
-hashed = tina4_auth.hash_password("mypassword")
-ok = tina4_auth.check_password(hashed, "mypassword")
+db = Database("sqlite:///data/app.db")
+db = Database("psycopg2:localhost/5432:mydb", "user", "pass")
+db = Database("mysql.connector:localhost/3306:mydb", "user", "pass")
+db = Database("pymssql:localhost/1433:mydb", "sa", "pass")
+db = Database("firebird.driver:localhost/3050:/path/to/db", "SYSDBA", "masterkey")
+db = Database("pymongo:localhost/27017:mydb")
+db = Database("pyodbc:DSN=mydsn")
+
+result = db.fetch("SELECT * FROM users WHERE age > ?", [18], limit=20, skip=0)
+row = db.fetch_one("SELECT * FROM users WHERE id = ?", [1])
+db.insert("users", {"name": "Alice", "email": "alice@test.com"})
+db.commit()
 ```
 
-## Queues
-
-Background processing with litequeue (default), RabbitMQ, Kafka, or MongoDB.
+### Middleware
 
 ```python
-from tina4_python.Queue import Queue, Producer, Consumer
-
-# Enqueue from a route
-Producer(Queue(topic="emails")).produce({"to": "alice@example.com"})
-
-# Process in a worker
-for msg in Consumer(Queue(topic="emails")).messages():
-    send_email(msg.data)
-```
-
-## GraphQL
-
-Zero-dependency GraphQL engine with ORM auto-schema:
-
-```python
-from tina4_python.GraphQL import GraphQL
-
-gql = GraphQL()
-gql.schema.from_orm(User)     # auto-generates type, queries, and mutations
-gql.schema.from_orm(Product)
-gql.register_route("/graphql") # GET = GraphiQL IDE, POST = queries
-```
-
-## Middleware
-
-```python
-from tina4_python.Router import get, middleware
-
 class AuthCheck:
     @staticmethod
     def before_auth(request, response):
@@ -249,84 +373,242 @@ async def protected(request, response):
     return response({"secret": True})
 ```
 
-## Swagger / OpenAPI
-
-Auto-generated at `/swagger`. Add metadata with decorators:
+### JWT Authentication
 
 ```python
-from tina4_python import description, tags
+from tina4_python.auth import Auth
 
-@get("/users")
+auth = Auth(secret="your-secret")
+token = auth.create_token({"user_id": 42})
+payload = auth.validate_token(token)
+```
+
+POST/PUT/PATCH/DELETE routes require `Authorization: Bearer <token>` by default. Use `@noauth()` to make public, `@secured()` to protect GET routes.
+
+### Sessions
+
+```python
+request.session.set("user_id", 42)
+user_id = request.session.get("user_id")
+```
+
+Backends: file (default), Redis, Valkey, MongoDB, database. Set via `TINA4_SESSION_HANDLER` in `.env`.
+
+### Queues
+
+```python
+from tina4_python.queue import Queue, Producer, Consumer
+
+Producer(Queue(topic="emails")).produce({"to": "alice@example.com"})
+
+for msg in Consumer(Queue(topic="emails")).messages():
+    send_email(msg.data)
+```
+
+### GraphQL
+
+```python
+from tina4_python.graphql import GraphQL
+
+gql = GraphQL()
+gql.schema.from_orm(User)
+gql.register_route("/graphql")   # GET = GraphiQL IDE, POST = queries
+```
+
+### WebSocket
+
+```python
+from tina4_python.websocket import WebSocketManager
+
+ws = WebSocketManager()
+
+@ws.route("/ws/chat")
+async def chat(connection, message):
+    await ws.broadcast("/ws/chat", f"User said: {message}")
+```
+
+### Swagger / OpenAPI
+
+Auto-generated at `/swagger`:
+
+```python
 @description("Get all users")
 @tags(["users"])
+@get("/api/users")
 async def users(request, response):
-    return response(User().select("*"))
+    return response(User().select().to_array())
 ```
 
-## REST Client
+### Event System
 
 ```python
-from tina4_python import Api
+from tina4_python.core.events import on, emit, once
 
-api = Api("https://api.example.com", auth_header="Bearer xyz")
-result = api.send_request("/users/42")
+@on("user.created", priority=10)
+def notify_admin(user):
+    send_notification(f"New user: {user['name']}")
+
+emit("user.created", {"name": "Alice"})
 ```
 
-## WSDL / SOAP
+### Template Engine (Frond)
+
+Twig-compatible, 35+ filters, macros, inheritance, fragment caching, sandboxing:
+
+```twig
+{% extends "base.twig" %}
+{% block content %}
+<h1>{{ title | upper }}</h1>
+{% for item in items %}
+    <p>{{ item.name }} -- {{ item.price | number_format(2) }}</p>
+{% endfor %}
+
+{% cache "sidebar" 300 %}
+    {% include "partials/sidebar.twig" %}
+{% endcache %}
+{% endblock %}
+```
+
+### CRUD Scaffolding
 
 ```python
-from tina4_python.WSDL import WSDL, wsdl_operation
-from tina4_python import get, post
+@get("/admin/users")
+async def admin_users(request, response):
+    return response(CRUD.to_crud(request, {
+        "sql": "SELECT id, name, email FROM users",
+        "title": "User Management",
+        "primary_key": "id",
+    }))
+```
+
+### WSDL / SOAP
+
+```python
+from tina4_python.wsdl import WSDL, wsdl_operation
 
 class Calculator(WSDL):
     @wsdl_operation({"Result": int})
     def Add(self, a: int, b: int):
         return {"Result": a + b}
-
-@get("/calculator")
-@post("/calculator")
-async def calculator(request, response):
-    return response(Calculator(request).handle())
 ```
 
-## Inline Testing
+### REST Client
 
 ```python
-from tina4_python import tests, assert_equal, assert_raises
+from tina4_python.api import Api
 
-@tests(
-    assert_equal((7, 7), 1),
-    assert_raises(ZeroDivisionError, (5, 0)),
-)
-def divide(a: int, b: int) -> float:
-    if b == 0:
-        raise ZeroDivisionError("division by zero")
-    return a / b
+api = Api("https://api.example.com", auth_header="Bearer xyz")
+result = api.send_request("/users/42")
 ```
 
-Run with `tina4 test` or `uv run pytest`.
+### Data Seeder
+
+```python
+from tina4_python.seeder import Fake, seed_orm
+
+fake = Fake()
+fake.name()      # "Alice Johnson"
+fake.email()     # "alice.johnson@example.com"
+
+seed_orm(User, count=50)
+```
+
+### Email / Messenger
+
+```python
+from tina4_python.messenger import create_messenger
+
+mail = create_messenger()
+mail.send(to="user@test.com", subject="Welcome", body="<h1>Hi!</h1>", html=True)
+```
+
+### In-Memory Cache
+
+```python
+from tina4_python.core.cache import Cache
+
+cache = Cache()
+cache.set("key", "value", ttl=300)
+cache.tag("users").flush()
+```
+
+### SCSS, Localization, Inline Testing
+
+- **SCSS**: Drop `.scss` in `src/scss/` -- auto-compiled to CSS. Variables, nesting, mixins, `@import`, `@extend`.
+- **i18n**: JSON translation files, 6 languages (en, fr, af, zh, ja, es), placeholder interpolation.
+- **Inline tests**: `@tests(assert_equal((5, 3), 8))` decorator on any function.
+
+---
+
+## Dev Mode
+
+Set `TINA4_DEBUG_LEVEL=DEBUG` in `.env` to enable:
+
+- **Live reload** -- browser auto-refreshes on code changes
+- **CSS hot-reload** -- SCSS changes apply without page refresh
+- **Error overlay** -- rich error display in the browser
+- **Dev admin** at `/__dev/` with 11 tabs: Routes, Queue, Mailbox, Messages, Database, Requests, Errors, WebSocket, System, Tools, Tina4
+
+---
+
+## CLI Reference
+
+```bash
+tina4 init [dir]             # Scaffold a new project
+tina4 serve [port]           # Start dev server (default: 7145)
+tina4 migrate                # Run pending migrations
+tina4 migrate:create <desc>  # Create a migration file
+tina4 migrate:rollback       # Rollback last batch
+tina4 seed                   # Run seeders from src/seeds/
+tina4 routes                 # List all registered routes
+tina4 test                   # Run test suite
+tina4 build                  # Build distributable package
+tina4 ai [--all]             # Detect AI tools and install context
+```
 
 ## Environment
 
-Key `.env` settings:
-
 ```bash
-SECRET=your-jwt-secret-32-chars-min
-API_KEY=your-api-key
-DATABASE_NAME=sqlite3:app.db
-TINA4_DEBUG_LEVEL=ALL
-TINA4_LANGUAGE=en
+SECRET=your-jwt-secret
+DATABASE_URL=sqlite:///data/app.db
+TINA4_DEBUG_LEVEL=DEBUG              # DEBUG, INFO, WARNING, ERROR, ALL
+TINA4_LANGUAGE=en                    # en, fr, af, zh, ja, es
 TINA4_SESSION_HANDLER=SessionFileHandler
 SWAGGER_TITLE=My API
 ```
 
-## Further Documentation
+## AI Tool Integration
 
-https://tina4.com/python
+```bash
+tina4 ai              # Detect and install context
+tina4 ai --all        # Install for ALL supported tools
+```
 
-## Community
+Supported: Claude Code, Cursor, GitHub Copilot, Windsurf, Aider, Cline, OpenAI Codex CLI. Generates framework-aware context so AI assistants understand Tina4's conventions.
 
-- GitHub: https://github.com/tina4stack/tina4-python
+## Carbonah Green Benchmarks
+
+All 9 benchmarks rated **A+** (South Africa grid, 1000 iterations each):
+
+| Benchmark | SCI (gCO2eq) | Grade |
+|-----------|-------------|-------|
+| JSON Hello World | 0.000864 | A+ |
+| Single DB Query | 0.000538 | A+ |
+| Multiple DB Queries | 0.001350 | A+ |
+| Template Rendering | 0.003237 | A+ |
+| Large JSON Payload | 0.000983 | A+ |
+| Plaintext Response | 0.000377 | A+ |
+| CRUD Cycle | 0.000456 | A+ |
+| Paginated Query | 0.000990 | A+ |
+| Framework Startup | 0.000801 | A+ |
+
+Run locally: `python benchmarks/run_carbonah.py`
+
+---
+
+## Documentation
+
+Full guides, API reference, and examples at **[tina4.com](https://tina4.com)**.
 
 ## License
 
@@ -335,7 +617,7 @@ https://opensource.org/licenses/MIT
 
 ---
 
-**Tina4** — The framework that keeps out of the way of your coding.
+<p align="center"><b>Tina4</b> -- The framework that keeps out of the way of your coding.</p>
 
 ---
 

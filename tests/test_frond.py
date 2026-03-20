@@ -1,0 +1,322 @@
+# Tests for tina4_python.frond
+import pytest
+from pathlib import Path
+from tina4_python.frond import Frond
+
+
+@pytest.fixture
+def engine(tmp_path):
+    """Frond engine with temp template dir."""
+    return Frond(template_dir=str(tmp_path))
+
+
+@pytest.fixture
+def tpl_dir(tmp_path):
+    """Template directory path."""
+    return tmp_path
+
+
+# ── Variable Tests ──────────────────────────────────────────────
+
+
+class TestVariables:
+    def test_simple_variable(self, engine):
+        assert engine.render_string("Hello {{ name }}", {"name": "World"}) == "Hello World"
+
+    def test_dotted_access(self, engine):
+        assert engine.render_string("{{ user.name }}", {"user": {"name": "Alice"}}) == "Alice"
+
+    def test_array_access(self, engine):
+        assert engine.render_string("{{ items[0] }}", {"items": ["first", "second"]}) == "first"
+
+    def test_missing_variable(self, engine):
+        assert engine.render_string("{{ missing }}", {}) == ""
+
+    def test_auto_escape_html(self, engine):
+        result = engine.render_string("{{ text }}", {"text": "<b>bold</b>"})
+        assert "&lt;b&gt;" in result
+
+    def test_raw_filter_no_escape(self, engine):
+        result = engine.render_string("{{ text | raw }}", {"text": "<b>bold</b>"})
+        assert result == "<b>bold</b>"
+
+    def test_string_concatenation(self, engine):
+        result = engine.render_string('{{ "Hello " ~ name ~ "!" }}', {"name": "World"})
+        assert result == "Hello World!"
+
+    def test_ternary(self, engine):
+        assert engine.render_string('{{ active ? "yes" : "no" }}', {"active": True}) == "yes"
+        assert engine.render_string('{{ active ? "yes" : "no" }}', {"active": False}) == "no"
+
+    def test_null_coalescing(self, engine):
+        assert engine.render_string('{{ name ?? "default" }}', {"name": None}) == "default"
+        assert engine.render_string('{{ name ?? "default" }}', {"name": "Alice"}) == "Alice"
+
+
+# ── Filter Tests ────────────────────────────────────────────────
+
+
+class TestFilters:
+    def test_upper(self, engine):
+        assert engine.render_string("{{ name | upper }}", {"name": "alice"}) == "ALICE"
+
+    def test_lower(self, engine):
+        assert engine.render_string("{{ name | lower }}", {"name": "ALICE"}) == "alice"
+
+    def test_capitalize(self, engine):
+        assert engine.render_string("{{ name | capitalize }}", {"name": "alice"}) == "Alice"
+
+    def test_default(self, engine):
+        assert engine.render_string('{{ x | default("N/A") }}', {}) == "N/A"
+        assert engine.render_string('{{ x | default("N/A") }}', {"x": "val"}) == "val"
+
+    def test_length(self, engine):
+        assert engine.render_string("{{ items | length }}", {"items": [1, 2, 3]}) == "3"
+
+    def test_join(self, engine):
+        result = engine.render_string('{{ items | join(", ") }}', {"items": ["a", "b", "c"]})
+        assert result == "a, b, c"
+
+    def test_truncate(self, engine):
+        result = engine.render_string("{{ text | truncate(5) }}", {"text": "Hello World"})
+        assert result == "Hello..."
+
+    def test_slug(self, engine):
+        result = engine.render_string("{{ title | slug }}", {"title": "Hello World!"})
+        assert result == "hello-world"
+
+    def test_json_encode(self, engine):
+        result = engine.render_string("{{ data | json_encode | raw }}", {"data": {"a": 1}})
+        assert '"a": 1' in result
+
+    def test_number_format(self, engine):
+        result = engine.render_string("{{ price | number_format(2) }}", {"price": 1234.5})
+        assert result == "1,234.50"
+
+    def test_nl2br(self, engine):
+        result = engine.render_string("{{ text | nl2br | raw }}", {"text": "a\nb"})
+        assert "<br>" in result
+
+    def test_striptags(self, engine):
+        result = engine.render_string("{{ html | striptags }}", {"html": "<b>bold</b>"})
+        assert result == "bold"
+
+    def test_replace(self, engine):
+        result = engine.render_string('{{ text | replace("world", "frond") }}', {"text": "hello world"})
+        assert result == "hello frond"
+
+    def test_chained_filters(self, engine):
+        result = engine.render_string("{{ name | trim | upper }}", {"name": "  alice  "})
+        assert result == "ALICE"
+
+    def test_md5(self, engine):
+        result = engine.render_string("{{ text | md5 }}", {"text": "hello"})
+        assert len(result) == 32
+
+    def test_first_last(self, engine):
+        assert engine.render_string("{{ items | first }}", {"items": [1, 2, 3]}) == "1"
+        assert engine.render_string("{{ items | last }}", {"items": [1, 2, 3]}) == "3"
+
+    def test_reverse(self, engine):
+        result = engine.render_string("{{ items | reverse | join }}", {"items": ["a", "b", "c"]})
+        assert result == "c, b, a"
+
+    def test_sort(self, engine):
+        result = engine.render_string("{{ items | sort | join }}", {"items": ["c", "a", "b"]})
+        assert result == "a, b, c"
+
+    def test_keys_values(self, engine):
+        data = {"name": "Alice", "age": "30"}
+        result = engine.render_string("{{ d | keys | join }}", {"d": data})
+        assert "name" in result
+
+    def test_custom_filter(self, engine):
+        engine.add_filter("double", lambda v: str(v) * 2)
+        assert engine.render_string("{{ x | double }}", {"x": "ha"}) == "haha"
+
+
+# ── If/Else Tests ───────────────────────────────────────────────
+
+
+class TestIfElse:
+    def test_if_true(self, engine):
+        result = engine.render_string("{% if show %}yes{% endif %}", {"show": True})
+        assert result == "yes"
+
+    def test_if_false(self, engine):
+        result = engine.render_string("{% if show %}yes{% endif %}", {"show": False})
+        assert result == ""
+
+    def test_if_else(self, engine):
+        tpl = "{% if active %}on{% else %}off{% endif %}"
+        assert engine.render_string(tpl, {"active": True}) == "on"
+        assert engine.render_string(tpl, {"active": False}) == "off"
+
+    def test_elseif(self, engine):
+        tpl = "{% if x == 1 %}one{% elseif x == 2 %}two{% else %}other{% endif %}"
+        assert engine.render_string(tpl, {"x": 1}) == "one"
+        assert engine.render_string(tpl, {"x": 2}) == "two"
+        assert engine.render_string(tpl, {"x": 3}) == "other"
+
+    def test_elif(self, engine):
+        tpl = "{% if x == 1 %}one{% elif x == 2 %}two{% endif %}"
+        assert engine.render_string(tpl, {"x": 2}) == "two"
+
+    def test_comparison_operators(self, engine):
+        assert engine.render_string("{% if x > 5 %}yes{% endif %}", {"x": 10}) == "yes"
+        assert engine.render_string("{% if x < 5 %}yes{% endif %}", {"x": 3}) == "yes"
+        assert engine.render_string("{% if x >= 5 %}yes{% endif %}", {"x": 5}) == "yes"
+        assert engine.render_string("{% if x != 5 %}yes{% endif %}", {"x": 3}) == "yes"
+
+    def test_and_or(self, engine):
+        assert engine.render_string("{% if a and b %}yes{% endif %}", {"a": True, "b": True}) == "yes"
+        assert engine.render_string("{% if a and b %}yes{% endif %}", {"a": True, "b": False}) == ""
+        assert engine.render_string("{% if a or b %}yes{% endif %}", {"a": False, "b": True}) == "yes"
+
+    def test_not(self, engine):
+        assert engine.render_string("{% if not hidden %}show{% endif %}", {"hidden": False}) == "show"
+
+    def test_is_defined(self, engine):
+        assert engine.render_string("{% if x is defined %}yes{% endif %}", {"x": 1}) == "yes"
+        assert engine.render_string("{% if x is defined %}yes{% endif %}", {}) == ""
+
+    def test_is_empty(self, engine):
+        assert engine.render_string("{% if items is empty %}empty{% endif %}", {"items": []}) == "empty"
+
+    def test_is_even_odd(self, engine):
+        assert engine.render_string("{% if n is even %}yes{% endif %}", {"n": 4}) == "yes"
+        assert engine.render_string("{% if n is odd %}yes{% endif %}", {"n": 3}) == "yes"
+
+    def test_in_operator(self, engine):
+        assert engine.render_string('{% if "a" in items %}yes{% endif %}', {"items": ["a", "b"]}) == "yes"
+        assert engine.render_string('{% if "c" in items %}yes{% endif %}', {"items": ["a", "b"]}) == ""
+
+    def test_nested_if(self, engine):
+        tpl = "{% if a %}{% if b %}both{% endif %}{% endif %}"
+        assert engine.render_string(tpl, {"a": True, "b": True}) == "both"
+
+
+# ── For Loop Tests ──────────────────────────────────────────────
+
+
+class TestForLoop:
+    def test_simple_for(self, engine):
+        result = engine.render_string("{% for item in items %}{{ item }}{% endfor %}", {"items": ["a", "b", "c"]})
+        assert result == "abc"
+
+    def test_loop_index(self, engine):
+        result = engine.render_string("{% for item in items %}{{ loop.index }}{% endfor %}", {"items": ["a", "b"]})
+        assert result == "12"
+
+    def test_loop_first_last(self, engine):
+        tpl = "{% for item in items %}{% if loop.first %}F{% endif %}{% if loop.last %}L{% endif %}{% endfor %}"
+        assert engine.render_string(tpl, {"items": ["a", "b", "c"]}) == "FL"
+
+    def test_loop_length(self, engine):
+        result = engine.render_string("{% for item in items %}{{ loop.length }}{% endfor %}", {"items": [1, 2, 3]})
+        assert result == "333"
+
+    def test_for_else(self, engine):
+        tpl = "{% for item in items %}{{ item }}{% else %}empty{% endfor %}"
+        assert engine.render_string(tpl, {"items": []}) == "empty"
+        assert engine.render_string(tpl, {"items": ["x"]}) == "x"
+
+    def test_for_key_value(self, engine):
+        tpl = "{% for k, v in data %}{{ k }}={{ v }} {% endfor %}"
+        result = engine.render_string(tpl, {"data": {"a": 1, "b": 2}})
+        assert "a=1" in result
+        assert "b=2" in result
+
+    def test_nested_for(self, engine):
+        tpl = "{% for g in groups %}{% for i in g %}{{ i }}{% endfor %},{% endfor %}"
+        result = engine.render_string(tpl, {"groups": [[1, 2], [3, 4]]})
+        assert result == "12,34,"
+
+    def test_loop_even_odd(self, engine):
+        tpl = "{% for i in items %}{% if loop.even %}E{% else %}O{% endif %}{% endfor %}"
+        assert engine.render_string(tpl, {"items": [1, 2, 3, 4]}) == "OEOE"
+
+
+# ── Set / Include / Extends Tests ──────────────────────────────
+
+
+class TestSetIncludeExtends:
+    def test_set_variable(self, engine):
+        result = engine.render_string('{% set greeting = "Hello" %}{{ greeting }}', {})
+        assert result == "Hello"
+
+    def test_set_with_concat(self, engine):
+        result = engine.render_string('{% set msg = "Hi " ~ name %}{{ msg }}', {"name": "Alice"})
+        assert result == "Hi Alice"
+
+    def test_include(self, engine, tpl_dir):
+        (tpl_dir / "partial.html").write_text("Hello {{ name }}")
+        result = engine.render_string('{% include "partial.html" %}', {"name": "World"})
+        assert result == "Hello World"
+
+    def test_include_ignore_missing(self, engine):
+        result = engine.render_string('{% include "nope.html" ignore missing %}', {})
+        assert result == ""
+
+    def test_include_missing_raises(self, engine):
+        with pytest.raises(FileNotFoundError):
+            engine.render_string('{% include "nope.html" %}', {})
+
+    def test_extends_and_blocks(self, engine, tpl_dir):
+        (tpl_dir / "base.html").write_text("<h1>{% block title %}Default{% endblock %}</h1><div>{% block content %}{% endblock %}</div>")
+        (tpl_dir / "page.html").write_text('{% extends "base.html" %}{% block title %}My Page{% endblock %}{% block content %}Hello{% endblock %}')
+        result = engine.render("page.html", {})
+        assert "<h1>My Page</h1>" in result
+        assert "<div>Hello</div>" in result
+
+    def test_extends_default_block(self, engine, tpl_dir):
+        (tpl_dir / "base.html").write_text("{% block title %}Default Title{% endblock %}")
+        (tpl_dir / "page.html").write_text('{% extends "base.html" %}')
+        result = engine.render("page.html", {})
+        assert result == "Default Title"
+
+
+# ── Whitespace Control Tests ────────────────────────────────────
+
+
+class TestWhitespaceControl:
+    def test_strip_before(self, engine):
+        result = engine.render_string("hello  {{- name }}", {"name": "world"})
+        assert result == "helloworld"
+
+    def test_strip_after(self, engine):
+        result = engine.render_string("{{ name -}}  there", {"name": "hello"})
+        assert result == "hellothere"
+
+
+# ── Comment Tests ───────────────────────────────────────────────
+
+
+class TestComments:
+    def test_comment_removed(self, engine):
+        result = engine.render_string("before{# comment #}after", {})
+        assert result == "beforeafter"
+        assert "comment" not in result
+
+
+# ── Global and Custom Test ──────────────────────────────────────
+
+
+class TestGlobals:
+    def test_global_variable(self, engine):
+        engine.add_global("app_name", "Tina4")
+        assert engine.render_string("{{ app_name }}", {}) == "Tina4"
+
+    def test_data_overrides_global(self, engine):
+        engine.add_global("name", "Global")
+        assert engine.render_string("{{ name }}", {"name": "Local"}) == "Local"
+
+
+# ── Macro Tests ─────────────────────────────────────────────────
+
+
+class TestMacros:
+    def test_simple_macro(self, engine):
+        tpl = '{% macro greet(name) %}Hello {{ name }}{% endmacro %}{{ greet("World") | raw }}'
+        result = engine.render_string(tpl, {})
+        assert "Hello World" in result

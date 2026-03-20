@@ -1,26 +1,26 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>500 Error - {{ server.url }}</title>
-</head>
-<body>
-<!-- AI-readable raw error text (hidden visually, kept in DOM for tooling) -->
-<div id="tina4-error-data" style="display:none">{{ error_message }}</div>
-
-<!-- Rich error overlay -->
-<div id="tina4-error-overlay">
-    <div id="tina4-error-panel">
-        <div class="tina4-error-header">
-            <span class="tina4-error-badge">500</span>
-            <h2>Runtime Error</h2>
-            <span class="tina4-error-url">{{ server.url }}</span>
-            <button class="tina4-error-close" onclick="document.getElementById('tina4-error-overlay').style.display='none'" title="Dismiss (Esc)">&times;</button>
-        </div>
-        <pre class="tina4-error-trace" id="tina4-error-trace">{{ error_message }}</pre>
-        <div class="tina4-error-hint">Press <kbd>Esc</kbd> to dismiss &middot; Fix the error and save to auto-reload</div>
+{% extends "errors/base.twig" %}
+{% block title %}500 — Server Error{% endblock %}
+{% block extra_styles %}
+.error-card { max-width: 700px; padding: 2rem; text-align: left; }
+.error-header { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+.error-badge { background: rgba(239,68,68,0.15); color: var(--danger); padding: 0.25rem 0.75rem; border-radius: var(--radius); font-size: 0.8rem; font-weight: 700; }
+.error-trace { background: var(--bg); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; font-family: var(--mono); font-size: 0.8rem; line-height: 1.5; overflow-x: auto; max-height: 400px; overflow-y: auto; white-space: pre-wrap; color: var(--danger); }
+.error-footer { margin-top: 1rem; display: flex; justify-content: space-between; align-items: center; }
+.error-hint { color: var(--muted); font-size: 0.75rem; }
+.error-id { color: var(--muted); font-family: var(--mono); font-size: 0.75rem; }
+.logo { width: 2rem; height: 2rem; }
+{% endblock %}
+{% block content %}
+    <div id="tina4-error-data" style="display:none">{{ error_message }}</div>
+    <div class="error-header">
+        <img src="https://tina4.com/logo.svg" class="logo" alt="Tina4">
+        <span class="error-badge">500</span>
+        <span class="error-title">Server Error</span>
     </div>
-</div>
-</body>
-</html>
+    <pre class="error-trace">{{ error_message }}</pre>
+    <div class="error-footer">
+        <span class="error-hint">Fix the error and save to auto-reload</span>
+        <span class="error-id">{{ request_id }}</span>
+        <a href="/" class="error-home">Go Home</a>
+    </div>
+{% endblock %}
