@@ -1,197 +1,159 @@
-#
-# Tina4 - This is not a 4ramework.
-# Copy-right 2007 - current Tina4
-# License: MIT https://opensource.org/licenses/MIT
-#
-
+# Tests for the Response callable pattern and HTTP constants.
 import json
-import os
 import pytest
-from datetime import datetime, date
-from tina4_python.Response import Response
-from tina4_python import Constant
+from tina4_python.core.response import Response
+from tina4_python.core.constants import (
+    HTTP_OK, HTTP_CREATED, HTTP_NO_CONTENT, HTTP_BAD_REQUEST,
+    HTTP_NOT_FOUND, HTTP_UNAUTHORIZED, HTTP_SERVER_ERROR,
+    APPLICATION_JSON, TEXT_HTML, TEXT_PLAIN,
+)
 
 
-# --- Basic construction ---
+class TestResponseCallable:
+    """Test response(data, status, content_type) smart callable."""
 
-def test_default_response():
-    r = Response("Hello")
-    assert r.content == "Hello"
-    assert r.http_code == Constant.HTTP_OK
-    assert r.content_type == Constant.TEXT_HTML
+    def test_dict_auto_json(self):
+        r = Response()
+        result = r({"key": "value"})
+        assert result is r
+        assert r.content_type == "application/json"
+        assert r.status_code == 200
+        assert json.loads(r.content) == {"key": "value"}
 
+    def test_list_auto_json(self):
+        r = Response()
+        r([1, 2, 3])
+        assert r.content_type == "application/json"
+        assert json.loads(r.content) == [1, 2, 3]
 
-def test_custom_http_code():
-    r = Response("Not Found", Constant.HTTP_NOT_FOUND)
-    assert r.http_code == Constant.HTTP_NOT_FOUND
+    def test_dict_with_status(self):
+        r = Response()
+        r({"created": True}, HTTP_CREATED)
+        assert r.status_code == 201
+        assert r.content_type == "application/json"
 
+    def test_html_auto_detect(self):
+        r = Response()
+        r("<h1>Hello</h1>")
+        assert "text/html" in r.content_type
+        assert r.content == b"<h1>Hello</h1>"
 
-def test_custom_content_type():
-    r = Response("data", Constant.HTTP_OK, Constant.APPLICATION_JSON)
-    assert r.content_type == Constant.APPLICATION_JSON
+    def test_html_with_whitespace(self):
+        r = Response()
+        r("  <div>test</div>  ")
+        assert "text/html" in r.content_type
 
+    def test_plain_text(self):
+        r = Response()
+        r("hello world")
+        assert "text/plain" in r.content_type
 
-def test_none_content():
-    r = Response(None)
-    assert r.content == ""
+    def test_text_with_status(self):
+        r = Response()
+        r("Not found", HTTP_NOT_FOUND)
+        assert r.status_code == 404
+        assert "text/plain" in r.content_type
 
+    def test_explicit_content_type(self):
+        r = Response()
+        r({"data": 1}, HTTP_OK, APPLICATION_JSON)
+        assert r.content_type == APPLICATION_JSON
+        assert r.status_code == 200
 
-def test_none_http_code_defaults():
-    r = Response("test", None)
-    assert r.http_code == Constant.HTTP_OK
+    def test_none_data(self):
+        r = Response()
+        r(None, HTTP_NO_CONTENT)
+        assert r.status_code == 204
+        assert r.content == b""
 
+    def test_bytes_data(self):
+        r = Response()
+        r(b"\x89PNG")
+        assert r.content_type == "application/octet-stream"
+        assert r.content == b"\x89PNG"
 
-# --- Auto content type detection ---
+    def test_number_to_string(self):
+        r = Response()
+        r(42)
+        assert r.content == b"42"
 
-def test_dict_auto_json():
-    r = Response({"key": "value"})
-    assert r.content_type == Constant.APPLICATION_JSON
-    parsed = json.loads(r.content)
-    assert parsed["key"] == "value"
+    def test_chainable(self):
+        r = Response()
+        result = r({"ok": True}, HTTP_OK)
+        assert result is r
 
+    def test_empty_dict(self):
+        r = Response()
+        r({})
+        assert r.content_type == "application/json"
+        assert json.loads(r.content) == {}
 
-def test_list_auto_json():
-    r = Response([1, 2, 3])
-    assert r.content_type == Constant.APPLICATION_JSON
-    parsed = json.loads(r.content)
-    assert parsed == [1, 2, 3]
-
-
-def test_bool_true():
-    r = Response(True)
-    assert r.content == "True"
-
-
-def test_bool_false():
-    r = Response(False)
-    assert r.content == "False"
-
-
-# --- convert_special_types ---
-
-def test_convert_dict_with_datetime():
-    data = {"created": datetime(2025, 1, 1, 12, 0)}
-    result = Response.convert_special_types(data)
-    assert result["created"] == "2025-01-01T12:00:00"
-
-
-def test_convert_dict_with_date():
-    data = {"day": date(2025, 6, 15)}
-    result = Response.convert_special_types(data)
-    assert result["day"] == "2025-06-15"
-
-
-def test_convert_nested():
-    data = {"items": [{"dt": datetime(2025, 3, 1)}]}
-    result = Response.convert_special_types(data)
-    assert result["items"][0]["dt"] == "2025-03-01T00:00:00"
-
-
-def test_convert_primitives():
-    assert Response.convert_special_types("hello") == "hello"
-    assert Response.convert_special_types(42) == 42
-    assert Response.convert_special_types(None) is None
-
-
-# --- Headers ---
-
-def test_custom_headers():
-    r = Response("test", headers_in={"X-Custom": "value"})
-    assert r.headers["X-Custom"] == "value"
+    def test_nested_dict(self):
+        data = {"users": [{"id": 1, "name": "Alice"}], "total": 1}
+        r = Response()
+        r(data)
+        assert json.loads(r.content) == data
 
 
-def test_add_header():
-    Response.reset_context()
-    Response.add_header("X-Test", "123")
-    r = Response("test")
-    assert r.headers.get("X-Test") == "123"
+class TestResponseMethods:
+    """Test explicit .json(), .html(), .text() methods still work."""
+
+    def test_json_method(self):
+        r = Response()
+        result = r.json({"test": True})
+        assert result is r
+        assert r.content_type == "application/json"
+
+    def test_html_method(self):
+        r = Response()
+        r.html("<p>Hello</p>")
+        assert "text/html" in r.content_type
+
+    def test_text_method(self):
+        r = Response()
+        r.text("hello")
+        assert "text/plain" in r.content_type
+
+    def test_redirect_method(self):
+        r = Response()
+        r.redirect("/login")
+        assert r.status_code == 302
+        assert ("location", "/login") in r._headers
+
+    def test_status_chain(self):
+        r = Response()
+        r.status(201).json({"id": 1})
+        assert r.status_code == 201
+
+    def test_header_chain(self):
+        r = Response()
+        r.header("X-Custom", "value").json({"ok": True})
+        assert ("X-Custom", "value") in r._headers
+
+    def test_cookie(self):
+        r = Response()
+        r.cookie("session", "abc123")
+        assert len(r._cookies) == 1
+        assert "session=abc123" in r._cookies[0]
 
 
-def test_add_header_merged():
-    Response.reset_context()
-    Response.add_header("X-A", "1")
-    Response.add_header("X-B", "2")
-    r = Response("test")
-    assert r.headers.get("X-A") == "1"
-    assert r.headers.get("X-B") == "2"
+class TestHTTPConstants:
+    """Verify all HTTP constants have correct values."""
 
+    def test_success_codes(self):
+        assert HTTP_OK == 200
+        assert HTTP_CREATED == 201
+        assert HTTP_NO_CONTENT == 204
 
-def test_headers_in_overrides_pending():
-    Response.reset_context()
-    Response.add_header("X-Pending", "old")
-    r = Response("test", headers_in={"X-Explicit": "new"})
-    assert r.headers.get("X-Explicit") == "new"
+    def test_client_error_codes(self):
+        assert HTTP_BAD_REQUEST == 400
+        assert HTTP_UNAUTHORIZED == 401
+        assert HTTP_NOT_FOUND == 404
 
+    def test_server_error_codes(self):
+        assert HTTP_SERVER_ERROR == 500
 
-def test_reset_context():
-    Response.reset_context()
-    Response.add_header("X-Before", "1")
-    Response.reset_context()
-    r = Response("test")
-    assert "X-Before" not in r.headers
-
-
-# --- redirect ---
-
-def test_redirect():
-    r = Response.redirect("/login")
-    assert r.http_code == Constant.HTTP_REDIRECT
-    assert r.headers["Location"] == "/login"
-    assert r.content_type == Constant.TEXT_HTML
-
-
-def test_redirect_custom_code():
-    r = Response.redirect("/new-url", Constant.HTTP_REDIRECT_MOVED)
-    assert r.http_code == Constant.HTTP_REDIRECT_MOVED
-    assert r.headers["Location"] == "/new-url"
-
-
-# --- file ---
-
-def test_file_not_found():
-    r = Response.file("nonexistent.txt", root_path="/tmp")
-    assert r.http_code == Constant.HTTP_NOT_FOUND
-
-
-def test_file_directory_traversal():
-    r = Response.file("../../etc/passwd", root_path="/tmp/safe")
-    assert r.http_code == Constant.HTTP_FORBIDDEN
-
-
-def test_file_serves_content(tmp_path):
-    test_file = tmp_path / "test.txt"
-    test_file.write_text("hello world")
-    r = Response.file("test.txt", root_path=str(tmp_path))
-    assert r.http_code == Constant.HTTP_OK
-    assert r.content == "hello world"
-    assert r.content_type == Constant.TEXT_PLAIN
-
-
-def test_file_binary(tmp_path):
-    test_file = tmp_path / "image.png"
-    test_file.write_bytes(b"\x89PNG\r\n")
-    r = Response.file("image.png", root_path=str(tmp_path))
-    assert r.http_code == Constant.HTTP_OK
-    assert r.content == b"\x89PNG\r\n"
-    assert r.content_type == "image/png"
-
-
-def test_file_css(tmp_path):
-    test_file = tmp_path / "style.css"
-    test_file.write_text("body { margin: 0; }")
-    r = Response.file("style.css", root_path=str(tmp_path))
-    assert r.content_type == Constant.TEXT_CSS
-
-
-def test_file_json(tmp_path):
-    test_file = tmp_path / "data.json"
-    test_file.write_text('{"key": "value"}')
-    r = Response.file("data.json", root_path=str(tmp_path))
-    assert r.content_type == Constant.APPLICATION_JSON
-
-
-def test_file_unknown_extension(tmp_path):
-    test_file = tmp_path / "data.xyz"
-    test_file.write_bytes(b"\x00\x01")
-    r = Response.file("data.xyz", root_path=str(tmp_path))
-    assert r.content_type == "application/octet-stream"
+    def test_content_types(self):
+        assert APPLICATION_JSON == "application/json"
+        assert "text/html" in TEXT_HTML
+        assert "text/plain" in TEXT_PLAIN
