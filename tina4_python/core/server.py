@@ -339,6 +339,7 @@ def _try_static(path: str) -> Response | None:
     1. TINA4_PUBLIC_DIR env var (if set)
     2. public/           (simple, IDE-friendly)
     3. src/public/       (nested convention)
+    4. tina4_python/public/  (framework built-in assets)
     """
     clean = path.lstrip("/")
     custom = os.environ.get("TINA4_PUBLIC_DIR")
@@ -347,6 +348,8 @@ def _try_static(path: str) -> Response | None:
         candidates.append(Path(custom) / clean)
     candidates.append(Path("public") / clean)
     candidates.append(Path("src/public") / clean)
+    # Framework built-in assets (tina4.js, tina4.min.css, tina4-dev-admin.js, etc.)
+    candidates.append(Path(__file__).resolve().parent.parent / "public" / clean)
 
     for file_path in candidates:
         if file_path.is_file():

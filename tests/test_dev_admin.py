@@ -288,13 +288,16 @@ class TestRenderDashboard:
             assert tab in html
 
     def test_contains_api_calls(self):
-        html = render_dashboard()
+        """API calls are now in the external tina4-dev-admin.js file."""
+        from pathlib import Path
+        js_path = Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js"
+        js_content = js_path.read_text()
         for api_path in ["/__dev/api/routes", "/__dev/api/queue",
                          "/__dev/api/mailbox", "/__dev/api/messages",
                          "/__dev/api/requests", "/__dev/api/broken",
                          "/__dev/api/websockets", "/__dev/api/system",
                          "/__dev/api/chat", "/__dev/api/seed"]:
-            assert api_path in html
+            assert api_path in js_content
 
     def test_no_external_dependencies(self):
         html = render_dashboard()
@@ -334,17 +337,25 @@ class TestRenderDashboard:
     def test_error_tracker(self):
         html = render_dashboard()
         assert "loadErrors" in html
-        assert "resolveError" in html
+        # resolveError is in the external JS file (dynamic template)
+        from pathlib import Path
+        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js").read_text()
+        assert "resolveError" in js
 
     def test_system_overview(self):
         html = render_dashboard()
-        assert "loadSystem" in html
         assert "sys-grid" in html
+        # loadSystem is in the external JS file
+        from pathlib import Path
+        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js").read_text()
+        assert "loadSystem" in js
 
     def test_queue_replay(self):
-        html = render_dashboard()
-        assert "replayJob" in html
-        assert "/__dev/api/queue/replay" in html
+        """replayJob and queue/replay API are in the external JS file."""
+        from pathlib import Path
+        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js").read_text()
+        assert "replayJob" in js
+        assert "/__dev/api/queue/replay" in js
 
     def test_message_search(self):
         html = render_dashboard()
