@@ -16,11 +16,20 @@ Active Record ORM with SQL-first paradigm.
     user.name = "Updated"
     user.save()
 """
-from tina4_python.orm.fields import Field, IntField, StrField, FloatField, BoolField, DateTimeField, TextField, BlobField
+from tina4_python.orm.fields import (
+    Field,
+    IntegerField, StringField, BooleanField, FloatField,
+    DateTimeField, TextField, BlobField,
+    IntField, StrField, BoolField,  # short aliases
+)
 from tina4_python.orm.model import ORM, orm_bind
 
 __all__ = [
     "ORM", "orm_bind",
-    "Field", "IntField", "StrField", "FloatField", "BoolField",
+    "Field",
+    # Verbose (preferred)
+    "IntegerField", "StringField", "BooleanField", "FloatField",
     "DateTimeField", "TextField", "BlobField",
+    # Short aliases (backwards compat)
+    "IntField", "StrField", "BoolField",
 ]

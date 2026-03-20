@@ -123,24 +123,38 @@ class Field:
         return f"Field({', '.join(parts)})"
 
 
-# Convenience aliases — keep it simple
-def IntField(**kwargs):
-    return Field(int, **kwargs)
+# Convenience aliases — both short and verbose forms supported.
+# Verbose is preferred: IntegerField, StringField, BooleanField.
+# Short forms (IntField, StrField, BoolField) kept for brevity.
 
-def StrField(**kwargs):
-    return Field(str, **kwargs)
+def _make_field(field_type: type, kind: str, **kwargs) -> Field:
+    """Create a Field and tag it with a kind name for introspection."""
+    f = Field(field_type, **kwargs)
+    f.kind = kind  # e.g. "IntegerField", "StringField" — used by GraphQL
+    return f
+
+def IntegerField(**kwargs):
+    return _make_field(int, "IntegerField", **kwargs)
+
+def StringField(**kwargs):
+    return _make_field(str, "StringField", **kwargs)
+
+def BooleanField(**kwargs):
+    return _make_field(bool, "BooleanField", **kwargs)
 
 def FloatField(**kwargs):
-    return Field(float, **kwargs)
-
-def BoolField(**kwargs):
-    return Field(bool, **kwargs)
+    return _make_field(float, "FloatField", **kwargs)
 
 def DateTimeField(**kwargs):
-    return Field(datetime, **kwargs)
+    return _make_field(datetime, "DateTimeField", **kwargs)
 
 def TextField(**kwargs):
-    return Field(str, **kwargs)
+    return _make_field(str, "TextField", **kwargs)
 
 def BlobField(**kwargs):
-    return Field(bytes, **kwargs)
+    return _make_field(bytes, "BlobField", **kwargs)
+
+# Short aliases — kept for backwards compatibility
+IntField = IntegerField
+StrField = StringField
+BoolField = BooleanField

@@ -1736,9 +1736,9 @@ def render_overlay_script() -> str:
     btn.id = 'tina4-dev-btn';
     btn.innerHTML = '<img src="https://tina4.com/logo.svg" style="width:1.5rem;height:1.5rem" alt="T4">';
     btn.title = 'Tina4 Dev Admin';
-    btn.style.cssText = 'position:fixed;bottom:1rem;right:1rem;width:2.5rem;height:2.5rem;background:#3b82f6;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-weight:700;font-size:0.8rem;font-family:system-ui;z-index:99999;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:transform 0.15s';
-    btn.onmouseover = function(){ this.style.transform='scale(1.1)'; };
-    btn.onmouseout = function(){ this.style.transform='scale(1)'; };
+    btn.style.cssText = 'position:fixed;bottom:1rem;right:1rem;width:2.5rem;height:2.5rem;background:#3b82f6;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-weight:700;font-size:0.8rem;font-family:system-ui;z-index:99999;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:transform 0.15s,opacity 0.15s;opacity:0.5';
+    btn.onmouseover = function(){ this.style.transform='scale(1.1)'; this.style.opacity='1'; };
+    btn.onmouseout = function(){ this.style.transform='scale(1)'; this.style.opacity='0.5'; };
     btn.onclick = function(){ window.open('/__dev/', '_blank'); };
     document.body.appendChild(btn);
 })();

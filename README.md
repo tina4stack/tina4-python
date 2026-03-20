@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://tina4.com/img/tina4-logo.svg" alt="Tina4" width="200">
+  <img src="https://tina4.com/logo.svg" alt="Tina4" width="200">
 </p>
 
 <h1 align="center">Tina4 Python</h1>
@@ -177,13 +177,13 @@ tina4 migrate
 Create `src/orm/User.py`:
 
 ```python
-from tina4_python.orm import ORM, IntField, StrField, DateTimeField
+from tina4_python.orm import ORM, IntegerField, StringField, DateTimeField
 
 class User(ORM):
     table_name = "users"
-    id = IntField(primary_key=True, auto_increment=True)
-    name = StrField(required=True, min_length=1, max_length=100)
-    email = StrField(regex=r'^[^@]+@[^@]+\.[^@]+$')
+    id = IntegerField(primary_key=True, auto_increment=True)
+    name = StringField(required=True, min_length=1, max_length=100)
+    email = StringField(regex=r'^[^@]+@[^@]+\.[^@]+$')
     created_at = DateTimeField()
 ```
 
@@ -303,14 +303,14 @@ Path parameter types: `{id}` (string), `{id:int}`, `{price:float}`, `{path:path}
 Active Record with typed fields, validation, soft delete, relationships, scopes, and multi-database support.
 
 ```python
-from tina4_python.orm import ORM, IntField, StrField, Field, orm_bind
+from tina4_python.orm import ORM, IntegerField, StringField, Field, orm_bind
 
 class User(ORM):
     table_name = "users"
-    id = IntField(primary_key=True, auto_increment=True)
-    name = StrField(required=True, min_length=1, max_length=100)
-    email = StrField(regex=r'^[^@]+@[^@]+\.[^@]+$')
-    role = StrField(choices=["admin", "user", "guest"], default="user")
+    id = IntegerField(primary_key=True, auto_increment=True)
+    name = StringField(required=True, min_length=1, max_length=100)
+    email = StringField(regex=r'^[^@]+@[^@]+\.[^@]+$')
+    role = StringField(choices=["admin", "user", "guest"], default="user")
     age = Field(int, min_value=0, max_value=150)
 
 # CRUD

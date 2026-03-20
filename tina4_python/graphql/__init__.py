@@ -348,11 +348,13 @@ class Schema:
         gql_fields = {}
         pk_field = None
         for fname, fobj in fields_meta.items():
-            ftype = type(fobj).__name__
+            ftype = getattr(fobj, "kind", type(fobj).__name__)
             if ftype == "IntegerField":
                 gql_type = "Int"
-            elif ftype == "NumericField":
+            elif ftype in ("FloatField", "NumericField"):
                 gql_type = "Float"
+            elif ftype == "BooleanField":
+                gql_type = "Boolean"
             elif ftype in ("StringField", "TextField", "DateTimeField"):
                 gql_type = "String"
             else:
