@@ -3,65 +3,65 @@
   "benchmarks": [
     {
       "benchmark": "JSON Hello World",
-      "sci": 0.0002284246125096651,
+      "sci": 0.0007937957463069122,
       "grade": "A+",
-      "energy": 1.5411225965283316e-07,
+      "energy": 5.399597387341685e-07,
       "duration": 0
     },
     {
       "benchmark": "Single DB Query",
-      "sci": 0.00014980822458343169,
+      "sci": 0.0004799242142644022,
       "grade": "A+",
-      "energy": 1.010719310299754e-07,
+      "energy": 3.2645837381374503e-07,
       "duration": 0
     },
     {
       "benchmark": "Multiple DB Queries",
-      "sci": 0.00017735952930416856,
+      "sci": 0.0015713495757174111,
       "grade": "A+",
-      "energy": 1.1966027669658136e-07,
+      "energy": 1.250723161534848e-06,
       "duration": 0
     },
     {
       "benchmark": "Template Rendering",
-      "sci": 0.0001296909321551367,
+      "sci": 0.001622594633505232,
       "grade": "A+",
-      "energy": 8.749939037509575e-08,
+      "energy": 1.1531216566824562e-06,
       "duration": 0
     },
     {
       "benchmark": "Large JSON Payload",
-      "sci": 0.00013485588991884778,
+      "sci": 0.0008165093600029431,
       "grade": "A+",
-      "energy": 9.098389633834453e-08,
+      "energy": 5.554200365242513e-07,
       "duration": 0
     },
     {
       "benchmark": "Plaintext Response",
-      "sci": 0.00022501285240574237,
+      "sci": 0.0002934265050221345,
       "grade": "A+",
-      "energy": 1.5181093446999466e-07,
+      "energy": 1.9960043458841214e-07,
       "duration": 0
     },
     {
       "benchmark": "CRUD Cycle",
-      "sci": 0.00014406199021830217,
+      "sci": 0.0003137703744619804,
       "grade": "A+",
-      "energy": 9.719566010750002e-08,
+      "energy": 2.1343936111387976e-07,
       "duration": 0
     },
     {
       "benchmark": "Paginated Query",
-      "sci": 0.00013584559207323102,
+      "sci": 0.000856964813689679,
       "grade": "A+",
-      "energy": 9.165212748012836e-08,
+      "energy": 5.829427291755473e-07,
       "duration": 0
     },
     {
       "benchmark": "Framework Startup",
-      "sci": 0.00016701763601904677,
+      "sci": 0.0005906000051299079,
       "grade": "A+",
-      "energy": 1.1268311629953266e-07,
+      "energy": 4.017510415718885e-07,
       "duration": 0
     }
   ]
