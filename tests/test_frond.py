@@ -320,3 +320,61 @@ class TestMacros:
         tpl = '{% macro greet(name) %}Hello {{ name }}{% endmacro %}{{ greet("World") | raw }}'
         result = engine.render_string(tpl, {})
         assert "Hello World" in result
+
+
+# ── Form Token Tests ───────────────────────────────────────────
+
+
+class TestFormToken:
+    def test_form_token_function_call(self, engine):
+        """{{ form_token() }} renders a hidden input with a JWT."""
+        result = engine.render_string("{{ form_token() | raw }}", {})
+        assert '<input type="hidden" name="formToken" value="' in result
+        # JWT has 3 dot-separated parts
+        import re
+        token_match = re.search(r'value="([^"]+)"', result)
+        assert token_match
+        token = token_match.group(1)
+        parts = token.split(".")
+        assert len(parts) == 3, f"Expected 3 JWT parts, got {len(parts)}"
+
+    def test_form_token_variable(self, engine):
+        """{{ form_token }} as a callable global renders properly."""
+        result = engine.render_string("{{ form_token() | raw }}", {})
+        assert "formToken" in result
+
+    def test_form_token_filter(self, engine):
+        """{{ "" | form_token }} works as a filter."""
+        result = engine.render_string('{{ "" | form_token | raw }}', {})
+        assert '<input type="hidden" name="formToken" value="' in result
+
+    def test_form_token_is_valid_jwt(self, engine):
+        """The generated token is a valid JWT that Auth can validate."""
+        import re
+        from tina4_python.auth import Auth
+
+        result = engine.render_string("{{ form_token() | raw }}", {})
+        token_match = re.search(r'value="([^"]+)"', result)
+        assert token_match
+        token = token_match.group(1)
+
+        auth = Auth()
+        payload = auth.validate_token(token)
+        assert payload is not None
+        assert payload.get("type") == "form"
+
+    def test_form_token_with_descriptor(self, engine):
+        """{{ "admin" | form_token }} includes context in payload."""
+        import re
+        from tina4_python.auth import Auth
+
+        result = engine.render_string('{{ "admin" | form_token | raw }}', {})
+        token_match = re.search(r'value="([^"]+)"', result)
+        assert token_match
+        token = token_match.group(1)
+
+        auth = Auth()
+        payload = auth.get_payload(token)
+        assert payload is not None
+        assert payload.get("type") == "form"
+        assert payload.get("context") == "admin"

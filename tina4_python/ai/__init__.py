@@ -131,11 +131,11 @@ with zero third-party dependencies for core features.
 ## Quick Start
 
 ```bash
-tina4 init .          # Scaffold project
-tina4 serve           # Start dev server on port 7145
-tina4 migrate         # Run database migrations
-tina4 test            # Run test suite
-tina4 routes          # List all registered routes
+tina4python init .          # Scaffold project
+tina4python serve           # Start dev server on port 7145
+tina4python migrate         # Run database migrations
+tina4python test            # Run test suite
+tina4python routes          # List all registered routes
 ```
 
 ## Project Structure
@@ -170,8 +170,8 @@ frontend/         — Frontend framework source (builds to public/)
 | Email (SMTP+IMAP) | messenger | `from tina4_python.messenger import Messenger` |
 | Background Queue | queue | `from tina4_python.queue import Queue, Producer, Consumer` |
 | SCSS Compilation | scss | Auto-compiled from src/scss/ |
-| Migrations | migration | `tina4 migrate` CLI command |
-| Seeder | seeder | `from tina4_python.seeder import Fake, seed_table` |
+| Migrations | migration | `tina4python migrate` CLI command |
+| Seeder | seeder | `from tina4_python.seeder import FakeData, seed_table` |
 | i18n | localization | `from tina4_python.localization import Localization` |
 | Swagger/OpenAPI | swagger | Auto-generated at /swagger |
 | Sessions | session | `request.session.get(key)` / `.set(key, value)` |
@@ -266,7 +266,7 @@ def install_context(root: str = ".", tools: list[str] = None, force: bool = Fals
 def install_all(root: str = ".", force: bool = False) -> list[str]:
     """Install Tina4 context for ALL known AI tools (not just detected ones).
 
-    This is called by `tina4 init --ai` to pre-install context for every
+    This is called by `tina4python init --ai` to pre-install context for every
     supported AI assistant.
     """
     root = Path(root).resolve()
@@ -372,7 +372,7 @@ def status_report(root: str = ".") -> str:
         lines.append("No AI coding tools detected.")
 
     if missing:
-        lines.append("\nNot detected (install context with `tina4 ai --all`):")
+        lines.append("\nNot detected (install context with `tina4python ai --all`):")
         for t in missing:
             lines.append(f"  · {t['description']} ({t['name']})")
 

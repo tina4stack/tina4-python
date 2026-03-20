@@ -2,9 +2,9 @@
 """
 Generate realistic fake data for testing and development.
 
-    from tina4_python.seeder import Fake, seed_table
+    from tina4_python.seeder import FakeData, seed_table
 
-    fake = Fake()
+    fake = FakeData()
     fake.name()      # "Alice Johnson"
     fake.email()     # "alice.johnson@example.com"
 
@@ -46,11 +46,20 @@ _STREETS = [
 ]
 
 
-class Fake:
+class FakeData:
     """Fake data generator with deterministic seeding."""
 
     def __init__(self, seed: int = None):
         self._rng = random.Random(seed)
+
+    @classmethod
+    def seed(cls, seed: int) -> "FakeData":
+        """Static factory — create a seeded FakeData instance.
+
+            fake = FakeData.seed(42)
+            fake.name()  # deterministic
+        """
+        return cls(seed)
 
     def name(self) -> str:
         return f"{self._rng.choice(_FIRST_NAMES)} {self._rng.choice(_LAST_NAMES)}"
@@ -170,4 +179,4 @@ def seed_table(db, table: str, count: int = 10,
     return count
 
 
-__all__ = ["Fake", "seed_table"]
+__all__ = ["FakeData", "seed_table"]

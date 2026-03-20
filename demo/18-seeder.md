@@ -1,13 +1,13 @@
 # Seeder
 
-Tina4's `Fake` class generates realistic test data with deterministic seeding. The `seed_table()` function populates database tables in bulk. No external faker library needed -- it is built from scratch with zero dependencies.
+Tina4's `FakeData` class generates realistic test data with deterministic seeding. The `seed_table()` function populates database tables in bulk. No external faker library needed -- it is built from scratch with zero dependencies.
 
 ## Fake Data Generator
 
 ```python
-from tina4_python.seeder import Fake
+from tina4_python.seeder import FakeData
 
-fake = Fake()
+fake = FakeData()
 
 fake.name()        # "Alice Johnson"
 fake.first_name()  # "Charlie"
@@ -47,8 +47,8 @@ fake.sample(["a", "b", "c", "d", "e"], 3)     # Pick 3 unique
 Pass a seed for reproducible results -- great for tests.
 
 ```python
-fake1 = Fake(seed=42)
-fake2 = Fake(seed=42)
+fake1 = FakeData(seed=42)
+fake2 = FakeData(seed=42)
 
 print(fake1.name())  # "Chloe Thomas"
 print(fake2.name())  # "Chloe Thomas" — same seed, same output
@@ -60,10 +60,10 @@ print(fake2.name())  # "Chloe Thomas" — same seed, same output
 
 ```python
 from tina4_python.database import Database
-from tina4_python.seeder import Fake, seed_table
+from tina4_python.seeder import FakeData, seed_table
 
 db = Database("sqlite:///data/app.db")
-fake = Fake()
+fake = FakeData()
 
 # Seed 50 users
 count = seed_table(db, "users", 50, {
@@ -97,7 +97,7 @@ seed_table(db, "users", 20,
 ## Seeding Multiple Tables
 
 ```python
-fake = Fake(seed=42)
+fake = FakeData(seed=42)
 
 # Users
 seed_table(db, "users", 100, {
@@ -128,10 +128,10 @@ Place seeder scripts in `src/seeds/` and run them with the CLI.
 
 ```python
 # src/seeds/users.py
-from tina4_python.seeder import Fake, seed_table
+from tina4_python.seeder import FakeData, seed_table
 
 def run(db):
-    fake = Fake(seed=1)
+    fake = FakeData(seed=1)
     seed_table(db, "users", 100, {
         "name": fake.name,
         "email": fake.email,
@@ -145,7 +145,7 @@ tina4python seed
 
 ## Tips
 
-- Use deterministic seeds (`Fake(seed=42)`) in tests for reproducible data.
+- Use deterministic seeds (`FakeData(seed=42)`) in tests for reproducible data.
 - Use `lambda:` wrappers around generators that need arguments (e.g., `lambda: fake.integer(1, 100)`).
 - Seed development databases with realistic volumes to test pagination and performance.
 - Run seeders after migrations: `tina4python migrate && tina4python seed`.

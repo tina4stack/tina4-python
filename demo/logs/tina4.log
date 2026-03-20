@@ -1,0 +1,26 @@
+2026-03-20T14:09:17.959Z [DEBUG  ] Route registered: GET / (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/routing (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/routing/{id} (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/orm (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/templates (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/auth (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/queue (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/graphql (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/cache (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/events (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/i18n (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/scss (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/email (auth=public)
+2026-03-20T14:09:17.960Z [DEBUG  ] Route registered: GET /demo/faker (auth=public)
+2026-03-20T14:09:17.961Z [DEBUG  ] Route registered: GET /demo/api-client (auth=public)
+2026-03-20T14:09:17.961Z [DEBUG  ] Route registered: GET /demo/logging (auth=public)
+2026-03-20T14:09:17.961Z [DEBUG  ] Route registered: GET /demo/dotenv (auth=public)
+2026-03-20T14:09:17.961Z [DEBUG  ] Route registered: GET /demo/swagger (auth=public)
+2026-03-20T14:09:17.961Z [DEBUG  ] Route registered: GET /demo/health (auth=public)
+2026-03-20T14:09:17.961Z [DEBUG  ] Route registered: GET /demo/websocket (auth=public)
+2026-03-20T14:09:17.961Z [DEBUG  ] Route registered: GET /demo/wsdl (auth=public)
+2026-03-20T14:09:17.961Z [ERROR  ] Failed to load /Users/andrevanzuydam/IdeaProjects/tina4-python/demo/src/routes/demo_routes.py: 'module' object is not callable
+2026-03-20T14:09:17.961Z [INFO   ] Discovered 22 routes
+2026-03-20T14:09:17.961Z [INFO   ] Server started http://localhost:7148
+2026-03-20T16:15:52.129Z [INFO   ] [28a57bd2] Shutting down gracefully...
+2026-03-20T16:15:52.163Z [INFO   ] [28a57bd2] Server stopped.

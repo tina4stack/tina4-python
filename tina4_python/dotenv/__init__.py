@@ -3,12 +3,15 @@
 Parse .env files into os.environ. No third-party libraries.
 
 Usage:
-    from tina4_python.dotenv import load_env, get_env, require_env
+    from tina4_python.dotenv import load_env, get_env, require_env, has_env, all_env, reset_env
 
     load_env()                           # Load .env from current directory
     load_env(".env.staging")             # Load specific file
     db_url = get_env("DATABASE_URL")     # Get with None default
     secret = require_env("JWT_SECRET")   # Raises on missing
+    if has_env("DEBUG"):                 # Check if variable exists
+        ...
+    env_vars = all_env()                 # Get all env vars as dict
 """
 import os
 from pathlib import Path
@@ -78,6 +81,7 @@ def load_env(file_path: str = ".env", override: bool = False) -> dict:
         # Set in os.environ
         if override or key not in os.environ:
             os.environ[key] = value
+            _loaded_keys.append(key)
 
     return loaded
 
@@ -107,3 +111,40 @@ def require_env(*keys: str) -> dict:
         raise SystemExit(1)
 
     return {k: os.environ[k] for k in keys}
+
+
+def has_env(key: str) -> bool:
+    """Check if an environment variable exists.
+
+    Args:
+        key: The environment variable name to check
+
+    Returns:
+        True if the variable is set in os.environ, False otherwise
+    """
+    return key in os.environ
+
+
+def all_env() -> dict[str, str]:
+    """Return all environment variables as a dict.
+
+    Returns:
+        A copy of all current environment variables
+    """
+    return dict(os.environ)
+
+
+# Track keys loaded by load_env so reset_env can remove them
+_loaded_keys: list[str] = []
+
+
+def reset_env() -> None:
+    """Remove all environment variables that were loaded by load_env().
+
+    Useful for testing. Only removes keys that were set by load_env(),
+    not pre-existing system environment variables.
+    """
+    global _loaded_keys
+    for key in _loaded_keys:
+        os.environ.pop(key, None)
+    _loaded_keys = []

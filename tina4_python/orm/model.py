@@ -287,6 +287,25 @@ class ORM(metaclass=ORMMeta):
         result = db.fetch(sql, params, limit=limit, skip=skip)
         return [cls(row) for row in result.records], result.count
 
+    @classmethod
+    def count(cls, conditions: str = None, params: list = None) -> int:
+        """Count records matching conditions (respects soft delete)."""
+        db = cls._get_db()
+        table = cls._get_table()
+
+        where_parts = []
+        if cls.soft_delete:
+            where_parts.append("deleted_at IS NULL")
+        if conditions:
+            where_parts.append(f"({conditions})")
+
+        sql = f"SELECT COUNT(*) as cnt FROM {table}"
+        if where_parts:
+            sql += f" WHERE {' AND '.join(where_parts)}"
+
+        row = db.fetch_one(sql, params or [])
+        return row["cnt"] if row else 0
+
     # ── Cached Queries ────────────────────────────────────────
 
     @classmethod
@@ -375,6 +394,18 @@ class ORM(metaclass=ORMMeta):
     def to_dict(self) -> dict:
         """Convert to dict (field values only)."""
         return {name: getattr(self, name) for name in self._fields}
+
+    def to_object(self) -> dict:
+        """Convert to an object/dict (alias for to_dict)."""
+        return self.to_dict()
+
+    def to_array(self) -> list:
+        """Convert to a list of values."""
+        return list(self.to_dict().values())
+
+    def to_list(self) -> list:
+        """Convert to a list of values (alias for to_array)."""
+        return self.to_array()
 
     def to_json(self) -> str:
         """Convert to JSON string."""

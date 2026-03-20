@@ -2,15 +2,15 @@
 """
 CLI commands for development workflow.
 
-    tina4 init              # Scaffold a new project
-    tina4 serve             # Start dev server
-    tina4 migrate           # Run pending migrations
-    tina4 migrate:create    # Create a migration file
-    tina4 migrate:rollback  # Rollback last batch
-    tina4 seed              # Run seeders
-    tina4 routes            # List registered routes
-    tina4 test              # Run tests
-    tina4 ai                # Detect AI tools and install context
+    tina4python init              # Scaffold a new project
+    tina4python serve             # Start dev server
+    tina4python migrate           # Run pending migrations
+    tina4python migrate:create    # Create a migration file
+    tina4python migrate:rollback  # Rollback last batch
+    tina4python seed              # Run seeders
+    tina4python routes            # List registered routes
+    tina4python test              # Run tests
+    tina4python ai                # Detect AI tools and install context
 """
 import os
 import sys
@@ -54,7 +54,7 @@ def _help(args=None):
     print("""
 Tina4 Python — CLI
 
-Usage: tina4 <command> [options]
+Usage: tina4python <command> [options]
 
 Commands:
   init [dir]            Scaffold a new project
@@ -152,8 +152,8 @@ def _init(args):
                 print(f"  + {f}")
 
     print(f"\nProject scaffolded at {target.resolve()}")
-    print("  Run: tina4 serve")
-    print("  Run: tina4 ai        (detect & install AI tool context)")
+    print("  Run: tina4python serve")
+    print("  Run: tina4python ai        (detect & install AI tool context)")
 
 
 def _serve(args):
@@ -187,7 +187,7 @@ def _migrate(args):
 def _migrate_create(args):
     """Create a new migration file."""
     if not args:
-        print("Usage: tina4 migrate:create <description>")
+        print("Usage: tina4python migrate:create <description>")
         sys.exit(1)
 
     from tina4_python.migration import create_migration

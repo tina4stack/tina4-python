@@ -1,22 +1,72 @@
 # Tina4 Python — Feature Demos
 
 Complete working examples for every feature in the Tina4 Python framework.
-Each file below covers one feature category with copy-paste-ready code snippets.
 
-## Getting Started
+## Running the Interactive Demo
+
+The `demo/` directory contains a runnable application that demonstrates every feature live.
 
 ```bash
-pip install tina4-python
-tina4python init my-project
-cd my-project
-tina4python serve
+cd tina4-python/demo
+pip install -e ..     # install tina4 from parent directory
+python app.py         # start the server on port 7145
 ```
 
-Visit [https://tina4.com](https://tina4.com) for full documentation.
+Then visit [http://localhost:7145](http://localhost:7145) to see all features demonstrated with live JSON output.
+
+### What the demo covers
+
+| Route | Feature | Description |
+|-------|---------|-------------|
+| `/` | Landing page | HTML index with links to all demos |
+| `/demo/routing` | Routing | Route decorators, query params, headers |
+| `/demo/routing/{id}` | Path params | Dynamic URL parameters |
+| `/demo/orm` | ORM | In-memory SQLite: create, insert, query, find |
+| `/demo/templates` | Templates (Frond) | Render .html template with variables, loops, conditions |
+| `/demo/auth` | Auth (JWT) | Create/validate JWT tokens, password hashing |
+| `/demo/queue` | Queue | DB-backed job queue: push, pop, complete |
+| `/demo/graphql` | GraphQL | Auto-generated schema from ORM models |
+| `/demo/cache` | Cache | TTL, tags, LRU eviction, remember pattern |
+| `/demo/events` | Events | Observer pattern: on, emit, once |
+| `/demo/i18n` | Localization | JSON translations in English and French |
+| `/demo/scss` | SCSS Compiler | Compile SCSS to CSS with variables, nesting, functions |
+| `/demo/email` | Email | Messenger configuration (no actual send) |
+| `/demo/faker` | Faker | Deterministic fake data generation |
+| `/demo/api-client` | API Client | Self-referencing HTTP call to /health |
+| `/demo/logging` | Logging | Structured log output (dev and production formats) |
+| `/demo/dotenv` | DotEnv | Loaded environment variables |
+| `/demo/swagger` | Swagger | Link to /swagger OpenAPI docs |
+| `/demo/health` | Health | Link to /health endpoint |
+| `/demo/websocket` | WebSocket | WebSocket server configuration info |
+| `/demo/wsdl` | WSDL / SOAP | WSDL service info |
+| `/demo/middleware` | Middleware | Before/after middleware with timing |
+| `/demo/validation` | Validation | ORM field validation with constraints |
+| `/demo/shortcomings` | Shortcomings | Honest JSON about what is missing/incomplete |
+
+### Demo project structure
+
+```
+demo/
+  app.py                    # Entry point
+  .env                      # Environment configuration
+  src/
+    routes/
+      demo_routes.py        # All demo route handlers
+    templates/
+      demo.html             # Frond template for /demo/templates
+    locales/
+      en.json               # English translations
+      fr.json               # French translations
+  data/                     # Created at runtime (SQLite DB)
+```
 
 ---
 
-## Table of Contents
+## Feature Documentation
+
+Each file below covers one feature category with copy-paste-ready code snippets.
+
+Visit [https://tina4.com](https://tina4.com) for full documentation.
 
 | # | Feature | File | Description |
 |---|---------|------|-------------|

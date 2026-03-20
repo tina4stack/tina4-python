@@ -136,6 +136,89 @@ def _render_error_page(status_code: int, path: str, request_id: str, error_messa
     return None
 
 
+def _has_index_template() -> bool:
+    """Check if the user has an index template in src/templates/."""
+    template_dir = Path("src/templates")
+    for name in ("index.html", "index.twig", "index.php", "index.erb"):
+        if (template_dir / name).is_file():
+            return True
+    return False
+
+
+def _render_landing_page() -> str:
+    """Render the built-in Tina4 welcome page shown when no / route exists."""
+    routes = Router.all()
+    route_rows = ""
+    for r in routes:
+        flags = []
+        if r.get("cached"):
+            flags.append('<span style="background:#e3f2fd;color:#1565c0;padding:1px 6px;border-radius:3px;font-size:11px">CACHE</span>')
+        if r.get("auth"):
+            flags.append('<span style="background:#fce4ec;color:#c62828;padding:1px 6px;border-radius:3px;font-size:11px">AUTH</span>')
+        flag_str = " ".join(flags)
+        path = r.get("path", "")
+        method = r.get("method", "")
+        route_rows += f'<tr><td><code>{method}</code></td><td><a href="{path}">{path}</a></td><td>{flag_str}</td></tr>'
+
+    is_dev = os.environ.get("TINA4_DEBUG_LEVEL", "").upper() in ("DEBUG", "ALL")
+    mode = '<span style="color:#4caf50">Development</span>' if is_dev else '<span style="color:#ff9800">Production</span>'
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Tina4 Python v{__version__}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }}
+        .hero {{ background: linear-gradient(135deg, #1565c0, #1976d2); color: white; padding: 60px 20px; text-align: center; }}
+        .hero h1 {{ font-size: 2.5em; margin-bottom: 10px; }}
+        .hero p {{ font-size: 1.2em; opacity: 0.9; }}
+        .container {{ max-width: 800px; margin: 0 auto; padding: 30px 20px; }}
+        .card {{ background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }}
+        .card h2 {{ color: #1565c0; margin-bottom: 12px; font-size: 1.3em; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        th, td {{ text-align: left; padding: 8px 12px; border-bottom: 1px solid #eee; }}
+        th {{ color: #666; font-size: 0.85em; text-transform: uppercase; }}
+        code {{ background: #e3f2fd; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #1565c0; }}
+        a {{ color: #1565c0; text-decoration: none; }}
+        a:hover {{ text-decoration: underline; }}
+        .get-started {{ background: #e3f2fd; border-left: 4px solid #1565c0; padding: 16px; border-radius: 0 8px 8px 0; }}
+        .get-started code {{ display: block; margin-top: 8px; background: #333; color: #4caf50; padding: 8px 12px; border-radius: 4px; }}
+    </style>
+</head>
+<body>
+    <div class="hero">
+        <h1>Tina4 Python</h1>
+        <p>This is not a 4ramework &mdash; v{__version__} &mdash; {mode}</p>
+    </div>
+    <div class="container">
+        <div class="card">
+            <h2>Registered Routes</h2>
+            <table>
+                <thead><tr><th>Method</th><th>Path</th><th>Flags</th></tr></thead>
+                <tbody>{route_rows}</tbody>
+            </table>
+        </div>
+        <div class="card get-started">
+            <h2>Get Started</h2>
+            <p>Create your first route file:</p>
+            <code>src/routes/hello.py</code>
+            <p style="margin-top: 12px">Example route:</p>
+            <code>@get("/hello")<br>async def hello(request, response):<br>&nbsp;&nbsp;&nbsp;&nbsp;return response({{"hello": "world"}})</code>
+        </div>
+        <div class="card">
+            <h2>Quick Links</h2>
+            <p><a href="/health">/health</a> &mdash; Health check endpoint</p>
+            <p style="margin-top: 8px"><a href="/swagger">/swagger</a> &mdash; API documentation</p>
+            <p style="margin-top: 8px"><a href="https://tina4.com" target="_blank">tina4.com</a> &mdash; Full documentation</p>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
     if scope["type"] == "lifespan":
@@ -267,6 +350,9 @@ async def app(scope: dict, receive, send):
         static = _try_static(request.path)
         if static:
             response = static
+        elif request.path == "/" and not _has_index_template():
+            # No "/" route registered and no index template — show default landing page
+            response.html(_render_landing_page())
         else:
             html = _render_error_page(404, request.path, request_id)
             if html:

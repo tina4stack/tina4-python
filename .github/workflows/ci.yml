@@ -31,11 +31,11 @@ jobs:
         run: echo "API_KEY=38168ba8aad6c91ba13d959c3f91c7a7" > .env
 
       - name: Initialize Tina4
-        run: uv run tina4 init .
+        run: uv run tina4python init .
 
       - name: Start Tina4 server
         run: |
-          uv run tina4 start &
+          uv run tina4python start &
           sleep 10  # Wait for server to start
 
       - name: Run tests
@@ -43,4 +43,4 @@ jobs:
 
       - name: Stop server
         if: always()
-        run: pkill -f "uv run tina4 start" || true
+        run: pkill -f "uv run tina4python start" || true

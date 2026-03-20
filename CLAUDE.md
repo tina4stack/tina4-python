@@ -11,7 +11,7 @@ Lightweight Python web framework. See https://tina4.com for full documentation.
 - Run single test: `.venv/bin/python -m pytest tests/test_file.py::TestClass::test_method`
 - Coverage: `.venv/bin/python -m pytest tests/ --cov=tina4_python`
 - Start server: `python app.py`
-- CLI: `tina4` (entry point defined in pyproject.toml)
+- CLI: `tina4python` (entry point defined in pyproject.toml)
 
 ## Code Principles
 
@@ -64,7 +64,15 @@ tina4_python/          # Core framework package
   Migration.py, Template.py, Swagger.py, Webserver.py,
   Queue.py, Session.py, GraphQL.py, WSDL.py, CRUD.py,
   Websocket.py, Localization.py, MiddleWare.py, cli.py,
-  DevReload.py, Debug.py, HtmlElement.py, Api.py ...
+  DevReload.py, Debug.py, HtmlElement.py, Api.py,
+  Testing.py ...
+  core/                # Core subsystems
+    events.py          # Event system (on, emit, once, off)
+  ai/                  # AI coding assistant detection & context
+  cache/               # In-memory response cache middleware
+  container/           # Lightweight dependency injection container
+  debug/               # Debug utilities
+    error_overlay.py   # Rich HTML error overlay for dev mode
   templates/           # Built-in framework templates (Twig)
   public/              # Built-in static assets
   scss/                # Built-in SCSS
@@ -195,6 +203,204 @@ consumer.run_forever()
 migrate(dba: Database, delimiter=";", migration_folder="migrations")
 ```
 
+### Events — Decoupled communication
+
+```python
+from tina4_python.core.events import on, emit, once, off, emit_async
+
+# Register a listener (decorator)
+@on("user.created")
+def send_welcome_email(user):
+    print(f"Welcome {user['name']}!")
+
+# Register with priority (higher = runs first)
+@on("user.created", priority=10)
+def audit_signup(user):
+    log_event("signup", user)
+
+# Fire an event synchronously
+results = emit("user.created", {"name": "Alice", "email": "alice@example.com"})
+
+# One-shot listener (auto-removes after first fire)
+@once("app.ready")
+def on_ready():
+    print("App started!")
+
+# Async listeners
+@on("order.placed")
+async def process_order(order):
+    await send_notification(order)
+
+results = await emit_async("order.placed", order_data)
+
+# Remove listeners
+off("user.created", send_welcome_email)  # remove specific
+off("user.created")                       # remove all for event
+```
+
+### AI Integration — AI assistant context scaffolding
+
+Detect AI coding tools in a project and install framework-aware context files.
+
+```python
+from tina4_python.ai import detect_ai, install_context, status_report
+
+# Detect which AI tools are present
+tools = detect_ai()
+# [{"name": "claude-code", "description": "Claude Code (Anthropic CLI)", "installed": True}, ...]
+
+# Install context files for all detected tools
+created_files = install_context()       # auto-detect
+created_files = install_context(tools=["claude-code", "cursor"])  # specific tools
+created_files = install_context(force=True)  # overwrite existing
+
+# Human-readable detection report
+print(status_report())
+```
+
+Supports: Claude Code, Cursor, GitHub Copilot, Windsurf, Aider, Cline, OpenAI Codex CLI.
+
+### Response Cache — In-memory GET response caching
+
+LRU cache middleware for GET responses with configurable TTL.
+
+```python
+from tina4_python.cache import ResponseCache, cache_stats, clear_cache
+
+# As middleware on a route
+@middleware(ResponseCache)
+@get("/api/products")
+async def products(request, response):
+    return response(expensive_query())
+
+# Per-route TTL override via @cached decorator
+@cached(True, max_age=120)
+@get("/api/slow")
+async def slow(request, response):
+    return response(very_slow_query())
+
+# Check cache stats
+stats = cache_stats()  # {"hits": 42, "misses": 7, "size": 15}
+
+# Flush all cached entries
+clear_cache()
+```
+
+Environment variables:
+- `TINA4_CACHE_TTL` — default TTL in seconds (default: 60)
+- `TINA4_CACHE_MAX_ENTRIES` — max cached entries (default: 1000)
+
+### DI Container — Lightweight dependency injection
+
+Thread-safe container with transient and singleton registrations.
+
+```python
+from tina4_python.container import Container
+
+container = Container()
+
+# Transient — new instance on every get()
+container.register("mailer", lambda: MailService())
+
+# Singleton — created once, memoised
+container.singleton("db", lambda: Database("sqlite3:app.db"))
+
+# Resolve
+mailer = container.get("mailer")   # new instance each call
+db     = container.get("db")       # same instance every call
+
+# Check registration
+container.has("db")       # True
+container.has("missing")  # False
+
+# Clear all registrations
+container.reset()
+```
+
+### Error Overlay — Rich debug error pages
+
+Renders a syntax-highlighted HTML error page with stack trace, source context, request details, and environment info when an unhandled exception occurs.
+
+```python
+from tina4_python.debug.error_overlay import render_error_overlay, render_production_error, is_debug_mode
+
+try:
+    handler(request, response)
+except Exception as exc:
+    if is_debug_mode():
+        html = render_error_overlay(exc, request)
+    else:
+        html = render_production_error(500, "Internal Server Error")
+```
+
+- Activated when `TINA4_DEBUG_LEVEL` is `ALL` or `DEBUG`
+- In production, `render_production_error()` returns a safe, generic error page
+- Shows: exception type/message, full stack trace with source code, request details, environment info
+
+### HtmlElement — Programmatic HTML builder
+
+Build HTML without string concatenation. Supports all HTML tags, void tags, builder pattern, and auto-escaping.
+
+```python
+from tina4_python.HtmlElement import HTMLElement, add_html_helpers
+
+# Direct construction
+el = HTMLElement("div", {"class": "card"}, ["Hello"])
+str(el)  # <div class="card">Hello</div>
+
+# Builder pattern via __call__
+page = HTMLElement("div")(
+    HTMLElement("h1")("Title"),
+    HTMLElement("p")("Content"),
+)
+
+# Dict arguments merge as attributes
+el = HTMLElement("a")({"href": "/home", "class": "link"}, "Home")
+
+# Void tags render correctly (no closing tag)
+HTMLElement("br")       # <br>
+HTMLElement("img", {"src": "logo.png"})  # <img src="logo.png">
+
+# Helper functions — injects _div(), _p(), _a(), _span(), etc. into namespace
+add_html_helpers(globals())
+html = _div({"class": "card"},
+    _h1("Title"),
+    _p({"class": "text-muted"}, "Description"),
+    _a({"href": "/more"}, "Read more"),
+)
+```
+
+### Inline Testing — Decorator-based test assertions
+
+Attach test assertions directly to functions. Tests run via CLI or programmatically.
+
+```python
+from tina4_python.Testing import tests, assert_equal, assert_raises, assert_true, assert_false
+
+@tests(
+    assert_equal((5, 3), 8),
+    assert_equal((0, 0), 0),
+    assert_raises(ValueError, (None,)),
+    assert_true((1, 1)),
+)
+def add(a, b=None):
+    if b is None:
+        raise ValueError("b required")
+    return a + b
+
+# Run all decorated tests
+from tina4_python.Testing import run_all_tests
+results = run_all_tests(quiet=False, failfast=False)
+# {"passed": 3, "failed": 0, "errors": 0, "details": [...]}
+```
+
+Available assertions: `assert_equal(args, expected)`, `assert_raises(exception_class, args)`, `assert_true(args)`, `assert_false(args)`.
+
+Run from CLI:
+```bash
+uv run tina4python test   # Discovers @tests in src/**/*.py
+```
+
 ## Key Architecture
 
 - Routes auto-discovered from `src/routes/`
@@ -206,7 +412,14 @@ migrate(dba: Database, delimiter=";", migration_folder="migrations")
 - Queue support via `litequeue` (+ RabbitMQ, Kafka, MongoDB backends)
 - WebSocket support via `simple-websocket`
 - Hot reload via `jurigged` + `watchdog`
-- Version: 0.2.202
+- Event system via `tina4_python.core.events` (observer pattern, async support)
+- AI context scaffolding via `tina4_python.ai` (Claude, Cursor, Copilot, etc.)
+- Response caching via `tina4_python.cache` (LRU, TTL, middleware)
+- DI container via `tina4_python.container` (transient + singleton)
+- Debug error overlay via `tina4_python.debug.error_overlay`
+- Inline testing via `tina4_python.Testing` (decorator-based assertions)
+- HTML builder via `tina4_python.HtmlElement` (programmatic HTML generation)
+- Version: 3.0.0
 
 ## Links
 

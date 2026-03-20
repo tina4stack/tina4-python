@@ -190,8 +190,8 @@ msgstr "Begin Tina4-bediener op http://localhost:{port}"
 msgid "Error: Migration description cannot be empty"
 msgstr "Fout: Migrasiebeskrywing kan nie leeg wees nie"
 
-msgid "Example: tina4 migrate:create create users table"
-msgstr "Voorbeeld: tina4 migrate:create create users table"
+msgid "Example: tina4python migrate:create create users table"
+msgstr "Voorbeeld: tina4python migrate:create create users table"
 
 msgid "Migration created: {filepath}"
 msgstr "Migrasie geskep: {filepath}"

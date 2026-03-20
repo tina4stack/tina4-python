@@ -1,0 +1,17 @@
+{
+  "id": "fake_1774019469534_7020",
+  "type": "inbox",
+  "from": "Noah Moore <ivy.miller@demo.net>",
+  "to": [
+    "dev@localhost"
+  ],
+  "cc": [],
+  "bcc": [],
+  "reply_to": "ivy.miller@demo.net",
+  "subject": "Invoice Jumps elit quis brown",
+  "body": "<p>Hi,</p><p>Amet magna jumps quis eiusmod brown. Nisi dog commodo amet labore quis.</p><p>Ut dolor elit aliquip lazy magna the commodo dog quis incididunt over.</p><p>Best regards,<br>Noah Moore</p>",
+  "html": true,
+  "attachments": [],
+  "date": "2022-08-29T05:30:47Z",
+  "read": false
+}

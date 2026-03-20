@@ -165,7 +165,7 @@ def bench_startup():
         from tina4_python.swagger import Swagger
         from tina4_python.queue import Queue
         from tina4_python.api import Api
-        from tina4_python.seeder import Fake
+        from tina4_python.seeder import FakeData
         from tina4_python.i18n import I18n
         from tina4_python.graphql import GraphQL
         from tina4_python.wsdl import WSDL

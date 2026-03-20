@@ -190,8 +190,8 @@ msgstr "Tina4サーバーを http://localhost:{port} で起動中"
 msgid "Error: Migration description cannot be empty"
 msgstr "エラー：マイグレーションの説明は空にできません"
 
-msgid "Example: tina4 migrate:create create users table"
-msgstr "例：tina4 migrate:create create users table"
+msgid "Example: tina4python migrate:create create users table"
+msgstr "例：tina4python migrate:create create users table"
 
 msgid "Migration created: {filepath}"
 msgstr "マイグレーション作成：{filepath}"

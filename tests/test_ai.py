@@ -154,4 +154,4 @@ class TestStatusReport:
 
     def test_report_shows_missing(self, tmp_path):
         report = status_report(str(tmp_path))
-        assert "tina4 ai --all" in report
+        assert "tina4python ai --all" in report

@@ -4,12 +4,20 @@ Zero-dependency twig-like template engine.
 Supports: variables, filters, if/elseif/else/endif, for/else/endfor,
 extends/block, include, macro, set, comments, whitespace control, tests.
 """
+import os
 import re
 import html
 import hashlib
 import json
 from pathlib import Path
 from datetime import datetime
+
+from tina4_python.auth import Auth as _FrondAuth
+
+
+class SafeString(str):
+    """Marker subclass of str that bypasses auto-escaping in Frond."""
+    pass
 
 
 # ── Lexer ───────────────────────────────────────────────────────
@@ -296,9 +304,42 @@ def _eval_test(value_expr: str, test_name: str, args: str, context: dict) -> boo
 
 # ── Filters ─────────────────────────────────────────────────────
 
+def _split_on_pipe(expr: str) -> list[str]:
+    """Split expression on | respecting quotes and parentheses."""
+    parts = []
+    current = ""
+    in_quote = None
+    depth = 0
+
+    for ch in expr:
+        if in_quote:
+            current += ch
+            if ch == in_quote:
+                in_quote = None
+        elif ch in ('"', "'"):
+            in_quote = ch
+            current += ch
+        elif ch == "(":
+            depth += 1
+            current += ch
+        elif ch == ")":
+            depth -= 1
+            current += ch
+        elif ch == "|" and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+
+    if current:
+        parts.append(current)
+
+    return parts
+
+
 def _parse_filter_chain(expr: str) -> tuple[str, list[tuple[str, list[str]]]]:
     """Parse 'variable | filter1 | filter2(arg)' into (variable, [(name, args)])."""
-    parts = expr.split("|")
+    parts = _split_on_pipe(expr)
     variable = parts[0].strip()
     filters = []
 
@@ -398,6 +439,7 @@ _BUILTIN_FILTERS = {
     "url_encode": lambda v, *a: __import__("urllib.parse", fromlist=["quote"]).quote(str(v)),
     "format": lambda v, *a: str(v) % tuple(a) if a else str(v),
     "dump": lambda v, *a: repr(v),
+    "form_token": lambda v, *a: _form_token(str(v) if v else ""),
 }
 
 
@@ -430,6 +472,38 @@ def _wordwrap(text: str, width: int) -> str:
     return "\n".join(lines)
 
 
+# ── Form Token ─────────────────────────────────────────────────
+
+
+def _form_token(descriptor: str = "") -> str:
+    """Generate a JWT form token and return a hidden input element.
+
+    Args:
+        descriptor: Optional string to enrich the token payload.
+            - Empty or omitted: payload is ``{"type": "form"}``
+            - ``"admin_panel"``: payload is ``{"type": "form", "context": "admin_panel"}``
+            - ``"checkout|order_123"``: payload is ``{"type": "form", "context": "checkout", "ref": "order_123"}``
+
+    Returns:
+        ``<input type="hidden" name="formToken" value="TOKEN">``
+    """
+    payload = {"type": "form"}
+    if descriptor:
+        descriptor = str(descriptor)
+        if "|" in descriptor:
+            parts = descriptor.split("|", 1)
+            payload["context"] = parts[0]
+            payload["ref"] = parts[1]
+        else:
+            payload["context"] = descriptor
+
+    secret = os.environ.get("SECRET", "tina4-default-secret")
+    ttl = int(os.environ.get("TINA4_TOKEN_LIMIT", "30"))
+    auth = _FrondAuth(secret=secret, token_expiry=ttl)
+    token = auth.create_token(payload)
+    return SafeString(f'<input type="hidden" name="formToken" value="{token}">')
+
+
 # ── Frond Engine ────────────────────────────────────────────────
 
 
@@ -449,6 +523,9 @@ class Frond:
         self._allowed_vars: set[str] | None = None
         # Fragment cache (key → (html, expires_at))
         self._fragment_cache: dict[str, tuple[str, float]] = {}
+
+        # Built-in global functions
+        self._globals["form_token"] = _form_token
 
     def sandbox(self, allowed_filters: list[str] = None,
                 allowed_tags: list[str] = None,
@@ -662,8 +739,8 @@ class Frond:
             if fn:
                 value = fn(value, *args)
 
-        # Auto-escape HTML unless marked safe
-        if not is_safe and isinstance(value, str):
+        # Auto-escape HTML unless marked safe or SafeString
+        if not is_safe and isinstance(value, str) and not isinstance(value, SafeString):
             value = html.escape(value)
 
         return value

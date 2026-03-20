@@ -31,15 +31,15 @@
 
 ```bash
 pip install tina4-python
-tina4 init my-app
+tina4python init my-app
 cd my-app
-tina4 serve
+tina4python serve
 # -> http://localhost:7145
 ```
 
 That's it. Zero configuration, zero classes, zero boilerplate.
 
-> **Prefer uv?** Replace `pip install tina4-python` with `uv add tina4-python`, then use `uv run tina4 serve`.
+> **Prefer uv?** Replace `pip install tina4-python` with `uv add tina4-python`, then use `uv run tina4python serve`.
 
 ---
 
@@ -103,7 +103,7 @@ pip install tina4-python[dev-reload]  # Hot-patching via jurigged
 ### 1. Create a project
 
 ```bash
-tina4 init my-app
+tina4python init my-app
 cd my-app
 ```
 
@@ -154,7 +154,7 @@ DATABASE_URL=sqlite:///data/app.db
 Create and run a migration:
 
 ```bash
-tina4 migrate:create "create users table"
+tina4python migrate:create "create users table"
 ```
 
 Edit the generated SQL:
@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS users (
 ```
 
 ```bash
-tina4 migrate
+tina4python migrate
 ```
 
 ### 4. Create an ORM model
@@ -265,9 +265,9 @@ async def home(request, response):
 ### 7. Seed, test, deploy
 
 ```bash
-tina4 seed                          # Run seeders from src/seeds/
-tina4 test                          # Run test suite
-tina4 build                         # Build distributable
+tina4python seed                          # Run seeders from src/seeds/
+tina4python test                          # Run test suite
+tina4python build                         # Build distributable
 ```
 
 For the complete step-by-step guide, visit **[tina4.com](https://tina4.com)**.
@@ -504,9 +504,9 @@ result = api.send_request("/users/42")
 ### Data Seeder
 
 ```python
-from tina4_python.seeder import Fake, seed_orm
+from tina4_python.seeder import FakeData, seed_orm
 
-fake = Fake()
+fake = FakeData()
 fake.name()      # "Alice Johnson"
 fake.email()     # "alice.johnson@example.com"
 
@@ -554,16 +554,16 @@ Set `TINA4_DEBUG_LEVEL=DEBUG` in `.env` to enable:
 ## CLI Reference
 
 ```bash
-tina4 init [dir]             # Scaffold a new project
-tina4 serve [port]           # Start dev server (default: 7145)
-tina4 migrate                # Run pending migrations
-tina4 migrate:create <desc>  # Create a migration file
-tina4 migrate:rollback       # Rollback last batch
-tina4 seed                   # Run seeders from src/seeds/
-tina4 routes                 # List all registered routes
-tina4 test                   # Run test suite
-tina4 build                  # Build distributable package
-tina4 ai [--all]             # Detect AI tools and install context
+tina4python init [dir]             # Scaffold a new project
+tina4python serve [port]           # Start dev server (default: 7145)
+tina4python migrate                # Run pending migrations
+tina4python migrate:create <desc>  # Create a migration file
+tina4python migrate:rollback       # Rollback last batch
+tina4python seed                   # Run seeders from src/seeds/
+tina4python routes                 # List all registered routes
+tina4python test                   # Run test suite
+tina4python build                  # Build distributable package
+tina4python ai [--all]             # Detect AI tools and install context
 ```
 
 ## Environment
@@ -580,8 +580,8 @@ SWAGGER_TITLE=My API
 ## AI Tool Integration
 
 ```bash
-tina4 ai              # Detect and install context
-tina4 ai --all        # Install for ALL supported tools
+tina4python ai              # Detect and install context
+tina4python ai --all        # Install for ALL supported tools
 ```
 
 Supported: Claude Code, Cursor, GitHub Copilot, Windsurf, Aider, Cline, OpenAI Codex CLI. Generates framework-aware context so AI assistants understand Tina4's conventions.

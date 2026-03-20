@@ -160,31 +160,48 @@ class Log:
     def _should_log(cls, level: str) -> bool:
         return cls.LEVELS.get(level, 0) >= cls.LEVELS.get(cls._level, 0)
 
+    # ANSI color codes for dev mode (matching PHP reference)
+    COLORS = {
+        "debug": "\033[36m",     # Cyan
+        "info": "\033[32m",      # Green
+        "warning": "\033[33m",   # Yellow
+        "error": "\033[31m",     # Red
+    }
+    RESET = "\033[0m"
+
+    @classmethod
+    def _timestamp(cls) -> str:
+        """ISO 8601 UTC timestamp with milliseconds: YYYY-MM-DDTHH:MM:SS.mmmZ"""
+        now = datetime.now(timezone.utc)
+        return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
+
     @classmethod
     def _format(cls, level: str, message: str, **kwargs) -> str:
-        now = datetime.now(timezone.utc)
+        timestamp = cls._timestamp()
         request_id = get_request_id()
 
         if cls._is_production:
             # JSON format for production
             entry = {
-                "timestamp": now.isoformat(),
-                "level": level,
+                "timestamp": timestamp,
+                "level": level.upper(),
                 "message": message,
             }
             if request_id:
                 entry["request_id"] = request_id
-            entry.update(kwargs)
+            if kwargs:
+                entry["context"] = {k: v for k, v in kwargs.items()}
             return json.dumps(entry, default=str)
         else:
             # Human-readable for development
-            time_str = now.strftime("%H:%M:%S")
             level_str = level.upper().ljust(7)
-            extra = ""
+            parts = [timestamp, f"[{level_str}]"]
+            if request_id:
+                parts.append(f"[{request_id}]")
+            parts.append(message)
             if kwargs:
-                extra = " " + " ".join(f"{k}={v}" for k, v in kwargs.items())
-            rid = f" [{request_id}]" if request_id else ""
-            return f"[{time_str}] {level_str} {message}{extra}{rid}"
+                parts.append(json.dumps(kwargs, default=str))
+            return " ".join(parts)
 
     @classmethod
     def _log(cls, level: str, message: str, **kwargs):
@@ -193,9 +210,10 @@ class Log:
 
         line = cls._format(level, message, **kwargs)
 
-        # Always print to stdout in dev
+        # Always print to stdout in dev with ANSI colors
         if not cls._is_production:
-            print(line)
+            color = cls.COLORS.get(level, "")
+            print(f"{color}{line}{cls.RESET}")
 
         # Write to file
         if cls._writer:

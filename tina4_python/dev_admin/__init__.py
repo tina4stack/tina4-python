@@ -613,7 +613,7 @@ async def _api_seed_table(request, response):
     """Seed fake data into a database table from the admin UI."""
     try:
         from tina4_python.database import Database
-        from tina4_python.seeder import Fake
+        from tina4_python.seeder import FakeData
 
         body = request.body if hasattr(request, "body") and request.body else {}
         table = body.get("table", "")
@@ -633,7 +633,7 @@ async def _api_seed_table(request, response):
             db.close()
             return response({"error": f"Table '{table}' not found or has no columns"}, 404)
 
-        fake = Fake(seed=42)
+        fake = FakeData(seed=42)
         inserted = 0
 
         for _ in range(count):
@@ -960,11 +960,11 @@ def _tina4_robot_fallback(message: str) -> str:
     elif "auth" in msg or "jwt" in msg:
         return "Set SECRET in .env. POST/PUT/DELETE require Bearer token by default. Use @noauth() to make public, @secured() to protect GET routes."
     elif "test" in msg:
-        return "Write tests in tests/ using pytest. Run with 'tina4 test' or 'pytest tests/ -v'."
+        return "Write tests in tests/ using pytest. Run with 'tina4python test' or 'pytest tests/ -v'."
     elif "migrate" in msg or "migration" in msg:
-        return "Create: 'tina4 migrate:create \"description\"'. Run: 'tina4 migrate'. Files go in migrations/ folder."
+        return "Create: 'tina4python migrate:create \"description\"'. Run: 'tina4python migrate'. Files go in migrations/ folder."
     elif "seed" in msg:
-        return "Create seed files in src/seeds/. Use Fake() for data generation, seed_table() for bulk insert. Run with 'tina4 seed'."
+        return "Create seed files in src/seeds/. Use FakeData() for data generation, seed_table() for bulk insert. Run with 'tina4python seed'."
     else:
         return "I'm Tina4! Ask me about routes, ORM, database, queues, templates, auth, tests, migrations, or seeding. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env for AI-powered answers."
 

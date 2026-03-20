@@ -193,7 +193,7 @@ db.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT)
 
 **Good — create a migration:**
 ```bash
-uv run tina4 migrate:create "create users table"
+uv run tina4python migrate:create "create users table"
 ```
 ```sql
 -- migrations/000001_create_users_table.sql
@@ -203,7 +203,7 @@ CREATE TABLE users (
 );
 ```
 ```bash
-uv run tina4 migrate
+uv run tina4python migrate
 ```
 
 Rules:
@@ -211,7 +211,7 @@ Rules:
 - Never modify an existing migration that has already been run — create a new one
 - Use `ORM.create_table()` only for rapid prototyping; production schemas must use migrations
 - When adding ORM models, always create a corresponding migration for the table
-- Run `uv run tina4 migrate` after creating migration files to apply them
+- Run `uv run tina4python migrate` after creating migration files to apply them
 
 ### 10. Use Tina4 Built-in Features — Never Reinvent
 
@@ -232,13 +232,18 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 | Swagger/OpenAPI docs | `@description()`, `@tags()`, `@example()` decorators |
 | GraphQL API | `GraphQL` from `tina4_python.GraphQL` |
 | SOAP/WSDL services | `WSDL` class from `tina4_python.WSDL` |
-| Database migrations | `tina4 migrate:create` + `tina4 migrate` |
+| Database migrations | `tina4python migrate:create` + `tina4python migrate` |
 | WebSockets | `Websocket` from `tina4_python.Websocket` |
 | SCSS compilation | Drop `.scss` in `src/scss/` — auto-compiled |
 | Static file serving | Put files in `src/public/` — auto-served |
 | Translations / i18n | `localize()` from `tina4_python.Localization` |
 | HTML generation in code | `HTMLElement` from `tina4_python.HtmlElement` |
 | Inline testing | `@tests`, `assert_equal`, `assert_raises` from `tina4_python.Testing` |
+| Event system | `on`, `emit`, `once`, `off` from `tina4_python.core.events` |
+| AI assistant context | `detect_ai`, `install_context` from `tina4_python.ai` |
+| Response caching | `ResponseCache`, `cache_stats`, `clear_cache` from `tina4_python.cache` |
+| Dependency injection | `Container` from `tina4_python.container` |
+| Error overlay (dev) | `render_error_overlay`, `is_debug_mode` from `tina4_python.debug.error_overlay` |
 
 **Bad — writing a custom queue:**
 ```python
@@ -304,6 +309,35 @@ project/
 │   ├── public/             # Static files served at / (css/, js/, images/)
 │   └── scss/               # SCSS files — auto-compiled to src/public/css/
 └── secrets/                # Auto-generated RSA keys for JWT (do not commit)
+
+tina4_python/               # Core framework package
+├── core/
+│   ├── events.py           # Event system (on, emit, once, off, emit_async)
+│   ├── router.py           # Core routing logic
+│   ├── request.py          # Request object
+│   ├── response.py         # Response object
+│   ├── middleware.py        # Middleware engine
+│   ├── cache.py            # Core cache utilities
+│   ├── server.py           # Server bootstrap
+│   └── constants.py        # Framework constants
+├── ai/                     # AI coding assistant detection & context
+│   └── __init__.py         # detect_ai, install_context, install_all, status_report
+├── cache/                  # In-memory response cache middleware
+│   └── __init__.py         # ResponseCache, cache_stats, clear_cache
+├── container/              # Lightweight dependency injection container
+│   └── __init__.py         # Container (register, singleton, get, has, reset)
+├── debug/
+│   └── error_overlay.py    # Rich HTML error overlay for dev mode
+├── Auth.py, Router.py, ORM.py, Database.py, Seeder.py,
+│   Migration.py, Template.py, Swagger.py, Webserver.py,
+│   Queue.py, Session.py, GraphQL.py, WSDL.py, CRUD.py,
+│   Websocket.py, Localization.py, MiddleWare.py, cli.py,
+│   DevReload.py, Debug.py, Api.py
+├── HtmlElement.py          # Programmatic HTML builder (HTMLElement, add_html_helpers)
+├── Testing.py              # Inline testing framework (tests, assert_equal, run_all_tests)
+├── templates/              # Built-in framework templates (Twig)
+├── public/                 # Built-in static assets
+└── scss/                   # Built-in SCSS
 ```
 
 ## Starting the Server
@@ -324,10 +358,10 @@ if __name__ == "__main__":
 
 ```bash
 uv add tina4-python          # Add dependency
-uv run tina4 start            # Start dev server on port 7145
-uv run tina4 init .           # Scaffold project structure
-uv run tina4 migrate          # Run pending SQL migrations
-uv run tina4 migrate:create "description"  # Create a migration file
+uv run tina4python start            # Start dev server on port 7145
+uv run tina4python init .           # Scaffold project structure
+uv run tina4python migrate          # Run pending SQL migrations
+uv run tina4python migrate:create "description"  # Create a migration file
 ```
 
 ## Development Mode (DevReload)
@@ -796,8 +830,8 @@ from tina4_python.FieldTypes import ForeignKeyField
 **CRITICAL:** All database schema changes must go through migrations (see [Principle 9](#9-always-use-migrations-for-database-changes)). Never create or alter tables outside of migration files.
 
 ```bash
-uv run tina4 migrate:create "create users table"   # Creates migrations/000001_create_users_table.sql
-uv run tina4 migrate                                 # Runs all pending migrations
+uv run tina4python migrate:create "create users table"   # Creates migrations/000001_create_users_table.sql
+uv run tina4python migrate                                 # Runs all pending migrations
 ```
 
 Or run on startup:
@@ -810,10 +844,10 @@ When adding a new ORM model, always create a matching migration:
 ```bash
 # 1. Create the ORM model in src/orm/Product.py
 # 2. Create the migration
-uv run tina4 migrate:create "create products table"
+uv run tina4python migrate:create "create products table"
 # 3. Write the DDL in the generated .sql file
 # 4. Run the migration
-uv run tina4 migrate
+uv run tina4python migrate
 ```
 
 ### How migrations work internally
@@ -1232,13 +1266,225 @@ def add(a, b=None):
 
 Run all decorated tests:
 ```bash
-uv run tina4 test                     # Discovers @tests in src/**/*.py
+uv run tina4python test                     # Discovers @tests in src/**/*.py
 ```
 
 Or programmatically:
 ```python
 from tina4_python.Testing import run_all_tests
 run_all_tests(quiet=False, failfast=False)
+```
+
+## Events — Decoupled Communication
+
+Zero-dependency observer pattern for event-driven architecture. Fire events anywhere, handle them elsewhere.
+
+```python
+from tina4_python.core.events import on, emit, once, off, emit_async, clear, listeners, events
+
+# Register a listener (decorator)
+@on("user.created")
+def send_welcome_email(user):
+    print(f"Welcome {user['name']}!")
+
+# Register with priority (higher = runs first)
+@on("user.created", priority=10)
+def log_signup(user):
+    print(f"New signup: {user['email']}")
+
+# Register directly (not as decorator)
+on("order.placed", my_handler)
+
+# One-shot listener — auto-removes after first fire
+@once("app.ready")
+def on_ready():
+    print("App started!")
+
+# Fire an event synchronously
+results = emit("user.created", {"name": "Alice", "email": "alice@example.com"})
+
+# Fire with async listener support
+await emit_async("order.placed", order_data)
+
+# Remove a specific listener
+off("user.created", send_welcome_email)
+
+# Remove all listeners for an event
+off("user.created")
+
+# Introspection
+listeners("user.created")   # list of listener functions (priority-ordered)
+events()                     # list of all registered event names
+clear()                      # remove all listeners for all events
+```
+
+## AI Integration — Assistant Detection & Context
+
+Detect AI coding tools in a project and install Tina4-aware context files so any assistant understands the framework.
+
+```python
+from tina4_python.ai import detect_ai, detect_ai_names, install_context, install_all, status_report
+
+# Detect which AI tools are present
+tools = detect_ai(".")
+# [{"name": "claude-code", "description": "Claude Code (Anthropic CLI)", "installed": True}, ...]
+
+# Just the names of detected tools
+names = detect_ai_names(".")   # ["claude-code", "cursor"]
+
+# Install context files for detected tools
+created = install_context(".", tools=None, force=False)
+# ["CLAUDE.md", ".cursorules"]
+
+# Install context for ALL known AI tools (not just detected)
+created = install_all(".", force=False)
+
+# Human-readable status report
+print(status_report("."))
+```
+
+Supported tools: Claude Code, Cursor, GitHub Copilot, Windsurf, Aider, Cline, OpenAI Codex CLI.
+
+## Response Cache — In-Memory GET Caching
+
+LRU in-memory cache middleware for GET responses. Thread-safe with automatic TTL expiry.
+
+```python
+from tina4_python.cache import ResponseCache, cache_stats, clear_cache
+from tina4_python.Router import get, middleware, cached
+
+# Apply as middleware on a route
+@middleware(ResponseCache)
+@get("/api/products")
+async def products(request, response):
+    return response(expensive_query())
+
+# Per-route TTL override via @cached decorator
+@cached(True, max_age=120)
+@get("/api/slow")
+async def slow(request, response):
+    return response(very_slow_query())
+
+# Custom cache instance with options
+cache = ResponseCache(ttl=300, max_entries=500, status_codes=[200, 201])
+
+# Stats and management
+stats = cache_stats()          # {"hits": 42, "misses": 10, "size": 35}
+clear_cache()                  # flush all entries and reset stats
+```
+
+### Environment variables
+
+```bash
+TINA4_CACHE_TTL=60              # Default TTL in seconds (default: 60)
+TINA4_CACHE_MAX_ENTRIES=1000    # Max cached entries (default: 1000)
+```
+
+## DI Container — Dependency Injection
+
+Lightweight, thread-safe dependency injection container with transient and singleton registrations.
+
+```python
+from tina4_python.container import Container
+
+container = Container()
+
+# Transient — new instance on every get()
+container.register("mailer", lambda: MailService())
+
+# Singleton — created once, memoised
+container.singleton("db", lambda: Database("sqlite3:app.db"))
+
+# Resolve
+mailer = container.get("mailer")   # new MailService() each time
+db     = container.get("db")       # same Database instance every time
+
+# Check registration
+container.has("mailer")            # True
+container.has("redis")             # False
+
+# Clear all registrations
+container.reset()
+
+# Raises KeyError if not registered
+container.get("unknown")           # KeyError: service not registered: unknown
+```
+
+## Error Overlay — Debug Error Pages
+
+Rich, syntax-highlighted HTML error overlay for development mode. Shows stack traces with source code context, request details, and environment info.
+
+```python
+from tina4_python.debug.error_overlay import render_error_overlay, render_production_error, is_debug_mode
+
+# Check if overlay should be shown
+if is_debug_mode():    # True when TINA4_DEBUG_LEVEL is ALL or DEBUG
+    html = render_error_overlay(exception, request=request)
+else:
+    html = render_production_error(status_code=500, message="Internal Server Error")
+```
+
+The error overlay is automatically activated by DevReload when `TINA4_DEBUG_LEVEL=ALL` or `DEBUG`. In production, `render_production_error()` returns a safe, generic error page with no stack traces or source code.
+
+## HtmlElement — Programmatic HTML Builder
+
+Build HTML in Python without string concatenation. Supports all standard tags, void elements, attribute escaping, and a builder pattern.
+
+```python
+from tina4_python.HtmlElement import HTMLElement, add_html_helpers
+
+# Direct construction
+el = HTMLElement("div", {"class": "card"}, ["Hello"])
+str(el)   # <div class="card">Hello</div>
+
+# Builder pattern — call an element to add children
+el = HTMLElement("div")(HTMLElement("p")("Text"))
+
+# Nested elements
+card = HTMLElement("div", {"class": "card"})(
+    HTMLElement("h3")("Title"),
+    HTMLElement("p")("Body text"),
+)
+
+# Helper functions — injects _div(), _p(), _a(), _span(), etc. into scope
+add_html_helpers(globals())
+html = _div({"class": "card"}, _p("Hello"), _a({"href": "/"}, "Home"))
+
+# Void tags auto-close correctly
+HTMLElement("br")          # <br>
+HTMLElement("img", {"src": "/logo.png"})  # <img src="/logo.png">
+```
+
+## Inline Testing — Decorator-Based Tests
+
+Attach test assertions directly to functions with the `@tests` decorator. Tests are registered globally and run via CLI or programmatically.
+
+```python
+from tina4_python.Testing import tests, assert_equal, assert_raises, assert_true, assert_false, run_all_tests
+
+@tests(
+    assert_equal((5, 3), 8),           # add(5, 3) == 8
+    assert_equal((0, 0), 0),           # add(0, 0) == 0
+    assert_raises(ValueError, (None,)), # add(None) raises ValueError
+    assert_true((1, 1)),               # add(1, 1) is truthy
+    assert_false((0, 0)),              # add(0, 0) is falsy
+)
+def add(a, b=None):
+    if b is None:
+        raise ValueError("b required")
+    return a + b
+```
+
+### Running tests
+
+```bash
+uv run tina4python test                  # Discovers @tests in src/**/*.py
+```
+
+```python
+# Programmatic execution
+results = run_all_tests(quiet=False, failfast=False)
+# {"passed": 5, "failed": 0, "errors": 0, "details": [...]}
 ```
 
 ## Swagger / OpenAPI
@@ -1321,14 +1567,14 @@ Changes to SCSS files trigger CSS-only hot-reload (no full page refresh).
 
 ## CLI Snippets & Scaffolding
 
-The `tina4` CLI generates boilerplate so you don't write it from scratch.
+The `tina4python` CLI generates boilerplate so you don't write it from scratch.
 
 ### Project scaffolding
 
 ```bash
-uv run tina4 init my-project    # Creates app.py, pyproject.toml, Dockerfile, CLAUDE.md
-uv run tina4 start              # Start server on default port 7145
-uv run tina4 start 8080         # Start on custom port
+uv run tina4python init my-project    # Creates app.py, pyproject.toml, Dockerfile, CLAUDE.md
+uv run tina4python start              # Start server on default port 7145
+uv run tina4python start 8080         # Start on custom port
 ```
 
 ### CRUD Generator
@@ -1369,10 +1615,10 @@ Product().create_table()  # Generates + executes DDL for your database
 ### Migration Files
 
 ```bash
-uv run tina4 migrate:create "add users table"
+uv run tina4python migrate:create "add users table"
 # Creates: migrations/000001_add_users_table.sql
 
-uv run tina4 migrate
+uv run tina4python migrate
 # Runs all pending .sql files in order
 ```
 
@@ -1383,7 +1629,7 @@ uv run tina4 migrate
 | Quick admin UI for a table | `CRUD.to_crud()` |
 | Schema-first database design | Migration files |
 | Code-first database design | `ORM.create_table()` |
-| New project from scratch | `tina4 init` |
+| New project from scratch | `tina4python init` |
 
 ## Common Patterns
 

@@ -190,8 +190,8 @@ msgstr "正在启动 Tina4 服务器 http://localhost:{port}"
 msgid "Error: Migration description cannot be empty"
 msgstr "错误：迁移描述不能为空"
 
-msgid "Example: tina4 migrate:create create users table"
-msgstr "示例：tina4 migrate:create create users table"
+msgid "Example: tina4python migrate:create create users table"
+msgstr "示例：tina4python migrate:create create users table"
 
 msgid "Migration created: {filepath}"
 msgstr "迁移已创建：{filepath}"

@@ -2,7 +2,7 @@
 import os
 import tempfile
 import pytest
-from tina4_python.dotenv import load_env, get_env, require_env
+from tina4_python.dotenv import load_env, get_env, require_env, has_env, all_env
 
 
 class TestLoadEnv:
@@ -102,3 +102,35 @@ class TestRequireEnv:
     def test_missing_var_exits(self):
         with pytest.raises(SystemExit):
             require_env("DEFINITELY_NOT_SET_12345")
+
+
+class TestHasEnv:
+    def test_existing_var(self):
+        os.environ["HAS_ENV_TEST"] = "yes"
+        assert has_env("HAS_ENV_TEST") is True
+        del os.environ["HAS_ENV_TEST"]
+
+    def test_missing_var(self):
+        assert has_env("DEFINITELY_NOT_SET_HAS_ENV") is False
+
+    def test_empty_value_still_exists(self):
+        os.environ["HAS_ENV_EMPTY"] = ""
+        assert has_env("HAS_ENV_EMPTY") is True
+        del os.environ["HAS_ENV_EMPTY"]
+
+
+class TestAllEnv:
+    def test_returns_dict(self):
+        result = all_env()
+        assert isinstance(result, dict)
+
+    def test_contains_known_var(self):
+        os.environ["ALL_ENV_TEST"] = "present"
+        result = all_env()
+        assert result["ALL_ENV_TEST"] == "present"
+        del os.environ["ALL_ENV_TEST"]
+
+    def test_returns_copy(self):
+        result = all_env()
+        result["SHOULD_NOT_LEAK"] = "nope"
+        assert "SHOULD_NOT_LEAK" not in os.environ

@@ -683,11 +683,11 @@ class DevMailbox:
         email-related UI without needing a real mail server.
         """
         try:
-            from tina4_python.seeder import Fake
+            from tina4_python.seeder import FakeData
         except ImportError:
             return 0
 
-        fake = Fake(seed=seed)
+        fake = FakeData(seed=seed)
         created = 0
 
         for i in range(count):

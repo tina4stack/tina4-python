@@ -29,3 +29,11 @@ from tina4_python.orm import (  # noqa: E402, F401
     DateTimeField, TextField, BlobField,
     IntField, StrField, BoolField,  # short aliases
 )
+
+# ── Response Cache ──
+from tina4_python.cache import (  # noqa: E402, F401
+    ResponseCache, cache_stats, clear_cache,
+)
+
+# ── DI Container ──
+from tina4_python.container import Container  # noqa: E402, F401

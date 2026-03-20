@@ -196,3 +196,147 @@ class TestAuthConfig:
             assert auth.token_expiry == 60
         finally:
             del os.environ["TINA4_TOKEN_LIMIT"]
+
+    def test_default_secret(self):
+        # When no env var and no kwarg, uses default
+        os.environ.pop("SECRET", None)
+        auth = Auth()
+        assert auth.secret == "tina4-default-secret"
+
+    def test_default_token_expiry(self):
+        os.environ.pop("TINA4_TOKEN_LIMIT", None)
+        auth = Auth()
+        assert auth.token_expiry == 30
+
+
+# ── JWT Standard Claims ────────────────────────────────────────
+
+
+class TestJWTClaims:
+    def test_sub_claim_preserved(self, auth):
+        token = auth.create_token({"sub": "user:1", "iss": "tina4"})
+        payload = auth.validate_token(token)
+        assert payload["sub"] == "user:1"
+        assert payload["iss"] == "tina4"
+
+    def test_custom_claims_preserved(self, auth):
+        token = auth.create_token({"roles": ["admin", "editor"], "org": "acme"})
+        payload = auth.validate_token(token)
+        assert payload["roles"] == ["admin", "editor"]
+        assert payload["org"] == "acme"
+
+    def test_get_payload_ignores_expiration(self):
+        auth = Auth(secret="test")
+        import json
+        from tina4_python.auth import _b64url_encode
+        header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+        payload = _b64url_encode(json.dumps({"user_id": 1, "exp": int(time.time()) - 100}).encode())
+        sig = auth._sign(f"{header}.{payload}")
+        expired_token = f"{header}.{payload}.{sig}"
+        # validate_token should reject it
+        assert auth.validate_token(expired_token) is None
+        # get_payload should still return payload
+        result = auth.get_payload(expired_token)
+        assert result is not None
+        assert result["user_id"] == 1
+
+    def test_get_payload_ignores_bad_signature(self, auth):
+        token = auth.create_token({"user_id": 42})
+        # Tamper with signature
+        parts = token.split(".")
+        parts[2] = parts[2][::-1]  # Reverse signature
+        tampered = ".".join(parts)
+        result = auth.get_payload(tampered)
+        assert result is not None
+        assert result["user_id"] == 42
+
+
+# ── JWT Edge Cases ──────────────────────────────────────────────
+
+
+class TestJWTEdgeCases:
+    def test_two_part_token(self, auth):
+        assert auth.validate_token("header.payload") is None
+
+    def test_four_part_token(self, auth):
+        assert auth.validate_token("a.b.c.d") is None
+
+    def test_none_payload_handling(self, auth):
+        assert auth.get_payload("") is None
+
+    def test_get_payload_two_parts(self, auth):
+        assert auth.get_payload("a.b") is None
+
+
+# ── Password Edge Cases ─────────────────────────────────────────
+
+
+class TestPasswordEdgeCases:
+    def test_empty_password(self):
+        hashed = Auth.hash_password("")
+        assert Auth.check_password(hashed, "") is True
+        assert Auth.check_password(hashed, "x") is False
+
+    def test_unicode_password(self):
+        hashed = Auth.hash_password("p@$$w0rd-émoji-🔑")
+        assert Auth.check_password(hashed, "p@$$w0rd-émoji-🔑") is True
+        assert Auth.check_password(hashed, "p@$$w0rd-émoji") is False
+
+    def test_long_password(self):
+        long_pw = "a" * 10000
+        hashed = Auth.hash_password(long_pw)
+        assert Auth.check_password(hashed, long_pw) is True
+
+    def test_check_password_empty_hash(self):
+        assert Auth.check_password("", "password") is False
+
+    def test_check_password_wrong_prefix(self):
+        assert Auth.check_password("bcrypt$100$salt$hash", "password") is False
+
+
+# ── Request Auth Edge Cases ───────────────────────────────────
+
+
+class TestRequestAuthEdgeCases:
+    def test_basic_auth_with_colon_in_password(self, auth):
+        creds = base64.b64encode(b"user:pass:with:colons").decode()
+        result = auth.authenticate_request({"authorization": f"Basic {creds}"})
+        assert result is not None
+        assert result["username"] == "user"
+        assert result["password"] == "pass:with:colons"
+
+    def test_malformed_basic_auth(self, auth):
+        result = auth.authenticate_request({"authorization": "Basic !!invalid!!"})
+        assert result is None
+
+    def test_unknown_auth_scheme(self, auth):
+        result = auth.authenticate_request({"authorization": "Digest abc123"})
+        assert result is None
+
+    def test_empty_authorization_header(self, auth):
+        result = auth.authenticate_request({"authorization": ""})
+        assert result is None
+
+    def test_bearer_without_value(self, auth):
+        result = auth.authenticate_request({"authorization": "Bearer "})
+        assert result is None
+
+
+# ── API Key Edge Cases ──────────────────────────────────────────
+
+
+class TestAPIKeyEdgeCases:
+    def test_api_key_empty_env(self):
+        os.environ["API_KEY"] = ""
+        try:
+            assert Auth.validate_api_key("") is False
+        finally:
+            del os.environ["API_KEY"]
+
+    def test_api_key_case_sensitive(self):
+        os.environ["API_KEY"] = "MyKey123"
+        try:
+            assert Auth.validate_api_key("MyKey123") is True
+            assert Auth.validate_api_key("mykey123") is False
+        finally:
+            del os.environ["API_KEY"]

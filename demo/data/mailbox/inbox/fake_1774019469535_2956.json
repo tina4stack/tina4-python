@@ -1,0 +1,17 @@
+{
+  "id": "fake_1774019469535_2956",
+  "type": "inbox",
+  "from": "Wendy Smith <alice.taylor@inbox.io>",
+  "to": [
+    "dev@localhost"
+  ],
+  "cc": [],
+  "bcc": [],
+  "reply_to": "alice.taylor@inbox.io",
+  "subject": "Re: Fox aliqua aliquip ipsum",
+  "body": "<p>Hi,</p><p>Fox laboris eiusmod jumps lorem consectetur ullamco ullamco. Brown jumps adipiscing elit the jumps brown the.</p><p>Ut quis consectetur elit over brown.</p><p>Best regards,<br>Wendy Smith</p>",
+  "html": true,
+  "attachments": [],
+  "date": "2022-07-21T09:46:39Z",
+  "read": true
+}

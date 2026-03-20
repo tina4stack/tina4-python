@@ -1,0 +1,17 @@
+{
+  "id": "fake_1774019469538_1592",
+  "type": "inbox",
+  "from": "Zane Lopez <bob.white@test.org>",
+  "to": [
+    "dev@localhost"
+  ],
+  "cc": [],
+  "bcc": [],
+  "reply_to": "bob.white@test.org",
+  "subject": "Meeting: Magna eiusmod nisi labore",
+  "body": "<p>Hi,</p><p>Tempor dog veniam enim exercitation. Lazy veniam sed ipsum ullamco amet nostrud.</p><p>Minim veniam laboris amet aliquip.</p><p>Best regards,<br>Zane Lopez</p>",
+  "html": true,
+  "attachments": [],
+  "date": "2021-01-03T22:28:24Z",
+  "read": true
+}
