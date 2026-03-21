@@ -2,6 +2,7 @@
 import pytest
 from tina4_python.database import Database
 from tina4_python.orm import ORM, orm_bind, Field, IntField, StrField, BoolField
+from tina4_python.orm import has_many, has_one, belongs_to
 
 
 # ── Test Models ─────────────────────────────────────────────────
@@ -14,6 +15,10 @@ class User(ORM):
     email = Field(str)
     active = Field(bool, default=True)
 
+    # Descriptor-based relationships
+    posts = has_many("Post", foreign_key="user_id")
+    profile = has_one("Profile", foreign_key="user_id")
+
 
 class Post(ORM):
     table_name = "posts"
@@ -24,12 +29,27 @@ class Post(ORM):
     deleted_at = Field(str)
     soft_delete = True
 
+    # Descriptor-based relationships
+    author = belongs_to("User", foreign_key="user_id")
+    comments = has_many("Comment", foreign_key="post_id")
+
 
 class Comment(ORM):
     table_name = "comments"
     id = Field(int, primary_key=True, auto_increment=True)
     text = Field(str)
     post_id = Field(int)
+
+    post = belongs_to("Post", foreign_key="post_id")
+
+
+class Profile(ORM):
+    table_name = "profiles"
+    id = Field(int, primary_key=True, auto_increment=True)
+    bio = Field(str)
+    user_id = Field(int)
+
+    owner = belongs_to("User", foreign_key="user_id")
 
 
 # ── Fixtures ────────────────────────────────────────────────────
@@ -43,6 +63,7 @@ def db(tmp_path):
     d.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT, active INTEGER DEFAULT 1)")
     d.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT, user_id INTEGER, deleted_at TEXT)")
     d.execute("CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, post_id INTEGER)")
+    d.execute("CREATE TABLE profiles (id INTEGER PRIMARY KEY AUTOINCREMENT, bio TEXT, user_id INTEGER)")
     d.commit()
     orm_bind(d)
     yield d
@@ -323,6 +344,215 @@ class TestRelationships:
         db.commit()
         posts = user.has_many(Post)
         assert posts == []
+
+
+# ── Descriptor Relationship Tests ──────────────────────────────
+
+
+class TestDescriptorRelationships:
+    """Tests for descriptor-based ORM relationships (has_many, has_one, belongs_to)."""
+
+    def test_has_many_lazy_load(self, db):
+        user = User({"name": "Alice"}).save()
+        db.commit()
+        Post({"title": "P1", "user_id": user.id}).save()
+        Post({"title": "P2", "user_id": user.id}).save()
+        db.commit()
+
+        # Lazy load via descriptor
+        posts = user.posts
+        assert len(posts) == 2
+        assert posts[0].title in ("P1", "P2")
+
+    def test_has_one_lazy_load(self, db):
+        user = User({"name": "Bob"}).save()
+        db.commit()
+        Profile({"bio": "Hello", "user_id": user.id}).save()
+        db.commit()
+
+        profile = user.profile
+        assert profile is not None
+        assert profile.bio == "Hello"
+
+    def test_belongs_to_lazy_load(self, db):
+        user = User({"name": "Carol"}).save()
+        db.commit()
+        post = Post({"title": "Post1", "user_id": user.id}).save()
+        db.commit()
+
+        author = post.author
+        assert author is not None
+        assert author.name == "Carol"
+
+    def test_relationship_cache(self, db):
+        user = User({"name": "Dave"}).save()
+        db.commit()
+        Post({"title": "Cached", "user_id": user.id}).save()
+        db.commit()
+
+        # First access loads
+        posts1 = user.posts
+        # Second access returns cached
+        posts2 = user.posts
+        assert posts1 is posts2  # Same object reference
+
+    def test_cache_clears_on_save(self, db):
+        user = User({"name": "Eve"}).save()
+        db.commit()
+        Post({"title": "Before", "user_id": user.id}).save()
+        db.commit()
+
+        _ = user.posts  # Load cache
+        assert "_rel_cache" in user.__dict__
+        user.name = "Eve Updated"
+        user.save()
+        db.commit()
+        assert user._rel_cache == {}
+
+    def test_has_many_empty_descriptor(self, db):
+        user = User({"name": "Lonely"}).save()
+        db.commit()
+        assert user.posts == []
+
+    def test_has_one_none(self, db):
+        user = User({"name": "NoProfile"}).save()
+        db.commit()
+        assert user.profile is None
+
+    def test_nested_relationships(self, db):
+        user = User({"name": "Frank"}).save()
+        db.commit()
+        post = Post({"title": "Post", "user_id": user.id}).save()
+        db.commit()
+        Comment({"text": "Nice!", "post_id": post.id}).save()
+        Comment({"text": "Great!", "post_id": post.id}).save()
+        db.commit()
+
+        posts = user.posts
+        assert len(posts) == 1
+        comments = posts[0].comments
+        assert len(comments) == 2
+
+
+# ── Eager Loading Tests ────────────────────────────────────────
+
+
+class TestEagerLoading:
+    """Tests for eager loading with include parameter."""
+
+    def test_eager_load_has_many(self, db):
+        u1 = User({"name": "A"}).save()
+        u2 = User({"name": "B"}).save()
+        db.commit()
+        Post({"title": "P1", "user_id": u1.id}).save()
+        Post({"title": "P2", "user_id": u1.id}).save()
+        Post({"title": "P3", "user_id": u2.id}).save()
+        db.commit()
+
+        users, _ = User.all(include=["posts"])
+        assert len(users) == 2
+        # Posts should be pre-loaded (no additional queries)
+        for u in users:
+            assert "posts" in u._rel_cache
+        a = [u for u in users if u.name == "A"][0]
+        b = [u for u in users if u.name == "B"][0]
+        assert len(a.posts) == 2
+        assert len(b.posts) == 1
+
+    def test_eager_load_has_one(self, db):
+        user = User({"name": "WithProfile"}).save()
+        db.commit()
+        Profile({"bio": "Bio text", "user_id": user.id}).save()
+        db.commit()
+
+        users, _ = User.where("name = ?", ["WithProfile"], include=["profile"])
+        assert len(users) == 1
+        assert users[0].profile is not None
+        assert users[0].profile.bio == "Bio text"
+
+    def test_eager_load_belongs_to(self, db):
+        user = User({"name": "Parent"}).save()
+        db.commit()
+        Post({"title": "Child", "user_id": user.id}).save()
+        db.commit()
+
+        posts, _ = Post.where("title = ?", ["Child"], include=["author"])
+        assert len(posts) == 1
+        assert posts[0].author is not None
+        assert posts[0].author.name == "Parent"
+
+    def test_eager_load_nested(self, db):
+        user = User({"name": "Deep"}).save()
+        db.commit()
+        post = Post({"title": "DeepPost", "user_id": user.id}).save()
+        db.commit()
+        Comment({"text": "C1", "post_id": post.id}).save()
+        db.commit()
+
+        users, _ = User.all(include=["posts.comments"])
+        u = users[0]
+        assert len(u.posts) == 1
+        assert len(u.posts[0].comments) == 1
+        assert u.posts[0].comments[0].text == "C1"
+
+    def test_find_with_include(self, db):
+        user = User({"name": "FindMe"}).save()
+        db.commit()
+        Post({"title": "Found", "user_id": user.id}).save()
+        db.commit()
+
+        found = User.find(user.id, include=["posts"])
+        assert found is not None
+        assert len(found.posts) == 1
+
+
+# ── to_dict with Include Tests ─────────────────────────────────
+
+
+class TestToDictInclude:
+    """Tests for to_dict with include parameter."""
+
+    def test_to_dict_with_has_many(self, db):
+        user = User({"name": "Alice"}).save()
+        db.commit()
+        Post({"title": "Hello", "user_id": user.id}).save()
+        db.commit()
+
+        d = user.to_dict(include=["posts"])
+        assert "posts" in d
+        assert len(d["posts"]) == 1
+        assert d["posts"][0]["title"] == "Hello"
+
+    def test_to_dict_with_nested(self, db):
+        user = User({"name": "Bob"}).save()
+        db.commit()
+        post = Post({"title": "Test", "user_id": user.id}).save()
+        db.commit()
+        Comment({"text": "Reply", "post_id": post.id}).save()
+        db.commit()
+
+        d = user.to_dict(include=["posts.comments"])
+        assert "posts" in d
+        assert "comments" in d["posts"][0]
+        assert d["posts"][0]["comments"][0]["text"] == "Reply"
+
+    def test_to_dict_with_belongs_to(self, db):
+        user = User({"name": "Carol"}).save()
+        db.commit()
+        post = Post({"title": "Mine", "user_id": user.id}).save()
+        db.commit()
+
+        d = post.to_dict(include=["author"])
+        assert "author" in d
+        assert d["author"]["name"] == "Carol"
+
+    def test_to_dict_none_relationship(self, db):
+        user = User({"name": "NoProfile"}).save()
+        db.commit()
+
+        d = user.to_dict(include=["profile"])
+        assert "profile" in d
+        assert d["profile"] is None
 
 
 # ── Scope Tests ─────────────────────────────────────────────────
