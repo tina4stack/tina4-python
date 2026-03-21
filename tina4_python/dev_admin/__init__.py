@@ -1295,7 +1295,7 @@ textarea.input { resize: vertical; font-family: var(--mono); }
 <body>
 
 <div class="dev-header">
-    <img src="https://tina4.com/logo.svg" style="width:1.5rem;height:1.5rem;cursor:pointer;opacity:0.7;transition:opacity 0.15s" title="Back to app" onclick="exitDevAdmin()" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'" alt="Tina4">
+    <img src="/images/logo.svg" style="width:1.5rem;height:1.5rem;cursor:pointer;opacity:0.7;transition:opacity 0.15s" title="Back to app" onclick="exitDevAdmin()" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'" alt="Tina4">
     <h1>Tina4 Dev Admin</h1>
     <span class="badge">DEV</span>
     <span style="margin-left:auto; font-size:0.75rem; color:var(--muted)" id="timestamp"></span>
