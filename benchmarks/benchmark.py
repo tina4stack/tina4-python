@@ -80,7 +80,51 @@ FRAMEWORKS = {
     "fastify": Framework("Fastify", "nodejs", 9033, [], 10, 5, "built-in"),
     "koa": Framework("Koa", "nodejs", 9034, [], 5, 3, "built-in"),
     "node-raw": Framework("Node.js raw", "nodejs", 9035, [], 0, 1, "built-in http"),
+
+    # ── PHP (additional) ──
+    "laravel": Framework("Laravel", "php", 9013, [], 50, 25, "artisan serve"),
 }
+
+
+# ── Laravel Setup ──────────────────────────────────────────────
+
+def _setup_laravel_bench():
+    """Create a Laravel project for benchmarking if it doesn't exist."""
+    laravel_dir = Path("/tmp/bench-laravel")
+    if (laravel_dir / "artisan").exists():
+        return  # already set up
+
+    # Check composer is available
+    if subprocess.run(["which", "composer"], capture_output=True).returncode != 0:
+        print("  ⚠  composer not found — skipping Laravel benchmark setup")
+        return
+
+    try:
+        print("  Setting up Laravel benchmark project...")
+        subprocess.run(
+            ["composer", "create-project", "--prefer-dist", "laravel/laravel", str(laravel_dir)],
+            capture_output=True, timeout=120,
+        )
+        # Add benchmark routes
+        routes_file = laravel_dir / "routes" / "web.php"
+        routes_file.write_text("""<?php
+use Illuminate\\Support\\Facades\\Route;
+use Illuminate\\Http\\JsonResponse;
+
+Route::get('/api/bench/json', function () {
+    return new JsonResponse(['message' => 'Hello, World!', 'framework' => 'laravel']);
+});
+
+Route::get('/api/bench/list', function () {
+    $items = [];
+    for ($i = 0; $i < 100; $i++) {
+        $items[] = ['id' => $i, 'name' => "Item $i", 'price' => round($i * 1.99, 2)];
+    }
+    return new JsonResponse(['items' => $items, 'count' => 100]);
+});
+""")
+    except Exception as e:
+        print(f"  ⚠  Laravel setup failed: {e}")
 
 
 # ── Server Scripts ─────────────────────────────────────────────
@@ -206,6 +250,10 @@ end
 require "webrick"
 Rack::Handler::WEBrick.run(B.freeze.app,Host:"127.0.0.1",Port:9023,Logger:WEBrick::Log.new(File::NULL),AccessLog:[])
 """)
+
+    # ── PHP (Laravel) ──
+    # Laravel benchmark — create project if needed, add bench routes
+    _setup_laravel_bench()
 
     # ── Node.js ──
     # Tina4 Node.js — use inline http server with Tina4's Router for accurate benchmark
@@ -335,6 +383,11 @@ def _start_server(key: str) -> bool:
         if not (slim_dir / "vendor").exists():
             return False
         cmd = ["php", "-S", f"127.0.0.1:{port}", "-d", "display_errors=Off", str(slim_dir / "index.php")]
+    elif key == "laravel":
+        laravel_dir = Path("/tmp/bench-laravel")
+        if not (laravel_dir / "artisan").exists():
+            return False
+        cmd = ["php", "artisan", "serve", f"--host=127.0.0.1", f"--port={port}", "--no-reload"]
     elif key == "tina4-ruby":
         cmd = [RUBY, str(TMP / "tina4_ruby_bench.rb")]
     elif key == "sinatra":
@@ -354,12 +407,15 @@ def _start_server(key: str) -> bool:
     else:
         return False
 
+    # Determine working directory (Laravel needs its project dir)
+    cwd = str(Path("/tmp/bench-laravel")) if key == "laravel" else str(TMP)
+
     try:
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            cwd=str(TMP),
+            cwd=cwd,
             env=env,
         )
         _processes.append(proc)
