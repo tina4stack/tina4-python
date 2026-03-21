@@ -1641,11 +1641,6 @@ document.addEventListener('DOMContentLoaded', function() {
 </html>"""
 
 
-def render_overlay_script() -> str:
-    """Deprecated — use render_dev_toolbar() instead."""
-    return render_dev_toolbar("GET", "/", "-", "-", 0)
-
-
 def render_dev_toolbar(method: str, path: str, matched_pattern: str,
                        request_id: str, route_count: int) -> str:
     """Return an HTML toolbar injected at the bottom of HTML responses in dev mode.
@@ -1671,5 +1666,4 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
 
 
 __all__ = ["MessageLog", "RequestInspector", "BrokenTracker",
-           "get_api_handlers", "render_dashboard", "render_overlay_script",
-           "render_dev_toolbar"]
+           "get_api_handlers", "render_dashboard", "render_dev_toolbar"]
