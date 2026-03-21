@@ -1,0 +1,87 @@
+{
+  "iterations": 1000,
+  "results": [
+    {
+      "benchmark": "JSON serialization",
+      "frameworks": {
+        "Tina4": {
+          "time_s": 0.0064,
+          "ops_per_sec": 155305.6
+        },
+        "Flask": {
+          "time_s": 0.0041,
+          "ops_per_sec": 245265.9
+        },
+        "Starlette": {
+          "time_s": 0.0541,
+          "ops_per_sec": 18471.3
+        },
+        "Django": {
+          "time_s": 0.0033,
+          "ops_per_sec": 301201.1
+        }
+      }
+    },
+    {
+      "benchmark": "Template rendering",
+      "frameworks": {
+        "Tina4": {
+          "time_s": 0.2052,
+          "ops_per_sec": 4872.1
+        },
+        "Flask": {
+          "time_s": 0.0214,
+          "ops_per_sec": 46626.5
+        },
+        "Starlette": {
+          "time_s": 0.0204,
+          "ops_per_sec": 48970.8
+        },
+        "Django": {
+          "time_s": 0.1292,
+          "ops_per_sec": 7742.0
+        }
+      }
+    },
+    {
+      "benchmark": "URL routing (100 routes)",
+      "frameworks": {
+        "Tina4": {
+          "time_s": 0.4093,
+          "ops_per_sec": 2443.4
+        },
+        "Flask": {
+          "time_s": 13.5078,
+          "ops_per_sec": 74.0
+        },
+        "Starlette": {
+          "error": "The starlette.testclient module requires the httpx package to be installed.\nYou can install this with:\n    $ pip install httpx\n"
+        },
+        "Django": {
+          "error": "'str' object has no attribute 'match'"
+        }
+      }
+    },
+    {
+      "benchmark": "Plaintext response",
+      "frameworks": {
+        "Tina4": {
+          "time_s": 0.0001,
+          "ops_per_sec": 7897334.4
+        },
+        "Flask": {
+          "time_s": 0.0026,
+          "ops_per_sec": 386604.2
+        },
+        "Starlette": {
+          "time_s": 0.0005,
+          "ops_per_sec": 1965922.7
+        },
+        "Django": {
+          "time_s": 0.0025,
+          "ops_per_sec": 400808.4
+        }
+      }
+    }
+  ]
+}
