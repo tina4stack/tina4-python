@@ -4,27 +4,37 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title }}</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; padding: 2rem; }
-        h1 { font-size: 2rem; margin-bottom: 1.5rem; }
-        .cards { display: flex; gap: 1rem; flex-wrap: wrap; }
-        .card { background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; padding: 1.5rem; flex: 1 1 250px; }
-        .card h3 { margin-bottom: 0.5rem; }
-        .card p { color: #94a3b8; font-size: 0.9rem; margin-bottom: 0.75rem; }
-        .badge { background: #3572A5; color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; }
-    </style>
+    <link rel="stylesheet" href="/css/tina4.min.css">
 </head>
-<body>
-    <h1>{{ title }}</h1>
-    <div class="cards">
-        {% for item in items %}
-        <div class="card">
-            <h3>{{ item.name }}</h3>
-            <p>{{ item.description }}</p>
-            <span class="badge">{{ item.badge }}</span>
+<body class="bg-dark text-light">
+    <div class="container mt-5">
+        <h1 class="mb-4">{{ title }}</h1>
+        <p class="text-muted mb-4">This page was rendered using the <code>@template</code> decorator with tina4css styling.</p>
+
+        <div class="row">
+            {% for item in items %}
+            <div class="col-md-4 mb-3">
+                <div class="card bg-secondary text-light">
+                    <div class="card-body">
+                        <h5 class="card-title">{{ item.name }}</h5>
+                        <p class="card-text text-muted">{{ item.description }}</p>
+                        <span class="badge bg-primary">{{ item.badge }}</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
         </div>
-        {% endfor %}
+
+        <div class="card bg-secondary mt-4">
+            <div class="card-body">
+                <h5 class="card-title">How this works</h5>
+                <pre class="bg-dark text-success p-3 rounded"><code>@get("/gallery/page")
+@template("gallery_page.twig")
+async def gallery_page(request, response):
+    return {"title": "Gallery Demo Page", "items": [...]}</code></pre>
+                <p class="text-muted mt-2">The <code>@template</code> decorator renders the dict return value through this Twig template. Styled with tina4css — no external CDN needed.</p>
+            </div>
+        </div>
     </div>
 </body>
 </html>

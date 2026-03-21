@@ -16,7 +16,7 @@ async def gallery_db_tables(request, response):
             )
         """)
         db.commit()
-        tables = db.get_database_tables()
+        tables = db.get_tables()
         return response({"tables": tables, "engine": "sqlite"})
     except Exception as e:
         return response({"error": str(e)}, 500)
