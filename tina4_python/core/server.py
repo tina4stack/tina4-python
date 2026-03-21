@@ -185,6 +185,8 @@ h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
 .gallery-card .icon{{font-size:1.5rem;margin-bottom:0.75rem}}
 .gallery-card h3{{font-size:1rem;font-weight:600;margin-bottom:0.5rem;color:#e2e8f0}}
 .gallery-card p{{font-size:0.85rem;color:#94a3b8;line-height:1.5}}
+.gallery-card .try-btn{{display:inline-block;margin-top:0.75rem;padding:0.3rem 0.8rem;background:#3572A5;color:#fff;border:none;border-radius:0.375rem;font-size:0.75rem;font-weight:600;cursor:pointer;transition:opacity 0.15s}}
+.gallery-card .try-btn:hover{{opacity:0.85}}
 </style>
 </head>
 <body>
@@ -232,6 +234,7 @@ run()  <span style="color:#64748b"># starts on port 7145</span></code></pre>
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">@get("/api/users")
 async def users(req, res):
     return res({{"users": []}})</pre>
+            <button class="try-btn" onclick="deployGallery('rest-api','/api/gallery/hello')">Try It</button>
         </div>
         <div class="gallery-card">
             <div class="accent accent-green"></div>
@@ -241,6 +244,7 @@ async def users(req, res):
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">class User(ORM):
     id = IntegerField(primary_key=True)
     name = StringField()</pre>
+            <button class="try-btn" onclick="deployGallery('orm','/api/gallery/products')">Try It</button>
         </div>
         <div class="gallery-card">
             <div class="accent accent-purple"></div>
@@ -249,6 +253,7 @@ async def users(req, res):
             <p>JWT tokens built-in</p>
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">token = Auth.get_token({{"user_id": 1}})
 valid = Auth.valid_token(token)</pre>
+            <button class="try-btn" onclick="deployGallery('auth','/api/gallery/auth/login')">Try It</button>
         </div>
         <div class="gallery-card">
             <div class="accent accent-blue"></div>
@@ -257,6 +262,7 @@ valid = Auth.valid_token(token)</pre>
             <p>Background jobs, no Redis needed</p>
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">producer = Producer(Queue("emails"))
 producer.produce({{"to": "a@b.com"}})</pre>
+            <button class="try-btn" onclick="deployGallery('queue','/api/gallery/queue/status')">Try It</button>
         </div>
         <div class="gallery-card">
             <div class="accent accent-green"></div>
@@ -267,6 +273,7 @@ producer.produce({{"to": "a@b.com"}})</pre>
 @get("/dashboard")
 async def dash(req, res):
     return {{"title": "Home"}}</pre>
+            <button class="try-btn" onclick="deployGallery('templates','/gallery/page')">Try It</button>
         </div>
         <div class="gallery-card">
             <div class="accent accent-purple"></div>
@@ -276,9 +283,37 @@ async def dash(req, res):
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">db = Database("sqlite:///app.db")
 result = db.fetch("SELECT * FROM users")
 for row in result: print(row["name"])</pre>
+            <button class="try-btn" onclick="deployGallery('database','/api/gallery/db/tables')">Try It</button>
         </div>
     </div>
 </div>
+<script>
+function deployGallery(name, tryUrl) {{
+    var btn = event.target;
+    btn.textContent = 'Deploying...';
+    btn.disabled = true;
+    fetch('/__dev/api/gallery/deploy', {{
+        method: 'POST',
+        headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify({{name: name}})
+    }})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(d) {{
+        if (d.error) {{
+            btn.textContent = 'Error';
+            alert('Deploy failed: ' + d.error);
+        }} else {{
+            btn.textContent = 'Deployed!';
+            btn.style.background = '#22c55e';
+            setTimeout(function() {{ window.open(tryUrl, '_blank'); }}, 500);
+        }}
+    }})
+    .catch(function(e) {{
+        btn.textContent = 'Error';
+        alert('Deploy failed: ' + e.message);
+    }});
+}}
+</script>
 </body>
 </html>"""
 

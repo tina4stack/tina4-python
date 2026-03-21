@@ -273,6 +273,8 @@ def get_api_handlers() -> dict:
         "/__dev/api/connections": ("GET", _api_connections),
         "/__dev/api/connections/test": ("POST", _api_connections_test),
         "/__dev/api/connections/save": ("POST", _api_connections_save),
+        "/__dev/api/gallery": ("GET", _api_gallery_list),
+        "/__dev/api/gallery/deploy": ("POST", _api_gallery_deploy),
     }
 
 
@@ -1085,6 +1087,53 @@ async def _api_connections_save(request, response):
         return response({"success": True})
     except Exception as e:
         return response({"success": False, "error": str(e)})
+
+
+async def _api_gallery_list(request, response):
+    """List available gallery examples."""
+    import json
+    gallery_dir = Path(__file__).parent.parent / "gallery"
+    items = []
+    if gallery_dir.exists():
+        for entry in sorted(gallery_dir.iterdir()):
+            meta_file = entry / "meta.json"
+            if entry.is_dir() and meta_file.exists():
+                meta = json.loads(meta_file.read_text())
+                meta["id"] = entry.name
+                # List the files that would be deployed
+                src_dir = entry / "src"
+                if src_dir.exists():
+                    meta["files"] = [
+                        str(f.relative_to(src_dir))
+                        for f in src_dir.rglob("*") if f.is_file()
+                    ]
+                items.append(meta)
+    return response({"gallery": items, "count": len(items)})
+
+
+async def _api_gallery_deploy(request, response):
+    """Deploy a gallery example into the running project."""
+    import shutil
+    body = request.body if hasattr(request, "body") else {}
+    name = body.get("name", "")
+    if not name:
+        return response({"error": "No gallery item specified"}, 400)
+
+    gallery_src = Path(__file__).parent.parent / "gallery" / name / "src"
+    if not gallery_src.exists():
+        return response({"error": f"Gallery item '{name}' not found"}, 404)
+
+    project_src = Path.cwd() / "src"
+    copied = []
+    for src_file in gallery_src.rglob("*"):
+        if src_file.is_file():
+            rel = src_file.relative_to(gallery_src)
+            dest = project_src / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dest)
+            copied.append(str(rel))
+
+    return response({"deployed": name, "files": copied})
 
 
 # Module startup time for uptime tracking

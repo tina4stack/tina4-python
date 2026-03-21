@@ -1,0 +1,1 @@
+{"name": "Auth", "description": "JWT login and protected endpoint", "try_url": "/api/gallery/auth/login"}
