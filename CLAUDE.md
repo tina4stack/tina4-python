@@ -157,8 +157,8 @@ db.start_transaction()
 db.commit()
 db.rollback()
 db.table_exists(table_name) -> bool
-db.get_database_tables() -> list[str]
-db.get_table_info(table_name) -> list[dict]
+db.get_tables() -> list[str]
+db.get_columns(table_name) -> list[dict]
 ```
 
 ### ORM — Active Record base class

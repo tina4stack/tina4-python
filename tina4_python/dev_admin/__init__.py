@@ -528,7 +528,7 @@ async def _api_tables(request, response):
         from tina4_python.database import Database
         db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
-        tables = db.get_database_tables()
+        tables = db.get_tables()
         db.close()
         return response({"tables": tables})
     except Exception as e:
@@ -819,7 +819,7 @@ async def _api_system(request, response):
         db_url = os.environ.get("DATABASE_URL", "")
         if db_url:
             db = Database(db_url)
-            tables = db.get_database_tables()
+            tables = db.get_tables()
             info["db_tables"] = len(tables)
             info["db_connected"] = True
             db.close()
@@ -1019,7 +1019,7 @@ async def _api_connections_test(request, response):
         version = ""
         table_count = 0
         try:
-            tables = db.get_database_tables()
+            tables = db.get_tables()
             table_count = len(tables) if tables else 0
         except Exception:
             table_count = 0

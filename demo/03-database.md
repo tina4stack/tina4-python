@@ -117,7 +117,7 @@ if db.table_exists("users"):
     print("Table found")
 
 # List all tables
-tables = db.get_database_tables()
+tables = db.get_tables()
 # ["users", "products", "orders"]
 
 # Get column info for a table
