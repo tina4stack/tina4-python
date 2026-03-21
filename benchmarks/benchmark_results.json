@@ -1,5 +1,5 @@
 {
-  "date": "2026-03-21T16:26:22Z",
+  "date": "2026-03-21T16:30:26Z",
   "machine": "arm64 Darwin",
   "config": {
     "runs": 3,
@@ -9,84 +9,124 @@
   },
   "results": [
     {
-      "framework": "Node.js raw",
-      "language": "nodejs",
+      "framework": "Tina4 Python",
+      "language": "python",
       "json_runs": [
-        73485.6446,
-        82597.7535,
-        73674.911
+        16477.8284,
+        17125.3526,
+        15750.8985
       ],
       "list_runs": [
-        24770.3479,
-        24905.6698,
-        24685.5828
+        6273.3794,
+        6347.6963,
+        6135.4204
       ],
-      "json_median": 73674.911,
-      "list_median": 24770.3479,
-      "warmup_time_ms": 37.620624992996454,
+      "json_median": 16477.8284,
+      "list_median": 6273.3794,
+      "warmup_time_ms": 73.72441599727608,
       "deps": 0,
-      "features": 1,
-      "server": "built-in http"
+      "features": 38,
+      "server": "built-in asyncio"
     },
     {
-      "framework": "Fastify",
-      "language": "nodejs",
+      "framework": "Starlette",
+      "language": "python",
       "json_runs": [
-        62610.6769,
-        69897.6462,
-        63061.1123
+        13891.2137,
+        15135.6342,
+        15316.2655
       ],
       "list_runs": [
-        23729.01,
-        24027.1988,
-        24204.5039
+        7477.0785,
+        7163.8733,
+        7635.6623
       ],
-      "json_median": 63061.1123,
-      "list_median": 24027.1988,
-      "warmup_time_ms": 42.88620798615739,
-      "deps": 10,
+      "json_median": 15135.6342,
+      "list_median": 7477.0785,
+      "warmup_time_ms": 49.82191699673422,
+      "deps": 4,
+      "features": 6,
+      "server": "uvicorn"
+    },
+    {
+      "framework": "FastAPI",
+      "language": "python",
+      "json_runs": [
+        12127.5209,
+        11732.5633,
+        11599.0767
+      ],
+      "list_runs": [
+        2453.714,
+        2438.8601,
+        2401.8036
+      ],
+      "json_median": 11732.5633,
+      "list_median": 2438.8601,
+      "warmup_time_ms": 62.36254100804217,
+      "deps": 12,
+      "features": 8,
+      "server": "uvicorn"
+    },
+    {
+      "framework": "Flask",
+      "language": "python",
+      "json_runs": [
+        5310.7645,
+        5765.1818,
+        5246.9641
+      ],
+      "list_runs": [
+        763.7644,
+        775.9238,
+        721.9218
+      ],
+      "json_median": 5310.7645,
+      "list_median": 763.7644,
+      "warmup_time_ms": 108.67262500687502,
+      "deps": 6,
+      "features": 7,
+      "server": "Werkzeug"
+    },
+    {
+      "framework": "Django",
+      "language": "python",
+      "json_runs": [
+        4355.7947,
+        4197.0729,
+        4331.5554
+      ],
+      "list_runs": [
+        2307.4196,
+        2290.6016,
+        2162.5833
+      ],
+      "json_median": 4331.5554,
+      "list_median": 2290.6016,
+      "warmup_time_ms": 80.70837499690242,
+      "deps": 20,
+      "features": 22,
+      "server": "runserver"
+    },
+    {
+      "framework": "Bottle",
+      "language": "python",
+      "json_runs": [
+        1259.428,
+        4619.0996,
+        1249.2862
+      ],
+      "list_runs": [
+        840.1613,
+        827.9795,
+        835.7245
+      ],
+      "json_median": 1259.428,
+      "list_median": 835.7245,
+      "warmup_time_ms": 90.99845899618231,
+      "deps": 0,
       "features": 5,
-      "server": "built-in"
-    },
-    {
-      "framework": "Koa",
-      "language": "nodejs",
-      "json_runs": [
-        48304.4533,
-        57635.6977,
-        58368.2284
-      ],
-      "list_runs": [
-        21344.4286,
-        22590.9909,
-        23180.3879
-      ],
-      "json_median": 57635.6977,
-      "list_median": 22590.9909,
-      "warmup_time_ms": 34.63275000103749,
-      "deps": 5,
-      "features": 3,
-      "server": "built-in"
-    },
-    {
-      "framework": "Express",
-      "language": "nodejs",
-      "json_runs": [
-        38474.1411,
-        45654.561,
-        56896.0907
-      ],
-      "list_runs": [
-        21767.7439,
-        21658.3628,
-        21338.2307
-      ],
-      "json_median": 45654.561,
-      "list_median": 21658.3628,
-      "warmup_time_ms": 58.97399998502806,
-      "deps": 3,
-      "features": 4,
-      "server": "built-in"
+      "server": "built-in wsgiref"
     }
   ]
 }
