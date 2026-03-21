@@ -191,6 +191,14 @@ def _eval_expr(expr: str, context: dict):
             return _eval_expr(ternary.group(2), context)
         return _eval_expr(ternary.group(3), context)
 
+    # Jinja2-style inline if: value if condition else other_value
+    inline_if = re.match(r"^(.+?)\s+if\s+(.+?)\s+else\s+(.+)$", expr)
+    if inline_if:
+        cond = _eval_expr(inline_if.group(2), context)
+        if cond:
+            return _eval_expr(inline_if.group(1), context)
+        return _eval_expr(inline_if.group(3), context)
+
     # Null coalescing: value ?? "default"
     if "??" in expr:
         left, _, right = expr.partition("??")
@@ -735,6 +743,16 @@ class Frond:
                     output.append(result)
                     i = skip
 
+                elif tag == "spaceless":
+                    result, skip = self._handle_spaceless(tokens, i, context)
+                    output.append(result)
+                    i = skip
+
+                elif tag == "autoescape":
+                    result, skip = self._handle_autoescape(tokens, i, context)
+                    output.append(result)
+                    i = skip
+
                 elif tag in ("block", "endblock", "extends"):
                     i += 1  # Already handled
 
@@ -1122,4 +1140,102 @@ class Frond:
         # Render and cache
         rendered = self._render_tokens(list(body_tokens), context)
         self._fragment_cache[cache_key] = (rendered, time.time() + ttl)
+        return rendered, i
+
+    def _handle_spaceless(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
+        """Handle {% spaceless %}...{% endspaceless %}.
+
+        Removes whitespace between HTML tags in the rendered content.
+        """
+        body_tokens = []
+        i = start + 1
+        depth = 0
+        while i < len(tokens):
+            if tokens[i][0] == BLOCK:
+                tag_content, _, _ = _strip_tag(tokens[i][1])
+                tag = tag_content.split()[0] if tag_content.split() else ""
+                if tag == "spaceless":
+                    depth += 1
+                    body_tokens.append(tokens[i])
+                elif tag == "endspaceless":
+                    if depth == 0:
+                        i += 1
+                        break
+                    depth -= 1
+                    body_tokens.append(tokens[i])
+                else:
+                    body_tokens.append(tokens[i])
+            else:
+                body_tokens.append(tokens[i])
+            i += 1
+
+        rendered = self._render_tokens(list(body_tokens), context)
+        # Collapse whitespace between > and <
+        rendered = re.sub(r">\s+<", "><", rendered)
+        return rendered, i
+
+    def _handle_autoescape(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
+        """Handle {% autoescape false %}...{% endautoescape %}.
+
+        When autoescape is false, variables inside the block skip HTML escaping.
+        """
+        content, _, _ = _strip_tag(tokens[start][1])
+        # Parse: autoescape false|true
+        mode_match = re.match(r"autoescape\s+(false|true)", content)
+        auto_escape_on = True
+        if mode_match and mode_match.group(1) == "false":
+            auto_escape_on = False
+
+        body_tokens = []
+        i = start + 1
+        depth = 0
+        while i < len(tokens):
+            if tokens[i][0] == BLOCK:
+                tag_content, _, _ = _strip_tag(tokens[i][1])
+                tag = tag_content.split()[0] if tag_content.split() else ""
+                if tag == "autoescape":
+                    depth += 1
+                    body_tokens.append(tokens[i])
+                elif tag == "endautoescape":
+                    if depth == 0:
+                        i += 1
+                        break
+                    depth -= 1
+                    body_tokens.append(tokens[i])
+                else:
+                    body_tokens.append(tokens[i])
+            else:
+                body_tokens.append(tokens[i])
+            i += 1
+
+        if not auto_escape_on:
+            # Render with a temporary engine that has auto-escape disabled
+            # We wrap _eval_var to skip escaping
+            original_eval_var = self._eval_var
+
+            def _no_escape_eval_var(expr, ctx):
+                var_name, filters = _parse_filter_chain(expr)
+                if self._sandbox and self._allowed_vars is not None:
+                    root_var = var_name.split(".")[0].split("[")[0].strip()
+                    if root_var and root_var not in self._allowed_vars and root_var != "loop":
+                        return ""
+                value = _eval_expr(var_name, ctx)
+                for fname, args in filters:
+                    if fname in ("raw", "safe"):
+                        continue
+                    if self._sandbox and self._allowed_filters is not None:
+                        if fname not in self._allowed_filters:
+                            continue
+                    fn = self._filters.get(fname)
+                    if fn:
+                        value = fn(value, *args)
+                # Skip auto-escape
+                return value
+
+            self._eval_var = _no_escape_eval_var
+            rendered = self._render_tokens(list(body_tokens), context)
+            self._eval_var = original_eval_var
+        else:
+            rendered = self._render_tokens(list(body_tokens), context)
+
         return rendered, i

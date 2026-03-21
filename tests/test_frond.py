@@ -485,3 +485,89 @@ class TestFromImport:
         src = '{% from "macros/forms.twig" import field %}{{ field("Name", "name") }}'
         result = engine.render_string(src, {})
         assert "Name:name" in result
+
+
+# ── Spaceless Tag Tests ────────────────────────────────────────
+
+
+class TestSpaceless:
+    def test_spaceless_removes_whitespace_between_tags(self, engine):
+        src = "{% spaceless %}<div>  <p>  Hello  </p>  </div>{% endspaceless %}"
+        result = engine.render_string(src, {})
+        assert result == "<div><p>  Hello  </p></div>"
+
+    def test_spaceless_preserves_content_whitespace(self, engine):
+        src = "{% spaceless %}<span>  text  </span>{% endspaceless %}"
+        result = engine.render_string(src, {})
+        assert result == "<span>  text  </span>"
+
+    def test_spaceless_multiline(self, engine):
+        src = "{% spaceless %}\n<div>\n    <p>Hi</p>\n</div>\n{% endspaceless %}"
+        result = engine.render_string(src, {})
+        assert "<div><p>" in result
+        assert "</p></div>" in result
+
+    def test_spaceless_with_variables(self, engine):
+        src = "{% spaceless %}<div>  <span>{{ name }}</span>  </div>{% endspaceless %}"
+        result = engine.render_string(src, {"name": "Alice"})
+        assert result == "<div><span>Alice</span></div>"
+
+
+# ── Autoescape Tag Tests ──────────────────────────────────────
+
+
+class TestAutoescape:
+    def test_autoescape_false_disables_escaping(self, engine):
+        src = '{% autoescape false %}{{ html }}{% endautoescape %}'
+        result = engine.render_string(src, {"html": "<b>bold</b>"})
+        assert result == "<b>bold</b>"
+
+    def test_autoescape_true_keeps_escaping(self, engine):
+        src = '{% autoescape true %}{{ html }}{% endautoescape %}'
+        result = engine.render_string(src, {"html": "<b>bold</b>"})
+        assert "&lt;b&gt;" in result
+
+    def test_autoescape_false_with_filters(self, engine):
+        src = '{% autoescape false %}{{ name | upper }}{% endautoescape %}'
+        result = engine.render_string(src, {"name": "alice"})
+        assert result == "ALICE"
+
+    def test_autoescape_false_multiple_variables(self, engine):
+        src = '{% autoescape false %}{{ a }} {{ b }}{% endautoescape %}'
+        result = engine.render_string(src, {"a": "<i>x</i>", "b": "<b>y</b>"})
+        assert result == "<i>x</i> <b>y</b>"
+
+
+# ── Inline If Expression Tests ────────────────────────────────
+
+
+class TestInlineIf:
+    def test_inline_if_true(self, engine):
+        src = "{{ 'yes' if active else 'no' }}"
+        result = engine.render_string(src, {"active": True})
+        assert result == "yes"
+
+    def test_inline_if_false(self, engine):
+        src = "{{ 'yes' if active else 'no' }}"
+        result = engine.render_string(src, {"active": False})
+        assert result == "no"
+
+    def test_inline_if_with_variable(self, engine):
+        src = "{{ name if name else 'Anonymous' }}"
+        result = engine.render_string(src, {"name": "Alice"})
+        assert result == "Alice"
+
+    def test_inline_if_with_missing_variable(self, engine):
+        src = "{{ name if name else 'Anonymous' }}"
+        result = engine.render_string(src, {})
+        assert result == "Anonymous"
+
+    def test_inline_if_with_comparison(self, engine):
+        src = "{{ 'adult' if age >= 18 else 'minor' }}"
+        result = engine.render_string(src, {"age": 21})
+        assert result == "adult"
+
+    def test_inline_if_numeric(self, engine):
+        src = "{{ count if count else 0 }}"
+        result = engine.render_string(src, {"count": 5})
+        assert result == "5"
