@@ -375,11 +375,16 @@ if __name__ == "__main__":
 ### Package Manager
 
 ```bash
-uv add tina4-python          # Add dependency
-uv run tina4python start            # Start dev server on port 7145
-uv run tina4python init .           # Scaffold project structure
-uv run tina4python migrate          # Run pending SQL migrations
-uv run tina4python migrate:create "description"  # Create a migration file
+uv add tina4-python                         # Add dependency
+uv run tina4python start                    # Start dev server on port 7145
+uv run tina4python serve --production       # Auto-install and use uvicorn
+uv run tina4python init .                   # Scaffold project structure
+uv run tina4python migrate                  # Run pending SQL migrations
+uv run tina4python migrate:create "desc"    # Create a migration file
+uv run tina4python generate model <name>    # Generate ORM model scaffold
+uv run tina4python generate route <name>    # Generate route scaffold
+uv run tina4python generate migration <d>   # Generate migration file
+uv run tina4python generate middleware <n>  # Generate middleware scaffold
 ```
 
 ## Development Mode (DevReload)
@@ -1756,5 +1761,20 @@ async def dashboard(request, response):
 </div>
 {% endblock %}
 ```
+
+## v3 Features Summary
+
+- **38 built-in features**, zero third-party dependencies
+- **1,633 tests** passing across all modules
+- **Production server auto-detect**: `tina4python serve --production` auto-installs uvicorn
+- **`tina4python generate`**: model, route, migration, middleware scaffolding
+- **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), query caching (`TINA4_DB_CACHE=true`, `cache_stats()`, `cache_clear()`)
+- **Sessions**: 4 backends (file, Redis/Valkey, MongoDB, database)
+- **Queue**: SQLite/RabbitMQ/Kafka backends, configured via env vars
+- **Cache**: memory/Redis/file backends
+- **Messenger**: .env driven SMTP/IMAP
+- **ORM relationships**: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)
+- **Frond pre-compilation**: 2.8x template render improvement, `Frond.clear_cache()`
+- **Gallery**: 7 interactive examples with Try It deploy at `/__dev/`
 
 

@@ -10,8 +10,8 @@
 
 | Metric | Value |
 |--------|-------|
-| Total Tests | 1,516 |
-| Passed | 1,516 |
+| Total Tests | 1,633 |
+| Passed | 1,633 |
 | Failed | 0 |
 | Errors | 0 |
 | Status | **PASS** |
@@ -108,7 +108,7 @@
 | PHP | 8.25s | 0.017g | 152.1 |
 | Ruby | 6.86s | 0.014g | 221.0 |
 | Node.js | 18.00s | 0.038g | 89.5 |
-| **Total** | **45.94s** | **0.094g** | — |
+| **Total (6,183 tests)** | **45.94s** | **0.094g** | — |
 
 ---
 
@@ -116,7 +116,7 @@
 
 | Criterion | Score | Notes |
 |-----------|-------|-------|
-| Test Coverage | 1,516 tests | All passing |
+| Test Coverage | 1,633 tests | All passing |
 | Zero Dependencies | Core has no third-party deps | stdlib only |
 | Feature Parity | 78/78 | 100% cross-framework |
 | Code Quality | Clean, DRY, separation of concerns | Enforced via CLAUDE.md |

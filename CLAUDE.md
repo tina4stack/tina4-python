@@ -505,6 +505,18 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Debug error overlay via `tina4_python.debug.error_overlay`
 - Inline testing via `tina4_python.Testing` (decorator-based assertions)
 - HTML builder via `tina4_python.HtmlElement` (programmatic HTML generation)
+- Messenger via `tina4_python.messenger` (.env driven, SMTP/IMAP)
+- SQL Translation via `tina4_python.database.adapter` (cross-engine SQL portability + query cache)
+- CLI scaffolding: `tina4python generate model/route/migration/middleware`
+- Production server auto-detection: `tina4python serve --production` (auto-installs uvicorn)
+- Frond pre-compilation for 2.8x template render improvement (clear_cache method)
+- DB query caching: `TINA4_DB_CACHE=true` env var, `cache_stats()`, `cache_clear()`
+- ORM relationships: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)
+- Queue backends: SQLite (default), RabbitMQ, Kafka — configured via env vars
+- Cache backends: memory (default), Redis, file — configured via env vars
+- Session backends: file, Redis, Valkey, MongoDB, database
+- Gallery: 7 interactive examples with Try It deploy at `/__dev/`
+- Tests: 1,633 passing (38 modules)
 - Version: 3.0.0
 
 ## Links
