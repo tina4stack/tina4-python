@@ -300,12 +300,16 @@ async def _api_routes(request, response):
     """List all registered routes."""
     try:
         from tina4_python.core.router import Router
+        internal_prefixes = ("/__dev", "/health", "/swagger")
         routes = Router.all()
         result = []
         for r in routes:
+            path = r.get("path", "")
+            if path.startswith(internal_prefixes):
+                continue
             result.append({
                 "method": r.get("method", "GET"),
-                "path": r.get("path", ""),
+                "path": path,
                 "auth_required": r.get("auth_required", False),
                 "handler": r["handler"].__name__ if r.get("handler") else "?",
                 "module": r["handler"].__module__ if r.get("handler") else "?",
