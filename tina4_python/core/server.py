@@ -147,74 +147,135 @@ def _has_index_template() -> bool:
 
 def _render_landing_page() -> str:
     """Render the built-in Tina4 welcome page shown when no / route exists."""
-    routes = Router.all()
-    route_rows = ""
-    for r in routes:
-        flags = []
-        if r.get("cached"):
-            flags.append('<span style="background:#e3f2fd;color:#1565c0;padding:1px 6px;border-radius:3px;font-size:11px">CACHE</span>')
-        if r.get("auth"):
-            flags.append('<span style="background:#fce4ec;color:#c62828;padding:1px 6px;border-radius:3px;font-size:11px">AUTH</span>')
-        flag_str = " ".join(flags)
-        path = r.get("path", "")
-        method = r.get("method", "")
-        route_rows += f'<tr><td><code>{method}</code></td><td><a href="{path}">{path}</a></td><td>{flag_str}</td></tr>'
-
-    is_dev = os.environ.get("TINA4_DEBUG_LEVEL", "").upper() in ("DEBUG", "ALL")
-    mode = '<span style="color:#4caf50">Development</span>' if is_dev else '<span style="color:#ff9800">Production</span>'
-
+    port = os.environ.get("PORT", "7145")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Tina4 Python v{__version__}</title>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; }}
-        .hero {{ background: linear-gradient(135deg, #1565c0, #1976d2); color: white; padding: 60px 20px; text-align: center; }}
-        .hero h1 {{ font-size: 2.5em; margin-bottom: 10px; }}
-        .hero p {{ font-size: 1.2em; opacity: 0.9; }}
-        .container {{ max-width: 800px; margin: 0 auto; padding: 30px 20px; }}
-        .card {{ background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }}
-        .card h2 {{ color: #1565c0; margin-bottom: 12px; font-size: 1.3em; }}
-        table {{ width: 100%; border-collapse: collapse; }}
-        th, td {{ text-align: left; padding: 8px 12px; border-bottom: 1px solid #eee; }}
-        th {{ color: #666; font-size: 0.85em; text-transform: uppercase; }}
-        code {{ background: #e3f2fd; padding: 2px 8px; border-radius: 4px; font-size: 0.9em; color: #1565c0; }}
-        a {{ color: #1565c0; text-decoration: none; }}
-        a:hover {{ text-decoration: underline; }}
-        .get-started {{ background: #e3f2fd; border-left: 4px solid #1565c0; padding: 16px; border-radius: 0 8px 8px 0; }}
-        .get-started code {{ display: block; margin-top: 8px; background: #333; color: #4caf50; padding: 8px 12px; border-radius: 4px; }}
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tina4</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;position:relative}}
+.bg-watermark{{position:fixed;bottom:-5%;right:-5%;width:45%;opacity:0.04;pointer-events:none;z-index:0}}
+.hero{{text-align:center;z-index:1;padding:3rem 2rem 2rem}}
+.logo{{width:120px;height:120px;margin-bottom:1.5rem}}
+h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
+.tagline{{color:#64748b;font-size:1.1rem;margin-bottom:2rem}}
+.actions{{display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;margin-bottom:2.5rem}}
+.btn{{padding:0.6rem 1.5rem;border-radius:0.5rem;font-size:0.9rem;font-weight:600;cursor:pointer;text-decoration:none;transition:all 0.15s;border:1px solid #334155;color:#94a3b8;background:transparent}}
+.btn:hover{{border-color:#64748b;color:#e2e8f0}}
+.btn-primary{{background:#3572A5;color:#fff;border-color:#3572A5}}
+.btn-primary:hover{{opacity:0.9;transform:translateY(-1px)}}
+.status{{display:flex;gap:2rem;justify-content:center;align-items:center;color:#64748b;font-size:0.85rem;margin-bottom:1.5rem}}
+.status .dot{{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:0.4rem}}
+.footer{{color:#334155;font-size:0.8rem;letter-spacing:0.5px}}
+.section{{z-index:1;width:100%;max-width:800px;padding:0 2rem;margin-bottom:2.5rem}}
+.card{{background:#1e293b;border-radius:0.75rem;padding:2rem;border:1px solid #334155}}
+.card h2{{font-size:1.4rem;font-weight:600;margin-bottom:1.25rem;color:#e2e8f0}}
+.code-block{{background:#0f172a;border-radius:0.5rem;padding:1.25rem;overflow-x:auto;font-family:'SF Mono',SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace;font-size:0.85rem;line-height:1.6;color:#4ade80;border:1px solid #1e293b}}
+.gallery{{z-index:1;width:100%;max-width:800px;padding:0 2rem;margin-bottom:3rem}}
+.gallery h2{{font-size:1.4rem;font-weight:600;margin-bottom:1.25rem;color:#e2e8f0;text-align:center}}
+.gallery-grid{{display:flex;gap:1rem;flex-wrap:wrap}}
+.gallery-card{{flex:1 1 220px;background:#1e293b;border:1px solid #334155;border-radius:0.75rem;padding:1.5rem;position:relative;overflow:hidden}}
+.gallery-card .accent{{position:absolute;top:0;left:0;right:0;height:3px}}
+.gallery-card .accent-blue{{background:#3572A5}}
+.gallery-card .accent-green{{background:#22c55e}}
+.gallery-card .accent-purple{{background:#a78bfa}}
+.gallery-card .icon{{font-size:1.5rem;margin-bottom:0.75rem}}
+.gallery-card h3{{font-size:1rem;font-weight:600;margin-bottom:0.5rem;color:#e2e8f0}}
+.gallery-card p{{font-size:0.85rem;color:#94a3b8;line-height:1.5}}
+</style>
 </head>
 <body>
-    <div class="hero">
-        <h1>Tina4 Python</h1>
-        <p>This is not a 4ramework &mdash; v{__version__} &mdash; {mode}</p>
+<img src="/images/logo.png" class="bg-watermark" alt="">
+<div class="hero">
+    <img src="/images/logo.png" class="logo" alt="Tina4">
+    <h1>Tina4</h1>
+    <p class="tagline">This is not a framework</p>
+    <div class="actions">
+        <a href="/__dev/" class="btn btn-primary">Dev Admin</a>
+        <a href="#gallery" class="btn">Gallery</a>
     </div>
-    <div class="container">
-        <div class="card">
-            <h2>Registered Routes</h2>
-            <table>
-                <thead><tr><th>Method</th><th>Path</th><th>Flags</th></tr></thead>
-                <tbody>{route_rows}</tbody>
-            </table>
+    <div class="status">
+        <span><span class="dot"></span>Server running</span>
+        <span>Port {port}</span>
+        <span>v{__version__}</span>
+    </div>
+    <p class="footer">Zero dependencies &middot; Convention over configuration</p>
+</div>
+<div class="section">
+    <div class="card">
+        <h2>Getting Started</h2>
+        <pre class="code-block"><code><span style="color:#64748b"># app.py</span>
+<span style="color:#c084fc">from</span> tina4_python.core <span style="color:#c084fc">import</span> run
+<span style="color:#c084fc">from</span> tina4_python.Router <span style="color:#c084fc">import</span> get
+
+<span style="color:#fbbf24">@get</span>(<span style="color:#4ade80">"/hello"</span>)
+<span style="color:#c084fc">async def</span> <span style="color:#38bdf8">hello</span>(request, response):
+    <span style="color:#c084fc">return</span> response({{"message": <span style="color:#4ade80">"Hello World!"</span>}})
+
+run()  <span style="color:#64748b"># starts on port 7145</span></code></pre>
+    </div>
+</div>
+<div class="gallery">
+    <h2 id="gallery">What You Can Build</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;">
+        <div class="gallery-card">
+            <div class="accent accent-blue"></div>
+            <div class="icon">&#128640;</div>
+            <h3>REST API</h3>
+            <p>Define routes with one decorator</p>
+            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">@get("/api/users")
+async def users(req, res):
+    return res({{"users": []}})</pre>
         </div>
-        <div class="card get-started">
-            <h2>Get Started</h2>
-            <p>Create your first route file:</p>
-            <code>src/routes/hello.py</code>
-            <p style="margin-top: 12px">Example route:</p>
-            <code>@get("/hello")<br>async def hello(request, response):<br>&nbsp;&nbsp;&nbsp;&nbsp;return response({{"hello": "world"}})</code>
+        <div class="gallery-card">
+            <div class="accent accent-green"></div>
+            <div class="icon">&#128451;</div>
+            <h3>ORM</h3>
+            <p>Active record models, zero config</p>
+            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">class User(ORM):
+    id = IntegerField(primary_key=True)
+    name = StringField()</pre>
         </div>
-        <div class="card">
-            <h2>Quick Links</h2>
-            <p><a href="/health">/health</a> &mdash; Health check endpoint</p>
-            <p style="margin-top: 8px"><a href="/swagger">/swagger</a> &mdash; API documentation</p>
-            <p style="margin-top: 8px"><a href="https://tina4.com" target="_blank">tina4.com</a> &mdash; Full documentation</p>
+        <div class="gallery-card">
+            <div class="accent accent-purple"></div>
+            <div class="icon">&#128274;</div>
+            <h3>Auth</h3>
+            <p>JWT tokens built-in</p>
+            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">token = Auth.get_token({{"user_id": 1}})
+valid = Auth.valid_token(token)</pre>
+        </div>
+        <div class="gallery-card">
+            <div class="accent accent-blue"></div>
+            <div class="icon">&#9889;</div>
+            <h3>Queue</h3>
+            <p>Background jobs, no Redis needed</p>
+            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">producer = Producer(Queue("emails"))
+producer.produce({{"to": "a@b.com"}})</pre>
+        </div>
+        <div class="gallery-card">
+            <div class="accent accent-green"></div>
+            <div class="icon">&#128196;</div>
+            <h3>Templates</h3>
+            <p>Twig templates with auto-reload</p>
+            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">@template("dashboard.twig")
+@get("/dashboard")
+async def dash(req, res):
+    return {{"title": "Home"}}</pre>
+        </div>
+        <div class="gallery-card">
+            <div class="accent accent-purple"></div>
+            <div class="icon">&#128225;</div>
+            <h3>Database</h3>
+            <p>Multi-engine, one API</p>
+            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">db = Database("sqlite:///app.db")
+result = db.fetch("SELECT * FROM users")
+for row in result: print(row["name"])</pre>
         </div>
     </div>
+</div>
 </body>
 </html>"""
 

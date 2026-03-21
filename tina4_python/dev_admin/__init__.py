@@ -1648,14 +1648,45 @@ def render_overlay_script() -> str:
     return """<script>
 (function(){
     if (document.getElementById('tina4-dev-btn')) return;
+    var FRAMEWORK_COLOR = '#3572A5';
     var btn = document.createElement('div');
     btn.id = 'tina4-dev-btn';
     btn.innerHTML = '<img src="https://tina4.com/logo.svg" style="width:1.5rem;height:1.5rem" alt="T4">';
     btn.title = 'Tina4 Dev Admin';
-    btn.style.cssText = 'position:fixed;bottom:1rem;right:1rem;width:2.5rem;height:2.5rem;background:#3b82f6;color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-weight:700;font-size:0.8rem;font-family:system-ui;z-index:99999;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:transform 0.15s,opacity 0.15s;opacity:0.5';
+    btn.style.cssText = 'position:fixed;bottom:1rem;right:1rem;width:2.5rem;height:2.5rem;background:'+FRAMEWORK_COLOR+';color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-weight:700;font-size:0.8rem;font-family:system-ui;z-index:99999;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:transform 0.15s,opacity 0.15s;opacity:0.5';
     btn.onmouseover = function(){ this.style.transform='scale(1.1)'; this.style.opacity='1'; };
     btn.onmouseout = function(){ this.style.transform='scale(1)'; this.style.opacity='0.5'; };
-    btn.onclick = function(){ window.open('/__dev/', '_blank'); };
+    btn.onclick = function(){
+        var panel = document.getElementById('tina4-dev-panel');
+        if (panel) { panel.style.display = panel.style.display === 'none' ? 'block' : 'none'; return; }
+        var container = document.createElement('div');
+        container.id = 'tina4-dev-panel';
+        container.style.cssText = 'position:fixed;bottom:4rem;right:1rem;width:min(90vw,1200px);height:min(80vh,700px);z-index:99998;transition:all 0.2s';
+        var fsBtn = document.createElement('div');
+        fsBtn.innerHTML = '\u26F6';
+        fsBtn.title = 'Toggle fullscreen';
+        fsBtn.style.cssText = 'position:absolute;top:0.25rem;right:0.25rem;width:1.5rem;height:1.5rem;background:'+FRAMEWORK_COLOR+';color:#fff;border-radius:0.25rem;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:0.9rem;z-index:99999;opacity:0.7';
+        fsBtn.onmouseover = function(){ this.style.opacity='1'; };
+        fsBtn.onmouseout = function(){ this.style.opacity='0.7'; };
+        var isFullscreen = false;
+        fsBtn.onclick = function(e){
+            e.stopPropagation();
+            isFullscreen = !isFullscreen;
+            if (isFullscreen) {
+                container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:99998;transition:all 0.2s';
+                iframe.style.borderRadius = '0';
+            } else {
+                container.style.cssText = 'position:fixed;bottom:4rem;right:1rem;width:min(90vw,1200px);height:min(80vh,700px);z-index:99998;transition:all 0.2s';
+                iframe.style.borderRadius = '0.5rem';
+            }
+        };
+        var iframe = document.createElement('iframe');
+        iframe.src = '/__dev/';
+        iframe.style.cssText = 'width:100%;height:100%;border:1px solid '+FRAMEWORK_COLOR+';border-radius:0.5rem;box-shadow:0 8px 32px rgba(0,0,0,0.5);background:#0f172a';
+        container.appendChild(iframe);
+        container.appendChild(fsBtn);
+        document.body.appendChild(container);
+    };
     document.body.appendChild(btn);
 })();
 </script>"""
