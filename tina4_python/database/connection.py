@@ -31,6 +31,23 @@ try:
 except ImportError:
     pass  # pyodbc not installed — that's fine
 
+# Register PostgreSQL (psycopg2 — optional)
+from tina4_python.database.postgres import PostgreSQLAdapter
+register_driver("postgresql", PostgreSQLAdapter)
+register_driver("postgres", PostgreSQLAdapter)
+
+# Register MySQL (mysql-connector-python — optional)
+from tina4_python.database.mysql import MySQLAdapter
+register_driver("mysql", MySQLAdapter)
+
+# Register MSSQL (pymssql — optional)
+from tina4_python.database.mssql import MSSQLAdapter
+register_driver("mssql", MSSQLAdapter)
+
+# Register Firebird (fdb — optional)
+from tina4_python.database.firebird import FirebirdAdapter
+register_driver("firebird", FirebirdAdapter)
+
 
 class Database:
     """Database connection manager.

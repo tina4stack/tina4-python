@@ -494,10 +494,43 @@ def _write_broken(request: Request, error: Exception):
     (broken_dir / filename).write_text(json.dumps(data, indent=2))
 
 
-def run(host: str = "localhost", port: int = 7145):
+def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> tuple[str, int]:
+    """Resolve host/port with priority: CLI flag > ENV var > default.
+
+    Args:
+        cli_host: Host from CLI flag (--host or positional), or None.
+        cli_port: Port from CLI flag (--port or positional), or None.
+
+    Returns:
+        (host, port) tuple with resolved values.
+    """
+    default_host = "0.0.0.0"
+    default_port = 7145
+
+    # Host: CLI flag > HOST env > default
+    if cli_host is not None:
+        host = cli_host
+    else:
+        host = os.environ.get("HOST", default_host)
+
+    # Port: CLI flag > PORT env > default
+    if cli_port is not None:
+        port = cli_port
+    else:
+        env_port = os.environ.get("PORT")
+        port = int(env_port) if env_port and env_port.isdigit() else default_port
+
+    return host, port
+
+
+def run(host: str | None = None, port: int | None = None):
     """Start the Tina4 dev server.
 
     Discovers routes from src/, starts ASGI server, handles shutdown.
+
+    Args:
+        host: Bind address. Falls back to HOST env var, then 0.0.0.0.
+        port: Bind port. Falls back to PORT env var, then 7145.
     """
     import time
     global _start_time
@@ -524,15 +557,8 @@ def run(host: str = "localhost", port: int = 7145):
     route_count = len(Router.all())
     Log.info(f"Discovered {route_count} routes")
 
-    # Parse CLI args
-    if len(sys.argv) > 1:
-        arg = sys.argv[1].strip()
-        if ":" in arg:
-            h, _, p = arg.partition(":")
-            host = h or host
-            port = int(p) if p.isdigit() else port
-        elif arg.isdigit():
-            port = int(arg)
+    # Resolve host/port (CLI arg > ENV > default)
+    host, port = resolve_config(cli_host=host, cli_port=port)
 
     display = "localhost" if host in ("0.0.0.0", "::") else host
     Log.info(f"Server started http://{display}:{port}")

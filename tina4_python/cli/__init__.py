@@ -58,7 +58,7 @@ Usage: tina4python <command> [options]
 
 Commands:
   init [dir]            Scaffold a new project
-  serve [port]          Start development server (default: 7145)
+  serve [--host H] [--port P]  Start dev server (default: 0.0.0.0:7145)
   migrate               Run pending database migrations
   migrate:create <desc> Create a new migration file
   migrate:rollback      Rollback last migration batch
@@ -157,12 +157,37 @@ def _init(args):
 
 
 def _serve(args):
-    """Start the development server."""
-    port = int(args[0]) if args else 7145
+    """Start the development server.
+
+    Supports:
+        tina4python serve                     # defaults
+        tina4python serve 8080                # positional port
+        tina4python serve --port 8080         # flag port
+        tina4python serve --host 127.0.0.1    # flag host
+        tina4python serve --host 127.0.0.1 --port 8080
+    """
     os.environ.setdefault("TINA4_DEBUG_LEVEL", "DEBUG")
 
+    cli_host = None
+    cli_port = None
+
+    # Parse flags and positional args
+    i = 0
+    while i < len(args):
+        if args[i] == "--port" and i + 1 < len(args):
+            cli_port = int(args[i + 1])
+            i += 2
+        elif args[i] == "--host" and i + 1 < len(args):
+            cli_host = args[i + 1]
+            i += 2
+        elif args[i].isdigit() and cli_port is None:
+            cli_port = int(args[i])
+            i += 1
+        else:
+            i += 1
+
     from tina4_python.core import run
-    run(host="0.0.0.0", port=port)
+    run(host=cli_host, port=cli_port)
 
 
 def _migrate(args):

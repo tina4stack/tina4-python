@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }} - {{ APP_NAME }}</title>
+    <link rel="stylesheet" href="/css/tina4.min.css">
+</head>
+<body>
+    <div class="container mt-4">
+        <h1>{{ title }}</h1>
+        <p>{{ message }}</p>
+
+        <h2 class="mt-4">API Endpoints</h2>
+        <ul>
+            <li><a href="/api/hello">/api/hello</a> - JSON greeting</li>
+            <li><a href="/api/users">/api/users</a> - List all users</li>
+            <li><a href="/swagger">/swagger</a> - API documentation</li>
+        </ul>
+
+        <p class="mt-4">
+            Visit <a href="https://tina4.com">tina4.com</a> for full documentation.
+        </p>
+    </div>
+</body>
+</html>
