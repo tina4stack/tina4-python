@@ -440,17 +440,23 @@ async def app(scope: dict, receive, send):
                                         {"method": request.method, "path": request.path})
                 except Exception:
                     pass
-            import traceback
-            tb = traceback.format_exc()
-            html = _render_error_page(500, request.path, request_id, tb)
-            if html:
-                response.status(500).html(html)
+            if _is_dev:
+                # Rich error overlay with stack trace, source context, and line numbers
+                from tina4_python.debug.error_overlay import render_error_overlay
+                overlay_html = render_error_overlay(e, request)
+                response.status(500).html(overlay_html)
             else:
-                response.status(500).json({
-                    "error": "Internal Server Error",
-                    "request_id": request_id,
-                    "status": 500,
-                })
+                import traceback
+                tb = traceback.format_exc()
+                html = _render_error_page(500, request.path, request_id, tb)
+                if html:
+                    response.status(500).html(html)
+                else:
+                    response.status(500).json({
+                        "error": "Internal Server Error",
+                        "request_id": request_id,
+                        "status": 500,
+                    })
     else:
         # Try serving static file
         static = _try_static(request.path)

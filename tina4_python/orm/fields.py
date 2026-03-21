@@ -154,6 +154,9 @@ def TextField(**kwargs):
 def BlobField(**kwargs):
     return _make_field(bytes, "BlobField", **kwargs)
 
+def NumericField(**kwargs):
+    return _make_field(float, "NumericField", **kwargs)
+
 # Short aliases — kept for backwards compatibility
 IntField = IntegerField
 StrField = StringField

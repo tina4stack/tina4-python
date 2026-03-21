@@ -1,5 +1,5 @@
 """Gallery: ORM — Product model."""
-from tina4_python.orm.fields import IntegerField, StringField
+from tina4_python.orm.fields import IntegerField, StringField, NumericField
 
 
 class Product:
@@ -7,4 +7,4 @@ class Product:
     id = IntegerField(primary_key=True, auto_increment=True)
     name = StringField()
     description = StringField()
-    price = StringField()  # stored as string, format on display
+    price = NumericField()

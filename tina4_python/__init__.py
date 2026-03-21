@@ -26,7 +26,7 @@ from tina4_python.core.constants import (  # noqa: E402, F401
 from tina4_python.orm import (  # noqa: E402, F401
     ORM, orm_bind, Field,
     IntegerField, StringField, BooleanField, FloatField,
-    DateTimeField, TextField, BlobField,
+    DateTimeField, TextField, BlobField, NumericField,
     IntField, StrField, BoolField,  # short aliases
 )
 
