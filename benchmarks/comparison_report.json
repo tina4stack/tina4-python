@@ -5,20 +5,20 @@
       "benchmark": "JSON serialization",
       "frameworks": {
         "Tina4": {
-          "time_s": 0.0064,
-          "ops_per_sec": 155305.6
+          "time_s": 0.0033,
+          "ops_per_sec": 301155.7
         },
         "Flask": {
-          "time_s": 0.0041,
-          "ops_per_sec": 245265.9
+          "time_s": 0.004,
+          "ops_per_sec": 252453.5
         },
         "Starlette": {
-          "time_s": 0.0541,
-          "ops_per_sec": 18471.3
+          "time_s": 0.0201,
+          "ops_per_sec": 49673.9
         },
         "Django": {
-          "time_s": 0.0033,
-          "ops_per_sec": 301201.1
+          "time_s": 0.0035,
+          "ops_per_sec": 288773.9
         }
       }
     },
@@ -26,20 +26,20 @@
       "benchmark": "Template rendering",
       "frameworks": {
         "Tina4": {
-          "time_s": 0.2052,
-          "ops_per_sec": 4872.1
+          "time_s": 0.2074,
+          "ops_per_sec": 4822.2
         },
         "Flask": {
-          "time_s": 0.0214,
-          "ops_per_sec": 46626.5
+          "time_s": 0.0206,
+          "ops_per_sec": 48556.9
         },
         "Starlette": {
-          "time_s": 0.0204,
-          "ops_per_sec": 48970.8
+          "time_s": 0.0201,
+          "ops_per_sec": 49787.3
         },
         "Django": {
-          "time_s": 0.1292,
-          "ops_per_sec": 7742.0
+          "time_s": 0.1214,
+          "ops_per_sec": 8235.3
         }
       }
     },
@@ -47,12 +47,12 @@
       "benchmark": "URL routing (100 routes)",
       "frameworks": {
         "Tina4": {
-          "time_s": 0.4093,
-          "ops_per_sec": 2443.4
+          "time_s": 0.3905,
+          "ops_per_sec": 2560.6
         },
         "Flask": {
-          "time_s": 13.5078,
-          "ops_per_sec": 74.0
+          "time_s": 13.3303,
+          "ops_per_sec": 75.0
         },
         "Starlette": {
           "error": "The starlette.testclient module requires the httpx package to be installed.\nYou can install this with:\n    $ pip install httpx\n"
@@ -67,19 +67,19 @@
       "frameworks": {
         "Tina4": {
           "time_s": 0.0001,
-          "ops_per_sec": 7897334.4
+          "ops_per_sec": 8113589.8
         },
         "Flask": {
-          "time_s": 0.0026,
-          "ops_per_sec": 386604.2
+          "time_s": 0.0024,
+          "ops_per_sec": 416536.5
         },
         "Starlette": {
           "time_s": 0.0005,
-          "ops_per_sec": 1965922.7
+          "ops_per_sec": 2160802.7
         },
         "Django": {
-          "time_s": 0.0025,
-          "ops_per_sec": 400808.4
+          "time_s": 0.0024,
+          "ops_per_sec": 415217.7
         }
       }
     }
