@@ -148,3 +148,12 @@ def reset_env() -> None:
     for key in _loaded_keys:
         os.environ.pop(key, None)
     _loaded_keys = []
+
+
+def is_truthy(val) -> bool:
+    """Check if a value is truthy for env boolean checks.
+
+    Accepts: "true", "True", "TRUE", "1", "yes", "Yes", "YES", "on", "On", "ON".
+    Everything else is falsy (including empty string, None, not set).
+    """
+    return str(val).strip().lower() in ("true", "1", "yes", "on")

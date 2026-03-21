@@ -11,9 +11,8 @@ Production: JSON lines → logs/tina4.log (with rotation)
 Development: Human-readable → stdout + logs/tina4.log
 """
 import os
+import re
 import json
-import gzip
-import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +20,9 @@ from pathlib import Path
 
 # Request ID context (set per-request by middleware)
 _request_id_var = threading.local()
+
+# Regex to strip ANSI escape codes
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 
 def set_request_id(request_id: str):
@@ -33,20 +35,31 @@ def get_request_id() -> str | None:
     return getattr(_request_id_var, "id", None)
 
 
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return _ANSI_RE.sub("", text)
+
+
 class _LogWriter:
-    """File writer with rotation support."""
+    """File writer with numbered rotation support.
+
+    Rotation scheme:
+        tina4.log → tina4.log.1 → tina4.log.2 → ... → tina4.log.{keep}
+
+    When tina4.log exceeds max_size:
+    1. Delete tina4.log.{keep} if it exists
+    2. Rename tina4.log.{n} → tina4.log.{n+1} for all existing rotated files
+    3. Rename tina4.log → tina4.log.1
+    4. Create new empty tina4.log
+    """
 
     def __init__(self, log_dir: str = "logs", filename: str = "tina4.log",
-                 max_size: int = 10 * 1024 * 1024, retain_days: int = 30,
-                 compress: bool = True):
+                 max_size_mb: int = 10, keep: int = 5):
         self.log_dir = Path(log_dir)
         self.filename = filename
-        self.max_size = max_size
-        self.retain_days = retain_days
-        self.compress = compress
+        self.max_size = max_size_mb * 1024 * 1024
+        self.keep = keep
         self._lock = threading.Lock()
-        self._current_date = None
-        self._file = None
         self._ensure_dir()
 
     def _ensure_dir(self):
@@ -56,80 +69,50 @@ class _LogWriter:
         return self.log_dir / self.filename
 
     def _rotate_if_needed(self):
-        today = datetime.now().strftime("%Y-%m-%d")
         log_path = self._log_path()
 
-        needs_rotate = False
+        if not log_path.exists():
+            return
 
-        # Date-based rotation
-        if self._current_date and self._current_date != today:
-            needs_rotate = True
+        try:
+            if log_path.stat().st_size < self.max_size:
+                return
+        except OSError:
+            return
 
-        # Size-based rotation
-        if log_path.exists() and log_path.stat().st_size >= self.max_size:
-            needs_rotate = True
-
-        if needs_rotate and log_path.exists():
-            # Close current file
-            if self._file:
-                self._file.close()
-                self._file = None
-
-            # Rename to dated file
-            date_str = self._current_date or today
-            stem = Path(self.filename).stem
-            rotated = self.log_dir / f"{stem}.{date_str}.log"
-            counter = 0
-            while rotated.exists():
-                counter += 1
-                rotated = self.log_dir / f"{stem}.{date_str}.{counter}.log"
-
-            log_path.rename(rotated)
-
-            # Compress old logs (>2 days) in background
-            if self.compress:
-                threading.Thread(target=self._compress_old, daemon=True).start()
-
-            # Prune old logs
-            threading.Thread(target=self._prune_old, daemon=True).start()
-
-        self._current_date = today
-
-    def _compress_old(self):
-        """Gzip log files older than 2 days."""
-        cutoff = datetime.now().timestamp() - (2 * 86400)
-        for f in self.log_dir.glob("*.log"):
-            if f.name == self.filename:
-                continue
-            if f.stat().st_mtime < cutoff:
-                gz_path = f.with_suffix(".log.gz")
-                if not gz_path.exists():
-                    try:
-                        with open(f, "rb") as fin, gzip.open(gz_path, "wb") as fout:
-                            shutil.copyfileobj(fin, fout)
-                        f.unlink()
-                    except OSError:
-                        pass
-
-    def _prune_old(self):
-        """Delete logs older than retain_days."""
-        cutoff = datetime.now().timestamp() - (self.retain_days * 86400)
-        for f in self.log_dir.glob("*"):
-            if f.name == self.filename:
-                continue
+        # Delete the oldest rotated file if it exists
+        oldest = self.log_dir / f"{self.filename}.{self.keep}"
+        if oldest.exists():
             try:
-                if f.stat().st_mtime < cutoff:
-                    f.unlink()
+                oldest.unlink()
             except OSError:
                 pass
 
+        # Shift existing rotated files: .{n} → .{n+1}
+        for n in range(self.keep - 1, 0, -1):
+            src = self.log_dir / f"{self.filename}.{n}"
+            dst = self.log_dir / f"{self.filename}.{n + 1}"
+            if src.exists():
+                try:
+                    src.rename(dst)
+                except OSError:
+                    pass
+
+        # Rename current log to .1
+        try:
+            log_path.rename(self.log_dir / f"{self.filename}.1")
+        except OSError:
+            pass
+
     def write(self, line: str):
+        """Write a line to the log file, stripping ANSI codes. Rotates if needed."""
+        clean_line = _strip_ansi(line)
         with self._lock:
             self._rotate_if_needed()
             log_path = self._log_path()
             try:
                 with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(line + "\n")
+                    f.write(clean_line + "\n")
             except OSError:
                 pass  # Can't write logs — don't crash the app
 
@@ -147,13 +130,17 @@ class Log:
 
     @classmethod
     def init(cls, log_dir: str = "logs", level: str = "info",
-             production: bool = False, max_size: int = 10 * 1024 * 1024,
-             retain_days: int = 30, compress: bool = True):
+             production: bool = False):
         """Initialize the logger. Called once at startup."""
         cls._level = level.lower()
         cls._is_production = production
-        cls._writer = _LogWriter(log_dir, "tina4.log", max_size, retain_days, compress)
-        cls._error_writer = _LogWriter(log_dir, "error.log", max_size, retain_days, compress)
+
+        # Read rotation config from env (with defaults)
+        max_size_mb = int(os.environ.get("TINA4_LOG_MAX_SIZE", "10"))
+        keep = int(os.environ.get("TINA4_LOG_KEEP", "5"))
+
+        cls._writer = _LogWriter(log_dir, "tina4.log", max_size_mb, keep)
+        cls._error_writer = _LogWriter(log_dir, "error.log", max_size_mb, keep)
         cls._initialized = True
 
     @classmethod
@@ -205,17 +192,15 @@ class Log:
 
     @classmethod
     def _log(cls, level: str, message: str, **kwargs):
-        if not cls._should_log(level):
-            return
-
+        # File always gets ALL levels (no filtering for file output)
         line = cls._format(level, message, **kwargs)
 
-        # Always print to stdout in dev with ANSI colors
-        if not cls._is_production:
+        # Console output respects TINA4_LOG_LEVEL
+        if not cls._is_production and cls._should_log(level):
             color = cls.COLORS.get(level, "")
             print(f"{color}{line}{cls.RESET}")
 
-        # Write to file
+        # Always write ALL levels to file (raw log, no filtering)
         if cls._writer:
             cls._writer.write(line)
 

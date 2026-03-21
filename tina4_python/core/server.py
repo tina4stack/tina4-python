@@ -386,7 +386,8 @@ async def app(scope: dict, receive, send):
     _req_start = _time.perf_counter()
 
     # Dev admin dashboard and API
-    _is_dev = os.environ.get("TINA4_DEBUG", "").lower() == "true"
+    from tina4_python.dotenv import is_truthy
+    _is_dev = is_truthy(os.environ.get("TINA4_DEBUG", ""))
 
     if _is_dev and request.path.startswith("/__dev"):
         from tina4_python.dev_admin import get_api_handlers, render_dashboard
@@ -632,6 +633,35 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
     return host, port
 
 
+def _print_banner(host: str, port: int):
+    """Print the Tina4 Slant ASCII banner to stdout (not through the logger)."""
+    from tina4_python.dotenv import is_truthy
+
+    is_debug = is_truthy(os.environ.get("TINA4_DEBUG", ""))
+    log_level = os.environ.get("TINA4_LOG_LEVEL", "debug").upper()
+    display = "localhost" if host in ("0.0.0.0", "::") else host
+
+    # Blue color for Python, only when stdout is a TTY
+    color = "\033[34m" if sys.stdout.isatty() else ""
+    reset = "\033[0m" if sys.stdout.isatty() else ""
+
+    banner = f"""{color}
+  ______ _             __ __
+ /_  __/(_)___  ____ _/ // /
+  / /  / / __ \\/ __ `/ // /_
+ / /  / / / / / /_/ /__  __/
+/_/  /_/_/ /_/\\__,_/  /_/
+{reset}
+  Tina4 Python v{__version__} — This is not a framework
+
+  Server:    http://{display}:{port}
+  Swagger:   http://localhost:{port}/swagger
+  Dashboard: http://localhost:{port}/__dev
+  Debug:     {"ON" if is_debug else "OFF"} (Log level: {log_level})
+"""
+    print(banner)
+
+
 def run(host: str | None = None, port: int | None = None):
     """Start the Tina4 dev server.
 
@@ -645,21 +675,17 @@ def run(host: str | None = None, port: int | None = None):
     global _start_time
     _start_time = time.time()
 
+    # Load .env first so env vars are available for logger init
+    from tina4_python.dotenv import load_env
+    load_env()
+
     # Init logger
     is_production = os.environ.get("TINA4_ENV", "development") == "production"
     log_level = os.environ.get("TINA4_LOG_LEVEL", "debug" if not is_production else "info")
     Log.init(level=log_level, production=is_production)
 
-    # Banner
-    print(f"\n  Tina4 Python v{__version__}")
-    print(f"  {'─' * 30}")
-
     # Ensure folders
     _ensure_folders()
-
-    # Load .env
-    from tina4_python.dotenv import load_env
-    load_env()
 
     # Auto-discover routes
     _auto_discover("src")
@@ -668,6 +694,9 @@ def run(host: str | None = None, port: int | None = None):
 
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
+
+    # Banner — printed directly to stdout, not through the logger
+    _print_banner(host, port)
 
     display = "localhost" if host in ("0.0.0.0", "::") else host
     Log.info(f"Server started http://{display}:{port}")

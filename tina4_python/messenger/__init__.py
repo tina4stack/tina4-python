@@ -743,7 +743,8 @@ class DevMailbox:
 
 def _is_dev_mode() -> bool:
     """Check if running in development/debug mode."""
-    return os.environ.get("TINA4_DEBUG", "").lower() == "true"
+    from tina4_python.dotenv import is_truthy
+    return is_truthy(os.environ.get("TINA4_DEBUG", ""))
 
 
 def create_messenger(**kwargs) -> Messenger:

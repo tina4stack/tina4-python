@@ -229,7 +229,8 @@ display:flex;justify-content:center;align-items:center;min-height:100vh;text-ali
 
 def is_debug_mode() -> bool:
     """Return True if TINA4_DEBUG is enabled."""
-    return os.environ.get("TINA4_DEBUG", "").lower() == "true"
+    from tina4_python.dotenv import is_truthy
+    return is_truthy(os.environ.get("TINA4_DEBUG", ""))
 
 
 def _get_version() -> str:
