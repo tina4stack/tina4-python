@@ -5,7 +5,7 @@ import tempfile
 import os
 from tina4_python.dev_admin import (
     MessageLog, RequestInspector, BrokenTracker,
-    get_api_handlers, render_dashboard, render_overlay_script,
+    get_api_handlers, render_dashboard, render_dev_toolbar,
 )
 
 
@@ -363,18 +363,17 @@ class TestRenderDashboard:
         assert "msg-search" in html
 
 
-class TestOverlayScript:
+class TestDevToolbar:
     def test_returns_toolbar(self):
-        script = render_overlay_script()
-        assert "tina4-dev-toolbar" in script
-        assert "/__dev" in script
+        toolbar = render_dev_toolbar("GET", "/", "-", "-", 0)
+        assert "tina4-dev-toolbar" in toolbar
+        assert "/__dev" in toolbar
 
     def test_no_external_deps(self):
-        script = render_overlay_script()
-        assert "cdn." not in script.lower()
+        toolbar = render_dev_toolbar("GET", "/", "-", "-", 0)
+        assert "cdn." not in toolbar.lower()
 
     def test_dev_toolbar_with_context(self):
-        from tina4_python.dev_admin import render_dev_toolbar
         toolbar = render_dev_toolbar("POST", "/api/users", "/api/users/{id:int}", "abc123", 5)
         assert "tina4-dev-toolbar" in toolbar
         assert "POST" in toolbar
