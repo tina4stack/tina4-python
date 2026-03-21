@@ -17,6 +17,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tina4_python import __version__
+
 
 class MessageLog:
     """In-memory message log for dev mode tracking.
@@ -1640,57 +1642,34 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 def render_overlay_script() -> str:
-    """Return a JS snippet that injects a floating dev admin button.
+    """Deprecated — use render_dev_toolbar() instead."""
+    return render_dev_toolbar("GET", "/", "-", "-", 0)
 
-    Inject this into page responses in dev mode to provide quick access
-    to the admin dashboard.
+
+def render_dev_toolbar(method: str, path: str, matched_pattern: str,
+                       request_id: str, route_count: int) -> str:
+    """Return an HTML toolbar injected at the bottom of HTML responses in dev mode.
+
+    Shows: Tina4 version (blue), HTTP method (green), path, matched pattern,
+    request ID (yellow), route count (blue), Python version, Dashboard link,
+    and a close button.
     """
-    return """<script>
-(function(){
-    if (document.getElementById('tina4-dev-btn')) return;
-    var FRAMEWORK_COLOR = '#3572A5';
-    var btn = document.createElement('div');
-    btn.id = 'tina4-dev-btn';
-    btn.innerHTML = '<img src="https://tina4.com/logo.svg" style="width:1.5rem;height:1.5rem" alt="T4">';
-    btn.title = 'Tina4 Dev Admin';
-    btn.style.cssText = 'position:fixed;bottom:1rem;right:1rem;width:2.5rem;height:2.5rem;background:'+FRAMEWORK_COLOR+';color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-weight:700;font-size:0.8rem;font-family:system-ui;z-index:99999;box-shadow:0 2px 8px rgba(0,0,0,0.3);transition:transform 0.15s,opacity 0.15s;opacity:0.5';
-    btn.onmouseover = function(){ this.style.transform='scale(1.1)'; this.style.opacity='1'; };
-    btn.onmouseout = function(){ this.style.transform='scale(1)'; this.style.opacity='0.5'; };
-    btn.onclick = function(){
-        var panel = document.getElementById('tina4-dev-panel');
-        if (panel) { panel.style.display = panel.style.display === 'none' ? 'block' : 'none'; return; }
-        var container = document.createElement('div');
-        container.id = 'tina4-dev-panel';
-        container.style.cssText = 'position:fixed;bottom:4rem;right:1rem;width:min(90vw,1200px);height:min(80vh,700px);z-index:99998;transition:all 0.2s';
-        var fsBtn = document.createElement('div');
-        fsBtn.innerHTML = '\u26F6';
-        fsBtn.title = 'Toggle fullscreen';
-        fsBtn.style.cssText = 'position:absolute;top:0.25rem;right:0.25rem;width:1.5rem;height:1.5rem;background:'+FRAMEWORK_COLOR+';color:#fff;border-radius:0.25rem;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:0.9rem;z-index:99999;opacity:0.7';
-        fsBtn.onmouseover = function(){ this.style.opacity='1'; };
-        fsBtn.onmouseout = function(){ this.style.opacity='0.7'; };
-        var isFullscreen = false;
-        fsBtn.onclick = function(e){
-            e.stopPropagation();
-            isFullscreen = !isFullscreen;
-            if (isFullscreen) {
-                container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:99998;transition:all 0.2s';
-                iframe.style.borderRadius = '0';
-            } else {
-                container.style.cssText = 'position:fixed;bottom:4rem;right:1rem;width:min(90vw,1200px);height:min(80vh,700px);z-index:99998;transition:all 0.2s';
-                iframe.style.borderRadius = '0.5rem';
-            }
-        };
-        var iframe = document.createElement('iframe');
-        iframe.src = '/__dev/';
-        iframe.style.cssText = 'width:100%;height:100%;border:1px solid '+FRAMEWORK_COLOR+';border-radius:0.5rem;box-shadow:0 8px 32px rgba(0,0,0,0.5);background:#0f172a';
-        container.appendChild(iframe);
-        container.appendChild(fsBtn);
-        document.body.appendChild(container);
-    };
-    document.body.appendChild(btn);
-})();
-</script>"""
+    import sys
+    python_version = sys.version.split()[0]
+
+    return f"""<div id="tina4-dev-toolbar" style="position:fixed;bottom:0;left:0;right:0;background:#333;color:#fff;font-family:monospace;font-size:12px;padding:6px 16px;z-index:99999;display:flex;align-items:center;gap:16px;">
+    <span style="color:#3572A5;font-weight:bold;">Tina4 v{__version__}</span>
+    <span style="color:#4caf50;">{method}</span>
+    <span>{path}</span>
+    <span style="color:#666;">&rarr; {matched_pattern}</span>
+    <span style="color:#ffeb3b;">req:{request_id}</span>
+    <span style="color:#90caf9;">{route_count} routes</span>
+    <span style="color:#888;">Python {python_version}</span>
+    <a href="#" onclick="(function(e){{e.preventDefault();var p=document.getElementById('tina4-dev-panel');if(p){{p.style.display=p.style.display==='none'?'block':'none';return;}}var c=document.createElement('div');c.id='tina4-dev-panel';c.style.cssText='position:fixed;bottom:2rem;right:1rem;width:min(90vw,1200px);height:min(80vh,700px);z-index:99998;transition:all 0.2s';var f=document.createElement('iframe');f.src='/__dev';f.style.cssText='width:100%;height:100%;border:1px solid #3572A5;border-radius:0.5rem;box-shadow:0 8px 32px rgba(0,0,0,0.5);background:#0f172a';c.appendChild(f);document.body.appendChild(c);}})(event)" style="color:#ef9a9a;margin-left:auto;text-decoration:none;cursor:pointer;">Dashboard &#8599;</a>
+    <span onclick="this.parentElement.style.display='none'" style="cursor:pointer;color:#888;margin-left:8px;">&#10005;</span>
+</div>"""
 
 
 __all__ = ["MessageLog", "RequestInspector", "BrokenTracker",
-           "get_api_handlers", "render_dashboard", "render_overlay_script"]
+           "get_api_handlers", "render_dashboard", "render_overlay_script",
+           "render_dev_toolbar"]

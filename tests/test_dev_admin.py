@@ -364,16 +364,25 @@ class TestRenderDashboard:
 
 
 class TestOverlayScript:
-    def test_returns_script(self):
+    def test_returns_toolbar(self):
         script = render_overlay_script()
-        assert "<script>" in script
-        assert "tina4-dev-btn" in script
-        assert "/__dev/" in script
+        assert "tina4-dev-toolbar" in script
+        assert "/__dev" in script
 
     def test_no_external_deps(self):
         script = render_overlay_script()
         assert "cdn." not in script.lower()
-        assert "http" not in script.lower() or "/__dev/" in script
+
+    def test_dev_toolbar_with_context(self):
+        from tina4_python.dev_admin import render_dev_toolbar
+        toolbar = render_dev_toolbar("POST", "/api/users", "/api/users/{id:int}", "abc123", 5)
+        assert "tina4-dev-toolbar" in toolbar
+        assert "POST" in toolbar
+        assert "/api/users" in toolbar
+        assert "abc123" in toolbar
+        assert "5 routes" in toolbar
+        assert "Python" in toolbar
+        assert "/__dev" in toolbar
 
 
 class TestAPIHandlers:

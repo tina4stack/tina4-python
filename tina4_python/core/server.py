@@ -195,7 +195,7 @@ h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
     <p class="tagline">This is not a framework</p>
     <div class="actions">
         <a href="https://tina4.com/python" class="btn" target="_blank">Website</a>
-        <a href="/__dev/" class="btn">Dev Admin</a>
+        <a href="/__dev" class="btn">Dev Admin</a>
         <a href="#gallery" class="btn">Gallery</a>
         <a href="https://github.com/tina4stack/tina4-python" class="btn" target="_blank">GitHub</a>
         <a href="https://github.com/tina4stack/tina4-python/stargazers" class="btn" target="_blank">&#11088; Star</a>
@@ -431,18 +431,22 @@ async def app(scope: dict, receive, send):
     # Apply CORS headers to all responses
     _cors.apply(request, response)
 
-    # Dev mode: inject overlay button into HTML responses
+    # Dev mode: inject toolbar into HTML responses
     if _is_dev and response.content_type and "text/html" in response.content_type:
         if not request.path.startswith("/__dev"):
             try:
-                from tina4_python.dev_admin import render_overlay_script
-                overlay = render_overlay_script().encode()
+                from tina4_python.dev_admin import render_dev_toolbar
+                matched_pattern = route["path"] if route else "-"
+                toolbar = render_dev_toolbar(
+                    request.method, request.path, matched_pattern,
+                    request_id, len(Router.all()),
+                ).encode()
                 content = response.content
                 # Inject before </body> if present, else append
                 if b"</body>" in content:
-                    content = content.replace(b"</body>", overlay + b"\n</body>", 1)
+                    content = content.replace(b"</body>", toolbar + b"\n</body>", 1)
                 else:
-                    content = content + overlay
+                    content = content + toolbar
                 response.content = content
             except Exception:
                 pass
