@@ -39,6 +39,7 @@ def main():
         "test": _test,
         "build": _build,
         "ai": _ai,
+        "generate": _generate,
         "help": _help,
     }
 
@@ -66,6 +67,7 @@ Commands:
   routes                List all registered routes
   test                  Run test suite
   build                 Build distributable package
+  generate <what> <name> Generate scaffolding (model, route, migration, middleware)
   ai [--all]            Detect AI tools and install framework context
   help                  Show this help message
 
@@ -372,6 +374,143 @@ def _ai(args):
                 print(f"  + {f}")
         else:
             print("Nothing to install.")
+
+
+def _generate(args):
+    """Generate scaffolding: model, route, migration, middleware."""
+    if len(args) < 2:
+        print("Usage: tina4python generate <what> <name>")
+        print("  Generators: model, route, migration, middleware")
+        sys.exit(1)
+
+    what = args[0].lower()
+    name = args[1]
+
+    if what == "model":
+        _generate_model(name)
+    elif what == "route":
+        _generate_route(name)
+    elif what == "migration":
+        _generate_migration(name)
+    elif what == "middleware":
+        _generate_middleware(name)
+    else:
+        print(f"Unknown generator: {what}")
+        print("  Available: model, route, migration, middleware")
+        sys.exit(1)
+
+
+def _generate_model(name):
+    """Generate an ORM model file."""
+    target = Path("src/orm")
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{name}.py"
+    if path.exists():
+        print(f"  File already exists: {path}")
+        sys.exit(1)
+    path.write_text(
+        f"from tina4_python import ORM, IntegerField, StringField\n\n\n"
+        f"class {name}(ORM):\n"
+        f"    id = IntegerField(primary_key=True, auto_increment=True)\n"
+        f"    name = StringField()\n"
+        f"    email = StringField()\n",
+        encoding="utf-8",
+    )
+    print(f"  Created {path}")
+
+
+def _generate_route(name):
+    """Generate a CRUD route file."""
+    route_path = name.lstrip("/")
+    target = Path("src/routes") / route_path
+    target.mkdir(parents=True, exist_ok=True)
+    path = Path(f"src/routes/{route_path}.py")
+    if path.exists():
+        print(f"  File already exists: {path}")
+        sys.exit(1)
+    path.write_text(
+        f'from tina4_python.core.router import get, post, put, delete\n\n\n'
+        f'@get("/{route_path}")\n'
+        f'async def get_list(request, response):\n'
+        f'    """List all."""\n'
+        f'    return response({{"data": []}})\n\n\n'
+        f'@get("/{route_path}/{{id}}")\n'
+        f'async def get_one(request, response):\n'
+        f'    """Get by id."""\n'
+        f'    return response({{"data": {{}}}})\n\n\n'
+        f'@post("/{route_path}")\n'
+        f'async def create(request, response):\n'
+        f'    """Create new."""\n'
+        f'    return response({{"message": "created"}}, 201)\n\n\n'
+        f'@put("/{route_path}/{{id}}")\n'
+        f'async def update(request, response):\n'
+        f'    """Update by id."""\n'
+        f'    return response({{"message": "updated"}})\n\n\n'
+        f'@delete("/{route_path}/{{id}}")\n'
+        f'async def remove(request, response):\n'
+        f'    """Delete by id."""\n'
+        f'    return response({{"message": "deleted"}})\n',
+        encoding="utf-8",
+    )
+    print(f"  Created {path}")
+
+
+def _generate_migration(name):
+    """Generate a timestamped migration file."""
+    from datetime import datetime
+
+    target = Path("migrations")
+    target.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now()
+    timestamp = now.strftime("%Y%m%d%H%M%S")
+    table = name.removeprefix("create_")
+    if not table.endswith("s"):
+        table = table + "s" if not table.endswith("y") else table[:-1] + "ies"
+
+    filename = f"{timestamp}_{name}.sql"
+    path = target / filename
+    path.write_text(
+        f"-- Migration: {name}\n"
+        f"-- Created: {now.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"CREATE TABLE {table} (\n"
+        f"    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        f"    name TEXT NOT NULL,\n"
+        f"    email TEXT NOT NULL,\n"
+        f"    created_at DATETIME DEFAULT CURRENT_TIMESTAMP\n"
+        f");\n",
+        encoding="utf-8",
+    )
+    print(f"  Created {path}")
+
+
+def _generate_middleware(name):
+    """Generate a middleware class file."""
+    target = Path("src/middleware")
+    target.mkdir(parents=True, exist_ok=True)
+
+    # Convert CamelCase to snake_case for filename
+    snake = ""
+    for i, ch in enumerate(name):
+        if ch.isupper() and i > 0:
+            snake += "_"
+        snake += ch.lower()
+
+    path = target / f"{snake}.py"
+    if path.exists():
+        print(f"  File already exists: {path}")
+        sys.exit(1)
+    path.write_text(
+        f"from tina4_python.core.middleware import Middleware\n\n\n"
+        f"class {name}(Middleware):\n"
+        f'    async def process(self, request, response):\n'
+        f'        auth = request.headers.get("Authorization")\n'
+        f"        if not auth:\n"
+        f'            return request, response({{"error": "Unauthorized"}}, 401)\n'
+        f"        return request, response\n",
+        encoding="utf-8",
+    )
+    print(f"  Created {path}")
 
 
 def _load_env():

@@ -19,7 +19,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-3.0.0-blue" alt="Version 3.0.0">
-  <img src="https://img.shields.io/badge/tests-1165%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/tests-1633%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/carbonah-A%2B%20rated-00cc44" alt="Carbonah A+">
   <img src="https://img.shields.io/badge/zero--dep-core-blue" alt="Zero Dependencies">
   <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python 3.12+">
@@ -53,18 +53,18 @@ Every feature is built from scratch -- no pip install, no node_modules, no third
 | **HTTP** | ASGI server, decorator routing, path params (`{id:int}`, `{p:path}`), middleware pipeline, CORS, rate limiting, graceful shutdown |
 | **Templates** | Frond engine (Twig-compatible), inheritance, partials, 35+ filters, macros, fragment caching, sandboxing |
 | **ORM** | Active Record, typed fields with validation, soft delete, relationships (`has_one`/`has_many`/`belongs_to`), scopes, result caching, multi-database |
-| **Database** | SQLite, PostgreSQL, MySQL, MSSQL, Firebird, MongoDB, ODBC -- unified 13-method adapter interface |
-| **Auth** | Zero-dep JWT (HS256), sessions (file, Redis, Valkey, MongoDB, database), password hashing, form tokens |
+| **Database** | SQLite, PostgreSQL, MySQL, MSSQL, Firebird -- unified adapter interface, query caching (TINA4_DB_CACHE=true for 4x speedup) |
+| **Auth** | Zero-dep JWT (HS256), sessions (file/Redis/Valkey/MongoDB/database), password hashing, form tokens |
 | **API** | Swagger/OpenAPI auto-generation, GraphQL with ORM auto-schema and GraphiQL IDE, WSDL/SOAP with auto WSDL |
-| **Background** | DB-backed queue with priority, delayed jobs, retry, batch processing, multi-queue |
+| **Background** | Queue (SQLite/RabbitMQ/Kafka) with priority, delayed jobs, retry, batch processing |
 | **Real-time** | Native asyncio WebSocket (RFC 6455), per-path routing, connection manager |
 | **Frontend** | tina4-css (~24 KB), frond.js helper, SCSS compiler, live reload, CSS hot-reload |
 | **DX** | Dev admin dashboard (11 tabs), error overlay, request inspector, AI tool integration, Carbonah green benchmarks |
 | **Data** | Migrations with rollback, 50+ fake data generators, ORM and table seeders |
 | **Mail** | SMTP send (plain/HTML/attachments), IMAP read/search, dev mailbox capture |
-| **Other** | REST client, localization (6 languages), in-memory cache (TTL/tags/LRU), event system, inline testing, configurable error pages, HTML element builder |
+| **Other** | REST client, localization (6 languages), cache (memory/Redis/file), event system, inline testing, messenger (.env driven), configurable error pages, HTML element builder |
 
-**622 tests across 28 modules. All Carbonah benchmarks rated A+.**
+**1,633 tests across 38 built-in features. Zero dependencies. All Carbonah benchmarks rated A+.**
 
 For full documentation visit **[tina4.com](https://tina4.com)**.
 
@@ -557,15 +557,79 @@ Set `TINA4_DEBUG_LEVEL=DEBUG` in `.env` to enable:
 ```bash
 tina4python init [dir]             # Scaffold a new project
 tina4python serve [port]           # Start dev server (default: 7145)
+tina4python serve --production     # Auto-install and use best production server (uvicorn)
 tina4python migrate                # Run pending migrations
 tina4python migrate:create <desc>  # Create a migration file
 tina4python migrate:rollback       # Rollback last batch
+tina4python generate model <name>  # Generate ORM model scaffold
+tina4python generate route <name>  # Generate route scaffold
+tina4python generate migration <d> # Generate migration file
+tina4python generate middleware <n># Generate middleware scaffold
 tina4python seed                   # Run seeders from src/seeds/
 tina4python routes                 # List all registered routes
 tina4python test                   # Run test suite
 tina4python build                  # Build distributable package
 tina4python ai [--all]             # Detect AI tools and install context
 ```
+
+### Production Server Auto-Detection
+
+`tina4 serve` automatically detects and uses the best available production server:
+
+- **Python**: uvicorn (if installed), otherwise built-in asyncio
+- Use `tina4python serve --production` to auto-install the production server
+
+### Scaffolding with `tina4 generate`
+
+Quickly scaffold new components:
+
+```bash
+tina4python generate model User          # Creates src/orm/User.py with field stubs
+tina4python generate route users         # Creates src/routes/users.py with CRUD stubs
+tina4python generate migration "add age" # Creates migration SQL file
+tina4python generate middleware AuthLog   # Creates middleware class
+```
+
+### ORM Relationships & Eager Loading
+
+```python
+# Define relationships
+orders = user.has_many("Order", "user_id")
+profile = user.has_one("Profile", "user_id")
+customer = order.belongs_to("Customer", "customer_id")
+
+# Eager loading with include=
+users = User().select(include=["orders", "profile"])
+```
+
+### DB Query Caching
+
+Enable query caching for up to 4x speedup on read-heavy workloads:
+
+```bash
+# .env
+TINA4_DB_CACHE=true
+```
+
+```python
+# Check cache stats
+from tina4_python.orm import cache_stats, cache_clear
+stats = cache_stats()   # {"hits": 42, "misses": 7, "size": 15}
+cache_clear()           # Flush all cached queries
+```
+
+### Frond Pre-Compilation
+
+Templates are pre-compiled for 2.8x faster rendering. Clear the cache when needed:
+
+```python
+from tina4_python.frond import Frond
+Frond.clear_cache()
+```
+
+### Gallery
+
+7 interactive examples with **Try It** deploy — visit the dev admin at `/__dev/` to explore.
 
 ## Environment
 
@@ -613,7 +677,7 @@ Full guides, API reference, and examples at **[tina4.com](https://tina4.com)**.
 
 ## License
 
-MIT (c) 2007-2025 Tina4 Stack
+MIT (c) 2007-2026 Tina4 Stack
 https://opensource.org/licenses/MIT
 
 ---
