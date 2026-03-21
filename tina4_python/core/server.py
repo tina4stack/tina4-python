@@ -457,6 +457,37 @@ async def app(scope: dict, receive, send):
         await send({"type": "http.response.body", "body": response.content})
         return
 
+    # Swagger auto-register: serve /swagger and /swagger/openapi.json when debug is on
+    if _is_dev and request.method == "GET":
+        if request.path in ("/swagger", "/swagger/"):
+            # Serve Swagger UI HTML
+            swagger_html = (
+                '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+                '<title>API Documentation</title>'
+                '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">'
+                '</head><body><div id="swagger-ui"></div>'
+                '<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>'
+                '<script>SwaggerUIBundle({ url: "/swagger/openapi.json", dom_id: "#swagger-ui" });</script>'
+                '</body></html>'
+            )
+            response.html(swagger_html)
+            _cors.apply(request, response)
+            headers = response.build_headers("")
+            await send({"type": "http.response.start", "status": response.status_code, "headers": headers})
+            await send({"type": "http.response.body", "body": response.content})
+            return
+        elif request.path == "/swagger/openapi.json":
+            # Serve OpenAPI spec JSON from all registered routes
+            from tina4_python.swagger import Swagger as _SwaggerGen
+            _swagger = _SwaggerGen()
+            _spec = _swagger.generate(Router.all())
+            response.json(_spec)
+            _cors.apply(request, response)
+            headers = response.build_headers("")
+            await send({"type": "http.response.start", "status": response.status_code, "headers": headers})
+            await send({"type": "http.response.body", "body": response.content})
+            return
+
     # Match route
     route, params = Router.match(request.method, request.path)
 
