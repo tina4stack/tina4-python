@@ -275,6 +275,47 @@ class TestSetIncludeExtends:
         result = engine.render("page.html", {})
         assert result == "Default Title"
 
+    def test_extends_with_leading_whitespace(self, engine, tpl_dir):
+        (tpl_dir / "base.html").write_text("<html><body>{% block content %}default{% endblock %}</body></html>")
+        (tpl_dir / "page.html").write_text('  {% extends "base.html" %}\n{% block content %}<h1>Hello</h1>{% endblock %}')
+        result = engine.render("page.html", {})
+        assert "<html><body>" in result
+        assert "<h1>Hello</h1>" in result
+
+    def test_extends_with_leading_newlines(self, engine, tpl_dir):
+        (tpl_dir / "base.html").write_text("<html><body>{% block content %}default{% endblock %}</body></html>")
+        (tpl_dir / "page.html").write_text('\n\n{% extends "base.html" %}\n{% block content %}<h1>Hello</h1>{% endblock %}')
+        result = engine.render("page.html", {})
+        assert "<html><body>" in result
+        assert "<h1>Hello</h1>" in result
+
+    def test_extends_with_variables_in_blocks(self, engine, tpl_dir):
+        (tpl_dir / "base.html").write_text(
+            '<!DOCTYPE html>\n<html>\n<head><title>{% block title %}Default{% endblock %}</title></head>\n'
+            '<body>\n{% block content %}{% endblock %}\n</body>\n</html>'
+        )
+        (tpl_dir / "error.html").write_text(
+            '\n{% extends "base.html" %}\n'
+            '{% block title %}Error {{ code }}{% endblock %}\n'
+            '{% block content %}<div class="card"><h1>{{ code }}</h1><p>{{ msg }}</p></div>{% endblock %}'
+        )
+        result = engine.render("error.html", {"code": 500, "msg": "Internal Server Error"})
+        assert "<title>Error 500</title>" in result
+        assert "<h1>500</h1>" in result
+        assert "Internal Server Error" in result
+        assert "<html>" in result
+
+    def test_extends_with_include_in_block(self, engine, tpl_dir):
+        (tpl_dir / "base.html").write_text("<main>{% block content %}{% endblock %}</main>")
+        (tpl_dir / "partial.html").write_text("<p>{{ message }}</p>")
+        (tpl_dir / "page.html").write_text(
+            '\n{% extends "base.html" %}\n'
+            '{% block content %}{% include "partial.html" %}{% endblock %}'
+        )
+        result = engine.render("page.html", {"message": "Included!"})
+        assert "<main>" in result
+        assert "<p>Included!</p>" in result
+
 
 # ── Whitespace Control Tests ────────────────────────────────────
 

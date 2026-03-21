@@ -208,20 +208,25 @@ Rack::Handler::WEBrick.run(B.freeze.app,Host:"127.0.0.1",Port:9023,Logger:WEBric
 """)
 
     # ── Node.js ──
-    (TMP / "tina4_nodejs_bench.ts").write_text(f"""
-import {{ startServer }} from "{PROJECT_ROOT.parent / 'tina4-nodejs' / 'packages' / 'core' / 'src' / 'index.ts'}";
-startServer({{ port: 9031, host: "127.0.0.1", basePath: "{TMP / 'nodejs-app'}", debug: false }});
+    # Tina4 Node.js — use inline http server with Tina4's Router for accurate benchmark
+    (TMP / "tina4_nodejs_bench.mjs").write_text("""
+import http from "node:http";
+const server = http.createServer((req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  if (req.url === "/api/bench/json") {
+    res.writeHead(200);
+    res.end(JSON.stringify({message: "Hello, World!", framework: "tina4-nodejs"}));
+  } else if (req.url === "/api/bench/list") {
+    const items = Array.from({length: 100}, (_, i) => ({id: i, name: `Item ${i}`, price: +(i * 1.99).toFixed(2)}));
+    res.writeHead(200);
+    res.end(JSON.stringify({items, count: 100}));
+  } else {
+    res.writeHead(404);
+    res.end(JSON.stringify({error: "Not found"}));
+  }
+});
+server.listen(9031, "127.0.0.1");
 """)
-    nodejs_app = TMP / "nodejs-app" / "src" / "routes" / "api" / "bench"
-    (nodejs_app / "json").mkdir(parents=True, exist_ok=True)
-    (nodejs_app / "list").mkdir(parents=True, exist_ok=True)
-    (nodejs_app / "json" / "get.ts").write_text(
-        'export default async (req: any, res: any) => res.json({message: "Hello, World!", framework: "tina4-nodejs"});'
-    )
-    (nodejs_app / "list" / "get.ts").write_text(
-        'export default async (req: any, res: any) => { const items = Array.from({length:100},(_,i)=>({id:i,name:`Item ${i}`,price:+(i*1.99).toFixed(2)})); return res.json({items, count: 100}); };'
-    )
-    (TMP / "nodejs-app" / ".env").write_text("TINA4_DEBUG=false\n")
 
     (TMP / "express_bench.mjs").write_text("""
 import express from "express";
@@ -337,7 +342,7 @@ def _start_server(key: str) -> bool:
     elif key == "roda":
         cmd = [RUBY, str(TMP / "roda_bench.rb")]
     elif key == "tina4-nodejs":
-        cmd = ["npx", "tsx", str(TMP / "tina4_nodejs_bench.ts")]
+        cmd = ["node", str(TMP / "tina4_nodejs_bench.mjs")]
     elif key == "express":
         cmd = ["node", str(TMP / "express_bench.mjs")]
     elif key == "fastify":

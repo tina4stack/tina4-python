@@ -591,7 +591,7 @@ class Frond:
     def _execute(self, source: str, context: dict) -> str:
         """Execute template source against context."""
         # Handle extends first
-        extends_match = re.match(r"\{%[-\s]*extends\s+[\"'](.+?)[\"']\s*[-]?%\}", source)
+        extends_match = re.match(r"\{%[-\s]*extends\s+[\"'](.+?)[\"']\s*[-]?%\}", source.lstrip())
         if extends_match:
             parent_name = extends_match.group(1)
             parent_source = self._load(parent_name)
