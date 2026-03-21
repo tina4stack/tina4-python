@@ -167,13 +167,29 @@ class Response:
         return self
 
     def render(self, template: str, data: dict = None) -> "Response":
-        """Render a Frond template. Requires Frond engine to be initialized."""
-        # Lazy import to avoid circular dependency
-        from tina4_python.frond import engine
-        if engine:
-            html = engine.render(template, data or {})
-            return self.html(html)
-        return self.html(f"<!-- Frond not initialized. Template: {template} -->")
+        """Render a Frond/Twig template with data."""
+        from tina4_python.frond.engine import Frond
+        from pathlib import Path
+
+        # Search for templates in user dir first, then framework dir
+        template_dirs = []
+        user_dir = Path("src/templates")
+        if user_dir.is_dir():
+            template_dirs.append(str(user_dir))
+        framework_dir = Path(__file__).resolve().parent.parent / "templates"
+        if framework_dir.is_dir():
+            template_dirs.append(str(framework_dir))
+
+        for tdir in template_dirs:
+            if (Path(tdir) / template).exists():
+                try:
+                    frond = Frond(tdir)
+                    html = frond.render(template, data or {})
+                    return self.html(html)
+                except Exception as e:
+                    return self.html(f"<pre>Template error: {e}</pre>", 500)
+
+        return self.html(f"<pre>Template not found: {template}</pre>", 404)
 
     def build_headers(self, accept_encoding: str = "") -> list[tuple[bytes, bytes]]:
         """Build final ASGI headers with compression and ETag."""

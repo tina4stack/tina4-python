@@ -2,8 +2,8 @@
 from tina4_python.core.router import get, template
 
 
-@template("gallery_page.twig")
 @get("/gallery/page")
+@template("gallery_page.twig")
 async def gallery_page(request, response):
     return {
         "title": "Gallery Demo Page",
