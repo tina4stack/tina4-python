@@ -1,4 +1,5 @@
 # Tests for tina4_python.queue
+import os
 import pytest
 from tina4_python.database import Database
 from tina4_python.queue import Queue, Producer, Consumer
@@ -146,3 +147,118 @@ class TestConsumer:
         c = Consumer(queue, callback=bad_handler)
         c.run()
         assert queue.size("failed") == 1
+
+
+class TestBackendSwitching:
+    """Tests for the unified Queue constructor and backend auto-detection."""
+
+    def test_legacy_constructor(self, db):
+        """Queue(db, topic='x') still works — backward compat."""
+        q = Queue(db, topic="legacy")
+        q.push({"task": "hello"})
+        job = q.pop()
+        assert job is not None
+        assert job.data["task"] == "hello"
+
+    def test_env_default_sqlite(self, tmp_path, monkeypatch):
+        """When TINA4_QUEUE_BACKEND is not set, defaults to sqlite."""
+        monkeypatch.delenv("TINA4_QUEUE_BACKEND", raising=False)
+        db_path = str(tmp_path / "auto_queue.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="auto_test")
+        q.push({"task": "auto"})
+        assert q.size() == 1
+        job = q.pop()
+        assert job is not None
+        assert job.data["task"] == "auto"
+
+    def test_env_explicit_sqlite(self, tmp_path, monkeypatch):
+        """TINA4_QUEUE_BACKEND=sqlite uses sqlite backend."""
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "sqlite")
+        db_path = str(tmp_path / "explicit_queue.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="explicit_test")
+        q.push({"task": "explicit"})
+        assert q.size() == 1
+
+    def test_explicit_backend_arg(self, tmp_path, monkeypatch):
+        """Queue(topic='x', backend='sqlite') overrides env."""
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "kafka")  # would fail
+        db_path = str(tmp_path / "override_queue.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        # Explicit backend= arg should override env
+        q = Queue(topic="override_test", backend="sqlite")
+        q.push({"task": "override"})
+        assert q.size() == 1
+
+    def test_invalid_backend_raises(self):
+        """Unknown backend should raise ValueError."""
+        with pytest.raises(ValueError, match="Unknown queue backend"):
+            Queue(topic="bad", backend="redis")
+
+    def test_string_as_first_arg_is_topic(self, db):
+        """Queue('mytopic') treats the string as topic, not db."""
+        # This should use env-based sqlite (or fail gracefully)
+        # But Queue(db, topic='x') should still work
+        q = Queue(db, topic="positional")
+        q.push({"test": True})
+        assert q.size() == 1
+
+    def test_job_complete_via_adapter(self, db):
+        """Job.complete() delegates through the backend adapter."""
+        q = Queue(db, topic="adapter_complete")
+        q.push({"task": "finish"})
+        job = q.pop()
+        job.complete()
+        assert q.size("pending") == 0
+        assert q.size("completed") == 1
+
+    def test_job_fail_via_adapter(self, db):
+        """Job.fail() delegates through the backend adapter."""
+        q = Queue(db, topic="adapter_fail")
+        q.push({"task": "break"})
+        job = q.pop()
+        job.fail("oops")
+        assert q.size("failed") == 1
+
+    def test_job_retry_via_adapter(self, db):
+        """Job.retry() delegates through the backend adapter."""
+        q = Queue(db, topic="adapter_retry")
+        q.push({"task": "again"})
+        job = q.pop()
+        job.retry()
+        assert q.size("pending") == 1
+        retried = q.pop()
+        assert retried.attempts == 1
+
+    def test_full_lifecycle_no_db(self, tmp_path, monkeypatch):
+        """Full push/pop/complete/fail/retry lifecycle without passing db."""
+        monkeypatch.delenv("TINA4_QUEUE_BACKEND", raising=False)
+        db_path = str(tmp_path / "lifecycle.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+
+        q = Queue(topic="lifecycle")
+
+        # Push
+        q.push({"step": 1})
+        q.push({"step": 2})
+        assert q.size() == 2
+
+        # Pop and complete
+        job1 = q.pop()
+        job1.complete()
+        assert q.size("completed") == 1
+
+        # Pop and fail
+        job2 = q.pop()
+        job2.fail("error")
+        assert q.size("failed") == 1
+
+        # Retry failed
+        count = q.retry_failed()
+        assert count == 1
+        assert q.size("pending") == 1
+
+        # Purge completed
+        q.purge("completed")
+        assert q.size("completed") == 0

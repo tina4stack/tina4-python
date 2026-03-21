@@ -1,28 +1,45 @@
 # Tina4 Messenger — Zero-dependency email via stdlib smtplib + imaplib.
 """
 Send and read email using Python's built-in smtplib, imaplib, and email modules.
+Unified .env-driven configuration with constructor override across all Tina4 frameworks.
+
+Priority: constructor params > .env > sensible defaults
+
+    # .env config:
+    # TINA4_MAIL_HOST=smtp.gmail.com
+    # TINA4_MAIL_PORT=587
+    # TINA4_MAIL_USERNAME=user@gmail.com
+    # TINA4_MAIL_PASSWORD=app-password
+    # TINA4_MAIL_FROM=noreply@myapp.com
+    # TINA4_MAIL_ENCRYPTION=tls
+    # TINA4_MAIL_IMAP_HOST=imap.gmail.com
+    # TINA4_MAIL_IMAP_PORT=993
 
     from tina4_python.messenger import Messenger
 
-    # Send
-    mail = Messenger(host="smtp.gmail.com", port=587, username="...", password="...")
-    mail.send(to="user@example.com", subject="Hello", body="<h1>Welcome!</h1>", html=True)
+    # Reads from .env
+    mail = Messenger()
 
-    # Read
-    mail = Messenger(imap_host="imap.gmail.com", imap_port=993, username="...", password="...")
+    # Override specific settings
+    mail = Messenger(host="smtp.office365.com", port=587)
+
+    # Send
+    mail.send(to="user@example.com", subject="Welcome",
+              body="<h1>Hello!</h1>", html=True, text="Hello!")
+
+    # Read inbox
     messages = mail.inbox(limit=10)
     message = mail.read(message_id)
-    unread = mail.unread()
 
 Supported:
-    - Plain text and HTML emails (send)
+    - Plain text and HTML emails (with text alternative)
     - Attachments (file path or bytes)
     - CC, BCC recipients
     - Reply-To header
     - Template rendering (via Frond engine)
-    - TLS / STARTTLS
+    - TLS / STARTTLS / SSL
     - IMAP inbox reading, search, mark read/unread, delete
-    - Environment variable configuration
+    - Environment variable configuration (TINA4_MAIL_* with SMTP_* fallback)
 """
 import os
 import re
@@ -52,27 +69,48 @@ class Messenger:
     def __init__(self, host: str = None, port: int = None,
                  username: str = None, password: str = None,
                  from_address: str = None, from_name: str = None,
-                 use_tls: bool = True,
+                 encryption: str = None, use_tls: bool = None,
                  imap_host: str = None, imap_port: int = None):
-        # SMTP (send)
-        self.host = host or os.environ.get("SMTP_HOST", "localhost")
-        self.port = port or int(os.environ.get("SMTP_PORT", "587"))
-        self.username = username or os.environ.get("SMTP_USERNAME", "")
-        self.password = password or os.environ.get("SMTP_PASSWORD", "")
-        self.from_address = from_address or os.environ.get("SMTP_FROM", self.username)
-        self.from_name = from_name or os.environ.get("SMTP_FROM_NAME", "")
-        self.use_tls = use_tls
+        # SMTP (send) — priority: constructor > .env > sensible default
+        self.host = host or os.environ.get("TINA4_MAIL_HOST",
+                          os.environ.get("SMTP_HOST", "localhost"))
+        self.port = port or int(os.environ.get("TINA4_MAIL_PORT",
+                                os.environ.get("SMTP_PORT", "587")))
+        self.username = username or os.environ.get("TINA4_MAIL_USERNAME",
+                                   os.environ.get("SMTP_USERNAME", ""))
+        self.password = password or os.environ.get("TINA4_MAIL_PASSWORD",
+                                   os.environ.get("SMTP_PASSWORD", ""))
+        self.from_address = from_address or os.environ.get("TINA4_MAIL_FROM",
+                                            os.environ.get("SMTP_FROM", self.username or "noreply@localhost"))
+        self.from_name = from_name or os.environ.get("TINA4_MAIL_FROM_NAME",
+                                      os.environ.get("SMTP_FROM_NAME", ""))
+
+        # Encryption: constructor > .env > backward-compat use_tls > default "tls"
+        resolved_encryption = encryption or os.environ.get("TINA4_MAIL_ENCRYPTION", None)
+        if resolved_encryption is not None:
+            self.encryption = resolved_encryption.lower()
+        elif use_tls is not None:
+            self.encryption = "tls" if use_tls else "none"
+        else:
+            self.encryption = "tls"
+        # Backward compat: use_tls derived from encryption
+        self.use_tls = self.encryption in ("tls", "starttls")
+
         self._default_headers: dict[str, str] = {}
+
         # IMAP (read)
-        self.imap_host = imap_host or os.environ.get("IMAP_HOST", "")
-        self.imap_port = imap_port or int(os.environ.get("IMAP_PORT", "993"))
+        self.imap_host = imap_host or os.environ.get("TINA4_MAIL_IMAP_HOST",
+                                      os.environ.get("IMAP_HOST", ""))
+        self.imap_port = imap_port or int(os.environ.get("TINA4_MAIL_IMAP_PORT",
+                                          os.environ.get("IMAP_PORT", "993")))
 
     def add_header(self, name: str, value: str):
         """Add a default header to all outgoing emails."""
         self._default_headers[name] = value
 
     def send(self, to: str | list[str], subject: str, body: str,
-             html: bool = False, cc: str | list[str] = None,
+             html: bool = False, text: str = None,
+             cc: str | list[str] = None,
              bcc: str | list[str] = None, reply_to: str = None,
              attachments: list = None, headers: dict = None) -> dict:
         """Send an email.
@@ -82,6 +120,7 @@ class Messenger:
             subject: Email subject
             body: Email body (plain text or HTML)
             html: If True, body is HTML
+            text: Plain text alternative (when body is HTML)
             cc: CC recipient(s)
             bcc: BCC recipient(s)
             reply_to: Reply-To address
@@ -96,13 +135,25 @@ class Messenger:
         bcc_list = [bcc] if isinstance(bcc, str) else list(bcc or [])
 
         has_attachments = bool(attachments)
+        has_text_alt = text is not None and html
 
-        if has_attachments:
-            msg = MIMEMultipart("mixed")
-            if html:
-                msg.attach(MIMEText(body, "html", "utf-8"))
+        if has_attachments or has_text_alt:
+            if has_attachments:
+                msg = MIMEMultipart("mixed")
+                if has_text_alt:
+                    alt_part = MIMEMultipart("alternative")
+                    alt_part.attach(MIMEText(text, "plain", "utf-8"))
+                    alt_part.attach(MIMEText(body, "html", "utf-8"))
+                    msg.attach(alt_part)
+                elif html:
+                    msg.attach(MIMEText(body, "html", "utf-8"))
+                else:
+                    msg.attach(MIMEText(body, "plain", "utf-8"))
             else:
-                msg.attach(MIMEText(body, "plain", "utf-8"))
+                # text alternative without attachments
+                msg = MIMEMultipart("alternative")
+                msg.attach(MIMEText(text, "plain", "utf-8"))
+                msg.attach(MIMEText(body, "html", "utf-8"))
         else:
             subtype = "html" if html else "plain"
             msg = MIMEText(body, subtype, "utf-8")
@@ -711,7 +762,7 @@ class DevMailbox:
                 "id": msg_id,
                 "type": "inbox",
                 "from": f"{sender_name} <{sender_email}>",
-                "to": [os.environ.get("SMTP_FROM", "dev@localhost")],
+                "to": [os.environ.get("TINA4_MAIL_FROM", os.environ.get("SMTP_FROM", "dev@localhost"))],
                 "cc": [],
                 "bcc": [],
                 "reply_to": sender_email,

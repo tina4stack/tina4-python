@@ -6,7 +6,10 @@ The Database class parses a connection URL and creates the right adapter.
     db = Database("postgresql://user:pass@host:5432/dbname")
     db = Database()  # Reads DATABASE_URL from environment
 """
+import hashlib
 import os
+import threading
+import time
 from urllib.parse import urlparse
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
 
@@ -65,6 +68,15 @@ class Database:
         self._adapter: DatabaseAdapter = self._create_adapter()
         self._adapter.connect(self._connection_path(), username=self.username, password=self.password)
 
+        # Query cache — off by default, opt-in via TINA4_DB_CACHE=true
+        from tina4_python.dotenv import is_truthy
+        self._cache_enabled: bool = is_truthy(os.environ.get("TINA4_DB_CACHE", "false"))
+        self._cache_ttl: int = int(os.environ.get("TINA4_DB_CACHE_TTL", "30"))
+        self._query_cache: dict[str, tuple[float, object]] = {}  # key -> (expires_at, result)
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
+        self._cache_lock = threading.Lock()
+
     def _create_adapter(self) -> DatabaseAdapter:
         """Select adapter based on URL scheme."""
         parsed = urlparse(self.url)
@@ -105,33 +117,115 @@ class Database:
         # For other drivers, return the full URL (adapter parses it)
         return self.url
 
-    # Delegate everything to the adapter — clean and simple
+    # ── Query Cache ──────────────────────────────────────────────
+
+    @staticmethod
+    def _cache_key(sql: str, params) -> str:
+        """Generate a cache key from SQL + params."""
+        raw = sql + str(params or [])
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _cache_get(self, key: str):
+        """Return cached result or None if miss/expired."""
+        with self._cache_lock:
+            entry = self._query_cache.get(key)
+            if entry is None:
+                return None
+            expires_at, result = entry
+            if time.monotonic() > expires_at:
+                del self._query_cache[key]
+                return None
+            return result
+
+    def _cache_set(self, key: str, result):
+        """Store a result in the cache with TTL."""
+        with self._cache_lock:
+            self._query_cache[key] = (time.monotonic() + self._cache_ttl, result)
+
+    def _cache_invalidate(self):
+        """Clear the entire query cache (called on writes)."""
+        with self._cache_lock:
+            self._query_cache.clear()
+
+    def cache_stats(self) -> dict:
+        """Return query cache statistics."""
+        with self._cache_lock:
+            return {
+                "enabled": self._cache_enabled,
+                "hits": self._cache_hits,
+                "misses": self._cache_misses,
+                "size": len(self._query_cache),
+                "ttl": self._cache_ttl,
+            }
+
+    def cache_clear(self):
+        """Flush the query cache and reset counters."""
+        with self._cache_lock:
+            self._query_cache.clear()
+            self._cache_hits = 0
+            self._cache_misses = 0
+
+    # ── Delegate to adapter — with cache integration ─────────
 
     def close(self):
         self._adapter.close()
 
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
+        if self._cache_enabled:
+            self._cache_invalidate()
         return self._adapter.execute(sql, params)
 
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
+        if self._cache_enabled:
+            self._cache_invalidate()
         return self._adapter.execute_many(sql, params_list)
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 20, skip: int = 0) -> DatabaseResult:
+        if self._cache_enabled:
+            key = self._cache_key(sql + f":L{limit}:S{skip}", params)
+            cached = self._cache_get(key)
+            if cached is not None:
+                with self._cache_lock:
+                    self._cache_hits += 1
+                return cached
+            result = self._adapter.fetch(sql, params, limit, skip)
+            self._cache_set(key, result)
+            with self._cache_lock:
+                self._cache_misses += 1
+            return result
         return self._adapter.fetch(sql, params, limit, skip)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
+        if self._cache_enabled:
+            key = self._cache_key(sql + ":ONE", params)
+            cached = self._cache_get(key)
+            if cached is not None:
+                with self._cache_lock:
+                    self._cache_hits += 1
+                return cached
+            result = self._adapter.fetch_one(sql, params)
+            self._cache_set(key, result)
+            with self._cache_lock:
+                self._cache_misses += 1
+            return result
         return self._adapter.fetch_one(sql, params)
 
     def insert(self, table: str, data: dict | list) -> DatabaseResult:
+        if self._cache_enabled:
+            self._cache_invalidate()
         return self._adapter.insert(table, data)
 
     def update(self, table: str, data: dict,
                filter_sql: str = "", params: list = None) -> DatabaseResult:
+        if self._cache_enabled:
+            self._cache_invalidate()
         return self._adapter.update(table, data, filter_sql, params)
 
     def delete(self, table: str,
                filter_sql: str | dict | list = "", params: list = None) -> DatabaseResult:
+        if self._cache_enabled:
+            self._cache_invalidate()
         return self._adapter.delete(table, filter_sql, params)
 
     def start_transaction(self):

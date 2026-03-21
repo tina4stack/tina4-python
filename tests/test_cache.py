@@ -1,10 +1,15 @@
-# Tests for tina4_python.cache — ResponseCache middleware
+# Tests for tina4_python.cache — ResponseCache middleware + multi-backend direct API
 import os
 import time
+import shutil
 import threading
 import pytest
 from unittest.mock import patch
-from tina4_python.cache import ResponseCache, _get_default, cache_stats, clear_cache
+from tina4_python.cache import (
+    ResponseCache, _get_default, cache_stats, clear_cache,
+    cache_get, cache_set, cache_delete, cache_clear,
+    _MemoryBackend, _FileBackend, _RedisBackend, _create_backend,
+)
 import tina4_python.cache as cache_module
 
 
@@ -100,6 +105,160 @@ class TestResponseCacheInit:
             assert cache.max_entries == 5
         finally:
             del os.environ["TINA4_CACHE_MAX_ENTRIES"]
+
+
+# ── Backend Selection ────────────────────────────────────────────
+
+
+class TestBackendSelection:
+    """Test that TINA4_CACHE_BACKEND selects the correct backend."""
+
+    def test_default_backend_is_memory(self):
+        backend = _create_backend()
+        assert backend.name() == "memory"
+
+    def test_env_selects_memory(self):
+        os.environ["TINA4_CACHE_BACKEND"] = "memory"
+        try:
+            backend = _create_backend()
+            assert backend.name() == "memory"
+        finally:
+            del os.environ["TINA4_CACHE_BACKEND"]
+
+    def test_env_selects_file(self):
+        os.environ["TINA4_CACHE_BACKEND"] = "file"
+        try:
+            backend = _create_backend()
+            assert backend.name() == "file"
+        finally:
+            del os.environ["TINA4_CACHE_BACKEND"]
+            # Cleanup
+            shutil.rmtree("data/cache", ignore_errors=True)
+
+    def test_explicit_param_overrides_env(self):
+        os.environ["TINA4_CACHE_BACKEND"] = "file"
+        try:
+            backend = _create_backend(backend="memory")
+            assert backend.name() == "memory"
+        finally:
+            del os.environ["TINA4_CACHE_BACKEND"]
+
+    def test_response_cache_accepts_backend_param(self):
+        cache = ResponseCache(backend="memory")
+        stats = cache.cache_stats()
+        assert stats["backend"] == "memory"
+
+
+# ── Memory Backend ───────────────────────────────────────────────
+
+
+class TestMemoryBackend:
+    """Test the in-memory LRU backend directly."""
+
+    def test_set_and_get(self):
+        backend = _MemoryBackend()
+        backend.set("key1", {"data": "value"}, ttl=60)
+        result = backend.get("key1")
+        assert result == {"data": "value"}
+
+    def test_get_missing_key(self):
+        backend = _MemoryBackend()
+        assert backend.get("nonexistent") is None
+
+    def test_ttl_expiry(self):
+        backend = _MemoryBackend()
+        backend.set("expire", "data", ttl=1)
+        assert backend.get("expire") == "data"
+        time.sleep(1.1)
+        assert backend.get("expire") is None
+
+    def test_delete(self):
+        backend = _MemoryBackend()
+        backend.set("del", "val", ttl=60)
+        assert backend.delete("del") is True
+        assert backend.get("del") is None
+        assert backend.delete("del") is False
+
+    def test_clear(self):
+        backend = _MemoryBackend()
+        backend.set("a", 1, ttl=60)
+        backend.set("b", 2, ttl=60)
+        backend.clear()
+        stats = backend.stats()
+        assert stats["size"] == 0
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
+
+    def test_lru_eviction(self):
+        backend = _MemoryBackend(max_entries=2)
+        backend.set("a", 1, ttl=60)
+        backend.set("b", 2, ttl=60)
+        backend.set("c", 3, ttl=60)
+        assert backend.get("a") is None  # evicted
+        assert backend.get("b") == 2
+        assert backend.get("c") == 3
+
+    def test_stats_tracks_hits_misses(self):
+        backend = _MemoryBackend()
+        backend.set("x", "val", ttl=60)
+        backend.get("x")  # hit
+        backend.get("y")  # miss
+        stats = backend.stats()
+        assert stats["hits"] == 1
+        assert stats["misses"] == 1
+        assert stats["backend"] == "memory"
+
+
+# ── File Backend ─────────────────────────────────────────────────
+
+
+class TestFileBackend:
+    """Test the file-based cache backend."""
+
+    CACHE_DIR = "/tmp/tina4_test_cache"
+
+    def setup_method(self):
+        shutil.rmtree(self.CACHE_DIR, ignore_errors=True)
+
+    def teardown_method(self):
+        shutil.rmtree(self.CACHE_DIR, ignore_errors=True)
+
+    def test_set_and_get(self):
+        backend = _FileBackend(cache_dir=self.CACHE_DIR)
+        backend.set("key1", {"data": "value"}, ttl=60)
+        result = backend.get("key1")
+        assert result == {"data": "value"}
+
+    def test_get_missing_key(self):
+        backend = _FileBackend(cache_dir=self.CACHE_DIR)
+        assert backend.get("nonexistent") is None
+
+    def test_ttl_expiry(self):
+        backend = _FileBackend(cache_dir=self.CACHE_DIR)
+        backend.set("expire", "data", ttl=1)
+        assert backend.get("expire") == "data"
+        time.sleep(1.1)
+        assert backend.get("expire") is None
+
+    def test_delete(self):
+        backend = _FileBackend(cache_dir=self.CACHE_DIR)
+        backend.set("del", "val", ttl=60)
+        assert backend.delete("del") is True
+        assert backend.get("del") is None
+        assert backend.delete("del") is False
+
+    def test_clear(self):
+        backend = _FileBackend(cache_dir=self.CACHE_DIR)
+        backend.set("a", 1, ttl=60)
+        backend.set("b", 2, ttl=60)
+        backend.clear()
+        stats = backend.stats()
+        assert stats["size"] == 0
+
+    def test_stats_backend_name(self):
+        backend = _FileBackend(cache_dir=self.CACHE_DIR)
+        stats = backend.stats()
+        assert stats["backend"] == "file"
 
 
 # ── Cache Key Generation ─────────────────────────────────────────
@@ -323,7 +482,10 @@ class TestCacheStats:
     def test_initial_stats(self):
         cache = ResponseCache(ttl=60)
         stats = cache.cache_stats()
-        assert stats == {"hits": 0, "misses": 0, "size": 0}
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
+        assert stats["size"] == 0
+        assert "backend" in stats
 
     def test_stats_after_miss_and_hit(self):
         cache = ResponseCache(ttl=60)
@@ -361,7 +523,9 @@ class TestClearCache:
 
         cache.clear_cache()
         stats = cache.cache_stats()
-        assert stats == {"hits": 0, "misses": 0, "size": 0}
+        assert stats["hits"] == 0
+        assert stats["misses"] == 0
+        assert stats["size"] == 0
 
 
 # ── Per-Route TTL Override ────────────────────────────────────────
@@ -455,7 +619,56 @@ class TestThreadSafety:
         assert stats["size"] <= 100
 
 
-# ── Module-Level Convenience Functions ────────────────────────────
+# ── Direct Cache API ──────────────────────────────────────────────
+
+
+class TestDirectCacheAPI:
+    """Test the module-level cache_get/cache_set/cache_delete/cache_clear/cache_stats."""
+
+    def setup_method(self):
+        # Reset the module-level singletons before each test
+        cache_module._default_cache = None
+        cache_module._default_backend = None
+        cache_module._default_ttl = None
+
+    def test_cache_set_and_get(self):
+        cache_set("test_key", {"hello": "world"}, ttl=60)
+        result = cache_get("test_key")
+        assert result == {"hello": "world"}
+
+    def test_cache_get_missing(self):
+        result = cache_get("nonexistent_key_12345")
+        assert result is None
+
+    def test_cache_delete(self):
+        cache_set("del_key", "value", ttl=60)
+        assert cache_delete("del_key") is True
+        assert cache_get("del_key") is None
+        assert cache_delete("del_key") is False
+
+    def test_cache_clear(self):
+        cache_set("a", 1, ttl=60)
+        cache_set("b", 2, ttl=60)
+        cache_clear()
+        stats = cache_stats()
+        assert stats["size"] == 0
+
+    def test_cache_stats_has_backend(self):
+        stats = cache_stats()
+        assert "backend" in stats
+        assert stats["backend"] == "memory"  # default
+
+    def test_cache_stats_tracks_hits_misses(self):
+        cache_clear()
+        cache_set("x", "val", ttl=60)
+        cache_get("x")       # hit
+        cache_get("missing")  # miss
+        stats = cache_stats()
+        assert stats["hits"] >= 1
+        assert stats["misses"] >= 1
+
+
+# ── Module-Level Convenience Functions (legacy) ──────────────────
 
 
 class TestModuleLevelFunctions:
@@ -464,13 +677,8 @@ class TestModuleLevelFunctions:
     def setup_method(self):
         # Reset the module-level singleton before each test
         cache_module._default_cache = None
-
-    def test_cache_stats_returns_dict(self):
-        stats = cache_stats()
-        assert isinstance(stats, dict)
-        assert "hits" in stats
-        assert "misses" in stats
-        assert "size" in stats
+        cache_module._default_backend = None
+        cache_module._default_ttl = None
 
     def test_clear_cache_resets_default(self):
         # Populate the default cache
@@ -480,12 +688,44 @@ class TestModuleLevelFunctions:
         default.before_cache(req, resp)
         resp_out = MockResponse(body="mod", status_code=200)
         default.after_cache(req, resp_out)
-        assert cache_stats()["size"] == 1
+        assert default.cache_stats()["size"] == 1
 
         clear_cache()
-        assert cache_stats()["size"] == 0
+        assert default.cache_stats()["size"] == 0
 
     def test_get_default_creates_singleton(self):
         d1 = _get_default()
         d2 = _get_default()
         assert d1 is d2
+
+
+# ── File Backend with env var ─────────────────────────────────────
+
+
+class TestFileBackendEnv:
+    """Test file backend creation via env vars."""
+
+    CACHE_DIR = "/tmp/tina4_env_cache_test"
+
+    def setup_method(self):
+        import shutil
+        shutil.rmtree(self.CACHE_DIR, ignore_errors=True)
+        cache_module._default_backend = None
+        cache_module._default_ttl = None
+
+    def teardown_method(self):
+        import shutil
+        shutil.rmtree(self.CACHE_DIR, ignore_errors=True)
+        for key in ["TINA4_CACHE_BACKEND", "TINA4_CACHE_DIR"]:
+            os.environ.pop(key, None)
+        cache_module._default_backend = None
+
+    def test_file_backend_via_env(self):
+        os.environ["TINA4_CACHE_BACKEND"] = "file"
+        os.environ["TINA4_CACHE_DIR"] = self.CACHE_DIR
+        backend = _create_backend()
+        assert backend.name() == "file"
+
+        backend.set("env_key", {"test": True}, ttl=60)
+        result = backend.get("env_key")
+        assert result == {"test": True}
