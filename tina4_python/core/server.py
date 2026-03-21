@@ -225,6 +225,7 @@ run()  <span style="color:#64748b"># starts on port 7145</span></code></pre>
 </div>
 <div class="gallery">
     <h2 id="gallery">What You Can Build</h2>
+    <p style="color:#64748b;font-size:0.85rem;text-align:center;margin-bottom:1.25rem;">Click <strong style="color:#94a3b8;">Try It</strong> to deploy working example code into your <code style="color:#4ade80;">src/</code> folder</p>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;">
         <div class="gallery-card">
             <div class="accent accent-blue"></div>
@@ -253,7 +254,7 @@ async def users(req, res):
             <p>JWT tokens built-in</p>
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">token = Auth.get_token({{"user_id": 1}})
 valid = Auth.valid_token(token)</pre>
-            <button class="try-btn" onclick="deployGallery('auth','/api/gallery/auth/login')">Try It</button>
+            <button class="try-btn" onclick="deployGallery('auth','/gallery/auth')">Try It</button>
         </div>
         <div class="gallery-card">
             <div class="accent accent-blue"></div>
@@ -303,6 +304,7 @@ function deployGallery(name, tryUrl) {{
         window.open(tryUrl, '_blank');
         return;
     }}
+    if (!confirm('This will add example code to your src/ folder. Continue?')) return;
     btn.textContent = 'Deploying...';
     btn.disabled = true;
     fetch('/__dev/api/gallery/deploy', {{
@@ -321,6 +323,7 @@ function deployGallery(name, tryUrl) {{
             btn.style.background = '#22c55e';
             btn.disabled = false;
             btn.dataset.deployed = '1';
+            window.location.href = tryUrl;
         }}
     }})
     .catch(function(e) {{
