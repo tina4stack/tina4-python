@@ -145,6 +145,32 @@ def _has_index_template() -> bool:
     return False
 
 
+def _is_gallery_deployed(name: str) -> bool:
+    """Check if a gallery item's files exist in the project's src/ folder."""
+    import json
+    gallery_dir = Path(__file__).resolve().parent.parent / "gallery" / name
+    meta_file = gallery_dir / "meta.json"
+    if not meta_file.exists():
+        return False
+    src_dir = gallery_dir / "src"
+    if not src_dir.exists():
+        return False
+    project_src = Path.cwd() / "src"
+    for f in src_dir.rglob("*"):
+        if f.is_file():
+            rel = f.relative_to(src_dir)
+            if not (project_src / rel).exists():
+                return False
+    return True
+
+
+def _gallery_btn(name: str, try_url: str) -> str:
+    """Render a Try It or View button depending on deployment state."""
+    if _is_gallery_deployed(name):
+        return f'<button class="try-btn" style="background:#22c55e;" onclick="window.location.href=\'{try_url}\'" data-deployed="1">View &#8599;</button>'
+    return f'<button class="try-btn" onclick="deployGallery(\'{name}\',\'{try_url}\')">Try It</button>'
+
+
 def _render_landing_page() -> str:
     """Render the built-in Tina4 welcome page shown when no / route exists."""
     port = os.environ.get("PORT", "7145")
@@ -235,7 +261,7 @@ run()  <span style="color:#64748b"># starts on port 7145</span></code></pre>
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">@get("/api/users")
 async def users(req, res):
     return res({{"users": []}})</pre>
-            <button class="try-btn" onclick="deployGallery('rest-api','/api/gallery/hello')">Try It</button>
+            {_gallery_btn('rest-api', '/api/gallery/hello')}
         </div>
         <div class="gallery-card">
             <div class="accent accent-green"></div>
@@ -245,7 +271,7 @@ async def users(req, res):
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">class User(ORM):
     id = IntegerField(primary_key=True)
     name = StringField()</pre>
-            <button class="try-btn" onclick="deployGallery('orm','/api/gallery/products')">Try It</button>
+            {_gallery_btn('orm', '/api/gallery/products')}
         </div>
         <div class="gallery-card">
             <div class="accent accent-purple"></div>
@@ -254,7 +280,7 @@ async def users(req, res):
             <p>JWT tokens built-in</p>
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">token = Auth.get_token({{"user_id": 1}})
 valid = Auth.valid_token(token)</pre>
-            <button class="try-btn" onclick="deployGallery('auth','/gallery/auth')">Try It</button>
+            {_gallery_btn('auth', '/gallery/auth')}
         </div>
         <div class="gallery-card">
             <div class="accent accent-blue"></div>
@@ -263,7 +289,7 @@ valid = Auth.valid_token(token)</pre>
             <p>Background jobs, no Redis needed</p>
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">producer = Producer(Queue("emails"))
 producer.produce({{"to": "a@b.com"}})</pre>
-            <button class="try-btn" onclick="deployGallery('queue','/api/gallery/queue/status')">Try It</button>
+            {_gallery_btn('queue', '/api/gallery/queue/status')}
         </div>
         <div class="gallery-card">
             <div class="accent accent-green"></div>
@@ -274,7 +300,7 @@ producer.produce({{"to": "a@b.com"}})</pre>
 @get("/dashboard")
 async def dash(req, res):
     return {{"title": "Home"}}</pre>
-            <button class="try-btn" onclick="deployGallery('templates','/gallery/page')">Try It</button>
+            {_gallery_btn('templates', '/gallery/page')}
         </div>
         <div class="gallery-card">
             <div class="accent accent-purple"></div>
@@ -284,7 +310,7 @@ async def dash(req, res):
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">db = Database("sqlite:///app.db")
 result = db.fetch("SELECT * FROM users")
 for row in result: print(row["name"])</pre>
-            <button class="try-btn" onclick="deployGallery('database','/api/gallery/db/tables')">Try It</button>
+            {_gallery_btn('database', '/api/gallery/db/tables')}
         </div>
         <div class="gallery-card">
             <div class="accent accent-blue"></div>
@@ -293,7 +319,7 @@ for row in result: print(row["name"])</pre>
             <p>Rich debug page with source code</p>
             <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">user = {{"name": "Alice"}}
 role = user["role"]  # KeyError!</pre>
-            <button class="try-btn" onclick="deployGallery('error-overlay','/api/gallery/crash')">Try It</button>
+            {_gallery_btn('error-overlay', '/api/gallery/crash')}
         </div>
     </div>
 </div>
