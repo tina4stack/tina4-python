@@ -528,8 +528,8 @@ Every project must have a `src/templates/base.twig`. All pages extend it.
 {% block nav %}{% include "partials/nav.twig" ignore missing %}{% endblock %}
 {% block content %}{% endblock %}
 {% block javascripts %}
-<script src="/js/tina4.js"></script>
-<script src="/js/tina4helper.js"></script>
+<script src="/js/tina4.min.js"></script>
+<script src="/js/frond.min.js"></script>
 {% endblock %}
 </body>
 </html>
@@ -622,11 +622,11 @@ async def dashboard(request, response):
     return {"title": "Dashboard", "stats": get_stats()}
 ```
 
-## Frontend — Tina4 CSS + tina4helper.js
+## Frontend — Tina4 CSS + frond.min.js
 
-The framework includes Tina4 CSS (~24KB, Bootstrap-compatible class names) and `tina4helper.js` for AJAX calls. No external CDN dependencies — everything ships built-in.
+The framework includes Tina4 CSS (~24KB, Bootstrap-compatible class names) and `frond.min.js` for AJAX calls and WebSocket reconnection. No external CDN dependencies — everything ships built-in.
 
-### tina4helper.js functions
+### frond.min.js functions
 
 ```javascript
 // Load HTML into an element
@@ -655,7 +655,7 @@ showMessage("Record saved successfully!");
 ```
 
 ### Token handling
-`tina4helper.js` automatically:
+`frond.min.js` automatically:
 - Sends `Authorization: Bearer` header with the current `formToken`
 - Updates the token from the `FreshToken` response header
 - Refreshes token values in forms before submission

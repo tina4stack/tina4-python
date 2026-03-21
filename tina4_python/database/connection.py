@@ -113,6 +113,9 @@ class Database:
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
         return self._adapter.execute(sql, params)
 
+    def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
+        return self._adapter.execute_many(sql, params_list)
+
     def fetch(self, sql: str, params: list = None,
               limit: int = 20, skip: int = 0) -> DatabaseResult:
         return self._adapter.fetch(sql, params, limit, skip)
@@ -120,7 +123,7 @@ class Database:
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         return self._adapter.fetch_one(sql, params)
 
-    def insert(self, table: str, data: dict) -> DatabaseResult:
+    def insert(self, table: str, data: dict | list) -> DatabaseResult:
         return self._adapter.insert(table, data)
 
     def update(self, table: str, data: dict,
@@ -128,7 +131,7 @@ class Database:
         return self._adapter.update(table, data, filter_sql, params)
 
     def delete(self, table: str,
-               filter_sql: str = "", params: list = None) -> DatabaseResult:
+               filter_sql: str | dict | list = "", params: list = None) -> DatabaseResult:
         return self._adapter.delete(table, filter_sql, params)
 
     def start_transaction(self):

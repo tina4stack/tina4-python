@@ -77,6 +77,27 @@ class DatabaseAdapter:
         """Execute a write query (INSERT, UPDATE, DELETE, DDL)."""
         raise NotImplementedError
 
+    def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
+        """Execute a single SQL statement with multiple parameter sets.
+
+        Like batch insert/update — runs the same SQL for each set of params.
+
+            db.execute_many("INSERT INTO users (name) VALUES (?)", [
+                ["Alice"], ["Bob"], ["Eve"]
+            ])
+        """
+        total_affected = 0
+        last_id = None
+        for params in (params_list or []):
+            result = self.execute(sql, params)
+            total_affected += result.affected_rows
+            if result.last_id is not None:
+                last_id = result.last_id
+        return DatabaseResult(
+            affected_rows=total_affected,
+            last_id=last_id,
+        )
+
     def fetch(self, sql: str, params: list = None,
               limit: int = 20, skip: int = 0) -> DatabaseResult:
         """Execute a read query and return multiple rows."""
@@ -86,8 +107,24 @@ class DatabaseAdapter:
         """Execute a read query and return a single row or None."""
         raise NotImplementedError
 
-    def insert(self, table: str, data: dict) -> DatabaseResult:
-        """Insert a row and return the last inserted ID."""
+    def insert(self, table: str, data: dict | list) -> DatabaseResult:
+        """Insert one or more rows.
+
+        Args:
+            table: Table name.
+            data: A dict (single row) or a list of dicts (multiple rows).
+                  List of dicts uses execute_many internally for efficiency.
+        """
+        if isinstance(data, list):
+            if not data:
+                return DatabaseResult()
+            # All dicts must have the same keys
+            keys = list(data[0].keys())
+            columns = ", ".join(keys)
+            placeholders = ", ".join(["?"] * len(keys))
+            sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+            params_list = [list(row[k] for k in keys) for row in data]
+            return self.execute_many(sql, params_list)
         raise NotImplementedError
 
     def update(self, table: str, data: dict,
@@ -96,8 +133,31 @@ class DatabaseAdapter:
         raise NotImplementedError
 
     def delete(self, table: str,
-               filter_sql: str = "", params: list = None) -> DatabaseResult:
-        """Delete rows matching the filter."""
+               filter_sql: str | dict | list = "", params: list = None) -> DatabaseResult:
+        """Delete rows matching the filter.
+
+        Args:
+            table: Table name.
+            filter_sql: One of:
+                - str: SQL WHERE clause (e.g. "age < 18")
+                - dict: builds WHERE from dict keys (e.g. {"id": 5} → "id = ?")
+                - list of dicts: delete multiple rows by key match
+            params: Parameters for the WHERE clause (only with str filter_sql).
+        """
+        if isinstance(filter_sql, list):
+            # List of dicts — delete each row
+            total_affected = 0
+            for row_filter in filter_sql:
+                result = self.delete(table, row_filter)
+                total_affected += result.affected_rows
+            return DatabaseResult(affected_rows=total_affected)
+
+        if isinstance(filter_sql, dict):
+            # Build WHERE from dict
+            where_parts = [f"{k} = ?" for k in filter_sql.keys()]
+            where_sql = " AND ".join(where_parts)
+            return self.delete(table, where_sql, list(filter_sql.values()))
+
         raise NotImplementedError
 
     def start_transaction(self):

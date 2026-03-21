@@ -306,6 +306,95 @@ class ORM(metaclass=ORMMeta):
         row = db.fetch_one(sql, params or [])
         return row["cnt"] if row else 0
 
+    # ── Table Creation ──────────────────────────────────────────
+
+    @classmethod
+    def create_table(cls) -> bool:
+        """Generate and execute CREATE TABLE DDL from the model's field definitions.
+
+        Field type to SQL type mapping:
+            IntegerField → INTEGER
+            StringField  → VARCHAR(255)
+            TextField    → TEXT
+            NumericField/FloatField → REAL
+            BooleanField → INTEGER
+            DateTimeField → DATETIME
+            BlobField    → BLOB
+
+        Auto-increment primary keys use engine-appropriate syntax.
+        Returns True on success.
+        """
+        from tina4_python.database.adapter import SQLTranslator
+
+        db = cls._get_db()
+        table = cls._get_table()
+
+        # Don't recreate if table already exists
+        if db.table_exists(table):
+            return True
+
+        col_defs = []
+        for name, field_obj in cls._fields.items():
+            col_name = field_obj.column or name
+            kind = getattr(field_obj, "kind", None)
+
+            # Map field kind to SQL type
+            sql_type = "TEXT"
+            if kind == "IntegerField":
+                sql_type = "INTEGER"
+            elif kind == "StringField":
+                max_len = getattr(field_obj, "max_length", None) or 255
+                sql_type = f"VARCHAR({max_len})"
+            elif kind == "TextField":
+                sql_type = "TEXT"
+            elif kind in ("NumericField", "FloatField"):
+                sql_type = "REAL"
+            elif kind == "BooleanField":
+                sql_type = "INTEGER"
+            elif kind == "DateTimeField":
+                sql_type = "DATETIME"
+            elif kind == "BlobField":
+                sql_type = "BLOB"
+            else:
+                # Fallback based on field_type
+                ft = field_obj.field_type
+                if ft == int:
+                    sql_type = "INTEGER"
+                elif ft == float:
+                    sql_type = "REAL"
+                elif ft == bool:
+                    sql_type = "INTEGER"
+                elif ft == bytes:
+                    sql_type = "BLOB"
+
+            parts = [col_name, sql_type]
+
+            if field_obj.primary_key:
+                parts.append("PRIMARY KEY")
+            if field_obj.auto_increment:
+                parts.append("AUTOINCREMENT")
+            if field_obj.required and not field_obj.primary_key:
+                parts.append("NOT NULL")
+            if field_obj.default is not None and not field_obj.auto_increment:
+                default_val = field_obj.default
+                if isinstance(default_val, str):
+                    parts.append(f"DEFAULT '{default_val}'")
+                elif isinstance(default_val, bool):
+                    parts.append(f"DEFAULT {1 if default_val else 0}")
+                else:
+                    parts.append(f"DEFAULT {default_val}")
+
+            col_defs.append(" ".join(parts))
+
+        sql = f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(col_defs)})"
+
+        # Translate auto-increment syntax for the current engine
+        engine = db.get_database_type()
+        sql = SQLTranslator.auto_increment_syntax(sql, engine)
+
+        db.execute(sql)
+        return True
+
     # ── Cached Queries ────────────────────────────────────────
 
     @classmethod

@@ -588,7 +588,7 @@ def _try_static(path: str) -> Response | None:
         candidates.append(Path(custom) / clean)
     candidates.append(Path("public") / clean)
     candidates.append(Path("src/public") / clean)
-    # Framework built-in assets (tina4.js, tina4.min.css, tina4-dev-admin.js, etc.)
+    # Framework built-in assets (tina4.min.js, frond.min.js, tina4.min.css, tina4-dev-admin.min.js, etc.)
     candidates.append(Path(__file__).resolve().parent.parent / "public" / clean)
 
     for file_path in candidates:

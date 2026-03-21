@@ -76,6 +76,20 @@ class SQLiteAdapter(DatabaseAdapter):
             last_id=cursor.lastrowid,
         )
 
+    def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
+        """Optimized batch execute using SQLite's executemany."""
+        sql = self._translate_sql(sql)
+        cursor = self._conn.executemany(sql, params_list or [])
+
+        if not self._in_transaction and self.autocommit:
+            if self._conn.in_transaction:
+                self._conn.execute("COMMIT")
+
+        return DatabaseResult(
+            affected_rows=cursor.rowcount,
+            last_id=cursor.lastrowid,
+        )
+
     def fetch(self, sql: str, params: list = None,
               limit: int = 20, skip: int = 0) -> DatabaseResult:
         # Count total rows (without LIMIT/OFFSET)
