@@ -1,0 +1,112 @@
+{
+  "date": "2026-03-21T16:24:30Z",
+  "machine": "arm64 Darwin",
+  "config": {
+    "runs": 3,
+    "requests": 5000,
+    "concurrency": 50,
+    "warmup": 500
+  },
+  "results": [
+    {
+      "framework": "Tina4 Python",
+      "language": "python",
+      "json_runs": [
+        17418.5935,
+        16913.479,
+        16380.2042
+      ],
+      "list_runs": [
+        6107.4735,
+        6194.9748,
+        6197.4133
+      ],
+      "json_median": 16913.479,
+      "list_median": 6194.9748,
+      "warmup_time_ms": 79.37683400814421,
+      "deps": 0,
+      "features": 38,
+      "server": "built-in asyncio"
+    },
+    {
+      "framework": "Starlette",
+      "language": "python",
+      "json_runs": [
+        1096.5381,
+        16406.5275,
+        16580.4735
+      ],
+      "list_runs": [
+        7572.6138,
+        7601.4518,
+        7066.7121
+      ],
+      "json_median": 16406.5275,
+      "list_median": 7572.6138,
+      "warmup_time_ms": 512.557125010062,
+      "deps": 4,
+      "features": 6,
+      "server": "uvicorn"
+    },
+    {
+      "framework": "FastAPI",
+      "language": "python",
+      "json_runs": [
+        10185.2121,
+        11083.6585,
+        12292.7481
+      ],
+      "list_runs": [
+        2529.0209,
+        2525.8262,
+        2546.7596
+      ],
+      "json_median": 11083.6585,
+      "list_median": 2529.0209,
+      "warmup_time_ms": 62.84041699836962,
+      "deps": 12,
+      "features": 8,
+      "server": "uvicorn"
+    },
+    {
+      "framework": "Flask",
+      "language": "python",
+      "json_runs": [
+        5698.9439,
+        5452.8261,
+        5251.5991
+      ],
+      "list_runs": [
+        760.9253,
+        682.0797,
+        798.5002
+      ],
+      "json_median": 5452.8261,
+      "list_median": 760.9253,
+      "warmup_time_ms": 111.00741600967012,
+      "deps": 6,
+      "features": 7,
+      "server": "Werkzeug"
+    },
+    {
+      "framework": "Bottle",
+      "language": "python",
+      "json_runs": [
+        2445.0594,
+        2415.7511,
+        1262.5747
+      ],
+      "list_runs": [
+        507.8562,
+        628.7083,
+        744.5199
+      ],
+      "json_median": 2415.7511,
+      "list_median": 628.7083,
+      "warmup_time_ms": 56.21654097922146,
+      "deps": 0,
+      "features": 5,
+      "server": "built-in wsgiref"
+    }
+  ]
+}
