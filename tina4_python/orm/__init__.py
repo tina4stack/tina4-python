@@ -21,6 +21,7 @@ from tina4_python.orm.fields import (
     IntegerField, StringField, BooleanField, FloatField,
     DateTimeField, TextField, BlobField, NumericField,
     IntField, StrField, BoolField,  # short aliases
+    has_many, has_one, belongs_to,  # relationship descriptors
 )
 from tina4_python.orm.model import ORM, orm_bind
 
@@ -32,4 +33,6 @@ __all__ = [
     "DateTimeField", "TextField", "BlobField", "NumericField",
     # Short aliases (backwards compat)
     "IntField", "StrField", "BoolField",
+    # Relationships
+    "has_many", "has_one", "belongs_to",
 ]

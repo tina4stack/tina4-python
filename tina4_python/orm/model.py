@@ -9,7 +9,7 @@ SQL-first: you write the queries, ORM maps and manages the data.
         name = Field(str, required=True)
         email = Field(str)
 """
-from tina4_python.orm.fields import Field
+from tina4_python.orm.fields import Field, RelationshipDescriptor
 from tina4_python.core.cache import Cache
 
 # Module-level query cache — shared across all ORM models
@@ -44,18 +44,23 @@ def orm_bind(db, name: str = None):
 
 
 class ORMMeta(type):
-    """Metaclass that collects Field definitions from class body."""
+    """Metaclass that collects Field definitions and relationship descriptors."""
 
     def __new__(mcs, name, bases, namespace):
         fields = {}
+        relationships = {}
         for key, value in list(namespace.items()):
             if isinstance(value, Field):
                 value.name = key
                 if value.column is None:
                     value.column = key
                 fields[key] = value
+            elif isinstance(value, RelationshipDescriptor):
+                value.attr_name = key
+                relationships[key] = value
 
         namespace["_fields"] = fields
+        namespace["_relationships"] = relationships
         cls = super().__new__(mcs, name, bases, namespace)
         return cls
 
@@ -77,6 +82,9 @@ class ORM(metaclass=ORMMeta):
     _fields: dict[str, Field] = {}
 
     def __init__(self, data: dict | str = None, **kwargs):
+        # Initialize relationship cache
+        self._rel_cache = {}
+
         # Set defaults from field definitions
         for name, field in self._fields.items():
             setattr(self, name, field.default)
@@ -171,8 +179,9 @@ class ORM(metaclass=ORMMeta):
             if result.last_id and pk in self._fields:
                 setattr(self, pk, result.last_id)
 
-        # Invalidate cached queries for this model
+        # Invalidate cached queries and relationship cache
         self.clear_cache()
+        self._rel_cache = {}
         return self
 
     def delete(self):
@@ -221,8 +230,13 @@ class ORM(metaclass=ORMMeta):
     # ── Finders ─────────────────────────────────────────────────
 
     @classmethod
-    def find(cls, pk_value):
-        """Find a single record by primary key. Returns instance or None."""
+    def find(cls, pk_value, include: list[str] = None):
+        """Find a single record by primary key. Returns instance or None.
+
+        Args:
+            pk_value: Primary key value.
+            include: List of relationship names to eager-load.
+        """
         db = cls._get_db()
         pk = cls._get_pk()
         table = cls._get_table()
@@ -235,7 +249,10 @@ class ORM(metaclass=ORMMeta):
         row = db.fetch_one(sql, [pk_value])
         if row is None:
             return None
-        return cls(row)
+        instance = cls(row)
+        if include:
+            cls._eager_load([instance], include)
+        return instance
 
     @classmethod
     def find_or_fail(cls, pk_value):
@@ -246,8 +263,12 @@ class ORM(metaclass=ORMMeta):
         return result
 
     @classmethod
-    def all(cls, limit: int = 100, skip: int = 0):
-        """Fetch all records (respects soft delete)."""
+    def all(cls, limit: int = 100, skip: int = 0, include: list[str] = None):
+        """Fetch all records (respects soft delete).
+
+        Args:
+            include: List of relationship names to eager-load.
+        """
         db = cls._get_db()
         table = cls._get_table()
 
@@ -256,18 +277,34 @@ class ORM(metaclass=ORMMeta):
             sql += " WHERE deleted_at IS NULL"
 
         result = db.fetch(sql, limit=limit, skip=skip)
-        return [cls(row) for row in result.records], result.count
+        instances = [cls(row) for row in result.records]
+        if include:
+            cls._eager_load(instances, include)
+        return instances, result.count
 
     @classmethod
-    def select(cls, sql: str, params: list = None, limit: int = 20, skip: int = 0):
-        """SQL-first query — you write the SQL, ORM maps results."""
+    def select(cls, sql: str, params: list = None, limit: int = 20, skip: int = 0,
+               include: list[str] = None):
+        """SQL-first query — you write the SQL, ORM maps results.
+
+        Args:
+            include: List of relationship names to eager-load.
+        """
         db = cls._get_db()
         result = db.fetch(sql, params, limit=limit, skip=skip)
-        return [cls(row) for row in result.records], result.count
+        instances = [cls(row) for row in result.records]
+        if include:
+            cls._eager_load(instances, include)
+        return instances, result.count
 
     @classmethod
-    def where(cls, filter_sql: str, params: list = None, limit: int = 20, skip: int = 0):
-        """Query with WHERE clause shorthand."""
+    def where(cls, filter_sql: str, params: list = None, limit: int = 20, skip: int = 0,
+              include: list[str] = None):
+        """Query with WHERE clause shorthand.
+
+        Args:
+            include: List of relationship names to eager-load.
+        """
         db = cls._get_db()
         table = cls._get_table()
 
@@ -276,7 +313,10 @@ class ORM(metaclass=ORMMeta):
             sql = f"SELECT * FROM {table} WHERE ({filter_sql}) AND deleted_at IS NULL"
 
         result = db.fetch(sql, params, limit=limit, skip=skip)
-        return [cls(row) for row in result.records], result.count
+        instances = [cls(row) for row in result.records]
+        if include:
+            cls._eager_load(instances, include)
+        return instances, result.count
 
     @classmethod
     def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 20, skip: int = 0):
@@ -422,7 +462,7 @@ class ORM(metaclass=ORMMeta):
     # ── Relationships ───────────────────────────────────────────
 
     def has_one(self, related_class, foreign_key: str = None):
-        """Load a single related record."""
+        """Load a single related record (imperative style)."""
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         fk = foreign_key or f"{self.__class__.__name__.lower()}_id"
@@ -433,7 +473,7 @@ class ORM(metaclass=ORMMeta):
         return related_class(row) if row else None
 
     def has_many(self, related_class, foreign_key: str = None, limit: int = 100, skip: int = 0):
-        """Load multiple related records."""
+        """Load multiple related records (imperative style)."""
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         fk = foreign_key or f"{self.__class__.__name__.lower()}_id"
@@ -444,12 +484,105 @@ class ORM(metaclass=ORMMeta):
         return [related_class(row) for row in result.records]
 
     def belongs_to(self, related_class, foreign_key: str = None):
-        """Load the parent record."""
+        """Load the parent record (imperative style)."""
         fk = foreign_key or f"{related_class.__name__.lower()}_id"
         fk_value = getattr(self, fk, None)
         if fk_value is None:
             return None
         return related_class.find(fk_value)
+
+    @classmethod
+    def _eager_load(cls, instances: list, include: list[str]):
+        """Eager-load relationships for a list of instances (prevents N+1).
+
+        Args:
+            instances: List of model instances.
+            include: List of relationship names, optionally dot-separated for nesting
+                     (e.g., ["posts", "posts.comments"]).
+        """
+        if not instances:
+            return
+
+        from tina4_python.orm.fields import (
+            HasManyDescriptor, HasOneDescriptor, BelongsToDescriptor,
+        )
+
+        # Group includes: top-level and nested
+        top_level = {}
+        for inc in include:
+            parts = inc.split(".", 1)
+            rel_name = parts[0]
+            if rel_name not in top_level:
+                top_level[rel_name] = []
+            if len(parts) > 1:
+                top_level[rel_name].append(parts[1])
+
+        for rel_name, nested in top_level.items():
+            descriptor = cls._relationships.get(rel_name)
+            if descriptor is None:
+                continue
+
+            related_cls = descriptor._resolve_model()
+            pk = cls._get_pk()
+            db = cls._get_db()
+
+            if isinstance(descriptor, (HasManyDescriptor, HasOneDescriptor)):
+                # Collect all PKs from instances
+                pk_values = [getattr(inst, pk) for inst in instances if getattr(inst, pk) is not None]
+                if not pk_values:
+                    continue
+
+                fk = descriptor.foreign_key or f"{cls.__name__.lower()}_id"
+                table = related_cls._get_table()
+                placeholders = ",".join("?" for _ in pk_values)
+                sql = f"SELECT * FROM {table} WHERE {fk} IN ({placeholders})"
+                result = db.fetch(sql, pk_values, limit=len(pk_values) * 1000, skip=0)
+                related_records = [related_cls(row) for row in result.records]
+
+                # Eager load nested relationships on related records
+                if nested:
+                    related_cls._eager_load(related_records, nested)
+
+                # Group by foreign key and assign
+                grouped = {}
+                for record in related_records:
+                    fk_val = getattr(record, fk, None)
+                    if fk_val not in grouped:
+                        grouped[fk_val] = []
+                    grouped[fk_val].append(record)
+
+                for inst in instances:
+                    pk_val = getattr(inst, pk)
+                    records = grouped.get(pk_val, [])
+                    if isinstance(descriptor, HasOneDescriptor):
+                        inst._rel_cache[rel_name] = records[0] if records else None
+                    else:
+                        inst._rel_cache[rel_name] = records
+
+            elif isinstance(descriptor, BelongsToDescriptor):
+                fk = descriptor.foreign_key or f"{related_cls.__name__.lower()}_id"
+                fk_values = list({
+                    getattr(inst, fk) for inst in instances
+                    if getattr(inst, fk, None) is not None
+                })
+                if not fk_values:
+                    continue
+
+                related_pk = related_cls._get_pk()
+                table = related_cls._get_table()
+                placeholders = ",".join("?" for _ in fk_values)
+                pk_col = related_cls._fields[related_pk].column
+                sql = f"SELECT * FROM {table} WHERE {pk_col} IN ({placeholders})"
+                result = db.fetch(sql, fk_values, limit=len(fk_values) * 10, skip=0)
+                related_records = [related_cls(row) for row in result.records]
+
+                if nested:
+                    related_cls._eager_load(related_records, nested)
+
+                lookup = {getattr(r, related_pk): r for r in related_records}
+                for inst in instances:
+                    fk_val = getattr(inst, fk, None)
+                    inst._rel_cache[rel_name] = lookup.get(fk_val)
 
     # ── Scopes ──────────────────────────────────────────────────
 
@@ -480,9 +613,43 @@ class ORM(metaclass=ORMMeta):
 
     # ── Serialization ───────────────────────────────────────────
 
-    def to_dict(self) -> dict:
-        """Convert to dict (field values only)."""
-        return {name: getattr(self, name) for name in self._fields}
+    def to_dict(self, include: list[str] = None) -> dict:
+        """Convert to dict (field values only, optionally with relationships).
+
+        Args:
+            include: List of relationship names to include. Supports dot notation
+                     for nested relationships (e.g., ["posts.comments"]).
+        """
+        result = {name: getattr(self, name) for name in self._fields}
+
+        if include:
+            # Group includes: top-level and nested
+            top_level = {}
+            for inc in include:
+                parts = inc.split(".", 1)
+                rel_name = parts[0]
+                if rel_name not in top_level:
+                    top_level[rel_name] = []
+                if len(parts) > 1:
+                    top_level[rel_name].append(parts[1])
+
+            for rel_name, nested in top_level.items():
+                if rel_name in self._relationships:
+                    # Access the relationship (triggers lazy load if not cached)
+                    related = getattr(self, rel_name)
+                    if related is None:
+                        result[rel_name] = None
+                    elif isinstance(related, list):
+                        result[rel_name] = [
+                            r.to_dict(include=nested if nested else None)
+                            for r in related
+                        ]
+                    else:
+                        result[rel_name] = related.to_dict(
+                            include=nested if nested else None
+                        )
+
+        return result
 
     def to_object(self) -> dict:
         """Convert to an object/dict (alias for to_dict)."""
@@ -496,10 +663,10 @@ class ORM(metaclass=ORMMeta):
         """Convert to a list of values (alias for to_array)."""
         return self.to_array()
 
-    def to_json(self) -> str:
+    def to_json(self, include: list[str] = None) -> str:
         """Convert to JSON string."""
         import json
-        data = self.to_dict()
+        data = self.to_dict(include=include)
         # Handle non-serializable types
         for key, value in data.items():
             if hasattr(value, "isoformat"):

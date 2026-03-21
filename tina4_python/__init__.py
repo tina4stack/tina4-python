@@ -28,6 +28,7 @@ from tina4_python.orm import (  # noqa: E402, F401
     IntegerField, StringField, BooleanField, FloatField,
     DateTimeField, TextField, BlobField, NumericField,
     IntField, StrField, BoolField,  # short aliases
+    has_many, has_one, belongs_to,  # relationship descriptors
 )
 
 # ── Response Cache ──

@@ -161,3 +161,135 @@ def NumericField(**kwargs):
 IntField = IntegerField
 StrField = StringField
 BoolField = BooleanField
+
+
+# ── Relationship Descriptors ────────────────────────────────────
+
+class RelationshipDescriptor:
+    """Base descriptor for ORM relationships. Lazy-loads on first access."""
+
+    def __init__(self, model_name: str, foreign_key: str = None, rel_type: str = "has_many"):
+        self.model_name = model_name
+        self.foreign_key = foreign_key
+        self.rel_type = rel_type  # "has_many", "has_one", "belongs_to"
+        self.attr_name = None  # Set by ORMMeta
+
+    def _resolve_model(self):
+        """Resolve the related model class by name from ORM subclasses."""
+        from tina4_python.orm.model import ORM
+        for cls in ORM.__subclasses__():
+            if cls.__name__ == self.model_name:
+                return cls
+        # Try recursive subclass search
+        def _find_subclass(parent):
+            for sub in parent.__subclasses__():
+                if sub.__name__ == self.model_name:
+                    return sub
+                found = _find_subclass(sub)
+                if found:
+                    return found
+            return None
+        found = _find_subclass(ORM)
+        if found:
+            return found
+        raise ValueError(f"Related model '{self.model_name}' not found")
+
+    def __set_name__(self, owner, name):
+        self.attr_name = name
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self  # Class-level access returns the descriptor
+        # Check relationship cache
+        cache = obj.__dict__.setdefault("_rel_cache", {})
+        if self.attr_name in cache:
+            return cache[self.attr_name]
+        # Load and cache
+        result = self._load(obj)
+        cache[self.attr_name] = result
+        return result
+
+    def __set__(self, obj, value):
+        # Allow direct assignment (used by eager loading)
+        cache = obj.__dict__.setdefault("_rel_cache", {})
+        cache[self.attr_name] = value
+
+    def _load(self, obj):
+        """Override in subclasses."""
+        raise NotImplementedError
+
+
+class HasManyDescriptor(RelationshipDescriptor):
+    """Lazy-loading descriptor for has_many relationships."""
+
+    def _load(self, obj):
+        related_cls = self._resolve_model()
+        pk = obj._get_pk()
+        pk_value = getattr(obj, pk, None)
+        if pk_value is None:
+            return []
+        fk = self.foreign_key or f"{obj.__class__.__name__.lower()}_id"
+        table = related_cls._get_table()
+        db = obj._get_db()
+        sql = f"SELECT * FROM {table} WHERE {fk} = ?"
+        result = db.fetch(sql, [pk_value], limit=1000, skip=0)
+        return [related_cls(row) for row in result.records]
+
+
+class HasOneDescriptor(RelationshipDescriptor):
+    """Lazy-loading descriptor for has_one relationships."""
+
+    def _load(self, obj):
+        related_cls = self._resolve_model()
+        pk = obj._get_pk()
+        pk_value = getattr(obj, pk, None)
+        if pk_value is None:
+            return None
+        fk = self.foreign_key or f"{obj.__class__.__name__.lower()}_id"
+        table = related_cls._get_table()
+        db = obj._get_db()
+        sql = f"SELECT * FROM {table} WHERE {fk} = ? LIMIT 1"
+        row = db.fetch_one(sql, [pk_value])
+        return related_cls(row) if row else None
+
+
+class BelongsToDescriptor(RelationshipDescriptor):
+    """Lazy-loading descriptor for belongs_to relationships."""
+
+    def _load(self, obj):
+        related_cls = self._resolve_model()
+        fk = self.foreign_key or f"{related_cls.__name__.lower()}_id"
+        fk_value = getattr(obj, fk, None)
+        if fk_value is None:
+            return None
+        return related_cls.find(fk_value)
+
+
+def has_many(model_name: str, foreign_key: str = None) -> HasManyDescriptor:
+    """Declare a has_many relationship on a model class.
+
+    Usage:
+        class User(ORM):
+            posts = has_many("Post", foreign_key="user_id")
+    """
+    return HasManyDescriptor(model_name, foreign_key, "has_many")
+
+
+def has_one(model_name: str, foreign_key: str = None) -> HasOneDescriptor:
+    """Declare a has_one relationship on a model class.
+
+    Usage:
+        class User(ORM):
+            profile = has_one("Profile", foreign_key="user_id")
+    """
+    return HasOneDescriptor(model_name, foreign_key, "has_one")
+
+
+def belongs_to(model_name: str, foreign_key: str = None) -> BelongsToDescriptor:
+    """Declare a belongs_to relationship on a model class.
+
+    Usage:
+        class Post(ORM):
+            user = belongs_to("User", foreign_key="user_id")
+    """
+    return BelongsToDescriptor(model_name, foreign_key, "belongs_to")

@@ -542,6 +542,346 @@ def print_report(results: list[BenchResult], runs: int, requests: int, concurren
     print()
 
 
+# ── Database Benchmarks ────────────────────────────────────────
+
+DB_ITERATIONS = 1000
+DB_PATH = "/tmp/tina4_bench.db"
+
+
+@dataclass
+class DbBenchResult:
+    name: str
+    framework: str
+    ops_per_sec: float
+    total_ms: float
+
+
+def _setup_tina4_db():
+    """Create a Tina4 SQLite database with test tables and seed data."""
+    import sqlite3
+    if os.path.exists(DB_PATH):
+        os.remove(DB_PATH)
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER)")
+    conn.execute("CREATE TABLE bench (id INTEGER PRIMARY KEY, name TEXT, value REAL)")
+    # Seed 1000 rows for multi-row fetch
+    for i in range(1, 1001):
+        conn.execute("INSERT INTO users (id, name, email, age) VALUES (?, ?, ?, ?)",
+                     (i, f"User {i}", f"user{i}@example.com", 20 + (i % 50)))
+    conn.commit()
+    conn.close()
+
+
+def _bench_tina4_db(iterations: int) -> list[DbBenchResult]:
+    """Run database benchmarks using Tina4 Database."""
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+    _setup_tina4_db()
+    results = []
+
+    # Import Tina4 Database
+    os.environ.pop("TINA4_DB_CACHE", None)
+    os.environ["TINA4_DB_CACHE"] = "false"
+    from tina4_python.database.connection import Database
+
+    db = Database(f"sqlite:///{DB_PATH}")
+
+    # 1. Single row fetch
+    t0 = time.perf_counter()
+    for i in range(iterations):
+        db.fetch_one("SELECT * FROM users WHERE id = ?", [i % 1000 + 1])
+    elapsed = time.perf_counter() - t0
+    results.append(DbBenchResult("Single row fetch", "Tina4", iterations / elapsed, elapsed * 1000))
+
+    # 2. Multi-row fetch (100 rows)
+    t0 = time.perf_counter()
+    for _ in range(iterations):
+        db.fetch("SELECT * FROM users", limit=100)
+    elapsed = time.perf_counter() - t0
+    results.append(DbBenchResult("Multi-row fetch (100)", "Tina4", iterations / elapsed, elapsed * 1000))
+
+    # 3. Insert
+    t0 = time.perf_counter()
+    for i in range(iterations):
+        db.insert("bench", {"name": f"item_{i}", "value": i * 1.5})
+    db.commit()
+    elapsed = time.perf_counter() - t0
+    results.append(DbBenchResult("Insert", "Tina4", iterations / elapsed, elapsed * 1000))
+
+    # 4. CRUD cycle (insert + read + update + delete)
+    t0 = time.perf_counter()
+    for i in range(iterations):
+        db.execute("INSERT INTO bench (name, value) VALUES (?, ?)", [f"crud_{i}", i])
+        db.fetch_one("SELECT * FROM bench WHERE name = ?", [f"crud_{i}"])
+        db.execute("UPDATE bench SET value = ? WHERE name = ?", [i + 1, f"crud_{i}"])
+        db.execute("DELETE FROM bench WHERE name = ?", [f"crud_{i}"])
+    db.commit()
+    elapsed = time.perf_counter() - t0
+    results.append(DbBenchResult("CRUD cycle", "Tina4", iterations / elapsed, elapsed * 1000))
+
+    db.close()
+
+    # 5. Fetch with cache ON
+    os.environ["TINA4_DB_CACHE"] = "true"
+    os.environ["TINA4_DB_CACHE_TTL"] = "30"
+
+    # Create new connection to pick up env change
+    db_cached = Database(f"sqlite:///{DB_PATH}")
+
+    # Warm the cache with one call
+    db_cached.fetch_one("SELECT * FROM users WHERE id = ?", [1])
+
+    t0 = time.perf_counter()
+    for i in range(iterations):
+        db_cached.fetch_one("SELECT * FROM users WHERE id = ?", [1])
+    elapsed = time.perf_counter() - t0
+    cached_ops = iterations / elapsed
+    results.append(DbBenchResult("Cached fetch (TTL=30)", "Tina4", cached_ops, elapsed * 1000))
+
+    # 6. Fetch with cache OFF
+    os.environ["TINA4_DB_CACHE"] = "false"
+    db_nocache = Database(f"sqlite:///{DB_PATH}")
+
+    t0 = time.perf_counter()
+    for i in range(iterations):
+        db_nocache.fetch_one("SELECT * FROM users WHERE id = ?", [1])
+    elapsed = time.perf_counter() - t0
+    uncached_ops = iterations / elapsed
+    results.append(DbBenchResult("Uncached fetch", "Tina4", uncached_ops, elapsed * 1000))
+
+    # Cache speedup ratio
+    speedup = cached_ops / uncached_ops if uncached_ops > 0 else 0
+    results.append(DbBenchResult("Cache speedup", "Tina4", speedup, 0))
+
+    db_cached.close()
+    db_nocache.close()
+
+    return results
+
+
+def _bench_django_db(iterations: int) -> list[DbBenchResult]:
+    """Run database benchmarks using Django ORM (if installed)."""
+    try:
+        import django
+    except ImportError:
+        return []
+
+    results = []
+    db_path = "/tmp/tina4_bench_django.db"
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+    from django.conf import settings
+    if not settings.configured:
+        settings.configure(
+            DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": db_path}},
+            INSTALLED_APPS=["django.contrib.contenttypes"],
+            DEFAULT_AUTO_FIELD="django.db.models.BigAutoField",
+        )
+        django.setup()
+
+    from django.db import connection
+    cursor = connection.cursor()
+    cursor.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER)")
+    for i in range(1, 1001):
+        cursor.execute("INSERT INTO users (id, name, email, age) VALUES (%s, %s, %s, %s)",
+                       [i, f"User {i}", f"user{i}@example.com", 20 + (i % 50)])
+    cursor.execute("CREATE TABLE bench (id INTEGER PRIMARY KEY, name TEXT, value REAL)")
+
+    # 1. Single row fetch
+    t0 = time.perf_counter()
+    for i in range(iterations):
+        cursor.execute("SELECT * FROM users WHERE id = %s", [i % 1000 + 1])
+        cursor.fetchone()
+    elapsed = time.perf_counter() - t0
+    results.append(DbBenchResult("Single row fetch", "Django", iterations / elapsed, elapsed * 1000))
+
+    # 2. Multi-row fetch
+    t0 = time.perf_counter()
+    for _ in range(iterations):
+        cursor.execute("SELECT * FROM users LIMIT 100")
+        cursor.fetchall()
+    elapsed = time.perf_counter() - t0
+    results.append(DbBenchResult("Multi-row fetch (100)", "Django", iterations / elapsed, elapsed * 1000))
+
+    # 3. Insert
+    t0 = time.perf_counter()
+    for i in range(iterations):
+        cursor.execute("INSERT INTO bench (name, value) VALUES (%s, %s)", [f"item_{i}", i * 1.5])
+    elapsed = time.perf_counter() - t0
+    results.append(DbBenchResult("Insert", "Django", iterations / elapsed, elapsed * 1000))
+
+    # 4. CRUD cycle
+    t0 = time.perf_counter()
+    for i in range(iterations):
+        cursor.execute("INSERT INTO bench (name, value) VALUES (%s, %s)", [f"crud_{i}", i])
+        cursor.execute("SELECT * FROM bench WHERE name = %s", [f"crud_{i}"])
+        cursor.fetchone()
+        cursor.execute("UPDATE bench SET value = %s WHERE name = %s", [i + 1, f"crud_{i}"])
+        cursor.execute("DELETE FROM bench WHERE name = %s", [f"crud_{i}"])
+    elapsed = time.perf_counter() - t0
+    results.append(DbBenchResult("CRUD cycle", "Django", iterations / elapsed, elapsed * 1000))
+
+    # No cache for Django
+    results.append(DbBenchResult("Cached fetch (TTL=30)", "Django", 0, 0))
+    results.append(DbBenchResult("Uncached fetch", "Django", 0, 0))
+    results.append(DbBenchResult("Cache speedup", "Django", 0, 0))
+
+    connection.close()
+    return results
+
+
+def _bench_sqlalchemy_db(iterations: int) -> list[DbBenchResult]:
+    """Run database benchmarks using SQLAlchemy (if installed)."""
+    try:
+        import sqlalchemy
+    except ImportError:
+        return []
+
+    results = []
+    db_path = "/tmp/tina4_bench_sa.db"
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+    from sqlalchemy import create_engine, text
+    engine = create_engine(f"sqlite:///{db_path}")
+
+    with engine.connect() as conn:
+        conn.execute(text("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER)"))
+        for i in range(1, 1001):
+            conn.execute(text("INSERT INTO users (id, name, email, age) VALUES (:id, :name, :email, :age)"),
+                         {"id": i, "name": f"User {i}", "email": f"user{i}@example.com", "age": 20 + (i % 50)})
+        conn.execute(text("CREATE TABLE bench (id INTEGER PRIMARY KEY, name TEXT, value REAL)"))
+        conn.commit()
+
+    with engine.connect() as conn:
+        # 1. Single row fetch
+        t0 = time.perf_counter()
+        for i in range(iterations):
+            conn.execute(text("SELECT * FROM users WHERE id = :id"), {"id": i % 1000 + 1}).fetchone()
+        elapsed = time.perf_counter() - t0
+        results.append(DbBenchResult("Single row fetch", "SQLAlchemy", iterations / elapsed, elapsed * 1000))
+
+        # 2. Multi-row fetch
+        t0 = time.perf_counter()
+        for _ in range(iterations):
+            conn.execute(text("SELECT * FROM users LIMIT 100")).fetchall()
+        elapsed = time.perf_counter() - t0
+        results.append(DbBenchResult("Multi-row fetch (100)", "SQLAlchemy", iterations / elapsed, elapsed * 1000))
+
+        # 3. Insert
+        t0 = time.perf_counter()
+        for i in range(iterations):
+            conn.execute(text("INSERT INTO bench (name, value) VALUES (:name, :value)"),
+                         {"name": f"item_{i}", "value": i * 1.5})
+        conn.commit()
+        elapsed = time.perf_counter() - t0
+        results.append(DbBenchResult("Insert", "SQLAlchemy", iterations / elapsed, elapsed * 1000))
+
+        # 4. CRUD cycle
+        t0 = time.perf_counter()
+        for i in range(iterations):
+            conn.execute(text("INSERT INTO bench (name, value) VALUES (:name, :value)"),
+                         {"name": f"crud_{i}", "value": i})
+            conn.execute(text("SELECT * FROM bench WHERE name = :name"), {"name": f"crud_{i}"}).fetchone()
+            conn.execute(text("UPDATE bench SET value = :value WHERE name = :name"),
+                         {"value": i + 1, "name": f"crud_{i}"})
+            conn.execute(text("DELETE FROM bench WHERE name = :name"), {"name": f"crud_{i}"})
+        conn.commit()
+        elapsed = time.perf_counter() - t0
+        results.append(DbBenchResult("CRUD cycle", "SQLAlchemy", iterations / elapsed, elapsed * 1000))
+
+    # No cache for SQLAlchemy
+    results.append(DbBenchResult("Cached fetch (TTL=30)", "SQLAlchemy", 0, 0))
+    results.append(DbBenchResult("Uncached fetch", "SQLAlchemy", 0, 0))
+    results.append(DbBenchResult("Cache speedup", "SQLAlchemy", 0, 0))
+
+    engine.dispose()
+    return results
+
+
+def run_db_benchmarks(iterations: int = DB_ITERATIONS):
+    """Run all database benchmarks and print results."""
+    print()
+    print("=" * 80)
+    print("  DATABASE BENCHMARKS")
+    print("=" * 80)
+    print()
+    print(f"  Iterations: {iterations}")
+    print(f"  Database:   SQLite (in /tmp)")
+    print()
+
+    # Run Tina4
+    print("  Running Tina4 database benchmarks...")
+    tina4_results = _bench_tina4_db(iterations)
+
+    # Run Django (if installed)
+    print("  Running Django database benchmarks...")
+    django_results = _bench_django_db(iterations)
+
+    # Run SQLAlchemy (if installed)
+    print("  Running SQLAlchemy database benchmarks...")
+    sa_results = _bench_sqlalchemy_db(iterations)
+
+    print()
+
+    # Collect unique benchmark names
+    bench_names = []
+    for r in tina4_results:
+        if r.name not in bench_names:
+            bench_names.append(r.name)
+
+    # Build lookup
+    def _lookup(results, name):
+        for r in results:
+            if r.name == name:
+                return r
+        return None
+
+    # Print table
+    has_django = len(django_results) > 0
+    has_sa = len(sa_results) > 0
+
+    header = f"  {'Benchmark':<28s} {'Tina4':>12s}"
+    if has_django:
+        header += f" {'Django':>12s}"
+    if has_sa:
+        header += f" {'SQLAlchemy':>12s}"
+    print(header)
+    print("  " + "-" * (28 + 12 + (14 if has_django else 0) + (14 if has_sa else 0)))
+
+    for name in bench_names:
+        t4 = _lookup(tina4_results, name)
+        dj = _lookup(django_results, name) if has_django else None
+        sa = _lookup(sa_results, name) if has_sa else None
+
+        if name == "Cache speedup":
+            t4_val = f"{t4.ops_per_sec:.1f}x" if t4 and t4.ops_per_sec > 0 else "N/A"
+            dj_val = "N/A"
+            sa_val = "N/A"
+        else:
+            t4_val = f"{t4.ops_per_sec:,.0f}" if t4 and t4.ops_per_sec > 0 else "N/A"
+            dj_val = f"{dj.ops_per_sec:,.0f}" if dj and dj.ops_per_sec > 0 else "N/A"
+            sa_val = f"{sa.ops_per_sec:,.0f}" if sa and sa.ops_per_sec > 0 else "N/A"
+
+        line = f"  {name:<28s} {t4_val:>12s}"
+        if has_django:
+            line += f" {dj_val:>12s}"
+        if has_sa:
+            line += f" {sa_val:>12s}"
+        print(line)
+
+    print()
+
+    # Cleanup
+    for p in [DB_PATH, "/tmp/tina4_bench_django.db", "/tmp/tina4_bench_sa.db"]:
+        if os.path.exists(p):
+            os.remove(p)
+
+    return tina4_results, django_results, sa_results
+
+
 # ── Main ───────────────────────────────────────────────────────
 
 def main():
@@ -554,6 +894,7 @@ def main():
     parser.add_argument("--requests", type=int, default=REQUESTS, help=f"Requests per run (default: {REQUESTS})")
     parser.add_argument("--concurrency", type=int, default=CONCURRENCY, help=f"Concurrent connections (default: {CONCURRENCY})")
     parser.add_argument("--output", type=str, default="", help="Save JSON report to file")
+    parser.add_argument("--db", action="store_true", help="Run database benchmarks (SQLite, 1000 iterations)")
     args = parser.parse_args()
 
     # Determine which frameworks to test
@@ -568,6 +909,11 @@ def main():
         languages.add("nodejs")
     if not languages:
         languages = {"python", "php", "ruby", "nodejs"}
+
+    # Database benchmarks mode
+    if args.db:
+        run_db_benchmarks(DB_ITERATIONS)
+        return
 
     to_test = [k for k, v in FRAMEWORKS.items() if v.language in languages]
 
