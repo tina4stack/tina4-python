@@ -285,6 +285,15 @@ result = db.fetch("SELECT * FROM users")
 for row in result: print(row["name"])</pre>
             <button class="try-btn" onclick="deployGallery('database','/api/gallery/db/tables')">Try It</button>
         </div>
+        <div class="gallery-card">
+            <div class="accent accent-blue"></div>
+            <div class="icon">&#128680;</div>
+            <h3>Error Overlay</h3>
+            <p>Rich debug page with source code</p>
+            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">user = {{"name": "Alice"}}
+role = user["role"]  # KeyError!</pre>
+            <button class="try-btn" onclick="deployGallery('error-overlay','/api/gallery/crash')">Try It</button>
+        </div>
     </div>
 </div>
 <script>
