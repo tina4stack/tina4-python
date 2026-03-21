@@ -139,6 +139,31 @@ def l(): response.content_type="application/json"; return json.dumps({"items":[{
 run(host="127.0.0.1",port=9005,quiet=True)
 """)
 
+    (TMP / "django_bench.py").write_text("""
+import django, os, json
+from django.conf import settings
+if not settings.configured:
+    settings.configure(
+        DEBUG=False, ALLOWED_HOSTS=["*"], ROOT_URLCONF="django_bench",
+        SECRET_KEY="benchmark-key", MIDDLEWARE=[], INSTALLED_APPS=[],
+    )
+    django.setup()
+from django.http import JsonResponse
+from django.urls import path
+
+def j(request): return JsonResponse({"message":"Hello, World!","framework":"django"})
+def l(request):
+    items=[{"id":i,"name":f"Item {i}","price":round(i*1.99,2)} for i in range(100)]
+    return JsonResponse({"items":items,"count":100})
+
+urlpatterns = [path("api/bench/json",j), path("api/bench/list",l)]
+
+if __name__ == "__main__":
+    from django.core.management import execute_from_command_line
+    os.environ["DJANGO_SETTINGS_MODULE"] = "__main__"
+    execute_from_command_line(["manage.py","runserver","127.0.0.1:9006","--noreload","--nothreading"])
+""")
+
     # ── PHP ──
     (TMP / "tina4_php_bench.php").write_text("""<?php
 header('Content-Type: application/json');
@@ -163,7 +188,7 @@ s.start
     (TMP / "sinatra_bench.rb").write_text("""
 require "sinatra/base"; require "json"
 class B < Sinatra::Base
-  set :port, 9022; set :bind, "127.0.0.1"; set :logging, false
+  set :port, 9022; set :bind, "127.0.0.1"; set :logging, false; set :environment, :production
   get("/api/bench/json"){content_type :json; JSON.generate({message:"Hello, World!",framework:"sinatra"})}
   get("/api/bench/list"){content_type :json; JSON.generate({items:(0...100).map{|i|{id:i,name:"Item \#{i}",price:(i*1.99).round(2)}},count:100})}
   run!
@@ -273,6 +298,18 @@ def _start_server(key: str) -> bool:
     _kill_port(port)
     time.sleep(0.5)
 
+    # Production mode environment for ALL frameworks
+    env = {
+        **os.environ,
+        "TINA4_DEBUG": "false",
+        "TINA4_LOG_LEVEL": "ERROR",
+        "FLASK_ENV": "production",
+        "NODE_ENV": "production",
+        "RACK_ENV": "production",
+        "DJANGO_SETTINGS_MODULE": "bench_settings",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+
     # Build command
     if key == "tina4-python":
         cmd = [VENV_PYTHON, str(TMP / "tina4_python_bench.py")]
@@ -284,13 +321,15 @@ def _start_server(key: str) -> bool:
         cmd = [VENV_PYTHON, str(TMP / "fastapi_bench.py")]
     elif key == "bottle":
         cmd = [VENV_PYTHON, str(TMP / "bottle_bench.py")]
+    elif key == "django":
+        cmd = [VENV_PYTHON, str(TMP / "django_bench.py")]
     elif key == "tina4-php":
-        cmd = ["php", "-S", f"127.0.0.1:{port}", str(TMP / "tina4_php_bench.php")]
+        cmd = ["php", "-S", f"127.0.0.1:{port}", "-d", "display_errors=Off", str(TMP / "tina4_php_bench.php")]
     elif key == "slim":
         slim_dir = Path("/tmp/bench-slim")
         if not (slim_dir / "vendor").exists():
             return False
-        cmd = ["php", "-S", f"127.0.0.1:{port}", str(slim_dir / "index.php")]
+        cmd = ["php", "-S", f"127.0.0.1:{port}", "-d", "display_errors=Off", str(slim_dir / "index.php")]
     elif key == "tina4-ruby":
         cmd = [RUBY, str(TMP / "tina4_ruby_bench.rb")]
     elif key == "sinatra":
@@ -316,6 +355,7 @@ def _start_server(key: str) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(TMP),
+            env=env,
         )
         _processes.append(proc)
 
