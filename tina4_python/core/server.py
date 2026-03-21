@@ -163,7 +163,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
 .tagline{{color:#64748b;font-size:1.1rem;margin-bottom:2rem}}
 .actions{{display:flex;gap:0.75rem;justify-content:center;flex-wrap:wrap;margin-bottom:2.5rem}}
-.btn{{padding:0.6rem 1.5rem;border-radius:0.5rem;font-size:0.9rem;font-weight:600;cursor:pointer;text-decoration:none;transition:all 0.15s;border:1px solid #334155;color:#94a3b8;background:transparent}}
+.btn{{padding:0.6rem 1.5rem;border-radius:0.5rem;font-size:0.9rem;font-weight:600;cursor:pointer;text-decoration:none;transition:all 0.15s;border:1px solid #334155;color:#94a3b8;background:transparent;min-width:140px;text-align:center;display:inline-block}}
 .btn:hover{{border-color:#64748b;color:#e2e8f0}}
 .btn-primary{{background:#3572A5;color:#fff;border-color:#3572A5}}
 .btn-primary:hover{{opacity:0.9;transform:translateY(-1px)}}
@@ -188,14 +188,17 @@ h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
 </style>
 </head>
 <body>
-<img src="/images/logo.png" class="bg-watermark" alt="">
+<img src="/images/tina4-logo-icon.webp" class="bg-watermark" alt="">
 <div class="hero">
-    <img src="/images/logo.png" class="logo" alt="Tina4">
+    <img src="/images/tina4-logo-icon.webp" class="logo" alt="Tina4">
     <h1>Tina4</h1>
     <p class="tagline">This is not a framework</p>
     <div class="actions">
-        <a href="/__dev/" class="btn btn-primary">Dev Admin</a>
+        <a href="https://tina4.com/python" class="btn" target="_blank">Website</a>
+        <a href="/__dev/" class="btn">Dev Admin</a>
         <a href="#gallery" class="btn">Gallery</a>
+        <a href="https://github.com/tina4stack/tina4-python" class="btn" target="_blank">GitHub</a>
+        <a href="https://github.com/tina4stack/tina4-python/stargazers" class="btn" target="_blank">&#11088; Star</a>
     </div>
     <div class="status">
         <span><span class="dot"></span>Server running</span>
