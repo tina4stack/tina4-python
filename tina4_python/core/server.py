@@ -290,6 +290,10 @@ for row in result: print(row["name"])</pre>
 <script>
 function deployGallery(name, tryUrl) {{
     var btn = event.target;
+    if (btn.dataset.deployed) {{
+        window.open(tryUrl, '_blank');
+        return;
+    }}
     btn.textContent = 'Deploying...';
     btn.disabled = true;
     fetch('/__dev/api/gallery/deploy', {{
@@ -300,16 +304,19 @@ function deployGallery(name, tryUrl) {{
     .then(function(r) {{ return r.json(); }})
     .then(function(d) {{
         if (d.error) {{
-            btn.textContent = 'Error';
+            btn.textContent = 'Try It';
+            btn.disabled = false;
             alert('Deploy failed: ' + d.error);
         }} else {{
-            btn.textContent = 'Deployed!';
+            btn.textContent = 'View \u2197';
             btn.style.background = '#22c55e';
-            setTimeout(function() {{ window.open(tryUrl, '_blank'); }}, 500);
+            btn.disabled = false;
+            btn.dataset.deployed = '1';
         }}
     }})
     .catch(function(e) {{
-        btn.textContent = 'Error';
+        btn.textContent = 'Try It';
+        btn.disabled = false;
         alert('Deploy failed: ' + e.message);
     }});
 }}

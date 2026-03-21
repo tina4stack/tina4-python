@@ -1133,6 +1133,13 @@ async def _api_gallery_deploy(request, response):
             shutil.copy2(src_file, dest)
             copied.append(str(rel))
 
+    # Re-discover routes so new files are immediately available
+    try:
+        from tina4_python.core.server import _auto_discover
+        _auto_discover("src")
+    except Exception:
+        pass  # Non-fatal — routes will load on next restart
+
     return response({"deployed": name, "files": copied})
 
 
