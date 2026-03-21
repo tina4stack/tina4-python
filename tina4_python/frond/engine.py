@@ -36,9 +36,31 @@ _TOKEN_RE = re.compile(
     re.DOTALL,
 )
 
+# Regex to extract {% raw %}...{% endraw %} blocks before tokenizing
+_RAW_BLOCK_RE = re.compile(
+    r"\{%-?\s*raw\s*-?%\}(.*?)\{%-?\s*endraw\s*-?%\}",
+    re.DOTALL,
+)
+
 
 def _tokenize(source: str) -> list[tuple[str, str]]:
-    """Split template source into (type, value) tokens."""
+    """Split template source into (type, value) tokens.
+
+    Before splitting on {{ }}/{% %} patterns, extract {% raw %}...{% endraw %}
+    blocks and replace them with placeholder TEXT tokens so their content is
+    output literally (not parsed).
+    """
+    # 1. Extract raw blocks and replace with placeholders
+    raw_blocks: list[str] = []
+
+    def _replace_raw(m: re.Match) -> str:
+        idx = len(raw_blocks)
+        raw_blocks.append(m.group(1))
+        return f"\x00RAW_{idx}\x00"
+
+    source = _RAW_BLOCK_RE.sub(_replace_raw, source)
+
+    # 2. Normal tokenization
     tokens = []
     pos = 0
     for m in _TOKEN_RE.finditer(source):
@@ -57,6 +79,16 @@ def _tokenize(source: str) -> list[tuple[str, str]]:
 
     if pos < len(source):
         tokens.append((TEXT, source[pos:]))
+
+    # 3. Restore raw block placeholders as literal TEXT
+    if raw_blocks:
+        restored = []
+        for ttype, value in tokens:
+            if ttype == TEXT and "\x00RAW_" in value:
+                for idx, content in enumerate(raw_blocks):
+                    value = value.replace(f"\x00RAW_{idx}\x00", content)
+            restored.append((ttype, value))
+        tokens = restored
 
     return tokens
 
@@ -694,6 +726,10 @@ class Frond:
                     skip = self._handle_macro(tokens, i, context)
                     i = skip
 
+                elif tag == "from":
+                    self._handle_from_import(content, context)
+                    i += 1
+
                 elif tag == "cache":
                     result, skip = self._handle_cache(tokens, i, context)
                     output.append(result)
@@ -964,6 +1000,62 @@ class Frond:
 
         context[macro_name] = macro_fn
         return i
+
+    def _handle_from_import(self, content: str, context: dict):
+        """Handle {% from "file" import macro1, macro2 %}.
+
+        Loads the given template file, parses it for macro definitions,
+        and registers the named macros as callables in the current context.
+        """
+        m = re.match(r'from\s+["\'](.+?)["\']\s+import\s+(.+)', content)
+        if not m:
+            return
+
+        filename = m.group(1)
+        names = [n.strip() for n in m.group(2).split(",") if n.strip()]
+
+        # Load and tokenize the macro file
+        source = self._load(filename)
+        tokens = _tokenize(source)
+
+        # Walk tokens to find macro definitions
+        i = 0
+        while i < len(tokens):
+            ttype, raw = tokens[i]
+            if ttype == BLOCK:
+                tag_content, _, _ = _strip_tag(raw)
+                tag = tag_content.split()[0] if tag_content.split() else ""
+                if tag == "macro":
+                    macro_m = re.match(r"macro\s+(\w+)\s*\(([^)]*)\)", tag_content)
+                    if macro_m and macro_m.group(1) in names:
+                        macro_name = macro_m.group(1)
+                        param_names = [p.strip() for p in macro_m.group(2).split(",") if p.strip()]
+
+                        # Collect body tokens until endmacro
+                        body_tokens = []
+                        i += 1
+                        while i < len(tokens):
+                            if tokens[i][0] == BLOCK and "endmacro" in tokens[i][1]:
+                                i += 1
+                                break
+                            body_tokens.append(tokens[i])
+                            i += 1
+
+                        # Register as callable
+                        engine = self
+                        captured_body = list(body_tokens)
+                        captured_params = list(param_names)
+                        captured_context = dict(context)
+
+                        def macro_fn(*args, _params=captured_params, _body=captured_body, _ctx=captured_context):
+                            macro_ctx = dict(_ctx)
+                            for pi, pname in enumerate(_params):
+                                macro_ctx[pname] = args[pi] if pi < len(args) else None
+                            return engine._render_tokens(list(_body), macro_ctx)
+
+                        context[macro_name] = macro_fn
+                        continue
+            i += 1
 
     def _handle_cache(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
         """Handle {% cache "key" ttl %}...{% endcache %}.

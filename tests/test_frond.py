@@ -419,3 +419,69 @@ class TestFormToken:
         assert payload is not None
         assert payload.get("type") == "form"
         assert payload.get("context") == "admin"
+
+
+# ── Raw Block Tests ────────────────────────────────────────────
+
+
+class TestRawBlock:
+    def test_raw_preserves_var_syntax(self, engine):
+        src = "{% raw %}{{ name }}{% endraw %}"
+        assert engine.render_string(src, {"name": "Alice"}) == "{{ name }}"
+
+    def test_raw_preserves_block_syntax(self, engine):
+        src = "{% raw %}{% if true %}yes{% endif %}{% endraw %}"
+        assert engine.render_string(src, {}) == "{% if true %}yes{% endif %}"
+
+    def test_raw_mixed_with_normal(self, engine):
+        src = "Hello {{ name }}! {% raw %}{{ not_parsed }}{% endraw %} done"
+        assert engine.render_string(src, {"name": "World"}) == "Hello World! {{ not_parsed }} done"
+
+    def test_multiple_raw_blocks(self, engine):
+        src = "{% raw %}{{ a }}{% endraw %} mid {% raw %}{{ b }}{% endraw %}"
+        assert engine.render_string(src, {}) == "{{ a }} mid {{ b }}"
+
+    def test_raw_block_multiline(self, engine):
+        src = "{% raw %}\n{{ var }}\n{% tag %}\n{% endraw %}"
+        assert engine.render_string(src, {}) == "\n{{ var }}\n{% tag %}\n"
+
+
+# ── From Import Tests ──────────────────────────────────────────
+
+
+class TestFromImport:
+    def test_from_import_basic(self, engine, tpl_dir):
+        (tpl_dir / "macros.twig").write_text(
+            '{% macro greeting(name) %}Hello {{ name }}!{% endmacro %}'
+        )
+        src = '{% from "macros.twig" import greeting %}{{ greeting("World") }}'
+        assert engine.render_string(src, {}) == "Hello World!"
+
+    def test_from_import_multiple(self, engine, tpl_dir):
+        (tpl_dir / "helpers.twig").write_text(
+            '{% macro bold(t) %}B{{ t }}B{% endmacro %}'
+            '{% macro italic(t) %}I{{ t }}I{% endmacro %}'
+        )
+        src = '{% from "helpers.twig" import bold, italic %}{{ bold("hi") }} {{ italic("there") }}'
+        result = engine.render_string(src, {})
+        assert "BhiB" in result
+        assert "IthereI" in result
+
+    def test_from_import_selective(self, engine, tpl_dir):
+        (tpl_dir / "mix.twig").write_text(
+            '{% macro used(x) %}[{{ x }}]{% endmacro %}'
+            '{% macro unused(x) %}{{{ x }}}{% endmacro %}'
+        )
+        src = '{% from "mix.twig" import used %}{{ used("ok") }}'
+        result = engine.render_string(src, {})
+        assert "[ok]" in result
+
+    def test_from_import_subdirectory(self, engine, tpl_dir):
+        subdir = tpl_dir / "macros"
+        subdir.mkdir(exist_ok=True)
+        (subdir / "forms.twig").write_text(
+            '{% macro field(label, name) %}{{ label }}:{{ name }}{% endmacro %}'
+        )
+        src = '{% from "macros/forms.twig" import field %}{{ field("Name", "name") }}'
+        result = engine.render_string(src, {})
+        assert "Name:name" in result
