@@ -563,6 +563,9 @@ class Frond:
         self._allowed_vars: set[str] | None = None
         # Fragment cache (key → (html, expires_at))
         self._fragment_cache: dict[str, tuple[str, float]] = {}
+        # Token pre-compilation cache
+        self._compiled: dict[str, tuple[list, float]] = {}  # {template_name: (tokens, mtime)}
+        self._compiled_strings: dict[str, list] = {}  # {md5_hash: tokens}
 
         # Built-in global functions
         self._globals["form_token"] = _form_token
@@ -611,15 +614,51 @@ class Frond:
         self._tests[name] = fn
 
     def render(self, template: str, data: dict = None) -> str:
-        """Render a template with data."""
+        """Render a template with data. Uses token caching for performance."""
         context = {**self._globals, **(data or {})}
-        source = self._load(template)
-        return self._execute(source, context)
+
+        # Resolve file path and check mtime for cache validity
+        path = self.template_dir / template
+        if not path.exists():
+            raise FileNotFoundError(f"Template not found: {path}")
+
+        debug_mode = os.environ.get("TINA4_DEBUG", "").lower() == "true"
+        cached = self._compiled.get(template)
+
+        if cached is not None:
+            if debug_mode:
+                # Dev mode: check if file changed
+                mtime = path.stat().st_mtime
+                if cached[1] == mtime:
+                    return self._execute_cached(cached[0], context, template)
+            else:
+                # Production: skip mtime check, cache is permanent
+                return self._execute_cached(cached[0], context, template)
+
+        # Cache miss — load, tokenize, cache
+        source = path.read_text(encoding="utf-8")
+        mtime = path.stat().st_mtime
+        tokens = _tokenize(source)
+        self._compiled[template] = (tokens, mtime)
+        return self._execute_with_source(source, tokens, context, template)
 
     def render_string(self, source: str, data: dict = None) -> str:
-        """Render a template string directly."""
+        """Render a template string directly. Uses token caching for performance."""
         context = {**self._globals, **(data or {})}
-        return self._execute(source, context)
+
+        key = hashlib.md5(source.encode()).hexdigest()
+        cached_tokens = self._compiled_strings.get(key)
+        if cached_tokens is not None:
+            return self._execute_cached(cached_tokens, context)
+
+        tokens = _tokenize(source)
+        self._compiled_strings[key] = tokens
+        return self._execute_cached(tokens, context)
+
+    def clear_cache(self):
+        """Clear all compiled template caches."""
+        self._compiled.clear()
+        self._compiled_strings.clear()
 
     def _load(self, name: str) -> str:
         """Load template source from file."""
@@ -627,6 +666,40 @@ class Frond:
         if not path.exists():
             raise FileNotFoundError(f"Template not found: {path}")
         return path.read_text(encoding="utf-8")
+
+    def _execute_cached(self, tokens: list, context: dict, template: str = None) -> str:
+        """Execute pre-tokenized template against context.
+
+        Checks for extends in tokens; if found, falls back to source-based
+        execution (extends requires re-reading parent template).
+        """
+        # Check if first non-text token is an extends block
+        for ttype, raw in tokens:
+            if ttype == TEXT:
+                if raw.strip():
+                    break
+                continue
+            if ttype == BLOCK:
+                content, _, _ = _strip_tag(raw)
+                if content.startswith("extends "):
+                    # Extends requires source-based execution for block extraction
+                    # Reconstruct source from tokens
+                    source = "".join(val for _, val in tokens)
+                    return self._execute(source, context)
+            break
+        return self._render_tokens(tokens, context)
+
+    def _execute_with_source(self, source: str, tokens: list, context: dict, template: str = None) -> str:
+        """Execute with both source and pre-tokenized tokens available."""
+        # Handle extends first
+        extends_match = re.match(r"\{%[-\s]*extends\s+[\"'](.+?)[\"']\s*[-]?%\}", source.lstrip())
+        if extends_match:
+            parent_name = extends_match.group(1)
+            parent_source = self._load(parent_name)
+            child_blocks = self._extract_blocks(source)
+            return self._render_with_blocks(parent_source, context, child_blocks)
+
+        return self._render_tokens(tokens, context)
 
     def _execute(self, source: str, context: dict) -> str:
         """Execute template source against context."""

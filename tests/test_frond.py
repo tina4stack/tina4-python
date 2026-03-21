@@ -571,3 +571,82 @@ class TestInlineIf:
         src = "{{ count if count else 0 }}"
         result = engine.render_string(src, {"count": 5})
         assert result == "5"
+
+
+# ── Token Pre-Compilation (Cache) Tests ────────────────────────
+
+
+class TestTokenCache:
+    def test_render_string_cache_same_output(self, engine):
+        """Second render_string call produces the same output (using cache)."""
+        src = "Hello {{ name }}!"
+        data = {"name": "World"}
+        first = engine.render_string(src, data)
+        second = engine.render_string(src, data)
+        assert first == second == "Hello World!"
+
+    def test_render_string_cache_different_data(self, engine):
+        """Cached tokens work with different data on each call."""
+        src = "{{ greeting }}, {{ name }}!"
+        r1 = engine.render_string(src, {"greeting": "Hi", "name": "Alice"})
+        r2 = engine.render_string(src, {"greeting": "Bye", "name": "Bob"})
+        assert r1 == "Hi, Alice!"
+        assert r2 == "Bye, Bob!"
+
+    def test_render_file_cache_same_output(self, engine, tpl_dir):
+        """Second file render produces the same output (using cache)."""
+        (tpl_dir / "cached.html").write_text("<p>{{ msg }}</p>")
+        first = engine.render("cached.html", {"msg": "hello"})
+        second = engine.render("cached.html", {"msg": "hello"})
+        assert first == second == "<p>hello</p>"
+
+    def test_render_file_cache_different_data(self, engine, tpl_dir):
+        """Cached file tokens work with different data."""
+        (tpl_dir / "cached2.html").write_text("{{ x }} + {{ y }}")
+        r1 = engine.render("cached2.html", {"x": 1, "y": 2})
+        r2 = engine.render("cached2.html", {"x": 10, "y": 20})
+        assert r1 == "1 + 2"
+        assert r2 == "10 + 20"
+
+    def test_cache_invalidation_on_file_change(self, engine, tpl_dir):
+        """In dev mode, cache invalidates when file mtime changes."""
+        import os
+        import time
+        os.environ["TINA4_DEBUG"] = "true"
+        try:
+            tpl = tpl_dir / "changing.html"
+            tpl.write_text("Version 1: {{ v }}")
+            r1 = engine.render("changing.html", {"v": "a"})
+            assert r1 == "Version 1: a"
+
+            # Change file content (touch to update mtime)
+            time.sleep(0.05)
+            tpl.write_text("Version 2: {{ v }}")
+            r2 = engine.render("changing.html", {"v": "b"})
+            assert r2 == "Version 2: b"
+        finally:
+            os.environ.pop("TINA4_DEBUG", None)
+
+    def test_clear_cache(self, engine):
+        """clear_cache() empties both caches."""
+        engine.render_string("{{ x }}", {"x": 1})
+        assert len(engine._compiled_strings) > 0
+        engine.clear_cache()
+        assert len(engine._compiled_strings) == 0
+        assert len(engine._compiled) == 0
+
+    def test_render_string_with_for_loop_cached(self, engine):
+        """Complex template with for loop works correctly from cache."""
+        src = "{% for i in items %}{{ i }},{% endfor %}"
+        data = {"items": [1, 2, 3]}
+        first = engine.render_string(src, data)
+        second = engine.render_string(src, data)
+        assert first == second == "1,2,3,"
+
+    def test_render_string_with_if_cached(self, engine):
+        """Template with conditionals works correctly from cache."""
+        src = "{% if show %}visible{% else %}hidden{% endif %}"
+        r1 = engine.render_string(src, {"show": True})
+        r2 = engine.render_string(src, {"show": False})
+        assert r1 == "visible"
+        assert r2 == "hidden"
