@@ -10,6 +10,7 @@ context so that any AI assistant understands how to build with Tina4.
 """
 import os
 import json
+import shutil
 from pathlib import Path
 
 
@@ -352,6 +353,31 @@ def _install_claude_skills(root: Path, force: bool) -> list[str]:
                 if not target.exists() or force:
                     target.write_text(skill_file.read_text(encoding="utf-8"), encoding="utf-8")
                     created.append(str(target.relative_to(root)))
+
+    # Copy .skill files from the framework's skills/ directory to project root
+    # These are self-contained ZIP archives that Claude Code can install
+    framework_root = pkg_dir.parent
+    skills_source = framework_root / "skills"
+    if skills_source.is_dir():
+        for skill_file in skills_source.glob("*.skill"):
+            target = root / skill_file.name
+            if not target.exists() or force:
+                shutil.copy2(skill_file, target)
+                created.append(str(target.relative_to(root)))
+
+    # Copy skill directories from the framework's .claude/skills/ to the project
+    framework_skills_dir = framework_root / ".claude" / "skills"
+    if framework_skills_dir.is_dir():
+        target_skills_dir = root / ".claude" / "skills"
+        target_skills_dir.mkdir(parents=True, exist_ok=True)
+        for skill_dir in framework_skills_dir.iterdir():
+            if skill_dir.is_dir():
+                target_dir = target_skills_dir / skill_dir.name
+                if not target_dir.exists() or force:
+                    if target_dir.exists():
+                        shutil.rmtree(target_dir)
+                    shutil.copytree(skill_dir, target_dir)
+                    created.append(str(target_dir.relative_to(root)))
 
     return created
 

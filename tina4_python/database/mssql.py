@@ -19,10 +19,11 @@ class MSSQLAdapter(DatabaseAdapter):
         self._conn = None
         self._in_transaction: bool = False
 
-    def connect(self, connection_string: str, **kwargs):
+    def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to MSSQL.
 
         Connection string: mssql://user:pass@host:port/dbname
+        Credentials priority: URL > username/password params > adapter defaults.
         """
         try:
             import pymssql
@@ -36,8 +37,8 @@ class MSSQLAdapter(DatabaseAdapter):
         self._conn = pymssql.connect(
             server=parsed.hostname or "localhost",
             port=str(parsed.port or 1433),
-            user=parsed.username or "",
-            password=parsed.password or "",
+            user=parsed.username or username or "",
+            password=parsed.password or password or "",
             database=parsed.path.lstrip("/") if parsed.path else "",
             autocommit=False,
             **kwargs,

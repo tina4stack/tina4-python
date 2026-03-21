@@ -17,7 +17,7 @@ class SQLiteAdapter(DatabaseAdapter):
         self._in_transaction: bool = False
         self._custom_functions: list[tuple] = []
 
-    def connect(self, connection_string: str, **kwargs):
+    def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to SQLite database.
 
         Connection string: path to .db file (e.g., "data/app.db")

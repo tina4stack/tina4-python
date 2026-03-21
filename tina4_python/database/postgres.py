@@ -20,10 +20,11 @@ class PostgreSQLAdapter(DatabaseAdapter):
         self._conn = None
         self._in_transaction: bool = False
 
-    def connect(self, connection_string: str, **kwargs):
+    def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to PostgreSQL.
 
         Connection string: postgresql://user:pass@host:port/dbname
+        Credentials priority: URL > username/password params > adapter defaults.
         """
         try:
             import psycopg2
@@ -38,8 +39,8 @@ class PostgreSQLAdapter(DatabaseAdapter):
         self._conn = psycopg2.connect(
             host=parsed.hostname or "localhost",
             port=parsed.port or 5432,
-            user=parsed.username or "",
-            password=parsed.password or "",
+            user=parsed.username or username or "",
+            password=parsed.password or password or "",
             dbname=parsed.path.lstrip("/") if parsed.path else "",
             **kwargs,
         )

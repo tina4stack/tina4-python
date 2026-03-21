@@ -43,6 +43,7 @@ register_driver("mysql", MySQLAdapter)
 # Register MSSQL (pymssql — optional)
 from tina4_python.database.mssql import MSSQLAdapter
 register_driver("mssql", MSSQLAdapter)
+register_driver("sqlserver", MSSQLAdapter)
 
 # Register Firebird (fdb — optional)
 from tina4_python.database.firebird import FirebirdAdapter
@@ -56,10 +57,13 @@ class Database:
     operations to the adapter. This is what the rest of the framework uses.
     """
 
-    def __init__(self, url: str = None):
+    def __init__(self, url: str = None, username: str = "", password: str = ""):
         self.url = url or os.environ.get("DATABASE_URL", "sqlite:///data/tina4.db")
+        # Priority: constructor params > env vars > empty
+        self.username = username or os.environ.get("DATABASE_USERNAME", "")
+        self.password = password or os.environ.get("DATABASE_PASSWORD", "")
         self._adapter: DatabaseAdapter = self._create_adapter()
-        self._adapter.connect(self._connection_path())
+        self._adapter.connect(self._connection_path(), username=self.username, password=self.password)
 
     def _create_adapter(self) -> DatabaseAdapter:
         """Select adapter based on URL scheme."""

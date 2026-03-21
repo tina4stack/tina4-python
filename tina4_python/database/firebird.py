@@ -19,10 +19,11 @@ class FirebirdAdapter(DatabaseAdapter):
         self._conn = None
         self._in_transaction: bool = False
 
-    def connect(self, connection_string: str, **kwargs):
+    def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to Firebird.
 
         Connection string: firebird://user:pass@host:port/path/to/db.fdb
+        Credentials priority: URL > username/password params > adapter defaults (SYSDBA/masterkey).
         """
         try:
             import fdb
@@ -37,8 +38,8 @@ class FirebirdAdapter(DatabaseAdapter):
         port = parsed.port or 3050
         # Firebird database path — decode URL-encoded characters
         db_path = unquote(parsed.path.lstrip("/")) if parsed.path else ""
-        user = parsed.username or "SYSDBA"
-        password = parsed.password or "masterkey"
+        user = parsed.username or username or "SYSDBA"
+        password = parsed.password or password or "masterkey"
         charset = kwargs.pop("charset", "UTF8")
 
         self._conn = fdb.connect(

@@ -65,7 +65,7 @@ class DatabaseAdapter:
     def autocommit(self, value: bool):
         self._autocommit = value
 
-    def connect(self, connection_string: str, **kwargs):
+    def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Establish connection to the database."""
         raise NotImplementedError
 

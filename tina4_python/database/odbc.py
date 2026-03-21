@@ -19,7 +19,7 @@ class ODBCAdapter(DatabaseAdapter):
         self._conn = None
         self._cursor = None
 
-    def connect(self, connection_string: str, **kwargs):
+    def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect via ODBC.
 
         Connection string formats:

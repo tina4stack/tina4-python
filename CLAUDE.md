@@ -425,3 +425,12 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 
 - Website: https://tina4.com
 - GitHub: https://github.com/tina4stack/tina4-python
+
+## Tina4 Maintainer Skill
+Always read and follow the instructions in .claude/skills/tina4-maintainer/SKILL.md when working on this codebase. Read its referenced files in .claude/skills/tina4-maintainer/references/ as needed for specific subsystems.
+
+## Tina4 Developer Skill
+Always read and follow the instructions in .claude/skills/tina4-developer/SKILL.md when building applications with this framework. Read its referenced files in .claude/skills/tina4-developer/references/ as needed.
+
+## Tina4-js Frontend Skill
+Always read and follow the instructions in .claude/skills/tina4-js-skill/SKILL.md when working with tina4-js frontend code. Read its referenced files in .claude/skills/tina4-js-skill/references/ as needed.
