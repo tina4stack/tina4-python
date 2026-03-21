@@ -234,7 +234,7 @@ Cache expensive template blocks with a TTL.
 
 ## Custom Filters and Globals
 
-Register in `app.py` before `run_web_server()`.
+Register in `app.py` before `run()`.
 
 ```python
 from tina4_python.frond import Frond

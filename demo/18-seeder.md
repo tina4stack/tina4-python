@@ -59,7 +59,7 @@ print(fake2.name())  # "Chloe Thomas" — same seed, same output
 `seed_table()` inserts multiple rows using callable generators.
 
 ```python
-from tina4_python.database import Database
+from tina4_python.database.connection import Database
 from tina4_python.seeder import FakeData, seed_table
 
 db = Database("sqlite:///data/app.db")

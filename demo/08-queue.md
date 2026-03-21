@@ -7,7 +7,7 @@ Tina4 includes a database-backed job queue with zero external dependencies. No R
 The queue auto-creates a `tina4_queue` table on first use.
 
 ```python
-from tina4_python.database import Database
+from tina4_python.database.connection import Database
 from tina4_python.queue import Queue, Producer, Consumer
 
 db = Database("sqlite:///data/app.db")
@@ -133,7 +133,7 @@ Process the work in a separate worker script:
 
 ```python
 # worker.py
-from tina4_python.database import Database
+from tina4_python.database.connection import Database
 from tina4_python.queue import Queue, Consumer
 
 db = Database("sqlite:///data/app.db")

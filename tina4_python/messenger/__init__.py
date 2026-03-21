@@ -545,7 +545,7 @@ class Messenger:
 class DevMailbox:
     """Local file-based mailbox for development — captures emails instead of sending.
 
-    In dev mode (TINA4_DEBUG_LEVEL=DEBUG), Messenger uses this instead of SMTP.
+    In dev mode (TINA4_DEBUG=true), Messenger uses this instead of SMTP.
     All "sent" messages are stored in data/mailbox/ as JSON files and can be
     browsed via the dev admin panel at /__dev/mailbox.
 
@@ -743,14 +743,13 @@ class DevMailbox:
 
 def _is_dev_mode() -> bool:
     """Check if running in development/debug mode."""
-    level = os.environ.get("TINA4_DEBUG_LEVEL", "").upper()
-    return level in ("DEBUG", "ALL")
+    return os.environ.get("TINA4_DEBUG", "").lower() == "true"
 
 
 def create_messenger(**kwargs) -> Messenger:
     """Factory that returns a Messenger configured for the current environment.
 
-    In dev mode (TINA4_DEBUG_LEVEL=DEBUG), email sending is intercepted
+    In dev mode (TINA4_DEBUG=true), email sending is intercepted
     by DevMailbox — no SMTP connection needed. The original Messenger.send()
     is replaced with a local capture.
     """

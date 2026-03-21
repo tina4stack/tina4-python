@@ -5,7 +5,7 @@ Tina4 provides a multi-driver database abstraction layer. One API, many backends
 ## Connection Strings
 
 ```python
-from tina4_python.database import Database
+from tina4_python.database.connection import Database
 
 # SQLite (built-in, no install needed)
 db = Database("sqlite:///data/app.db")

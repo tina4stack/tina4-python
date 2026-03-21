@@ -40,7 +40,7 @@ async def list_invoices(request, response):
 **Good — centralised in app.py as a Twig filter:**
 ```python
 # app.py
-from tina4_python.Template import Template
+from tina4_python.frond import Frond
 
 def _money_filter(value):
     try:
@@ -50,7 +50,7 @@ def _money_filter(value):
     except (ValueError, TypeError):
         return "0.00"
 
-Template.add_filter("money", _money_filter)
+Frond.add_filter("money", _money_filter)
 ```
 Then in templates: `{{ order.total | money }}`
 
@@ -123,29 +123,29 @@ Rules:
 
 ### 5. Centralise Configuration in app.py
 
-`app.py` is the single entry point. Register all custom filters, global functions, middleware classes, and ORM setup here — before `run_web_server()`.
+`app.py` is the single entry point. Register all custom filters, global functions, middleware classes, and ORM setup here — before `run()`.
 
 ```python
 # app.py
-import tina4_python
-from tina4_python import run_web_server, orm
-from tina4_python.Template import Template
-from tina4_python.Database import Database
+from tina4_python.core import run
+from tina4_python.orm import orm_bind
+from tina4_python.frond import Frond
+from tina4_python.database import Database
 
 # 1. Database & ORM
-db = Database("sqlite3:app.db")
-orm(db)
+db = Database("sqlite:///app.db")
+orm_bind(db)
 
 # 2. Custom Twig filters
-Template.add_filter("money", lambda v: f"{float(v or 0):,.2f}")
-Template.add_filter("initials", lambda name: "".join(w[0].upper() for w in name.split() if w))
+Frond.add_filter("money", lambda v: f"{float(v or 0):,.2f}")
+Frond.add_filter("initials", lambda name: "".join(w[0].upper() for w in name.split() if w))
 
 # 3. Custom Twig globals (available in every template)
-Template.add_global("APP_NAME", "My Application")
-Template.add_global("APP_VERSION", "1.0.0")
+Frond.add_global("APP_NAME", "My Application")
+Frond.add_global("APP_VERSION", "1.0.0")
 
 if __name__ == "__main__":
-    run_web_server("0.0.0.0", 7145)
+    run()
 ```
 
 ### 6. Use the Api Class for External HTTP Calls
@@ -170,8 +170,8 @@ async def generate_report(request, response):
 ```python
 @post("/api/reports")
 async def generate_report(request, response):
-    producer = Producer(Queue(topic="reports"))
-    producer.produce({"user_id": request.body["user_id"], "type": "monthly"})
+    producer = Producer(Queue(db, topic="reports"))
+    producer.push({"user_id": request.body["user_id"], "type": "monthly"})
     return response({"status": "queued"})
 ```
 
@@ -219,30 +219,31 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 
 | Need | Use this — don't build your own |
 |------|--------------------------------|
-| Background jobs / async work | `Queue`, `Producer`, `Consumer` from `tina4_python.Queue` |
-| HTTP calls to external APIs | `Api` from `tina4_python.Api` |
-| JWT tokens & auth | `tina4_python.tina4_auth` (get_token, valid, get_payload) |
-| Password hashing | `tina4_python.tina4_auth.hash_password()` / `check_password()` |
-| Session management | `request.session` (set, get, unset, close) |
-| Database queries & CRUD | `Database` from `tina4_python.Database` |
-| ORM models | Subclass `ORM` from `tina4_python` |
-| Template rendering | `response.render()` with Twig/Jinja2 |
+| Background jobs / async work | `Queue`, `Producer`, `Consumer` from `tina4_python.queue` |
+| HTTP calls to external APIs | `Api` from `tina4_python.api` |
+| JWT tokens & auth | `Auth` from `tina4_python.auth` (create_token, validate_token, get_payload) |
+| Password hashing | `Auth.hash_password()` / `Auth.check_password()` from `tina4_python.auth` |
+| Session management | `Session` from `tina4_python.session` |
+| Database queries & CRUD | `Database` from `tina4_python.database` |
+| ORM models | `ORM` from `tina4_python.orm` |
+| Template rendering | `Frond` from `tina4_python.frond` or `response.render()` |
 | Form token validation | `{{ form_token() }}` in templates + built-in middleware |
-| CRUD admin interfaces | `result.to_crud(request)` or `CRUD.to_crud()` |
-| Swagger/OpenAPI docs | `@description()`, `@tags()`, `@example()` decorators |
-| GraphQL API | `GraphQL` from `tina4_python.GraphQL` |
-| SOAP/WSDL services | `WSDL` class from `tina4_python.WSDL` |
-| Database migrations | `tina4python migrate:create` + `tina4python migrate` |
-| WebSockets | `Websocket` from `tina4_python.Websocket` |
+| Auto-CRUD REST endpoints | `AutoCrud` from `tina4_python.crud` |
+| Swagger/OpenAPI docs | `@description()`, `@tags()`, `@example()` from `tina4_python.swagger` |
+| GraphQL API | `GraphQL` from `tina4_python.graphql` |
+| SOAP/WSDL services | `WSDL` from `tina4_python.wsdl` |
+| Database migrations | `migrate`, `create_migration` from `tina4_python.migration` |
+| WebSockets | `WebSocketServer` from `tina4_python.websocket` |
 | SCSS compilation | Drop `.scss` in `src/scss/` — auto-compiled |
 | Static file serving | Put files in `src/public/` — auto-served |
-| Translations / i18n | `localize()` from `tina4_python.Localization` |
+| Translations / i18n | `I18n` from `tina4_python.i18n` |
 | HTML generation in code | `HTMLElement` from `tina4_python.HtmlElement` |
 | Inline testing | `@tests`, `assert_equal`, `assert_raises` from `tina4_python.Testing` |
 | Event system | `on`, `emit`, `once`, `off` from `tina4_python.core.events` |
 | AI assistant context | `detect_ai`, `install_context` from `tina4_python.ai` |
 | Response caching | `ResponseCache`, `cache_stats`, `clear_cache` from `tina4_python.cache` |
 | Dependency injection | `Container` from `tina4_python.container` |
+| Structured logging | `Log` from `tina4_python.debug` |
 | Error overlay (dev) | `render_error_overlay`, `is_debug_mode` from `tina4_python.debug.error_overlay` |
 
 **Bad — writing a custom queue:**
@@ -253,14 +254,14 @@ task_queue = queue.Queue()  # Don't do this!
 
 **Good — use Tina4's Queue:**
 ```python
-from tina4_python.Queue import Queue, Producer
-Producer(Queue(topic="tasks")).produce({"action": "send_email"})
+from tina4_python.queue import Queue, Producer
+Producer(Queue(db, topic="tasks")).push({"action": "send_email"})
 ```
 
 ### 11. Key tina4_python Gotchas
 
-1. **Database import**: Use `from tina4_python.Database import Database` (NOT `from tina4_python import Database`)
-2. **noauth/secured import**: Use `from tina4_python import noauth` or `from tina4_python.Router import noauth` (there is NO `tina4_python.Decorators` module). **Never** import `noauth` from `tina4_python.Swagger` — that version only affects documentation, not actual auth.
+1. **Database import**: Use `from tina4_python.database import Database` (NOT `from tina4_python import Database`)
+2. **noauth/secured import**: Use `from tina4_python.core.router import noauth, secured` (there is NO `tina4_python.Decorators` module). **Never** import `noauth` from `tina4_python.swagger` — that version only affects documentation, not actual auth.
 2b. **Decorator ordering**: Route decorators (`@get`, `@post`, etc.) must be the **innermost** (closest to the function). Swagger/meta decorators (`@description`, `@tags`, `@noauth`, `@secured`) go above. Correct: `@noauth()` → `@description(...)` → `@post(...)` → `def handler`. Wrong: `@post(...)` → `@description(...)` → `def handler` (will crash).
 3. **Jinja2 template syntax** (common mistakes):
     - **No ternary operator**: Use `{% if x %}...{% endif %}` NOT `{{ x ? 'a' : 'b' }}`
@@ -285,8 +286,7 @@ Producer(Queue(topic="tasks")).produce({"action": "send_email"})
     - Other methods: `.to_json()`, `.to_array()`, `.to_csv()`, `.to_paginate()`
 4. **fetch_one()**: Returns a plain dict (or None), NOT a DatabaseResult
 5. **Dict access**: All query results use dict access `row["column"]` not attribute access `row.column`
-6. **Firebird connection string**: `firebird.driver:<host>/<port>:<database_path>` — note the `firebird.driver:` prefix (the module name), NOT `firebird:`
-6b. **MongoDB connection string**: `pymongo:<host>/<port>:<database_name>` — uses the same SQL API as all other engines (SQL is translated to MongoDB queries internally). JOINs are not supported. Install: `pip install pymongo`
+6. **Connection strings**: v3 uses standard URL format: `driver://host:port/database` with separate `username` and `password` parameters. Example: `Database("firebird://localhost:3050//path/to/db", "SYSDBA", "masterkey")`. Environment variable: `DATABASE_URL`.
 7. **Running the app**: `uv run python app.py <port> <name>` — port and name are CLI args handled by tina4_python
 8. **SCSS**: Files in `src/scss/` are auto-compiled to `src/public/css/` on startup
 
@@ -297,7 +297,7 @@ Producer(Queue(topic="tasks")).produce({"action": "send_email"})
 
 ```
 project/
-├── app.py                  # Entry point — filters, ORM, run_web_server()
+├── app.py                  # Entry point — filters, ORM, run()
 ├── .env                    # Environment variables
 ├── migrations/             # SQL migration files (000001_description.sql)
 ├── src/
@@ -310,29 +310,49 @@ project/
 │   └── scss/               # SCSS files — auto-compiled to src/public/css/
 └── secrets/                # Auto-generated RSA keys for JWT (do not commit)
 
-tina4_python/               # Core framework package
-├── core/
-│   ├── events.py           # Event system (on, emit, once, off, emit_async)
-│   ├── router.py           # Core routing logic
+tina4_python/               # Core framework package (v3.0.0)
+├── core/                   # HTTP engine (zero deps — asyncio + stdlib only)
+│   ├── router.py           # Route registration (get, post, put, delete, noauth, secured, cached, template)
+│   ├── server.py           # Server bootstrap (run, resolve_config)
 │   ├── request.py          # Request object
 │   ├── response.py         # Response object
-│   ├── middleware.py        # Middleware engine
+│   ├── middleware.py        # CorsMiddleware, RateLimiter
 │   ├── cache.py            # Core cache utilities
-│   ├── server.py           # Server bootstrap
-│   └── constants.py        # Framework constants
+│   ├── constants.py        # HTTP constants
+│   └── events.py           # Event system (on, emit, once, off, emit_async)
+├── auth/                   # JWT auth, password hashing (Auth class — zero deps)
+├── database/               # Multi-driver database abstraction
+│   ├── connection.py       # Database class (URL-based connection)
+│   ├── adapter.py          # DatabaseAdapter, DatabaseResult, SQLTranslator
+│   ├── sqlite.py, postgres.py, mysql.py, mssql.py, firebird.py, odbc.py
+├── orm/                    # Active Record ORM (ORM, Field, orm_bind)
+│   ├── model.py            # ORM base class
+│   └── fields.py           # IntegerField, StringField, etc.
+├── frond/                  # Template engine (Frond — Jinja2/Twig-compatible)
+│   └── engine.py           # Frond class (render, add_filter, add_global, add_test)
+├── api/                    # HTTP client (Api — urllib, zero deps)
+├── queue/                  # Database-backed job queue (Queue, Producer, Consumer)
+├── swagger/                # OpenAPI 3.0.3 generator (Swagger, description, tags, example)
+├── migration/              # SQL-file migrations (migrate, create_migration, rollback)
+│   └── runner.py           # Migration runner
+├── session/                # Pluggable sessions (Session, FileSessionHandler, DatabaseSessionHandler)
+├── websocket/              # RFC 6455 WebSocket server (WebSocketServer, WebSocketConnection)
+├── graphql/                # Zero-dep GraphQL engine (GraphQL, Schema)
+├── wsdl/                   # SOAP 1.1 / WSDL server (WSDL, wsdl_operation)
+├── crud/                   # Auto-CRUD REST endpoint generator (AutoCrud)
+├── seeder/                 # Fake data generation (FakeData, seed_table)
+├── i18n/                   # Internationalization (I18n — JSON-based translations)
 ├── ai/                     # AI coding assistant detection & context
-│   └── __init__.py         # detect_ai, install_context, install_all, status_report
 ├── cache/                  # In-memory response cache middleware
 │   └── __init__.py         # ResponseCache, cache_stats, clear_cache
 ├── container/              # Lightweight dependency injection container
 │   └── __init__.py         # Container (register, singleton, get, has, reset)
-├── debug/
+├── debug/                  # Structured logging (Log) + error overlay
 │   └── error_overlay.py    # Rich HTML error overlay for dev mode
-├── Auth.py, Router.py, ORM.py, Database.py, Seeder.py,
-│   Migration.py, Template.py, Swagger.py, Webserver.py,
-│   Queue.py, Session.py, GraphQL.py, WSDL.py, CRUD.py,
-│   Websocket.py, Localization.py, MiddleWare.py, cli.py,
-│   DevReload.py, Debug.py, Api.py
+├── service/                # Service layer utilities
+├── messenger/              # Messaging integration
+├── dotenv/                 # .env file loader
+├── cli/                    # CLI commands
 ├── HtmlElement.py          # Programmatic HTML builder (HTMLElement, add_html_helpers)
 ├── Testing.py              # Inline testing framework (tests, assert_equal, run_all_tests)
 ├── templates/              # Built-in framework templates (Twig)
@@ -344,15 +364,13 @@ tina4_python/               # Core framework package
 
 ```python
 # app.py
-from tina4_python import run_web_server
+from tina4_python.core import run
 
 if __name__ == "__main__":
-    run_web_server("0.0.0.0", 7145)
+    run()
 ```
 
-`run_web_server()` automatically discovers and imports all Python files in `src/` — no manual imports needed. Route decorators (`@get`, `@post`, etc.) register themselves on import.
-
-**Auto-start:** If your script does NOT call `run_web_server()` and has no `main()` function, Tina4 will auto-start on port 7145. When you call `run_web_server()` explicitly, auto-start is disabled.
+`run()` automatically discovers and imports all Python files in `src/` — no manual imports needed. Route decorators (`@get`, `@post`, etc.) register themselves on import. Configure host/port via environment variables or `resolve_config()`.
 
 ### Package Manager
 
@@ -366,7 +384,7 @@ uv run tina4python migrate:create "description"  # Create a migration file
 
 ## Development Mode (DevReload)
 
-Set `TINA4_DEBUG_LEVEL=ALL` or `DEBUG` in `.env` to enable development features:
+Set `TINA4_DEBUG=true` in `.env` to enable development features:
 
 - **Live-reload** — Browser auto-refreshes when `.py`, `.twig`, `.html`, or `.js` files change
 - **CSS hot-reload** — SCSS/CSS changes refresh stylesheets without full page reload
@@ -381,7 +399,7 @@ DevReload connects via WebSocket at `/__dev_reload`. No configuration needed.
 Routes are auto-discovered from `src/routes/`. Each file defines handlers with decorators.
 
 ```python
-from tina4_python.Router import get, post, put, delete, patch
+from tina4_python.core.router import get, post, put, delete, patch
 
 @get("/api/users")
 async def list_users(request, response):
@@ -411,7 +429,7 @@ async def create_user(request, response):
 - Make sure you use formToken filter in forms when you need to POST data.
 
 ```python
-from tina4_python.Router import post, get, noauth, secured
+from tina4_python.core.router import post, get, noauth, secured
 
 @noauth()
 @description("Public webhook")
@@ -451,7 +469,7 @@ return response.file("doc.pdf")            # Serve a file
 
 Add custom headers before returning:
 ```python
-from tina4_python.Response import Response
+from tina4_python.core.response import Response
 Response.add_header("X-Custom", "value")
 ```
 
@@ -484,8 +502,8 @@ TINA4_SESSION_MONGO_COLLECTION=sessions   # default collection
 ```
 
 ### Authentication & Security
-- Use `tina4_python.tina4_auth.hash_password()` to hash passwords — never use hashlib directly.
-- Use `tina4_python.tina4_auth.check_password(hash, password)` to verify passwords.
+- Use `Auth.hash_password()` from `tina4_python.auth` to hash passwords — never use hashlib directly.
+- Use `Auth.check_password(hash, password)` from `tina4_python.auth` to verify passwords.
 
 ## Templates (Twig)
 
@@ -547,14 +565,14 @@ Create `src/templates/partials/` for repeated components:
 
 ### Custom Filters
 
-Register in `app.py` before `run_web_server()`:
+Register in `app.py` before `run()`:
 
 ```python
-from tina4_python.Template import Template
+from tina4_python.frond import Frond
 
 # Formatting
-Template.add_filter("money", lambda v: f"{float(v or 0):,.2f}")
-Template.add_filter("truncate", lambda s, n=50: (s[:n] + "...") if len(s) > n else s)
+Frond.add_filter("money", lambda v: f"{float(v or 0):,.2f}")
+Frond.add_filter("truncate", lambda s, n=50: (s[:n] + "...") if len(s) > n else s)
 
 # Use in templates:
 # {{ price | money }}         → "1,234.56"
@@ -564,8 +582,8 @@ Template.add_filter("truncate", lambda s, n=50: (s[:n] + "...") if len(s) > n el
 ### Custom Global Functions
 
 ```python
-Template.add_global("APP_NAME", "My App")
-Template.add_global("current_year", lambda: datetime.now().year)
+Frond.add_global("APP_NAME", "My App")
+Frond.add_global("current_year", lambda: datetime.now().year)
 
 # Use in templates:
 # {{ APP_NAME }}
@@ -575,7 +593,7 @@ Template.add_global("current_year", lambda: datetime.now().year)
 ### Custom Tests
 
 ```python
-Template.add_test("positive", lambda x: x > 0)
+Frond.add_test("positive", lambda x: x > 0)
 
 # Use in templates:
 # {% if balance is positive %}...{% endif %}
@@ -596,8 +614,7 @@ Template.add_test("positive", lambda x: x > 0)
 
 Auto-renders a dict return value through a template:
 ```python
-from tina4_python.Router import get
-from tina4_python.Template import template
+from tina4_python.core.router import get, template
 
 @template("pages/dashboard.twig")
 @get("/dashboard")
@@ -648,36 +665,35 @@ showMessage("Record saved successfully!");
 Use `Api` for all outbound HTTP requests. Never use raw `requests` directly.
 
 ```python
-from tina4_python.Api import Api
+from tina4_python.api import Api
 
 # Setup
 api = Api("https://api.example.com", auth_header="Bearer sk-abc123")
 
 # GET
-result = api.send_request("/users")
+result = api.get("/users")
 if result["error"] is None:
     users = result["body"]  # Auto-parsed JSON
 
 # POST with JSON body
-result = api.send_request(
+result = api.post(
     "/users",
-    request_type="POST",
     body={"name": "Alice", "email": "alice@example.com"}
 )
 
 # With custom headers
-api.add_custom_headers({"X-Tenant": "acme-corp"})
+api.add_headers({"X-Tenant": "acme-corp"})
 
 # With basic auth instead of bearer
 api = Api("https://api.example.com")
-api.set_username_password("client_id", "client_secret")
+api.set_basic_auth("client_id", "client_secret")
 
 # Disable SSL verification (dev only)
-api = Api("https://self-signed.local", ignore_ssl_validation=True)
+api = Api("https://self-signed.local", ignore_ssl=True)
 ```
 
 ### Return format
-Every `send_request()` returns:
+Every request method (`get()`, `post()`, `put()`, `patch()`, `delete()`, `send()`) returns:
 ```python
 {
     "http_code": 200,       # HTTP status (or None on network error)
@@ -696,15 +712,15 @@ Every `send_request()` returns:
 ## Database
 
 ```python
-from tina4_python.Database import Database
+from tina4_python.database import Database
 
-db = Database("sqlite3:app.db")        # SQLite
-db = Database("psycopg2:localhost/5432:mydb", "user", "password")  # PostgreSQL
-db = Database("mysql.connector:localhost/3306:mydb", "user", "password")  # MySQL
-db = Database("firebird.driver:localhost/3050:/path/to/db", "SYSDBA", "masterkey")  # Firebird
-db = Database("pymssql:localhost/1433:mydb", "sa", "password")  # MSSQL
-db = Database("pymongo:localhost/27017:mydb")  # MongoDB
-db = Database("pymongo:localhost/27017:mydb", "user", "password")  # MongoDB with auth
+db = Database("sqlite:///app.db")                                       # SQLite (relative path)
+db = Database("sqlite:////absolute/path/app.db")                          # SQLite (absolute path)
+db = Database("postgresql://localhost:5432/mydb", "user", "password")     # PostgreSQL
+db = Database("mysql://localhost:3306/mydb", "user", "password")          # MySQL
+db = Database("firebird://localhost:3050//path/to/db", "SYSDBA", "masterkey")  # Firebird
+db = Database("mssql://localhost:1433/mydb", "sa", "password")            # MSSQL
+db = Database()                                                           # Uses DATABASE_URL env var
 ```
 
 ### MongoDB support
@@ -785,10 +801,10 @@ class User(ORM):
 
 Initialize in `app.py`:
 ```python
-from tina4_python import orm
-from tina4_python.Database import Database
+from tina4_python.orm import orm_bind
+from tina4_python.database import Database
 
-orm(Database("sqlite3:app.db"))  # Assigns DB to all ORM subclasses
+orm_bind(Database("sqlite:///app.db"))  # Assigns DB to all ORM subclasses
 ```
 
 ### ORM operations
@@ -820,9 +836,9 @@ user.to_dict()
 ### Available field types
 `IntegerField`, `StringField`, `TextField`, `DateTimeField`, `NumericField`, `BlobField`, `JSONBField`
 
-Import from `tina4_python` or `tina4_python.FieldTypes`. For foreign keys:
+Import from `tina4_python` or `tina4_python.orm.fields`. For foreign keys:
 ```python
-from tina4_python.FieldTypes import ForeignKeyField
+from tina4_python.orm.fields import ForeignKeyField
 ```
 
 ## Migrations
@@ -836,7 +852,7 @@ uv run tina4python migrate                                 # Runs all pending mi
 
 Or run on startup:
 ```python
-from tina4_python.Migration import migrate
+from tina4_python.migration import migrate
 migrate(db)
 ```
 
@@ -938,7 +954,7 @@ Middleware methods are classified by name prefix:
 - Other names — run as general middleware
 
 ```python
-from tina4_python.Router import get, post, middleware
+from tina4_python.core.router import get, post, middleware
 
 class AuthMiddleware:
     @staticmethod
@@ -951,7 +967,7 @@ class AuthMiddleware:
     @staticmethod
     def after_headers(request, response):
         """Add custom headers to every response."""
-        from tina4_python.Response import Response
+        from tina4_python.core.response import Response
         Response.add_header("X-Powered-By", "Tina4")
         return request, response
 
@@ -999,13 +1015,13 @@ Supports: litequeue (default/SQLite, zero-config), RabbitMQ, Kafka, MongoDB.
 ### Producer — enqueue work from a route
 
 ```python
-from tina4_python.Queue import Queue, Producer
+from tina4_python.queue import Queue, Producer
 
 @post("/api/reports/generate")
 async def request_report(request, response):
-    queue = Queue(topic="reports")
+    queue = Queue(db, topic="reports")
     producer = Producer(queue)
-    producer.produce({
+    producer.push({
         "user_id": request.body["user_id"],
         "report_type": "monthly",
     })
@@ -1016,65 +1032,49 @@ async def request_report(request, response):
 
 ```python
 # worker.py (run separately: python worker.py)
-from tina4_python.Queue import Queue, Consumer
+from tina4_python.queue import Queue, Consumer
+from tina4_python.database import Database
 
-def handle_report(message):
-    data = message.data
+db = Database("sqlite:///app.db")
+
+def handle_report(job):
+    data = job.data
     report = generate_report(data["user_id"], data["report_type"])
     send_email(data["user_id"], report)
 
-queue = Queue(topic="reports", callback=handle_report)
-consumer = Consumer(queue)
+queue = Queue(db, topic="reports")
+consumer = Consumer(queue, callback=handle_report)
 consumer.run_forever()
 ```
 
-### Batch consumption
+### Poll once for available jobs
 
 ```python
-queue = Queue(topic="logs", batch_size=50)
+queue = Queue(db, topic="logs")
 consumer = Consumer(queue)
-for batch in consumer.messages():
-    # batch is a list of Message objects
-    bulk_insert(batch)
+jobs = consumer.poll()  # Returns list of Job objects
+for job in jobs:
+    process(job.data)
+    job.complete()
 ```
 
-### Multi-queue consumption (round-robin)
+### Queue management
 
 ```python
-consumer = Consumer([
-    Queue(topic="emails"),
-    Queue(topic="notifications"),
-    Queue(topic="reports"),
-])
-for msg in consumer.messages():
-    process(msg)
-```
+queue = Queue(db, topic="tasks", max_retries=3)
 
-### Backend configuration
+# Check queue size
+queue.size()                    # pending jobs
+queue.size("reserved")          # currently processing
 
-```python
-from tina4_python.Queue import Queue, Config
+# Retry failed jobs (under max_retries limit)
+queue.retry_failed()
 
-# Default: litequeue (SQLite, zero config)
-queue = Queue(topic="tasks")
+# Get dead letters (exceeded max_retries)
+dead = queue.dead_letters()
 
-# RabbitMQ
-config = Config()
-config.queue_type = "rabbitmq"
-config.rabbitmq_config = {"host": "rabbitmq", "port": 5672, "username": "guest", "password": "guest"}
-queue = Queue(config=config, topic="tasks")
-
-# Kafka
-config = Config()
-config.queue_type = "kafka"
-config.kafka_config = {"bootstrap.servers": "kafka:9092", "group.id": "my-app"}
-queue = Queue(config=config, topic="tasks")
-
-# MongoDB
-config = Config()
-config.queue_type = "mongo-queue-service"
-config.mongo_queue_config = {"host": "mongodb://mongo:27017", "timeout": 600}
-queue = Queue(config=config, topic="tasks")
+# Purge completed jobs
+queue.purge("completed")
 ```
 
 ### When to use queues
@@ -1090,8 +1090,8 @@ Tina4 includes zero-config SOAP 1.1 support with automatic WSDL generation.
 
 ```python
 from typing import List, Optional
-from tina4_python.WSDL import WSDL, wsdl_operation
-from tina4_python.Router import get, post
+from tina4_python.wsdl import WSDL, wsdl_operation
+from tina4_python.core.router import get, post
 
 class Calculator(WSDL):
     @wsdl_operation({"Result": int})
@@ -1135,7 +1135,7 @@ class SecureService(WSDL):
 Tina4 includes a zero-dependency GraphQL engine with a recursive-descent parser, schema builder, query executor, and ORM auto-generation.
 
 ```python
-from tina4_python.GraphQL import GraphQL
+from tina4_python.graphql import GraphQL
 
 # Auto-generate from ORM
 gql = GraphQL()
@@ -1179,51 +1179,56 @@ Supports: queries, mutations, variables, fragments, aliases, `@skip`/`@include` 
 | DateTimeField | String |
 | Primary key | ID |
 
-## Localization (i18n)
+## Internationalization (i18n)
 
-Tina4 supports translations via Python's `gettext` module. Translation files live in `tina4_python/translations/`.
+Tina4 v3 supports translations via JSON files in `src/locales/`.
 
 Set the language in `.env`:
 ```bash
-TINA4_LANGUAGE=en   # Supported: en, fr, af, zh, ja, es
+TINA4_LANGUAGE=en           # Default locale
+TINA4_LOCALE_DIR=src/locales  # Directory for translation files
 ```
 
-### Using localize()
-
-`localize()` initializes the translation system and returns a translation function:
+### Using I18n
 
 ```python
-from tina4_python.Localization import localize
+from tina4_python.i18n import I18n
 
-_ = localize()
-print(_("Server stopped."))  # English: "Server stopped."
-                              # French:  "Serveur arrêté."
-                              # Afrikaans: "Bediener gestop."
-                              # Chinese:  "服务器已停止。"
-                              # Japanese: "サーバー停止。"
-                              # Spanish:  "Servidor detenido."
+i18n = I18n(locale_dir="src/locales", default_locale="en")
+_ = i18n.t
+
+_("greeting")                    # "Hello" (from src/locales/en.json)
+i18n.locale = "fr"
+_("greeting")                    # "Bonjour" (from src/locales/fr.json)
+
+# Interpolation with {placeholder} format
+_("welcome", name="Alice")      # "Welcome, Alice!"
+
+# Nested keys (dot notation)
+_("errors.not_found")            # "Page not found"
 ```
 
-The returned `_()` function also installs itself as a Python builtin, so after calling `localize()` once, `_()` is available globally.
+### Locale file format
 
-### Format strings
-
-Translated strings can contain `{placeholder}` format variables:
-```python
-_ = localize()
-msg = _("Server started http://{host_name}:{port}")
-print(msg.format(host_name="localhost", port=7145))
+```json
+// src/locales/en.json
+{
+  "greeting": "Hello",
+  "welcome": "Welcome, {name}!",
+  "errors": {
+    "not_found": "Page not found"
+  }
+}
 ```
 
 ### Fallback behaviour
 
-If `TINA4_LANGUAGE` is set to an unsupported language, the system falls back gracefully to returning the original English msgid — no crash.
+If a key is missing in the current locale, it falls back to the default locale. If missing there too, the key itself is returned — no crash.
 
-### Available languages
+### Available locales
 
 ```python
-from tina4_python.Localization import AVAILABLE_LANGUAGES
-# ['en', 'fr', 'af', 'zh', 'ja', 'es']
+i18n.available_locales()  # ["en", "fr", "de"]  (based on .json files in locale_dir)
 ```
 
 ## HTML Element Builder
@@ -1351,7 +1356,7 @@ LRU in-memory cache middleware for GET responses. Thread-safe with automatic TTL
 
 ```python
 from tina4_python.cache import ResponseCache, cache_stats, clear_cache
-from tina4_python.Router import get, middleware, cached
+from tina4_python.core.router import get, middleware, cached
 
 # Apply as middleware on a route
 @middleware(ResponseCache)
@@ -1393,7 +1398,7 @@ container = Container()
 container.register("mailer", lambda: MailService())
 
 # Singleton — created once, memoised
-container.singleton("db", lambda: Database("sqlite3:app.db"))
+container.singleton("db", lambda: Database("sqlite:///app.db"))
 
 # Resolve
 mailer = container.get("mailer")   # new MailService() each time
@@ -1418,13 +1423,13 @@ Rich, syntax-highlighted HTML error overlay for development mode. Shows stack tr
 from tina4_python.debug.error_overlay import render_error_overlay, render_production_error, is_debug_mode
 
 # Check if overlay should be shown
-if is_debug_mode():    # True when TINA4_DEBUG_LEVEL is ALL or DEBUG
+if is_debug_mode():    # True when TINA4_DEBUG is true
     html = render_error_overlay(exception, request=request)
 else:
     html = render_production_error(status_code=500, message="Internal Server Error")
 ```
 
-The error overlay is automatically activated by DevReload when `TINA4_DEBUG_LEVEL=ALL` or `DEBUG`. In production, `render_production_error()` returns a safe, generic error page with no stack traces or source code.
+The error overlay is automatically activated when `TINA4_DEBUG=true`. In production, `render_production_error()` returns a safe, generic error page with no stack traces or source code.
 
 ## HtmlElement — Programmatic HTML Builder
 
@@ -1492,7 +1497,7 @@ results = run_all_tests(quiet=False, failfast=False)
 Routes with decorators appear at `/swagger`:
 
 ```python
-from tina4_python import description, tags, example, example_response
+from tina4_python.swagger import description, tags, example, example_response
 
 @post("/api/users")
 @description("Create a new user")
@@ -1515,13 +1520,13 @@ TINA4_TOKEN_LIMIT=2               # Token lifetime in minutes (default: 2)
 TINA4_TOKEN_EXPIRES_IN=2          # Alternative token expiry setting
 
 # Database
-DATABASE_NAME=sqlite3:app.db      # Connection string (driver:connection_details)
-DATABASE_PATH=sqlite3:app.db      # Alternative to DATABASE_NAME
+DATABASE_URL=sqlite:///app.db     # Connection URL (driver://host:port/database)
 DATABASE_USERNAME=                 # DB username (for PostgreSQL, MySQL, etc.)
 DATABASE_PASSWORD=                 # DB password
 
 # Framework
-TINA4_DEBUG_LEVEL=All             # All, Debug, Info, Warning, Error
+TINA4_DEBUG=true                  # Enable dev mode (toolbar, live reload, error overlay)
+TINA4_LOG_LEVEL=ALL               # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR
 TINA4_LANGUAGE=en                 # Language for framework messages (en, fr, af, zh, ja, es)
 TINA4_DEFAULT_WEBSERVER=FALSE     # Set to TRUE to use Tina4's built-in webserver instead of ASGI
 HOST_NAME=localhost:7145
@@ -1582,7 +1587,7 @@ uv run tina4python start 8080         # Start on custom port
 Generate a complete CRUD interface (list, create, update, delete) for any database table with one call:
 
 ```python
-from tina4_python.CRUD import CRUD
+from tina4_python.crud import AutoCrud
 
 @get("/admin/users")
 async def admin_users(request, response):
@@ -1679,7 +1684,7 @@ async def upload(request, response):
 ### External API integration with error handling
 
 ```python
-from tina4_python.Api import Api
+from tina4_python.api import Api
 
 # Centralise API client setup in app.py or src/app/services.py
 payment_api = Api(
@@ -1705,8 +1710,8 @@ async def charge(request, response):
 # In route — fast response
 @post("/api/invite")
 async def invite(request, response):
-    producer = Producer(Queue(topic="emails"))
-    producer.produce({
+    producer = Producer(Queue(db, topic="emails"))
+    producer.push({
         "to": request.body["email"],
         "template": "invite",
         "data": {"name": request.body["name"]}
@@ -1727,8 +1732,7 @@ Consumer(queue).run_forever()
 
 ```python
 # src/routes/dashboard.py
-from tina4_python.Router import get
-from tina4_python.Template import template
+from tina4_python.core.router import get, template
 
 @template("pages/dashboard.twig")
 @get("/dashboard")

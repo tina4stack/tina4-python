@@ -16,7 +16,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tina4_python.dotenv import load_env
-from tina4_python.database import Database
+from tina4_python.database.connection import Database
 from tina4_python.orm import orm_bind
 from tina4_python.debug import Log
 from tina4_python.core import run

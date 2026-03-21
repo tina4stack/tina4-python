@@ -112,7 +112,8 @@ def _init(args):
     if not env_file.exists():
         env_file.write_text(
             "# Tina4 Configuration\n"
-            "TINA4_DEBUG_LEVEL=DEBUG\n"
+            "TINA4_DEBUG=true\n"
+            "TINA4_LOG_LEVEL=ALL\n"
             "DATABASE_URL=sqlite:///data/app.db\n"
             'SECRET=change-me-in-production\n',
             encoding="utf-8",
@@ -166,7 +167,8 @@ def _serve(args):
         tina4python serve --host 127.0.0.1    # flag host
         tina4python serve --host 127.0.0.1 --port 8080
     """
-    os.environ.setdefault("TINA4_DEBUG_LEVEL", "DEBUG")
+    os.environ.setdefault("TINA4_DEBUG", "true")
+    os.environ.setdefault("TINA4_LOG_LEVEL", "ALL")
 
     cli_host = None
     cli_port = None

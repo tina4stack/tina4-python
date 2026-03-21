@@ -48,7 +48,7 @@ In your `app.py`, bind a database to all ORM models before using them.
 
 ```python
 # app.py
-from tina4_python.database import Database
+from tina4_python.database.connection import Database
 from tina4_python.orm import orm_bind
 
 db = Database("sqlite:///data/app.db")

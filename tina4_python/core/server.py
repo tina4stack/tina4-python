@@ -386,8 +386,7 @@ async def app(scope: dict, receive, send):
     _req_start = _time.perf_counter()
 
     # Dev admin dashboard and API
-    _is_dev = os.environ.get("TINA4_DEBUG_LEVEL", "").upper() in ("DEBUG", "ALL") or \
-              os.environ.get("TINA4_DEBUG", "").lower() == "true"
+    _is_dev = os.environ.get("TINA4_DEBUG", "").lower() == "true"
 
     if _is_dev and request.path.startswith("/__dev"):
         from tina4_python.dev_admin import get_api_handlers, render_dashboard

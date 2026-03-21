@@ -18,6 +18,7 @@
 </p>
 
 <p align="center">
+  <img src="https://img.shields.io/badge/version-3.0.0-blue" alt="Version 3.0.0">
   <img src="https://img.shields.io/badge/tests-1165%20passing-brightgreen" alt="Tests">
   <img src="https://img.shields.io/badge/carbonah-A%2B%20rated-00cc44" alt="Carbonah A+">
   <img src="https://img.shields.io/badge/zero--dep-core-blue" alt="Zero Dependencies">
@@ -341,15 +342,15 @@ class AuditLog(ORM):
 Unified interface across 7 engines:
 
 ```python
-from tina4_python.database import Database
+from tina4_python.database.connection import Database
 
 db = Database("sqlite:///data/app.db")
-db = Database("psycopg2:localhost/5432:mydb", "user", "pass")
-db = Database("mysql.connector:localhost/3306:mydb", "user", "pass")
-db = Database("pymssql:localhost/1433:mydb", "sa", "pass")
-db = Database("firebird.driver:localhost/3050:/path/to/db", "SYSDBA", "masterkey")
-db = Database("pymongo:localhost/27017:mydb")
-db = Database("pyodbc:DSN=mydsn")
+db = Database("postgresql://user:pass@localhost:5432/mydb")
+db = Database("mysql://user:pass@localhost:3306/mydb")
+db = Database("mssql://sa:pass@localhost:1433/mydb")
+db = Database("firebird://SYSDBA:masterkey@localhost:3050//path/to/db")
+db = Database("mongodb://localhost:27017/mydb")
+db = Database("odbc://DSN=mydsn")
 
 result = db.fetch("SELECT * FROM users WHERE age > ?", [18], limit=20, skip=0)
 row = db.fetch_one("SELECT * FROM users WHERE id = ?", [1])

@@ -8,7 +8,7 @@ The fastest way to get a GraphQL API: auto-generate the schema from your ORM mod
 
 ```python
 # app.py
-from tina4_python.database import Database
+from tina4_python.database.connection import Database
 from tina4_python.orm import ORM, Field, orm_bind
 from tina4_python.graphql import GraphQL
 

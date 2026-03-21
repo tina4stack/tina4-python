@@ -16,6 +16,7 @@ Routes are registered via decorators. Pattern matching supports dynamic params.
         return response.status(201).json(request.body)
 """
 import re
+import functools
 from tina4_python.debug import Log
 
 
@@ -209,4 +210,31 @@ def cached(max_age: int = 60):
         fn._cached = True
         fn._cache_max_age = max_age
         return fn
+    return decorator
+
+
+# ── Template Decorator ────────────────────────────────────────
+
+def template(template_name: str):
+    """Auto-render a dict return value through a Frond/Twig template.
+
+    Usage:
+        @template("pages/dashboard.twig")
+        @get("/dashboard")
+        async def dashboard(request, response):
+            return {"title": "Dashboard", "items": get_items()}
+
+    If the handler returns a dict, it is rendered through the named
+    template via ``response.render(template_name, data)`` and the
+    resulting HTML response is returned.  Any other return type
+    (e.g. an already-built Response) is passed through unchanged.
+    """
+    def decorator(fn):
+        @functools.wraps(fn)
+        async def wrapper(request, response, *args, **kwargs):
+            result = await fn(request, response, *args, **kwargs)
+            if isinstance(result, dict):
+                return response.render(template_name, result)
+            return result
+        return wrapper
     return decorator

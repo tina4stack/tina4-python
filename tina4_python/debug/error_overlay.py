@@ -10,7 +10,7 @@ exception occurs in a route handler.
     except Exception as exc:
         html = render_error_overlay(exc, request_info={"method": "GET", "url": "/api/users"})
 
-Only activate when TINA4_DEBUG_LEVEL is ALL or DEBUG.  In production, call
+Only activate when TINA4_DEBUG is true.  In production, call
 render_production_error() instead for a safe, generic error page.
 """
 import os
@@ -166,7 +166,8 @@ def render_error_overlay(exception: BaseException, request: Any = None) -> str:
         ("Version", _get_version()),
         ("Python", f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"),
         ("Platform", sys.platform),
-        ("Debug Level", os.environ.get("TINA4_DEBUG_LEVEL", "not set")),
+        ("Debug", os.environ.get("TINA4_DEBUG", "false")),
+        ("Log Level", os.environ.get("TINA4_LOG_LEVEL", "ERROR")),
     ]
     env_section = _collapsible("Environment", _table(env_pairs))
 
@@ -195,7 +196,7 @@ body{{background:{_BG};color:{_TEXT};font-family:-apple-system,BlinkMacSystemFon
   {request_section}
   {env_section}
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid {_OVERLAY};color:{_SUBTEXT};font-size:12px;">
-    Tina4 Debug Overlay &mdash; This page is only shown in debug mode. Set TINA4_DEBUG_LEVEL to WARNING or ERROR in production.
+    Tina4 Debug Overlay &mdash; This page is only shown in debug mode. Set TINA4_DEBUG=false in production.
   </div>
 </div>
 </body>
@@ -227,9 +228,8 @@ display:flex;justify-content:center;align-items:center;min-height:100vh;text-ali
 
 
 def is_debug_mode() -> bool:
-    """Return True if the current TINA4_DEBUG_LEVEL enables the error overlay."""
-    level = os.environ.get("TINA4_DEBUG_LEVEL", "").upper()
-    return level in ("ALL", "DEBUG", "TINA4_LOG_ALL", "TINA4_LOG_DEBUG")
+    """Return True if TINA4_DEBUG is enabled."""
+    return os.environ.get("TINA4_DEBUG", "").lower() == "true"
 
 
 def _get_version() -> str:

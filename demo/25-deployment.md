@@ -202,7 +202,7 @@ tina4python migrate
 Or run on startup in `app.py`:
 
 ```python
-from tina4_python.database import Database
+from tina4_python.database.connection import Database
 from tina4_python.orm import orm_bind
 
 db = Database()

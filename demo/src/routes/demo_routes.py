@@ -168,7 +168,7 @@ async def demo_routing_param(request, response):
 @get("/demo/orm")
 async def demo_orm(request, response):
     def _run():
-        from tina4_python.database import Database
+        from tina4_python.database.connection import Database
         from tina4_python.orm import ORM, Field, orm_bind
 
         # Create a temporary in-memory database for this demo
@@ -321,7 +321,7 @@ async def demo_auth(request, response):
 @get("/demo/queue")
 async def demo_queue(request, response):
     def _run():
-        from tina4_python.database import Database
+        from tina4_python.database.connection import Database
         from tina4_python.queue import Queue, Producer, Consumer
 
         # Use the demo database
@@ -373,7 +373,7 @@ async def demo_queue(request, response):
 async def demo_graphql(request, response):
     def _run():
         from tina4_python.graphql import GraphQL
-        from tina4_python.database import Database
+        from tina4_python.database.connection import Database
         from tina4_python.orm import ORM, Field, orm_bind
 
         db = Database("sqlite:///data/demo.db")

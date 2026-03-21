@@ -1,6 +1,6 @@
 # Tina4 Dev Admin — Built-in development dashboard, zero dependencies.
 """
-Auto-registered admin panel for development mode (TINA4_DEBUG_LEVEL=DEBUG).
+Auto-registered admin panel for development mode (TINA4_DEBUG=true).
 Provides API endpoints and a single-page UI at /__dev/ for:
 
     - Route inspector (all registered routes, methods, auth)
@@ -287,7 +287,8 @@ async def _api_status(request, response):
     status = {
         "python_version": sys.version,
         "framework": "tina4-python v3",
-        "debug_level": os.environ.get("TINA4_DEBUG_LEVEL", ""),
+        "debug": os.environ.get("TINA4_DEBUG", "false"),
+        "log_level": os.environ.get("TINA4_LOG_LEVEL", "ERROR"),
         "database": os.environ.get("DATABASE_URL", "not configured"),
         "mailbox": mailbox.count(),
         "messages": MessageLog.count(),
@@ -796,7 +797,8 @@ async def _api_system(request, response):
         "framework": "tina4-python v3",
         "pid": os.getpid(),
         "cwd": os.getcwd(),
-        "debug_level": os.environ.get("TINA4_DEBUG_LEVEL", ""),
+        "debug": os.environ.get("TINA4_DEBUG", "false"),
+        "log_level": os.environ.get("TINA4_LOG_LEVEL", "ERROR"),
         "database": os.environ.get("DATABASE_URL", "not configured"),
     }
 
