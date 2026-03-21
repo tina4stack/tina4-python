@@ -55,3 +55,6 @@ __pycache__/
 /benchmarks/results/
 /benchmarks/__pycache__/
 .claude/
+*.c
+*.so
+build/
