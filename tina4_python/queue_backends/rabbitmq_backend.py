@@ -145,6 +145,8 @@ class RabbitMQBackend:
         self._ensure_connected()
 
         if self._use_pika:
+            # Declare the queue first (idempotent) to ensure it exists
+            self._channel.queue_declare(queue=topic, durable=True)
             self._channel.queue_purge(queue=topic)
         else:
             self._queue_purge_raw(topic)

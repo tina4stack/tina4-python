@@ -6,6 +6,7 @@ Tests cover:
 - Skip markers for tests requiring actual RabbitMQ/Kafka
 """
 import json
+import os
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -330,7 +331,10 @@ class TestKafkaBackendMocked:
 # ── Integration Tests (require actual services) ─────────────────
 
 
-@pytest.mark.skipif(True, reason="Requires running RabbitMQ server")
+@pytest.mark.skipif(
+    not os.environ.get("TINA4_TEST_RABBITMQ_URL"),
+    reason="TINA4_TEST_RABBITMQ_URL not set"
+)
 class TestRabbitMQIntegration:
     """Integration tests that require an actual RabbitMQ server."""
 
@@ -351,7 +355,10 @@ class TestRabbitMQIntegration:
             backend.close()
 
 
-@pytest.mark.skipif(True, reason="Requires running Kafka server")
+@pytest.mark.skipif(
+    not os.environ.get("TINA4_TEST_KAFKA_URL"),
+    reason="TINA4_TEST_KAFKA_URL not set"
+)
 class TestKafkaIntegration:
     """Integration tests that require an actual Kafka server."""
 

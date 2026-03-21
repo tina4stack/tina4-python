@@ -6,6 +6,7 @@ Tests cover:
 - Skip markers for tests requiring actual Redis/MongoDB/Valkey
 """
 import json
+import os
 import time
 import pytest
 from unittest.mock import MagicMock, patch
@@ -423,7 +424,10 @@ class TestSessionWithHandlers:
 # ── Integration Tests (require actual services) ─────────────────
 
 
-@pytest.mark.skipif(True, reason="Requires running Redis server")
+@pytest.mark.skipif(
+    not os.environ.get("TINA4_TEST_REDIS_URL"),
+    reason="TINA4_TEST_REDIS_URL not set"
+)
 class TestRedisIntegration:
     """Integration tests that require an actual Redis server."""
 
@@ -439,7 +443,10 @@ class TestRedisIntegration:
         handler.close()
 
 
-@pytest.mark.skipif(True, reason="Requires running MongoDB server")
+@pytest.mark.skipif(
+    not os.environ.get("TINA4_TEST_MONGO_URL"),
+    reason="TINA4_TEST_MONGO_URL not set"
+)
 class TestMongoDBIntegration:
     """Integration tests that require an actual MongoDB server."""
 
@@ -455,7 +462,10 @@ class TestMongoDBIntegration:
         handler.close()
 
 
-@pytest.mark.skipif(True, reason="Requires running Valkey server")
+@pytest.mark.skipif(
+    not os.environ.get("TINA4_TEST_VALKEY_URL"),
+    reason="TINA4_TEST_VALKEY_URL not set"
+)
 class TestValkeyIntegration:
     """Integration tests that require an actual Valkey server."""
 
