@@ -125,7 +125,7 @@ class TestDevMailbox:
 
 class TestCreateMessenger:
     def test_dev_mode_intercepts_send(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("TINA4_DEBUG_LEVEL", "DEBUG")
+        monkeypatch.setenv("TINA4_DEBUG", "true")
         monkeypatch.setenv("TINA4_MAILBOX_DIR", str(tmp_path / "mailbox"))
         messenger = create_messenger()
         result = messenger.send(to="user@test.com", subject="Dev Test", body="Hello")
@@ -135,12 +135,12 @@ class TestCreateMessenger:
         assert messenger.dev_mailbox.count()["outbox"] == 1
 
     def test_prod_mode_uses_real_send(self, monkeypatch):
-        monkeypatch.setenv("TINA4_DEBUG_LEVEL", "ERROR")
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
         messenger = create_messenger()
         assert not hasattr(messenger, "dev_mailbox")
 
     def test_dev_mailbox_html_capture(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("TINA4_DEBUG_LEVEL", "DEBUG")
+        monkeypatch.setenv("TINA4_DEBUG", "true")
         monkeypatch.setenv("TINA4_MAILBOX_DIR", str(tmp_path / "mailbox"))
         messenger = create_messenger()
         messenger.send(

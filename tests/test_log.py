@@ -137,12 +137,13 @@ class TestLogOutput:
         content = error_file.read_text()
         assert "error write test" in content
 
-    def test_debug_not_logged_at_info_level(self, tmp_path):
+    def test_debug_always_logged_to_file(self, tmp_path):
+        """File captures ALL levels regardless of the configured level."""
         Log.init(log_dir=str(tmp_path), level="info", production=True)
-        Log.debug("should not appear")
+        Log.debug("should still appear in file")
         log_file = tmp_path / "tina4.log"
-        if log_file.exists():
-            assert "should not appear" not in log_file.read_text()
+        assert log_file.exists()
+        assert "should still appear in file" in log_file.read_text()
 
     def test_warning_logged_at_info_level(self, tmp_path):
         Log.init(log_dir=str(tmp_path), level="info", production=True)

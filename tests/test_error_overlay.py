@@ -75,7 +75,7 @@ class TestRenderErrorOverlay:
     def test_contains_debug_mode_footer(self):
         exc = self._make_exception()
         html = render_error_overlay(exc)
-        assert "TINA4_DEBUG_LEVEL" in html
+        assert "TINA4_DEBUG" in html
 
     def test_escapes_html_in_message(self):
         try:
@@ -121,25 +121,25 @@ class TestIsDebugMode:
     """Tests for is_debug_mode()."""
 
     def test_all_is_debug(self):
-        os.environ["TINA4_DEBUG_LEVEL"] = "ALL"
+        os.environ["TINA4_DEBUG"] = "true"
         assert is_debug_mode() is True
 
     def test_debug_is_debug(self):
-        os.environ["TINA4_DEBUG_LEVEL"] = "DEBUG"
+        os.environ["TINA4_DEBUG"] = "1"
         assert is_debug_mode() is True
 
     def test_case_insensitive(self):
-        os.environ["TINA4_DEBUG_LEVEL"] = "all"
+        os.environ["TINA4_DEBUG"] = "True"
         assert is_debug_mode() is True
 
     def test_warning_is_not_debug(self):
-        os.environ["TINA4_DEBUG_LEVEL"] = "WARNING"
+        os.environ["TINA4_DEBUG"] = "false"
         assert is_debug_mode() is False
 
     def test_error_is_not_debug(self):
-        os.environ["TINA4_DEBUG_LEVEL"] = "ERROR"
+        os.environ["TINA4_DEBUG"] = "0"
         assert is_debug_mode() is False
 
     def test_empty_is_not_debug(self):
-        os.environ.pop("TINA4_DEBUG_LEVEL", None)
+        os.environ.pop("TINA4_DEBUG", None)
         assert is_debug_mode() is False
