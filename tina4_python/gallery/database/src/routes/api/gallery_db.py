@@ -1,6 +1,6 @@
 """Gallery: Database — raw SQL query demo."""
-from tina4_python.Router import get, post, noauth
-from tina4_python.Database import Database
+from tina4_python.core.router import get, post, noauth
+from tina4_python.database.connection import Database
 
 
 @get("/api/gallery/db/tables")
@@ -15,6 +15,7 @@ async def gallery_db_tables(request, response):
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        db.commit()
         tables = db.get_database_tables()
         return response({"tables": tables, "engine": "sqlite"})
     except Exception as e:

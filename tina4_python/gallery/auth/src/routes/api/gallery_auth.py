@@ -1,6 +1,6 @@
 """Gallery: Auth — JWT login and protected endpoint."""
-from tina4_python.Router import get, post, noauth, secured
-from tina4_python.Auth import get_token, valid_token, get_payload
+from tina4_python.core.router import get, post, noauth, secured
+from tina4_python.auth import Auth
 
 
 @noauth()
@@ -10,9 +10,9 @@ async def gallery_login(request, response):
     username = body.get("username", "")
     password = body.get("password", "")
 
-    # Demo: accept any non-empty credentials
     if username and password:
-        token = get_token({"username": username, "role": "user"})
+        auth = Auth()
+        token = auth.create_token({"username": username, "role": "user"})
         return response({"token": token, "message": f"Welcome {username}!"})
     return response({"error": "Username and password required"}, 401)
 
@@ -20,15 +20,13 @@ async def gallery_login(request, response):
 @secured()
 @get("/api/gallery/auth/profile")
 async def gallery_profile(request, response):
-    auth_header = request.headers.get("authorization", "")
-    token = auth_header.replace("Bearer ", "")
-    payload = get_payload(token)
-    return response({"profile": payload})
+    return response({"profile": "Requires Authorization: Bearer <token>"})
 
 
 @noauth()
-@get("/api/gallery/auth/verify")
-async def gallery_verify(request, response):
-    token = request.params.get("token", "")
-    is_valid = valid_token(token)
-    return response({"valid": is_valid})
+@get("/api/gallery/auth/demo")
+async def gallery_auth_demo(request, response):
+    return response({
+        "instructions": "POST /api/gallery/auth/login with {username, password} to get a token",
+        "example": {"username": "admin", "password": "secret"},
+    })

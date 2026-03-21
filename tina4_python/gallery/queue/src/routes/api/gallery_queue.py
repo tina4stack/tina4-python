@@ -1,6 +1,6 @@
 """Gallery: Queue — produce and consume background jobs."""
-from tina4_python.Router import get, post, noauth
-from tina4_python.Queue import Queue, Producer
+from tina4_python.core.router import get, post, noauth
+from tina4_python.queue import Queue, Producer
 
 
 @noauth()

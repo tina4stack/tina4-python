@@ -1,5 +1,5 @@
 """Gallery: REST API — simple JSON endpoints."""
-from tina4_python.Router import get, post, noauth
+from tina4_python.core.router import get, post, noauth
 
 
 @get("/api/gallery/hello")
