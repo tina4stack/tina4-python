@@ -679,6 +679,42 @@ def _write_broken(request: Request, error: Exception):
     (broken_dir / filename).write_text(json.dumps(data, indent=2))
 
 
+def _find_production_server():
+    """Check for production ASGI servers, return (name, start_func) or None.
+
+    Priority order: uvicorn > hypercorn > granian.
+    Returns None if no production server is installed.
+    """
+    try:
+        import uvicorn
+        def _start_uvicorn(host, port, asgi_app):
+            uvicorn.run(asgi_app, host=host, port=port, log_level="info")
+        return "uvicorn", _start_uvicorn
+    except ImportError:
+        pass
+    try:
+        import hypercorn.asyncio
+        import hypercorn.config
+        def _start_hypercorn(host, port, asgi_app):
+            import asyncio
+            cfg = hypercorn.config.Config()
+            cfg.bind = [f"{host}:{port}"]
+            asyncio.run(hypercorn.asyncio.serve(asgi_app, cfg))
+        return "hypercorn", _start_hypercorn
+    except ImportError:
+        pass
+    try:
+        import granian
+        def _start_granian(host, port, asgi_app):
+            from granian import Granian
+            g = Granian("tina4_python.core.server:app", address=host, port=port, interface="asgi")
+            g.serve()
+        return "granian", _start_granian
+    except ImportError:
+        pass
+    return None
+
+
 def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> tuple[str, int]:
     """Resolve host/port with priority: CLI flag > ENV var > default.
 
@@ -708,7 +744,7 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
     return host, port
 
 
-def _print_banner(host: str, port: int):
+def _print_banner(host: str, port: int, server_name: str = "asyncio"):
     """Print the Tina4 Slant ASCII banner to stdout (not through the logger)."""
     from tina4_python.dotenv import is_truthy
 
@@ -729,7 +765,7 @@ def _print_banner(host: str, port: int):
 {reset}
   Tina4 Python v{__version__} — This is not a framework
 
-  Server:    http://{display}:{port}
+  Server:    http://{display}:{port} ({server_name})
   Swagger:   http://localhost:{port}/swagger
   Dashboard: http://localhost:{port}/__dev
   Debug:     {"ON" if is_debug else "OFF"} (Log level: {log_level})
@@ -770,11 +806,34 @@ def run(host: str | None = None, port: int | None = None):
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
 
+    # Detect production server (unless TINA4_DEBUG is true)
+    from tina4_python.dotenv import is_truthy
+    is_debug = is_truthy(os.environ.get("TINA4_DEBUG", ""))
+
+    prod = None
+    if not is_debug:
+        prod = _find_production_server()
+
+    server_name = prod[0] if prod else "asyncio"
+
     # Banner — printed directly to stdout, not through the logger
-    _print_banner(host, port)
+    _print_banner(host, port, server_name)
 
     display = "localhost" if host in ("0.0.0.0", "::") else host
-    Log.info(f"Server started http://{display}:{port}")
+    Log.info(f"Server started http://{display}:{port} ({server_name})")
+
+    # Use production server if available
+    if prod:
+        name, starter = prod
+        Log.info(f"Production server: {name}")
+        try:
+            starter(host, port, app)
+        except KeyboardInterrupt:
+            pass
+        return
+
+    # Fall back to built-in asyncio dev server
+    Log.info("Development server: asyncio")
 
     # Graceful shutdown
     shutdown = asyncio.Event()
