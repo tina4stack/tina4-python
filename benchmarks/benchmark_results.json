@@ -1,5 +1,5 @@
 {
-  "date": "2026-03-22T07:22:33Z",
+  "date": "2026-03-22T07:47:37Z",
   "machine": "arm64 Darwin",
   "config": {
     "runs": 3,
@@ -9,64 +9,64 @@
   },
   "results": [
     {
-      "framework": "Tina4 PHP",
-      "language": "php",
+      "framework": "Tina4 Ruby",
+      "language": "ruby",
       "json_runs": [
-        28088.4214,
-        28695.1526,
-        25774.1869
+        8930.3435,
+        9102.0709,
+        9269.296
       ],
       "list_runs": [
-        15984.4844,
-        15790.3318,
-        13324.4459
+        7585.8889,
+        7487.5085,
+        7666.0319
       ],
-      "json_median": 28088.4214,
-      "list_median": 15790.3318,
-      "warmup_time_ms": 53.87674999656156,
+      "json_median": 9102.0709,
+      "list_median": 7585.8889,
+      "warmup_time_ms": 101.72412500833161,
       "deps": 0,
       "features": 38,
-      "server": "php -S"
+      "server": "WEBrick"
     },
     {
-      "framework": "Slim",
-      "language": "php",
+      "framework": "Sinatra",
+      "language": "ruby",
       "json_runs": [
-        5001.7662,
-        5532.3152,
-        5421.291
+        9163.656,
+        9381.4791,
+        9364.2523
       ],
       "list_runs": [
-        4911.8535,
-        4562.8364,
-        4693.88
+        7234.8465,
+        6880.4069,
+        7192.4336
       ],
-      "json_median": 5421.291,
-      "list_median": 4693.88,
-      "warmup_time_ms": 118.43895798665471,
-      "deps": 10,
-      "features": 6,
-      "server": "php -S"
+      "json_median": 9364.2523,
+      "list_median": 7192.4336,
+      "warmup_time_ms": 85.04383300896734,
+      "deps": 5,
+      "features": 4,
+      "server": "Puma"
     },
     {
-      "framework": "Laravel",
-      "language": "php",
+      "framework": "Rails",
+      "language": "ruby",
       "json_runs": [
-        351.8537,
-        354.8694,
-        371.8737
+        5060.0405,
+        5189.0727,
+        4812.6565
       ],
       "list_runs": [
-        309.6781,
-        402.6564,
-        402.9218
+        4357.8233,
+        4385.0115,
+        4232.5397
       ],
-      "json_median": 354.8694,
-      "list_median": 402.6564,
-      "warmup_time_ms": 1755.2040419832338,
-      "deps": 50,
-      "features": 25,
-      "server": "artisan serve"
+      "json_median": 5060.0405,
+      "list_median": 4357.8233,
+      "warmup_time_ms": 221.84425001614727,
+      "deps": 40,
+      "features": 20,
+      "server": "Puma"
     }
   ]
 }
