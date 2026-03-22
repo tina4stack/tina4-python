@@ -5,20 +5,23 @@ Runs all Tina4 frameworks and competitors with proper warm-up,
 multiple runs, median reporting, and full cleanup between tests.
 
 Usage:
-    python benchmarks/benchmark.py                    # All available
-    python benchmarks/benchmark.py --python            # Python frameworks only
-    python benchmarks/benchmark.py --php               # PHP frameworks only
-    python benchmarks/benchmark.py --ruby              # Ruby frameworks only
-    python benchmarks/benchmark.py --nodejs            # Node.js frameworks only
-    python benchmarks/benchmark.py --runs 5            # 5 runs per test (default: 5)
-    python benchmarks/benchmark.py --requests 10000    # 10K requests per run
-    python benchmarks/benchmark.py --concurrency 100   # 100 concurrent
+    python benchmarks/benchmark.py --all                  # All available
+    python benchmarks/benchmark.py --python               # Python frameworks only
+    python benchmarks/benchmark.py --php                  # PHP frameworks only
+    python benchmarks/benchmark.py --ruby                 # Ruby frameworks only
+    python benchmarks/benchmark.py --nodejs               # Node.js frameworks only
+    python benchmarks/benchmark.py --runs 5               # 5 runs per test (default: 5)
+    python benchmarks/benchmark.py --requests 10000       # 10K requests per run
+    python benchmarks/benchmark.py --concurrency 100      # 100 concurrent
+    python benchmarks/benchmark.py --fresh                # Force recreate cached projects
+    python benchmarks/benchmark.py --db                   # Database benchmarks only
 """
 
 import argparse
 import json
 import os
 import platform
+import shutil
 import signal
 import socket
 import subprocess
@@ -40,6 +43,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 VENV_PYTHON = str(PROJECT_ROOT / ".venv" / "bin" / "python")
 RUBY = "/opt/homebrew/opt/ruby/bin/ruby"
 TMP = Path("/tmp/tina4-benchmark")
+RESULTS_DIR = PROJECT_ROOT / "benchmarks" / "results"
 
 
 # ── Framework Definitions ─────────────────────────────────────
@@ -68,11 +72,14 @@ FRAMEWORKS = {
     # ── PHP ──
     "tina4-php": Framework("Tina4 PHP", "php", 9011, [], 0, 38, "php -S"),
     "slim": Framework("Slim", "php", 9012, [], 10, 6, "php -S"),
+    "laravel": Framework("Laravel", "php", 9013, [], 50, 25, "artisan serve"),
+    "symfony": Framework("Symfony", "php", 9014, [], 30, 20, "php -S"),
 
     # ── Ruby ──
     "tina4-ruby": Framework("Tina4 Ruby", "ruby", 9021, [], 0, 38, "WEBrick"),
     "sinatra": Framework("Sinatra", "ruby", 9022, [], 5, 4, "Puma"),
     "roda": Framework("Roda", "ruby", 9023, [], 1, 3, "WEBrick"),
+    "rails": Framework("Rails", "ruby", 9024, [], 40, 20, "Puma"),
 
     # ── Node.js ──
     "tina4-nodejs": Framework("Tina4 Node.js", "nodejs", 9031, [], 0, 38, "built-in"),
@@ -80,36 +87,14 @@ FRAMEWORKS = {
     "fastify": Framework("Fastify", "nodejs", 9033, [], 10, 5, "built-in"),
     "koa": Framework("Koa", "nodejs", 9034, [], 5, 3, "built-in"),
     "node-raw": Framework("Node.js raw", "nodejs", 9035, [], 0, 1, "built-in http"),
-
-    # ── PHP (additional) ──
-    "laravel": Framework("Laravel", "php", 9013, [], 50, 25, "artisan serve"),
 }
 
 
-# ── Laravel Setup ──────────────────────────────────────────────
+# ── Route templates ───────────────────────────────────────────
 
-def _setup_laravel_bench():
-    """Create a Laravel project for benchmarking if it doesn't exist."""
-    laravel_dir = Path("/tmp/bench-laravel")
-    if (laravel_dir / "artisan").exists():
-        return  # already set up
-
-    # Check composer is available
-    if subprocess.run(["which", "composer"], capture_output=True).returncode != 0:
-        print("  ⚠  composer not found — skipping Laravel benchmark setup")
-        return
-
-    try:
-        print("  Setting up Laravel benchmark project...")
-        subprocess.run(
-            ["composer", "create-project", "--prefer-dist", "laravel/laravel", str(laravel_dir)],
-            capture_output=True, timeout=120,
-        )
-        # Add benchmark routes
-        routes_file = laravel_dir / "routes" / "web.php"
-        routes_file.write_text("""<?php
-use Illuminate\\Support\\Facades\\Route;
-use Illuminate\\Http\\JsonResponse;
+LARAVEL_ROUTES = r"""<?php
+use Illuminate\Support\Facades\Route;
+use Illuminate\Http\JsonResponse;
 
 Route::get('/api/bench/json', function () {
     return new JsonResponse(['message' => 'Hello, World!', 'framework' => 'laravel']);
@@ -122,12 +107,294 @@ Route::get('/api/bench/list', function () {
     }
     return new JsonResponse(['items' => $items, 'count' => 100]);
 });
-""")
+"""
+
+SYMFONY_CONTROLLER = r"""<?php
+namespace App\Controller;
+
+use Symfony\Component\HttpFoundation\JsonResponse;
+use Symfony\Component\Routing\Annotation\Route;
+
+class BenchController
+{
+    #[Route('/api/bench/json', methods: ['GET'])]
+    public function json(): JsonResponse
+    {
+        return new JsonResponse(['message' => 'Hello, World!', 'framework' => 'symfony']);
+    }
+
+    #[Route('/api/bench/list', methods: ['GET'])]
+    public function list(): JsonResponse
+    {
+        $items = [];
+        for ($i = 0; $i < 100; $i++) {
+            $items[] = ['id' => $i, 'name' => "Item $i", 'price' => round($i * 1.99, 2)];
+        }
+        return new JsonResponse(['items' => $items, 'count' => 100]);
+    }
+}
+"""
+
+SYMFONY_ROUTES_YAML = """controllers:
+    resource:
+        path: ../src/Controller/
+        namespace: App\\Controller
+    type: attribute
+"""
+
+RAILS_CONTROLLER = """class BenchController < ApplicationController
+  def json_bench
+    render json: { message: 'Hello, World!', framework: 'rails' }
+  end
+
+  def list_bench
+    items = (0...100).map { |i| { id: i, name: "Item #{i}", price: (i * 1.99).round(2) } }
+    render json: { items: items, count: 100 }
+  end
+end
+"""
+
+RAILS_ROUTES = """Rails.application.routes.draw do
+  get '/api/bench/json', to: 'bench#json_bench'
+  get '/api/bench/list', to: 'bench#list_bench'
+end
+"""
+
+RODA_CONFIG_RU = r"""require "roda"
+require "json"
+
+class BenchApp < Roda
+  route do |r|
+    r.get("api", "bench", "json") do
+      response["Content-Type"] = "application/json"
+      JSON.generate({message: "Hello, World!", framework: "roda"})
+    end
+    r.get("api", "bench", "list") do
+      response["Content-Type"] = "application/json"
+      items = (0...100).map { |i| {id: i, name: "Item #{i}", price: (i * 1.99).round(2)} }
+      JSON.generate({items: items, count: 100})
+    end
+  end
+end
+
+run BenchApp.freeze.app
+"""
+
+
+# ── Dependency check helpers ──────────────────────────────────
+
+def _has_command(cmd: str) -> bool:
+    """Check if a command is available on PATH."""
+    return shutil.which(cmd) is not None
+
+
+# ── Framework auto-setup ──────────────────────────────────────
+
+def _setup_laravel(fresh: bool = False):
+    """Create a Laravel project for benchmarking if it doesn't exist."""
+    path = Path("/tmp/bench-laravel")
+    if fresh and path.exists():
+        shutil.rmtree(path)
+    if (path / "artisan").exists():
+        # Just update routes
+        (path / "routes" / "web.php").write_text(LARAVEL_ROUTES)
+        return True
+
+    if not _has_command("composer"):
+        print("  [WARN] composer not found -- skipping Laravel setup")
+        return False
+
+    try:
+        print("  Setting up Laravel project (cached in /tmp/bench-laravel)...")
+        result = subprocess.run(
+            ["composer", "create-project", "--no-interaction", "--prefer-dist",
+             "laravel/laravel", str(path)],
+            capture_output=True, text=True, timeout=180,
+        )
+        if result.returncode != 0:
+            print(f"  [WARN] Laravel create-project failed: {result.stderr[:200]}")
+            return False
+        (path / "routes" / "web.php").write_text(LARAVEL_ROUTES)
+        return True
     except Exception as e:
-        print(f"  ⚠  Laravel setup failed: {e}")
+        print(f"  [WARN] Laravel setup failed: {e}")
+        return False
 
 
-# ── Server Scripts ─────────────────────────────────────────────
+def _setup_symfony(fresh: bool = False):
+    """Create a Symfony project for benchmarking if it doesn't exist."""
+    path = Path("/tmp/bench-symfony")
+    if fresh and path.exists():
+        shutil.rmtree(path)
+
+    if (path / "bin" / "console").exists():
+        # Update controller + routes
+        (path / "src" / "Controller").mkdir(parents=True, exist_ok=True)
+        (path / "src" / "Controller" / "BenchController.php").write_text(SYMFONY_CONTROLLER)
+        (path / "config" / "routes.yaml").write_text(SYMFONY_ROUTES_YAML)
+        return True
+
+    if not _has_command("composer"):
+        print("  [WARN] composer not found -- skipping Symfony setup")
+        return False
+
+    try:
+        print("  Setting up Symfony project (cached in /tmp/bench-symfony)...")
+        result = subprocess.run(
+            ["composer", "create-project", "--no-interaction",
+             "symfony/skeleton", str(path)],
+            capture_output=True, text=True, timeout=180,
+        )
+        if result.returncode != 0:
+            print(f"  [WARN] Symfony create-project failed: {result.stderr[:200]}")
+            return False
+        # Install annotations/attributes routing support
+        subprocess.run(
+            ["composer", "require", "--no-interaction", "symfony/routing"],
+            capture_output=True, text=True, timeout=60, cwd=str(path),
+        )
+        (path / "src" / "Controller").mkdir(parents=True, exist_ok=True)
+        (path / "src" / "Controller" / "BenchController.php").write_text(SYMFONY_CONTROLLER)
+        (path / "config" / "routes.yaml").write_text(SYMFONY_ROUTES_YAML)
+        return True
+    except Exception as e:
+        print(f"  [WARN] Symfony setup failed: {e}")
+        return False
+
+
+def _setup_rails(fresh: bool = False):
+    """Create a Rails project for benchmarking if it doesn't exist."""
+    path = Path("/tmp/bench-rails")
+    if fresh and path.exists():
+        shutil.rmtree(path)
+
+    if (path / "Gemfile").exists():
+        # Update controller + routes
+        (path / "app" / "controllers" / "bench_controller.rb").write_text(RAILS_CONTROLLER)
+        (path / "config" / "routes.rb").write_text(RAILS_ROUTES)
+        return True
+
+    if not _has_command("rails"):
+        print("  [WARN] rails not found -- skipping Rails setup")
+        return False
+
+    try:
+        print("  Setting up Rails project (cached in /tmp/bench-rails)...")
+        result = subprocess.run(
+            ["rails", "new", str(path), "--api", "--minimal", "--skip-git",
+             "--skip-docker", "--skip-test"],
+            capture_output=True, text=True, timeout=180,
+        )
+        if result.returncode != 0:
+            print(f"  [WARN] rails new failed: {result.stderr[:200]}")
+            return False
+        subprocess.run(
+            ["bundle", "config", "set", "--local", "path", "vendor/bundle"],
+            capture_output=True, cwd=str(path),
+        )
+        result = subprocess.run(
+            ["bundle", "install"],
+            capture_output=True, text=True, timeout=180, cwd=str(path),
+        )
+        if result.returncode != 0:
+            print(f"  [WARN] bundle install failed: {result.stderr[:200]}")
+            return False
+        (path / "app" / "controllers" / "bench_controller.rb").write_text(RAILS_CONTROLLER)
+        (path / "config" / "routes.rb").write_text(RAILS_ROUTES)
+        return True
+    except Exception as e:
+        print(f"  [WARN] Rails setup failed: {e}")
+        return False
+
+
+def _setup_roda(fresh: bool = False):
+    """Create a Roda config.ru for benchmarking."""
+    path = Path("/tmp/bench-roda")
+    if fresh and path.exists():
+        shutil.rmtree(path)
+    path.mkdir(parents=True, exist_ok=True)
+
+    # Check that roda gem is available
+    if not _has_command("puma"):
+        print("  [WARN] puma not found -- skipping Roda setup")
+        return False
+
+    (path / "config.ru").write_text(RODA_CONFIG_RU)
+
+    # Create a minimal Gemfile if missing
+    gemfile = path / "Gemfile"
+    if not gemfile.exists():
+        gemfile.write_text('source "https://rubygems.org"\ngem "roda"\ngem "puma"\n')
+        result = subprocess.run(
+            ["bundle", "install"],
+            capture_output=True, text=True, timeout=60, cwd=str(path),
+        )
+        if result.returncode != 0:
+            print(f"  [WARN] Roda bundle install failed: {result.stderr[:200]}")
+            return False
+
+    return True
+
+
+def _setup_slim(fresh: bool = False):
+    """Create a Slim PHP project for benchmarking."""
+    path = Path("/tmp/bench-slim")
+    if fresh and path.exists():
+        shutil.rmtree(path)
+
+    if (path / "vendor").exists():
+        return True
+
+    if not _has_command("composer"):
+        print("  [WARN] composer not found -- skipping Slim setup")
+        return False
+
+    try:
+        print("  Setting up Slim project (cached in /tmp/bench-slim)...")
+        path.mkdir(parents=True, exist_ok=True)
+        # Create composer.json
+        (path / "composer.json").write_text(json.dumps({
+            "require": {"slim/slim": "^4.0", "slim/psr7": "^1.0"},
+        }))
+        result = subprocess.run(
+            ["composer", "install", "--no-interaction"],
+            capture_output=True, text=True, timeout=120, cwd=str(path),
+        )
+        if result.returncode != 0:
+            print(f"  [WARN] Slim composer install failed: {result.stderr[:200]}")
+            return False
+
+        (path / "index.php").write_text(r"""<?php
+require __DIR__ . '/vendor/autoload.php';
+use Psr\Http\Message\ResponseInterface as Response;
+use Psr\Http\Message\ServerRequestInterface as Request;
+use Slim\Factory\AppFactory;
+
+$app = AppFactory::create();
+
+$app->get('/api/bench/json', function (Request $request, Response $response) {
+    $response->getBody()->write(json_encode(['message' => 'Hello, World!', 'framework' => 'slim']));
+    return $response->withHeader('Content-Type', 'application/json');
+});
+
+$app->get('/api/bench/list', function (Request $request, Response $response) {
+    $items = [];
+    for ($i = 0; $i < 100; $i++) {
+        $items[] = ['id' => $i, 'name' => "Item $i", 'price' => round($i * 1.99, 2)];
+    }
+    $response->getBody()->write(json_encode(['items' => $items, 'count' => 100]));
+    return $response->withHeader('Content-Type', 'application/json');
+});
+
+$app->run();
+""")
+        return True
+    except Exception as e:
+        print(f"  [WARN] Slim setup failed: {e}")
+        return False
+
+
+# ── Server Scripts ────────────────────────────────────────────
 
 def _write_server_scripts():
     """Write all benchmark server scripts to /tmp."""
@@ -221,42 +488,25 @@ if ($path === '/api/bench/json') {
 """)
 
     # ── Ruby ──
-    (TMP / "tina4_ruby_bench.rb").write_text("""
-require "webrick"; require "json"
-s=WEBrick::HTTPServer.new(Port:9021,BindAddress:"127.0.0.1",Logger:WEBrick::Log.new(File::NULL),AccessLog:[])
-s.mount_proc("/api/bench/json"){|q,r|r["Content-Type"]="application/json";r.body=JSON.generate({message:"Hello, World!",framework:"tina4-ruby"})}
-s.mount_proc("/api/bench/list"){|q,r|r["Content-Type"]="application/json";r.body=JSON.generate({items:(0...100).map{|i|{id:i,name:"Item \#{i}",price:(i*1.99).round(2)}},count:100})}
-s.start
-""")
+    (TMP / "tina4_ruby_bench.rb").write_text(
+        'require "webrick"; require "json"\n'
+        's=WEBrick::HTTPServer.new(Port:9021,BindAddress:"127.0.0.1",Logger:WEBrick::Log.new(File::NULL),AccessLog:[])\n'
+        's.mount_proc("/api/bench/json"){|q,r|r["Content-Type"]="application/json";r.body=JSON.generate({message:"Hello, World!",framework:"tina4-ruby"})}\n'
+        's.mount_proc("/api/bench/list"){|q,r|r["Content-Type"]="application/json";r.body=JSON.generate({items:(0...100).map{|i|{id:i,name:"Item \\#{i}",price:(i*1.99).round(2)}},count:100})}\n'
+        's.start\n'
+    )
 
-    (TMP / "sinatra_bench.rb").write_text("""
-require "sinatra/base"; require "json"
-class B < Sinatra::Base
-  set :port, 9022; set :bind, "127.0.0.1"; set :logging, false; set :environment, :production
-  get("/api/bench/json"){content_type :json; JSON.generate({message:"Hello, World!",framework:"sinatra"})}
-  get("/api/bench/list"){content_type :json; JSON.generate({items:(0...100).map{|i|{id:i,name:"Item \#{i}",price:(i*1.99).round(2)}},count:100})}
-  run!
-end
-""")
-
-    (TMP / "roda_bench.rb").write_text("""
-require "roda"; require "json"
-class B < Roda
-  route do |r|
-    r.get("api/bench/json"){response["Content-Type"]="application/json";JSON.generate({message:"Hello, World!",framework:"roda"})}
-    r.get("api/bench/list"){response["Content-Type"]="application/json";JSON.generate({items:(0...100).map{|i|{id:i,name:"Item \#{i}",price:(i*1.99).round(2)}},count:100})}
-  end
-end
-require "webrick"
-Rack::Handler::WEBrick.run(B.freeze.app,Host:"127.0.0.1",Port:9023,Logger:WEBrick::Log.new(File::NULL),AccessLog:[])
-""")
-
-    # ── PHP (Laravel) ──
-    # Laravel benchmark — create project if needed, add bench routes
-    _setup_laravel_bench()
+    (TMP / "sinatra_bench.rb").write_text(
+        'require "sinatra/base"; require "json"\n'
+        'class B < Sinatra::Base\n'
+        '  set :port, 9022; set :bind, "127.0.0.1"; set :logging, false; set :environment, :production\n'
+        '  get("/api/bench/json"){content_type :json; JSON.generate({message:"Hello, World!",framework:"sinatra"})}\n'
+        '  get("/api/bench/list"){content_type :json; JSON.generate({items:(0...100).map{|i|{id:i,name:"Item \\#{i}",price:(i*1.99).round(2)}},count:100})}\n'
+        '  run!\n'
+        'end\n'
+    )
 
     # ── Node.js ──
-    # Tina4 Node.js — use inline http server with Tina4's Router for accurate benchmark
     (TMP / "tina4_nodejs_bench.mjs").write_text("""
 import http from "node:http";
 const server = http.createServer((req, res) => {
@@ -343,7 +593,23 @@ def _kill_port(port: int):
         pass
 
 
-def _start_server(key: str) -> bool:
+def _wait_for_server(port: int, timeout: float = 15.0) -> bool:
+    """Wait for a server to respond on the given port. Returns True if ready."""
+    import urllib.request
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if not _port_free(port):
+                resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/bench/json", timeout=2)
+                if resp.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def _start_server(key: str, fresh: bool = False) -> bool:
     fw = FRAMEWORKS[key]
     port = fw.port
 
@@ -361,9 +627,14 @@ def _start_server(key: str) -> bool:
         "RACK_ENV": "production",
         "DJANGO_SETTINGS_MODULE": "bench_settings",
         "PYTHONDONTWRITEBYTECODE": "1",
+        "APP_DEBUG": "false",
+        "APP_ENV": "production",
     }
 
-    # Build command
+    # Build command based on framework
+    cmd = None
+    cwd = str(TMP)
+
     if key == "tina4-python":
         cmd = [VENV_PYTHON, str(TMP / "tina4_python_bench.py")]
     elif key == "flask":
@@ -376,24 +647,71 @@ def _start_server(key: str) -> bool:
         cmd = [VENV_PYTHON, str(TMP / "bottle_bench.py")]
     elif key == "django":
         cmd = [VENV_PYTHON, str(TMP / "django_bench.py")]
+
     elif key == "tina4-php":
-        cmd = ["php", "-S", f"127.0.0.1:{port}", "-d", "display_errors=Off", str(TMP / "tina4_php_bench.php")]
+        if not _has_command("php"):
+            return False
+        cmd = ["php", "-S", f"127.0.0.1:{port}", "-d", "display_errors=Off",
+               str(TMP / "tina4_php_bench.php")]
+
     elif key == "slim":
         slim_dir = Path("/tmp/bench-slim")
+        if not _setup_slim(fresh):
+            return False
         if not (slim_dir / "vendor").exists():
             return False
-        cmd = ["php", "-S", f"127.0.0.1:{port}", "-d", "display_errors=Off", str(slim_dir / "index.php")]
+        cmd = ["php", "-S", f"127.0.0.1:{port}", "-d", "display_errors=Off",
+               str(slim_dir / "index.php")]
+
     elif key == "laravel":
+        if not _setup_laravel(fresh):
+            return False
         laravel_dir = Path("/tmp/bench-laravel")
         if not (laravel_dir / "artisan").exists():
             return False
+        env["APP_DEBUG"] = "false"
         cmd = ["php", "artisan", "serve", f"--host=127.0.0.1", f"--port={port}", "--no-reload"]
+        cwd = str(laravel_dir)
+
+    elif key == "symfony":
+        if not _setup_symfony(fresh):
+            return False
+        symfony_dir = Path("/tmp/bench-symfony")
+        if not (symfony_dir / "bin" / "console").exists():
+            return False
+        env["APP_ENV"] = "prod"
+        env["APP_DEBUG"] = "0"
+        cmd = ["php", "-S", f"127.0.0.1:{port}", "-d", "display_errors=Off",
+               str(symfony_dir / "public" / "index.php")]
+        cwd = str(symfony_dir / "public")
+
     elif key == "tina4-ruby":
         cmd = [RUBY, str(TMP / "tina4_ruby_bench.rb")]
+
     elif key == "sinatra":
         cmd = [RUBY, str(TMP / "sinatra_bench.rb")]
+
     elif key == "roda":
-        cmd = [RUBY, str(TMP / "roda_bench.rb")]
+        if not _setup_roda(fresh):
+            return False
+        roda_dir = Path("/tmp/bench-roda")
+        cmd = ["bundle", "exec", "puma", "-b", f"tcp://127.0.0.1:{port}",
+               "-e", "production", "-q", str(roda_dir / "config.ru")]
+        cwd = str(roda_dir)
+
+    elif key == "rails":
+        if not _setup_rails(fresh):
+            return False
+        rails_dir = Path("/tmp/bench-rails")
+        if not (rails_dir / "Gemfile").exists():
+            return False
+        env["RAILS_ENV"] = "production"
+        env["SECRET_KEY_BASE"] = "benchmarkkeybenchmarkkeybenchmarkkeybenchmarkkeyxx"
+        env["RAILS_LOG_TO_STDOUT"] = "false"
+        cmd = ["bundle", "exec", "puma", "-b", f"tcp://127.0.0.1:{port}",
+               "-e", "production", "-q"]
+        cwd = str(rails_dir)
+
     elif key == "tina4-nodejs":
         cmd = ["node", str(TMP / "tina4_nodejs_bench.mjs")]
     elif key == "express":
@@ -404,11 +722,9 @@ def _start_server(key: str) -> bool:
         cmd = ["node", str(TMP / "koa_bench.mjs")]
     elif key == "node-raw":
         cmd = ["node", str(TMP / "node_raw_bench.mjs")]
-    else:
-        return False
 
-    # Determine working directory (Laravel needs its project dir)
-    cwd = str(Path("/tmp/bench-laravel")) if key == "laravel" else str(TMP)
+    if cmd is None:
+        return False
 
     try:
         proc = subprocess.Popen(
@@ -420,18 +736,12 @@ def _start_server(key: str) -> bool:
         )
         _processes.append(proc)
 
-        # Wait for server to be ready
-        for _ in range(30):
-            time.sleep(0.5)
-            if not _port_free(port):
-                # Verify response
-                try:
-                    import urllib.request
-                    resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/bench/json", timeout=2)
-                    if resp.status == 200:
-                        return True
-                except Exception:
-                    pass
+        if _wait_for_server(port):
+            return True
+
+        # Server didn't respond -- check if process died
+        if proc.poll() is not None:
+            return False
         return False
     except Exception:
         return False
@@ -484,15 +794,16 @@ def _run_hey(url: str, n: int, c: int) -> float:
     return 0
 
 
-def benchmark_framework(key: str, runs: int, requests: int, concurrency: int) -> BenchResult | None:
+def benchmark_framework(key: str, runs: int, requests: int, concurrency: int,
+                        fresh: bool = False) -> BenchResult | None:
     fw = FRAMEWORKS[key]
     port = fw.port
     base = f"http://127.0.0.1:{port}"
 
     print(f"  Starting {fw.name}...", end="", flush=True)
 
-    if not _start_server(key):
-        print(" ❌ failed to start")
+    if not _start_server(key, fresh=fresh):
+        print(" [SKIP] failed to start")
         return None
 
     # Warm up + measure warm-up time
@@ -532,11 +843,41 @@ def benchmark_framework(key: str, runs: int, requests: int, concurrency: int) ->
         server=fw.server_type,
     )
 
-    print(f" ✅ JSON: {result.json_median:,.0f} req/s  List: {result.list_median:,.0f} req/s  (warm-up: {warmup_ms:.0f}ms)")
+    print(f" OK  JSON: {result.json_median:,.0f} req/s  List: {result.list_median:,.0f} req/s  (warm-up: {warmup_ms:.0f}ms)")
     return result
 
 
 # ── Report ─────────────────────────────────────────────────────
+
+LANG_LABELS = {"python": "Python", "php": "PHP", "ruby": "Ruby", "nodejs": "Node.js"}
+
+
+def _print_language_table(lang: str, lang_results: list[BenchResult],
+                          runs: int, requests: int, concurrency: int):
+    """Print a per-language benchmark table."""
+    label = LANG_LABELS.get(lang, lang)
+    print()
+    print(f"=== {label} Benchmark ({requests:,} req x {concurrency} concurrent x {runs} runs) ===")
+    print()
+
+    fmt = "  {:<22s} {:>12s} {:>12s} {:>16s} {:>6s}"
+    print(fmt.format("Framework", "JSON req/s", "List req/s", "Server", "Deps"))
+    print("  " + "-" * 72)
+
+    for r in sorted(lang_results, key=lambda x: x.json_median, reverse=True):
+        is_tina4 = "Tina4" in r.framework
+        marker = "*" if is_tina4 else " "
+        deps_str = str(r.deps) if r.deps == 0 else f"{r.deps}+"
+        print(fmt.format(
+            f"{marker} {r.framework}",
+            f"{r.json_median:,.0f}",
+            f"{r.list_median:,.0f}",
+            r.server,
+            deps_str,
+        ))
+
+    print()
+
 
 def print_report(results: list[BenchResult], runs: int, requests: int, concurrency: int):
     print()
@@ -555,47 +896,43 @@ def print_report(results: list[BenchResult], runs: int, requests: int, concurren
     print(f"  Warm-up:     {WARMUP_REQUESTS} requests discarded before each test")
     print()
 
-    # Sort by JSON median descending
-    results.sort(key=lambda r: r.json_median, reverse=True)
-
-    # Group by language
+    # Per-language tables
     for lang in ["python", "php", "ruby", "nodejs"]:
         lang_results = [r for r in results if r.language == lang]
         if not lang_results:
             continue
-
-        lang_label = {"python": "Python", "php": "PHP", "ruby": "Ruby", "nodejs": "Node.js"}[lang]
-        print(f"  ── {lang_label} {'─' * (70 - len(lang_label))}")
-        print()
-        printf = "  {:<22s} {:>10s} {:>10s} {:>8s} {:>6s} {:>8s}"
-        print(printf.format("Framework", "JSON/s", "List/s", "Warm-up", "Deps", "Features"))
-        print("  " + "─" * 70)
-
-        for r in sorted(lang_results, key=lambda x: x.json_median, reverse=True):
-            is_tina4 = "Tina4" in r.framework
-            marker = "★" if is_tina4 else " "
-            print(printf.format(
-                f"{marker} {r.framework}",
-                f"{r.json_median:,.0f}",
-                f"{r.list_median:,.0f}",
-                f"{r.warmup_time_ms:.0f}ms",
-                str(r.deps),
-                f"{r.features}/38" if r.features else "",
-            ))
-            # Show individual runs
-            print(f"    {'':22s} runs: {', '.join(f'{v:,.0f}' for v in r.json_runs)}")
-
-        print()
+        _print_language_table(lang, lang_results, runs, requests, concurrency)
 
     # Overall ranking
-    print("  ── Overall Ranking ──────────────────────────────────────────────")
+    results_sorted = sorted(results, key=lambda r: r.json_median, reverse=True)
+    print("  -- Overall Ranking " + "-" * 58)
     print()
-    for i, r in enumerate(results, 1):
+    for i, r in enumerate(results_sorted, 1):
         is_tina4 = "Tina4" in r.framework
-        marker = "🏆" if is_tina4 and i <= 3 else "  "
+        marker = " *" if is_tina4 and i <= 3 else "  "
         print(f"  {marker} {i:2d}. {r.framework:<22s} {r.json_median:>10,.0f} req/s  ({r.language}, {r.deps} deps, {r.features}/38 features)")
 
     print()
+
+
+def _save_per_language_results(results: list[BenchResult], runs: int, requests: int, concurrency: int):
+    """Save results split by language into benchmarks/results/<language>.json."""
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    meta = {
+        "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "machine": f"{platform.machine()} {platform.system()}",
+        "config": {"runs": runs, "requests": requests, "concurrency": concurrency, "warmup": WARMUP_REQUESTS},
+    }
+
+    for lang in ["python", "php", "ruby", "nodejs"]:
+        lang_results = [r for r in results if r.language == lang]
+        if not lang_results:
+            continue
+        report = {**meta, "results": [asdict(r) for r in lang_results]}
+        out = RESULTS_DIR / f"{lang}.json"
+        out.write_text(json.dumps(report, indent=2))
+        print(f"  Saved {lang} results to: {out}")
 
 
 # ── Database Benchmarks ────────────────────────────────────────
@@ -621,7 +958,6 @@ def _setup_tina4_db():
     conn = sqlite3.connect(DB_PATH)
     conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, age INTEGER)")
     conn.execute("CREATE TABLE bench (id INTEGER PRIMARY KEY, name TEXT, value REAL)")
-    # Seed 1000 rows for multi-row fetch
     for i in range(1, 1001):
         conn.execute("INSERT INTO users (id, name, email, age) VALUES (?, ?, ?, ?)",
                      (i, f"User {i}", f"user{i}@example.com", 20 + (i % 50)))
@@ -636,7 +972,6 @@ def _bench_tina4_db(iterations: int) -> list[DbBenchResult]:
     _setup_tina4_db()
     results = []
 
-    # Import Tina4 Database
     os.environ.pop("TINA4_DB_CACHE", None)
     os.environ["TINA4_DB_CACHE"] = "false"
     from tina4_python.database.connection import Database
@@ -682,10 +1017,7 @@ def _bench_tina4_db(iterations: int) -> list[DbBenchResult]:
     os.environ["TINA4_DB_CACHE"] = "true"
     os.environ["TINA4_DB_CACHE_TTL"] = "30"
 
-    # Create new connection to pick up env change
     db_cached = Database(f"sqlite:///{DB_PATH}")
-
-    # Warm the cache with one call
     db_cached.fetch_one("SELECT * FROM users WHERE id = ?", [1])
 
     t0 = time.perf_counter()
@@ -745,7 +1077,6 @@ def _bench_django_db(iterations: int) -> list[DbBenchResult]:
                        [i, f"User {i}", f"user{i}@example.com", 20 + (i % 50)])
     cursor.execute("CREATE TABLE bench (id INTEGER PRIMARY KEY, name TEXT, value REAL)")
 
-    # 1. Single row fetch
     t0 = time.perf_counter()
     for i in range(iterations):
         cursor.execute("SELECT * FROM users WHERE id = %s", [i % 1000 + 1])
@@ -753,7 +1084,6 @@ def _bench_django_db(iterations: int) -> list[DbBenchResult]:
     elapsed = time.perf_counter() - t0
     results.append(DbBenchResult("Single row fetch", "Django", iterations / elapsed, elapsed * 1000))
 
-    # 2. Multi-row fetch
     t0 = time.perf_counter()
     for _ in range(iterations):
         cursor.execute("SELECT * FROM users LIMIT 100")
@@ -761,14 +1091,12 @@ def _bench_django_db(iterations: int) -> list[DbBenchResult]:
     elapsed = time.perf_counter() - t0
     results.append(DbBenchResult("Multi-row fetch (100)", "Django", iterations / elapsed, elapsed * 1000))
 
-    # 3. Insert
     t0 = time.perf_counter()
     for i in range(iterations):
         cursor.execute("INSERT INTO bench (name, value) VALUES (%s, %s)", [f"item_{i}", i * 1.5])
     elapsed = time.perf_counter() - t0
     results.append(DbBenchResult("Insert", "Django", iterations / elapsed, elapsed * 1000))
 
-    # 4. CRUD cycle
     t0 = time.perf_counter()
     for i in range(iterations):
         cursor.execute("INSERT INTO bench (name, value) VALUES (%s, %s)", [f"crud_{i}", i])
@@ -779,7 +1107,6 @@ def _bench_django_db(iterations: int) -> list[DbBenchResult]:
     elapsed = time.perf_counter() - t0
     results.append(DbBenchResult("CRUD cycle", "Django", iterations / elapsed, elapsed * 1000))
 
-    # No cache for Django
     results.append(DbBenchResult("Cached fetch (TTL=30)", "Django", 0, 0))
     results.append(DbBenchResult("Uncached fetch", "Django", 0, 0))
     results.append(DbBenchResult("Cache speedup", "Django", 0, 0))
@@ -812,21 +1139,18 @@ def _bench_sqlalchemy_db(iterations: int) -> list[DbBenchResult]:
         conn.commit()
 
     with engine.connect() as conn:
-        # 1. Single row fetch
         t0 = time.perf_counter()
         for i in range(iterations):
             conn.execute(text("SELECT * FROM users WHERE id = :id"), {"id": i % 1000 + 1}).fetchone()
         elapsed = time.perf_counter() - t0
         results.append(DbBenchResult("Single row fetch", "SQLAlchemy", iterations / elapsed, elapsed * 1000))
 
-        # 2. Multi-row fetch
         t0 = time.perf_counter()
         for _ in range(iterations):
             conn.execute(text("SELECT * FROM users LIMIT 100")).fetchall()
         elapsed = time.perf_counter() - t0
         results.append(DbBenchResult("Multi-row fetch (100)", "SQLAlchemy", iterations / elapsed, elapsed * 1000))
 
-        # 3. Insert
         t0 = time.perf_counter()
         for i in range(iterations):
             conn.execute(text("INSERT INTO bench (name, value) VALUES (:name, :value)"),
@@ -835,7 +1159,6 @@ def _bench_sqlalchemy_db(iterations: int) -> list[DbBenchResult]:
         elapsed = time.perf_counter() - t0
         results.append(DbBenchResult("Insert", "SQLAlchemy", iterations / elapsed, elapsed * 1000))
 
-        # 4. CRUD cycle
         t0 = time.perf_counter()
         for i in range(iterations):
             conn.execute(text("INSERT INTO bench (name, value) VALUES (:name, :value)"),
@@ -848,7 +1171,6 @@ def _bench_sqlalchemy_db(iterations: int) -> list[DbBenchResult]:
         elapsed = time.perf_counter() - t0
         results.append(DbBenchResult("CRUD cycle", "SQLAlchemy", iterations / elapsed, elapsed * 1000))
 
-    # No cache for SQLAlchemy
     results.append(DbBenchResult("Cached fetch (TTL=30)", "SQLAlchemy", 0, 0))
     results.append(DbBenchResult("Uncached fetch", "SQLAlchemy", 0, 0))
     results.append(DbBenchResult("Cache speedup", "SQLAlchemy", 0, 0))
@@ -868,34 +1190,28 @@ def run_db_benchmarks(iterations: int = DB_ITERATIONS):
     print(f"  Database:   SQLite (in /tmp)")
     print()
 
-    # Run Tina4
     print("  Running Tina4 database benchmarks...")
     tina4_results = _bench_tina4_db(iterations)
 
-    # Run Django (if installed)
     print("  Running Django database benchmarks...")
     django_results = _bench_django_db(iterations)
 
-    # Run SQLAlchemy (if installed)
     print("  Running SQLAlchemy database benchmarks...")
     sa_results = _bench_sqlalchemy_db(iterations)
 
     print()
 
-    # Collect unique benchmark names
     bench_names = []
     for r in tina4_results:
         if r.name not in bench_names:
             bench_names.append(r.name)
 
-    # Build lookup
     def _lookup(results, name):
         for r in results:
             if r.name == name:
                 return r
         return None
 
-    # Print table
     has_django = len(django_results) > 0
     has_sa = len(sa_results) > 0
 
@@ -930,7 +1246,6 @@ def run_db_benchmarks(iterations: int = DB_ITERATIONS):
 
     print()
 
-    # Cleanup
     for p in [DB_PATH, "/tmp/tina4_bench_django.db", "/tmp/tina4_bench_sa.db"]:
         if os.path.exists(p):
             os.remove(p)
@@ -942,6 +1257,7 @@ def run_db_benchmarks(iterations: int = DB_ITERATIONS):
 
 def main():
     parser = argparse.ArgumentParser(description="Tina4 v3 Benchmark Suite")
+    parser.add_argument("--all", action="store_true", help="Run all frameworks (default if no language specified)")
     parser.add_argument("--python", action="store_true", help="Python frameworks only")
     parser.add_argument("--php", action="store_true", help="PHP frameworks only")
     parser.add_argument("--ruby", action="store_true", help="Ruby frameworks only")
@@ -949,8 +1265,9 @@ def main():
     parser.add_argument("--runs", type=int, default=RUNS, help=f"Runs per test (default: {RUNS})")
     parser.add_argument("--requests", type=int, default=REQUESTS, help=f"Requests per run (default: {REQUESTS})")
     parser.add_argument("--concurrency", type=int, default=CONCURRENCY, help=f"Concurrent connections (default: {CONCURRENCY})")
-    parser.add_argument("--output", type=str, default="", help="Save JSON report to file")
+    parser.add_argument("--output", type=str, default="", help="Save JSON report to file (in addition to per-language files)")
     parser.add_argument("--db", action="store_true", help="Run database benchmarks (SQLite, 1000 iterations)")
+    parser.add_argument("--fresh", action="store_true", help="Force recreate temporary projects (Laravel, Symfony, Rails, etc.)")
     args = parser.parse_args()
 
     # Determine which frameworks to test
@@ -963,7 +1280,7 @@ def main():
         languages.add("ruby")
     if args.nodejs:
         languages.add("nodejs")
-    if not languages:
+    if not languages or args.all:
         languages = {"python", "php", "ruby", "nodejs"}
 
     # Database benchmarks mode
@@ -974,7 +1291,7 @@ def main():
     to_test = [k for k, v in FRAMEWORKS.items() if v.language in languages]
 
     # Check hey is installed
-    if subprocess.run(["which", "hey"], capture_output=True).returncode != 0:
+    if not _has_command("hey"):
         print("ERROR: 'hey' not found. Install: brew install hey")
         sys.exit(1)
 
@@ -987,14 +1304,22 @@ def main():
     _cleanup_all()
     time.sleep(2)
 
-    print(f"\nBenchmarking {len(to_test)} frameworks ({args.runs} runs, {args.requests} requests, {args.concurrency} concurrent)\n")
+    print(f"\nBenchmarking {len(to_test)} frameworks ({args.runs} runs, {args.requests} requests, {args.concurrency} concurrent)")
+    if args.fresh:
+        print("  --fresh: forcing recreation of cached projects")
+    print()
 
     # Run benchmarks
     results = []
     for key in to_test:
-        result = benchmark_framework(key, args.runs, args.requests, args.concurrency)
-        if result:
-            results.append(result)
+        try:
+            result = benchmark_framework(key, args.runs, args.requests, args.concurrency,
+                                         fresh=args.fresh)
+            if result:
+                results.append(result)
+        except Exception as e:
+            fw = FRAMEWORKS[key]
+            print(f"  [SKIP] {fw.name} -- error: {e}")
 
     # Cleanup
     _cleanup_all()
@@ -1003,7 +1328,10 @@ def main():
     if results:
         print_report(results, args.runs, args.requests, args.concurrency)
 
-        # Save JSON
+        # Save per-language JSON files
+        _save_per_language_results(results, args.runs, args.requests, args.concurrency)
+
+        # Save combined JSON
         output_path = args.output or str(PROJECT_ROOT / "benchmarks" / "benchmark_results.json")
         report = {
             "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -1012,14 +1340,14 @@ def main():
             "results": [asdict(r) for r in results],
         }
         Path(output_path).write_text(json.dumps(report, indent=2))
-        print(f"  Results saved to: {output_path}")
+        print(f"  Combined results saved to: {output_path}")
     else:
-        print("No results — all frameworks failed to start.")
+        print("No results -- all frameworks failed to start.")
 
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nInterrupted — cleaning up...")
+        print("\nInterrupted -- cleaning up...")
         _cleanup_all()
