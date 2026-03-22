@@ -543,7 +543,7 @@ cache.tag("users").flush()
 
 ## Dev Mode
 
-Set `TINA4_DEBUG_LEVEL=DEBUG` in `.env` to enable:
+Set `TINA4_DEBUG=true` in `.env` to enable:
 
 - **Live reload** -- browser auto-refreshes on code changes
 - **CSS hot-reload** -- SCSS changes apply without page refresh
@@ -636,7 +636,8 @@ Frond.clear_cache()
 ```bash
 SECRET=your-jwt-secret
 DATABASE_URL=sqlite:///data/app.db
-TINA4_DEBUG_LEVEL=DEBUG              # DEBUG, INFO, WARNING, ERROR, ALL
+TINA4_DEBUG=true                     # Enable dev toolbar, error overlay
+TINA4_LOG_LEVEL=ALL                  # ALL, DEBUG, INFO, WARNING, ERROR
 TINA4_LANGUAGE=en                    # en, fr, af, zh, ja, es
 TINA4_SESSION_HANDLER=SessionFileHandler
 SWAGGER_TITLE=My API
