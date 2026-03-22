@@ -1,6 +1,6 @@
 [project]
 name = "tina4-python"
-version = "3.1.2"
+version = "3.1.3"
 description = "Tina4 Python v3 — Zero-dependency, lightweight web framework"
 authors = [
     {name = "Andre van Zuydam", email = "andrevanzuydam@gmail.com"}
@@ -10,15 +10,7 @@ requires-python = ">=3.12"
 license = {text = "MIT"}
 
 # ZERO core dependencies — this is v3's defining feature
-dependencies = [
-    "fdb>=2.0.4",
-    "mysql-connector-python>=9.6.0",
-    "pika>=1.3.2",
-    "psycopg2-binary>=2.9.11",
-    "pymongo>=4.16.0",
-    "pymssql>=2.3.13",
-    "redis>=7.3.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
 # Database drivers — install what you need
