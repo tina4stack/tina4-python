@@ -1,372 +1,72 @@
 {
-  "date": "2026-03-21T16:45:48Z",
+  "date": "2026-03-22T07:22:33Z",
   "machine": "arm64 Darwin",
   "config": {
-    "runs": 5,
+    "runs": 3,
     "requests": 5000,
     "concurrency": 50,
     "warmup": 500
   },
   "results": [
     {
-      "framework": "Node.js raw",
-      "language": "nodejs",
-      "json_runs": [
-        69215.4087,
-        82998.6289,
-        87757.596,
-        86661.5589,
-        97383.3104
-      ],
-      "list_runs": [
-        24988.9217,
-        24598.35,
-        24415.652,
-        24102.0528,
-        24743.7935
-      ],
-      "json_median": 86661.5589,
-      "list_median": 24598.35,
-      "warmup_time_ms": 28.5755000077188,
-      "deps": 0,
-      "features": 1,
-      "server": "built-in http"
-    },
-    {
-      "framework": "Fastify",
-      "language": "nodejs",
-      "json_runs": [
-        57936.0849,
-        73619.496,
-        80760.983,
-        95971.3621,
-        79505.055
-      ],
-      "list_runs": [
-        24637.7683,
-        24640.5964,
-        22978.4164,
-        23395.0052,
-        23309.7472
-      ],
-      "json_median": 79505.055,
-      "list_median": 23395.0052,
-      "warmup_time_ms": 34.5934170181863,
-      "deps": 10,
-      "features": 5,
-      "server": "built-in"
-    },
-    {
-      "framework": "Koa",
-      "language": "nodejs",
-      "json_runs": [
-        50932.0566,
-        59802.502,
-        60400.2116,
-        61460.0446,
-        64159.0808
-      ],
-      "list_runs": [
-        21864.3194,
-        22322.7531,
-        23433.4037,
-        23570.4845,
-        23700.9322
-      ],
-      "json_median": 60400.2116,
-      "list_median": 23433.4037,
-      "warmup_time_ms": 34.87775000394322,
-      "deps": 5,
-      "features": 3,
-      "server": "built-in"
-    },
-    {
-      "framework": "Tina4 Node.js",
-      "language": "nodejs",
-      "json_runs": [
-        54512.8959,
-        57035.0062,
-        54405.3361,
-        81996.2815,
-        83496.7908
-      ],
-      "list_runs": [
-        23645.6976,
-        23730.7228,
-        25457.6275,
-        25087.9175,
-        25469.3579
-      ],
-      "json_median": 57035.0062,
-      "list_median": 25087.9175,
-      "warmup_time_ms": 53.27704199589789,
-      "deps": 0,
-      "features": 38,
-      "server": "built-in"
-    },
-    {
-      "framework": "Express",
-      "language": "nodejs",
-      "json_runs": [
-        48805.3466,
-        56201.4558,
-        56686.8249,
-        58562.8675,
-        59125.6203
-      ],
-      "list_runs": [
-        21087.0627,
-        20719.5341,
-        21259.2001,
-        20540.429,
-        20620.5869
-      ],
-      "json_median": 56686.8249,
-      "list_median": 20719.5341,
-      "warmup_time_ms": 45.067917002597824,
-      "deps": 3,
-      "features": 4,
-      "server": "built-in"
-    },
-    {
       "framework": "Tina4 PHP",
       "language": "php",
       "json_runs": [
-        26602.5663,
-        27183.5529,
-        29709.3682,
-        30817.9468,
-        25673.5675
+        28088.4214,
+        28695.1526,
+        25774.1869
       ],
       "list_runs": [
-        17493.1066,
-        6381.3152,
-        16367.9382,
-        8710.3221,
-        17426.4249
+        15984.4844,
+        15790.3318,
+        13324.4459
       ],
-      "json_median": 27183.5529,
-      "list_median": 16367.9382,
-      "warmup_time_ms": 41.64420798770152,
+      "json_median": 28088.4214,
+      "list_median": 15790.3318,
+      "warmup_time_ms": 53.87674999656156,
       "deps": 0,
       "features": 38,
       "server": "php -S"
-    },
-    {
-      "framework": "Tina4 Python",
-      "language": "python",
-      "json_runs": [
-        15655.6488,
-        17318.6638,
-        16233.4522,
-        16558.5417,
-        15943.7229
-      ],
-      "list_runs": [
-        5662.9163,
-        5726.4121,
-        5857.5294,
-        6067.4902,
-        6052.2222
-      ],
-      "json_median": 16233.4522,
-      "list_median": 5857.5294,
-      "warmup_time_ms": 95.82749998662621,
-      "deps": 0,
-      "features": 38,
-      "server": "built-in asyncio"
-    },
-    {
-      "framework": "Starlette",
-      "language": "python",
-      "json_runs": [
-        15586.6848,
-        15866.7951,
-        16172.6179,
-        16416.6097,
-        15978.127
-      ],
-      "list_runs": [
-        7472.1615,
-        7667.4323,
-        7744.1013,
-        7457.0831,
-        7493.4882
-      ],
-      "json_median": 15978.127,
-      "list_median": 7493.4882,
-      "warmup_time_ms": 51.3198749977164,
-      "deps": 4,
-      "features": 6,
-      "server": "uvicorn"
-    },
-    {
-      "framework": "FastAPI",
-      "language": "python",
-      "json_runs": [
-        12161.0882,
-        12456.8655,
-        11885.9401,
-        11432.8789,
-        11761.483
-      ],
-      "list_runs": [
-        2463.9432,
-        2354.2505,
-        2477.239,
-        2479.0979,
-        2440.4642
-      ],
-      "json_median": 11885.9401,
-      "list_median": 2463.9432,
-      "warmup_time_ms": 68.98887499119155,
-      "deps": 12,
-      "features": 8,
-      "server": "uvicorn"
-    },
-    {
-      "framework": "Sinatra",
-      "language": "ruby",
-      "json_runs": [
-        9731.7255,
-        9967.91,
-        9922.5085,
-        7084.2824,
-        7011.3423
-      ],
-      "list_runs": [
-        4745.6533,
-        7664.6007,
-        5995.5714,
-        4756.5212,
-        7426.7325
-      ],
-      "json_median": 9731.7255,
-      "list_median": 5995.5714,
-      "warmup_time_ms": 74.33641600073315,
-      "deps": 5,
-      "features": 4,
-      "server": "Puma"
-    },
-    {
-      "framework": "Tina4 Ruby",
-      "language": "ruby",
-      "json_runs": [
-        8934.0409,
-        9658.6434,
-        8977.4592,
-        9504.2143,
-        9748.8588
-      ],
-      "list_runs": [
-        7852.5429,
-        7839.2325,
-        7647.9345,
-        7323.7248,
-        7353.2228
-      ],
-      "json_median": 9504.2143,
-      "list_median": 7647.9345,
-      "warmup_time_ms": 67.884124990087,
-      "deps": 0,
-      "features": 38,
-      "server": "WEBrick"
     },
     {
       "framework": "Slim",
       "language": "php",
       "json_runs": [
-        5332.7647,
-        5342.8327,
-        5527.561,
-        5308.6101,
-        5459.1391
+        5001.7662,
+        5532.3152,
+        5421.291
       ],
       "list_runs": [
-        4476.7622,
-        4583.8003,
-        4616.6748,
-        4797.874,
-        4663.0904
+        4911.8535,
+        4562.8364,
+        4693.88
       ],
-      "json_median": 5342.8327,
-      "list_median": 4616.6748,
-      "warmup_time_ms": 101.80329199647531,
+      "json_median": 5421.291,
+      "list_median": 4693.88,
+      "warmup_time_ms": 118.43895798665471,
       "deps": 10,
       "features": 6,
       "server": "php -S"
     },
     {
-      "framework": "Flask",
-      "language": "python",
+      "framework": "Laravel",
+      "language": "php",
       "json_runs": [
-        4767.2113,
-        5527.2323,
-        5353.235,
-        928.7622,
-        764.6562
+        351.8537,
+        354.8694,
+        371.8737
       ],
       "list_runs": [
-        743.783,
-        737.6578,
-        1644.1902,
-        3967.5509,
-        3896.3622
+        309.6781,
+        402.6564,
+        402.9218
       ],
-      "json_median": 4767.2113,
-      "list_median": 1644.1902,
-      "warmup_time_ms": 150.5143329850398,
-      "deps": 6,
-      "features": 7,
-      "server": "Werkzeug"
-    },
-    {
-      "framework": "Django",
-      "language": "python",
-      "json_runs": [
-        3746.7743,
-        5885.3992,
-        3651.7596,
-        3649.3691,
-        5964.6704
-      ],
-      "list_runs": [
-        3365.7334,
-        3273.7645,
-        1899.9766,
-        3304.7617,
-        3368.2348
-      ],
-      "json_median": 3746.7743,
-      "list_median": 3304.7617,
-      "warmup_time_ms": 83.60083302250132,
-      "deps": 20,
-      "features": 22,
-      "server": "runserver"
-    },
-    {
-      "framework": "Bottle",
-      "language": "python",
-      "json_runs": [
-        1251.2483,
-        1247.8646,
-        2431.9974,
-        2447.8502,
-        1241.4981
-      ],
-      "list_runs": [
-        831.8085,
-        420.878,
-        674.5619,
-        675.8757,
-        1013.2941
-      ],
-      "json_median": 1251.2483,
-      "list_median": 675.8757,
-      "warmup_time_ms": 58.83233298663981,
-      "deps": 0,
-      "features": 5,
-      "server": "built-in wsgiref"
+      "json_median": 354.8694,
+      "list_median": 402.6564,
+      "warmup_time_ms": 1755.2040419832338,
+      "deps": 50,
+      "features": 25,
+      "server": "artisan serve"
     }
   ]
 }
