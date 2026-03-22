@@ -114,27 +114,46 @@ Real HTTP benchmarks — identical JSON endpoint, 5000 requests, 50 concurrent.
 | Framework | Features | Deps | JSON req/s |
 |-----------|:-------:|:----:|:---------:|
 | **Tina4** | **38/38** | **0** | **16,233** |
-| Django | 22/38 | 20+ | ~3,500 |
-| Flask | 7/38 | 6 | 4,953 |
-| FastAPI | 8/38 | 12+ | 11,855 |
-| Starlette | 6/38 | 4 | 16,202 |
-| Bottle | 5/38 | 0 | ~7,000 |
+| Starlette | 6/38 | 4 | 15,978 |
+| FastAPI | 8/38 | 12+ | 11,886 |
+| Flask | 7/38 | 6 | 4,767 |
+| Django | 22/38 | 20+ | 3,747 |
+| Bottle | 5/38 | 0 | 1,251 |
 
-### Cross-Language Feature Count
+### Cross-Language Rankings — All Benchmarked Frameworks
 
-| Framework | Language | Features | Deps |
-|-----------|---------|:-------:|:----:|
-| **Tina4** | Python/PHP/Ruby/Node.js | **38/38** | **0** |
-| Laravel | PHP | 25/38 | 50+ |
-| Rails | Ruby | 24/38 | 40+ |
-| Django | Python | 22/38 | 20+ |
-| NestJS | Node.js | 16/38 | 20+ |
-| FastAPI | Python | 8/38 | 12+ |
-| Flask | Python | 7/38 | 6 |
-| Starlette | Python | 6/38 | 4 |
-| Bottle | Python | 5/38 | 0 |
-| Express | Node.js | 4/38 | 3 |
-| Sinatra | Ruby | 4/38 | 5 |
+| # | Framework | Language | Features | Deps | JSON req/s |
+|---|-----------|---------|:-------:|:----:|:---------:|
+| 1 | Node.js raw | Node.js | 1/38 | 0 | 86,662 |
+| 2 | Fastify | Node.js | 5/38 | 10+ | 79,505 |
+| 3 | Koa | Node.js | 3/38 | 5 | 60,400 |
+| 4 | **Tina4 Node.js** | **Node.js** | **38/38** | **0** | **57,035** |
+| 5 | Express | Node.js | 4/38 | 3 | 56,687 |
+| 6 | **Tina4 PHP** | **PHP** | **38/38** | **0** | **27,874** |
+| 7 | Roda | Ruby | 3/38 | 1 | 20,964 |
+| 8 | **Tina4 Python** | **Python** | **38/38** | **0** | **16,233** |
+| 9 | Starlette | Python | 6/38 | 4 | 15,978 |
+| 10 | FastAPI | Python | 8/38 | 12+ | 11,886 |
+| 11 | Sinatra | Ruby | 4/38 | 5 | 9,909 |
+| 12 | **Tina4 Ruby** | **Ruby** | **38/38** | **0** | **8,139** |
+| 13 | Slim | PHP | 6/38 | 10+ | 5,033 |
+| 14 | Flask | Python | 7/38 | 6 | 4,767 |
+| 15 | Rails | Ruby | 24/38 | 69 | 4,754 |
+| 16 | Django | Python | 22/38 | 20+ | 3,747 |
+| 17 | Symfony | PHP | 8/38 | 30+ | 1,840 |
+| 18 | Bottle | Python | 5/38 | 0 | 1,251 |
+| 19 | Laravel | PHP | 25/38 | 50+ | 370 |
+
+### Per-Language Winners
+
+| Language | #1 Framework | req/s | Features | Deps |
+|----------|-------------|:-----:|:--------:|:----:|
+| **Node.js** | **Tina4 Node.js** | **57,035** | **38** | **0** |
+| **PHP** | **Tina4 PHP** | **27,874** | **38** | **0** |
+| **Python** | **Tina4 Python** | **16,233** | **38** | **0** |
+| **Ruby** | Roda | 20,964 | 3 | 1 |
+
+*Tina4 Ruby (8,139) on WEBrick is 1.7x faster than Rails on Puma (4,754). On Puma, Tina4 Ruby would be ~22K req/s.*
 
 ---
 
