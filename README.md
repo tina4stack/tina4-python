@@ -28,19 +28,24 @@
 
 ---
 
-## Quickstart
+## Quick Start
 
 ```bash
-pip install tina4-python
-tina4python init my-app
-cd my-app
-tina4python serve
-# -> http://localhost:7145
+# Install the Tina4 CLI
+# Download from https://github.com/tina4stack/tina4/releases
+# Download from https://github.com/tina4stack/tina4/releases
+cargo install tina4  # or download binary from GitHub releases  # or download binary from GitHub releases
+
+# Create a project
+tina4 init python ./my-app
+
+# Run it
+cd my-app && tina4 serve
 ```
 
-That's it. Zero configuration, zero classes, zero boilerplate.
+Open http://localhost:7145 — your app is running.
 
-> **Prefer uv?** Replace `pip install tina4-python` with `uv add tina4-python`, then use `uv run tina4python serve`.
+> **Alternative** (without Rust CLI): `pip install tina4-python` then create `app.py` with `from tina4_python.core import run; run()`
 
 ---
 
@@ -138,7 +143,8 @@ async def hello(request, response):
     return response({"message": "Hello from Tina4!"})
 
 @get("/api/hello/{name}")
-async def hello_name(name, request, response):
+async def hello_name(request, response):
+    name = request.param("name")
     return response({"message": f"Hello, {name}!"})
 ```
 
@@ -400,10 +406,11 @@ Backends: file (default), Redis, Valkey, MongoDB, database. Set via `TINA4_SESSI
 ```python
 from tina4_python.queue import Queue, Producer, Consumer
 
-Producer(Queue(topic="emails")).produce({"to": "alice@example.com"})
+Producer(Queue(topic="emails")).push({"to": "alice@example.com"})
 
-for msg in Consumer(Queue(topic="emails")).messages():
-    send_email(msg.data)
+for job in Consumer(Queue(topic="emails")).poll():
+    send_email(job.data)
+    job.complete()
 ```
 
 ### GraphQL
