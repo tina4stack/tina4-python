@@ -1,0 +1,112 @@
+{
+  "date": "2026-03-22T09:32:14Z",
+  "machine": "arm64 Darwin",
+  "config": {
+    "runs": 3,
+    "requests": 5000,
+    "concurrency": 50,
+    "warmup": 500
+  },
+  "results": [
+    {
+      "framework": "Tina4 Node.js",
+      "language": "nodejs",
+      "json_runs": [
+        54946.2879,
+        78422.2485,
+        78620.3698
+      ],
+      "list_runs": [
+        19161.2299,
+        23468.0222,
+        22781.9148
+      ],
+      "json_median": 78422.2485,
+      "list_median": 22781.9148,
+      "warmup_time_ms": 52.43404200882651,
+      "deps": 0,
+      "features": 38,
+      "server": "built-in"
+    },
+    {
+      "framework": "Express",
+      "language": "nodejs",
+      "json_runs": [
+        41923.3599,
+        49160.1601,
+        51021.7311
+      ],
+      "list_runs": [
+        19982.3456,
+        18284.2237,
+        21379.0179
+      ],
+      "json_median": 49160.1601,
+      "list_median": 19982.3456,
+      "warmup_time_ms": 45.61533298692666,
+      "deps": 3,
+      "features": 4,
+      "server": "built-in"
+    },
+    {
+      "framework": "Fastify",
+      "language": "nodejs",
+      "json_runs": [
+        67134.3694,
+        84042.7353,
+        82482.1056
+      ],
+      "list_runs": [
+        25526.1797,
+        24767.6894,
+        24987.7767
+      ],
+      "json_median": 82482.1056,
+      "list_median": 24987.7767,
+      "warmup_time_ms": 38.205709017347544,
+      "deps": 10,
+      "features": 5,
+      "server": "built-in"
+    },
+    {
+      "framework": "Koa",
+      "language": "nodejs",
+      "json_runs": [
+        55389.6175,
+        64874.5437,
+        52823.6435
+      ],
+      "list_runs": [
+        12642.7418,
+        20601.4243,
+        20890.3829
+      ],
+      "json_median": 55389.6175,
+      "list_median": 20601.4243,
+      "warmup_time_ms": 37.038749986095354,
+      "deps": 5,
+      "features": 3,
+      "server": "built-in"
+    },
+    {
+      "framework": "Node.js raw",
+      "language": "nodejs",
+      "json_runs": [
+        62144.5788,
+        68181.3527,
+        73573.9077
+      ],
+      "list_runs": [
+        24865.7096,
+        26493.8561,
+        26230.6204
+      ],
+      "json_median": 68181.3527,
+      "list_median": 26230.6204,
+      "warmup_time_ms": 37.32529198168777,
+      "deps": 0,
+      "features": 1,
+      "server": "built-in http"
+    }
+  ]
+}
