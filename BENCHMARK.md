@@ -10,14 +10,14 @@ Real HTTP benchmarks — identical JSON endpoint, development servers.
 
 | Framework | JSON req/s | 100-item list req/s | Server | Deps |
 |-----------|:---------:|:-------------------:|--------|:----:|
-| Starlette 0.52 | 16,899 | 7,656 | uvicorn (C) | 4 |
-| FastAPI 0.115 | 11,628 | 2,387 | uvicorn (C) | 12 |
-| **Tina4 Python 3.0** | **10,887** | **5,239** | **built-in asyncio** | **0** |
-| Flask 3.1 | 4,466 | 890 | Werkzeug | 6 |
-| Bottle 0.13 | 4,391 | 638 | built-in wsgiref | 0 |
-| Django 5.2 | 4,221 | 2,290 | runserver | 20 |
+| Starlette 0.52 | 16,103 | 7,598 | uvicorn (C parser) | 4 |
+| **Tina4 Python 3.1** | **11,235** | **5,308** | **uvicorn (auto-detected)** | **0** |
+| FastAPI 0.115 | 11,131 | 2,322 | uvicorn (C parser) | 12 |
+| Flask 3.1 | 5,738 | 908 | Werkzeug | 6 |
+| Django 5.2 | 4,306 | 2,281 | runserver | 20 |
+| Bottle 0.13 | 2,437 | 619 | built-in wsgiref | 0 |
 
-**Key takeaway:** Tina4 delivers 38 features with 0 dependencies while matching FastAPI-class throughput. Starlette is faster but ships 6 features. Django has 22 features but needs 20+ deps and is 2.5x slower.
+**Key takeaway:** Tina4 Python matches FastAPI throughput (11,235 vs 11,131) while shipping 38 features with 0 dependencies. Starlette is faster (C parser) but ships only 6 features. Django has 22 features but is 2.6x slower.
 
 ### Warmup Time
 
@@ -88,7 +88,7 @@ Ships with core install, no extra packages needed.
 
 | Framework | Features | Deps | JSON req/s |
 |-----------|:-------:|:----:|:---------:|
-| **Tina4** | **38/38** | **0** | **10,887** |
+| **Tina4** | **38/38** | **0** | **11,235** |
 | Django | 22/38 | 20 | 4,221 |
 | FastAPI | 8/38 | 12 | 11,628 |
 | Flask | 7/38 | 6 | 4,466 |
