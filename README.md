@@ -43,7 +43,31 @@ cd my-app && tina4 serve
 
 Open http://localhost:7145 — your app is running.
 
-> **Alternative** (without Rust CLI): `pip install tina4-python` then create `app.py` with `from tina4_python.core import run; run()`
+<details>
+<summary><strong>Without the Tina4 CLI</strong></summary>
+
+```bash
+# 1. Create project
+mkdir my-app && cd my-app
+uv init && uv add tina4-python
+
+# 2. Create entry point
+echo 'from tina4_python.core import run; run()' > app.py
+
+# 3. Create .env
+echo 'TINA4_DEBUG=true' > .env
+echo 'TINA4_LOG_LEVEL=ALL' >> .env
+
+# 4. Create route directory
+mkdir -p src/routes
+
+# 5. Run
+uv run python app.py
+```
+
+Open http://localhost:7145
+
+</details>
 
 ---
 
