@@ -240,7 +240,7 @@ h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
         <h2>Getting Started</h2>
         <pre class="code-block"><code><span style="color:#64748b"># app.py</span>
 <span style="color:#c084fc">from</span> tina4_python.core <span style="color:#c084fc">import</span> run
-<span style="color:#c084fc">from</span> tina4_python.Router <span style="color:#c084fc">import</span> get
+<span style="color:#c084fc">from</span> tina4_python.core.router <span style="color:#c084fc">import</span> get
 
 <span style="color:#fbbf24">@get</span>(<span style="color:#4ade80">"/hello"</span>)
 <span style="color:#c084fc">async def</span> <span style="color:#38bdf8">hello</span>(request, response):
