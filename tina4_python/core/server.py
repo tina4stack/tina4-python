@@ -447,10 +447,15 @@ async def app(scope: dict, receive, send):
                     import inspect
                     _tsig = inspect.signature(handler_info[1])
                     _tpcount = len(_tsig.parameters)
+                    _tparams = list(_tsig.parameters.values())
                     if _tpcount == 0:
                         result = await handler_info[1]()
                     elif _tpcount == 1:
-                        result = await handler_info[1](_resp)
+                        _tann = _tparams[0].annotation
+                        if _tann is Request or (isinstance(_tann, str) and _tann in ("Request", "request")):
+                            result = await handler_info[1](request)
+                        else:
+                            result = await handler_info[1](_resp)
                     else:
                         result = await handler_info[1](request, _resp)
                 except Exception as e:
@@ -504,11 +509,17 @@ async def app(scope: dict, receive, send):
         try:
             import inspect
             _sig = inspect.signature(route["handler"])
-            _pcount = len(_sig.parameters)
+            _params = list(_sig.parameters.values())
+            _pcount = len(_params)
             if _pcount == 0:
                 result = await route["handler"]()
             elif _pcount == 1:
-                result = await route["handler"](response)
+                # If type-hinted as Request, pass request; otherwise pass response
+                _ann = _params[0].annotation
+                if _ann is Request or (isinstance(_ann, str) and _ann in ("Request", "request")):
+                    result = await route["handler"](request)
+                else:
+                    result = await route["handler"](response)
             else:
                 result = await route["handler"](request, response)
             if isinstance(result, Response):
