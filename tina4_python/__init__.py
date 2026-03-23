@@ -8,7 +8,7 @@ Tina4 Python v3.0 — Zero-dependency, lightweight web framework.
 
 One import, everything works.
 """
-__version__ = "3.0.0-dev"
+__version__ = "3.1.3"
 
 # ── HTTP Constants ──
 from tina4_python.core.constants import (  # noqa: E402, F401
