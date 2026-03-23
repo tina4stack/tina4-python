@@ -446,7 +446,10 @@ async def app(scope: dict, receive, send):
                     _resp.render = response.render
                     import inspect
                     _tsig = inspect.signature(handler_info[1])
-                    if len(_tsig.parameters) == 1:
+                    _tpcount = len(_tsig.parameters)
+                    if _tpcount == 0:
+                        result = await handler_info[1]()
+                    elif _tpcount == 1:
                         result = await handler_info[1](_resp)
                     else:
                         result = await handler_info[1](request, _resp)
@@ -501,7 +504,10 @@ async def app(scope: dict, receive, send):
         try:
             import inspect
             _sig = inspect.signature(route["handler"])
-            if len(_sig.parameters) == 1:
+            _pcount = len(_sig.parameters)
+            if _pcount == 0:
+                result = await route["handler"]()
+            elif _pcount == 1:
                 result = await route["handler"](response)
             else:
                 result = await route["handler"](request, response)
