@@ -162,11 +162,31 @@ class Session:
     """
 
     def __init__(self, handler: SessionHandler = None, ttl: int = None):
-        self._handler = handler or FileSessionHandler()
+        self._handler = handler or self._resolve_handler()
         self._ttl = ttl or int(os.environ.get("TINA4_SESSION_TTL", "1800"))  # 30 min
         self._session_id: str | None = None
         self._data: dict = {}
         self._dirty: bool = False
+
+    @staticmethod
+    def _resolve_handler() -> SessionHandler:
+        """Auto-select session handler from TINA4_SESSION_BACKEND env var."""
+        backend = os.environ.get("TINA4_SESSION_BACKEND", "file").lower().strip()
+        if backend in ("file", "filesystem"):
+            return FileSessionHandler()
+        elif backend in ("redis",):
+            from tina4_python.session_handlers import RedisSessionHandler
+            return RedisSessionHandler()
+        elif backend in ("valkey",):
+            from tina4_python.session_handlers import ValkeySessionHandler
+            return ValkeySessionHandler()
+        elif backend in ("mongodb", "mongo"):
+            from tina4_python.session_handlers import MongoDBSessionHandler
+            return MongoDBSessionHandler()
+        elif backend in ("database", "db"):
+            return DatabaseSessionHandler()
+        else:
+            return FileSessionHandler()
 
     @property
     def session_id(self) -> str | None:
