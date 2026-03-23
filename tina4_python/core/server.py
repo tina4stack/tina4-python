@@ -742,6 +742,28 @@ def _find_production_server():
     return None
 
 
+def _find_available_port(start: int, max_tries: int = 10) -> int:
+    """Try successive ports starting from *start*, return the first available."""
+    import socket
+    for offset in range(max_tries):
+        port = start + offset
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.bind(("127.0.0.1", port))
+            s.close()
+            return port
+        except OSError:
+            continue
+    return start
+
+
+def _open_browser(url: str):
+    """Open *url* in the default browser after a short delay."""
+    import webbrowser
+    import threading
+    threading.Timer(2.0, webbrowser.open, args=[url]).start()
+
+
 def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> tuple[str, int]:
     """Resolve host/port with priority: CLI flag > ENV var > default.
 
@@ -833,6 +855,12 @@ def run(host: str | None = None, port: int | None = None):
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
 
+    # Auto-increment port if already in use
+    original_port = port
+    port = _find_available_port(port)
+    if port != original_port:
+        Log.info(f"Port {original_port} in use — using {port} instead")
+
     # Detect production server (unless TINA4_DEBUG is true)
     from tina4_python.dotenv import is_truthy
     is_debug = is_truthy(os.environ.get("TINA4_DEBUG", ""))
@@ -848,6 +876,9 @@ def run(host: str | None = None, port: int | None = None):
 
     display = "localhost" if host in ("0.0.0.0", "::") else host
     Log.info(f"Server started http://{display}:{port} ({server_name})")
+
+    # Open browser after a short delay
+    _open_browser(f"http://{display}:{port}")
 
     # Use production server if available
     if prod:
