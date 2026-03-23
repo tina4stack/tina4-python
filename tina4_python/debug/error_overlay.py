@@ -147,14 +147,18 @@ def render_error_overlay(exception: BaseException, request: Any = None) -> str:
             req = request
         else:
             req = {}
-            for attr in ("method", "url", "path", "headers", "params", "query", "body"):
+            for attr in ("method", "url", "path", "ip", "content_type", "headers", "params", "query", "body"):
                 val = getattr(request, attr, None)
-                if val is not None:
-                    req[attr] = val
+                req[attr] = val
         for k, v in req.items():
-            if isinstance(v, dict):
-                for hk, hv in v.items():
-                    request_pairs.append((f"{k}.{hk}", str(hv)))
+            if v is None:
+                request_pairs.append((str(k), "(none)"))
+            elif isinstance(v, dict):
+                if v:
+                    for hk, hv in v.items():
+                        request_pairs.append((f"{k}.{hk}", str(hv)))
+                else:
+                    request_pairs.append((str(k), "(empty)"))
             else:
                 request_pairs.append((str(k), str(v)))
 
