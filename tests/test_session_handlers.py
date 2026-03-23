@@ -51,6 +51,18 @@ class TestSessionHandlerContract:
         assert callable(getattr(handler, "destroy", None))
         assert callable(getattr(handler, "gc", None))
 
+    def test_database_handler_extends_session_handler(self):
+        from tina4_python.session import SessionHandler, DatabaseSessionHandler
+        from tina4_python.database import Database
+
+        db = Database("sqlite::memory:")
+        assert issubclass(DatabaseSessionHandler, SessionHandler)
+        handler = DatabaseSessionHandler(db)
+        assert callable(getattr(handler, "read", None))
+        assert callable(getattr(handler, "write", None))
+        assert callable(getattr(handler, "destroy", None))
+        assert callable(getattr(handler, "gc", None))
+
 
 # ── Redis Handler Tests ──────────────────────────────────────────
 
@@ -375,6 +387,80 @@ class TestValkeyHandlerMocked:
         handler, mock_client = self._make_handler_with_mock()
         handler.close()
         mock_client.close.assert_called_once()
+
+
+# ── Database Session Handler Tests ────────────────────────────────
+
+
+class TestDatabaseSessionHandler:
+    """Test DatabaseSessionHandler with a real SQLite in-memory database."""
+
+    def _make_handler(self):
+        from tina4_python.session import DatabaseSessionHandler
+        from tina4_python.database import Database
+
+        db = Database("sqlite::memory:")
+        handler = DatabaseSessionHandler(db)
+        return handler
+
+    def test_write_and_read(self):
+        handler = self._make_handler()
+        handler.write("sess-1", {"user_id": 42, "role": "admin"}, ttl=1800)
+        result = handler.read("sess-1")
+        assert result == {"user_id": 42, "role": "admin"}
+
+    def test_read_nonexistent(self):
+        handler = self._make_handler()
+        result = handler.read("nonexistent-session")
+        assert result == {}
+
+    def test_destroy(self):
+        handler = self._make_handler()
+        handler.write("sess-2", {"user_id": 99}, ttl=1800)
+        assert handler.read("sess-2") == {"user_id": 99}
+        handler.destroy("sess-2")
+        assert handler.read("sess-2") == {}
+
+    def test_expiry(self):
+        handler = self._make_handler()
+        handler.write("sess-3", {"user_id": 7}, ttl=1)
+        time.sleep(1.5)
+        result = handler.read("sess-3")
+        assert result == {}
+
+    def test_gc(self):
+        handler = self._make_handler()
+        # Write two sessions with very short TTL (already expired)
+        handler.write("expired-1", {"a": 1}, ttl=1)
+        handler.write("expired-2", {"b": 2}, ttl=1)
+        # Write one session that is still valid
+        handler.write("valid-1", {"c": 3}, ttl=3600)
+        time.sleep(1.5)
+        handler.gc(1800)
+        # Expired sessions should be cleaned up
+        assert handler.read("expired-1") == {}
+        assert handler.read("expired-2") == {}
+        # Valid session should still exist
+        assert handler.read("valid-1") == {"c": 3}
+
+
+class TestResolveHandlerDatabase:
+    """Test that Session._resolve_handler returns DatabaseSessionHandler for database backend."""
+
+    def test_resolve_handler_database(self, monkeypatch):
+        from tina4_python.session import Session, DatabaseSessionHandler
+        from tina4_python.database import Database
+
+        monkeypatch.setenv("TINA4_SESSION_BACKEND", "database")
+        # DatabaseSessionHandler requires a db arg; patch it to accept no-arg construction
+        db = Database("sqlite::memory:")
+        with patch(
+            "tina4_python.session.DatabaseSessionHandler",
+            return_value=DatabaseSessionHandler(db),
+        ) as mock_cls:
+            handler = Session._resolve_handler()
+            mock_cls.assert_called_once()
+            assert isinstance(handler, DatabaseSessionHandler)
 
 
 # ── Session Integration Tests ────────────────────────────────────

@@ -11,6 +11,14 @@ import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 
 
+def _pymongo_available():
+    try:
+        import pymongo
+        return True
+    except ImportError:
+        return False
+
+
 # ── Interface Contract Tests ─────────────────────────────────────
 
 
@@ -35,6 +43,24 @@ class TestQueueBackendContract:
         from tina4_python.queue_backends.kafka_backend import KafkaBackend
 
         backend = KafkaBackend()
+        assert callable(getattr(backend, "enqueue", None))
+        assert callable(getattr(backend, "dequeue", None))
+        assert callable(getattr(backend, "acknowledge", None))
+        assert callable(getattr(backend, "reject", None))
+        assert callable(getattr(backend, "size", None))
+        assert callable(getattr(backend, "clear", None))
+        assert callable(getattr(backend, "dead_letter", None))
+        assert callable(getattr(backend, "close", None))
+        assert callable(getattr(backend, "connect", None))
+
+    @pytest.mark.skipif(
+        not _pymongo_available(),
+        reason="pymongo not installed"
+    )
+    def test_mongodb_backend_has_required_methods(self):
+        from tina4_python.queue_backends.mongo_backend import MongoBackend
+
+        backend = MongoBackend()
         assert callable(getattr(backend, "enqueue", None))
         assert callable(getattr(backend, "dequeue", None))
         assert callable(getattr(backend, "acknowledge", None))
@@ -326,6 +352,168 @@ class TestKafkaBackendMocked:
         backend.close()
         mock_producer.flush.assert_called_once()
         mock_consumer.close.assert_called_once()
+
+
+# ── MongoDB Backend Tests ────────────────────────────────────────
+
+
+_skip_no_pymongo = pytest.mark.skipif(
+    not _pymongo_available(),
+    reason="pymongo not installed"
+)
+
+
+@_skip_no_pymongo
+class TestMongoDBBackendConfig:
+    """Test MongoDB backend configuration without connecting."""
+
+    def test_default_config(self):
+        from tina4_python.queue_backends.mongo_backend import MongoBackend
+
+        backend = MongoBackend()
+        assert backend._host == "localhost"
+        assert backend._port == 27017
+        assert backend._db_name == "tina4"
+        assert backend._collection_name == "tina4_queue"
+
+    def test_env_override(self, monkeypatch):
+        from tina4_python.queue_backends.mongo_backend import MongoBackend
+
+        monkeypatch.setenv("TINA4_MONGO_HOST", "mongo-env")
+        monkeypatch.setenv("TINA4_MONGO_PORT", "27020")
+        monkeypatch.setenv("TINA4_MONGO_DB", "envdb")
+        monkeypatch.setenv("TINA4_MONGO_COLLECTION", "env_queue")
+
+        backend = MongoBackend()
+        assert backend._host == "mongo-env"
+        assert backend._port == 27020
+        assert backend._db_name == "envdb"
+        assert backend._collection_name == "env_queue"
+
+    def test_constructor_override(self):
+        from tina4_python.queue_backends.mongo_backend import MongoBackend
+
+        backend = MongoBackend(
+            host="custom-host",
+            port=27030,
+            db="customdb",
+            collection="custom_queue",
+        )
+        assert backend._host == "custom-host"
+        assert backend._port == 27030
+        assert backend._db_name == "customdb"
+        assert backend._collection_name == "custom_queue"
+
+    def test_close_without_connect(self):
+        from tina4_python.queue_backends.mongo_backend import MongoBackend
+
+        backend = MongoBackend()
+        backend.close()  # Should not raise
+
+
+@_skip_no_pymongo
+class TestMongoDBBackendMocked:
+    """Test MongoDB backend with mocked pymongo client."""
+
+    def _make_backend_with_mock(self):
+        from tina4_python.queue_backends.mongo_backend import MongoBackend
+
+        backend = MongoBackend()
+        mock_collection = MagicMock()
+        backend._collection = mock_collection
+        backend._client = MagicMock()
+        backend._db = MagicMock()
+        return backend, mock_collection
+
+    def test_enqueue_inserts_document(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        msg_id = backend.enqueue("emails", {"to": "alice@test.com"})
+        assert isinstance(msg_id, str)
+        mock_collection.insert_one.assert_called_once()
+        doc = mock_collection.insert_one.call_args[0][0]
+        assert doc["topic"] == "emails"
+        assert doc["status"] == "pending"
+
+    def test_dequeue_returns_none_when_empty(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        mock_collection.find_one_and_update.return_value = None
+        result = backend.dequeue("emails")
+        assert result is None
+
+    def test_dequeue_returns_message(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        mock_collection.find_one_and_update.return_value = {
+            "_id": "msg-1",
+            "data": {"to": "alice@test.com"},
+            "topic": "emails",
+            "status": "reserved",
+        }
+        result = backend.dequeue("emails")
+        assert result is not None
+        assert result["id"] == "msg-1"
+        assert result["to"] == "alice@test.com"
+
+    def test_acknowledge_updates_status(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        backend.acknowledge("emails", "msg-1")
+        mock_collection.update_one.assert_called_once()
+        call_args = mock_collection.update_one.call_args[0]
+        assert call_args[0] == {"_id": "msg-1", "topic": "emails"}
+        assert call_args[1]["$set"]["status"] == "completed"
+
+    def test_reject_requeues(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        backend.reject("emails", "msg-1", requeue=True)
+        mock_collection.update_one.assert_called_once()
+        call_args = mock_collection.update_one.call_args[0]
+        assert call_args[1]["$set"]["status"] == "pending"
+
+    def test_reject_fails(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        backend.reject("emails", "msg-1", requeue=False)
+        mock_collection.update_one.assert_called_once()
+        call_args = mock_collection.update_one.call_args[0]
+        assert call_args[1]["$set"]["status"] == "failed"
+
+    def test_size(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        mock_collection.count_documents.return_value = 5
+        assert backend.size("emails") == 5
+        mock_collection.count_documents.assert_called_once_with(
+            {"topic": "emails", "status": "pending"}
+        )
+
+    def test_clear(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        backend.clear("emails")
+        mock_collection.delete_many.assert_called_once_with({"topic": "emails"})
+
+    def test_dead_letter(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        backend.dead_letter("emails", {"id": "msg-1", "error": "failed"})
+        mock_collection.insert_one.assert_called_once()
+        doc = mock_collection.insert_one.call_args[0][0]
+        assert doc["topic"] == "emails.dead_letter"
+        assert doc["status"] == "dead"
+
+    def test_close(self):
+        backend, _ = self._make_backend_with_mock()
+        client = backend._client
+        backend.close()
+        client.close.assert_called_once()
+        assert backend._client is None
+
+
+class TestResolveBackend:
+    """Test _resolve_backend returns the correct adapter for mongodb."""
+
+    @_skip_no_pymongo
+    def test_resolve_backend_mongodb(self, monkeypatch):
+        from tina4_python.queue import _resolve_backend, _MongoDBAdapter
+
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "mongodb")
+        adapter = _resolve_backend(None, "test", None, 3)
+        assert isinstance(adapter, _MongoDBAdapter)
 
 
 # ── Integration Tests (require actual services) ─────────────────
