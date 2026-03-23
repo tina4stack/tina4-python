@@ -512,7 +512,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Frond pre-compilation for 2.8x template render improvement (clear_cache method)
 - DB query caching: `TINA4_DB_CACHE=true` env var, `cache_stats()`, `cache_clear()`
 - ORM relationships: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)
-- Queue backends: SQLite (default), RabbitMQ, Kafka — configured via env vars
+- Queue backends: SQLite (default), RabbitMQ, Kafka, MongoDB — configured via env vars
 - Cache backends: memory (default), Redis, file — configured via env vars
 - Session backends: file, Redis, Valkey, MongoDB, database
 - Gallery: 7 interactive examples with Try It deploy at `/__dev/`

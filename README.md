@@ -83,7 +83,7 @@ Every feature is built from scratch -- no pip install, no node_modules, no third
 | **Database** | SQLite, PostgreSQL, MySQL, MSSQL, Firebird -- unified adapter interface, query caching (TINA4_DB_CACHE=true for 4x speedup) |
 | **Auth** | Zero-dep JWT (HS256), sessions (file/Redis/Valkey/MongoDB/database), password hashing, form tokens |
 | **API** | Swagger/OpenAPI auto-generation, GraphQL with ORM auto-schema and GraphiQL IDE, WSDL/SOAP with auto WSDL |
-| **Background** | Queue (SQLite/RabbitMQ/Kafka) with priority, delayed jobs, retry, batch processing |
+| **Background** | Queue (SQLite/RabbitMQ/Kafka/MongoDB) with priority, delayed jobs, retry, batch processing |
 | **Real-time** | Native asyncio WebSocket (RFC 6455), per-path routing, connection manager |
 | **Frontend** | tina4-css (~24 KB), frond.js helper, SCSS compiler, live reload, CSS hot-reload |
 | **DX** | Dev admin dashboard (11 tabs), error overlay, request inspector, AI tool integration, Carbonah green benchmarks |

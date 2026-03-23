@@ -1770,7 +1770,7 @@ async def dashboard(request, response):
 - **`tina4python generate`**: model, route, migration, middleware scaffolding
 - **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), query caching (`TINA4_DB_CACHE=true`, `cache_stats()`, `cache_clear()`)
 - **Sessions**: 4 backends (file, Redis/Valkey, MongoDB, database)
-- **Queue**: SQLite/RabbitMQ/Kafka backends, configured via env vars
+- **Queue**: SQLite/RabbitMQ/Kafka/MongoDB backends, configured via env vars
 - **Cache**: memory/Redis/file backends
 - **Messenger**: .env driven SMTP/IMAP
 - **ORM relationships**: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)

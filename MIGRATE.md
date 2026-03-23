@@ -8,7 +8,7 @@ v3 is a ground-up rewrite. You get:
 - **5 database drivers** — SQLite, PostgreSQL, MySQL, MSSQL, Firebird (plus MongoDB and ODBC)
 - **ORM relationships** — `has_many`, `has_one`, `belongs_to` with eager loading
 - **Built-in template engine** — Frond replaces Jinja2 (still uses Twig/Jinja2 syntax)
-- **Queue backends** — SQLite, RabbitMQ, Kafka — switched via env vars, not code
+- **Queue backends** — SQLite, RabbitMQ, Kafka, MongoDB — switched via env vars, not code
 - **Event system**, response caching, DI container, GraphQL, WSDL/SOAP, error overlay
 - **1,633 tests** passing across all modules
 - **Production server** auto-detection with uvicorn
