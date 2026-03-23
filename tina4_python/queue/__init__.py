@@ -1,7 +1,7 @@
 # Tina4 Queue — Unified job queue with pluggable backends, zero dependencies.
 """
 Production-grade queue with auto-detected backends. Switching from SQLite to
-RabbitMQ or Kafka is a .env change — no code change needed.
+RabbitMQ, Kafka, or MongoDB is a .env change — no code change needed.
 
     from tina4_python.queue import Queue, Producer, Consumer
 
@@ -17,10 +17,11 @@ RabbitMQ or Kafka is a .env change — no code change needed.
     queue = Queue(db, topic="emails")
 
 Environment variables:
-    TINA4_QUEUE_BACKEND   — 'sqlite' (default), 'rabbitmq', or 'kafka'
+    TINA4_QUEUE_BACKEND   — 'sqlite' (default), 'rabbitmq', 'kafka', or 'mongodb'
     TINA4_QUEUE_URL       — connection URL for rabbitmq/kafka
     TINA4_RABBITMQ_HOST   — RabbitMQ host (default: localhost)
     TINA4_KAFKA_BROKERS   — Kafka brokers (default: localhost:9092)
+    TINA4_MONGO_HOST      — MongoDB host (default: localhost)
     DATABASE_URL          — used by sqlite backend when no db passed
 """
 import json
@@ -315,6 +316,73 @@ class _KafkaAdapter:
         self._backend.enqueue(self._topic, msg)
 
 
+class _MongoDBAdapter:
+    """Backend adapter wrapping MongoBackend for the unified Queue API."""
+
+    def __init__(self, topic: str, max_retries: int):
+        from tina4_python.queue_backends import MongoBackend
+
+        url = os.environ.get("TINA4_QUEUE_URL", "")
+        config = {}
+        if url:
+            config["uri"] = url
+        self._backend = MongoBackend(**config)
+        self._topic = topic
+        self._max_retries = max_retries
+
+    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> str:
+        msg = {"payload": data, "priority": priority, "attempts": 0}
+        return self._backend.enqueue(self._topic, msg)
+
+    def pop(self, queue_ref) -> Job | None:
+        result = self._backend.dequeue(self._topic)
+        if result is None:
+            return None
+        msg_id = result.get("id", "unknown")
+        payload = result.get("payload", result)
+        attempts = result.get("attempts", 0)
+        priority = result.get("priority", 0)
+        return Job(
+            queue=queue_ref,
+            job_id=msg_id,
+            topic=self._topic,
+            data=payload if isinstance(payload, dict) else result,
+            priority=priority,
+            attempts=attempts,
+        )
+
+    def size(self, status: str = "pending") -> int:
+        if status != "pending":
+            return 0
+        return self._backend.size(self._topic)
+
+    def purge(self, status: str = "completed"):
+        if status == "pending":
+            self._backend.clear(self._topic)
+
+    def retry_failed(self) -> int:
+        return 0  # MongoDB backend handles retries via reject(requeue=True)
+
+    def dead_letters(self) -> list[dict]:
+        return []  # Dead letters stored in topic.dead_letter collection docs
+
+    def complete(self, job: Job):
+        self._backend.acknowledge(self._topic, str(job.id))
+
+    def fail(self, job: Job, error: str = ""):
+        job.attempts += 1
+        if job.attempts >= self._max_retries:
+            msg = {"id": job.id, "payload": job.data, "error": error}
+            self._backend.dead_letter(self._topic, msg)
+            self._backend.acknowledge(self._topic, str(job.id))
+        else:
+            self._backend.reject(self._topic, str(job.id), requeue=True)
+
+    def retry(self, job: Job, delay_seconds: int = 0):
+        job.attempts += 1
+        self._backend.reject(self._topic, str(job.id), requeue=True)
+
+
 def _resolve_backend(db, topic: str, backend: str | None, max_retries: int):
     """Resolve which backend adapter to use."""
     # If db is passed explicitly, always use sqlite adapter (backward compat)
@@ -335,8 +403,10 @@ def _resolve_backend(db, topic: str, backend: str | None, max_retries: int):
         return _RabbitMQAdapter(topic, max_retries)
     elif chosen == "kafka":
         return _KafkaAdapter(topic, max_retries)
+    elif chosen in ("mongodb", "mongo"):
+        return _MongoDBAdapter(topic, max_retries)
     else:
-        raise ValueError(f"Unknown queue backend: {chosen!r}. Use 'sqlite', 'rabbitmq', or 'kafka'.")
+        raise ValueError(f"Unknown queue backend: {chosen!r}. Use 'sqlite', 'rabbitmq', 'kafka', or 'mongodb'.")
 
 
 class Queue:
