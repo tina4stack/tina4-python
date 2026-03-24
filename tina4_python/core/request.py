@@ -75,6 +75,7 @@ class Request:
         return self.params.get(key, self._route_params.get(key, default))
 
 
+
 def _extract_ip(scope: dict, headers: dict) -> str:
     """Extract client IP, respecting X-Forwarded-For."""
     forwarded = headers.get("x-forwarded-for", "")

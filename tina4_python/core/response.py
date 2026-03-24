@@ -191,6 +191,10 @@ class Response:
 
         return self.html(f"<pre>Template not found: {template}</pre>", 404)
 
+    def template(self, template: str, data: dict = None) -> "Response":
+        """Alias for render() — parity with PHP/Node.js naming."""
+        return self.render(template, data)
+
     def build_headers(self, accept_encoding: str = "") -> list[tuple[bytes, bytes]]:
         """Build final ASGI headers with compression and ETag."""
         # Compress if applicable

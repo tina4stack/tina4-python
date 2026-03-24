@@ -29,27 +29,38 @@ class Auth:
     """JWT authentication and password hashing — zero dependencies."""
 
     def __init__(self, secret: str = None, algorithm: str = "HS256",
-                 token_expiry: int = None):
+                 expires_in: int = None):
+        """
+        Args:
+            secret:     Signing secret (falls back to SECRET env var).
+            algorithm:  JWT algorithm (default HS256).
+            expires_in: Token lifetime in seconds (default 3600).
+        """
         self.secret = secret or os.environ.get("SECRET", "tina4-default-secret")
         self.algorithm = algorithm
-        self.token_expiry = token_expiry or int(
-            os.environ.get("TINA4_TOKEN_LIMIT", "30")
+        self.expires_in = expires_in or int(
+            os.environ.get("TINA4_TOKEN_EXPIRES_IN", "60")
         )
 
     # ── JWT ────────────────────────────────────────────────────────
 
-    def get_token(self, payload: dict, expiry_minutes: int = None) -> str:
+    def get_token(self, payload: dict, expires_in: int = None) -> str:
         """Create a signed JWT token.
+
+        Args:
+            expires_in: Lifetime in minutes (default: self.expires_in).
 
         Returns: header.payload.signature
         """
-        exp = expiry_minutes if expiry_minutes is not None else self.token_expiry
+        exp_minutes = expires_in or self.expires_in
+        exp_seconds = exp_minutes * 60
+
         header = {"alg": self.algorithm, "typ": "JWT"}
 
         claims = dict(payload)
         claims["iat"] = int(time.time())
-        if exp > 0:
-            claims["exp"] = claims["iat"] + (exp * 60)
+        if exp_seconds > 0:
+            claims["exp"] = claims["iat"] + exp_seconds
 
         h = _b64url_encode(json.dumps(header).encode())
         p = _b64url_encode(json.dumps(claims, default=str).encode())
@@ -88,14 +99,18 @@ class Auth:
         except Exception:
             return None
 
-    def refresh_token(self, token: str, expiry_minutes: int = None) -> str | None:
-        """Validate and issue a fresh token with the same claims."""
+    def refresh_token(self, token: str, expires_in: int = None) -> str | None:
+        """Validate and issue a fresh token with the same claims.
+
+        Args:
+            expires_in: Lifetime in minutes (default: self.expires_in).
+        """
         payload = self.valid_token(token)
         if payload is None:
             return None
         payload.pop("iat", None)
         payload.pop("exp", None)
-        return self.get_token(payload, expiry_minutes)
+        return self.get_token(payload, expires_in=expires_in)
 
     def _sign(self, message: str) -> str:
         sig = hmac.new(
@@ -105,8 +120,37 @@ class Auth:
 
     # ── Legacy aliases ─────────────────────────────────────────────
 
-    create_token = get_token
-    validate_token = valid_token
+    # get_token and valid_token are the primary names
+
+    # ── Class-level convenience methods (read SECRET from env) ────
+
+    @classmethod
+    def get_token_static(cls, payload: dict, expires_in: int = 60) -> str:
+        """Create a JWT without instantiating Auth — reads SECRET from env."""
+        secret = os.environ.get("SECRET", "tina4-default-secret")
+        auth = cls(secret=secret, expires_in=expires_in)
+        return auth.get_token(payload)
+
+    @classmethod
+    def valid_token_static(cls, token: str) -> dict | None:
+        """Validate a JWT without instantiating Auth — reads SECRET from env."""
+        secret = os.environ.get("SECRET", "tina4-default-secret")
+        auth = cls(secret=secret)
+        return auth.valid_token(token)
+
+    @classmethod
+    def get_payload_static(cls, token: str) -> dict | None:
+        """Decode payload (no validation) without instantiating Auth."""
+        secret = os.environ.get("SECRET", "tina4-default-secret")
+        auth = cls(secret=secret)
+        return auth.get_payload(token)
+
+    @classmethod
+    def refresh_token_static(cls, token: str, expires_in: int = 60) -> str | None:
+        """Refresh a JWT without instantiating Auth — reads SECRET from env."""
+        secret = os.environ.get("SECRET", "tina4-default-secret")
+        auth = cls(secret=secret, expires_in=expires_in)
+        return auth.refresh_token(token)
 
     # ── Password Hashing ──────────────────────────────────────────
 
@@ -189,4 +233,26 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s)
 
 
-__all__ = ["Auth"]
+# ── Module-level convenience functions (use static methods) ────
+
+def get_token(payload: dict, expires_in: int = 60) -> str:
+    """Create a JWT — reads SECRET from env. Shortcut for Auth.get_token_static()."""
+    return Auth.get_token_static(payload, expires_in=expires_in)
+
+
+def valid_token(token: str) -> dict | None:
+    """Validate a JWT — reads SECRET from env. Shortcut for Auth.valid_token_static()."""
+    return Auth.valid_token_static(token)
+
+
+def get_payload(token: str) -> dict | None:
+    """Decode JWT payload (no validation). Shortcut for Auth.get_payload_static()."""
+    return Auth.get_payload_static(token)
+
+
+def refresh_token(token: str, expires_in: int = 60) -> str | None:
+    """Refresh a JWT — reads SECRET from env. Shortcut for Auth.refresh_token_static()."""
+    return Auth.refresh_token_static(token, expires_in=expires_in)
+
+
+__all__ = ["Auth", "get_token", "valid_token", "get_payload", "refresh_token"]

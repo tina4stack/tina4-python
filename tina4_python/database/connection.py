@@ -182,20 +182,21 @@ class Database:
         return self._adapter.execute_many(sql, params_list)
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, skip: int = 0) -> DatabaseResult:
+              limit: int = 20, offset: int = 0) -> DatabaseResult:
+        """Fetch rows with pagination."""
         if self._cache_enabled:
-            key = self._cache_key(sql + f":L{limit}:S{skip}", params)
+            key = self._cache_key(sql + f":L{limit}:S{offset}", params)
             cached = self._cache_get(key)
             if cached is not None:
                 with self._cache_lock:
                     self._cache_hits += 1
                 return cached
-            result = self._adapter.fetch(sql, params, limit, skip)
+            result = self._adapter.fetch(sql, params, limit, offset)
             self._cache_set(key, result)
             with self._cache_lock:
                 self._cache_misses += 1
             return result
-        return self._adapter.fetch(sql, params, limit, skip)
+        return self._adapter.fetch(sql, params, limit, offset)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         if self._cache_enabled:
