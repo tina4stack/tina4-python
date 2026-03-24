@@ -8,6 +8,6 @@ SQL-file-based migrations with tracking table.
     create_migration("add users table")  # Create new .sql file
     rollback(db)                         # Rollback last batch
 """
-from tina4_python.migration.runner import migrate, create_migration, rollback
+from tina4_python.migration.runner import migrate, create_migration, rollback, status
 
-__all__ = ["migrate", "create_migration", "rollback"]
+__all__ = ["migrate", "create_migration", "rollback", "status"]

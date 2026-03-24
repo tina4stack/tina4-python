@@ -7,6 +7,7 @@ CLI commands for development workflow.
     tina4python migrate           # Run pending migrations
     tina4python migrate:create    # Create a migration file
     tina4python migrate:rollback  # Rollback last batch
+    tina4python migrate:status    # Show completed and pending migrations
     tina4python seed              # Run seeders
     tina4python routes            # List registered routes
     tina4python test              # Run tests
@@ -34,6 +35,7 @@ def main():
         "migrate": _migrate,
         "migrate:create": _migrate_create,
         "migrate:rollback": _migrate_rollback,
+        "migrate:status": _migrate_status,
         "seed": _seed,
         "routes": _routes,
         "test": _test,
@@ -63,6 +65,7 @@ Commands:
   migrate               Run pending database migrations
   migrate:create <desc> Create a new migration file
   migrate:rollback      Rollback last migration batch
+  migrate:status        Show completed and pending migrations
   seed                  Run database seeders
   routes                List all registered routes
   test                  Run test suite
@@ -233,13 +236,46 @@ def _migrate_rollback(args):
 
     db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
     db = Database(db_url)
-    rolled = rollback(db, "migrations")
+    mig_dir = args[0] if args else "migrations"
+    rolled = rollback(db, mig_dir)
     if rolled:
         for f in rolled:
             print(f"  Rolled back: {f}")
         print(f"\n{len(rolled)} migration(s) rolled back.")
     else:
         print("Nothing to rollback.")
+    db.close()
+
+
+def _migrate_status(args):
+    """Show completed and pending migrations."""
+    _load_env()
+    from tina4_python.database import Database
+    from tina4_python.migration import status
+
+    db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+    db = Database(db_url)
+    mig_dir = args[0] if args else "migrations"
+    result = status(db, mig_dir)
+
+    completed = result["completed"]
+    pending = result["pending"]
+
+    if completed:
+        print("\nCompleted migrations:")
+        for m in completed:
+            print(f"  [batch {m['batch']}] {m['migration_id']}  ({m['executed_at']})")
+    else:
+        print("\nNo completed migrations.")
+
+    if pending:
+        print("\nPending migrations:")
+        for m in pending:
+            print(f"  {m['migration_id']}  ({m['description']})")
+    else:
+        print("\nNo pending migrations.")
+
+    print(f"\nTotal: {len(completed)} completed, {len(pending)} pending.")
     db.close()
 
 

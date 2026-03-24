@@ -1,9 +1,10 @@
 # Tina4 Migration Runner — Execute, create, and rollback SQL migrations.
 """
-Migrations are .sql files in a migrations/ folder, named sequentially:
-    000001_create_users_table.sql
-    000002_add_email_column.sql
+Migrations are .sql files in a migrations/ folder, named with either pattern:
+    000001_create_users_table.sql       (sequential)
+    20260324153045_add_email_column.sql  (timestamp — YYYYMMDDHHMMSS)
 
+Both naming patterns are supported. New migrations use timestamp format by default.
 Each file is executed once. State tracked in tina4_migration table.
 Rollback uses matching .down.sql files.
 """
@@ -130,8 +131,8 @@ def migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> l
 
             # Record as passed
             now = datetime.now(timezone.utc).isoformat()
-            # Extract description from filename
-            desc = re.sub(r"^\d+_", "", migration_id).replace("_", " ")
+            # Extract description from filename (supports both 000001_ and YYYYMMDDHHMMSS_ prefixes)
+            desc = re.sub(r"^\d+_", "", migration_id, count=1).replace("_", " ")
             db.execute(
                 "INSERT INTO tina4_migration (migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, 1)",
                 [migration_id, desc, batch, now],
@@ -204,41 +205,86 @@ def rollback(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
 
 
 def create_migration(description: str, migration_folder: str = "migrations") -> str:
-    """Create a new migration .sql file with the next sequence number.
+    """Create a new migration .sql file with a YYYYMMDDHHMMSS timestamp prefix.
 
+    Also creates a matching .down.sql rollback template.
     Returns the path to the created file.
     """
     folder = Path(migration_folder)
     folder.mkdir(parents=True, exist_ok=True)
 
-    # Find next sequence number
-    existing = sorted(folder.glob("*.sql"))
-    existing_up = [f for f in existing if not f.name.endswith(".down.sql")]
-
-    if existing_up:
-        last = existing_up[-1].stem
-        match = re.match(r"^(\d+)", last)
-        next_num = int(match.group(1)) + 1 if match else 1
-    else:
-        next_num = 1
+    # Use timestamp format (matches PHP/Ruby/Node.js convention)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
 
     # Clean description for filename
     clean = re.sub(r"[^a-z0-9]+", "_", description.lower()).strip("_")
-    filename = f"{next_num:06d}_{clean}.sql"
+    filename = f"{timestamp}_{clean}.sql"
     filepath = folder / filename
+
+    created_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
     filepath.write_text(
         f"-- Migration: {description}\n"
-        f"-- Created: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n",
+        f"-- Created: {created_at}\n\n",
         encoding="utf-8",
     )
 
     # Also create .down.sql
-    down_path = folder / f"{next_num:06d}_{clean}.down.sql"
+    down_path = folder / f"{timestamp}_{clean}.down.sql"
     down_path.write_text(
         f"-- Rollback: {description}\n"
-        f"-- Created: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n",
+        f"-- Created: {created_at}\n\n",
         encoding="utf-8",
     )
 
     return str(filepath)
+
+
+def status(db, migration_folder: str = "migrations") -> dict:
+    """Get migration status: which are completed and which are pending.
+
+    Returns {"completed": [...], "pending": [...]}, where each entry is
+    a dict with 'migration_id', 'description', and (for completed)
+    'executed_at' and 'batch'.
+    """
+    _ensure_tracking_table(db)
+
+    folder = Path(migration_folder)
+    if not folder.is_dir():
+        return {"completed": [], "pending": []}
+
+    executed = _get_executed(db)
+
+    # Get all .sql files sorted by name (excluding .down.sql)
+    sql_files = sorted(
+        f for f in folder.glob("*.sql")
+        if not f.name.endswith(".down.sql")
+    )
+
+    # Build completed list from the database with execution metadata
+    result = db.fetch(
+        "SELECT migration_id, description, batch, executed_at FROM tina4_migration WHERE passed = 1 ORDER BY migration_id",
+        limit=10000,
+    )
+    completed = [
+        {
+            "migration_id": row["migration_id"],
+            "description": row["description"],
+            "batch": row["batch"],
+            "executed_at": row["executed_at"],
+        }
+        for row in result.records
+    ]
+
+    # Build pending list from files not yet executed
+    pending = []
+    for sql_file in sql_files:
+        migration_id = sql_file.stem
+        if migration_id not in executed:
+            desc = re.sub(r"^\d+_", "", migration_id, count=1).replace("_", " ")
+            pending.append({
+                "migration_id": migration_id,
+                "description": desc,
+            })
+
+    return {"completed": completed, "pending": pending}

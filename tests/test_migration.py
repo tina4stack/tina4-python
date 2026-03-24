@@ -1,8 +1,9 @@
 # Tests for tina4_python.migration
+import re
 import pytest
 from pathlib import Path
 from tina4_python.database import Database
-from tina4_python.migration import migrate, create_migration, rollback
+from tina4_python.migration import migrate, create_migration, rollback, status
 
 
 @pytest.fixture
@@ -201,16 +202,19 @@ class TestCreateMigration:
 
     def test_create_first(self, mig_dir):
         path = create_migration("create users table", str(mig_dir))
-        assert "000001_create_users_table.sql" in path
+        # Now uses YYYYMMDDHHMMSS timestamp format
+        assert "_create_users_table.sql" in path
+        assert re.search(r"\d{14}_create_users_table\.sql$", path)
         assert Path(path).exists()
         # Down file also created
         down = Path(path).with_suffix("").with_suffix(".down.sql")
         assert down.exists()
 
-    def test_sequential_numbering(self, mig_dir):
-        create_migration("first", str(mig_dir))
-        path = create_migration("second", str(mig_dir))
-        assert "000002_second.sql" in path
+    def test_timestamp_format(self, mig_dir):
+        path = create_migration("first", str(mig_dir))
+        filename = Path(path).name
+        # Should start with 14-digit timestamp
+        assert re.match(r"^\d{14}_first\.sql$", filename)
 
     def test_clean_description(self, mig_dir):
         path = create_migration("Add Email & Phone Fields!", str(mig_dir))
@@ -221,3 +225,55 @@ class TestCreateMigration:
         path = create_migration("test", str(new_dir))
         assert new_dir.is_dir()
         assert Path(path).exists()
+
+
+# ── status() Tests ──────────────────────────────────────────
+
+
+class TestMigrationStatus:
+    """Tests for migration status reporting."""
+
+    def test_status_empty(self, db, mig_dir):
+        result = status(db, str(mig_dir))
+        assert result == {"completed": [], "pending": []}
+
+    def test_status_with_pending(self, db, mig_dir):
+        (mig_dir / "000001_create_users.sql").write_text(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY);", encoding="utf-8"
+        )
+        result = status(db, str(mig_dir))
+        assert len(result["completed"]) == 0
+        assert len(result["pending"]) == 1
+        assert result["pending"][0]["migration_id"] == "000001_create_users"
+
+    def test_status_with_completed(self, db, mig_dir):
+        (mig_dir / "000001_create_users.sql").write_text(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY);", encoding="utf-8"
+        )
+        migrate(db, str(mig_dir))
+        result = status(db, str(mig_dir))
+        assert len(result["completed"]) == 1
+        assert len(result["pending"]) == 0
+        assert result["completed"][0]["migration_id"] == "000001_create_users"
+        assert "batch" in result["completed"][0]
+        assert "executed_at" in result["completed"][0]
+
+    def test_status_mixed(self, db, mig_dir):
+        (mig_dir / "000001_create_users.sql").write_text(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY);", encoding="utf-8"
+        )
+        migrate(db, str(mig_dir))
+        (mig_dir / "000002_add_email.sql").write_text(
+            "ALTER TABLE users ADD COLUMN email TEXT;", encoding="utf-8"
+        )
+        result = status(db, str(mig_dir))
+        assert len(result["completed"]) == 1
+        assert len(result["pending"]) == 1
+
+    def test_status_supports_timestamp_names(self, db, mig_dir):
+        (mig_dir / "20260324120000_create_orders.sql").write_text(
+            "CREATE TABLE orders (id INTEGER PRIMARY KEY);", encoding="utf-8"
+        )
+        result = status(db, str(mig_dir))
+        assert len(result["pending"]) == 1
+        assert result["pending"][0]["migration_id"] == "20260324120000_create_orders"
