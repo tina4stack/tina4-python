@@ -958,7 +958,7 @@ def _tina4_robot_fallback(message: str) -> str:
     elif "database" in msg or "db" in msg:
         return "Set DATABASE_URL in .env. Supports sqlite, postgres, mysql, firebird, mssql, mongodb. Use db.fetch(), db.insert(), db.update(), db.delete()."
     elif "queue" in msg:
-        return "Use Queue(topic='name') + Producer to enqueue, Consumer to process. Supports litequeue, RabbitMQ, Kafka, MongoDB backends."
+        return "Use Queue(topic='name') with queue.produce() to enqueue, queue.consume() to process. Supports litequeue, RabbitMQ, Kafka, MongoDB backends."
     elif "template" in msg or "twig" in msg:
         return "Templates use Jinja2/Twig syntax in src/templates/. Always extend base.twig. Use {% block %} for content, {% include %} for partials."
     elif "auth" in msg or "jwt" in msg:

@@ -287,8 +287,8 @@ valid = Auth.valid_token(token)</pre>
             <div class="icon">&#9889;</div>
             <h3>Queue</h3>
             <p>Background jobs, no Redis needed</p>
-            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">producer = Producer(Queue("emails"))
-producer.produce({{"to": "a@b.com"}})</pre>
+            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">queue = Queue(topic="emails")
+queue.produce("emails", {{"to": "a@b.com"}})</pre>
             {_gallery_btn('queue', '/api/gallery/queue/status')}
         </div>
         <div class="gallery-card">
