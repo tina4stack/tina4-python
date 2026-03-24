@@ -158,11 +158,10 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
             continue
 
         if filename:
-            import base64
             result[name] = {
                 "filename": filename,
                 "type": file_type,
-                "content": base64.b64encode(content).decode(),
+                "content": bytes(content),
                 "size": len(content),
             }
         else:
