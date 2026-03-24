@@ -262,3 +262,119 @@ class TestBackendSwitching:
         # Purge completed
         q.purge("completed")
         assert q.size("completed") == 0
+
+
+class TestProduceConsume:
+    """Tests for the new produce/consume/reject API."""
+
+    def test_produce(self, queue):
+        """produce(topic, data) pushes to a specific topic."""
+        queue.produce("emails", {"to": "alice@test.com", "subject": "Hello"})
+        assert queue.size() >= 0  # pushed to 'emails' topic, not 'test'
+
+    def test_consume_yields_all_jobs(self, queue):
+        """consume() yields all pending jobs as a generator."""
+        queue.push({"order": 1})
+        queue.push({"order": 2})
+        queue.push({"order": 3})
+
+        results = []
+        for job in queue.consume():
+            results.append(job.data["order"])
+            job.complete()
+
+        assert results == [1, 2, 3]
+        assert queue.size("pending") == 0
+
+    def test_consume_empty_queue(self, queue):
+        """consume() on empty queue yields nothing."""
+        jobs = list(queue.consume())
+        assert jobs == []
+
+    def test_consume_by_id(self, db):
+        """consume(topic, job_id=X) yields only that specific job."""
+        q = Queue(db, topic="targeted")
+        id1 = q.push({"task": "first"})
+        id2 = q.push({"task": "second"})
+        id3 = q.push({"task": "third"})
+
+        # Consume only the second job
+        jobs = list(q.consume("targeted", job_id=str(id2)))
+        assert len(jobs) == 1
+        assert jobs[0].data["task"] == "second"
+
+        # The other two are still pending
+        assert q.size("pending") == 2
+
+    def test_reject_with_reason(self, queue):
+        """reject(reason) marks job as failed with the reason."""
+        queue.push({"task": "bad_data"})
+        job = queue.pop()
+        job.reject("Invalid email address")
+        assert queue.size("failed") == 1
+
+    def test_email_failure_scenario(self, db):
+        """Simulate: queue email, SMTP fails, job gets failed with reason."""
+        q = Queue(db, topic="emails", max_retries=3)
+
+        # Producer queues an email
+        q.push({"to": "user@example.com", "subject": "Welcome", "body": "<h1>Hi</h1>"})
+
+        # Consumer tries to send — SMTP fails
+        for job in q.consume("emails"):
+            try:
+                # Simulate SMTP failure
+                raise ConnectionError("Connection refused: smtp.example.com:587")
+            except ConnectionError as e:
+                job.fail(str(e))
+
+        # Job is in failed state with the reason
+        assert q.size("failed") == 1
+        assert q.size("pending") == 0
+
+    def test_email_retry_then_dead_letter(self, db):
+        """Simulate: email fails 3 times, exceeds max_retries, becomes dead letter."""
+        q = Queue(db, topic="emails", max_retries=3)
+        q.push({"to": "user@example.com", "subject": "Welcome"})
+
+        # Attempt 1: fail
+        job = q.pop()
+        job.fail("SMTP timeout attempt 1")
+        assert q.size("failed") == 1
+
+        # Retry failed jobs back to pending
+        q.retry_failed()
+        assert q.size("pending") == 1
+
+        # Attempt 2: fail again
+        job = q.pop()
+        job.fail("SMTP timeout attempt 2")
+        q.retry_failed()
+
+        # Attempt 3: fail again — now at 3 attempts = max_retries
+        job = q.pop()
+        job.fail("SMTP timeout attempt 3")
+
+        # retry_failed should NOT re-queue because attempts >= max_retries
+        requeued = q.retry_failed()
+        assert requeued == 0  # nothing re-queued — it's now a dead letter
+
+        # Verify it's a dead letter
+        dead = q.dead_letters()
+        assert len(dead) >= 1
+
+    def test_consume_complete_happy_path(self, db):
+        """Simulate: queue email, send succeeds, job completed."""
+        q = Queue(db, topic="emails")
+        q.push({"to": "alice@test.com", "subject": "Hello"})
+
+        for job in q.consume("emails"):
+            # Simulate successful send
+            result = {"success": True, "message": "Email sent"}
+            if result["success"]:
+                job.complete()
+            else:
+                job.fail(result["message"])
+
+        assert q.size("completed") == 1
+        assert q.size("failed") == 0

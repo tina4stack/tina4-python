@@ -51,6 +51,10 @@ class Job:
         """Mark job as failed. Will be retried if attempts < max_retries."""
         self.queue._backend.fail(self, error)
 
+    def reject(self, reason: str = ""):
+        """Reject a job with a reason. Alias for fail()."""
+        self.fail(reason)
+
     def retry(self, delay_seconds: int = 0):
         """Re-queue this job with optional delay."""
         self.queue._backend.retry(self, delay_seconds)
@@ -465,6 +469,76 @@ class Queue:
     def dead_letters(self) -> list[dict]:
         """Get jobs that exceeded max retries."""
         return self._backend.dead_letters()
+
+
+    def produce(self, topic: str, data: dict, priority: int = 0, delay_seconds: int = 0):
+        """Produce a message onto a topic. Convenience wrapper around push()."""
+        old_topic = self.topic
+        self.topic = topic
+        self._backend = _resolve_backend(None, topic, None, self.max_retries)
+        try:
+            return self.push(data, priority, delay_seconds)
+        finally:
+            self.topic = old_topic
+            self._backend = _resolve_backend(None, old_topic, None, self.max_retries)
+
+    def consume(self, topic: str = None, job_id: str = None):
+        """Consume jobs from a topic using a generator (yield pattern).
+
+        Usage:
+            for job in queue.consume("emails"):
+                process(job)
+                job.complete()
+
+            # Consume a specific job by ID:
+            for job in queue.consume("emails", job_id="abc-123"):
+                process(job)
+                job.complete()
+
+        Args:
+            topic: Topic/queue name (defaults to constructor topic)
+            job_id: Optional job ID — only yield this specific job
+        """
+        topic = topic or self.topic
+
+        if job_id is not None:
+            # Consume a specific job by ID
+            job = self._pop_by_id(topic, job_id)
+            if job is not None:
+                yield job
+            return
+
+        # Yield all available jobs
+        while True:
+            job = self.pop()
+            if job is None:
+                break
+            yield job
+
+    def _pop_by_id(self, topic: str, job_id: str) -> Job | None:
+        """Pop a specific job by ID from the queue."""
+        if hasattr(self._backend, '_db'):
+            # SQLite backend — query by ID
+            row = self._backend._db.fetch_one(
+                "SELECT * FROM tina4_queue WHERE topic = ? AND id = ? AND status = 'pending'",
+                [topic, int(job_id) if str(job_id).isdigit() else job_id],
+            )
+            if not row:
+                return None
+            now = _now()
+            result = self._backend._db.execute(
+                "UPDATE tina4_queue SET status = 'reserved', reserved_at = ? WHERE id = ? AND status = 'pending'",
+                [now, row["id"]],
+            )
+            self._backend._db.commit()
+            if result.affected_rows == 0:
+                return None
+            return Job(
+                queue=self, job_id=row["id"], topic=row["topic"],
+                data=json.loads(row["data"]), priority=row.get("priority", 0),
+                attempts=row.get("attempts", 0),
+            )
+        return None
 
 
 class Producer:
