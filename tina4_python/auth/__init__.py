@@ -6,6 +6,10 @@ No PyJWT, no cryptography package.
     from tina4_python.auth import Auth
 
     auth = Auth(secret="my-secret")
+    token = auth.get_token({"user_id": 1, "role": "admin"})
+    payload = auth.valid_token(token)
+
+    # Legacy aliases also work:
     token = auth.create_token({"user_id": 1, "role": "admin"})
     payload = auth.validate_token(token)
 
@@ -34,7 +38,7 @@ class Auth:
 
     # ── JWT ────────────────────────────────────────────────────────
 
-    def create_token(self, payload: dict, expiry_minutes: int = None) -> str:
+    def get_token(self, payload: dict, expiry_minutes: int = None) -> str:
         """Create a signed JWT token.
 
         Returns: header.payload.signature
@@ -53,7 +57,7 @@ class Auth:
 
         return f"{h}.{p}.{signature}"
 
-    def validate_token(self, token: str) -> dict | None:
+    def valid_token(self, token: str) -> dict | None:
         """Validate a JWT and return the payload. None if invalid/expired."""
         try:
             parts = token.split(".")
@@ -86,18 +90,23 @@ class Auth:
 
     def refresh_token(self, token: str, expiry_minutes: int = None) -> str | None:
         """Validate and issue a fresh token with the same claims."""
-        payload = self.validate_token(token)
+        payload = self.valid_token(token)
         if payload is None:
             return None
         payload.pop("iat", None)
         payload.pop("exp", None)
-        return self.create_token(payload, expiry_minutes)
+        return self.get_token(payload, expiry_minutes)
 
     def _sign(self, message: str) -> str:
         sig = hmac.new(
             self.secret.encode(), message.encode(), hashlib.sha256
         ).digest()
         return _b64url_encode(sig)
+
+    # ── Legacy aliases ─────────────────────────────────────────────
+
+    create_token = get_token
+    validate_token = valid_token
 
     # ── Password Hashing ──────────────────────────────────────────
 
@@ -149,7 +158,7 @@ class Auth:
 
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            payload = self.validate_token(token)
+            payload = self.valid_token(token)
             if payload:
                 return payload
             if self.validate_api_key(token):
