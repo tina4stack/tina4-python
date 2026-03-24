@@ -118,6 +118,66 @@ def _strip_tag(raw: str) -> tuple[str, bool, bool]:
     return inner.strip(), strip_before, strip_after
 
 
+# ── Ternary helpers ────────────────────────────────────────────
+
+
+def _find_ternary(expr: str) -> int:
+    """Find the index of a top-level ``?`` that is part of a ternary operator.
+
+    Respects quoted strings, parentheses, and skips ``??`` (null coalesce).
+    Returns -1 if not found.
+    """
+    depth = 0
+    in_quote = None
+    i = 0
+    length = len(expr)
+    while i < length:
+        ch = expr[i]
+        if in_quote:
+            if ch == in_quote:
+                in_quote = None
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_quote = ch
+            i += 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "?" and depth == 0:
+            # Skip ``??`` (null coalesce)
+            if i + 1 < length and expr[i + 1] == "?":
+                i += 2
+                continue
+            return i
+        i += 1
+    return -1
+
+
+def _find_colon(expr: str) -> int:
+    """Find the index of the top-level ``:`` that separates the true/false
+    branches of a ternary.  Respects quotes and parentheses."""
+    depth = 0
+    in_quote = None
+    for i, ch in enumerate(expr):
+        if in_quote:
+            if ch == in_quote:
+                in_quote = None
+            continue
+        if ch in ('"', "'"):
+            in_quote = ch
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == ":" and depth == 0:
+            return i
+    return -1
+
+
 # ── Expression Evaluator ────────────────────────────────────────
 
 
@@ -841,6 +901,72 @@ class Frond:
 
     def _eval_var(self, expr: str, context: dict):
         """Evaluate a variable expression with filters."""
+        # Check for top-level ternary BEFORE splitting filters, so that
+        # expressions like ``products|length != 1 ? "s" : ""`` are handled
+        # correctly.  The ``?`` belongs to the ternary, not to a filter.
+        ternary_pos = _find_ternary(expr)
+        if ternary_pos != -1:
+            cond_part = expr[:ternary_pos].strip()
+            rest = expr[ternary_pos + 1:]
+            colon_pos = _find_colon(rest)
+            if colon_pos != -1:
+                true_part = rest[:colon_pos].strip()
+                false_part = rest[colon_pos + 1:].strip()
+                cond = self._eval_var_raw(cond_part, context)
+                if cond:
+                    return self._eval_var(true_part, context)
+                return self._eval_var(false_part, context)
+
+        return self._eval_var_inner(expr, context)
+
+    def _eval_var_raw(self, expr: str, context: dict):
+        """Evaluate a variable expression with filters, returning the raw
+        (unescaped) value for use in boolean/comparison tests.
+
+        Handles the case where a filter segment contains a trailing comparison
+        operator, e.g. ``products|length != 1`` is split by the filter parser
+        into variable ``products`` and filter ``length != 1``.  We detect that
+        ``length`` is a real filter but ``!= 1`` is a comparison, so we apply
+        the filter first and then evaluate the comparison.
+        """
+        var_name, filters = _parse_filter_chain(expr)
+        value = _eval_expr(var_name, context)
+
+        for fname, args in filters:
+            if fname in ("raw", "safe"):
+                continue
+            fn = self._filters.get(fname)
+            if fn:
+                value = fn(value, *args)
+            else:
+                # The filter name may include a trailing comparison operator,
+                # e.g. "length != 1".  Extract the real filter name and the
+                # comparison suffix, apply the filter, then evaluate the
+                # comparison against the result.
+                m = re.match(r"(\w+)\s*(!=|==|>=|<=|>|<)\s*(.+)", fname)
+                if m:
+                    real_filter = m.group(1)
+                    op = m.group(2)
+                    right_expr = m.group(3).strip()
+                    fn2 = self._filters.get(real_filter)
+                    if fn2:
+                        value = fn2(value, *args)
+                    right = _eval_expr(right_expr, context)
+                    ops = {"!=": lambda a, b: a != b, "==": lambda a, b: a == b,
+                           ">=": lambda a, b: a >= b, "<=": lambda a, b: a <= b,
+                           ">": lambda a, b: a > b, "<": lambda a, b: a < b}
+                    try:
+                        value = ops[op](value, right)
+                    except TypeError:
+                        value = False
+                else:
+                    # Unrecognised filter with no comparison — evaluate as a
+                    # full expression (handles cases like bare comparisons).
+                    value = _eval_expr(fname, context)
+        return value
+
+    def _eval_var_inner(self, expr: str, context: dict):
+        """Core variable evaluation: resolve expression, apply filters, escape."""
         var_name, filters = _parse_filter_chain(expr)
 
         # Sandbox: check variable access
