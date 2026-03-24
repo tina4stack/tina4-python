@@ -272,7 +272,7 @@ class TestGetAPIHandlers:
 
     def test_handler_count(self):
         handlers = get_api_handlers()
-        assert len(handlers) == 32
+        assert len(handlers) == 33
 
 
 class TestRenderDashboard:
