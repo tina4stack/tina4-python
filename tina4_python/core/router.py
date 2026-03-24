@@ -279,6 +279,9 @@ def any_method(path: str, **options):
         return fn
     return decorator
 
+# Alias — @any() is the standard name across all Tina4 frameworks
+any = any_method
+
 
 # ── Auth Decorators ────────────────────────────────────────────
 
