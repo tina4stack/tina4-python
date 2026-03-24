@@ -349,7 +349,22 @@ function deployGallery(name, tryUrl) {{
             btn.style.background = '#22c55e';
             btn.disabled = false;
             btn.dataset.deployed = '1';
-            window.location.href = tryUrl;
+            // Wait for the newly deployed route to become reachable before navigating
+            var attempts = 0;
+            var maxAttempts = 5;
+            function pollRoute() {{
+                fetch(tryUrl, {{method: 'HEAD'}}).then(function() {{
+                    window.location.href = tryUrl;
+                }}).catch(function() {{
+                    attempts++;
+                    if (attempts < maxAttempts) {{
+                        setTimeout(pollRoute, 500);
+                    }} else {{
+                        window.location.href = tryUrl;
+                    }}
+                }});
+            }}
+            setTimeout(pollRoute, 500);
         }}
     }})
     .catch(function(e) {{
