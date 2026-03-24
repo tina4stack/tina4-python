@@ -1676,7 +1676,7 @@ async def upload(request, response):
     file_list = uploaded if isinstance(uploaded, list) else [uploaded]
     for f in file_list:
         content = base64.b64decode(f["content"])
-        with open(os.path.join("src/public/uploads", f["file_name"]), "wb") as fh:
+        with open(os.path.join("src/public/uploads", f["filename"]), "wb") as fh:
             fh.write(content)
     return response({"uploaded": len(file_list)})
 ```
