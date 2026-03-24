@@ -36,9 +36,14 @@ class Job:
         self.queue = queue
         self.id = job_id
         self.topic = topic
-        self.data = data
+        self.payload = data
         self.priority = priority
         self.attempts = attempts
+
+    @property
+    def data(self):
+        """Alias for payload — deprecated, use .payload instead."""
+        return self.payload
 
     def complete(self):
         """Mark job as completed."""
