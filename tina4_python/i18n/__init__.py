@@ -25,7 +25,7 @@ class I18n:
             locale_dir or os.environ.get("TINA4_LOCALE_DIR", "src/locales")
         )
         self._default_locale = default_locale or os.environ.get(
-            "TINA4_LOCALE", os.environ.get("TINA4_LANGUAGE", "en")
+            "TINA4_LOCALE", "en"
         )
         self._current_locale = self._default_locale
         self._translations: dict[str, dict] = {}
