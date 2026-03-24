@@ -139,9 +139,10 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
         header_section = part[:header_end].decode(errors="replace")
         content = part[header_end + 4:].rstrip(b"\r\n")
 
-        # Parse Content-Disposition
+        # Parse Content-Disposition and Content-Type
         name = None
         filename = None
+        file_type = "application/octet-stream"
         for line in header_section.split("\r\n"):
             if "Content-Disposition" in line:
                 for token in line.split(";"):
@@ -150,6 +151,8 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
                         name = token[5:].strip('"')
                     elif token.startswith("filename="):
                         filename = token[9:].strip('"')
+            elif "Content-Type" in line:
+                file_type = line.split(":", 1)[1].strip()
 
         if not name:
             continue
@@ -158,6 +161,7 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
             import base64
             result[name] = {
                 "filename": filename,
+                "type": file_type,
                 "content": base64.b64encode(content).decode(),
                 "size": len(content),
             }
