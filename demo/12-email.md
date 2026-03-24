@@ -148,11 +148,12 @@ For production, always send emails through a queue to avoid blocking requests.
 
 ```python
 from tina4_python.core.router import post
-from tina4_python.queue import Queue, Producer
+from tina4_python.queue import Queue
 
 @post("/api/invite")
 async def invite(request, response):
-    Producer(Queue(db, topic="emails")).push({
+    queue = Queue(topic="emails")
+    queue.push({
         "to": request.body["email"],
         "subject": "You're Invited!",
         "body": f"<h1>Hello {request.body['name']}</h1>",
@@ -162,18 +163,17 @@ async def invite(request, response):
 
 # worker.py
 from tina4_python.messenger import Messenger
-from tina4_python.queue import Queue, Consumer
+from tina4_python.queue import Queue
 
 mail = Messenger()
+queue = Queue(topic="emails")
 
-def send_email(job):
+for job in queue.consume("emails"):
     result = mail.send(**job.data)
     if result["success"]:
         job.complete()
     else:
         job.fail(result["error"])
-
-Consumer(Queue(db, topic="emails"), callback=send_email).run()
 ```
 
 ## Tips

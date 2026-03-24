@@ -1,14 +1,12 @@
 """Gallery: Queue — interactive queue demo with visual web UI."""
 import json
 from tina4_python.core.router import get, post, noauth
-from tina4_python.database.connection import Database
 from tina4_python.queue import Queue
 
 
 def _get_queue():
     """Get a queue instance backed by a local SQLite DB."""
-    db = Database("sqlite:///data/gallery_queue.db")
-    return Queue(db, topic="gallery-tasks", max_retries=3)
+    return Queue(topic="gallery-tasks", max_retries=3)
 
 
 @noauth()

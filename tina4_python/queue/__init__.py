@@ -13,9 +13,6 @@ RabbitMQ, Kafka, or MongoDB is a .env change — no code change needed.
         send_email(job.data)
         job.complete()
 
-    # Legacy usage still works:
-    queue = Queue(db, topic="emails")
-
 Environment variables:
     TINA4_QUEUE_BACKEND   — 'sqlite' (default), 'rabbitmq', 'kafka', or 'mongodb'
     TINA4_QUEUE_URL       — connection URL for rabbitmq/kafka
@@ -387,18 +384,12 @@ class _MongoDBAdapter:
         self._backend.reject(self._topic, str(job.id), requeue=True)
 
 
-def _resolve_backend(db, topic: str, backend: str | None, max_retries: int):
+def _resolve_backend(topic: str, backend: str | None, max_retries: int):
     """Resolve which backend adapter to use."""
-    # If db is passed explicitly, always use sqlite adapter (backward compat)
-    if db is not None:
-        return _SqliteAdapter(db, topic, max_retries)
-
-    # Determine backend from argument or env
     chosen = backend or os.environ.get("TINA4_QUEUE_BACKEND", "sqlite")
     chosen = chosen.lower().strip()
 
     if chosen in ("sqlite", "database", "db"):
-        # Auto-create a database from DATABASE_URL or default path
         from tina4_python.database import Database
         db_url = os.environ.get("DATABASE_URL", "sqlite:///data/tina4_queue.db")
         auto_db = Database(db_url)
@@ -420,31 +411,15 @@ class Queue:
     from the TINA4_QUEUE_BACKEND environment variable.
 
     Usage:
-        # Auto-detect from env (default: sqlite)
         queue = Queue(topic="tasks")
-
-        # Explicit backend
         queue = Queue(topic="tasks", backend="rabbitmq")
-
-        # Legacy (backward compat) — uses sqlite backend
-        queue = Queue(db, topic="tasks")
     """
 
-    def __init__(self, db=None, topic: str = "default", max_retries: int = 3,
+    def __init__(self, topic: str = "default", max_retries: int = 3,
                  backend: str | None = None):
-        # Handle positional args: Queue(topic="x") vs Queue(db, topic="x")
-        # If first arg is a string, treat it as topic (no db)
-        if isinstance(db, str):
-            topic = db
-            db = None
-
         self.topic = topic
         self.max_retries = max_retries
-        self._backend = _resolve_backend(db, topic, backend, max_retries)
-
-        # Keep reference for backward compat (some code accesses queue._db)
-        if db is not None:
-            self._db = db
+        self._backend = _resolve_backend(topic, backend, max_retries)
 
     def push(self, data: dict, priority: int = 0, delay_seconds: int = 0):
         """Add a job to the queue. Returns job ID."""
@@ -475,12 +450,12 @@ class Queue:
         """Produce a message onto a topic. Convenience wrapper around push()."""
         old_topic = self.topic
         self.topic = topic
-        self._backend = _resolve_backend(None, topic, None, self.max_retries)
+        self._backend = _resolve_backend(topic, None, self.max_retries)
         try:
             return self.push(data, priority, delay_seconds)
         finally:
             self.topic = old_topic
-            self._backend = _resolve_backend(None, old_topic, None, self.max_retries)
+            self._backend = _resolve_backend(old_topic, None, self.max_retries)
 
     def consume(self, topic: str = None, job_id: str = None):
         """Consume jobs from a topic using a generator (yield pattern).

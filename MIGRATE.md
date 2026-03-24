@@ -313,15 +313,15 @@ TINA4_QUEUE_URL=amqp://localhost:5672
 | `producer.produce(data)` | `producer.push(data)` |
 | `consumer.messages()` (generator) | `consumer.poll()` (returns list) |
 | `consumer.consume()` | `consumer.run()` or `consumer.run_forever()` |
-| `Queue(config=..., topic=...)` | `Queue(db, topic=...)` or `Queue(topic=...)` |
+| `Queue(config=..., topic=...)` | `Queue(topic=...)` |
 
 ### Database-Backed Queue
 
-v2 required a `Config` object with `queue_type="litequeue"`. v3 accepts a `Database` instance directly:
+v2 required a `Config` object with `queue_type="litequeue"`. v3 auto-detects the backend from environment variables:
 
 ```python
 # v3
-queue = Queue(db, topic="tasks", max_retries=3)
+queue = Queue(topic="tasks", max_retries=3)
 queue.push({"action": "process"})
 ```
 

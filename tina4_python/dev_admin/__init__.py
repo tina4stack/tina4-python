@@ -380,14 +380,10 @@ async def _api_queue(request, response):
 async def _api_queue_retry(request, response):
     """Retry failed queue jobs."""
     try:
-        from tina4_python.database import Database
         from tina4_python.queue import Queue
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
-        db = Database(db_url)
         topic = request.body.get("topic", "default") if hasattr(request, "body") and request.body else "default"
-        queue = Queue(db, topic=topic)
+        queue = Queue(topic=topic)
         retried = queue.retry_failed()
-        db.close()
         MessageLog.log("queue", f"Retried {retried} failed jobs", {"topic": topic})
         return response({"retried": retried})
     except Exception as e:
@@ -397,15 +393,11 @@ async def _api_queue_retry(request, response):
 async def _api_queue_purge(request, response):
     """Purge completed queue jobs."""
     try:
-        from tina4_python.database import Database
         from tina4_python.queue import Queue
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
-        db = Database(db_url)
         topic = request.body.get("topic", "default") if hasattr(request, "body") and request.body else "default"
         status = request.body.get("status", "completed") if hasattr(request, "body") and request.body else "completed"
-        queue = Queue(db, topic=topic)
+        queue = Queue(topic=topic)
         queue.purge(status=status)
-        db.close()
         MessageLog.log("queue", f"Purged {status} jobs", {"topic": topic})
         return response({"purged": True})
     except Exception as e:
@@ -586,9 +578,8 @@ async def _api_queue_replay(request, response):
                 data = {"raw": data}
 
         # Push new job with same data
-        queue = Queue(db, topic=topic)
+        queue = Queue(topic=topic)
         new_id = queue.push(data)
-        db.close()
         MessageLog.log("queue", f"Replayed job {job_id} as {new_id}", {"original": job_id, "new": new_id})
         return response({"replayed": True, "original_id": job_id, "new_id": new_id})
     except Exception as e:

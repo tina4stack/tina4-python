@@ -170,7 +170,7 @@ async def generate_report(request, response):
 ```python
 @post("/api/reports")
 async def generate_report(request, response):
-    queue = Queue(db, topic="reports")
+    queue = Queue(topic="reports")
     queue.push({"user_id": request.body["user_id"], "type": "monthly"})
     return response({"status": "queued"})
 ```
@@ -255,7 +255,7 @@ task_queue = queue.Queue()  # Don't do this!
 **Good — use Tina4's Queue:**
 ```python
 from tina4_python.queue import Queue
-Queue(db, topic="tasks").push({"action": "send_email"})
+Queue(topic="tasks").push({"action": "send_email"})
 ```
 
 ### 11. Key tina4_python Gotchas
@@ -1024,7 +1024,7 @@ from tina4_python.queue import Queue
 
 @post("/api/reports/generate")
 async def request_report(request, response):
-    queue = Queue(db, topic="reports")
+    queue = Queue(topic="reports")
     queue.push({
         "user_id": request.body["user_id"],
         "report_type": "monthly",
@@ -1040,7 +1040,7 @@ from tina4_python.queue import Queue
 from tina4_python.database import Database
 
 db = Database("sqlite:///app.db")
-queue = Queue(db, topic="reports")
+queue = Queue(topic="reports")
 
 for job in queue.consume("reports"):
     data = job.data
@@ -1052,7 +1052,7 @@ for job in queue.consume("reports"):
 ### Poll once for available jobs
 
 ```python
-queue = Queue(db, topic="logs")
+queue = Queue(topic="logs")
 for job in queue.consume():
     process(job.data)
     job.complete()
@@ -1061,7 +1061,7 @@ for job in queue.consume():
 ### Queue management
 
 ```python
-queue = Queue(db, topic="tasks", max_retries=3)
+queue = Queue(topic="tasks", max_retries=3)
 
 # Check queue size
 queue.size()                    # pending jobs
@@ -1710,7 +1710,7 @@ async def charge(request, response):
 # In route — fast response
 @post("/api/invite")
 async def invite(request, response):
-    queue = Queue(db, topic="emails")
+    queue = Queue(topic="emails")
     queue.push({
         "to": request.body["email"],
         "template": "invite",

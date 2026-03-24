@@ -166,7 +166,8 @@ from tina4_python.core.events import on
 @on("user.created")
 def welcome_email(user):
     # Send welcome email via queue
-    Producer(Queue(db, topic="emails")).push({
+    queue = Queue(topic="emails")
+    queue.push({
         "to": user["email"],
         "subject": "Welcome!",
         "body": f"Hello {user['name']}!",

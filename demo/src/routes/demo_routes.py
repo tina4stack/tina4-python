@@ -321,12 +321,9 @@ async def demo_auth(request, response):
 @get("/demo/queue")
 async def demo_queue(request, response):
     def _run():
-        from tina4_python.database.connection import Database
         from tina4_python.queue import Queue
 
-        # Use the demo database
-        db = Database("sqlite:///data/demo.db")
-        queue = Queue(db, topic="demo-tasks", max_retries=3)
+        queue = Queue(topic="demo-tasks", max_retries=3)
 
         # Push some jobs
         job1_id = queue.push({"action": "send_email", "to": "user@example.com"})

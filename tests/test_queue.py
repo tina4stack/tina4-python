@@ -1,20 +1,14 @@
 # Tests for tina4_python.queue
 import os
 import pytest
-from tina4_python.database import Database
 from tina4_python.queue import Queue
 
 
 @pytest.fixture
-def db(tmp_path):
-    d = Database(f"sqlite:///{tmp_path / 'queue.db'}")
-    yield d
-    d.close()
-
-
-@pytest.fixture
-def queue(db):
-    return Queue(db, topic="test")
+def queue(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "queue.db")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+    return Queue(topic="test")
 
 
 class TestQueue:
@@ -85,16 +79,18 @@ class TestQueue:
         assert count == 1
         assert queue.size("pending") == 1
 
-    def test_dead_letters(self, db):
-        q = Queue(db, topic="dead", max_retries=1)
+    def test_dead_letters(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "dead.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="dead", max_retries=1)
         q.push({"task": "doomed"})
         job = q.pop()
         job.fail("err1")
-        # Exceed max retries
-        db.execute(
+        # Exceed max retries via direct DB manipulation
+        q._backend._db.execute(
             "UPDATE tina4_queue SET attempts = 5 WHERE id = ?", [job.id]
         )
-        db.commit()
+        q._backend._db.commit()
         dead = q.dead_letters()
         assert len(dead) >= 1
 
@@ -102,14 +98,6 @@ class TestQueue:
 
 class TestBackendSwitching:
     """Tests for the unified Queue constructor and backend auto-detection."""
-
-    def test_legacy_constructor(self, db):
-        """Queue(db, topic='x') still works — backward compat."""
-        q = Queue(db, topic="legacy")
-        q.push({"task": "hello"})
-        job = q.pop()
-        assert job is not None
-        assert job.data["task"] == "hello"
 
     def test_env_default_sqlite(self, tmp_path, monkeypatch):
         """When TINA4_QUEUE_BACKEND is not set, defaults to sqlite."""
@@ -147,34 +135,40 @@ class TestBackendSwitching:
         with pytest.raises(ValueError, match="Unknown queue backend"):
             Queue(topic="bad", backend="redis")
 
-    def test_string_as_first_arg_is_topic(self, db):
+    def test_string_as_first_arg_is_topic(self, tmp_path, monkeypatch):
         """Queue('mytopic') treats the string as topic, not db."""
-        # This should use env-based sqlite (or fail gracefully)
-        # But Queue(db, topic='x') should still work
-        q = Queue(db, topic="positional")
+        db_path = str(tmp_path / "positional_queue.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="positional")
         q.push({"test": True})
         assert q.size() == 1
 
-    def test_job_complete_via_adapter(self, db):
+    def test_job_complete_via_adapter(self, tmp_path, monkeypatch):
         """Job.complete() delegates through the backend adapter."""
-        q = Queue(db, topic="adapter_complete")
+        db_path = str(tmp_path / "adapter_complete.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="adapter_complete")
         q.push({"task": "finish"})
         job = q.pop()
         job.complete()
         assert q.size("pending") == 0
         assert q.size("completed") == 1
 
-    def test_job_fail_via_adapter(self, db):
+    def test_job_fail_via_adapter(self, tmp_path, monkeypatch):
         """Job.fail() delegates through the backend adapter."""
-        q = Queue(db, topic="adapter_fail")
+        db_path = str(tmp_path / "adapter_fail.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="adapter_fail")
         q.push({"task": "break"})
         job = q.pop()
         job.fail("oops")
         assert q.size("failed") == 1
 
-    def test_job_retry_via_adapter(self, db):
+    def test_job_retry_via_adapter(self, tmp_path, monkeypatch):
         """Job.retry() delegates through the backend adapter."""
-        q = Queue(db, topic="adapter_retry")
+        db_path = str(tmp_path / "adapter_retry.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="adapter_retry")
         q.push({"task": "again"})
         job = q.pop()
         job.retry()
@@ -242,9 +236,11 @@ class TestProduceConsume:
         jobs = list(queue.consume())
         assert jobs == []
 
-    def test_consume_by_id(self, db):
+    def test_consume_by_id(self, tmp_path, monkeypatch):
         """consume(topic, job_id=X) yields only that specific job."""
-        q = Queue(db, topic="targeted")
+        db_path = str(tmp_path / "targeted.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="targeted")
         id1 = q.push({"task": "first"})
         id2 = q.push({"task": "second"})
         id3 = q.push({"task": "third"})
@@ -264,9 +260,11 @@ class TestProduceConsume:
         job.reject("Invalid email address")
         assert queue.size("failed") == 1
 
-    def test_email_failure_scenario(self, db):
+    def test_email_failure_scenario(self, tmp_path, monkeypatch):
         """Simulate: queue email, SMTP fails, job gets failed with reason."""
-        q = Queue(db, topic="emails", max_retries=3)
+        db_path = str(tmp_path / "email_fail.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="emails", max_retries=3)
 
         # Push an email onto the queue
         q.push({"to": "user@example.com", "subject": "Welcome", "body": "<h1>Hi</h1>"})
@@ -283,9 +281,11 @@ class TestProduceConsume:
         assert q.size("failed") == 1
         assert q.size("pending") == 0
 
-    def test_email_retry_then_dead_letter(self, db):
+    def test_email_retry_then_dead_letter(self, tmp_path, monkeypatch):
         """Simulate: email fails 3 times, exceeds max_retries, becomes dead letter."""
-        q = Queue(db, topic="emails", max_retries=3)
+        db_path = str(tmp_path / "email_retry.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="emails", max_retries=3)
         q.push({"to": "user@example.com", "subject": "Welcome"})
 
         # Attempt 1: fail
@@ -314,9 +314,11 @@ class TestProduceConsume:
         dead = q.dead_letters()
         assert len(dead) >= 1
 
-    def test_consume_complete_happy_path(self, db):
+    def test_consume_complete_happy_path(self, tmp_path, monkeypatch):
         """Simulate: queue email, send succeeds, job completed."""
-        q = Queue(db, topic="emails")
+        db_path = str(tmp_path / "email_happy.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        q = Queue(topic="emails")
         q.push({"to": "alice@test.com", "subject": "Hello"})
 
         for job in q.consume("emails"):

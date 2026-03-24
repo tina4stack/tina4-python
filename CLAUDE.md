@@ -243,7 +243,7 @@ api.set_bearer_token(token)
 ```python
 from tina4_python.queue import Queue
 
-queue = Queue(db, topic="tasks", max_retries=3)
+queue = Queue(topic="tasks", max_retries=3)
 queue.push(data: dict, priority=0, delay_seconds=0) -> int
 queue.pop() -> Job | None
 queue.size(status="pending") -> int

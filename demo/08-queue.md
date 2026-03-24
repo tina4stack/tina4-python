@@ -11,7 +11,7 @@ from tina4_python.database.connection import Database
 from tina4_python.queue import Queue, Producer, Consumer
 
 db = Database("sqlite:///data/app.db")
-queue = Queue(db, topic="emails")
+queue = Queue(topic="emails")
 ```
 
 ## Pushing Jobs
@@ -121,7 +121,7 @@ from tina4_python.queue import Queue, Producer
 
 @post("/api/reports/generate")
 async def generate_report(request, response):
-    queue = Queue(db, topic="reports")
+    queue = Queue(topic="reports")
     Producer(queue).push({
         "user_id": request.body["user_id"],
         "report_type": "monthly",
@@ -137,7 +137,7 @@ from tina4_python.database.connection import Database
 from tina4_python.queue import Queue, Consumer
 
 db = Database("sqlite:///data/app.db")
-queue = Queue(db, topic="reports")
+queue = Queue(topic="reports")
 
 def handle_report(job):
     data = job.data
@@ -154,9 +154,9 @@ consumer.run()
 Use separate topics for different job types.
 
 ```python
-email_queue = Queue(db, topic="emails")
-report_queue = Queue(db, topic="reports")
-notification_queue = Queue(db, topic="notifications")
+email_queue = Queue(topic="emails")
+report_queue = Queue(topic="reports")
+notification_queue = Queue(topic="notifications")
 
 # Push to specific topics
 Producer(email_queue).push({"to": "alice@example.com"})
@@ -167,7 +167,6 @@ Producer(report_queue).push({"type": "monthly"})
 
 ```python
 queue = Queue(
-    db,
     topic="emails",
     max_retries=3,  # Jobs fail permanently after 3 attempts
 )

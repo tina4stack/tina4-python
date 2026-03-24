@@ -273,15 +273,14 @@ class TestMiddleware:
 
 
 class TestQueue:
-    def test_push_pop_verify_payload(self, tmp_path):
-        db = Database(f"sqlite:///{tmp_path / 'q.db'}")
-        q = Queue(db, topic="smoke")
+    def test_push_pop_verify_payload(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'q.db'}")
+        q = Queue(topic="smoke")
         q.push({"action": "send_email", "to": "user@test.com"})
         job = q.pop()
         assert job is not None
         assert job.data["action"] == "send_email"
         assert job.data["to"] == "user@test.com"
-        db.close()
 
 
 # ── 11. GraphQL ──────────────────────────────────────────────────
@@ -989,15 +988,14 @@ class TestDotEnvAdvanced:
 
 
 class TestQueueAdvanced:
-    def test_pop_empty_queue_returns_none(self, tmp_path):
-        db = Database(f"sqlite:///{tmp_path / 'eq.db'}")
-        q = Queue(db, topic="empty")
+    def test_pop_empty_queue_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'eq.db'}")
+        q = Queue(topic="empty")
         assert q.pop() is None
-        db.close()
 
-    def test_multiple_pushes(self, tmp_path):
-        db = Database(f"sqlite:///{tmp_path / 'mq.db'}")
-        q = Queue(db, topic="multi")
+    def test_multiple_pushes(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'mq.db'}")
+        q = Queue(topic="multi")
         q.push({"msg": "first"})
         q.push({"msg": "second"})
         q.push({"msg": "third"})
@@ -1009,7 +1007,6 @@ class TestQueueAdvanced:
         assert job2.data["msg"] == "second"
         assert job3.data["msg"] == "third"
         assert q.pop() is None
-        db.close()
 
 
 # ── 33. GraphQL Advanced ────────────────────────────────────────
