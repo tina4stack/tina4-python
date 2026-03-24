@@ -512,7 +512,7 @@ class TestResolveBackend:
         from tina4_python.queue import _resolve_backend, _MongoDBAdapter
 
         monkeypatch.setenv("TINA4_QUEUE_BACKEND", "mongodb")
-        adapter = _resolve_backend(None, "test", None, 3)
+        adapter = _resolve_backend("test", None, 3)
         assert isinstance(adapter, _MongoDBAdapter)
 
 
