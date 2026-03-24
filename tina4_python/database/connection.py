@@ -60,11 +60,12 @@ class Database:
     operations to the adapter. This is what the rest of the framework uses.
     """
 
-    def __init__(self, url: str = None, username: str = "", password: str = ""):
+    def __init__(self, url: str = None, username: str = "", password: str = "", pool: int = 0):
         self.url = url or os.environ.get("DATABASE_URL", "sqlite:///data/tina4.db")
         # Priority: constructor params > env vars > empty
         self.username = username or os.environ.get("DATABASE_USERNAME", "")
         self.password = password or os.environ.get("DATABASE_PASSWORD", "")
+        self.pool_size = pool  # Reserved for future connection pooling (0 = single connection)
         self._adapter: DatabaseAdapter = self._create_adapter()
         self._adapter.connect(self._connection_path(), username=self.username, password=self.password)
 
