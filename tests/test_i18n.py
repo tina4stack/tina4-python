@@ -180,12 +180,12 @@ class TestI18nEnvConfig:
         locale_dir.mkdir()
         (locale_dir / "fr.json").write_text(json.dumps({"hello": "Bonjour"}))
 
-        os.environ["TINA4_LANGUAGE"] = "fr"
+        os.environ["TINA4_LOCALE"] = "fr"
         try:
             i18n = I18n(locale_dir=str(locale_dir))
             assert i18n.locale == "fr"
         finally:
-            del os.environ["TINA4_LANGUAGE"]
+            del os.environ["TINA4_LOCALE"]
 
     def test_locale_dir_from_env(self, tmp_path):
         import os

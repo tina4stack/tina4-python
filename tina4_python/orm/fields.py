@@ -232,7 +232,7 @@ class HasManyDescriptor(RelationshipDescriptor):
         table = related_cls._get_table()
         db = obj._get_db()
         sql = f"SELECT * FROM {table} WHERE {fk} = ?"
-        result = db.fetch(sql, [pk_value], limit=1000, skip=0)
+        result = db.fetch(sql, [pk_value], limit=1000, offset=0)
         return [related_cls(row) for row in result.records]
 
 

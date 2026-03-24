@@ -599,9 +599,9 @@ def _form_token(descriptor: str = "") -> str:
             payload["context"] = descriptor
 
     secret = os.environ.get("SECRET", "tina4-default-secret")
-    ttl = int(os.environ.get("TINA4_TOKEN_LIMIT", "30"))
-    auth = _FrondAuth(secret=secret, token_expiry=ttl)
-    token = auth.create_token(payload)
+    ttl = int(os.environ.get("TINA4_TOKEN_EXPIRES_IN", "60"))
+    auth = _FrondAuth(secret=secret, expires_in=ttl)
+    token = auth.get_token(payload)
     return SafeString(f'<input type="hidden" name="formToken" value="{token}">')
 
 

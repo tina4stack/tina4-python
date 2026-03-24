@@ -100,7 +100,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, skip: int = 0) -> DatabaseResult:
+              limit: int = 20, offset: int = 0) -> DatabaseResult:
         import psycopg2.extras
 
         sql = self._translate_sql(sql)
@@ -117,7 +117,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
 
         # Apply pagination
         paginated_sql = f"{sql} LIMIT %s OFFSET %s"
-        paginated_params = (params or []) + [limit, skip]
+        paginated_params = (params or []) + [limit, offset]
         cursor.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
 

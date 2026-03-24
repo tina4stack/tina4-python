@@ -10,8 +10,8 @@ No PyJWT, no cryptography package.
     payload = auth.valid_token(token)
 
     # Legacy aliases also work:
-    token = auth.create_token({"user_id": 1, "role": "admin"})
-    payload = auth.validate_token(token)
+    token = auth.get_token({"user_id": 1, "role": "admin"})
+    payload = auth.valid_token(token)
 
     hashed = Auth.hash_password("secret123")
     Auth.check_password(hashed, "secret123")  # True
@@ -52,7 +52,7 @@ class Auth:
 
         Returns: header.payload.signature
         """
-        exp_minutes = expires_in or self.expires_in
+        exp_minutes = expires_in if expires_in is not None else self.expires_in
         exp_seconds = exp_minutes * 60
 
         header = {"alg": self.algorithm, "typ": "JWT"}

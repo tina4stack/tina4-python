@@ -102,7 +102,7 @@ class MSSQLAdapter(DatabaseAdapter):
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, skip: int = 0) -> DatabaseResult:
+              limit: int = 20, offset: int = 0) -> DatabaseResult:
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(as_dict=True)
 
@@ -121,7 +121,7 @@ class MSSQLAdapter(DatabaseAdapter):
         else:
             paginated_sql = f"{sql} OFFSET %s ROWS FETCH NEXT %s ROWS ONLY"
 
-        paginated_params = tuple(params or []) + (skip, limit)
+        paginated_params = tuple(params or []) + (offset, limit)
         cursor.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
 

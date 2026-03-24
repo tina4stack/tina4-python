@@ -400,7 +400,7 @@ class TestFormToken:
         token = token_match.group(1)
 
         auth = Auth()
-        payload = auth.validate_token(token)
+        payload = auth.valid_token(token)
         assert payload is not None
         assert payload.get("type") == "form"
 

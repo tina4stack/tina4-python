@@ -49,9 +49,9 @@ async def gallery_auth_page(request, response):
         <div class="card-body">
             <h6 style="color:#e2e8f0;">How it works</h6>
             <pre style="background:#0f172a;color:#4ade80;padding:1rem;border-radius:0.5rem;font-size:0.8rem;"><code>auth = Auth()
-token = auth.create_token({"username": "admin"})
+token = auth.get_token({"username": "admin"})
 payload = auth.get_payload(token)
-is_valid = auth.validate_token(token)</code></pre>
+is_valid = auth.valid_token(token)</code></pre>
         </div>
     </div>
 </div>
@@ -107,7 +107,7 @@ async def gallery_login(request, response):
     password = body.get("password", "")
     if username and password:
         auth = Auth()
-        token = auth.create_token({"username": username, "role": "user"})
+        token = auth.get_token({"username": username, "role": "user"})
         return response({"token": token, "message": f"Welcome {username}!"})
     return response({"error": "Username and password required"}, 401)
 
@@ -117,5 +117,5 @@ async def gallery_login(request, response):
 async def gallery_verify(request, response):
     token = request.params.get("token", "")
     auth = Auth()
-    is_valid = auth.validate_token(token)
+    is_valid = auth.valid_token(token)
     return response({"valid": is_valid})

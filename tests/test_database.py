@@ -77,7 +77,7 @@ class TestSQLiteAdapter:
         for i in range(25):
             db.insert("users", {"name": f"User{i}"})
         db.commit()
-        result = db.fetch("SELECT * FROM users", limit=10, skip=0)
+        result = db.fetch("SELECT * FROM users", limit=10, offset=0)
         assert len(result.records) == 10
         assert result.count == 25
 
@@ -85,7 +85,7 @@ class TestSQLiteAdapter:
         for i in range(25):
             db.insert("users", {"name": f"User{i}"})
         db.commit()
-        result = db.fetch("SELECT * FROM users", limit=10, skip=10)
+        result = db.fetch("SELECT * FROM users", limit=10, offset=10)
         assert len(result.records) == 10
         assert result.records[0]["name"] == "User10"
 

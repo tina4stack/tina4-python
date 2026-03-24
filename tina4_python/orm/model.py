@@ -297,7 +297,7 @@ class ORM(metaclass=ORMMeta):
         return result
 
     @classmethod
-    def all(cls, limit: int = 100, skip: int = 0, include: list[str] = None):
+    def all(cls, limit: int = 100, offset: int = 0, include: list[str] = None):
         """Fetch all records (respects soft delete).
 
         Args:
@@ -310,14 +310,14 @@ class ORM(metaclass=ORMMeta):
         if cls.soft_delete:
             sql += " WHERE deleted_at IS NULL"
 
-        result = db.fetch(sql, limit=limit, skip=skip)
+        result = db.fetch(sql, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
         return instances, result.count
 
     @classmethod
-    def select(cls, sql: str, params: list = None, limit: int = 20, skip: int = 0,
+    def select(cls, sql: str, params: list = None, limit: int = 20, offset: int = 0,
                include: list[str] = None):
         """SQL-first query — you write the SQL, ORM maps results.
 
@@ -325,14 +325,14 @@ class ORM(metaclass=ORMMeta):
             include: List of relationship names to eager-load.
         """
         db = cls._get_db()
-        result = db.fetch(sql, params, limit=limit, skip=skip)
+        result = db.fetch(sql, params, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
         return instances, result.count
 
     @classmethod
-    def where(cls, filter_sql: str, params: list = None, limit: int = 20, skip: int = 0,
+    def where(cls, filter_sql: str, params: list = None, limit: int = 20, offset: int = 0,
               include: list[str] = None):
         """Query with WHERE clause shorthand.
 
@@ -346,19 +346,19 @@ class ORM(metaclass=ORMMeta):
         if cls.soft_delete:
             sql = f"SELECT * FROM {table} WHERE ({filter_sql}) AND deleted_at IS NULL"
 
-        result = db.fetch(sql, params, limit=limit, skip=skip)
+        result = db.fetch(sql, params, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
         return instances, result.count
 
     @classmethod
-    def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 20, skip: int = 0):
+    def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 20, offset: int = 0):
         """Query including soft-deleted records."""
         db = cls._get_db()
         table = cls._get_table()
         sql = f"SELECT * FROM {table} WHERE {filter_sql}"
-        result = db.fetch(sql, params, limit=limit, skip=skip)
+        result = db.fetch(sql, params, limit=limit, offset=offset)
         return [cls(row) for row in result.records], result.count
 
     @classmethod
@@ -473,18 +473,18 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def cached(cls, sql: str, params: list = None, ttl: int = 60,
-               limit: int = 20, skip: int = 0):
+               limit: int = 20, offset: int = 0):
         """SQL query with result caching.
 
         Usage:
             users, count = User.cached("SELECT * FROM users WHERE active = ?", [1], ttl=120)
         """
-        cache_key = f"{cls.__name__}:{Cache.query_key(sql, params)}:{limit}:{skip}"
+        cache_key = f"{cls.__name__}:{Cache.query_key(sql, params)}:{limit}:{offset}"
         cached = _query_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        result = cls.select(sql, params, limit=limit, skip=skip)
+        result = cls.select(sql, params, limit=limit, offset=offset)
         _query_cache.set(cache_key, result, ttl=ttl, tags=[cls.__name__])
         return result
 
@@ -506,7 +506,7 @@ class ORM(metaclass=ORMMeta):
         row = self._get_db().fetch_one(sql, [pk_value])
         return related_class(row) if row else None
 
-    def has_many(self, related_class, foreign_key: str = None, limit: int = 100, skip: int = 0):
+    def has_many(self, related_class, foreign_key: str = None, limit: int = 100, offset: int = 0):
         """Load multiple related records (imperative style)."""
         pk = self._get_pk()
         pk_value = getattr(self, pk)
@@ -514,7 +514,7 @@ class ORM(metaclass=ORMMeta):
         table = related_class._get_table()
 
         sql = f"SELECT * FROM {table} WHERE {fk} = ?"
-        result = self._get_db().fetch(sql, [pk_value], limit=limit, skip=skip)
+        result = self._get_db().fetch(sql, [pk_value], limit=limit, offset=offset)
         return [related_class(row) for row in result.records]
 
     def belongs_to(self, related_class, foreign_key: str = None):
@@ -570,7 +570,7 @@ class ORM(metaclass=ORMMeta):
                 table = related_cls._get_table()
                 placeholders = ",".join("?" for _ in pk_values)
                 sql = f"SELECT * FROM {table} WHERE {fk} IN ({placeholders})"
-                result = db.fetch(sql, pk_values, limit=len(pk_values) * 1000, skip=0)
+                result = db.fetch(sql, pk_values, limit=len(pk_values) * 1000, offset=0)
                 related_records = [related_cls(row) for row in result.records]
 
                 # Eager load nested relationships on related records
@@ -607,7 +607,7 @@ class ORM(metaclass=ORMMeta):
                 placeholders = ",".join("?" for _ in fk_values)
                 pk_col = related_cls.field_mapping.get(related_pk, related_cls._fields[related_pk].column)
                 sql = f"SELECT * FROM {table} WHERE {pk_col} IN ({placeholders})"
-                result = db.fetch(sql, fk_values, limit=len(fk_values) * 10, skip=0)
+                result = db.fetch(sql, fk_values, limit=len(fk_values) * 10, offset=0)
                 related_records = [related_cls(row) for row in result.records]
 
                 if nested:
@@ -627,8 +627,8 @@ class ORM(metaclass=ORMMeta):
             User.scope("active", "active = ?", [1])
             users, count = User.active()
         """
-        def scope_method(limit: int = 20, skip: int = 0):
-            return cls.where(filter_sql, params, limit=limit, skip=skip)
+        def scope_method(limit: int = 20, offset: int = 0):
+            return cls.where(filter_sql, params, limit=limit, offset=offset)
 
         setattr(cls, name, staticmethod(scope_method))
 

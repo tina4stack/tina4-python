@@ -114,7 +114,7 @@ class FirebirdAdapter(DatabaseAdapter):
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, skip: int = 0) -> DatabaseResult:
+              limit: int = 20, offset: int = 0) -> DatabaseResult:
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor()
 
@@ -127,8 +127,8 @@ class FirebirdAdapter(DatabaseAdapter):
             total = 0
 
         # Apply Firebird pagination — ROWS start TO end
-        start = skip + 1
-        end = skip + limit
+        start = offset + 1
+        end = offset + limit
         paginated_sql = f"{sql} ROWS {start} TO {end}"
         cursor.execute(paginated_sql, params or [])
 

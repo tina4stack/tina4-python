@@ -206,7 +206,7 @@ class TestAuthConfig:
     def test_default_expires_in(self):
         os.environ.pop("TINA4_TOKEN_EXPIRES_IN", None)
         auth = Auth()
-        assert auth.expires_in == 30
+        assert auth.expires_in == 60
 
 
 # ── JWT Standard Claims ────────────────────────────────────────

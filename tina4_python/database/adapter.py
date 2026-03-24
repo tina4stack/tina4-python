@@ -285,7 +285,7 @@ class DatabaseAdapter:
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, skip: int = 0) -> DatabaseResult:
+              limit: int = 20, offset: int = 0) -> DatabaseResult:
         """Execute a read query and return multiple rows."""
         raise NotImplementedError
 

@@ -93,7 +93,7 @@ class SQLiteAdapter(DatabaseAdapter):
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, skip: int = 0) -> DatabaseResult:
+              limit: int = 20, offset: int = 0) -> DatabaseResult:
         # Count total rows (without LIMIT/OFFSET)
         count_sql = f"SELECT COUNT(*) as cnt FROM ({sql})"
         try:
@@ -103,7 +103,7 @@ class SQLiteAdapter(DatabaseAdapter):
 
         # Apply pagination
         paginated_sql = f"{sql} LIMIT ? OFFSET ?"
-        paginated_params = (params or []) + [limit, skip]
+        paginated_params = (params or []) + [limit, offset]
         cursor = self._conn.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
 

@@ -74,7 +74,7 @@ class ODBCAdapter(DatabaseAdapter):
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, skip: int = 0) -> DatabaseResult:
+              limit: int = 20, offset: int = 0) -> DatabaseResult:
         # Count total
         count_sql = f"SELECT COUNT(*) FROM ({sql}) AS _t"
         cursor = self._conn.cursor()
@@ -86,14 +86,14 @@ class ODBCAdapter(DatabaseAdapter):
 
         # Apply pagination — use OFFSET/FETCH for ODBC (SQL Server style)
         paginated_sql = f"{sql} OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
-        paginated_params = (params or []) + [skip, limit]
+        paginated_params = (params or []) + [offset, limit]
 
         try:
             cursor.execute(paginated_sql, paginated_params)
         except Exception:
             # Fallback: try LIMIT/OFFSET for non-SQL Server ODBC sources
             paginated_sql = f"{sql} LIMIT ? OFFSET ?"
-            paginated_params = (params or []) + [limit, skip]
+            paginated_params = (params or []) + [limit, offset]
             cursor.execute(paginated_sql, paginated_params)
 
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
