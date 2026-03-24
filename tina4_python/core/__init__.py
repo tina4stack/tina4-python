@@ -14,7 +14,7 @@ from tina4_python.core.request import Request
 from tina4_python.core.response import Response
 from tina4_python.core.router import (
     Router, get, post, put, patch, delete, any_method,
-    noauth, secured, middleware, cached,
+    noauth, secured, middleware, cached, websocket,
 )
 from tina4_python.core.middleware import CorsMiddleware, RateLimiter
 from tina4_python.core.cache import Cache
@@ -23,7 +23,7 @@ from tina4_python.core.server import run, resolve_config
 
 __all__ = [
     "Request", "Response", "Router",
-    "get", "post", "put", "patch", "delete", "any_method",
+    "get", "post", "put", "patch", "delete", "any_method", "websocket",
     "noauth", "secured", "middleware", "cached",
     "CorsMiddleware", "RateLimiter",
     "Cache",

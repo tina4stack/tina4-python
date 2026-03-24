@@ -378,6 +378,207 @@ function deployGallery(name, tryUrl) {{
 </html>"""
 
 
+# ── WebSocket support ──────────────────────────────────────────
+from tina4_python.websocket import WebSocketConnection, WebSocketManager
+
+_ws_manager = WebSocketManager()
+
+
+async def _handle_asgi_websocket(scope: dict, receive, send):
+    """Handle ASGI WebSocket connections, dispatching to registered routes."""
+    path = scope.get("path", "/")
+
+    route, params = Router.match_ws(path)
+    if route is None:
+        # No matching WebSocket route — reject
+        await send({"type": "websocket.close", "code": 4004})
+        return
+
+    # Accept the connection
+    msg = await receive()
+    if msg["type"] != "websocket.connect":
+        return
+    await send({"type": "websocket.accept"})
+
+    handler = route["handler"]
+
+    # Create a lightweight connection wrapper for ASGI WebSocket
+    conn = _AsgiWebSocketConnection(scope, receive, send, path, params, _ws_manager)
+    _ws_manager.add(conn)
+
+    # Fire "open" event
+    try:
+        await handler(conn, "open", None)
+    except Exception as e:
+        Log.error(f"WebSocket open handler error: {e}")
+
+    # Message loop
+    try:
+        while True:
+            msg = await receive()
+            if msg["type"] == "websocket.receive":
+                data = msg.get("text") or (msg.get("bytes", b"").decode("utf-8", errors="replace") if msg.get("bytes") else "")
+                try:
+                    await handler(conn, "message", data)
+                except Exception as e:
+                    Log.error(f"WebSocket message handler error: {e}")
+            elif msg["type"] == "websocket.disconnect":
+                break
+    except Exception:
+        pass
+    finally:
+        # Fire "close" event
+        try:
+            await handler(conn, "close", None)
+        except Exception as e:
+            Log.error(f"WebSocket close handler error: {e}")
+        _ws_manager.remove(conn)
+
+
+class _AsgiWebSocketConnection:
+    """WebSocket connection wrapper for ASGI servers (uvicorn, etc.)."""
+
+    def __init__(self, scope, receive, send, path, params, manager):
+        self.id = str(uuid.uuid4())[:8]
+        self.path = path
+        self.params = params
+        self.headers = {
+            k.decode(): v.decode()
+            for k, v in scope.get("headers", [])
+        }
+        self._scope = scope
+        self._receive = receive
+        self._send = send
+        self._manager = manager
+        self._closed = False
+
+        client = scope.get("client", ("unknown", 0))
+        self.ip = client[0] if client else "unknown"
+        import time
+        self.connected_at = time.time()
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    async def send(self, message: str | bytes):
+        """Send a text or binary message."""
+        if self._closed:
+            return
+        try:
+            if isinstance(message, bytes):
+                await self._send({"type": "websocket.send", "bytes": message})
+            else:
+                await self._send({"type": "websocket.send", "text": str(message)})
+        except Exception:
+            self._closed = True
+
+    async def send_json(self, data):
+        """Send data as JSON."""
+        import json
+        await self.send(json.dumps(data))
+
+    async def broadcast(self, message: str | bytes, exclude_self: bool = False):
+        """Broadcast to all connections on the same path."""
+        await self._manager.broadcast(self.path, message,
+                                      exclude=self.id if exclude_self else None)
+
+    async def broadcast_to(self, path: str, message: str | bytes):
+        """Broadcast to all connections on a different path."""
+        await self._manager.broadcast(path, message)
+
+    async def close(self, code: int = 1000, reason: str = ""):
+        """Close the WebSocket connection."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self._send({"type": "websocket.close", "code": code})
+        except Exception:
+            pass
+
+
+async def _handle_dev_websocket(reader, writer, headers, path):
+    """Handle WebSocket upgrade in the built-in dev server, dispatching to registered routes."""
+    route, params = Router.match_ws(path)
+    if route is None:
+        writer.write(b"HTTP/1.1 404 Not Found\r\n\r\n")
+        await writer.drain()
+        writer.close()
+        return
+
+    from tina4_python.websocket import compute_accept_key
+
+    ws_key = headers.get("sec-websocket-key")
+    if not ws_key:
+        writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+        await writer.drain()
+        writer.close()
+        return
+
+    # Send upgrade response
+    accept = compute_accept_key(ws_key)
+    response_data = (
+        f"HTTP/1.1 101 Switching Protocols\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
+    )
+    writer.write(response_data.encode())
+    await writer.drain()
+
+    ws = WebSocketConnection(reader, writer, path, headers, params)
+    _ws_manager.add(ws)
+
+    handler = route["handler"]
+
+    # Fire "open" event
+    try:
+        await handler(ws, "open", None)
+    except Exception as e:
+        Log.error(f"WebSocket open handler error: {e}")
+
+    # Wire up message/close callbacks and run the frame loop
+    async def on_message(message):
+        try:
+            await handler(ws, "message", message)
+        except Exception as e:
+            Log.error(f"WebSocket message handler error: {e}")
+
+    ws._on_message = on_message
+
+    original_on_close = ws._on_close
+
+    async def on_close():
+        try:
+            await handler(ws, "close", None)
+        except Exception as e:
+            Log.error(f"WebSocket close handler error: {e}")
+        _ws_manager.remove(ws)
+        if original_on_close:
+            result = original_on_close()
+            if asyncio.iscoroutine(result):
+                await result
+
+    ws._on_close = on_close
+
+    # Enter the frame loop
+    await ws._run()
+
+    # Ensure cleanup if _run exits without triggering on_close
+    if not ws._closed:
+        ws._closed = True
+        try:
+            await handler(ws, "close", None)
+        except Exception:
+            pass
+        _ws_manager.remove(ws)
+        try:
+            ws.writer.close()
+        except Exception:
+            pass
+
+
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
     if scope["type"] == "lifespan":
@@ -389,6 +590,10 @@ async def app(scope: dict, receive, send):
             await send({"type": "lifespan.startup.complete"})
         elif msg["type"] == "lifespan.shutdown":
             await send({"type": "lifespan.shutdown.complete"})
+        return
+
+    if scope["type"] == "websocket":
+        await _handle_asgi_websocket(scope, receive, send)
         return
 
     if scope["type"] != "http":
@@ -962,6 +1167,12 @@ def run(host: str | None = None, port: int | None = None):
                     headers.append([name.encode(), value.encode()])
                     if name == "content-length":
                         content_length = int(value)
+
+            # Check for WebSocket upgrade before reading body
+            _header_dict = {k.decode(): v.decode() for k, v in headers}
+            if _header_dict.get("upgrade", "").lower() == "websocket":
+                await _handle_dev_websocket(reader, writer, _header_dict, path)
+                return
 
             # Read body
             body = b""

@@ -23,6 +23,9 @@ from tina4_python.debug import Log
 # Global route registry
 _routes: list[dict] = []
 
+# Global WebSocket route registry
+_ws_routes: list[dict] = []
+
 
 class RouteRef:
     """Thin wrapper around a registered route dict, enabling chained modifiers.
@@ -86,6 +89,47 @@ class Router:
         finally:
             cls._group_prefix = prev_prefix
             cls._group_middleware = prev_middleware
+
+    @classmethod
+    def websocket(cls, path: str, handler) -> None:
+        """Register a WebSocket route (imperative, non-decorator style).
+
+        The handler signature is::
+
+            async def handler(connection, event, data):
+                ...
+
+        Where:
+        - ``connection`` is a :class:`WebSocketConnection`
+        - ``event`` is ``"open"``, ``"message"``, or ``"close"``
+        - ``data`` is the message payload (str for message, None for open/close)
+        """
+        pattern, param_names = _compile_pattern(path)
+        route = {
+            "path": path,
+            "pattern": pattern,
+            "param_names": param_names,
+            "handler": handler,
+        }
+        _ws_routes.append(route)
+        Log.debug(f"WebSocket route registered: {path}")
+
+    @staticmethod
+    def match_ws(path: str) -> tuple[dict | None, dict]:
+        """Find a WebSocket route matching the given path. Returns (route, params)."""
+        for route in _ws_routes:
+            m = route["pattern"].match(path)
+            if m:
+                params = {}
+                for i, name in enumerate(route["param_names"]):
+                    params[name] = m.group(i + 1)
+                return route, params
+        return None, {}
+
+    @staticmethod
+    def all_ws() -> list[dict]:
+        """Return all registered WebSocket routes."""
+        return _ws_routes
 
     @classmethod
     def get(cls, path: str, handler, **options) -> "RouteRef":
@@ -193,6 +237,7 @@ class Router:
     def clear():
         """Clear all routes (for testing)."""
         _routes.clear()
+        _ws_routes.clear()
 
 
 def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
@@ -281,6 +326,24 @@ def any_method(path: str, **options):
 
 # Alias — @any() is the standard name across all Tina4 frameworks
 any = any_method
+
+
+def websocket(path: str):
+    """Register a WebSocket route.
+
+    Usage::
+
+        @websocket("/ws/chat/{room}")
+        async def chat(connection, event, data):
+            if event == "message":
+                await connection.broadcast(data)
+            elif event == "open":
+                await connection.send(f"Welcome to {connection.params['room']}")
+    """
+    def decorator(fn):
+        Router.websocket(path, fn)
+        return fn
+    return decorator
 
 
 # ── Auth Decorators ────────────────────────────────────────────
