@@ -40,6 +40,32 @@ class AutoCrud:
     _registered: dict[str, type] = {}
 
     @staticmethod
+    def _build_example(model_class) -> dict:
+        """Build a sample request body from ORM field definitions.
+
+        Generates a dict with field names as keys and example values
+        based on field types, suitable for Swagger request body examples.
+        """
+        from datetime import datetime
+
+        example = {}
+        for name, field in model_class._fields.items():
+            if field.primary_key and field.auto_increment:
+                continue  # Skip auto-generated PKs
+            ft = field.field_type
+            if ft == int:
+                example[name] = 0
+            elif ft == float:
+                example[name] = 0.0
+            elif ft == bool:
+                example[name] = True
+            elif ft == datetime:
+                example[name] = "2024-01-01T00:00:00"
+            else:
+                example[name] = "string"
+        return example
+
+    @staticmethod
     def register(model_class, prefix: str = "/api"):
         """Register REST endpoints for a single ORM model class.
 
@@ -62,6 +88,8 @@ class AutoCrud:
         base_path = f"{prefix}/{table}"
         pk_field = model_class._get_pk()
         generated = []
+        pretty_name = table.replace("_", " ").title()
+        example_body = AutoCrud._build_example(model_class)
 
         # ── GET /api/{table} — list with pagination ──────────────
         async def list_handler(request, response, _cls=model_class):
@@ -82,6 +110,8 @@ class AutoCrud:
 
         list_handler.__name__ = f"autocrud_list_{table}"
         list_handler.__qualname__ = f"autocrud_list_{table}"
+        list_handler._swagger_summary = f"List all {pretty_name}"
+        list_handler._swagger_tags = [table]
         Router.add("GET", base_path, list_handler)
         generated.append({"method": "GET", "path": base_path, "table": table})
 
@@ -95,6 +125,8 @@ class AutoCrud:
 
         get_handler.__name__ = f"autocrud_get_{table}"
         get_handler.__qualname__ = f"autocrud_get_{table}"
+        get_handler._swagger_summary = f"Get {pretty_name} by ID"
+        get_handler._swagger_tags = [table]
         Router.add("GET", f"{base_path}/{{id}}", get_handler)
         generated.append({"method": "GET", "path": f"{base_path}/{{id}}", "table": table})
 
@@ -114,6 +146,9 @@ class AutoCrud:
         create_handler.__name__ = f"autocrud_create_{table}"
         create_handler.__qualname__ = f"autocrud_create_{table}"
         create_handler._noauth = True
+        create_handler._swagger_summary = f"Create {pretty_name}"
+        create_handler._swagger_tags = [table]
+        create_handler._swagger_example = example_body
         Router.add("POST", base_path, create_handler)
         generated.append({"method": "POST", "path": base_path, "table": table})
 
@@ -143,6 +178,9 @@ class AutoCrud:
         update_handler.__name__ = f"autocrud_update_{table}"
         update_handler.__qualname__ = f"autocrud_update_{table}"
         update_handler._noauth = True
+        update_handler._swagger_summary = f"Update {pretty_name}"
+        update_handler._swagger_tags = [table]
+        update_handler._swagger_example = example_body
         Router.add("PUT", f"{base_path}/{{id}}", update_handler)
         generated.append({"method": "PUT", "path": f"{base_path}/{{id}}", "table": table})
 
@@ -162,6 +200,8 @@ class AutoCrud:
         delete_handler.__name__ = f"autocrud_delete_{table}"
         delete_handler.__qualname__ = f"autocrud_delete_{table}"
         delete_handler._noauth = True
+        delete_handler._swagger_summary = f"Delete {pretty_name}"
+        delete_handler._swagger_tags = [table]
         Router.add("DELETE", f"{base_path}/{{id}}", delete_handler)
         generated.append({"method": "DELETE", "path": f"{base_path}/{{id}}", "table": table})
 
