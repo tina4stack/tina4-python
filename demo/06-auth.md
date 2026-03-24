@@ -10,18 +10,18 @@ from tina4_python.auth import Auth
 auth = Auth(secret="my-secret-key")
 
 # Create a token with custom claims
-token = auth.create_token({"user_id": 1, "role": "admin"})
+token = auth.get_token({"user_id": 1, "role": "admin"})
 # "eyJhbGciOi..."
 
 # Custom expiry (in minutes)
-token = auth.create_token({"user_id": 1}, expiry_minutes=60)
+token = auth.get_token({"user_id": 1}, expires_in=60)
 ```
 
 ## JWT Token Validation
 
 ```python
 # Validate and get payload (returns None if invalid or expired)
-payload = auth.validate_token(token)
+payload = auth.valid_token(token)
 if payload:
     print(payload["user_id"])  # 1
     print(payload["role"])     # "admin"
@@ -112,7 +112,7 @@ async def login(request, response):
         return response({"error": "Invalid credentials"}, 401)
 
     # Issue token
-    token = auth.create_token({"user_id": user["id"], "role": user["role"]})
+    token = auth.get_token({"user_id": user["id"], "role": user["role"]})
     return response({"token": token})
 ```
 
@@ -123,7 +123,7 @@ Set these in your `.env` file:
 ```bash
 SECRET=your-jwt-signing-secret     # JWT signing key
 API_KEY=your-api-key               # Static bearer token for API auth
-TINA4_TOKEN_LIMIT=30               # Token lifetime in minutes (default: 30)
+TINA4_TOKEN_EXPIRES_IN=60          # Token lifetime in minutes (default: 60)
 ```
 
 ## Session Backends

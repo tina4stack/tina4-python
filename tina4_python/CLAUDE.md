@@ -221,7 +221,7 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 |------|--------------------------------|
 | Background jobs / async work | `Queue` from `tina4_python.queue` (use `queue.push()`, `queue.consume()`) |
 | HTTP calls to external APIs | `Api` from `tina4_python.api` |
-| JWT tokens & auth | `Auth` from `tina4_python.auth` (create_token, validate_token, get_payload) |
+| JWT tokens & auth | `Auth` from `tina4_python.auth` (get_token, valid_token, get_payload) |
 | Password hashing | `Auth.hash_password()` / `Auth.check_password()` from `tina4_python.auth` |
 | Session management | `Session` from `tina4_python.session` |
 | Database queries & CRUD | `Database` from `tina4_python.database` |
@@ -480,7 +480,7 @@ Response.add_header("X-Custom", "value")
 
 ## Sessions
 
-TINA4_TOKEN_LIMIT is used to set the session time, recommend 15-30 minutes
+TINA4_TOKEN_EXPIRES_IN is used to set the session time, recommend 15-60 minutes
 
 ### Session Backends
 
@@ -775,7 +775,7 @@ row = db.fetch_one("SELECT * FROM users WHERE id = ?", [1])
 # Result methods
 result.to_json()       # JSON string
 result.to_array()      # List of dicts
-result.to_paginate()   # Dict with records, count, limit, skip
+result.to_paginate()   # Dict with records, count, limit, offset
 result.to_csv()        # CSV string
 
 # Transactions
@@ -1185,7 +1185,7 @@ Tina4 v3 supports translations via JSON files in `src/locales/`.
 
 Set the language in `.env`:
 ```bash
-TINA4_LANGUAGE=en           # Default locale
+TINA4_LOCALE=en             # Default locale
 TINA4_LOCALE_DIR=src/locales  # Directory for translation files
 ```
 
@@ -1516,8 +1516,7 @@ Key `.env` settings:
 # Authentication
 SECRET=your-jwt-secret            # JWT signing (default uses insecure placeholder)
 API_KEY=your-api-key              # Static bearer token for API auth
-TINA4_TOKEN_LIMIT=2               # Token lifetime in minutes (default: 2)
-TINA4_TOKEN_EXPIRES_IN=2          # Alternative token expiry setting
+TINA4_TOKEN_EXPIRES_IN=60         # Token lifetime in minutes (default: 60)
 
 # Database
 DATABASE_URL=sqlite:///app.db     # Connection URL (driver://host:port/database)
@@ -1527,7 +1526,7 @@ DATABASE_PASSWORD=                 # DB password
 # Framework
 TINA4_DEBUG=true                  # Enable dev mode (toolbar, live reload, error overlay)
 TINA4_LOG_LEVEL=ALL               # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR
-TINA4_LANGUAGE=en                 # Language for framework messages (en, fr, af, zh, ja, es)
+TINA4_LOCALE=en                   # Language for framework messages (en, fr, af, zh, ja, es)
 TINA4_DEFAULT_WEBSERVER=FALSE     # Set to TRUE to use Tina4's built-in webserver instead of ASGI
 HOST_NAME=localhost:7145
 

@@ -182,7 +182,7 @@ MyModel().create_table()
 
 | v2 | v3 |
 |----|-----|
-| `model.fetch(filter=..., limit=..., skip=...)` | `model.select(filter=..., limit=..., skip=...)` |
+| `model.fetch(filter=..., limit=..., skip=...)` | `model.select(filter=..., limit=..., offset=...)` |
 
 ---
 
@@ -247,8 +247,8 @@ v2 depended on `PyJWT` and `bcrypt`. v3 uses stdlib only (HMAC-SHA256 for JWT, P
 
 | v2 | v3 |
 |----|-----|
-| `auth.get_token(payload)` | `auth.create_token(payload)` |
-| `auth.valid(token)` → `bool` | `auth.validate_token(token)` → `dict \| None` |
+| `auth.get_token(payload)` | `auth.get_token(payload)` (unchanged) |
+| `auth.valid(token)` → `bool` | `auth.valid_token(token)` → `dict \| None` |
 | `auth.hash_password(text)` | `Auth.hash_password(text)` (now a static method) |
 | `auth.check_password(hash, text)` | `Auth.check_password(hash, text)` (now a static method) |
 | `auth.get_payload(token)` | `auth.get_payload(token)` (unchanged) |
@@ -263,7 +263,7 @@ token = tina4_auth.get_token({"user_id": 1})
 # v3 — create your own instance
 from tina4_python.auth import Auth
 auth = Auth(secret="my-secret")
-token = auth.create_token({"user_id": 1})
+token = auth.get_token({"user_id": 1})
 ```
 
 ### Password Hashing Change
@@ -336,7 +336,7 @@ queue.push({"action": "process"})
 | `DATABASE_PATH` | `DATABASE_URL` | URL format, not colon-separated |
 | `SECRET` | `SECRET` | Unchanged |
 | `API_KEY` | `API_KEY` | Unchanged |
-| `TINA4_TOKEN_LIMIT` | `TINA4_TOKEN_LIMIT` | Unchanged |
+| `TINA4_TOKEN_LIMIT` | `TINA4_TOKEN_EXPIRES_IN` | Renamed, value in minutes |
 
 ### Debug Settings
 
@@ -454,7 +454,7 @@ These did not exist in v2:
 
 6. **Replace Template with Frond.** Change `Template.render()` to `Frond.render()`. Move `add_filter`, `add_global` calls to use `Frond`. Your Twig templates work without changes.
 
-7. **Update Auth usage.** Replace `get_token()` with `create_token()`. Replace `valid()` with `validate_token()`. Create an `Auth()` instance instead of using the global `tina4_auth`. Plan to re-hash user passwords (bcrypt to PBKDF2).
+7. **Update Auth usage.** `get_token()` is unchanged. Replace `valid()` with `valid_token()`. Create an `Auth()` instance instead of using the global `tina4_auth`. Plan to re-hash user passwords (bcrypt to PBKDF2).
 
 8. **Migrate Queue code.** Remove `Config` objects. Set `TINA4_QUEUE_BACKEND` in `.env`. Replace `produce()` with `push()`. Replace `messages()` with `poll()`.
 

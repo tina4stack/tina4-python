@@ -380,7 +380,7 @@ db = Database("firebird://SYSDBA:masterkey@localhost:3050//path/to/db")
 db = Database("mongodb://localhost:27017/mydb")
 db = Database("odbc://DSN=mydsn")
 
-result = db.fetch("SELECT * FROM users WHERE age > ?", [18], limit=20, skip=0)
+result = db.fetch("SELECT * FROM users WHERE age > ?", [18], limit=20, offset=0)
 row = db.fetch_one("SELECT * FROM users WHERE id = ?", [1])
 db.insert("users", {"name": "Alice", "email": "alice@test.com"})
 db.commit()
@@ -408,8 +408,8 @@ async def protected(request, response):
 from tina4_python.auth import Auth
 
 auth = Auth(secret="your-secret")
-token = auth.create_token({"user_id": 42})
-payload = auth.validate_token(token)
+token = auth.get_token({"user_id": 42})
+payload = auth.valid_token(token)
 ```
 
 POST/PUT/PATCH/DELETE routes require `Authorization: Bearer <token>` by default. Use `@noauth()` to make public, `@secured()` to protect GET routes.
@@ -667,7 +667,7 @@ SECRET=your-jwt-secret
 DATABASE_URL=sqlite:///data/app.db
 TINA4_DEBUG=true                     # Enable dev toolbar, error overlay
 TINA4_LOG_LEVEL=ALL                  # ALL, DEBUG, INFO, WARNING, ERROR
-TINA4_LANGUAGE=en                    # en, fr, af, zh, ja, es
+TINA4_LOCALE=en                      # en, fr, af, zh, ja, es
 TINA4_SESSION_HANDLER=SessionFileHandler
 SWAGGER_TITLE=My API
 ```

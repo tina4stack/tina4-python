@@ -146,7 +146,7 @@ from tina4_python.database import Database
 
 db = Database(url: str, username="", password="")
 
-db.fetch(sql, params=None, limit=10, skip=0) -> DatabaseResult
+db.fetch(sql, params=None, limit=10, offset=0) -> DatabaseResult
 db.fetch_one(sql, params=None) -> dict | None
 db.execute(sql, params=None) -> DatabaseResult
 db.execute_many(sql, params=None) -> DatabaseResult
@@ -174,7 +174,7 @@ model = MyModel(init_object: dict | None = None)
 model.save() -> bool
 model.load(query="", params=None) -> bool
 model.delete(query="", params=None) -> bool
-model.select(column_names="*", filter="", params=None, join="", group_by="", having="", order_by="", limit=10, skip=0) -> DatabaseResult
+model.select(column_names="*", filter="", params=None, join="", group_by="", having="", order_by="", limit=10, offset=0) -> DatabaseResult
 model.fetch_one(column_names="*", filter="", params=None) -> dict | None
 model.to_dict() -> dict
 model.to_json() -> str

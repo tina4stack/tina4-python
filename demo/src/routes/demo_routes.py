@@ -284,10 +284,10 @@ async def demo_auth(request, response):
 
         # Create a token
         payload = {"user_id": 42, "role": "admin", "name": "Demo User"}
-        token = auth.create_token(payload, expiry_minutes=60)
+        token = auth.get_token(payload, expires_in=60)
 
         # Validate the token
-        validated = auth.validate_token(token)
+        validated = auth.valid_token(token)
 
         # Get payload without validation
         raw_payload = auth.get_payload(token)
@@ -796,14 +796,14 @@ async def demo_dotenv(request, response):
 
         # Demonstrate get_env
         debug_level = get_env("TINA4_DEBUG_LEVEL", "not set")
-        language = get_env("TINA4_LANGUAGE", "not set")
+        language = get_env("TINA4_LOCALE", "not set")
         missing = get_env("NONEXISTENT_VAR", "default_fallback")
 
         return {
             "loaded_env_vars": loaded_vars,
             "get_env_examples": {
                 "TINA4_DEBUG_LEVEL": debug_level,
-                "TINA4_LANGUAGE": language,
+                "TINA4_LOCALE": language,
                 "NONEXISTENT_VAR (with default)": missing,
             },
             "features": [

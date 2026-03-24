@@ -8,7 +8,7 @@ from tina4_python.auth import Auth
 
 @pytest.fixture
 def auth():
-    return Auth(secret="test-secret-key", token_expiry=30)
+    return Auth(secret="test-secret-key", expires_in=30)
 
 
 # ── JWT Tests ──────────────────────────────────────────────────
@@ -16,73 +16,73 @@ def auth():
 
 class TestJWT:
     def test_create_token(self, auth):
-        token = auth.create_token({"user_id": 1})
+        token = auth.get_token({"user_id": 1})
         assert isinstance(token, str)
         parts = token.split(".")
         assert len(parts) == 3
 
     def test_validate_token(self, auth):
-        token = auth.create_token({"user_id": 1, "role": "admin"})
-        payload = auth.validate_token(token)
+        token = auth.get_token({"user_id": 1, "role": "admin"})
+        payload = auth.valid_token(token)
         assert payload is not None
         assert payload["user_id"] == 1
         assert payload["role"] == "admin"
 
     def test_token_has_iat(self, auth):
-        token = auth.create_token({"user_id": 1})
-        payload = auth.validate_token(token)
+        token = auth.get_token({"user_id": 1})
+        payload = auth.valid_token(token)
         assert "iat" in payload
 
     def test_token_has_exp(self, auth):
-        token = auth.create_token({"user_id": 1})
-        payload = auth.validate_token(token)
+        token = auth.get_token({"user_id": 1})
+        payload = auth.valid_token(token)
         assert "exp" in payload
         assert payload["exp"] > payload["iat"]
 
     def test_token_no_expiry(self, auth):
-        token = auth.create_token({"user_id": 1}, expiry_minutes=0)
-        payload = auth.validate_token(token)
+        token = auth.get_token({"user_id": 1}, expires_in=0)
+        payload = auth.valid_token(token)
         assert "exp" not in payload
 
     def test_token_custom_expiry(self, auth):
-        token = auth.create_token({"user_id": 1}, expiry_minutes=5)
-        payload = auth.validate_token(token)
+        token = auth.get_token({"user_id": 1}, expires_in=5)
+        payload = auth.valid_token(token)
         assert payload["exp"] - payload["iat"] == 300
 
     def test_get_payload_without_validation(self, auth):
-        token = auth.create_token({"user_id": 99})
+        token = auth.get_token({"user_id": 99})
         payload = auth.get_payload(token)
         assert payload["user_id"] == 99
 
     def test_refresh_token(self, auth):
-        original = auth.create_token({"user_id": 1, "role": "admin"}, expiry_minutes=1)
+        original = auth.get_token({"user_id": 1, "role": "admin"}, expires_in=1)
         time.sleep(1.1)  # Ensure different iat
         refreshed = auth.refresh_token(original)
         assert refreshed is not None
         assert refreshed != original
-        payload = auth.validate_token(refreshed)
+        payload = auth.valid_token(refreshed)
         assert payload["user_id"] == 1
         assert payload["role"] == "admin"
 
 
 class TestJWTNegative:
     def test_invalid_token(self, auth):
-        assert auth.validate_token("not.a.token") is None
+        assert auth.valid_token("not.a.token") is None
 
     def test_tampered_token(self, auth):
-        token = auth.create_token({"user_id": 1})
+        token = auth.get_token({"user_id": 1})
         parts = token.split(".")
         parts[1] = parts[1] + "tampered"
-        assert auth.validate_token(".".join(parts)) is None
+        assert auth.valid_token(".".join(parts)) is None
 
     def test_wrong_secret(self, auth):
-        token = auth.create_token({"user_id": 1})
+        token = auth.get_token({"user_id": 1})
         other = Auth(secret="wrong-secret")
-        assert other.validate_token(token) is None
+        assert other.valid_token(token) is None
 
     def test_expired_token(self):
-        auth = Auth(secret="test", token_expiry=0)
-        token = auth.create_token({"user_id": 1}, expiry_minutes=0)
+        auth = Auth(secret="test", expires_in=0)
+        token = auth.get_token({"user_id": 1}, expires_in=0)
         # Manually create an expired token
         import json
         from tina4_python.auth import _b64url_encode
@@ -90,10 +90,10 @@ class TestJWTNegative:
         payload = _b64url_encode(json.dumps({"user_id": 1, "exp": int(time.time()) - 10}).encode())
         sig = auth._sign(f"{header}.{payload}")
         expired = f"{header}.{payload}.{sig}"
-        assert auth.validate_token(expired) is None
+        assert auth.valid_token(expired) is None
 
     def test_empty_token(self, auth):
-        assert auth.validate_token("") is None
+        assert auth.valid_token("") is None
 
     def test_refresh_invalid_token(self, auth):
         assert auth.refresh_token("bad.token.here") is None
@@ -149,7 +149,7 @@ class TestAPIKey:
 
 class TestRequestAuth:
     def test_bearer_jwt(self, auth):
-        token = auth.create_token({"user_id": 1})
+        token = auth.get_token({"user_id": 1})
         result = auth.authenticate_request({"authorization": f"Bearer {token}"})
         assert result is not None
         assert result["user_id"] == 1
@@ -190,12 +190,12 @@ class TestAuthConfig:
             del os.environ["SECRET"]
 
     def test_token_limit_from_env(self):
-        os.environ["TINA4_TOKEN_LIMIT"] = "60"
+        os.environ["TINA4_TOKEN_EXPIRES_IN"] = "60"
         try:
             auth = Auth()
-            assert auth.token_expiry == 60
+            assert auth.expires_in == 60
         finally:
-            del os.environ["TINA4_TOKEN_LIMIT"]
+            del os.environ["TINA4_TOKEN_EXPIRES_IN"]
 
     def test_default_secret(self):
         # When no env var and no kwarg, uses default
@@ -203,10 +203,10 @@ class TestAuthConfig:
         auth = Auth()
         assert auth.secret == "tina4-default-secret"
 
-    def test_default_token_expiry(self):
-        os.environ.pop("TINA4_TOKEN_LIMIT", None)
+    def test_default_expires_in(self):
+        os.environ.pop("TINA4_TOKEN_EXPIRES_IN", None)
         auth = Auth()
-        assert auth.token_expiry == 30
+        assert auth.expires_in == 30
 
 
 # ── JWT Standard Claims ────────────────────────────────────────
@@ -214,14 +214,14 @@ class TestAuthConfig:
 
 class TestJWTClaims:
     def test_sub_claim_preserved(self, auth):
-        token = auth.create_token({"sub": "user:1", "iss": "tina4"})
-        payload = auth.validate_token(token)
+        token = auth.get_token({"sub": "user:1", "iss": "tina4"})
+        payload = auth.valid_token(token)
         assert payload["sub"] == "user:1"
         assert payload["iss"] == "tina4"
 
     def test_custom_claims_preserved(self, auth):
-        token = auth.create_token({"roles": ["admin", "editor"], "org": "acme"})
-        payload = auth.validate_token(token)
+        token = auth.get_token({"roles": ["admin", "editor"], "org": "acme"})
+        payload = auth.valid_token(token)
         assert payload["roles"] == ["admin", "editor"]
         assert payload["org"] == "acme"
 
@@ -233,15 +233,15 @@ class TestJWTClaims:
         payload = _b64url_encode(json.dumps({"user_id": 1, "exp": int(time.time()) - 100}).encode())
         sig = auth._sign(f"{header}.{payload}")
         expired_token = f"{header}.{payload}.{sig}"
-        # validate_token should reject it
-        assert auth.validate_token(expired_token) is None
+        # valid_token should reject it
+        assert auth.valid_token(expired_token) is None
         # get_payload should still return payload
         result = auth.get_payload(expired_token)
         assert result is not None
         assert result["user_id"] == 1
 
     def test_get_payload_ignores_bad_signature(self, auth):
-        token = auth.create_token({"user_id": 42})
+        token = auth.get_token({"user_id": 42})
         # Tamper with signature
         parts = token.split(".")
         parts[2] = parts[2][::-1]  # Reverse signature
@@ -256,10 +256,10 @@ class TestJWTClaims:
 
 class TestJWTEdgeCases:
     def test_two_part_token(self, auth):
-        assert auth.validate_token("header.payload") is None
+        assert auth.valid_token("header.payload") is None
 
     def test_four_part_token(self, auth):
-        assert auth.validate_token("a.b.c.d") is None
+        assert auth.valid_token("a.b.c.d") is None
 
     def test_none_payload_handling(self, auth):
         assert auth.get_payload("") is None

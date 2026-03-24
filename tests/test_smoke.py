@@ -225,21 +225,21 @@ class TestSessions:
 
 class TestAuthJWT:
     def test_create_and_validate_token(self):
-        auth = Auth(secret="smoke-secret", token_expiry=30)
-        token = auth.create_token({"user_id": 1, "role": "admin"})
-        payload = auth.validate_token(token)
+        auth = Auth(secret="smoke-secret", expires_in=30)
+        token = auth.get_token({"user_id": 1, "role": "admin"})
+        payload = auth.valid_token(token)
         assert payload is not None
         assert payload["user_id"] == 1
         assert payload["role"] == "admin"
 
     def test_expired_token_rejected(self):
         from tina4_python.auth import _b64url_encode
-        auth = Auth(secret="smoke-secret", token_expiry=0)
+        auth = Auth(secret="smoke-secret", expires_in=0)
         header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
         payload = _b64url_encode(json.dumps({"user_id": 1, "exp": int(time.time()) - 10}).encode())
         sig = auth._sign(f"{header}.{payload}")
         expired = f"{header}.{payload}.{sig}"
-        assert auth.validate_token(expired) is None
+        assert auth.valid_token(expired) is None
 
 
 # ── 9. Middleware ────────────────────────────────────────────────
@@ -866,21 +866,21 @@ class TestFrondAdvanced:
 
 class TestAuthAdvanced:
     def test_token_payload_contains_claims(self):
-        auth = Auth(secret="test-key", token_expiry=60)
-        token = auth.create_token({"role": "admin", "org": "acme"})
-        payload = auth.validate_token(token)
+        auth = Auth(secret="test-key", expires_in=60)
+        token = auth.get_token({"role": "admin", "org": "acme"})
+        payload = auth.valid_token(token)
         assert payload["role"] == "admin"
         assert payload["org"] == "acme"
 
     def test_token_invalid_signature_rejected(self):
-        auth1 = Auth(secret="secret-a", token_expiry=60)
-        auth2 = Auth(secret="secret-b", token_expiry=60)
-        token = auth1.create_token({"user_id": 1})
-        assert auth2.validate_token(token) is None
+        auth1 = Auth(secret="secret-a", expires_in=60)
+        auth2 = Auth(secret="secret-b", expires_in=60)
+        token = auth1.get_token({"user_id": 1})
+        assert auth2.valid_token(token) is None
 
     def test_token_tampered_payload_rejected(self):
-        auth = Auth(secret="secure-key", token_expiry=60)
-        token = auth.create_token({"user_id": 1})
+        auth = Auth(secret="secure-key", expires_in=60)
+        token = auth.get_token({"user_id": 1})
         parts = token.split(".")
         # Tamper with payload
         import base64
@@ -888,7 +888,7 @@ class TestAuthAdvanced:
         tampered = payload_bytes.replace(b"1", b"9")
         parts[1] = base64.urlsafe_b64encode(tampered).rstrip(b"=").decode()
         tampered_token = ".".join(parts)
-        assert auth.validate_token(tampered_token) is None
+        assert auth.valid_token(tampered_token) is None
 
 
 # ── 29. Response Advanced ────────────────────────────────────────
