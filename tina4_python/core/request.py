@@ -65,9 +65,14 @@ class Request:
 
         return req
 
+    def merge_route_params(self):
+        """Merge route params into params dict (route params take priority)."""
+        if self._route_params:
+            self.params.update(self._route_params)
+
     def param(self, key: str, default=None):
-        """Get a route parameter (from URL path)."""
-        return self._route_params.get(key, default)
+        """Get a route parameter (from URL path). Alias for params[key]."""
+        return self.params.get(key, self._route_params.get(key, default))
 
 
 def _extract_ip(scope: dict, headers: dict) -> str:

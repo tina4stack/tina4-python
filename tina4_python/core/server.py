@@ -521,6 +521,7 @@ async def app(scope: dict, receive, send):
 
     if route:
         request._route_params = params
+        request.merge_route_params()
         try:
             import inspect
             _sig = inspect.signature(route["handler"])
