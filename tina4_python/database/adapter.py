@@ -15,6 +15,9 @@ class DatabaseResult:
     affected_rows: int = 0
     last_id: int | str | None = None
     error: str | None = None
+    sql: str | None = None
+    adapter: object | None = field(default=None, repr=False)
+    _column_info: list | None = field(default=None, init=False, repr=False)
 
     def __iter__(self):
         return iter(self.records)
@@ -39,6 +42,189 @@ class DatabaseResult:
             "has_next": page < total_pages,
             "has_prev": page > 1,
         }
+
+    def column_info(self) -> list[dict]:
+        """Return column metadata for the query's table.
+
+        Lazy — only queries the database when explicitly called. Caches the
+        result so subsequent calls return immediately without re-querying.
+
+        Returns a list of dicts with keys:
+            name, type, size, decimals, nullable, primary_key
+        """
+        if self._column_info is not None:
+            return self._column_info
+
+        # Try to extract table name from the SQL query
+        table = self._extract_table_from_sql()
+
+        # If we have an adapter and a table name, query the database for metadata
+        if self.adapter is not None and table:
+            try:
+                self._column_info = self._query_column_metadata(table)
+                return self._column_info
+            except Exception:
+                pass
+
+        # Fallback: derive basic info from record keys
+        self._column_info = self._fallback_column_info()
+        return self._column_info
+
+    def _extract_table_from_sql(self) -> str | None:
+        """Extract table name from a SQL query using simple regex."""
+        if not self.sql:
+            return None
+        # Match FROM tablename (with optional schema prefix)
+        m = re.search(r'\bFROM\s+["\']?(\w+)["\']?', self.sql, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        # Match INSERT INTO tablename
+        m = re.search(r'\bINSERT\s+INTO\s+["\']?(\w+)["\']?', self.sql, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        # Match UPDATE tablename
+        m = re.search(r'\bUPDATE\s+["\']?(\w+)["\']?', self.sql, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        return None
+
+    def _query_column_metadata(self, table: str) -> list[dict]:
+        """Query the database adapter for column metadata."""
+        adapter = self.adapter
+        db_type = ""
+        try:
+            db_type = adapter.get_database_type().lower()
+        except (AttributeError, NotImplementedError):
+            pass
+
+        if db_type == "sqlite":
+            return self._query_sqlite_columns(table)
+        elif db_type in ("postgresql", "postgres"):
+            return self._query_pg_columns(table)
+        elif db_type == "mysql":
+            return self._query_mysql_columns(table)
+        else:
+            # Try get_columns if the adapter supports it
+            try:
+                raw_cols = adapter.get_columns(table)
+                return self._normalize_adapter_columns(raw_cols)
+            except (AttributeError, NotImplementedError):
+                pass
+            return self._fallback_column_info()
+
+    def _query_sqlite_columns(self, table: str) -> list[dict]:
+        """Get column metadata from SQLite PRAGMA."""
+        result = self.adapter.fetch(f"PRAGMA table_info({table})")
+        columns = []
+        for row in result.records:
+            col_type = (row.get("type") or "TEXT").upper()
+            size, decimals = self._parse_type_size(col_type)
+            columns.append({
+                "name": row.get("name"),
+                "type": col_type.split("(")[0],
+                "size": size,
+                "decimals": decimals,
+                "nullable": not bool(row.get("notnull", 0)),
+                "primary_key": bool(row.get("pk", 0)),
+            })
+        return columns
+
+    def _query_pg_columns(self, table: str) -> list[dict]:
+        """Get column metadata from PostgreSQL information_schema."""
+        sql = (
+            "SELECT column_name, data_type, character_maximum_length, "
+            "numeric_precision, numeric_scale, is_nullable "
+            "FROM information_schema.columns WHERE table_name = ?"
+        )
+        result = self.adapter.fetch(sql, [table])
+        # Determine primary keys
+        pk_sql = (
+            "SELECT a.attname FROM pg_index i "
+            "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) "
+            "WHERE i.indrelid = ?::regclass AND i.indisprimary"
+        )
+        pk_names = set()
+        try:
+            pk_result = self.adapter.fetch(pk_sql, [table])
+            pk_names = {r.get("attname") for r in pk_result.records}
+        except Exception:
+            pass
+
+        columns = []
+        for row in result.records:
+            columns.append({
+                "name": row.get("column_name"),
+                "type": (row.get("data_type") or "UNKNOWN").upper(),
+                "size": row.get("character_maximum_length") or row.get("numeric_precision"),
+                "decimals": row.get("numeric_scale"),
+                "nullable": (row.get("is_nullable") or "YES").upper() == "YES",
+                "primary_key": row.get("column_name") in pk_names,
+            })
+        return columns
+
+    def _query_mysql_columns(self, table: str) -> list[dict]:
+        """Get column metadata from MySQL information_schema."""
+        sql = (
+            "SELECT column_name, data_type, character_maximum_length, "
+            "numeric_precision, numeric_scale, is_nullable, column_key "
+            "FROM information_schema.columns WHERE table_name = ?"
+        )
+        result = self.adapter.fetch(sql, [table])
+        columns = []
+        for row in result.records:
+            columns.append({
+                "name": row.get("column_name") or row.get("COLUMN_NAME"),
+                "type": (row.get("data_type") or row.get("DATA_TYPE") or "UNKNOWN").upper(),
+                "size": row.get("character_maximum_length") or row.get("CHARACTER_MAXIMUM_LENGTH") or row.get("numeric_precision") or row.get("NUMERIC_PRECISION"),
+                "decimals": row.get("numeric_scale") or row.get("NUMERIC_SCALE"),
+                "nullable": (row.get("is_nullable") or row.get("IS_NULLABLE") or "YES").upper() == "YES",
+                "primary_key": (row.get("column_key") or row.get("COLUMN_KEY") or "") == "PRI",
+            })
+        return columns
+
+    @staticmethod
+    def _parse_type_size(type_str: str) -> tuple:
+        """Parse size and decimals from a type string like VARCHAR(255) or NUMERIC(10,2)."""
+        m = re.search(r'\((\d+)(?:\s*,\s*(\d+))?\)', type_str)
+        if m:
+            size = int(m.group(1))
+            decimals = int(m.group(2)) if m.group(2) else None
+            return size, decimals
+        return None, None
+
+    @staticmethod
+    def _normalize_adapter_columns(raw_cols: list[dict]) -> list[dict]:
+        """Normalize output from adapter.get_columns() to standard format."""
+        columns = []
+        for col in raw_cols:
+            col_type = (col.get("type") or "UNKNOWN").upper()
+            size, decimals = DatabaseResult._parse_type_size(col_type)
+            columns.append({
+                "name": col.get("name"),
+                "type": col_type.split("(")[0],
+                "size": size,
+                "decimals": decimals,
+                "nullable": col.get("nullable", True),
+                "primary_key": col.get("primary_key", False),
+            })
+        return columns
+
+    def _fallback_column_info(self) -> list[dict]:
+        """Derive basic column info from record keys when no adapter is available."""
+        if not self.records:
+            return []
+        keys = list(self.records[0].keys()) if isinstance(self.records[0], dict) else []
+        return [
+            {
+                "name": k,
+                "type": "UNKNOWN",
+                "size": None,
+                "decimals": None,
+                "nullable": True,
+                "primary_key": False,
+            }
+            for k in keys
+        ]
 
 
 class DatabaseAdapter:

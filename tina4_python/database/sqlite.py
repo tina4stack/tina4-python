@@ -74,6 +74,8 @@ class SQLiteAdapter(DatabaseAdapter):
             count=len(records),
             affected_rows=cursor.rowcount,
             last_id=cursor.lastrowid,
+            sql=sql,
+            adapter=self,
         )
 
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
@@ -105,7 +107,7 @@ class SQLiteAdapter(DatabaseAdapter):
         cursor = self._conn.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
 
-        return DatabaseResult(records=rows, count=total)
+        return DatabaseResult(records=rows, count=total, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         cursor = self._conn.execute(sql, params or [])

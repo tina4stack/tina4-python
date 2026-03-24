@@ -69,6 +69,8 @@ class ODBCAdapter(DatabaseAdapter):
             count=0,
             affected_rows=cursor.rowcount,
             last_id=last_id,
+            sql=sql,
+            adapter=self,
         )
 
     def fetch(self, sql: str, params: list = None,
@@ -97,7 +99,7 @@ class ODBCAdapter(DatabaseAdapter):
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-        return DatabaseResult(records=rows, count=total)
+        return DatabaseResult(records=rows, count=total, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         cursor = self._conn.cursor()

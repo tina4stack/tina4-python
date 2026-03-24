@@ -97,6 +97,8 @@ class MSSQLAdapter(DatabaseAdapter):
             count=len(records),
             affected_rows=affected,
             last_id=last_id,
+            sql=sql,
+            adapter=self,
         )
 
     def fetch(self, sql: str, params: list = None,
@@ -123,7 +125,7 @@ class MSSQLAdapter(DatabaseAdapter):
         cursor.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
 
-        return DatabaseResult(records=rows, count=total)
+        return DatabaseResult(records=rows, count=total, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         sql = self._translate_sql(sql)
