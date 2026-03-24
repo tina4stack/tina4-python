@@ -154,7 +154,7 @@ Never use raw `requests` or `urllib` directly. Use the built-in `Api` class — 
 
 ### 7. Use Queues for Long-Running Work
 
-Route handlers must respond fast. Any operation that takes more than a second (sending emails, generating reports, calling slow external APIs, processing files) must be pushed to a Queue and processed by a Consumer.
+Route handlers must respond fast. Any operation that takes more than a second (sending emails, generating reports, calling slow external APIs, processing files) must be pushed to a Queue and consumed via `queue.consume()`.
 
 **Bad — blocking the request:**
 ```python
@@ -170,8 +170,8 @@ async def generate_report(request, response):
 ```python
 @post("/api/reports")
 async def generate_report(request, response):
-    producer = Producer(Queue(db, topic="reports"))
-    producer.push({"user_id": request.body["user_id"], "type": "monthly"})
+    queue = Queue(db, topic="reports")
+    queue.push({"user_id": request.body["user_id"], "type": "monthly"})
     return response({"status": "queued"})
 ```
 
@@ -219,7 +219,7 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 
 | Need | Use this — don't build your own |
 |------|--------------------------------|
-| Background jobs / async work | `Queue`, `Producer`, `Consumer` from `tina4_python.queue` |
+| Background jobs / async work | `Queue` from `tina4_python.queue` (use `queue.push()`, `queue.consume()`) |
 | HTTP calls to external APIs | `Api` from `tina4_python.api` |
 | JWT tokens & auth | `Auth` from `tina4_python.auth` (create_token, validate_token, get_payload) |
 | Password hashing | `Auth.hash_password()` / `Auth.check_password()` from `tina4_python.auth` |
@@ -254,8 +254,8 @@ task_queue = queue.Queue()  # Don't do this!
 
 **Good — use Tina4's Queue:**
 ```python
-from tina4_python.queue import Queue, Producer
-Producer(Queue(db, topic="tasks")).push({"action": "send_email"})
+from tina4_python.queue import Queue
+Queue(db, topic="tasks").push({"action": "send_email"})
 ```
 
 ### 11. Key tina4_python Gotchas
@@ -331,7 +331,7 @@ tina4_python/               # Core framework package (v3.0.0)
 ├── frond/                  # Template engine (Frond — Jinja2/Twig-compatible)
 │   └── engine.py           # Frond class (render, add_filter, add_global, add_test)
 ├── api/                    # HTTP client (Api — urllib, zero deps)
-├── queue/                  # Database-backed job queue (Queue, Producer, Consumer)
+├── queue/                  # Database-backed job queue (Queue, Job)
 ├── swagger/                # OpenAPI 3.0.3 generator (Swagger, description, tags, example)
 ├── migration/              # SQL-file migrations (migrate, create_migration, rollback)
 │   └── runner.py           # Migration runner
@@ -1017,48 +1017,43 @@ async def admin_dashboard(request, response):
 
 Supports: litequeue (default/SQLite, zero-config), RabbitMQ, Kafka, MongoDB.
 
-### Producer — enqueue work from a route
+### Producing — enqueue work from a route
 
 ```python
-from tina4_python.queue import Queue, Producer
+from tina4_python.queue import Queue
 
 @post("/api/reports/generate")
 async def request_report(request, response):
     queue = Queue(db, topic="reports")
-    producer = Producer(queue)
-    producer.push({
+    queue.push({
         "user_id": request.body["user_id"],
         "report_type": "monthly",
     })
     return response({"status": "queued"})
 ```
 
-### Consumer — process work in a background worker
+### Consuming — process work in a background worker
 
 ```python
 # worker.py (run separately: python worker.py)
-from tina4_python.queue import Queue, Consumer
+from tina4_python.queue import Queue
 from tina4_python.database import Database
 
 db = Database("sqlite:///app.db")
+queue = Queue(db, topic="reports")
 
-def handle_report(job):
+for job in queue.consume("reports"):
     data = job.data
     report = generate_report(data["user_id"], data["report_type"])
     send_email(data["user_id"], report)
-
-queue = Queue(db, topic="reports")
-consumer = Consumer(queue, callback=handle_report)
-consumer.run_forever()
+    job.complete()
 ```
 
 ### Poll once for available jobs
 
 ```python
 queue = Queue(db, topic="logs")
-consumer = Consumer(queue)
-jobs = consumer.poll()  # Returns list of Job objects
-for job in jobs:
+for job in queue.consume():
     process(job.data)
     job.complete()
 ```
@@ -1715,8 +1710,8 @@ async def charge(request, response):
 # In route — fast response
 @post("/api/invite")
 async def invite(request, response):
-    producer = Producer(Queue(db, topic="emails"))
-    producer.push({
+    queue = Queue(db, topic="emails")
+    queue.push({
         "to": request.body["email"],
         "template": "invite",
         "data": {"name": request.body["name"]}
@@ -1724,13 +1719,12 @@ async def invite(request, response):
     return response({"sent": True})
 
 # In worker — separate process
-def send_email(message):
-    email = message.data
+queue = Queue(topic="emails")
+for job in queue.consume("emails"):
+    email = job.data
     html = Template.render(f"emails/{email['template']}.twig", email["data"])
     # ... send via SMTP
-
-queue = Queue(topic="emails", callback=send_email)
-Consumer(queue).run_forever()
+    job.complete()
 ```
 
 ### Full page with template inheritance

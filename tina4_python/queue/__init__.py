@@ -3,13 +3,13 @@
 Production-grade queue with auto-detected backends. Switching from SQLite to
 RabbitMQ, Kafka, or MongoDB is a .env change — no code change needed.
 
-    from tina4_python.queue import Queue, Producer, Consumer
+    from tina4_python.queue import Queue
 
     # Auto-detect backend from TINA4_QUEUE_BACKEND env var (default: sqlite)
     queue = Queue(topic="emails")
-    Producer(queue).push({"to": "alice@test.com", "subject": "Hello"})
+    queue.push({"to": "alice@test.com", "subject": "Hello"})
 
-    for job in Consumer(queue).poll():
+    for job in queue.consume("emails"):
         send_email(job.data)
         job.complete()
 
@@ -541,73 +541,6 @@ class Queue:
         return None
 
 
-class Producer:
-    """Convenience wrapper for pushing jobs."""
-
-    def __init__(self, queue: Queue):
-        self._queue = queue
-
-    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0):
-        return self._queue.push(data, priority, delay_seconds)
-
-
-class Consumer:
-    """Job consumer — polls the queue and processes jobs."""
-
-    def __init__(self, queue: Queue, callback: callable = None,
-                 poll_interval: float = 1.0):
-        self._queue = queue
-        self._callback = callback
-        self._poll_interval = poll_interval
-        self._running = False
-
-    def poll(self) -> list[Job]:
-        """Poll once and return all available jobs."""
-        jobs = []
-        while True:
-            job = self._queue.pop()
-            if job is None:
-                break
-            jobs.append(job)
-        return jobs
-
-    def run(self, max_jobs: int = None):
-        """Process jobs until queue is empty or max_jobs reached."""
-        if not self._callback:
-            raise ValueError("No callback set — pass callback to Consumer()")
-        processed = 0
-        while max_jobs is None or processed < max_jobs:
-            job = self._queue.pop()
-            if job is None:
-                break
-            try:
-                self._callback(job)
-                job.complete()
-            except Exception as e:
-                job.fail(str(e))
-            processed += 1
-        return processed
-
-    def run_forever(self):
-        """Poll continuously (blocking). Call stop() from another thread."""
-        if not self._callback:
-            raise ValueError("No callback set — pass callback to Consumer()")
-        self._running = True
-        while self._running:
-            job = self._queue.pop()
-            if job is None:
-                time.sleep(self._poll_interval)
-                continue
-            try:
-                self._callback(job)
-                job.complete()
-            except Exception as e:
-                job.fail(str(e))
-
-    def stop(self):
-        """Stop the consumer loop."""
-        self._running = False
-
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -646,4 +579,4 @@ def _parse_amqp_url(url: str) -> dict:
     return config
 
 
-__all__ = ["Queue", "Producer", "Consumer", "Job"]
+__all__ = ["Queue", "Job"]

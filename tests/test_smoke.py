@@ -17,7 +17,7 @@ from tina4_python.orm import ORM, orm_bind, Field
 from tina4_python.frond import Frond
 from tina4_python.session import Session, FileSessionHandler
 from tina4_python.auth import Auth
-from tina4_python.queue import Queue, Producer, Consumer
+from tina4_python.queue import Queue
 from tina4_python.graphql import GraphQL
 from tina4_python.swagger import Swagger, description, tags
 from tina4_python.i18n import I18n

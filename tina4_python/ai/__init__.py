@@ -169,7 +169,7 @@ frontend/         — Frontend framework source (builds to public/)
 | WebSocket | websocket | `from tina4_python.websocket import WebSocketServer` |
 | SOAP/WSDL | wsdl | `from tina4_python.wsdl import WSDL, wsdl_operation` |
 | Email (SMTP+IMAP) | messenger | `from tina4_python.messenger import Messenger` |
-| Background Queue | queue | `from tina4_python.queue import Queue, Producer, Consumer` |
+| Background Queue | queue | `from tina4_python.queue import Queue` |
 | SCSS Compilation | scss | Auto-compiled from src/scss/ |
 | Migrations | migration | `tina4python migrate` CLI command |
 | Seeder | seeder | `from tina4_python.seeder import FakeData, seed_table` |

@@ -322,7 +322,7 @@ async def demo_auth(request, response):
 async def demo_queue(request, response):
     def _run():
         from tina4_python.database.connection import Database
-        from tina4_python.queue import Queue, Producer, Consumer
+        from tina4_python.queue import Queue
 
         # Use the demo database
         db = Database("sqlite:///data/demo.db")

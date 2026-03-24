@@ -2,7 +2,7 @@
 import json
 from tina4_python.core.router import get, post, noauth
 from tina4_python.database.connection import Database
-from tina4_python.queue import Queue, Producer
+from tina4_python.queue import Queue
 
 
 def _get_queue():
@@ -179,8 +179,7 @@ async def gallery_queue_produce(request, response):
     data = body.get("data", {})
 
     queue = _get_queue()
-    producer = Producer(queue)
-    job_id = producer.push({"task": task, "data": data})
+    job_id = queue.push({"task": task, "data": data})
 
     return response({"queued": True, "task": task, "job_id": job_id}, 201)
 

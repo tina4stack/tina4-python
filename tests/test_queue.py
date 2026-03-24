@@ -2,7 +2,7 @@
 import os
 import pytest
 from tina4_python.database import Database
-from tina4_python.queue import Queue, Producer, Consumer
+from tina4_python.queue import Queue
 
 
 @pytest.fixture
@@ -98,55 +98,6 @@ class TestQueue:
         dead = q.dead_letters()
         assert len(dead) >= 1
 
-
-class TestProducer:
-    def test_produce(self, queue):
-        p = Producer(queue)
-        job_id = p.push({"task": "produced"})
-        assert job_id is not None
-        assert queue.size() == 1
-
-
-class TestConsumer:
-    def test_poll(self, queue):
-        queue.push({"a": 1})
-        queue.push({"b": 2})
-        c = Consumer(queue)
-        jobs = c.poll()
-        assert len(jobs) == 2
-
-    def test_run_with_callback(self, queue):
-        queue.push({"x": 1})
-        queue.push({"x": 2})
-        results = []
-
-        def handler(job):
-            results.append(job.data["x"])
-
-        c = Consumer(queue, callback=handler)
-        processed = c.run()
-        assert processed == 2
-        assert results == [1, 2]
-        assert queue.size("completed") == 2
-
-    def test_run_max_jobs(self, queue):
-        for i in range(5):
-            queue.push({"i": i})
-
-        c = Consumer(queue, callback=lambda j: None)
-        processed = c.run(max_jobs=3)
-        assert processed == 3
-        assert queue.size("pending") == 2
-
-    def test_callback_failure_marks_failed(self, queue):
-        queue.push({"task": "will_fail"})
-
-        def bad_handler(job):
-            raise ValueError("boom")
-
-        c = Consumer(queue, callback=bad_handler)
-        c.run()
-        assert queue.size("failed") == 1
 
 
 class TestBackendSwitching:
@@ -317,10 +268,10 @@ class TestProduceConsume:
         """Simulate: queue email, SMTP fails, job gets failed with reason."""
         q = Queue(db, topic="emails", max_retries=3)
 
-        # Producer queues an email
+        # Push an email onto the queue
         q.push({"to": "user@example.com", "subject": "Welcome", "body": "<h1>Hi</h1>"})
 
-        # Consumer tries to send — SMTP fails
+        # Consume and try to send — SMTP fails
         for job in q.consume("emails"):
             try:
                 # Simulate SMTP failure

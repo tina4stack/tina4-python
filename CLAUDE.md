@@ -81,7 +81,7 @@ tina4_python/          # Core framework package
   frond/               # Template engine (Frond — replaces Template)
     engine.py          # Frond class (render, add_filter, add_global, add_test)
   api/                 # HTTP client (Api class — zero deps)
-  queue/               # Database-backed job queue (Queue, Producer, Consumer)
+  queue/               # Database-backed job queue (Queue, Job)
   swagger/             # OpenAPI 3.0.3 generator (Swagger, description, tags, example)
   migration/           # SQL-file migrations (migrate, create_migration, rollback)
     runner.py          # Migration runner
@@ -241,7 +241,7 @@ api.set_bearer_token(token)
 ### Queue — Database-backed job queue
 
 ```python
-from tina4_python.queue import Queue, Producer, Consumer
+from tina4_python.queue import Queue
 
 queue = Queue(db, topic="tasks", max_retries=3)
 queue.push(data: dict, priority=0, delay_seconds=0) -> int
@@ -250,19 +250,13 @@ queue.size(status="pending") -> int
 queue.purge(status="completed")
 queue.retry_failed() -> int
 queue.dead_letters() -> list[dict]
-
-producer = Producer(queue)
-producer.push(data: dict, priority=0, delay_seconds=0) -> int
-
-consumer = Consumer(queue, callback=handler_func, poll_interval=1.0)
-consumer.run()                  # Process until queue empty
-consumer.run_forever()          # Poll continuously
-consumer.poll() -> list[Job]    # Poll once
-consumer.stop()                 # Stop run_forever loop
+queue.produce(topic, data, priority=0, delay_seconds=0)  # Push to a specific topic
+queue.consume(topic=None, job_id=None)                     # Generator for consuming jobs
 
 # Job methods
 job.complete()                  # Mark as completed
 job.fail(error="")              # Mark as failed
+job.reject(reason="")           # Alias for fail()
 job.retry(delay_seconds=0)      # Re-queue with optional delay
 ```
 
