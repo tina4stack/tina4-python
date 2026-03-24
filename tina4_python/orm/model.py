@@ -78,6 +78,7 @@ class ORM(metaclass=ORMMeta):
 
     table_name: str = ""
     soft_delete: bool = False  # Set True to enable soft delete
+    field_mapping: dict[str, str] = {}  # {"python_attribute": "db_column"}
     _db: str | object | None = None  # Per-model database override
     _fields: dict[str, Field] = {}
 
@@ -101,14 +102,41 @@ class ORM(metaclass=ORMMeta):
             self._populate(kwargs)
 
     def _populate(self, data: dict):
-        """Set field values from a dict."""
+        """Set field values from a dict.
+
+        Applies reverse field_mapping so DB column names are converted
+        to Python attribute names before assignment.
+        """
+        # Build reverse mapping: db_column -> python_attribute
+        reverse = {v: k for k, v in self.field_mapping.items()} if self.field_mapping else {}
+
         for key, value in data.items():
-            if key in self._fields:
-                field = self._fields[key]
-                setattr(self, key, field.validate(value))
+            # Convert DB column name to Python attribute name if mapped
+            attr = reverse.get(key, key)
+            if attr in self._fields:
+                field = self._fields[attr]
+                setattr(self, attr, field.validate(value))
             else:
                 # Allow extra attributes (from joined queries, etc.)
-                setattr(self, key, value)
+                setattr(self, attr, value)
+
+    def _get_db_column(self, prop: str) -> str:
+        """Get the DB column name for a Python attribute.
+
+        Uses field_mapping if defined, otherwise returns the property name as-is.
+        """
+        return self.field_mapping.get(prop, prop)
+
+    def _get_db_data(self) -> dict:
+        """Convert all field data using field_mapping.
+
+        Returns a dict with DB column names as keys and current attribute values.
+        """
+        data = {}
+        for name, field in self._fields.items():
+            db_col = self.field_mapping.get(name, field.column)
+            data[db_col] = getattr(self, name)
+        return data
 
     @classmethod
     def _get_table(cls) -> str:
@@ -159,6 +187,7 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk, None)
         table = self._get_table()
+        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         data = {}
         for name, field in self._fields.items():
@@ -166,13 +195,15 @@ class ORM(metaclass=ORMMeta):
                 continue  # Skip auto-increment on insert
             value = getattr(self, name)
             if value is not None or not field.auto_increment:
-                data[field.column] = value
+                # Use field_mapping for the column name, fall back to field.column
+                db_col = self.field_mapping.get(name, field.column)
+                data[db_col] = value
 
         if pk_value is not None:
             # Update — use primary key as filter
-            update_data = {k: v for k, v in data.items() if k != self._fields[pk].column}
+            update_data = {k: v for k, v in data.items() if k != pk_db_col}
             if update_data:
-                db.update(table, update_data, f"{self._fields[pk].column} = ?", [pk_value])
+                db.update(table, update_data, f"{pk_db_col} = ?", [pk_value])
         else:
             # Insert
             result = db.insert(table, data)
@@ -190,6 +221,7 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
+        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         if pk_value is None:
             raise ValueError("Cannot delete: no primary key value")
@@ -197,10 +229,10 @@ class ORM(metaclass=ORMMeta):
         if self.soft_delete and "deleted_at" in self._fields:
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc).isoformat()
-            db.update(table, {"deleted_at": now}, f"{self._fields[pk].column} = ?", [pk_value])
+            db.update(table, {"deleted_at": now}, f"{pk_db_col} = ?", [pk_value])
             self.deleted_at = now
         else:
-            db.delete(table, f"{self._fields[pk].column} = ?", [pk_value])
+            db.delete(table, f"{pk_db_col} = ?", [pk_value])
 
     def force_delete(self):
         """Hard delete, even if soft delete is enabled."""
@@ -208,11 +240,12 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
+        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         if pk_value is None:
             raise ValueError("Cannot delete: no primary key value")
 
-        db.delete(table, f"{self._fields[pk].column} = ?", [pk_value])
+        db.delete(table, f"{pk_db_col} = ?", [pk_value])
 
     def restore(self):
         """Restore a soft-deleted record."""
@@ -223,8 +256,9 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
+        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
-        db.update(table, {"deleted_at": None}, f"{self._fields[pk].column} = ?", [pk_value])
+        db.update(table, {"deleted_at": None}, f"{pk_db_col} = ?", [pk_value])
         self.deleted_at = None
 
     # ── Finders ─────────────────────────────────────────────────
@@ -240,7 +274,7 @@ class ORM(metaclass=ORMMeta):
         db = cls._get_db()
         pk = cls._get_pk()
         table = cls._get_table()
-        pk_col = cls._fields[pk].column
+        pk_col = cls.field_mapping.get(pk, cls._fields[pk].column)
 
         sql = f"SELECT * FROM {table} WHERE {pk_col} = ?"
         if cls.soft_delete:
@@ -375,7 +409,7 @@ class ORM(metaclass=ORMMeta):
 
         col_defs = []
         for name, field_obj in cls._fields.items():
-            col_name = field_obj.column or name
+            col_name = cls.field_mapping.get(name, field_obj.column or name)
             kind = getattr(field_obj, "kind", None)
 
             # Map field kind to SQL type
@@ -571,7 +605,7 @@ class ORM(metaclass=ORMMeta):
                 related_pk = related_cls._get_pk()
                 table = related_cls._get_table()
                 placeholders = ",".join("?" for _ in fk_values)
-                pk_col = related_cls._fields[related_pk].column
+                pk_col = related_cls.field_mapping.get(related_pk, related_cls._fields[related_pk].column)
                 sql = f"SELECT * FROM {table} WHERE {pk_col} IN ({placeholders})"
                 result = db.fetch(sql, fk_values, limit=len(fk_values) * 10, skip=0)
                 related_records = [related_cls(row) for row in result.records]

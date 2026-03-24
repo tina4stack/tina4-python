@@ -24,11 +24,101 @@ from tina4_python.debug import Log
 _routes: list[dict] = []
 
 
+class RouteRef:
+    """Thin wrapper around a registered route dict, enabling chained modifiers.
+
+    Usage::
+
+        Router.get("/api/data", handler).secure().cache()
+    """
+
+    __slots__ = ("_route",)
+
+    def __init__(self, route: dict):
+        self._route = route
+
+    def secure(self):
+        """Mark this route as requiring bearer-token authentication."""
+        self._route["auth_required"] = True
+        return self
+
+    def cache(self, max_age: int | None = None):
+        """Mark this route as cacheable.
+
+        Args:
+            max_age: Optional TTL override in seconds.
+        """
+        self._route["cached"] = True
+        if max_age is not None:
+            self._route["cache_max_age"] = max_age
+        return self
+
+
 class Router:
     """Route registry and matcher."""
 
-    @staticmethod
-    def add(method: str, path: str, handler, **options):
+    # ── Group state (used by Router.group) ────────────────────────
+    _group_prefix: str = ""
+    _group_middleware: list = []
+
+    @classmethod
+    def group(cls, prefix: str, callback, middleware=None):
+        """Register routes with a shared prefix and optional middleware.
+
+        Saves/restores static prefix and middleware state around the
+        callback so that nested groups concatenate correctly.
+
+        Usage::
+
+            Router.group("/api", lambda: [
+                Router.get("/users", handler),
+                Router.post("/users", handler),
+            ], middleware=[auth_check])
+        """
+        prev_prefix = cls._group_prefix
+        prev_middleware = list(cls._group_middleware)
+
+        cls._group_prefix = prev_prefix + prefix.rstrip("/")
+        cls._group_middleware = prev_middleware + (middleware or [])
+
+        try:
+            callback()
+        finally:
+            cls._group_prefix = prev_prefix
+            cls._group_middleware = prev_middleware
+
+    @classmethod
+    def get(cls, path: str, handler, **options) -> "RouteRef":
+        """Register a GET route (imperative, non-decorator style)."""
+        return cls.add("GET", path, handler, **options)
+
+    @classmethod
+    def post(cls, path: str, handler, **options) -> "RouteRef":
+        """Register a POST route (imperative, non-decorator style)."""
+        return cls.add("POST", path, handler, **options)
+
+    @classmethod
+    def put(cls, path: str, handler, **options) -> "RouteRef":
+        """Register a PUT route (imperative, non-decorator style)."""
+        return cls.add("PUT", path, handler, **options)
+
+    @classmethod
+    def patch(cls, path: str, handler, **options) -> "RouteRef":
+        """Register a PATCH route (imperative, non-decorator style)."""
+        return cls.add("PATCH", path, handler, **options)
+
+    @classmethod
+    def delete(cls, path: str, handler, **options) -> "RouteRef":
+        """Register a DELETE route (imperative, non-decorator style)."""
+        return cls.add("DELETE", path, handler, **options)
+
+    @classmethod
+    def any(cls, path: str, handler, **options) -> "RouteRef":
+        """Register a route for any HTTP method (imperative, non-decorator style)."""
+        return cls.add("ANY", path, handler, **options)
+
+    @classmethod
+    def add(cls, method: str, path: str, handler, **options) -> "RouteRef":
         """Register a route handler.
 
         Auth defaults:
@@ -36,7 +126,21 @@ class Router:
         - POST/PUT/PATCH/DELETE require auth by default
         - Use @noauth() to make a write route public
         - Use @secured() to protect a GET route
+
+        Returns a :class:`RouteRef` so callers can chain ``.secure()`` /
+        ``.cache()``::
+
+            Router.get("/api/data", handler).secure().cache()
         """
+        # Apply group prefix
+        if cls._group_prefix:
+            path = cls._group_prefix + path
+
+        # Merge group middleware with route-level middleware
+        if cls._group_middleware:
+            route_mw = options.get("middleware", [])
+            options["middleware"] = list(cls._group_middleware) + list(route_mw)
+
         pattern, param_names = _compile_pattern(path)
 
         # Auth default: GET=public, writes=secured
@@ -50,7 +154,7 @@ class Router:
         else:
             auth_required = m not in ("GET", "ANY")
 
-        _routes.append({
+        route = {
             "method": m,
             "path": path,
             "pattern": pattern,
@@ -60,8 +164,10 @@ class Router:
             "auth_required": auth_required,
             "cached": options.get("cached", False),
             "cache_max_age": options.get("cache_max_age", 60),
-        })
+        }
+        _routes.append(route)
         Log.debug(f"Route registered: {m} {path} (auth={'required' if auth_required else 'public'})")
+        return RouteRef(route)
 
     @staticmethod
     def match(method: str, path: str) -> tuple[dict | None, dict]:

@@ -865,6 +865,14 @@ def run(host: str | None = None, port: int | None = None):
     from tina4_python.dotenv import is_truthy
     is_debug = is_truthy(os.environ.get("TINA4_DEBUG", ""))
 
+    # Start DevReload file watcher in debug mode
+    if is_debug:
+        try:
+            from tina4_python.dev_reload import start as _start_dev_reload
+            _start_dev_reload(["src", "public"])
+        except Exception as e:
+            Log.error(f"DevReload: failed to start: {e}")
+
     prod = None
     if not is_debug:
         prod = _find_production_server()

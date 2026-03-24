@@ -275,6 +275,7 @@ def get_api_handlers() -> dict:
         "/__dev/api/connections/save": ("POST", _api_connections_save),
         "/__dev/api/gallery": ("GET", _api_gallery_list),
         "/__dev/api/gallery/deploy": ("POST", _api_gallery_deploy),
+        "/__dev/api/mtime": ("GET", _api_mtime),
     }
 
 
@@ -1136,6 +1137,19 @@ async def _api_gallery_deploy(request, response):
     return response({"deployed": name, "files": copied})
 
 
+async def _api_mtime(request, response):
+    """Return the last file modification timestamp for DevReload polling.
+
+    The dev toolbar JS polls this endpoint and triggers a browser refresh
+    when the mtime changes, indicating source files have been modified.
+    """
+    from tina4_python.dev_reload import get_last_mtime, get_last_change_file
+    return response({
+        "mtime": get_last_mtime(),
+        "file": get_last_change_file(),
+    })
+
+
 # Module startup time for uptime tracking
 _start_time = time.time()
 
@@ -1715,7 +1729,32 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     <span style="color:#888;">Python {python_version}</span>
     <a href="#" onclick="(function(e){{e.preventDefault();var p=document.getElementById('tina4-dev-panel');if(p){{p.style.display=p.style.display==='none'?'block':'none';return;}}var c=document.createElement('div');c.id='tina4-dev-panel';c.style.cssText='position:fixed;bottom:2rem;right:1rem;width:min(90vw,1200px);height:min(80vh,700px);z-index:99998;transition:all 0.2s';var f=document.createElement('iframe');f.src='/__dev';f.style.cssText='width:100%;height:100%;border:1px solid #3572A5;border-radius:0.5rem;box-shadow:0 8px 32px rgba(0,0,0,0.5);background:#0f172a';c.appendChild(f);document.body.appendChild(c);}})(event)" style="color:#ef9a9a;margin-left:auto;text-decoration:none;cursor:pointer;">Dashboard &#8599;</a>
     <span onclick="this.parentElement.style.display='none'" style="cursor:pointer;color:#888;margin-left:8px;">&#10005;</span>
-</div>"""
+</div>
+<script>
+(function(){{
+    var _t4_mtime=0,_t4_css_exts=['.css','.scss'];
+    function _t4_poll(){{
+        fetch('/__dev/api/mtime').then(function(r){{return r.json()}}).then(function(d){{
+            if(!_t4_mtime){{_t4_mtime=d.mtime;return;}}
+            if(d.mtime>_t4_mtime){{
+                var f=d.file||'';
+                var isCss=_t4_css_exts.some(function(e){{return f.endsWith(e)}});
+                if(isCss){{
+                    var links=document.querySelectorAll('link[rel="stylesheet"]');
+                    links.forEach(function(l){{
+                        var href=l.getAttribute('href');
+                        if(href){{l.setAttribute('href',href.split('?')[0]+'?_t4='+d.mtime)}}
+                    }});
+                    _t4_mtime=d.mtime;
+                }}else{{
+                    location.reload();
+                }}
+            }}
+        }}).catch(function(){{}});
+    }}
+    setInterval(_t4_poll,1500);
+}})();
+</script>"""
 
 
 __all__ = ["MessageLog", "RequestInspector", "BrokenTracker",
