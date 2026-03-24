@@ -168,14 +168,8 @@ def _poll_loop(directories: list[str], interval: float = 1.0):
                 except Exception as e:
                     Log.error(f"DevReload: route re-discovery failed: {e}")
 
-            # Compile SCSS if an SCSS file changed
-            if new_file.endswith(".scss"):
-                try:
-                    from tina4_python.scss import compile_scss
-                    compile_scss()
-                    Log.debug("DevReload: SCSS recompiled")
-                except Exception:
-                    pass  # SCSS module may not be available
+            # Note: SCSS compilation is handled by the Rust CLI watcher.
+            # DevReload only handles route re-discovery and browser refresh.
 
 
 def start(directories: list[str] | None = None, interval: float = 1.0):
