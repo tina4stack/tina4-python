@@ -5,6 +5,9 @@ The Database class parses a connection URL and creates the right adapter.
     db = Database("sqlite:///data/app.db")
     db = Database("postgresql://user:pass@host:5432/dbname")
     db = Database()  # Reads DATABASE_URL from environment
+
+Connection pooling:
+    db = Database("sqlite:///data/app.db", pool=4)  # 4 connections, round-robin
 """
 import hashlib
 import os
@@ -12,6 +15,73 @@ import threading
 import time
 from urllib.parse import urlparse
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
+
+
+class ConnectionPool:
+    """Thread-safe connection pool using round-robin rotation.
+
+    When pool_size > 0, maintains multiple adapter instances and rotates
+    through them for each operation. Connections are created lazily on
+    first use.
+
+    Usage:
+        pool = ConnectionPool(pool_size=4, factory=create_adapter,
+                              connect_args=("path", {"username": "u", "password": "p"}))
+        adapter = pool.checkout()
+        try:
+            result = adapter.fetch(sql, params, limit, offset)
+        finally:
+            pool.checkin(adapter)
+        pool.close_all()
+    """
+
+    def __init__(self, pool_size: int, factory: callable, connect_path: str,
+                 username: str = "", password: str = ""):
+        self._pool_size = pool_size
+        self._factory = factory
+        self._connect_path = connect_path
+        self._username = username
+        self._password = password
+        self._adapters: list[DatabaseAdapter | None] = [None] * pool_size
+        self._index = 0
+        self._lock = threading.Lock()
+
+    def _ensure_adapter(self, idx: int) -> DatabaseAdapter:
+        """Lazily create an adapter at the given index."""
+        if self._adapters[idx] is None:
+            adapter = self._factory()
+            adapter.connect(self._connect_path, username=self._username, password=self._password)
+            self._adapters[idx] = adapter
+        return self._adapters[idx]
+
+    def checkout(self) -> DatabaseAdapter:
+        """Get the next adapter via round-robin. Thread-safe."""
+        with self._lock:
+            idx = self._index
+            self._index = (self._index + 1) % self._pool_size
+            return self._ensure_adapter(idx)
+
+    def checkin(self, adapter: DatabaseAdapter) -> None:
+        """Return an adapter to the pool. Currently a no-op for round-robin."""
+        pass
+
+    def close_all(self) -> None:
+        """Close all active connections in the pool."""
+        with self._lock:
+            for i, adapter in enumerate(self._adapters):
+                if adapter is not None:
+                    adapter.close()
+                    self._adapters[i] = None
+
+    @property
+    def size(self) -> int:
+        return self._pool_size
+
+    @property
+    def active_count(self) -> int:
+        """Number of connections that have been created."""
+        with self._lock:
+            return sum(1 for a in self._adapters if a is not None)
 
 
 # Driver registry — maps URL scheme to adapter class
@@ -65,9 +135,23 @@ class Database:
         # Priority: constructor params > env vars > empty
         self.username = username or os.environ.get("DATABASE_USERNAME", "")
         self.password = password or os.environ.get("DATABASE_PASSWORD", "")
-        self.pool_size = pool  # Reserved for future connection pooling (0 = single connection)
-        self._adapter: DatabaseAdapter = self._create_adapter()
-        self._adapter.connect(self._connection_path(), username=self.username, password=self.password)
+        self.pool_size = pool  # 0 = single connection, N>0 = N pooled connections
+
+        if self.pool_size > 0:
+            # Pooled mode — create a ConnectionPool with lazy adapter creation
+            self._pool = ConnectionPool(
+                pool_size=self.pool_size,
+                factory=self._create_adapter,
+                connect_path=self._connection_path(),
+                username=self.username,
+                password=self.password,
+            )
+            self._adapter: DatabaseAdapter | None = None
+        else:
+            # Single-connection mode — current behavior
+            self._pool: ConnectionPool | None = None
+            self._adapter: DatabaseAdapter = self._create_adapter()
+            self._adapter.connect(self._connection_path(), username=self.username, password=self.password)
 
         # Query cache — off by default, opt-in via TINA4_DB_CACHE=true
         from tina4_python.dotenv import is_truthy
@@ -166,20 +250,34 @@ class Database:
             self._cache_hits = 0
             self._cache_misses = 0
 
+    # ── Pool-aware adapter access ─────────────────────────────
+
+    def _get_adapter(self) -> DatabaseAdapter:
+        """Get an adapter — from pool (round-robin) or single connection."""
+        if self._pool is not None:
+            return self._pool.checkout()
+        return self._adapter
+
     # ── Delegate to adapter — with cache integration ─────────
 
     def close(self):
-        self._adapter.close()
+        """Close all connections (pool or single)."""
+        if self._pool is not None:
+            self._pool.close_all()
+        elif self._adapter is not None:
+            self._adapter.close()
 
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
         if self._cache_enabled:
             self._cache_invalidate()
-        return self._adapter.execute(sql, params)
+        adapter = self._get_adapter()
+        return adapter.execute(sql, params)
 
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
         if self._cache_enabled:
             self._cache_invalidate()
-        return self._adapter.execute_many(sql, params_list)
+        adapter = self._get_adapter()
+        return adapter.execute_many(sql, params_list)
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 20, offset: int = 0) -> DatabaseResult:
@@ -191,12 +289,14 @@ class Database:
                 with self._cache_lock:
                     self._cache_hits += 1
                 return cached
-            result = self._adapter.fetch(sql, params, limit, offset)
+            adapter = self._get_adapter()
+            result = adapter.fetch(sql, params, limit, offset)
             self._cache_set(key, result)
             with self._cache_lock:
                 self._cache_misses += 1
             return result
-        return self._adapter.fetch(sql, params, limit, offset)
+        adapter = self._get_adapter()
+        return adapter.fetch(sql, params, limit, offset)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         if self._cache_enabled:
@@ -206,59 +306,79 @@ class Database:
                 with self._cache_lock:
                     self._cache_hits += 1
                 return cached
-            result = self._adapter.fetch_one(sql, params)
+            adapter = self._get_adapter()
+            result = adapter.fetch_one(sql, params)
             self._cache_set(key, result)
             with self._cache_lock:
                 self._cache_misses += 1
             return result
-        return self._adapter.fetch_one(sql, params)
+        adapter = self._get_adapter()
+        return adapter.fetch_one(sql, params)
 
     def insert(self, table: str, data: dict | list) -> DatabaseResult:
         if self._cache_enabled:
             self._cache_invalidate()
-        return self._adapter.insert(table, data)
+        adapter = self._get_adapter()
+        return adapter.insert(table, data)
 
     def update(self, table: str, data: dict,
                filter_sql: str = "", params: list = None) -> DatabaseResult:
         if self._cache_enabled:
             self._cache_invalidate()
-        return self._adapter.update(table, data, filter_sql, params)
+        adapter = self._get_adapter()
+        return adapter.update(table, data, filter_sql, params)
 
     def delete(self, table: str,
                filter_sql: str | dict | list = "", params: list = None) -> DatabaseResult:
         if self._cache_enabled:
             self._cache_invalidate()
-        return self._adapter.delete(table, filter_sql, params)
+        adapter = self._get_adapter()
+        return adapter.delete(table, filter_sql, params)
 
     def start_transaction(self):
-        self._adapter.start_transaction()
+        adapter = self._get_adapter()
+        adapter.start_transaction()
 
     def commit(self):
-        self._adapter.commit()
+        adapter = self._get_adapter()
+        adapter.commit()
 
     def rollback(self):
-        self._adapter.rollback()
+        adapter = self._get_adapter()
+        adapter.rollback()
 
     def table_exists(self, name: str) -> bool:
-        return self._adapter.table_exists(name)
+        adapter = self._get_adapter()
+        return adapter.table_exists(name)
 
     def get_tables(self) -> list[str]:
-        return self._adapter.get_tables()
+        adapter = self._get_adapter()
+        return adapter.get_tables()
 
     def get_columns(self, table: str) -> list[dict]:
-        return self._adapter.get_columns(table)
+        adapter = self._get_adapter()
+        return adapter.get_columns(table)
 
     def get_database_type(self) -> str:
-        return self._adapter.get_database_type()
+        adapter = self._get_adapter()
+        return adapter.get_database_type()
 
     @property
     def autocommit(self) -> bool:
         """Whether writes auto-commit. Off by default, set TINA4_AUTOCOMMIT=true to enable."""
-        return self._adapter.autocommit
+        adapter = self._get_adapter()
+        return adapter.autocommit
 
     @autocommit.setter
     def autocommit(self, value: bool):
-        self._adapter.autocommit = value
+        if self._pool is not None:
+            # Set autocommit on all active pool connections
+            with self._pool._lock:
+                for a in self._pool._adapters:
+                    if a is not None:
+                        a.autocommit = value
+        elif self._adapter is not None:
+            self._adapter.autocommit = value
 
     def register_function(self, name: str, num_params: int, func: callable, deterministic: bool = True):
         """Register a custom SQL function (SQLite only).
@@ -267,14 +387,23 @@ class Database:
             db.register_function("double", 1, lambda x: x * 2)
             db.fetch_one("SELECT double(5) as result")  # {"result": 10}
         """
-        if hasattr(self._adapter, "register_function"):
-            self._adapter.register_function(name, num_params, func, deterministic)
+        adapter = self._get_adapter()
+        if hasattr(adapter, "register_function"):
+            adapter.register_function(name, num_params, func, deterministic)
         else:
             raise NotImplementedError(
-                f"{self._adapter.get_database_type()} does not support custom function registration"
+                f"{adapter.get_database_type()} does not support custom function registration"
             )
 
     @property
     def adapter(self) -> DatabaseAdapter:
-        """Access the underlying adapter directly (for driver-specific ops)."""
-        return self._adapter
+        """Access the underlying adapter directly (for driver-specific ops).
+
+        With pooling enabled, returns the next adapter from the pool via round-robin.
+        """
+        return self._get_adapter()
+
+    @property
+    def pool(self) -> ConnectionPool | None:
+        """Access the connection pool (None if pooling is disabled)."""
+        return self._pool
