@@ -483,7 +483,7 @@ class Queue:
 
         if job_id is not None:
             # Consume a specific job by ID
-            job = self._pop_by_id(topic, job_id)
+            job = self.pop_by_id(topic, job_id)
             if job is not None:
                 yield job
             return
@@ -495,7 +495,7 @@ class Queue:
                 break
             yield job
 
-    def _pop_by_id(self, topic: str, job_id: str) -> Job | None:
+    def pop_by_id(self, topic: str, job_id: str) -> Job | None:
         """Pop a specific job by ID from the queue."""
         if hasattr(self._backend, '_db'):
             # SQLite backend — query by ID
