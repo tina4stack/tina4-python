@@ -132,6 +132,14 @@ class Response:
         self.content = content.encode() if isinstance(content, str) else content
         return self
 
+    def error(self, code: str, message: str, status_code: int = 400) -> "Response":
+        """Standard error response envelope.
+
+        Usage:
+            return response.error("VALIDATION_FAILED", "Email is required", 400)
+        """
+        return self.json(error_response(code, message, status_code), status_code)
+
     def xml(self, content: str, status_code: int = None) -> "Response":
         """XML response."""
         if status_code:
@@ -227,6 +235,20 @@ class Response:
             headers.append((b"set-cookie", cookie_str.encode()))
 
         return headers
+
+
+def error_response(code: str, message: str, status: int = 400) -> dict:
+    """Build a standard error response envelope.
+
+    Usage:
+        return response(error_response("VALIDATION_FAILED", "Email is required", 400), 400)
+    """
+    return {
+        "error": True,
+        "code": code,
+        "message": message,
+        "status": status,
+    }
 
 
 def _is_compressible(content_type: str) -> bool:
