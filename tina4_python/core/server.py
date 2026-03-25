@@ -779,9 +779,20 @@ async def app(scope: dict, receive, send):
         static = _try_static(request.path)
         if static:
             response = static
-        elif request.path == "/" and not _has_index_template():
-            # No "/" route registered and no index template — show default landing page
-            response.html(_render_landing_page())
+        elif request.path == "/":
+            # Check for index template in src/templates/
+            template_dir = Path("src/templates")
+            index_file = None
+            for name in ("index.html", "index.twig", "index.php", "index.erb"):
+                if (template_dir / name).is_file():
+                    index_file = name
+                    break
+            if index_file:
+                from tina4_python.frond import Frond
+                html = Frond.render(index_file, {})
+                response.html(html)
+            else:
+                response.html(_render_landing_page())
         else:
             html = _render_error_page(404, request.path, request_id)
             if html:
