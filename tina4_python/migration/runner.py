@@ -8,10 +8,13 @@ Both naming patterns are supported. New migrations use timestamp format by defau
 Each file is executed once. State tracked in tina4_migration table.
 Rollback uses matching .down.sql files.
 """
+import logging
 import os
 import re
 from pathlib import Path
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_tracking_table(db):
@@ -94,6 +97,64 @@ def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
     return statements
 
 
+def _is_firebird(db) -> bool:
+    """Check if the database connection is Firebird."""
+    try:
+        return db.get_database_type() == "firebird"
+    except (AttributeError, Exception):
+        return False
+
+
+# Regex to match ALTER TABLE <table> ADD <column> ...
+# Captures the table name and column name from the SQL statement.
+_ALTER_ADD_RE = re.compile(
+    r"^\s*ALTER\s+TABLE\s+"
+    r"(?:\"([^\"]+)\"|(\S+))"       # table name (quoted or unquoted)
+    r"\s+ADD\s+"
+    r"(?:\"([^\"]+)\"|(\S+))",       # column name (quoted or unquoted)
+    re.IGNORECASE,
+)
+
+
+def _firebird_column_exists(db, table: str, column: str) -> bool:
+    """Check if a column already exists in a Firebird table via RDB$RELATION_FIELDS.
+
+    Firebird does not support IF NOT EXISTS for ALTER TABLE ADD, so we query
+    the system catalogue directly. Column and table names are compared in
+    upper-case because Firebird stores unquoted identifiers that way.
+    """
+    row = db.fetch_one(
+        "SELECT 1 FROM RDB$RELATION_FIELDS "
+        "WHERE RDB$RELATION_NAME = ? AND TRIM(RDB$FIELD_NAME) = ?",
+        [table.upper(), column.upper()],
+    )
+    return row is not None
+
+
+def _should_skip_for_firebird(db, stmt: str) -> str | None:
+    """If stmt is an ALTER TABLE ... ADD on Firebird and the column already exists, return a skip reason.
+
+    Returns None if the statement should be executed normally.
+    This makes ALTER TABLE ADD idempotent on Firebird, which lacks IF NOT EXISTS
+    for column additions. Only genuine duplicates are skipped — other errors
+    (bad syntax, wrong data type, etc.) will still raise normally on execute().
+    """
+    if not _is_firebird(db):
+        return None
+
+    m = _ALTER_ADD_RE.match(stmt)
+    if not m:
+        return None
+
+    table = m.group(1) or m.group(2)
+    column = m.group(3) or m.group(4)
+
+    if _firebird_column_exists(db, table, column):
+        return f"Column {column} already exists in {table}, skipping"
+
+    return None
+
+
 def migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
     """Run all pending migrations.
 
@@ -127,6 +188,13 @@ def migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> l
         try:
             db.start_transaction()
             for stmt in statements:
+                # Firebird lacks IF NOT EXISTS for ALTER TABLE ADD.
+                # Pre-check the system catalogue so duplicate columns are
+                # silently skipped instead of raising an error.
+                skip_reason = _should_skip_for_firebird(db, stmt)
+                if skip_reason:
+                    logger.info(f"Migration {sql_file.name}: {skip_reason}")
+                    continue
                 db.execute(stmt)
 
             # Record as passed
