@@ -137,3 +137,51 @@ class RateLimiter:
         response.header("x-ratelimit-remaining", str(info["remaining"]))
         response.header("x-ratelimit-reset", str(info["reset"]))
         return response
+
+
+class SecurityHeadersMiddleware:
+    """Injects security headers on every response.
+
+    Configurable via environment variables:
+        TINA4_FRAME_OPTIONS        — X-Frame-Options (default: SAMEORIGIN)
+        TINA4_HSTS                 — Strict-Transport-Security max-age value
+                                     (default: "" = off; set to "31536000" to enable)
+        TINA4_CSP                  — Content-Security-Policy (default: "default-src 'self'")
+        TINA4_REFERRER_POLICY      — Referrer-Policy (default: strict-origin-when-cross-origin)
+        TINA4_PERMISSIONS_POLICY   — Permissions-Policy (default: camera=(), microphone=(), geolocation=())
+    """
+
+    @staticmethod
+    def before_security(request, response):
+        """Set security headers before the route handler runs."""
+        response.header(
+            "x-frame-options",
+            os.environ.get("TINA4_FRAME_OPTIONS", "SAMEORIGIN"),
+        )
+        response.header("x-content-type-options", "nosniff")
+
+        hsts = os.environ.get("TINA4_HSTS", "")
+        if hsts:
+            response.header(
+                "strict-transport-security",
+                f"max-age={hsts}; includeSubDomains",
+            )
+
+        response.header(
+            "content-security-policy",
+            os.environ.get("TINA4_CSP", "default-src 'self'"),
+        )
+        response.header(
+            "referrer-policy",
+            os.environ.get("TINA4_REFERRER_POLICY", "strict-origin-when-cross-origin"),
+        )
+        response.header("x-xss-protection", "0")
+        response.header(
+            "permissions-policy",
+            os.environ.get(
+                "TINA4_PERMISSIONS_POLICY",
+                "camera=(), microphone=(), geolocation=()",
+            ),
+        )
+
+        return request, response
