@@ -13,9 +13,9 @@ Real HTTP benchmarks — identical JSON endpoint, development servers.
 | Starlette 0.52 | 15,664 | 9,302 | uvicorn | 4 |
 | FastAPI 0.135 | 11,523 | 2,709 | uvicorn | 12 |
 | **Tina4 Python** | **9,761** | **5,769** | **uvicorn (auto-detected)** | **0** |
-| Django 6.0 | 2,333 | 2,150 | runserver | 20 |
 | Flask 3.1 | 5,722 | 962 | Werkzeug | 6 |
 | Bottle 0.13 | 3,165 | 1,105 | wsgiref | 0 |
+| Django 6.0 | 2,333 | 2,150 | runserver | 20 |
 
 **Key takeaway:** Tina4 Python delivers 9,761 req/s with 38 features and 0 dependencies — competitive with Starlette (12,914) and FastAPI (10,071), while shipping 38 features vs their 6 and 8 respectively, all with zero dependencies.
 
