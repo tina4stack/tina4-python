@@ -3,7 +3,16 @@
 Clean request object with parsed body, params, headers, and cookies.
 """
 import json
+import os
 from urllib.parse import parse_qs, unquote
+
+# Maximum upload size in bytes (default 10 MB). Override via TINA4_MAX_UPLOAD_SIZE env var.
+TINA4_MAX_UPLOAD_SIZE = int(os.environ.get("TINA4_MAX_UPLOAD_SIZE", 10_485_760))
+
+
+class PayloadTooLarge(Exception):
+    """Raised when request body exceeds TINA4_MAX_UPLOAD_SIZE."""
+    pass
 
 
 class Request:
@@ -45,6 +54,14 @@ class Request:
 
         req.content_type = req.headers.get("content-type", "")
         req.ip = _extract_ip(scope, req.headers)
+
+        # Check upload size limit
+        content_length = int(req.headers.get("content-length", 0) or 0)
+        if content_length > TINA4_MAX_UPLOAD_SIZE or len(body) > TINA4_MAX_UPLOAD_SIZE:
+            raise PayloadTooLarge(
+                f"Request body ({max(content_length, len(body))} bytes) exceeds "
+                f"TINA4_MAX_UPLOAD_SIZE ({TINA4_MAX_UPLOAD_SIZE} bytes)"
+            )
 
         # Parse query params
         if req.query_string:
