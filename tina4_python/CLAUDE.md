@@ -264,9 +264,9 @@ Queue(topic="tasks").push({"action": "send_email"})
 2. **noauth/secured import**: Use `from tina4_python.core.router import noauth, secured` (there is NO `tina4_python.Decorators` module). **Never** import `noauth` from `tina4_python.swagger` — that version only affects documentation, not actual auth.
 2b. **Decorator ordering**: Route decorators (`@get`, `@post`, etc.) must be the **innermost** (closest to the function). Swagger/meta decorators (`@description`, `@tags`, `@noauth`, `@secured`) go above. Correct: `@noauth()` → `@description(...)` → `@post(...)` → `def handler`. Wrong: `@post(...)` → `@description(...)` → `def handler` (will crash).
 3. **Jinja2 template syntax** (common mistakes):
-    - **No ternary operator**: Use `{% if x %}...{% endif %}` NOT `{{ x ? 'a' : 'b' }}`
+    - **Ternary operator supported**: Both `{{ x ? 'a' : 'b' }}` and `{{ 'a' if x else 'b' }}` work
     - **elif not elseif**: Use `{% elif %}` NOT `{% elseif %}`
-    - **safe not raw**: Use `{{ var | safe }}` NOT `{{ var | raw }}` for unescaped output
+    - **Unescaped output**: Both `{{ var | safe }}` and `{{ var | raw }}` work for unescaped output
     - **format filter**: Use `{{ "%.2f" | format(value) }}` for number formatting
     - **e() filter has NO arguments**: Use `{{ var|e }}` NOT `{{ var|e('js') }}` — Jinja2's `|e` is HTML-only with no mode parameter (that's PHP Twig syntax)
     - **JS string escaping**: Use `{{ var|replace("'", "\\'") }}` to escape single quotes for inline JS onclick handlers
