@@ -779,21 +779,23 @@ async def app(scope: dict, receive, send):
         static = _try_static(request.path)
         if static:
             response = static
-        elif request.path == "/":
-            # Check for index template in src/templates/
-            template_dir = Path("src/templates")
-            index_file = None
-            for name in ("index.html", "index.twig", "index.php", "index.erb"):
-                if (template_dir / name).is_file():
-                    index_file = name
-                    break
-            if index_file:
-                from tina4_python.frond import Frond
-                html = Frond.render(index_file, {})
-                response.html(html)
-            else:
-                response.html(_render_landing_page())
         else:
+            # Try serving a template file (e.g. /hello -> src/templates/hello.twig or hello.html)
+            template_dir = Path("src/templates")
+            clean_path = request.path.strip("/") or "index"
+            tpl_file = None
+            for ext in (".twig", ".html"):
+                candidate = clean_path + ext
+                if (template_dir / candidate).is_file():
+                    tpl_file = candidate
+                    break
+            if tpl_file:
+                from tina4_python.frond import Frond
+                html = Frond.render(tpl_file, {})
+                response.html(html)
+            elif request.path == "/":
+                response.html(_render_landing_page())
+            else:
             html = _render_error_page(404, request.path, request_id)
             if html:
                 response.status(404).html(html)
