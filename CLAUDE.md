@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.8.0 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -510,8 +510,8 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Cache backends: memory (default), Redis, file — configured via env vars
 - Session backends: file, Redis, Valkey, MongoDB, database
 - Gallery: 7 interactive examples with Try It deploy at `/__dev/`
-- Tests: 1,633 passing (38 modules)
-- Version: 3.0.0
+- Tests: 1,791 passing (38 modules)
+- Version: 3.8.0
 
 ## Links
 
