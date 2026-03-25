@@ -136,13 +136,45 @@ def _render_error_page(status_code: int, path: str, request_id: str, error_messa
     return None
 
 
-def _has_index_template() -> bool:
-    """Check if the user has an index template in src/templates/."""
+_template_cache: dict[str, str] | None = None
+
+
+def _resolve_template(path: str) -> str | None:
+    """Resolve a URL path to a template file in src/templates/.
+    Dev mode: checks filesystem every time for live changes.
+    Production: uses a cached lookup built once at startup.
+    """
+    clean_path = path.strip("/") or "index"
+    is_dev = os.environ.get("TINA4_DEBUG", "false").lower() in ("true", "1", "yes")
+
+    if is_dev:
+        template_dir = Path("src/templates")
+        for ext in (".twig", ".html"):
+            candidate = clean_path + ext
+            if (template_dir / candidate).is_file():
+                return candidate
+        return None
+
+    global _template_cache
+    if _template_cache is None:
+        _build_template_cache()
+    return _template_cache.get(clean_path)
+
+
+def _build_template_cache() -> None:
+    """Scan src/templates/ once and build url_path -> template_file lookup."""
+    global _template_cache
+    _template_cache = {}
     template_dir = Path("src/templates")
-    for name in ("index.html", "index.twig", "index.php", "index.erb"):
-        if (template_dir / name).is_file():
-            return True
-    return False
+    if not template_dir.is_dir():
+        return
+    for f in template_dir.rglob("*"):
+        if not f.is_file() or f.suffix not in (".twig", ".html"):
+            continue
+        rel = str(f.relative_to(template_dir)).replace("\\", "/")
+        url_path = rel.rsplit(".", 1)[0]
+        if url_path not in _template_cache:
+            _template_cache[url_path] = rel
 
 
 def _is_gallery_deployed(name: str) -> bool:
@@ -781,14 +813,7 @@ async def app(scope: dict, receive, send):
             response = static
         else:
             # Try serving a template file (e.g. /hello -> src/templates/hello.twig or hello.html)
-            template_dir = Path("src/templates")
-            clean_path = request.path.strip("/") or "index"
-            tpl_file = None
-            for ext in (".twig", ".html"):
-                candidate = clean_path + ext
-                if (template_dir / candidate).is_file():
-                    tpl_file = candidate
-                    break
+            tpl_file = _resolve_template(request.path)
             if tpl_file:
                 from tina4_python.frond import Frond
                 html = Frond.render(tpl_file, {})
