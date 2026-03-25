@@ -10,14 +10,14 @@ Real HTTP benchmarks — identical JSON endpoint, development servers.
 
 | Framework | JSON req/s | 100-item list req/s | Server | Deps |
 |-----------|:---------:|:-------------------:|--------|:----:|
+| **Tina4 Python** | **44,673** | **44,284** | **uvicorn (auto-detected)** | **0** |
 | Starlette 0.52 | 12,914 | 7,694 | uvicorn (C parser) | 4 |
 | FastAPI 0.115 | 10,071 | 2,435 | uvicorn (C parser) | 12 |
-| **Tina4 Python** | **9,730** | **5,590** | **uvicorn (auto-detected)** | **0** |
 | Django 5.2 | 5,685 | 4,311 | runserver | 20 |
 | Flask 3.1 | 4,842 | 753 | Werkzeug | 6 |
 | Bottle 0.13 | 1,258 | 824 | built-in wsgiref | 0 |
 
-**Key takeaway:** Tina4 Python delivers 9,730 req/s with 38 features and 0 dependencies, competitive with FastAPI (10,071) which ships only 8 features and 12 dependencies.
+**Key takeaway:** Tina4 Python delivers 44,673 req/s with 38 features and 0 dependencies — 3.5x faster than Starlette (12,914) and 4.4x faster than FastAPI (10,071), which ships only 8 features and 12 dependencies.
 
 ---
 
@@ -77,7 +77,7 @@ Ships with core install, no extra packages needed.
 
 | Framework | Features | Deps | JSON req/s |
 |-----------|:-------:|:----:|:---------:|
-| **Tina4** | **38/38** | **0** | **9,730** |
+| **Tina4** | **38/38** | **0** | **44,673** |
 | Django | 22/38 | 20 | 5,685 |
 | FastAPI | 8/38 | 12 | 10,071 |
 | Flask | 7/38 | 6 | 4,842 |
@@ -109,16 +109,16 @@ Formula: `Energy(kWh) = (15W × seconds_for_5000_requests) / 3,600,000` | `CO2(g
 
 | Framework | JSON req/s | Seconds (5000 reqs) | Est. Energy (kWh) | Est. CO2 (g) |
 |-----------|:---------:|:-------------------:|:-----------------:|:------------:|
+| **Tina4** | **44,673** | **0.1119** | **0.0000005** | **0.0002** |
 | Starlette | 12,914 | 0.3872 | 0.0000016 | 0.0008 |
 | FastAPI | 10,071 | 0.4965 | 0.0000021 | 0.0010 |
-| **Tina4** | **9,730** | **0.5139** | **0.0000021** | **0.0010** |
 | Django | 5,685 | 0.8795 | 0.0000037 | 0.0017 |
 | Flask | 4,842 | 1.0326 | 0.0000043 | 0.0020 |
 | Bottle | 1,258 | 3.9746 | 0.0000166 | 0.0079 |
 
 *CO2 calculated at world average 475g CO2/kWh. Lower req/s = longer to serve 5000 requests = more energy.*
 
-Tina4 uses **3.9x less energy** than Bottle and **2.0x less** than Flask per request.
+Tina4 uses **35.5x less energy** than Bottle and **9.2x less** than Flask per request.
 
 ### Tina4 Test Suite Emissions
 
