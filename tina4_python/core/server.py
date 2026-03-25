@@ -816,20 +816,21 @@ async def app(scope: dict, receive, send):
             tpl_file = _resolve_template(request.path)
             if tpl_file:
                 from tina4_python.frond import Frond
-                html = Frond.render(tpl_file, {})
+                frond = Frond()
+                html = frond.render(tpl_file, {})
                 response.html(html)
             elif request.path == "/":
                 response.html(_render_landing_page())
             else:
-            html = _render_error_page(404, request.path, request_id)
-            if html:
-                response.status(404).html(html)
-            else:
-                response.status(404).json({
-                    "error": "Not Found",
-                    "path": request.path,
-                    "status": 404,
-                })
+                html = _render_error_page(404, request.path, request_id)
+                if html:
+                    response.status(404).html(html)
+                else:
+                    response.status(404).json({
+                        "error": "Not Found",
+                        "path": request.path,
+                        "status": 404,
+                    })
 
     # Apply CORS headers to all responses
     _cors.apply(request, response)
