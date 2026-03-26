@@ -139,6 +139,19 @@ class ORM(metaclass=ORMMeta):
         return data
 
     @classmethod
+    def query(cls) -> "QueryBuilder":
+        """Create a fluent QueryBuilder pre-configured for this model's table and database.
+
+        Usage:
+            results = User.query().where("active = ?", [1]).order_by("name").get()
+
+        Returns:
+            A QueryBuilder instance bound to this model's table and database.
+        """
+        from tina4_python.query_builder import QueryBuilder
+        return QueryBuilder.from_table(cls._get_table(), cls._get_db())
+
+    @classmethod
     def _get_table(cls) -> str:
         """Get table name — defaults to lowercase class name + 's'."""
         if cls.table_name:
