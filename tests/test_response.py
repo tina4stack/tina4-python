@@ -116,11 +116,34 @@ def test_add_header_merged():
     assert r.headers.get("X-B") == "2"
 
 
-def test_headers_in_overrides_pending():
+def test_headers_in_merges_with_pending():
+    """headers_in should merge with pending headers, not replace them."""
     Response.reset_context()
     Response.add_header("X-Pending", "old")
     r = Response("test", headers_in={"X-Explicit": "new"})
     assert r.headers.get("X-Explicit") == "new"
+    assert r.headers.get("X-Pending") == "old"
+
+
+def test_add_header_survives_redirect():
+    """Headers set via add_header() must survive Response.redirect()."""
+    Response.reset_context()
+    Response.add_header("Set-Cookie", "session=abc123; Path=/; HttpOnly")
+    r = Response.redirect("/dashboard")
+    assert r.headers.get("Location") == "/dashboard"
+    assert r.headers.get("Set-Cookie") == "session=abc123; Path=/; HttpOnly"
+    assert r.http_code == Constant.HTTP_REDIRECT
+
+
+def test_multiple_add_headers_survive_redirect():
+    """Multiple headers set via add_header() must all survive redirect."""
+    Response.reset_context()
+    Response.add_header("Set-Cookie", "token=xyz; Path=/")
+    Response.add_header("X-Custom", "value")
+    r = Response.redirect("/login")
+    assert r.headers.get("Location") == "/login"
+    assert r.headers.get("Set-Cookie") == "token=xyz; Path=/"
+    assert r.headers.get("X-Custom") == "value"
 
 
 def test_reset_context():

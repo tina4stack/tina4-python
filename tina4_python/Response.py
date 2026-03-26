@@ -104,12 +104,11 @@ class Response:
 
         # Merge any headers added via add_header() before this Response was created
         pending = _pending_headers.get()
+        merged_headers = {}
+        if pending:
+            merged_headers.update(pending)
         if headers_in is not None:
-            merged_headers = dict(headers_in)
-        elif pending:
-            merged_headers = dict(pending)
-        else:
-            merged_headers = {}
+            merged_headers.update(headers_in)
 
         self.headers = merged_headers
         self.content = content_in if content_in is not None else ""
