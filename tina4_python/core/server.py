@@ -644,6 +644,22 @@ async def app(scope: dict, receive, send):
     request_id = request.headers.get("x-request-id", str(uuid.uuid4())[:8])
     set_request_id(request_id)
 
+    # Auto-start session — lazy, reads cookie, saves on response
+    try:
+        from tina4_python.session import Session
+        cookie_header = dict(scope.get("headers", [])).get(b"cookie", b"").decode()
+        sid_match = None
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith("tina4_session="):
+                sid_match = part.split("=", 1)[1]
+                break
+        sess = Session()
+        sess.start(sid_match)
+        request.session = sess
+    except Exception:
+        pass  # Session module not available — session stays None
+
     response = Response()
     response.header("x-request-id", request_id)
 
@@ -870,6 +886,17 @@ async def app(scope: dict, receive, send):
 
     # ETag check — 304 Not Modified
     if_none_match = request.headers.get("if-none-match", "")
+
+    # Save session and set cookie if session was used
+    if request.session is not None:
+        try:
+            request.session.save()
+            sid = request.session.session_id if hasattr(request.session, 'session_id') else getattr(request.session, 'id', None)
+            if sid:
+                ttl = int(os.environ.get("TINA4_SESSION_TTL", "3600"))
+                response.header("set-cookie", f"tina4_session={sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl}")
+        except Exception:
+            pass
 
     # Build and send response
     accept_encoding = request.headers.get("accept-encoding", "")
