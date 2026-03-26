@@ -780,17 +780,34 @@ async def app(scope: dict, receive, send):
             _sig = inspect.signature(route["handler"])
             _params = list(_sig.parameters.values())
             _pcount = len(_params)
+
+            # Build args: inject path params by name, then request/response
+            _args = []
+            _remaining = []
+            for p in _params:
+                name = p.name
+                if name in params:
+                    _args.append(params[name])
+                else:
+                    _remaining.append(p)
+
+            # Append request/response for remaining positional params
+            if len(_remaining) == 0:
+                pass  # All params were path params
+            elif len(_remaining) == 1:
+                _ann = _remaining[0].annotation
+                if _ann is Request or (isinstance(_ann, str) and _ann in ("Request", "request")):
+                    _args.append(request)
+                else:
+                    _args.append(response)
+            elif len(_remaining) >= 2:
+                _args.append(request)
+                _args.append(response)
+
             if _pcount == 0:
                 result = await route["handler"]()
-            elif _pcount == 1:
-                # If type-hinted as Request, pass request; otherwise pass response
-                _ann = _params[0].annotation
-                if _ann is Request or (isinstance(_ann, str) and _ann in ("Request", "request")):
-                    result = await route["handler"](request)
-                else:
-                    result = await route["handler"](response)
             else:
-                result = await route["handler"](request, response)
+                result = await route["handler"](*_args)
             if isinstance(result, Response):
                 response = result
         except Exception as e:
