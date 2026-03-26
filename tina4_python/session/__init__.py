@@ -208,10 +208,13 @@ class Session:
         self._data[key] = value
         self._dirty = True
 
-    def unset(self, key: str):
+    def delete(self, key: str):
         """Remove a session key."""
         self._data.pop(key, None)
         self._dirty = True
+
+    # Alias for backward compatibility
+    unset = delete
 
     def has(self, key: str) -> bool:
         return key in self._data
