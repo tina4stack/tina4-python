@@ -214,7 +214,7 @@ class CsrfMiddleware:
     def before_csrf(request, response):
         """Validate CSRF token before the route handler runs."""
         # Check if CSRF is enabled via env (middleware registration bypasses this)
-        csrf_env = os.environ.get("TINA4_CSRF", "").lower() in ("true", "1", "yes")
+        csrf_env = os.environ.get("TINA4_CSRF", "true").lower() not in ("false", "0", "no")
         # When registered via Router.use(), this method always runs.
         # The env check is only for auto-activation scenarios.
 

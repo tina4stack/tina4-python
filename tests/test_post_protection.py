@@ -209,3 +209,66 @@ class TestMultipleRoutes:
         assert admin_route["auth_required"] is True
         assert webhook_route["auth_required"] is False
         assert user_route["auth_required"] is True
+
+
+# ── Secure-by-default enforcement ────────────────────────────────
+#
+# These tests verify that auth_required on the route dict means a
+# request without proper auth would be rejected at dispatch time.
+# We test the route metadata that the server uses to enforce auth.
+
+
+class TestSecureByDefaultEnforcement:
+
+    def test_post_without_bearer_is_auth_required(self):
+        """POST route requires auth by default — no Bearer means 401 at dispatch."""
+        @post("/api/protected-post")
+        async def protected_post(req, res):
+            pass
+
+        route, _ = Router.match("POST", "/api/protected-post")
+        assert route is not None
+        assert route["auth_required"] is True
+
+    def test_post_route_auth_flag_allows_bearer(self):
+        """POST with auth_required=True allows requests that carry a valid Bearer."""
+        @post("/api/authed-post")
+        async def authed_post(req, res):
+            pass
+
+        route, _ = Router.match("POST", "/api/authed-post")
+        assert route is not None
+        # The route is auth-gated; a valid Bearer would pass at dispatch
+        assert route["auth_required"] is True
+
+    def test_post_with_noauth_allows_unauthenticated(self):
+        """@noauth() on POST sets auth_required=False — no token needed."""
+        @post("/api/public-hook")
+        @noauth()
+        async def public_hook(req, res):
+            pass
+
+        route, _ = Router.match("POST", "/api/public-hook")
+        assert route is not None
+        assert route["auth_required"] is False
+
+    def test_get_with_secured_requires_auth(self):
+        """GET with @secured() sets auth_required=True — no Bearer means 401."""
+        @get("/api/locked-get")
+        @secured()
+        async def locked_get(req, res):
+            pass
+
+        route, _ = Router.match("GET", "/api/locked-get")
+        assert route is not None
+        assert route["auth_required"] is True
+
+    def test_get_without_secured_is_public(self):
+        """Plain GET route is public — auth_required=False."""
+        @get("/api/open-get")
+        async def open_get(req, res):
+            pass
+
+        route, _ = Router.match("GET", "/api/open-get")
+        assert route is not None
+        assert route["auth_required"] is False
