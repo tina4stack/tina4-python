@@ -1015,7 +1015,7 @@ async def admin_dashboard(request, response):
 
 **Rule: Any operation that takes more than ~1 second must use a queue.**
 
-Supports: litequeue (default/SQLite, zero-config), RabbitMQ, Kafka, MongoDB.
+Supports: file (default, zero-config), RabbitMQ, Kafka, MongoDB.
 
 ### Producing — enqueue work from a route
 

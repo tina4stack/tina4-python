@@ -300,7 +300,7 @@ Producer(queue).push({"to": "alice@test.com"})
 Set these in `.env`:
 
 ```bash
-TINA4_QUEUE_BACKEND=rabbitmq          # sqlite (default), rabbitmq, kafka
+TINA4_QUEUE_BACKEND=rabbitmq          # file (default), rabbitmq, kafka
 TINA4_RABBITMQ_HOST=localhost
 # or
 TINA4_QUEUE_URL=amqp://localhost:5672
@@ -317,7 +317,7 @@ TINA4_QUEUE_URL=amqp://localhost:5672
 
 ### Database-Backed Queue
 
-v2 required a `Config` object with `queue_type="litequeue"`. v3 auto-detects the backend from environment variables:
+v2 required a `Config` object with `queue_type="file"`. v3 auto-detects the backend from environment variables:
 
 ```python
 # v3
