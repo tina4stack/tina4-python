@@ -173,8 +173,9 @@ class _FileAdapter:
             pass
         return count
 
-    def purge(self, status: str = "completed"):
+    def purge(self, status: str = "completed") -> int:
         queue_dir = self._queue_dir()
+        count = 0
         try:
             for filename in os.listdir(queue_dir):
                 if not filename.endswith(".queue-data"):
@@ -185,10 +186,12 @@ class _FileAdapter:
                         job_data = json.load(f)
                     if job_data.get("status") == status:
                         os.unlink(filepath)
+                        count += 1
                 except (json.JSONDecodeError, FileNotFoundError):
                     continue
         except FileNotFoundError:
             pass
+        return count
 
     def retry_failed(self) -> int:
         failed_dir = self._failed_dir()
@@ -530,9 +533,9 @@ class Queue:
         """Count jobs by status."""
         return self._backend.size(status)
 
-    def purge(self, status: str = "completed"):
-        """Remove all jobs with the given status."""
-        self._backend.purge(status)
+    def purge(self, status: str = "completed") -> int:
+        """Remove all jobs with the given status. Returns count removed."""
+        return self._backend.purge(status)
 
     def retry_failed(self) -> int:
         """Re-queue failed jobs that haven't exceeded max_retries."""
