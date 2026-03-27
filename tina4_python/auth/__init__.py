@@ -39,7 +39,7 @@ class Auth:
         self.secret = secret or os.environ.get("SECRET", "tina4-default-secret")
         self.algorithm = algorithm
         self.expires_in = expires_in or int(
-            os.environ.get("TINA4_TOKEN_EXPIRES_IN", "60")
+            os.environ.get("TINA4_TOKEN_LIMIT", "60")
         )
 
     # ── JWT ────────────────────────────────────────────────────────
@@ -184,8 +184,8 @@ class Auth:
 
     @staticmethod
     def validate_api_key(provided: str) -> bool:
-        """Check a Bearer token against the API_KEY env var."""
-        expected = os.environ.get("API_KEY", "")
+        """Check a Bearer token against the TINA4_API_KEY env var (falls back to API_KEY)."""
+        expected = os.environ.get("TINA4_API_KEY", os.environ.get("API_KEY", ""))
         if not expected:
             return False
         return hmac.compare_digest(provided, expected)

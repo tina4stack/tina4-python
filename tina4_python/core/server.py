@@ -1102,7 +1102,7 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio"):
     from tina4_python.dotenv import is_truthy
 
     is_debug = is_truthy(os.environ.get("TINA4_DEBUG", ""))
-    log_level = os.environ.get("TINA4_LOG_LEVEL", "debug").upper()
+    log_level = os.environ.get("TINA4_LOG_LEVEL", "error").upper()
     display = "localhost" if host in ("0.0.0.0", "::") else host
 
     # Blue color for Python, only when stdout is a TTY
@@ -1145,7 +1145,7 @@ def run(host: str | None = None, port: int | None = None):
 
     # Init logger
     is_production = os.environ.get("TINA4_ENV", "development") == "production"
-    log_level = os.environ.get("TINA4_LOG_LEVEL", "debug" if not is_production else "info")
+    log_level = os.environ.get("TINA4_LOG_LEVEL", "error" if not is_production else "error")
     Log.init(level=log_level, production=is_production)
 
     # Ensure folders

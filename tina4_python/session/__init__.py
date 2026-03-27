@@ -40,7 +40,7 @@ class FileSessionHandler(SessionHandler):
 
     def __init__(self, path: str = None):
         self._path = Path(
-            path or os.environ.get("TINA4_SESSION_PATH", "sessions")
+            path or os.environ.get("TINA4_SESSION_PATH", "data/sessions")
         )
         self._path.mkdir(parents=True, exist_ok=True)
 
