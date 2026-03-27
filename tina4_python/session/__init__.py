@@ -265,6 +265,11 @@ class Session:
             self.unset(flash_key)
             return val
 
+    def cookie_header(self, cookie_name: str = "tina4_session") -> str:
+        """Return a Set-Cookie header value for this session."""
+        samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
+        return f"{cookie_name}={self._session_id}; Path=/; HttpOnly; SameSite={samesite}; Max-Age={self._ttl}"
+
     def gc(self):
         """Run garbage collection on the backend."""
         self._handler.gc(self._ttl)

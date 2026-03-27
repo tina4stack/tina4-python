@@ -480,7 +480,7 @@ Response.add_header("X-Custom", "value")
 
 ## Sessions
 
-TINA4_TOKEN_EXPIRES_IN is used to set the session time, recommend 15-60 minutes
+TINA4_TOKEN_LIMIT is used to set the session time, default 60 minutes
 
 ### Session Backends
 
@@ -1515,8 +1515,8 @@ Key `.env` settings:
 ```bash
 # Authentication
 SECRET=your-jwt-secret            # JWT signing (default uses insecure placeholder)
-API_KEY=your-api-key              # Static bearer token for API auth
-TINA4_TOKEN_EXPIRES_IN=60         # Token lifetime in minutes (default: 60)
+TINA4_API_KEY=your-api-key        # Static bearer token for API auth (API_KEY fallback supported)
+TINA4_TOKEN_LIMIT=60              # Token lifetime in minutes (default: 60)
 
 # Database
 DATABASE_URL=sqlite:///app.db     # Connection URL (driver://host:port/database)
@@ -1525,7 +1525,7 @@ DATABASE_PASSWORD=                 # DB password
 
 # Framework
 TINA4_DEBUG=true                  # Enable dev mode (toolbar, live reload, error overlay)
-TINA4_LOG_LEVEL=ALL               # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR
+TINA4_LOG_LEVEL=ERROR             # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR (default: ERROR)
 TINA4_LOCALE=en                   # Language for framework messages (en, fr, af, zh, ja, es)
 TINA4_DEFAULT_WEBSERVER=FALSE     # Set to TRUE to use Tina4's built-in webserver instead of ASGI
 HOST_NAME=localhost:7145
@@ -1534,7 +1534,7 @@ HOST_NAME=localhost:7145
 TINA4_SESSION_HANDLER=SessionFileHandler  # SessionFileHandler, SessionRedisHandler, SessionValkeyHandler, SessionMongoHandler
 
 # Swagger/OpenAPI
-SWAGGER_TITLE=My API              # API title (default: "Tina4 Python API")
+SWAGGER_TITLE=Tina4 API           # API title (default: "Tina4 API")
 SWAGGER_VERSION=1.0.0             # API version
 SWAGGER_DESCRIPTION=              # API description
 SWAGGER_CONTACT_TEAM=             # Contact name
@@ -1763,7 +1763,7 @@ async def dashboard(request, response):
 - **`tina4python generate`**: model, route, migration, middleware scaffolding
 - **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), query caching (`TINA4_DB_CACHE=true`, `cache_stats()`, `cache_clear()`)
 - **Sessions**: 4 backends (file, Redis/Valkey, MongoDB, database)
-- **Queue**: SQLite/RabbitMQ/Kafka/MongoDB backends, configured via env vars
+- **Queue**: file/RabbitMQ/Kafka/MongoDB backends, configured via env vars
 - **Cache**: memory/Redis/file backends
 - **Messenger**: .env driven SMTP/IMAP
 - **ORM relationships**: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)

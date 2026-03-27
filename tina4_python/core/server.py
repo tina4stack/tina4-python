@@ -911,7 +911,8 @@ async def app(scope: dict, receive, send):
             sid = request.session.session_id if hasattr(request.session, 'session_id') else getattr(request.session, 'id', None)
             if sid:
                 ttl = int(os.environ.get("TINA4_SESSION_TTL", "3600"))
-                response.header("set-cookie", f"tina4_session={sid}; Path=/; HttpOnly; SameSite=Lax; Max-Age={ttl}")
+                samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
+                response.header("set-cookie", f"tina4_session={sid}; Path=/; HttpOnly; SameSite={samesite}; Max-Age={ttl}")
         except Exception:
             pass
 
