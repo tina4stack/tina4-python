@@ -257,6 +257,152 @@ class QueryBuilder:
         """
         return self.count() > 0
 
+    def to_mongo(self) -> dict:
+        """Convert the fluent builder state into a MongoDB-compatible query.
+
+        Returns:
+            A dict with keys: filter, projection, sort, limit, skip.
+            Only non-empty keys are included.
+        """
+        result = {}
+
+        # -- projection --
+        if self._columns != ["*"]:
+            result["projection"] = {col.strip(): 1 for col in self._columns}
+
+        # -- filter --
+        if self._wheres:
+            param_index = 0
+            and_conditions = []
+            or_conditions = []
+
+            for i, (connector, condition) in enumerate(self._wheres):
+                mongo_cond, param_index = self._parse_condition_to_mongo(
+                    condition, param_index
+                )
+                if i == 0 or connector == "AND":
+                    and_conditions.append(mongo_cond)
+                else:
+                    or_conditions.append(mongo_cond)
+
+            if or_conditions:
+                # Merge AND conditions into a single dict, then $or with OR ones
+                and_merged = self._merge_mongo_conditions(and_conditions)
+                all_branches = [and_merged] + or_conditions
+                result["filter"] = {"$or": all_branches}
+            else:
+                result["filter"] = self._merge_mongo_conditions(and_conditions)
+
+        # -- sort --
+        if self._order_by_cols:
+            sort_list = []
+            for expr in self._order_by_cols:
+                parts = expr.strip().split()
+                field = parts[0]
+                direction = -1 if len(parts) > 1 and parts[1].upper() == "DESC" else 1
+                sort_list.append((field, direction))
+            result["sort"] = sort_list
+
+        # -- limit / skip --
+        if self._limit_val is not None:
+            result["limit"] = self._limit_val
+        if self._offset_val is not None:
+            result["skip"] = self._offset_val
+
+        return result
+
+    def _parse_condition_to_mongo(self, condition: str, param_index: int) -> tuple[dict, int]:
+        """Parse a single SQL condition string into a MongoDB filter dict.
+
+        Returns:
+            (mongo_filter_dict, updated_param_index)
+        """
+        import re
+
+        cond = condition.strip()
+
+        # IS NOT NULL
+        match = re.match(r"^(\w+)\s+IS\s+NOT\s+NULL$", cond, re.IGNORECASE)
+        if match:
+            return {match.group(1): {"$exists": True, "$ne": None}}, param_index
+
+        # IS NULL
+        match = re.match(r"^(\w+)\s+IS\s+NULL$", cond, re.IGNORECASE)
+        if match:
+            return {match.group(1): {"$exists": False}}, param_index
+
+        # NOT IN
+        match = re.match(r"^(\w+)\s+NOT\s+IN\s*\(\s*\?\s*\)$", cond, re.IGNORECASE)
+        if match:
+            val = self._params[param_index] if param_index < len(self._params) else []
+            values = val if isinstance(val, list) else [val]
+            return {match.group(1): {"$nin": values}}, param_index + 1
+
+        # IN
+        match = re.match(r"^(\w+)\s+IN\s*\(\s*\?\s*\)$", cond, re.IGNORECASE)
+        if match:
+            val = self._params[param_index] if param_index < len(self._params) else []
+            values = val if isinstance(val, list) else [val]
+            return {match.group(1): {"$in": values}}, param_index + 1
+
+        # LIKE
+        match = re.match(r"^(\w+)\s+LIKE\s+\?$", cond, re.IGNORECASE)
+        if match:
+            val = self._params[param_index] if param_index < len(self._params) else ""
+            # Convert SQL LIKE pattern to regex: % -> .*, _ -> .
+            pattern = str(val).replace("%", ".*").replace("_", ".")
+            return {match.group(1): {"$regex": pattern, "$options": "i"}}, param_index + 1
+
+        # Comparison operators: >=, <=, <>, !=, >, <, =
+        match = re.match(r"^(\w+)\s*(>=|<=|<>|!=|>|<|=)\s*\?$", cond)
+        if match:
+            field = match.group(1)
+            op = match.group(2)
+            val = self._params[param_index] if param_index < len(self._params) else None
+            op_map = {
+                "=": None,
+                "!=": "$ne",
+                "<>": "$ne",
+                ">": "$gt",
+                ">=": "$gte",
+                "<": "$lt",
+                "<=": "$lte",
+            }
+            mongo_op = op_map.get(op)
+            if mongo_op is None:
+                return {field: val}, param_index + 1
+            return {field: {mongo_op: val}}, param_index + 1
+
+        # Fallback: return condition as-is in $where (raw JS expression)
+        return {"$where": cond}, param_index
+
+    @staticmethod
+    def _merge_mongo_conditions(conditions: list[dict]) -> dict:
+        """Merge a list of single-field mongo condition dicts into one dict.
+
+        If the same field appears in multiple conditions, wraps them in $and.
+        """
+        if len(conditions) == 1:
+            return conditions[0]
+
+        merged = {}
+        conflicts = []
+        for cond in conditions:
+            for key, val in cond.items():
+                if key in merged:
+                    conflicts.append(cond)
+                    break
+                else:
+                    merged[key] = val
+            else:
+                continue
+            # If we broke out due to conflict, don't add to merged
+            pass
+
+        if conflicts:
+            return {"$and": conditions}
+        return merged
+
     # -- Private helpers --
 
     def _build_where(self) -> str:

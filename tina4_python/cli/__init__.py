@@ -141,6 +141,37 @@ def _init(args):
         if not dst_file.exists() and src_file.exists():
             dst_file.write_text(src_file.read_text(encoding="utf-8"), encoding="utf-8")
 
+    # Create root Dockerfile (uv variant) if it doesn't exist
+    root_dockerfile = target / "Dockerfile"
+    if not root_dockerfile.exists():
+        root_dockerfile.write_text(
+            'FROM python:3.13-slim AS build\n'
+            'WORKDIR /app\n'
+            'COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv\n'
+            'COPY pyproject.toml uv.lock* ./\n'
+            'RUN uv sync --frozen --no-dev\n'
+            'COPY . .\n'
+            '\n'
+            'FROM python:3.13-slim\n'
+            'WORKDIR /app\n'
+            'COPY --from=build /app .\n'
+            'COPY --from=build /usr/local/bin/uv /usr/local/bin/uv\n'
+            'ENV PATH="/app/.venv/bin:$PATH"\n'
+            'ENV HOST=0.0.0.0\n'
+            'ENV PORT=7145\n'
+            'EXPOSE 7145\n'
+            'CMD ["python", "app.py"]\n',
+            encoding="utf-8",
+        )
+
+    # Create root .dockerignore if it doesn't exist
+    root_dockerignore = target / ".dockerignore"
+    if not root_dockerignore.exists():
+        root_dockerignore.write_text(
+            ".venv\n__pycache__\n.git\n.claude\n.env\n*.log\ntests\ntmp\n",
+            encoding="utf-8",
+        )
+
     # Auto-detect AI tools and install context
     from tina4_python.ai import detect_ai_names, install_context, install_all
     detected = detect_ai_names(str(target))
