@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.9.1 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.9.2 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -181,6 +181,15 @@ model.to_json() -> str
 model.create_table() -> bool
 
 orm_bind(dba: Database) -> None  # Bind database to all ORM subclasses
+```
+
+### QueryBuilder — Fluent query construction
+
+The ORM `select()` method supports a fluent QueryBuilder API. NoSQL support: `to_mongo()` generates MongoDB query documents from the same fluent API.
+
+```python
+result = User().select(filter="active = ?", params=[True], order_by="name", limit=10)
+result.to_mongo()  # Returns MongoDB query document equivalent
 ```
 
 ### Frond — Template engine (replaces Template)
@@ -481,13 +490,13 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Template engine via `tina4_python.frond` (Frond — Jinja2/Twig-compatible, replaces Template)
 - JWT auth via `tina4_python.auth` (zero-dep HMAC-SHA256, password hashing via PBKDF2)
 - Queue via `tina4_python.queue` (database-backed, zero deps)
-- WebSocket via `tina4_python.websocket` (RFC 6455, asyncio-based)
+- WebSocket via `tina4_python.websocket` (RFC 6455, asyncio-based). WebSocket backplane for scaling broadcast across instances via Redis pub/sub. Configured via `TINA4_WS_BACKPLANE` and `TINA4_WS_BACKPLANE_URL` env vars
 - API client via `tina4_python.api` (urllib-based, zero deps)
 - Swagger via `tina4_python.swagger` (OpenAPI 3.0.3 generator)
 - GraphQL via `tina4_python.graphql` (recursive-descent parser, ORM auto-generation)
 - WSDL/SOAP via `tina4_python.wsdl` (SOAP 1.1 with auto WSDL generation)
 - Migrations via `tina4_python.migration` (SQL-file-based with tracking)
-- Sessions via `tina4_python.session` (File, Database backends)
+- Sessions via `tina4_python.session` (File, Database backends). `TINA4_SESSION_SAMESITE` env var controls SameSite attribute (default: Lax)
 - Auto-CRUD via `tina4_python.crud` (AutoCrud — REST from ORM models)
 - Seeder via `tina4_python.seeder` (FakeData, seed_table)
 - i18n via `tina4_python.i18n` (I18n — JSON-based translations)
@@ -509,9 +518,13 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Queue backends: file (default), RabbitMQ, Kafka, MongoDB — configured via env vars
 - Cache backends: memory (default), Redis, file — configured via env vars
 - Session backends: file, Redis, Valkey, MongoDB, database
+- QueryBuilder with NoSQL/MongoDB support (`to_mongo()`)
+- WebSocket backplane (Redis pub/sub) for horizontal scaling
+- SameSite=Lax default on session cookies (`TINA4_SESSION_SAMESITE`)
+- `tina4 init` generates Dockerfile and .dockerignore
 - Gallery: 7 interactive examples with Try It deploy at `/__dev/`
 - Tests: 1,791 passing (38 modules)
-- Version: 3.9.1
+- Version: 3.9.2
 
 ## Links
 

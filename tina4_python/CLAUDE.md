@@ -233,7 +233,7 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 | GraphQL API | `GraphQL` from `tina4_python.graphql` |
 | SOAP/WSDL services | `WSDL` from `tina4_python.wsdl` |
 | Database migrations | `migrate`, `create_migration` from `tina4_python.migration` |
-| WebSockets | `WebSocketServer` from `tina4_python.websocket` |
+| WebSockets | `WebSocketServer` from `tina4_python.websocket`. Backplane via Redis pub/sub (`TINA4_WS_BACKPLANE`, `TINA4_WS_BACKPLANE_URL`) |
 | SCSS compilation | Drop `.scss` in `src/scss/` — auto-compiled |
 | Static file serving | Put files in `src/public/` — auto-served |
 | Translations / i18n | `I18n` from `tina4_python.i18n` |
@@ -336,7 +336,7 @@ tina4_python/               # Core framework package (v3.0.0)
 ├── migration/              # SQL-file migrations (migrate, create_migration, rollback)
 │   └── runner.py           # Migration runner
 ├── session/                # Pluggable sessions (Session, FileSessionHandler, DatabaseSessionHandler)
-├── websocket/              # RFC 6455 WebSocket server (WebSocketServer, WebSocketConnection)
+├── websocket/              # RFC 6455 WebSocket server (WebSocketServer, WebSocketConnection, backplane)
 ├── graphql/                # Zero-dep GraphQL engine (GraphQL, Schema)
 ├── wsdl/                   # SOAP 1.1 / WSDL server (WSDL, wsdl_operation)
 ├── crud/                   # Auto-CRUD REST endpoint generator (AutoCrud)
@@ -504,6 +504,7 @@ TINA4_SESSION_MONGO_USERNAME=             # optional
 TINA4_SESSION_MONGO_PASSWORD=             # optional
 TINA4_SESSION_MONGO_DB=tina4_sessions     # default database
 TINA4_SESSION_MONGO_COLLECTION=sessions   # default collection
+TINA4_SESSION_SAMESITE=Lax               # SameSite attribute for session cookies (default: Lax)
 ```
 
 ### Authentication & Security
@@ -836,6 +837,9 @@ result = User().select(filter="name = ?", params=["Alice"], limit=10)
 
 # Convert to dict
 user.to_dict()
+
+# NoSQL support: to_mongo() generates MongoDB query documents from the same fluent API
+result.to_mongo()
 ```
 
 ### Available field types
@@ -1532,6 +1536,7 @@ HOST_NAME=localhost:7145
 
 # Sessions
 TINA4_SESSION_HANDLER=SessionFileHandler  # SessionFileHandler, SessionRedisHandler, SessionValkeyHandler, SessionMongoHandler
+TINA4_SESSION_SAMESITE=Lax               # SameSite attribute for session cookies (default: Lax)
 
 # Swagger/OpenAPI
 SWAGGER_TITLE=Tina4 API           # API title (default: "Tina4 API")
@@ -1768,6 +1773,10 @@ async def dashboard(request, response):
 - **Messenger**: .env driven SMTP/IMAP
 - **ORM relationships**: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)
 - **Frond pre-compilation**: 2.8x template render improvement, `Frond.clear_cache()`
+- **QueryBuilder** with NoSQL/MongoDB support (`to_mongo()`)
+- **WebSocket backplane** (Redis pub/sub) for horizontal scaling
+- **SameSite=Lax** default on session cookies (`TINA4_SESSION_SAMESITE`)
+- **`tina4 init`** generates Dockerfile and .dockerignore
 - **Gallery**: 7 interactive examples with Try It deploy at `/__dev/`
 
 
