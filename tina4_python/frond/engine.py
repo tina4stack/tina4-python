@@ -578,7 +578,7 @@ def _wordwrap(text: str, width: int) -> str:
 # ── Form Token ─────────────────────────────────────────────────
 
 
-def _form_token(descriptor: str = "") -> str:
+def _form_token(descriptor: str = "", session_id: str = "") -> str:
     """Generate a JWT form token and return a hidden input element.
 
     Args:
@@ -586,6 +586,9 @@ def _form_token(descriptor: str = "") -> str:
             - Empty or omitted: payload is ``{"type": "form"}``
             - ``"admin_panel"``: payload is ``{"type": "form", "context": "admin_panel"}``
             - ``"checkout|order_123"``: payload is ``{"type": "form", "context": "checkout", "ref": "order_123"}``
+        session_id: Optional session ID to bind the token to a specific session.
+            When provided, the CSRF middleware will verify the token belongs to
+            the same session. If empty, checks ``_form_token_session_id`` global.
 
     Returns:
         ``<input type="hidden" name="formToken" value="TOKEN">``
@@ -600,11 +603,27 @@ def _form_token(descriptor: str = "") -> str:
         else:
             payload["context"] = descriptor
 
+    # Include session_id in payload for CSRF session binding
+    sid = session_id or _form_token_session_id
+    if sid:
+        payload["session_id"] = sid
+
     secret = os.environ.get("SECRET", "tina4-default-secret")
     ttl = int(os.environ.get("TINA4_TOKEN_EXPIRES_IN", "60"))
     auth = _FrondAuth(secret=secret, expires_in=ttl)
     token = auth.get_token(payload)
     return SafeString(f'<input type="hidden" name="formToken" value="{token}">')
+
+
+# Module-level session ID holder — set by the server before rendering templates
+# so that form_token() can bind tokens to the current session.
+_form_token_session_id: str = ""
+
+
+def set_form_token_session_id(session_id: str) -> None:
+    """Set the session ID used by form_token() for CSRF session binding."""
+    global _form_token_session_id
+    _form_token_session_id = session_id or ""
 
 
 # ── Frond Engine ────────────────────────────────────────────────

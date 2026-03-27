@@ -1,9 +1,9 @@
-# Tina4 Middleware — CORS and Rate Limiter.
+# Tina4 Middleware — CORS, Rate Limiter, CSRF.
 """
-Built-in middleware for cross-origin requests and rate limiting.
+Built-in middleware for cross-origin requests, rate limiting, and CSRF protection.
 Zero dependencies — stdlib only.
 
-    from tina4_python.core.middleware import CorsMiddleware, RateLimiter
+    from tina4_python.core.middleware import CorsMiddleware, RateLimiter, CsrfMiddleware
 
 CORS is configured via environment variables:
     TINA4_CORS_ORIGINS=*                    # Allowed origins (* = all)
@@ -14,9 +14,13 @@ CORS is configured via environment variables:
 Rate limiter uses a sliding window in memory:
     TINA4_RATE_LIMIT=100                   # Requests per window
     TINA4_RATE_WINDOW=60                   # Window in seconds
+
+CSRF protection (off by default):
+    TINA4_CSRF=true                        # Enable CSRF token validation
 """
 import os
 import time
+import logging
 import threading
 
 
@@ -183,5 +187,124 @@ class SecurityHeadersMiddleware:
                 "camera=(), microphone=(), geolocation=()",
             ),
         )
+
+        return request, response
+
+
+class CsrfMiddleware:
+    """CSRF token validation middleware.
+
+    Off by default — only active when TINA4_CSRF=true in .env or when
+    registered explicitly via Router.use(CsrfMiddleware).
+
+    Behaviour:
+        - Skips GET, HEAD, OPTIONS requests.
+        - Skips routes marked @noauth().
+        - Skips requests with a valid Authorization: Bearer header (API clients).
+        - Checks request.body["formToken"] then request.headers["X-Form-Token"].
+        - Rejects if token found in request.query["formToken"] (log warning, 403).
+        - Validates token with Auth.valid_token using SECRET env var.
+        - If token payload has session_id, verifies it matches request.session.session_id.
+        - Returns 403 with response.error("CSRF_INVALID", ...) on failure.
+    """
+
+    _logger = logging.getLogger("tina4.csrf")
+
+    @staticmethod
+    def before_csrf(request, response):
+        """Validate CSRF token before the route handler runs."""
+        # Check if CSRF is enabled via env (middleware registration bypasses this)
+        csrf_env = os.environ.get("TINA4_CSRF", "").lower() in ("true", "1", "yes")
+        # When registered via Router.use(), this method always runs.
+        # The env check is only for auto-activation scenarios.
+
+        # Skip safe HTTP methods
+        method = getattr(request, "method", "GET").upper()
+        if method in ("GET", "HEAD", "OPTIONS"):
+            return request, response
+
+        # Skip routes marked @noauth()
+        handler = getattr(request, "_handler", None)
+        if handler and getattr(handler, "_noauth", False):
+            return request, response
+
+        # Skip requests with valid Bearer token (API clients)
+        auth_header = ""
+        headers = getattr(request, "headers", {})
+        if isinstance(headers, dict):
+            auth_header = headers.get("authorization", headers.get("Authorization", ""))
+        elif hasattr(headers, "get"):
+            auth_header = headers.get("authorization", "")
+
+        if auth_header.startswith("Bearer "):
+            bearer_token = auth_header[7:].strip()
+            if bearer_token:
+                from tina4_python.auth import Auth as _CsrfAuth
+                secret = os.environ.get("SECRET", "tina4-default-secret")
+                auth = _CsrfAuth(secret=secret)
+                if auth.valid_token(bearer_token) is not None:
+                    return request, response
+
+        # Reject if token is in query string (security risk — log warning)
+        query = getattr(request, "params", None) or getattr(request, "query", None) or {}
+        if isinstance(query, dict) and query.get("formToken"):
+            CsrfMiddleware._logger.warning(
+                "CSRF token found in query string — rejected for security. "
+                "Use POST body or X-Form-Token header instead."
+            )
+            return request, response.error(
+                "CSRF_INVALID",
+                "Form token must not be sent in the URL query string",
+                403,
+            )
+
+        # Extract token: body first, then header
+        token = None
+        body = getattr(request, "body", None) or {}
+        if isinstance(body, dict):
+            token = body.get("formToken")
+
+        if not token:
+            if isinstance(headers, dict):
+                token = headers.get("x-form-token", headers.get("X-Form-Token", ""))
+            elif hasattr(headers, "get"):
+                token = headers.get("x-form-token", "")
+
+        if not token:
+            return request, response.error(
+                "CSRF_INVALID",
+                "Invalid or missing form token",
+                403,
+            )
+
+        # Validate the token
+        from tina4_python.auth import Auth as _CsrfAuth
+        secret = os.environ.get("SECRET", "tina4-default-secret")
+        auth = _CsrfAuth(secret=secret)
+        payload = auth.valid_token(token)
+
+        if payload is None:
+            return request, response.error(
+                "CSRF_INVALID",
+                "Invalid or missing form token",
+                403,
+            )
+
+        # Session binding — if token has session_id, verify it matches
+        token_session_id = payload.get("session_id")
+        if token_session_id:
+            session = getattr(request, "session", None)
+            current_session_id = None
+            if session is not None:
+                current_session_id = getattr(session, "session_id", None)
+                if current_session_id is None and hasattr(session, "get"):
+                    current_session_id = session.get("session_id")
+
+            if current_session_id and token_session_id != current_session_id:
+                return request, response.error(
+                    "CSRF_INVALID",
+                    "Invalid or missing form token",
+                    403,
+                )
 
         return request, response
