@@ -1,11 +1,11 @@
 # Tina4 Queue — Unified job queue with pluggable backends, zero dependencies.
 """
-Production-grade queue with auto-detected backends. Switching from SQLite to
+Production-grade queue with auto-detected backends. Switching from file to
 RabbitMQ, Kafka, or MongoDB is a .env change — no code change needed.
 
     from tina4_python.queue import Queue
 
-    # Auto-detect backend from TINA4_QUEUE_BACKEND env var (default: sqlite)
+    # Auto-detect backend from TINA4_QUEUE_BACKEND env var (default: file)
     queue = Queue(topic="emails")
     queue.push({"to": "alice@test.com", "subject": "Hello"})
 
@@ -14,12 +14,12 @@ RabbitMQ, Kafka, or MongoDB is a .env change — no code change needed.
         job.complete()
 
 Environment variables:
-    TINA4_QUEUE_BACKEND   — 'sqlite' (default), 'rabbitmq', 'kafka', or 'mongodb'
+    TINA4_QUEUE_BACKEND   — 'file' (default), 'rabbitmq', 'kafka', or 'mongodb'
     TINA4_QUEUE_URL       — connection URL for rabbitmq/kafka
+    TINA4_QUEUE_PATH      — file backend storage path (default: data/queue)
     TINA4_RABBITMQ_HOST   — RabbitMQ host (default: localhost)
     TINA4_KAFKA_BROKERS   — Kafka brokers (default: localhost:9092)
     TINA4_MONGO_HOST      — MongoDB host (default: localhost)
-    DATABASE_URL          — used by sqlite backend when no db passed
 """
 import json
 import os
@@ -62,124 +62,219 @@ class Job:
         self.queue._backend.retry(self, delay_seconds)
 
 
-class _SqliteAdapter:
-    """Backend adapter wrapping the database for the unified Queue API."""
+class _FileAdapter:
+    """File-based queue backend — JSON files on disk. Zero dependencies.
 
-    def __init__(self, db, topic: str, max_retries: int):
-        self._db = db
+    Matches the file-based queue implementation in PHP, Ruby, and Node.js.
+    Each job is stored as a separate .queue-data JSON file.
+    """
+
+    def __init__(self, topic: str, max_retries: int):
         self._topic = topic
         self._max_retries = max_retries
-        self._ensure_table()
+        self._base_path = os.environ.get("TINA4_QUEUE_PATH", "data/queue")
+        self._lock = threading.Lock()
+        self._seq = 0
+        self._ensure_dirs()
 
-    def _ensure_table(self):
-        if not self._db.table_exists("tina4_queue"):
-            self._db.execute("""
-                CREATE TABLE tina4_queue (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    topic TEXT NOT NULL,
-                    data TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    priority INTEGER NOT NULL DEFAULT 0,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    error TEXT,
-                    available_at TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    completed_at TEXT,
-                    reserved_at TEXT
-                )
-            """)
-            self._db.commit()
+    def _ensure_dirs(self):
+        queue_dir = os.path.join(self._base_path, self._topic)
+        failed_dir = os.path.join(queue_dir, "failed")
+        os.makedirs(queue_dir, exist_ok=True)
+        os.makedirs(failed_dir, exist_ok=True)
 
-    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> int:
+    def _queue_dir(self) -> str:
+        return os.path.join(self._base_path, self._topic)
+
+    def _failed_dir(self) -> str:
+        return os.path.join(self._base_path, self._topic, "failed")
+
+    def _next_prefix(self) -> str:
+        self._seq += 1
+        return f"{int(time.time() * 1000)}-{self._seq:06d}"
+
+    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> str:
+        import uuid
+        job_id = str(uuid.uuid4())
         available = _now() if delay_seconds == 0 else _future(delay_seconds)
-        result = self._db.execute(
-            "INSERT INTO tina4_queue (topic, data, priority, available_at, created_at) VALUES (?, ?, ?, ?, ?)",
-            [self._topic, json.dumps(data, default=str), priority, available, _now()],
-        )
-        self._db.commit()
-        return result.last_id
+        job = {
+            "id": job_id,
+            "topic": self._topic,
+            "data": data,
+            "status": "pending",
+            "priority": priority,
+            "attempts": 0,
+            "error": None,
+            "available_at": available,
+            "created_at": _now(),
+        }
+        prefix = self._next_prefix()
+        filepath = os.path.join(self._queue_dir(), f"{prefix}_{job_id}.queue-data")
+        with open(filepath, "w") as f:
+            json.dump(job, f, indent=2, default=str)
+        return job_id
 
     def pop(self, queue_ref) -> Job | None:
         now = _now()
-        row = self._db.fetch_one(
-            "SELECT * FROM tina4_queue WHERE topic = ? AND status = 'pending' AND available_at <= ? "
-            "ORDER BY priority DESC, id ASC",
-            [self._topic, now],
-        )
-        if not row:
-            return None
+        queue_dir = self._queue_dir()
 
-        result = self._db.execute(
-            "UPDATE tina4_queue SET status = 'reserved', reserved_at = ? WHERE id = ? AND status = 'pending'",
-            [now, row["id"]],
-        )
-        self._db.commit()
+        with self._lock:
+            try:
+                files = sorted(f for f in os.listdir(queue_dir) if f.endswith(".queue-data"))
+            except FileNotFoundError:
+                return None
 
-        if result.affected_rows == 0:
-            return None
+            for filename in files:
+                filepath = os.path.join(queue_dir, filename)
+                try:
+                    with open(filepath) as f:
+                        job_data = json.load(f)
+                except (json.JSONDecodeError, FileNotFoundError):
+                    continue
 
-        return Job(
-            queue=queue_ref,
-            job_id=row["id"],
-            topic=row["topic"],
-            data=json.loads(row["data"]),
-            priority=row["priority"],
-            attempts=row["attempts"],
-        )
+                if job_data.get("status") != "pending":
+                    continue
+                if job_data.get("available_at", "") > now:
+                    continue
+
+                # Claim the job by deleting the file
+                try:
+                    os.unlink(filepath)
+                except FileNotFoundError:
+                    continue  # Already consumed by another worker
+
+                return Job(
+                    queue=queue_ref,
+                    job_id=job_data["id"],
+                    topic=job_data.get("topic", self._topic),
+                    data=job_data["data"],
+                    priority=job_data.get("priority", 0),
+                    attempts=job_data.get("attempts", 0),
+                )
+
+        return None
 
     def size(self, status: str = "pending") -> int:
-        row = self._db.fetch_one(
-            "SELECT COUNT(*) as cnt FROM tina4_queue WHERE topic = ? AND status = ?",
-            [self._topic, status],
-        )
-        return row["cnt"] if row else 0
+        queue_dir = self._queue_dir()
+        count = 0
+        try:
+            for filename in os.listdir(queue_dir):
+                if not filename.endswith(".queue-data"):
+                    continue
+                filepath = os.path.join(queue_dir, filename)
+                try:
+                    with open(filepath) as f:
+                        job_data = json.load(f)
+                    if job_data.get("status") == status:
+                        count += 1
+                except (json.JSONDecodeError, FileNotFoundError):
+                    continue
+        except FileNotFoundError:
+            pass
+        return count
 
     def purge(self, status: str = "completed"):
-        self._db.execute(
-            "DELETE FROM tina4_queue WHERE topic = ? AND status = ?",
-            [self._topic, status],
-        )
-        self._db.commit()
+        queue_dir = self._queue_dir()
+        try:
+            for filename in os.listdir(queue_dir):
+                if not filename.endswith(".queue-data"):
+                    continue
+                filepath = os.path.join(queue_dir, filename)
+                try:
+                    with open(filepath) as f:
+                        job_data = json.load(f)
+                    if job_data.get("status") == status:
+                        os.unlink(filepath)
+                except (json.JSONDecodeError, FileNotFoundError):
+                    continue
+        except FileNotFoundError:
+            pass
 
     def retry_failed(self) -> int:
-        now = _now()
-        result = self._db.execute(
-            "UPDATE tina4_queue SET status = 'pending', available_at = ? "
-            "WHERE topic = ? AND status = 'failed' AND attempts < ?",
-            [now, self._topic, self._max_retries],
-        )
-        self._db.commit()
-        return result.affected_rows
+        failed_dir = self._failed_dir()
+        queue_dir = self._queue_dir()
+        count = 0
+        try:
+            for filename in os.listdir(failed_dir):
+                if not filename.endswith(".queue-data"):
+                    continue
+                filepath = os.path.join(failed_dir, filename)
+                try:
+                    with open(filepath) as f:
+                        job_data = json.load(f)
+                    if job_data.get("attempts", 0) < self._max_retries:
+                        job_data["status"] = "pending"
+                        job_data["available_at"] = _now()
+                        prefix = self._next_prefix()
+                        new_path = os.path.join(queue_dir, f"{prefix}_{job_data['id']}.queue-data")
+                        with open(new_path, "w") as f:
+                            json.dump(job_data, f, indent=2, default=str)
+                        os.unlink(filepath)
+                        count += 1
+                except (json.JSONDecodeError, FileNotFoundError):
+                    continue
+        except FileNotFoundError:
+            pass
+        return count
 
     def dead_letters(self) -> list[dict]:
-        result = self._db.fetch(
-            "SELECT * FROM tina4_queue WHERE topic = ? AND status = 'failed' AND attempts >= ?",
-            [self._topic, self._max_retries],
-            limit=1000,
-        )
-        return result.records
+        failed_dir = self._failed_dir()
+        results = []
+        try:
+            for filename in sorted(os.listdir(failed_dir)):
+                if not filename.endswith(".queue-data"):
+                    continue
+                filepath = os.path.join(failed_dir, filename)
+                try:
+                    with open(filepath) as f:
+                        job_data = json.load(f)
+                    if job_data.get("attempts", 0) >= self._max_retries:
+                        results.append(job_data)
+                except (json.JSONDecodeError, FileNotFoundError):
+                    continue
+        except FileNotFoundError:
+            pass
+        return results
 
     def complete(self, job: Job):
-        self._db.execute(
-            "UPDATE tina4_queue SET status = 'completed', completed_at = ? WHERE id = ?",
-            [_now(), job.id],
-        )
-        self._db.commit()
+        # Job file was already deleted on pop — nothing to do
+        pass
 
     def fail(self, job: Job, error: str = ""):
-        self._db.execute(
-            "UPDATE tina4_queue SET status = 'failed', error = ?, attempts = attempts + 1 WHERE id = ?",
-            [error, job.id],
-        )
-        self._db.commit()
+        job.attempts += 1
+        job_data = {
+            "id": job.id,
+            "topic": job.topic,
+            "data": job.payload,
+            "status": "failed",
+            "priority": job.priority,
+            "attempts": job.attempts,
+            "error": error,
+            "failed_at": _now(),
+        }
+        failed_dir = self._failed_dir()
+        os.makedirs(failed_dir, exist_ok=True)
+        filepath = os.path.join(failed_dir, f"{job.id}.queue-data")
+        with open(filepath, "w") as f:
+            json.dump(job_data, f, indent=2, default=str)
 
     def retry(self, job: Job, delay_seconds: int = 0):
-        available_at = _now() if delay_seconds == 0 else _future(delay_seconds)
-        self._db.execute(
-            "UPDATE tina4_queue SET status = 'pending', available_at = ?, attempts = attempts + 1 WHERE id = ?",
-            [available_at, job.id],
-        )
-        self._db.commit()
+        job.attempts += 1
+        available = _now() if delay_seconds == 0 else _future(delay_seconds)
+        job_data = {
+            "id": job.id,
+            "topic": job.topic,
+            "data": job.payload,
+            "status": "pending",
+            "priority": job.priority,
+            "attempts": job.attempts,
+            "available_at": available,
+            "created_at": _now(),
+        }
+        prefix = self._next_prefix()
+        filepath = os.path.join(self._queue_dir(), f"{prefix}_{job.id}.queue-data")
+        with open(filepath, "w") as f:
+            json.dump(job_data, f, indent=2, default=str)
 
 
 class _RabbitMQAdapter:
@@ -391,14 +486,11 @@ class _MongoDBAdapter:
 
 def _resolve_backend(topic: str, backend: str | None, max_retries: int):
     """Resolve which backend adapter to use."""
-    chosen = backend or os.environ.get("TINA4_QUEUE_BACKEND", "sqlite")
+    chosen = backend or os.environ.get("TINA4_QUEUE_BACKEND", "file")
     chosen = chosen.lower().strip()
 
-    if chosen in ("sqlite", "database", "db"):
-        from tina4_python.database import Database
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///data/tina4_queue.db")
-        auto_db = Database(db_url)
-        return _SqliteAdapter(auto_db, topic, max_retries)
+    if chosen in ("file", "default", "lite"):
+        return _FileAdapter(topic, max_retries)
     elif chosen == "rabbitmq":
         return _RabbitMQAdapter(topic, max_retries)
     elif chosen == "kafka":
@@ -406,14 +498,14 @@ def _resolve_backend(topic: str, backend: str | None, max_retries: int):
     elif chosen in ("mongodb", "mongo"):
         return _MongoDBAdapter(topic, max_retries)
     else:
-        raise ValueError(f"Unknown queue backend: {chosen!r}. Use 'sqlite', 'rabbitmq', 'kafka', or 'mongodb'.")
+        raise ValueError(f"Unknown queue backend: {chosen!r}. Use 'file', 'rabbitmq', 'kafka', or 'mongodb'.")
 
 
 class Queue:
     """Unified job queue with pluggable backends.
 
-    Supports SQLite (default), RabbitMQ, and Kafka. Backend is auto-detected
-    from the TINA4_QUEUE_BACKEND environment variable.
+    Supports file (default), RabbitMQ, Kafka, and MongoDB. Backend is
+    auto-detected from the TINA4_QUEUE_BACKEND environment variable.
 
     Usage:
         queue = Queue(topic="tasks")
@@ -497,27 +589,32 @@ class Queue:
 
     def pop_by_id(self, topic: str, job_id: str) -> Job | None:
         """Pop a specific job by ID from the queue."""
-        if hasattr(self._backend, '_db'):
-            # SQLite backend — query by ID
-            row = self._backend._db.fetch_one(
-                "SELECT * FROM tina4_queue WHERE topic = ? AND id = ? AND status = 'pending'",
-                [topic, int(job_id) if str(job_id).isdigit() else job_id],
-            )
-            if not row:
-                return None
-            now = _now()
-            result = self._backend._db.execute(
-                "UPDATE tina4_queue SET status = 'reserved', reserved_at = ? WHERE id = ? AND status = 'pending'",
-                [now, row["id"]],
-            )
-            self._backend._db.commit()
-            if result.affected_rows == 0:
-                return None
-            return Job(
-                queue=self, job_id=row["id"], topic=row["topic"],
-                data=json.loads(row["data"]), priority=row.get("priority", 0),
-                attempts=row.get("attempts", 0),
-            )
+        if not isinstance(self._backend, _FileAdapter):
+            return None
+        queue_dir = self._backend._queue_dir()
+        try:
+            for filename in os.listdir(queue_dir):
+                if not filename.endswith(".queue-data"):
+                    continue
+                if job_id not in filename:
+                    continue
+                filepath = os.path.join(queue_dir, filename)
+                try:
+                    with open(filepath) as f:
+                        job_data = json.load(f)
+                    if job_data.get("id") == job_id and job_data.get("status") == "pending":
+                        os.unlink(filepath)
+                        return Job(
+                            queue=self, job_id=job_data["id"],
+                            topic=job_data.get("topic", topic),
+                            data=job_data["data"],
+                            priority=job_data.get("priority", 0),
+                            attempts=job_data.get("attempts", 0),
+                        )
+                except (json.JSONDecodeError, FileNotFoundError):
+                    continue
+        except FileNotFoundError:
+            pass
         return None
 
 
