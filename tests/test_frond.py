@@ -845,3 +845,38 @@ class TestReplaceFilter:
         """Replace backslash with forward slash."""
         r = engine.render_string('{{ path|replace("\\\\", "/") }}', {"path": "C:\\\\Users\\\\test"})
         assert "/" in r
+
+
+# ── to_json and js_escape Filter Tests ─────────────────────────
+
+
+class TestJsonAndJsFilters:
+    """Test to_json, tojson, and js_escape filters."""
+
+    def test_to_json_dict(self, engine):
+        r = engine.render_string("{{ data|to_json|raw }}", {"data": {"a": 1}})
+        assert r == '{"a":1}'
+
+    def test_to_json_list(self, engine):
+        r = engine.render_string("{{ items|to_json|raw }}", {"items": [1, 2, 3]})
+        assert r == "[1,2,3]"
+
+    def test_to_json_html_safe(self, engine):
+        """to_json escapes <, >, & for safe embedding in HTML."""
+        r = engine.render_string("{{ data|to_json|raw }}", {"data": {"x": "<b>bold</b>"}})
+        assert "<" not in r
+        assert "\\u003c" in r
+
+    def test_tojson_alias(self, engine):
+        r = engine.render_string("{{ data|tojson|raw }}", {"data": {"a": 1}})
+        assert r == '{"a":1}'
+
+    def test_js_escape_quotes(self, engine):
+        r = engine.render_string("{{ text|js_escape|raw }}", {"text": "it's a \"test\""})
+        assert "\\'" in r
+        assert '\\"' in r
+
+    def test_js_escape_newlines(self, engine):
+        r = engine.render_string("{{ text|js_escape|raw }}", {"text": "line1\nline2"})
+        assert "\\n" in r
+        assert "\n" not in r
