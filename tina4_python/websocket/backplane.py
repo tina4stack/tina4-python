@@ -100,6 +100,101 @@ class RedisBackplane(WebSocketBackplane):
         logger.info("RedisBackplane closed")
 
 
+class NATSBackplane(WebSocketBackplane):
+    """NATS pub/sub backplane.
+
+    Requires the ``nats-py`` package (``pip install nats-py``). The import is
+    deferred so the rest of Tina4 works fine without it installed.
+
+    NATS is async-native, so we run an asyncio event loop in a background
+    thread for the subscription listener.
+    """
+
+    def __init__(self, url: str | None = None):
+        try:
+            import nats  # noqa: F401
+        except ImportError:
+            raise ImportError(
+                "The 'nats-py' package is required for NATSBackplane. "
+                "Install it with: pip install nats-py"
+            )
+
+        self._url = url or os.environ.get(
+            "TINA4_WS_BACKPLANE_URL", "nats://localhost:4222"
+        )
+        self._nc = None
+        self._subs: dict[str, object] = {}
+        self._loop = None
+        self._thread = None
+        self._running = True
+        self._connect()
+        logger.info("NATSBackplane connected to %s", self._url)
+
+    def _connect(self):
+        """Connect to NATS in a background event loop."""
+        import asyncio
+        import nats
+
+        self._loop = asyncio.new_event_loop()
+
+        async def _do_connect():
+            self._nc = await nats.connect(self._url)
+
+        self._loop.run_until_complete(_do_connect())
+
+        # Run the event loop in a background thread for subscriptions
+        self._thread = threading.Thread(
+            target=self._loop.run_forever, daemon=True
+        )
+        self._thread.start()
+
+    def publish(self, channel: str, message: str) -> None:
+        import asyncio
+
+        async def _pub():
+            await self._nc.publish(channel, message.encode())
+
+        asyncio.run_coroutine_threadsafe(_pub(), self._loop).result(timeout=5)
+
+    def subscribe(self, channel: str, callback) -> None:
+        import asyncio
+
+        async def _sub():
+            async def handler(msg):
+                callback(msg.data.decode())
+
+            sub = await self._nc.subscribe(channel, cb=handler)
+            self._subs[channel] = sub
+
+        asyncio.run_coroutine_threadsafe(_sub(), self._loop).result(timeout=5)
+        logger.info("NATSBackplane subscribed to channel '%s'", channel)
+
+    def unsubscribe(self, channel: str) -> None:
+        import asyncio
+
+        sub = self._subs.pop(channel, None)
+        if sub:
+            asyncio.run_coroutine_threadsafe(
+                sub.unsubscribe(), self._loop
+            ).result(timeout=5)
+        logger.info("NATSBackplane unsubscribed from channel '%s'", channel)
+
+    def close(self) -> None:
+        import asyncio
+
+        self._running = False
+        if self._nc:
+            asyncio.run_coroutine_threadsafe(
+                self._nc.close(), self._loop
+            ).result(timeout=5)
+        if self._loop:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        if self._thread:
+            self._thread.join(timeout=2)
+        self._subs.clear()
+        logger.info("NATSBackplane closed")
+
+
 def create_backplane(url: str | None = None) -> WebSocketBackplane | None:
     """Factory that reads TINA4_WS_BACKPLANE and returns the appropriate
     backplane instance, or *None* if no backplane is configured.
@@ -112,9 +207,7 @@ def create_backplane(url: str | None = None) -> WebSocketBackplane | None:
     if backend == "redis":
         return RedisBackplane(url=url)
     elif backend == "nats":
-        raise NotImplementedError(
-            "NATS backplane is on the roadmap but not yet implemented."
-        )
+        return NATSBackplane(url=url)
     elif backend == "":
         return None
     else:

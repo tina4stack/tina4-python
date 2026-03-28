@@ -966,6 +966,10 @@ async def app(scope: dict, receive, send):
                 ttl = int(os.environ.get("TINA4_SESSION_TTL", "3600"))
                 samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
                 response.header("set-cookie", f"tina4_session={sid}; Path=/; HttpOnly; SameSite={samesite}; Max-Age={ttl}")
+            # Probabilistic garbage collection (~1% of requests)
+            import random
+            if random.randint(1, 100) == 1:
+                request.session.gc()
         except Exception:
             pass
 
