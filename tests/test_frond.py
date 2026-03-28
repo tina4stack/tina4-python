@@ -650,3 +650,69 @@ class TestTokenCache:
         r2 = engine.render_string(src, {"show": False})
         assert r1 == "visible"
         assert r2 == "hidden"
+
+
+# ── Method Call Tests ──────────────────────────────────────────
+
+
+class TestMethodCalls:
+    """Test calling methods on dict/object values in templates."""
+
+    def test_dict_callable_with_args(self, engine):
+        """{{ user.t("key") }} calls dict callable with string arg."""
+        ctx = {"user": {"t": lambda k: f"T:{k}"}}
+        assert engine.render_string('{{ user.t("greeting") }}', ctx) == "T:greeting"
+
+    def test_dict_callable_no_args(self, engine):
+        """{{ config.get_name() }} calls dict callable with no args."""
+        ctx = {"config": {"get_name": lambda: "MyApp"}}
+        assert engine.render_string("{{ config.get_name() }}", ctx) == "MyApp"
+
+    def test_dict_callable_multiple_args(self, engine):
+        """{{ math.add(3, 4) }} calls dict callable with multiple args."""
+        ctx = {"math": {"add": lambda a, b: a + b}}
+        assert engine.render_string("{{ math.add(3, 4) }}", ctx) == "7"
+
+    def test_dotted_arg_in_method_call(self, engine):
+        """{{ user.t("auth.email") }} — dot inside quoted arg doesn't split."""
+        ctx = {"user": {"t": lambda k: f"T:{k}"}}
+        assert engine.render_string('{{ user.t("auth.email") }}', ctx) == "T:auth.email"
+
+    def test_method_call_in_html_attribute(self, engine):
+        """{{ func("dotted.key") }} inside HTML attribute renders correctly."""
+        ctx = {"user": {"t": lambda k: f"T:{k}"}}
+        result = engine.render_string(
+            '<input placeholder="{{ user.t(\'auth.email\') }}">', ctx
+        )
+        assert result == '<input placeholder="T:auth.email">'
+
+    def test_object_method_with_args(self, engine):
+        """Object methods with args work through dotted path."""
+        class Obj:
+            def greet(self, name):
+                return f"Hello {name}"
+        ctx = {"obj": Obj()}
+        assert engine.render_string('{{ obj.greet("Alice") }}', ctx) == "Hello Alice"
+
+
+# ── Slice Syntax Tests ─────────────────────────────────────────
+
+
+class TestSliceSyntax:
+    """Test Python slice syntax in bracket access."""
+
+    def test_string_slice_start(self, engine):
+        """{{ text[:5] }} returns first 5 chars."""
+        assert engine.render_string("{{ text[:5] }}", {"text": "Hello World"}) == "Hello"
+
+    def test_string_slice_end(self, engine):
+        """{{ text[6:] }} returns from index 6 onwards."""
+        assert engine.render_string("{{ text[6:] }}", {"text": "Hello World"}) == "World"
+
+    def test_string_slice_range(self, engine):
+        """{{ text[0:5] }} returns chars 0-4."""
+        assert engine.render_string("{{ text[0:5] }}", {"text": "Hello World"}) == "Hello"
+
+    def test_list_slice(self, engine):
+        """{{ items[1:3] }} returns list slice."""
+        assert engine.render_string("{{ items[1:3] }}", {"items": [10, 20, 30, 40]}) == "[20, 30]"

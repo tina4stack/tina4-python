@@ -181,6 +181,60 @@ def _find_colon(expr: str) -> int:
 # ── Expression Evaluator ────────────────────────────────────────
 
 
+def _split_dotted(expr: str) -> list[str]:
+    """Split a dotted expression into parts, respecting quotes, parens, and brackets.
+
+    'user.t("auth.email")' → ['user', 't("auth.email")']
+    'items[0].name'        → ['items', '[0]', 'name']
+    'a.b.c'                → ['a', 'b', 'c']
+    """
+    parts = []
+    current = ""
+    in_q = None
+    paren_depth = 0
+    bracket_depth = 0
+    i = 0
+    while i < len(expr):
+        ch = expr[i]
+        if ch in ('"', "'") and paren_depth == 0 and bracket_depth == 0 and in_q is None:
+            in_q = ch
+            current += ch
+        elif ch == in_q:
+            in_q = None
+            current += ch
+        elif in_q:
+            current += ch
+        elif ch == "(":
+            paren_depth += 1
+            current += ch
+        elif ch == ")":
+            paren_depth -= 1
+            current += ch
+        elif ch == "[" and paren_depth == 0:
+            # Start of bracket access — save current part if any
+            if current:
+                parts.append(current)
+                current = ""
+            bracket_depth += 1
+            current += ch
+        elif ch == "]" and bracket_depth > 0:
+            bracket_depth -= 1
+            current += ch
+            if bracket_depth == 0:
+                parts.append(current)
+                current = ""
+        elif ch == "." and paren_depth == 0 and bracket_depth == 0:
+            if current:
+                parts.append(current)
+                current = ""
+        else:
+            current += ch
+        i += 1
+    if current:
+        parts.append(current)
+    return parts
+
+
 def _resolve(expr: str, context: dict):
     """Resolve a dotted expression against the context.
 
@@ -209,9 +263,8 @@ def _resolve(expr: str, context: dict):
     if expr in ("null", "none", "None"):
         return None
 
-    # Dotted path with bracket access
-    parts = re.split(r"\.|(\[[^\]]+\])", expr)
-    parts = [p for p in parts if p]
+    # Dotted path with bracket access — split respecting quotes and parens
+    parts = _split_dotted(expr)
 
     value = context
     for part in parts:
