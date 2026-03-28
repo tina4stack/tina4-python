@@ -669,7 +669,7 @@ def _parse_filter_chain(expr: str) -> tuple[str, list[tuple[str, list[str]]]]:
 
 
 def _parse_args(raw: str) -> list[str]:
-    """Parse filter arguments, respecting quoted strings."""
+    """Parse filter arguments, respecting quoted strings and backslash escapes."""
     args = []
     current = ""
     in_quote = None
@@ -685,15 +685,37 @@ def _parse_args(raw: str) -> list[str]:
         elif ch == ")" and not in_quote:
             depth -= 1
         elif ch == "," and not in_quote and depth == 0:
-            args.append(current.strip().strip("'\""))
+            args.append(_strip_outer_quotes(current.strip()))
             current = ""
             continue
         current += ch
 
     if current.strip():
-        args.append(current.strip().strip("'\""))
+        args.append(_strip_outer_quotes(current.strip()))
 
     return args
+
+
+def _strip_outer_quotes(s: str) -> str:
+    """Remove only the outermost matching quotes from a string.
+
+    'hello' → hello, "world" → world, \\'  → \\' (no matching quotes).
+    Handles backslash escapes inside: "\\'" → \\' (preserves backslash).
+    """
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in ('"', "'"):
+        inner = s[1:-1]
+        # Process backslash escapes: \' → ', \\" → ", \\\\ → \\
+        result = []
+        i = 0
+        while i < len(inner):
+            if inner[i] == '\\' and i + 1 < len(inner):
+                result.append(inner[i + 1])
+                i += 2
+            else:
+                result.append(inner[i])
+                i += 1
+        return "".join(result)
+    return s
 
 
 # Built-in filters

@@ -818,3 +818,30 @@ class TestDynamicDictKeys:
         ctx = {"lookup": {"x": "found"}, "config": {"key": "x"}}
         r = engine.render_string("{{ lookup[config.key] }}", ctx)
         assert r == "found"
+
+
+# ── Replace Filter Tests ──────────────────────────────────────
+
+
+class TestReplaceFilter:
+    """Test the |replace filter with various argument patterns."""
+
+    def test_simple_replace(self, engine):
+        assert engine.render_string('{{ text|replace("a", "b") }}', {"text": "banana"}) == "bbnbnb"
+
+    def test_replace_space_with_underscore(self, engine):
+        assert engine.render_string("{{ name|replace(' ', '_') }}", {"name": "John Doe"}) == "John_Doe"
+
+    def test_replace_with_empty(self, engine):
+        r = engine.render_string('{{ text|replace("world", "") }}', {"text": "hello world"})
+        assert r.strip() == "hello"
+
+    def test_replace_quote_with_backslash_quote(self, engine):
+        """The critical bug: |replace("'", "\\'") should escape quotes, not corrupt output."""
+        r = engine.render_string("{{ text|replace(\"'\", \"\\\\'\") | raw }}", {"text": "it's ok"})
+        assert r == "it\\'s ok"
+
+    def test_replace_backslash(self, engine):
+        """Replace backslash with forward slash."""
+        r = engine.render_string('{{ path|replace("\\\\", "/") }}', {"path": "C:\\\\Users\\\\test"})
+        assert "/" in r
