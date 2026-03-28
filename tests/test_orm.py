@@ -589,3 +589,105 @@ class TestValidation:
         errors = user.validate()
         assert len(errors) == 1
         assert "required" in errors[0]
+
+
+# ── Auto-commit Tests ──────────────────────────────────────────
+
+
+class TestAutoCommit:
+    """ORM write operations auto-commit without needing explicit db.commit()."""
+
+    def test_save_auto_commits(self, db):
+        """save() persists data without manual commit."""
+        user = User({"name": "AutoSave"})
+        user.save()
+        # Do NOT call db.commit() — save() should have done it
+        row = db.fetch_one("SELECT name FROM users WHERE name = ?", ["AutoSave"])
+        assert row is not None
+        assert row["name"] == "AutoSave"
+
+    def test_save_update_auto_commits(self, db):
+        """save() on existing record auto-commits the update."""
+        user = User({"name": "Before"})
+        user.save()
+        user.name = "After"
+        user.save()
+        row = db.fetch_one("SELECT name FROM users WHERE id = ?", [user.id])
+        assert row["name"] == "After"
+
+    def test_delete_auto_commits(self, db):
+        """delete() persists without manual commit."""
+        user = User({"name": "ToDelete"})
+        user.save()
+        uid = user.id
+        user.delete()
+        row = db.fetch_one("SELECT * FROM users WHERE id = ?", [uid])
+        assert row is None
+
+    def test_soft_delete_auto_commits(self, db):
+        """Soft delete auto-commits."""
+        post = Post({"title": "SoftDel", "user_id": 1})
+        post.save()
+        pid = post.id
+        post.delete()
+        row = db.fetch_one("SELECT deleted_at FROM posts WHERE id = ?", [pid])
+        assert row is not None
+        assert row["deleted_at"] is not None
+
+    def test_restore_auto_commits(self, db):
+        """restore() auto-commits."""
+        post = Post({"title": "Restore", "user_id": 1})
+        post.save()
+        post.delete()
+        post.restore()
+        row = db.fetch_one("SELECT deleted_at FROM posts WHERE id = ?", [post.id])
+        assert row["deleted_at"] is None
+
+    def test_force_delete_auto_commits(self, db):
+        """force_delete() auto-commits."""
+        post = Post({"title": "ForceDel", "user_id": 1})
+        post.save()
+        pid = post.id
+        post.force_delete()
+        row = db.fetch_one("SELECT * FROM posts WHERE id = ?", [pid])
+        assert row is None
+
+    def test_create_table_auto_commits(self, db):
+        """create_table() auto-commits."""
+        class Widget(ORM):
+            table_name = "widgets"
+            id = Field(int, primary_key=True, auto_increment=True)
+            name = Field(str)
+
+        Widget.create_table()
+        assert db.table_exists("widgets")
+
+
+# ── get_next_id Tests ──────────────────────────────────────────
+
+
+class TestGetNextId:
+    """Database.get_next_id() returns the next available ID for a table."""
+
+    def test_get_next_id_empty_table(self, db):
+        """Next ID on empty table returns 1."""
+        next_id = db.get_next_id("users")
+        assert next_id == 1
+
+    def test_get_next_id_with_rows(self, db):
+        """Next ID after inserts returns max + 1."""
+        db.insert("users", {"name": "A"})
+        db.insert("users", {"name": "B"})
+        db.commit()
+        next_id = db.get_next_id("users")
+        assert next_id == 3
+
+    def test_get_next_id_custom_column(self, db):
+        """Next ID with custom primary key column."""
+        next_id = db.get_next_id("users", pk_column="id")
+        assert next_id == 1
+
+    def test_get_next_id_nonexistent_table(self, db):
+        """Next ID on missing table returns 1."""
+        next_id = db.get_next_id("nonexistent")
+        assert next_id == 1

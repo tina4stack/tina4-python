@@ -383,6 +383,55 @@ class Database:
         elif self._adapter is not None:
             self._adapter.autocommit = value
 
+    def get_next_id(self, table: str, pk_column: str = "id", generator_name: str = None) -> int:
+        """Get the next available ID for a table.
+
+        Engine-specific strategies:
+            - Firebird: uses GEN_ID(generator, 1) to increment and return
+            - PostgreSQL: uses nextval(sequence) if sequence exists
+            - SQLite/MySQL/MSSQL: SELECT MAX(pk) + 1 (fallback)
+
+        Args:
+            table: Table name.
+            pk_column: Primary key column name (default: "id").
+            generator_name: Firebird generator or PostgreSQL sequence name.
+                            Auto-detected if not provided.
+
+        Returns:
+            The next integer ID.
+        """
+        engine = self.get_database_type()
+
+        if engine == "firebird":
+            gen_name = generator_name or f"GEN_{table.upper()}_ID"
+            # Create generator if it doesn't exist
+            try:
+                self.execute(f"CREATE GENERATOR {gen_name}")
+                self.commit()
+            except Exception:
+                pass  # Already exists
+            row = self.fetch_one(
+                f"SELECT GEN_ID({gen_name}, 1) AS next_id FROM RDB$DATABASE"
+            )
+            return row["next_id"] if row else 1
+
+        elif engine == "postgresql":
+            seq_name = generator_name or f"{table}_{pk_column}_seq"
+            try:
+                row = self.fetch_one(f"SELECT nextval('{seq_name}') AS next_id")
+                return row["next_id"] if row else 1
+            except Exception:
+                pass  # Sequence doesn't exist, fall through to MAX
+
+        # Fallback: MAX(pk) + 1
+        try:
+            row = self.fetch_one(
+                f"SELECT MAX({pk_column}) AS max_id FROM {table}"
+            )
+            return (row["max_id"] or 0) + 1 if row else 1
+        except Exception:
+            return 1
+
     def register_function(self, name: str, num_params: int, func: callable, deterministic: bool = True):
         """Register a custom SQL function (SQLite only).
 
