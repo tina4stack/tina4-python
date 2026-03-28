@@ -463,12 +463,25 @@ def _eval_expr(expr: str, context: dict):
         if _find_outside_quotes(expr, op) >= 0:
             return _eval_comparison(expr, context)
 
-    # Function call: name("arg1", "arg2")
-    fn_match = re.match(r"^(\w+)\s*\((.*)?\)$", expr, re.DOTALL)
+    # Function call: name("arg1", "arg2") or obj.method("arg1")
+    fn_match = re.match(r"^([\w.]+)\s*\((.*)?\)$", expr, re.DOTALL)
     if fn_match:
         fn_name = fn_match.group(1)
         raw_args = fn_match.group(2) or ""
-        fn = context.get(fn_name) or _resolve(fn_name, context)
+        # For dotted names like obj.method, resolve the object then get the method
+        if "." in fn_name:
+            parts = fn_name.rsplit(".", 1)
+            obj = _resolve(parts[0], context)
+            if obj is None:
+                fn = None
+            elif isinstance(obj, dict):
+                fn = obj.get(parts[1])
+            elif hasattr(obj, parts[1]):
+                fn = getattr(obj, parts[1])
+            else:
+                fn = None
+        else:
+            fn = context.get(fn_name) or _resolve(fn_name, context)
         if callable(fn):
             if raw_args.strip():
                 # Split args manually, evaluate each as expression
