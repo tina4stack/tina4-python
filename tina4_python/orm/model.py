@@ -240,6 +240,9 @@ class ORM(metaclass=ORMMeta):
             if result.last_id and pk in self._fields:
                 setattr(self, pk, result.last_id)
 
+        # ORM save is a discrete unit of work — always commit
+        db.commit()
+
         # Invalidate cached queries and relationship cache
         self.clear_cache()
         self._rel_cache = {}
@@ -264,6 +267,9 @@ class ORM(metaclass=ORMMeta):
         else:
             db.delete(table, f"{pk_db_col} = ?", [pk_value])
 
+        # ORM delete is a discrete unit of work — always commit
+        db.commit()
+
     def force_delete(self):
         """Hard delete, even if soft delete is enabled."""
         db = self._get_db()
@@ -276,6 +282,7 @@ class ORM(metaclass=ORMMeta):
             raise ValueError("Cannot delete: no primary key value")
 
         db.delete(table, f"{pk_db_col} = ?", [pk_value])
+        db.commit()
 
     def restore(self):
         """Restore a soft-deleted record."""
@@ -290,6 +297,7 @@ class ORM(metaclass=ORMMeta):
 
         db.update(table, {"deleted_at": None}, f"{pk_db_col} = ?", [pk_value])
         self.deleted_at = None
+        db.commit()
 
     # ── Finders ─────────────────────────────────────────────────
 
@@ -497,6 +505,7 @@ class ORM(metaclass=ORMMeta):
         sql = SQLTranslator.auto_increment_syntax(sql, engine)
 
         db.execute(sql)
+        db.commit()
         return True
 
     # ── Cached Queries ────────────────────────────────────────
