@@ -36,12 +36,13 @@ class ConnectionPool:
     """
 
     def __init__(self, pool_size: int, factory: callable, connect_path: str,
-                 username: str = "", password: str = ""):
+                 username: str = "", password: str = "", **kwargs):
         self._pool_size = pool_size
         self._factory = factory
         self._connect_path = connect_path
         self._username = username
         self._password = password
+        self._connect_kwargs = kwargs
         self._adapters: list[DatabaseAdapter | None] = [None] * pool_size
         self._index = 0
         self._lock = threading.Lock()
@@ -50,7 +51,7 @@ class ConnectionPool:
         """Lazily create an adapter at the given index."""
         if self._adapters[idx] is None:
             adapter = self._factory()
-            adapter.connect(self._connect_path, username=self._username, password=self._password)
+            adapter.connect(self._connect_path, username=self._username, password=self._password, **self._connect_kwargs)
             self._adapters[idx] = adapter
         return self._adapters[idx]
 
@@ -130,12 +131,13 @@ class Database:
     operations to the adapter. This is what the rest of the framework uses.
     """
 
-    def __init__(self, url: str = None, username: str = "", password: str = "", pool: int = 0):
+    def __init__(self, url: str = None, username: str = "", password: str = "", pool: int = 0, **kwargs):
         self.url = url or os.environ.get("DATABASE_URL", "sqlite:///data/tina4.db")
         # Priority: constructor params > env vars > empty
         self.username = username or os.environ.get("DATABASE_USERNAME", "")
         self.password = password or os.environ.get("DATABASE_PASSWORD", "")
         self.pool_size = pool  # 0 = single connection, N>0 = N pooled connections
+        self._connect_kwargs = kwargs  # Extra kwargs passed through to adapter.connect()
 
         if self.pool_size > 0:
             # Pooled mode — create a ConnectionPool with lazy adapter creation
@@ -145,13 +147,14 @@ class Database:
                 connect_path=self._connection_path(),
                 username=self.username,
                 password=self.password,
+                **kwargs,
             )
             self._adapter: DatabaseAdapter | None = None
         else:
             # Single-connection mode — current behavior
             self._pool: ConnectionPool | None = None
             self._adapter: DatabaseAdapter = self._create_adapter()
-            self._adapter.connect(self._connection_path(), username=self.username, password=self.password)
+            self._adapter.connect(self._connection_path(), username=self.username, password=self.password, **kwargs)
 
         # Query cache — off by default, opt-in via TINA4_DB_CACHE=true
         from tina4_python.dotenv import is_truthy

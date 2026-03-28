@@ -74,12 +74,16 @@ class TestGracefulImportErrors:
             with pytest.raises(ImportError, match="pymssql"):
                 adapter.connect("mssql://user:pass@localhost:1433/testdb")
 
-    def test_firebird_missing_fdb(self):
-        from tina4_python.database.firebird import FirebirdAdapter
-        adapter = FirebirdAdapter()
-        with patch.dict("sys.modules", {"fdb": None}):
-            with pytest.raises(ImportError, match="fdb"):
+    def test_firebird_missing_driver(self):
+        from tina4_python.database import firebird as fb_module
+        adapter = fb_module.FirebirdAdapter()
+        original_driver = fb_module._driver
+        fb_module._driver = None
+        try:
+            with pytest.raises(ImportError, match="Firebird driver"):
                 adapter.connect("firebird://user:pass@localhost:3050/test.fdb")
+        finally:
+            fb_module._driver = original_driver
 
 
 # ── Connection URL Parsing ───────────────────────────────────────

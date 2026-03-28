@@ -18,7 +18,11 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_tracking_table(db):
-    """Create the migration tracking table if it doesn't exist."""
+    """Create or upgrade the migration tracking table.
+
+    Handles v2→v3 upgrade: v2 tables have `description` but no `migration_id`.
+    When detected, adds the missing column and backfills from `description`.
+    """
     if not db.table_exists("tina4_migration"):
         db.execute("""
             CREATE TABLE tina4_migration (
@@ -31,15 +35,62 @@ def _ensure_tracking_table(db):
             )
         """)
         db.commit()
+        return
+
+    # Check if this is a v2 table (has description but no migration_id column)
+    try:
+        db.fetch_one("SELECT migration_id FROM tina4_migration WHERE 1=0")
+    except Exception:
+        # migration_id column doesn't exist — v2 schema, upgrade it
+        try:
+            db.execute("ALTER TABLE tina4_migration ADD migration_id TEXT")
+            db.commit()
+        except Exception:
+            pass  # Column may already exist on some engines
+
+        # Backfill migration_id from description (v2 used description as the identifier)
+        try:
+            db.execute("UPDATE tina4_migration SET migration_id = description WHERE migration_id IS NULL")
+            db.commit()
+        except Exception:
+            pass
+
+        # Add batch column if missing (v2 didn't have it)
+        try:
+            db.fetch_one("SELECT batch FROM tina4_migration WHERE 1=0")
+        except Exception:
+            try:
+                db.execute("ALTER TABLE tina4_migration ADD batch INTEGER DEFAULT 1")
+                db.commit()
+            except Exception:
+                pass
+
+        # Add executed_at column if missing
+        try:
+            db.fetch_one("SELECT executed_at FROM tina4_migration WHERE 1=0")
+        except Exception:
+            try:
+                db.execute("ALTER TABLE tina4_migration ADD executed_at TEXT DEFAULT ''")
+                db.commit()
+            except Exception:
+                pass
 
 
 def _get_executed(db) -> set[str]:
     """Get set of already-executed migration IDs."""
-    result = db.fetch(
-        "SELECT migration_id FROM tina4_migration WHERE passed = 1",
-        limit=10000,
-    )
-    return {row["migration_id"] for row in result.records}
+    try:
+        result = db.fetch(
+            "SELECT migration_id FROM tina4_migration WHERE passed = 1",
+            limit=10000,
+        )
+        return {row["migration_id"] for row in result.records if row.get("migration_id")}
+    except Exception:
+        # Fallback for v2 tables where migration_id may not exist yet
+        result = db.fetch(
+            "SELECT description FROM tina4_migration WHERE passed = 1",
+            limit=10000,
+        )
+        return {row["description"] for row in result.records if row.get("description")}
 
 
 def _get_next_batch(db) -> int:

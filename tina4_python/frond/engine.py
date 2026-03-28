@@ -217,26 +217,86 @@ def _resolve(expr: str, context: dict):
     for part in parts:
         if part.startswith("[") and part.endswith("]"):
             idx = part[1:-1].strip("'\"")
-            try:
-                idx = int(idx)
-            except ValueError:
-                pass
-            try:
-                value = value[idx]
-            except (KeyError, IndexError, TypeError):
-                return None
-        elif isinstance(value, dict):
-            value = value.get(part)
-        elif hasattr(value, part):
-            attr = getattr(value, part)
-            value = attr() if callable(attr) else attr
+            # Slice syntax: value[1:5], value[:10], value[3:]
+            if ":" in idx:
+                slice_parts = idx.split(":", 1)
+                s_start = int(slice_parts[0]) if slice_parts[0].strip() else None
+                s_end = int(slice_parts[1]) if slice_parts[1].strip() else None
+                try:
+                    value = value[s_start:s_end]
+                except (TypeError, IndexError):
+                    return None
+            else:
+                try:
+                    idx = int(idx)
+                except ValueError:
+                    pass
+                try:
+                    value = value[idx]
+                except (KeyError, IndexError, TypeError):
+                    return None
         else:
-            return None
+            # Check if this part is a method call: name(args)
+            call_match = re.match(r"^(\w+)\s*\((.*)?\)$", part, re.DOTALL)
+            if call_match:
+                method_name = call_match.group(1)
+                raw_args = call_match.group(2) or ""
+                # Resolve the callable from the current value
+                if isinstance(value, dict):
+                    fn = value.get(method_name)
+                elif hasattr(value, method_name):
+                    fn = getattr(value, method_name)
+                else:
+                    return None
+                if callable(fn):
+                    if raw_args.strip():
+                        args = [_eval_expr(a.strip(), context) for a in _split_args(raw_args)]
+                    else:
+                        args = []
+                    value = fn(*args)
+                else:
+                    return None
+            elif isinstance(value, dict):
+                value = value.get(part)
+            elif hasattr(value, part):
+                attr = getattr(value, part)
+                value = attr() if callable(attr) else attr
+            else:
+                return None
 
         if value is None:
             return None
 
     return value
+
+
+def _split_args(raw: str) -> list[str]:
+    """Split comma-separated arguments respecting quotes and nested parens."""
+    parts = []
+    current = ""
+    in_q = None
+    depth = 0
+    for ch in raw:
+        if ch in ('"', "'") and not in_q:
+            in_q = ch
+            current += ch
+        elif ch == in_q:
+            in_q = None
+            current += ch
+        elif ch == "(" and not in_q:
+            depth += 1
+            current += ch
+        elif ch == ")" and not in_q:
+            depth -= 1
+            current += ch
+        elif ch == "," and not in_q and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        parts.append(current.strip())
+    return parts
 
 
 def _eval_expr(expr: str, context: dict):

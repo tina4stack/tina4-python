@@ -1,18 +1,32 @@
-# Tina4 Firebird Driver — Uses fdb (optional).
+# Tina4 Firebird Driver — Uses firebird-driver or fdb (optional).
 """
-Firebird adapter using fdb.
+Firebird adapter using firebird-driver (preferred) or fdb (fallback).
 
     db = Database("firebird://user:pass@localhost:3050/path/to/database.fdb")
 
-Requires: pip install fdb
+Requires: pip install firebird-driver  (or pip install fdb for legacy)
 """
 import re
 from urllib.parse import urlparse, unquote
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
 
+# Try modern firebird-driver first, fall back to legacy fdb
+_driver = None
+_driver_name = None
+try:
+    import firebird.driver as _driver
+    _driver_name = "firebird-driver"
+except ImportError:
+    try:
+        import fdb as _driver
+        _driver_name = "fdb"
+    except ImportError:
+        _driver = None
+        _driver_name = None
+
 
 class FirebirdAdapter(DatabaseAdapter):
-    """Firebird database driver using fdb."""
+    """Firebird database driver using firebird-driver or fdb."""
 
     def __init__(self):
         super().__init__()
@@ -25,12 +39,10 @@ class FirebirdAdapter(DatabaseAdapter):
         Connection string: firebird://user:pass@host:port/path/to/db.fdb
         Credentials priority: URL > username/password params > adapter defaults (SYSDBA/masterkey).
         """
-        try:
-            import fdb
-        except ImportError:
+        if _driver is None:
             raise ImportError(
-                "fdb is required for Firebird connections. "
-                "Install: pip install fdb"
+                "A Firebird driver is required. "
+                "Install: pip install firebird-driver  (or pip install fdb for legacy)"
             )
 
         parsed = urlparse(connection_string)
@@ -42,15 +54,27 @@ class FirebirdAdapter(DatabaseAdapter):
         password = parsed.password or password or "masterkey"
         charset = kwargs.pop("charset", "UTF8")
 
-        self._conn = fdb.connect(
-            host=host,
-            port=port,
-            database=db_path,
-            user=user,
-            password=password,
-            charset=charset,
-            **kwargs,
-        )
+        if _driver_name == "firebird-driver":
+            # Modern firebird-driver uses dsn format: host/port:path
+            dsn = f"{host}/{port}:{db_path}" if port != 3050 else f"{host}:{db_path}"
+            self._conn = _driver.connect(
+                dsn,
+                user=user,
+                password=password,
+                charset=charset,
+                **kwargs,
+            )
+        else:
+            # Legacy fdb
+            self._conn = _driver.connect(
+                host=host,
+                port=port,
+                database=db_path,
+                user=user,
+                password=password,
+                charset=charset,
+                **kwargs,
+            )
 
     def close(self):
         if self._conn:
@@ -94,7 +118,7 @@ class FirebirdAdapter(DatabaseAdapter):
                         desc = cursor.description
                         row = cursor.fetchone()
                         if row and desc:
-                            col_names = [d[0] for d in desc]
+                            col_names = [d[0].strip().lower() for d in desc]
                             records = [dict(zip(col_names, row))]
                 except Exception:
                     pass
@@ -133,7 +157,7 @@ class FirebirdAdapter(DatabaseAdapter):
         cursor.execute(paginated_sql, params or [])
 
         desc = cursor.description
-        col_names = [d[0] for d in desc] if desc else []
+        col_names = [d[0].strip().lower() for d in desc] if desc else []
         rows = [dict(zip(col_names, row)) for row in cursor.fetchall()]
 
         return DatabaseResult(records=rows, count=total, sql=sql, adapter=self)
@@ -146,7 +170,7 @@ class FirebirdAdapter(DatabaseAdapter):
         row = cursor.fetchone()
         if row is None:
             return None
-        col_names = [d[0] for d in desc] if desc else []
+        col_names = [d[0].strip().lower() for d in desc] if desc else []
         return dict(zip(col_names, row))
 
     def insert(self, table: str, data: dict) -> DatabaseResult:
@@ -204,7 +228,7 @@ class FirebirdAdapter(DatabaseAdapter):
             "ORDER BY RDB$RELATION_NAME",
             limit=10000,
         )
-        return [r["RDB$RELATION_NAME"].strip() for r in result.records]
+        return [r["rdb$relation_name"].strip() for r in result.records]
 
     def get_columns(self, table: str) -> list[dict]:
         sql = (
@@ -224,10 +248,10 @@ class FirebirdAdapter(DatabaseAdapter):
         }
         return [
             {
-                "name": r["RDB$FIELD_NAME"].strip() if r["RDB$FIELD_NAME"] else "",
-                "type": type_map.get(r.get("RDB$FIELD_TYPE"), str(r.get("RDB$FIELD_TYPE", ""))),
-                "nullable": r.get("RDB$NULL_FLAG") is None,
-                "default": r.get("RDB$DEFAULT_SOURCE"),
+                "name": r["rdb$field_name"].strip() if r["rdb$field_name"] else "",
+                "type": type_map.get(r.get("rdb$field_type"), str(r.get("rdb$field_type", ""))),
+                "nullable": r.get("rdb$null_flag") is None,
+                "default": r.get("rdb$default_source"),
                 "primary_key": False,
             }
             for r in result.records

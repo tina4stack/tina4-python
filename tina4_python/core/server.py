@@ -772,40 +772,98 @@ async def app(scope: dict, receive, send):
         request._route_params = params
         request.merge_route_params()
         try:
-            import inspect
-            _sig = inspect.signature(route["handler"])
-            _params = list(_sig.parameters.values())
-            _pcount = len(_params)
+            # ── Auth enforcement ────────────────────────────────────
+            _skip_handler = False
+            if route.get("auth_required"):
+                _auth_header = request.headers.get("authorization", "")
+                _api_key = os.environ.get("TINA4_API_KEY", os.environ.get("API_KEY", ""))
+                _auth_ok = False
+                if _auth_header:
+                    if _auth_header.startswith("Bearer "):
+                        _token = _auth_header[7:]
+                        # Check static API key first
+                        if _api_key and _token == _api_key:
+                            _auth_ok = True
+                        else:
+                            # Validate JWT token
+                            try:
+                                from tina4_python.auth import Auth
+                                if Auth.valid_token(_token):
+                                    _auth_ok = True
+                            except Exception:
+                                pass
+                if not _auth_ok:
+                    response.status(401).json({
+                        "error": "Unauthorized",
+                        "message": "Valid authorization token required",
+                        "status": 401,
+                    })
+                    _skip_handler = True
 
-            # Build args: inject path params by name, then request/response
-            _args = []
-            _remaining = []
-            for p in _params:
-                name = p.name
-                if name in params:
-                    _args.append(params[name])
-                else:
-                    _remaining.append(p)
+            # ── Route middleware (before_* methods) ─────────────────
+            if not _skip_handler:
+                for _mw_cls in route.get("middleware", []):
+                    _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
+                    for _attr_name in dir(_mw_inst):
+                        if _attr_name.startswith("before_"):
+                            _mw_method = getattr(_mw_inst, _attr_name)
+                            if callable(_mw_method):
+                                _mw_result = _mw_method(request, response)
+                                if _mw_result is not None:
+                                    request, response = _mw_result
+                                    # If middleware returned an error status, skip handler
+                                    if response.status_code >= 400:
+                                        _skip_handler = True
+                                        break
+                    if _skip_handler:
+                        break
 
-            # Append request/response for remaining positional params
-            if len(_remaining) == 0:
-                pass  # All params were path params
-            elif len(_remaining) == 1:
-                _ann = _remaining[0].annotation
-                if _ann is Request or (isinstance(_ann, str) and _ann in ("Request", "request")):
+            if not _skip_handler:
+                import inspect
+                _sig = inspect.signature(route["handler"])
+                _params = list(_sig.parameters.values())
+                _pcount = len(_params)
+
+                # Build args: inject path params by name, then request/response
+                _args = []
+                _remaining = []
+                for p in _params:
+                    name = p.name
+                    if name in params:
+                        _args.append(params[name])
+                    else:
+                        _remaining.append(p)
+
+                # Append request/response for remaining positional params
+                if len(_remaining) == 0:
+                    pass  # All params were path params
+                elif len(_remaining) == 1:
+                    _ann = _remaining[0].annotation
+                    if _ann is Request or (isinstance(_ann, str) and _ann in ("Request", "request")):
+                        _args.append(request)
+                    else:
+                        _args.append(response)
+                elif len(_remaining) >= 2:
                     _args.append(request)
-                else:
                     _args.append(response)
-            elif len(_remaining) >= 2:
-                _args.append(request)
-                _args.append(response)
 
-            if _pcount == 0:
-                result = await route["handler"]()
-            else:
-                result = await route["handler"](*_args)
-            if isinstance(result, Response):
-                response = result
+                if _pcount == 0:
+                    result = await route["handler"]()
+                else:
+                    result = await route["handler"](*_args)
+                if isinstance(result, Response):
+                    response = result
+
+            # ── Route middleware (after_* methods) ──────────────────
+            for _mw_cls in route.get("middleware", []):
+                _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
+                for _attr_name in dir(_mw_inst):
+                    if _attr_name.startswith("after_"):
+                        _mw_method = getattr(_mw_inst, _attr_name)
+                        if callable(_mw_method):
+                            _mw_result = _mw_method(request, response)
+                            if _mw_result is not None:
+                                request, response = _mw_result
         except Exception as e:
             Log.error(f"Route error: {e}", path=request.path)
             _write_broken(request, e)
@@ -1134,6 +1192,11 @@ def run(host: str | None = None, port: int | None = None):
     import time
     global _start_time
     _start_time = time.time()
+
+    # Ensure CWD is on sys.path so auto-discovered modules can be imported
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
 
     # Load .env first so env vars are available for logger init
     from tina4_python.dotenv import load_env
