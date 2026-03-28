@@ -1074,3 +1074,63 @@ class TestJsonAndJsFilters:
         r = engine.render_string("{{ text|js_escape|raw }}", {"text": "line1\nline2"})
         assert "\\n" in r
         assert "\n" not in r
+
+
+# ── SafeString Tests (no double-escaping) ──────────────────────
+
+
+class TestSafeStringFilters:
+    """Verify js_escape and to_json bypass auto-HTML-escaping via SafeString."""
+
+    def test_js_escape_no_html_encoding(self, engine):
+        """js_escape output should NOT be HTML-encoded (no &#x27; for quotes)."""
+        r = engine.render_string("{{ text|js_escape }}", {"text": "it's a test"})
+        assert r == "it\\'s a test"
+        assert "&#" not in r  # No HTML entities
+
+    def test_to_json_no_html_encoding(self, engine):
+        """to_json output should NOT be HTML-encoded (no &quot; for quotes)."""
+        r = engine.render_string("{{ data|to_json }}", {"data": {"key": "value"}})
+        assert r == '{"key":"value"}'
+        assert "&quot;" not in r
+
+    def test_tojson_no_html_encoding(self, engine):
+        r = engine.render_string("{{ data|tojson }}", {"data": [1, 2]})
+        assert r == "[1,2]"
+
+    def test_js_escape_backslash_not_encoded(self, engine):
+        """Backslashes from js_escape should remain as \\ not &#92;"""
+        r = engine.render_string("{{ text|js_escape }}", {"text": 'say "hello"'})
+        assert '\\"' in r
+        assert "&#" not in r
+
+    def test_to_json_xss_still_escaped(self, engine):
+        """to_json should escape < > & as unicode, not HTML entities."""
+        r = engine.render_string("{{ data|to_json }}", {"data": {"x": "<script>"}})
+        assert "\\u003c" in r  # Unicode-escaped
+        assert "&lt;" not in r  # Not HTML-escaped
+        assert "<script>" not in r  # Not raw
+
+    def test_regular_var_still_html_escaped(self, engine):
+        """Normal variables should still be HTML-auto-escaped."""
+        r = engine.render_string("{{ text }}", {"text": "<b>bold</b>"})
+        assert "&lt;b&gt;" in r
+        assert "<b>" not in r
+
+    def test_js_escape_in_onclick(self, engine):
+        """Real-world: js_escape in an onclick attribute."""
+        r = engine.render_string(
+            '<button onclick="alert(\'{{ msg|js_escape }}\')">Click</button>',
+            {"msg": "it's a \"test\""}
+        )
+        assert "\\'" in r
+        assert "&#" not in r
+
+    def test_to_json_in_script_tag(self, engine):
+        """Real-world: to_json in a script tag."""
+        r = engine.render_string(
+            '<script>var data = {{ items|to_json }};</script>',
+            {"items": [{"name": "Alice"}]}
+        )
+        assert '"name"' in r
+        assert "&quot;" not in r
