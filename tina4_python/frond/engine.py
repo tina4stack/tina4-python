@@ -269,10 +269,11 @@ def _resolve(expr: str, context: dict):
     value = context
     for part in parts:
         if part.startswith("[") and part.endswith("]"):
-            idx = part[1:-1].strip("'\"")
+            raw_idx = part[1:-1].strip()
             # Slice syntax: value[1:5], value[:10], value[3:]
-            if ":" in idx:
-                slice_parts = idx.split(":", 1)
+            if ":" in raw_idx and not ((raw_idx.startswith('"') and raw_idx.endswith('"')) or (raw_idx.startswith("'") and raw_idx.endswith("'"))):
+                idx_clean = raw_idx.strip("'\"")
+                slice_parts = idx_clean.split(":", 1)
                 s_start = int(slice_parts[0]) if slice_parts[0].strip() else None
                 s_end = int(slice_parts[1]) if slice_parts[1].strip() else None
                 try:
@@ -280,10 +281,20 @@ def _resolve(expr: str, context: dict):
                 except (TypeError, IndexError):
                     return None
             else:
-                try:
-                    idx = int(idx)
-                except ValueError:
-                    pass
+                # Resolve the key: string literal, int literal, or variable
+                if (raw_idx.startswith('"') and raw_idx.endswith('"')) or \
+                   (raw_idx.startswith("'") and raw_idx.endswith("'")):
+                    # String literal: balances["9600.000"]
+                    idx = raw_idx[1:-1]
+                else:
+                    try:
+                        # Integer literal: items[0]
+                        idx = int(raw_idx)
+                    except ValueError:
+                        # Variable key: balances[k] or balances[cb.glcode]
+                        idx = _resolve(raw_idx, context)
+                        if idx is None:
+                            return None
                 try:
                     value = value[idx]
                 except (KeyError, IndexError, TypeError):

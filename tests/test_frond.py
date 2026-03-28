@@ -785,3 +785,36 @@ class TestDottedStringArgs:
         result = engine.render_string('{{ echo("it\'s fine") }}', ctx)
         # The inner quote gets stripped by the parser, but the call should not crash
         assert result is not None
+
+
+# ── Dynamic Dict Key Access Tests ──────────────────────────────
+
+
+class TestDynamicDictKeys:
+    """Test dict[variable_key] resolves the variable, not as literal."""
+
+    def test_variable_key_via_set(self, engine):
+        ctx = {"balances": {"9600.000": 342120.0}}
+        r = engine.render_string('{% set k = "9600.000" %}{{ balances[k] }}', ctx)
+        assert r == "342120.0"
+
+    def test_variable_key_from_loop(self, engine):
+        ctx = {"balances": {"A": 100, "B": 200}, "items": [{"code": "A"}, {"code": "B"}]}
+        r = engine.render_string("{% for i in items %}{{ balances[i.code] }},{% endfor %}", ctx)
+        assert r == "100,200,"
+
+    def test_string_literal_key_still_works(self, engine):
+        ctx = {"data": {"key": "val"}}
+        assert engine.render_string('{{ data["key"] }}', ctx) == "val"
+        assert engine.render_string("{{ data['key'] }}", ctx) == "val"
+
+    def test_int_key_still_works(self, engine):
+        assert engine.render_string("{{ items[1] }}", {"items": [10, 20, 30]}) == "20"
+
+    def test_slice_still_works(self, engine):
+        assert engine.render_string("{{ text[:3] }}", {"text": "Hello"}) == "Hel"
+
+    def test_nested_variable_key(self, engine):
+        ctx = {"lookup": {"x": "found"}, "config": {"key": "x"}}
+        r = engine.render_string("{{ lookup[config.key] }}", ctx)
+        assert r == "found"
