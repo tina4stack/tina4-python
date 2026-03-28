@@ -22,6 +22,54 @@ import mimetypes
 from pathlib import Path
 
 
+# ---------------------------------------------------------------------------
+# Global Frond template engine registry
+# ---------------------------------------------------------------------------
+_global_frond = None
+_framework_frond = None
+
+
+def get_frond():
+    """Return the global Frond engine, creating a default if needed."""
+    global _global_frond
+    if _global_frond is None:
+        from tina4_python.frond.engine import Frond
+        _global_frond = Frond("src/templates")
+    return _global_frond
+
+
+def get_framework_frond():
+    """Return the singleton Frond engine for built-in framework templates."""
+    global _framework_frond
+    framework_dir = Path(__file__).resolve().parent.parent / "templates"
+    if _framework_frond is None and framework_dir.is_dir():
+        from tina4_python.frond.engine import Frond
+        _framework_frond = Frond(str(framework_dir))
+    # Sync custom filters/globals from the user engine
+    if _framework_frond is not None:
+        user_engine = get_frond()
+        _framework_frond._filters.update(user_engine._filters)
+        _framework_frond._globals.update(user_engine._globals)
+    return _framework_frond
+
+
+def set_frond(engine):
+    """Register a pre-configured Frond engine for response.render().
+
+    Call this at startup after registering custom filters and globals:
+
+        from tina4_python.frond import Frond
+        from tina4_python.core.response import set_frond
+
+        engine = Frond("src/templates")
+        engine.add_filter("money", my_money_filter)
+        engine.add_global("APP_VERSION", "1.0")
+        set_frond(engine)
+    """
+    global _global_frond
+    _global_frond = engine
+
+
 class Response:
     """HTTP response builder with compression and ETag support."""
 
@@ -175,27 +223,33 @@ class Response:
         return self
 
     def render(self, template: str, data: dict = None) -> "Response":
-        """Render a Frond/Twig template with data."""
-        from tina4_python.frond.engine import Frond
-        from pathlib import Path
+        """Render a Frond/Twig template with data.
 
-        # Search for templates in user dir first, then framework dir
-        template_dirs = []
-        user_dir = Path("src/templates")
-        if user_dir.is_dir():
-            template_dirs.append(str(user_dir))
-        framework_dir = Path(__file__).resolve().parent.parent / "templates"
-        if framework_dir.is_dir():
-            template_dirs.append(str(framework_dir))
+        Uses the global Frond engine (registered via set_frond()) so that
+        custom filters and globals are available in all templates.
+        Falls back to framework templates if not found in user dir.
+        """
+        engine = get_frond()
 
-        for tdir in template_dirs:
-            if (Path(tdir) / template).exists():
-                try:
-                    frond = Frond(tdir)
-                    html = frond.render(template, data or {})
-                    return self.html(html)
-                except Exception as e:
-                    return self.html(f"<pre>Template error: {e}</pre>", 500)
+        # Try user templates first (the global engine's directory)
+        try:
+            html = engine.render(template, data or {})
+            return self.html(html)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            return self.html(f"<pre>Template error: {e}</pre>", 500)
+
+        # Fallback: framework templates (singleton, filters/globals synced)
+        fw_engine = get_framework_frond()
+        if fw_engine is not None:
+            try:
+                html = fw_engine.render(template, data or {})
+                return self.html(html)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                return self.html(f"<pre>Template error: {e}</pre>", 500)
 
         return self.html(f"<pre>Template not found: {template}</pre>", 404)
 

@@ -105,7 +105,7 @@ def _render_error_page(status_code: int, path: str, request_id: str, error_messa
 
     Returns rendered HTML string, or None if no template found.
     """
-    from tina4_python.frond.engine import Frond
+    from tina4_python.core.response import get_frond, get_framework_frond
 
     template_name = f"errors/{status_code}.twig"
     data = {
@@ -115,21 +115,17 @@ def _render_error_page(status_code: int, path: str, request_id: str, error_messa
         "status_code": status_code,
     }
 
-    # 1. Try user override
-    user_dir = Path("src/templates")
-    if (user_dir / template_name).exists():
-        try:
-            engine = Frond(str(user_dir))
-            return engine.render(template_name, data)
-        except Exception:
-            pass
+    # 1. Try user override (singleton engine with custom filters/globals)
+    try:
+        return get_frond().render(template_name, data)
+    except (FileNotFoundError, Exception):
+        pass
 
-    # 2. Try framework default
-    framework_dir = Path(__file__).resolve().parent.parent / "templates"
-    if (framework_dir / template_name).exists():
+    # 2. Try framework default (singleton, filters/globals synced)
+    fw_engine = get_framework_frond()
+    if fw_engine is not None:
         try:
-            engine = Frond(str(framework_dir))
-            return engine.render(template_name, data)
+            return fw_engine.render(template_name, data)
         except Exception:
             pass
 
@@ -848,9 +844,8 @@ async def app(scope: dict, receive, send):
             # Try serving a template file (e.g. /hello -> src/templates/hello.twig or hello.html)
             tpl_file = _resolve_template(request.path)
             if tpl_file:
-                from tina4_python.frond import Frond
-                frond = Frond()
-                html = frond.render(tpl_file, {})
+                from tina4_python.core.response import get_frond
+                html = get_frond().render(tpl_file, {})
                 response.html(html)
             elif request.path == "/":
                 response.html(_render_landing_page())

@@ -203,9 +203,8 @@ class Messenger:
             **kwargs: Passed to send() (cc, bcc, attachments, etc.)
         """
         try:
-            from tina4_python.frond import Frond
-            engine = Frond()
-            body = engine.render_string(template, data or {})
+            from tina4_python.core.response import get_frond
+            body = get_frond().render_string(template, data or {})
         except ImportError:
             body = template
 
