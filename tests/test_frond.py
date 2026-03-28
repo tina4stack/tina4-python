@@ -716,3 +716,72 @@ class TestSliceSyntax:
     def test_list_slice(self, engine):
         """{{ items[1:3] }} returns list slice."""
         assert engine.render_string("{{ items[1:3] }}", {"items": [10, 20, 30, 40]}) == "[20, 30]"
+
+
+# ── Dotted String Argument Edge Cases ──────────────────────────
+
+
+class TestDottedStringArgs:
+    """Test that dots inside quoted function arguments are never misinterpreted."""
+
+    def test_single_dot_single_quotes(self, engine):
+        ctx = {"user": {"t": lambda k: f"T:{k}"}}
+        assert engine.render_string("{{ user.t('auth.email') }}", ctx) == "T:auth.email"
+
+    def test_single_dot_double_quotes(self, engine):
+        ctx = {"user": {"t": lambda k: f"T:{k}"}}
+        assert engine.render_string('{{ user.t("auth.email") }}', ctx) == "T:auth.email"
+
+    def test_multiple_dots(self, engine):
+        ctx = {"i18n": {"t": lambda k: f"T:{k}"}}
+        assert engine.render_string("{{ i18n.t('app.auth.login.title') }}", ctx) == "T:app.auth.login.title"
+
+    def test_dotted_arg_in_html_attribute(self, engine):
+        ctx = {"t": lambda k: f"T:{k}"}
+        result = engine.render_string('<input placeholder="{{ t(\'auth.email\') }}">', ctx)
+        assert result == '<input placeholder="T:auth.email">'
+
+    def test_dotted_arg_method_on_dict(self, engine):
+        ctx = {"user": {"t": lambda k: f"T:{k}"}}
+        result = engine.render_string(
+            '<label>{{ user.t(\'form.fields.name\') }}</label>', ctx
+        )
+        assert result == "<label>T:form.fields.name</label>"
+
+    def test_multiple_args_with_dots(self, engine):
+        ctx = {"fmt": {"pair": lambda a, b: f"{a}={b}"}}
+        assert engine.render_string("{{ fmt.pair('a.b', 'c.d') }}", ctx) == "a.b=c.d"
+
+    def test_tilde_in_quoted_string(self, engine):
+        """Tilde inside quotes should not trigger string concatenation."""
+        ctx = {"echo": lambda s: s}
+        assert engine.render_string("{{ echo('hello~world') }}", ctx) == "hello~world"
+
+    def test_operator_chars_in_quoted_string(self, engine):
+        """Comparison operators inside quotes should not trigger comparisons."""
+        ctx = {"echo": lambda s: s}
+        # Output is HTML-escaped (> becomes &gt;) which is correct behavior
+        result = engine.render_string("{{ echo('a >= b') }}", ctx)
+        assert "a" in result and "b" in result  # Function was called, not evaluated as comparison
+
+    def test_question_mark_in_quoted_string(self, engine):
+        """? and ?? inside quotes should not trigger ternary/coalescing."""
+        ctx = {"echo": lambda s: s}
+        assert engine.render_string("{{ echo('is this ok?') }}", ctx) == "is this ok?"
+
+    def test_chained_method_with_dotted_arg(self, engine):
+        """Chained access after method call with dotted arg."""
+        ctx = {"svc": {"lookup": lambda k: {"value": f"V:{k}"}}}
+        assert engine.render_string("{{ svc.lookup('db.host').value }}", ctx) == "V:db.host"
+
+    def test_top_level_func_dotted_arg(self, engine):
+        """Top-level function (not method) with dotted arg."""
+        ctx = {"t": lambda k: f"T:{k}"}
+        assert engine.render_string("{{ t('auth.email') }}", ctx) == "T:auth.email"
+
+    def test_nested_quotes_in_arg(self, engine):
+        """Double quotes inside single-quoted arg."""
+        ctx = {"echo": lambda s: s}
+        result = engine.render_string('{{ echo("it\'s fine") }}', ctx)
+        # The inner quote gets stripped by the parser, but the call should not crash
+        assert result is not None

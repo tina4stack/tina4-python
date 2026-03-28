@@ -352,9 +352,80 @@ def _split_args(raw: str) -> list[str]:
     return parts
 
 
+def _find_outside_quotes(expr: str, needle: str) -> int:
+    """Find the first occurrence of *needle* that is not inside quotes or parens.
+
+    Returns the index, or -1 if not found outside quotes.
+    """
+    in_q = None
+    depth = 0
+    i = 0
+    while i <= len(expr) - len(needle):
+        ch = expr[i]
+        if ch in ('"', "'") and depth == 0:
+            if in_q is None:
+                in_q = ch
+            elif ch == in_q:
+                in_q = None
+            i += 1
+            continue
+        if in_q:
+            i += 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if depth == 0 and expr[i:i + len(needle)] == needle:
+            return i
+        i += 1
+    return -1
+
+
+def _split_outside_quotes(expr: str, sep: str) -> list[str]:
+    """Split *expr* on *sep* only when *sep* is outside quotes and parens."""
+    parts = []
+    current_start = 0
+    in_q = None
+    depth = 0
+    i = 0
+    while i <= len(expr) - len(sep):
+        ch = expr[i]
+        if ch in ('"', "'") and depth == 0:
+            if in_q is None:
+                in_q = ch
+            elif ch == in_q:
+                in_q = None
+            i += 1
+            continue
+        if in_q:
+            i += 1
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if depth == 0 and expr[i:i + len(sep)] == sep:
+            parts.append(expr[current_start:i])
+            i += len(sep)
+            current_start = i
+            continue
+        i += 1
+    parts.append(expr[current_start:])
+    return parts
+
+
 def _eval_expr(expr: str, context: dict):
     """Evaluate a full expression (with ~, ternary, ??, comparisons)."""
     expr = expr.strip()
+
+    # String literal — only match if the entire expression is a single quoted
+    # string with no unescaped matching quotes inside (avoids catching
+    # expressions like 'yes' if x else 'no').
+    if len(expr) >= 2:
+        q = expr[0]
+        if q in ('"', "'") and expr.endswith(q) and q not in expr[1:-1]:
+            return expr[1:-1]
 
     # Ternary: condition ? "yes" : "no"
     ternary = re.match(r"^(.+?)\s*\?\s*(.+?)\s*:\s*(.+)$", expr)
@@ -373,21 +444,23 @@ def _eval_expr(expr: str, context: dict):
         return _eval_expr(inline_if.group(3), context)
 
     # Null coalescing: value ?? "default"
-    if "??" in expr:
-        left, _, right = expr.partition("??")
+    if _find_outside_quotes(expr, "??") >= 0:
+        pos = _find_outside_quotes(expr, "??")
+        left = expr[:pos]
+        right = expr[pos + 2:]
         val = _eval_expr(left.strip(), context)
         if val is None:
             return _eval_expr(right.strip(), context)
         return val
 
     # String concatenation with ~
-    if "~" in expr:
-        parts = expr.split("~")
+    if _find_outside_quotes(expr, "~") >= 0:
+        parts = _split_outside_quotes(expr, "~")
         return "".join(str(_eval_expr(p, context) or "") for p in parts)
 
     # Comparison operators for if conditions
     for op in (" not in ", " in ", " is not ", " is ", "!=", "==", ">=", "<=", ">", "<", " and ", " or ", " not "):
-        if op in expr:
+        if _find_outside_quotes(expr, op) >= 0:
             return _eval_comparison(expr, context)
 
     # Function call: name("arg1", "arg2")
