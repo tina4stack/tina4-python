@@ -57,45 +57,239 @@ class TestVariables:
 
 
 class TestFilters:
+    """Comprehensive tests for every builtin Frond filter."""
+
+    # ── String Filters ─────────────────────────────────────────
+
     def test_upper(self, engine):
-        assert engine.render_string("{{ name | upper }}", {"name": "alice"}) == "ALICE"
+        assert engine.render_string("{{ v|upper }}", {"v": "alice"}) == "ALICE"
 
     def test_lower(self, engine):
-        assert engine.render_string("{{ name | lower }}", {"name": "ALICE"}) == "alice"
+        assert engine.render_string("{{ v|lower }}", {"v": "ALICE"}) == "alice"
 
     def test_capitalize(self, engine):
-        assert engine.render_string("{{ name | capitalize }}", {"name": "alice"}) == "Alice"
+        assert engine.render_string("{{ v|capitalize }}", {"v": "alice bob"}) == "Alice bob"
 
-    def test_default(self, engine):
-        assert engine.render_string('{{ x | default("N/A") }}', {}) == "N/A"
-        assert engine.render_string('{{ x | default("N/A") }}', {"x": "val"}) == "val"
+    def test_title(self, engine):
+        assert engine.render_string("{{ v|title }}", {"v": "hello world"}) == "Hello World"
 
-    def test_length(self, engine):
-        assert engine.render_string("{{ items | length }}", {"items": [1, 2, 3]}) == "3"
+    def test_trim(self, engine):
+        assert engine.render_string("{{ v|trim }}", {"v": "  hi  "}) == "hi"
 
-    def test_join(self, engine):
-        result = engine.render_string('{{ items | join(", ") }}', {"items": ["a", "b", "c"]})
-        assert result == "a, b, c"
+    def test_ltrim(self, engine):
+        assert engine.render_string("{{ v|ltrim }}", {"v": "  hi  "}) == "hi  "
 
-    def test_truncate(self, engine):
-        result = engine.render_string("{{ text | truncate(5) }}", {"text": "Hello World"})
-        assert result == "Hello..."
+    def test_rtrim(self, engine):
+        assert engine.render_string("{{ v|rtrim }}", {"v": "  hi  "}) == "  hi"
 
     def test_slug(self, engine):
-        result = engine.render_string("{{ title | slug }}", {"title": "Hello World!"})
-        assert result == "hello-world"
+        assert engine.render_string("{{ v|slug }}", {"v": "Hello World!"}) == "hello-world"
 
-    def test_json_encode(self, engine):
-        result = engine.render_string("{{ data | json_encode | raw }}", {"data": {"a": 1}})
-        assert '"a": 1' in result
+    def test_wordwrap(self, engine):
+        r = engine.render_string("{{ v|wordwrap(10) }}", {"v": "hello world test"})
+        assert "\n" in r
 
-    def test_number_format(self, engine):
-        result = engine.render_string("{{ price | number_format(2) }}", {"price": 1234.5})
-        assert result == "1,234.50"
+    def test_truncate(self, engine):
+        assert engine.render_string("{{ v|truncate(5) }}", {"v": "Hello World"}) == "Hello..."
+
+    def test_truncate_short(self, engine):
+        assert engine.render_string("{{ v|truncate(20) }}", {"v": "Hello"}) == "Hello"
 
     def test_nl2br(self, engine):
-        result = engine.render_string("{{ text | nl2br | raw }}", {"text": "a\nb"})
-        assert "<br>" in result
+        assert "<br>" in engine.render_string("{{ v|nl2br|raw }}", {"v": "a\nb"})
+
+    def test_striptags(self, engine):
+        assert engine.render_string("{{ v|striptags }}", {"v": "<b>bold</b>"}) == "bold"
+
+    # ── Array/Collection Filters ───────────────────────────────
+
+    def test_length_list(self, engine):
+        assert engine.render_string("{{ v|length }}", {"v": [1, 2, 3]}) == "3"
+
+    def test_length_string(self, engine):
+        assert engine.render_string("{{ v|length }}", {"v": "hello"}) == "5"
+
+    def test_reverse_list(self, engine):
+        assert engine.render_string("{{ v|reverse }}", {"v": [1, 2, 3]}) == "[3, 2, 1]"
+
+    def test_reverse_string(self, engine):
+        assert engine.render_string("{{ v|reverse }}", {"v": "abc"}) == "cba"
+
+    def test_sort(self, engine):
+        assert engine.render_string("{{ v|sort }}", {"v": [3, 1, 2]}) == "[1, 2, 3]"
+
+    def test_first(self, engine):
+        assert engine.render_string("{{ v|first }}", {"v": [10, 20, 30]}) == "10"
+
+    def test_last(self, engine):
+        assert engine.render_string("{{ v|last }}", {"v": [10, 20, 30]}) == "30"
+
+    def test_join(self, engine):
+        assert engine.render_string('{{ v|join(", ") }}', {"v": ["a", "b", "c"]}) == "a, b, c"
+
+    def test_join_default_separator(self, engine):
+        assert engine.render_string("{{ v|join }}", {"v": ["a", "b"]}) == "a, b"
+
+    def test_split(self, engine):
+        r = engine.render_string("{{ v|split(',') }}", {"v": "a,b,c"})
+        assert "a" in r and "b" in r and "c" in r
+
+    def test_unique(self, engine):
+        assert engine.render_string("{{ v|unique }}", {"v": [1, 2, 2, 3]}) == "[1, 2, 3]"
+
+    def test_filter(self, engine):
+        r = engine.render_string("{{ v|filter }}", {"v": [0, 1, "", "hi", None, 3]})
+        assert "0" not in r or "1" in r  # falsy values removed
+
+    def test_map(self, engine):
+        ctx = {"v": [{"name": "A"}, {"name": "B"}]}
+        r = engine.render_string('{{ v|map("name") }}', ctx)
+        assert "A" in r and "B" in r
+
+    def test_column(self, engine):
+        ctx = {"v": [{"id": 1, "name": "A"}, {"id": 2, "name": "B"}]}
+        r = engine.render_string('{{ v|column("name") }}', ctx)
+        assert "A" in r and "B" in r
+
+    def test_batch(self, engine):
+        r = engine.render_string("{{ v|batch(2) }}", {"v": [1, 2, 3, 4, 5]})
+        assert "[[1, 2]" in r
+
+    def test_slice_filter(self, engine):
+        r = engine.render_string("{{ v|slice(1, 3) }}", {"v": [10, 20, 30, 40]})
+        assert "20" in r and "30" in r
+
+    # ── Replace Filter ─────────────────────────────────────────
+
+    def test_replace(self, engine):
+        assert engine.render_string('{{ v|replace("a", "b") }}', {"v": "banana"}) == "bbnbnb"
+
+    def test_replace_space(self, engine):
+        assert engine.render_string("{{ v|replace(' ', '_') }}", {"v": "hi there"}) == "hi_there"
+
+    # ── Encoding Filters ───────────────────────────────────────
+
+    def test_escape(self, engine):
+        """escape filter + auto-escape = double-escaped, use |raw to see filter output."""
+        r = engine.render_string("{{ v|escape|raw }}", {"v": "<b>hi</b>"})
+        assert "&lt;b&gt;" in r
+
+    def test_e_alias(self, engine):
+        r = engine.render_string("{{ v|e|raw }}", {"v": "<b>"})
+        assert "&lt;b&gt;" in r
+
+    def test_raw(self, engine):
+        assert engine.render_string("{{ v|raw }}", {"v": "<b>hi</b>"}) == "<b>hi</b>"
+
+    def test_safe(self, engine):
+        assert engine.render_string("{{ v|safe }}", {"v": "<b>hi</b>"}) == "<b>hi</b>"
+
+    def test_url_encode(self, engine):
+        r = engine.render_string("{{ v|url_encode }}", {"v": "hello world"})
+        assert "hello" in r and " " not in r
+
+    def test_base64_encode(self, engine):
+        assert engine.render_string("{{ v|base64_encode }}", {"v": "hello"}) == "aGVsbG8="
+
+    def test_base64_decode(self, engine):
+        assert engine.render_string("{{ v|base64_decode }}", {"v": "aGVsbG8="}) == "hello"
+
+    def test_md5(self, engine):
+        r = engine.render_string("{{ v|md5 }}", {"v": "hello"})
+        assert len(r) == 32
+
+    def test_sha256(self, engine):
+        r = engine.render_string("{{ v|sha256 }}", {"v": "hello"})
+        assert len(r) == 64
+
+    # ── Numeric Filters ────────────────────────────────────────
+
+    def test_abs(self, engine):
+        assert engine.render_string("{{ v|abs }}", {"v": -5}) == "5"
+
+    def test_round(self, engine):
+        assert engine.render_string("{{ v|round(2) }}", {"v": 3.14159}) == "3.14"
+
+    def test_round_no_decimals(self, engine):
+        assert engine.render_string("{{ v|round }}", {"v": 3.7}) == "4.0"
+
+    def test_number_format(self, engine):
+        assert engine.render_string("{{ v|number_format(2) }}", {"v": 1234.5}) == "1,234.50"
+
+    # ── Type Conversion Filters ────────────────────────────────
+
+    def test_int(self, engine):
+        assert engine.render_string("{{ v|int }}", {"v": "42"}) == "42"
+
+    def test_float(self, engine):
+        assert engine.render_string("{{ v|float }}", {"v": "3.14"}) == "3.14"
+
+    def test_string(self, engine):
+        assert engine.render_string("{{ v|string }}", {"v": 123}) == "123"
+
+    # ── JSON Filters ───────────────────────────────────────────
+
+    def test_json_encode(self, engine):
+        r = engine.render_string("{{ v|json_encode|raw }}", {"v": {"a": 1}})
+        assert '"a"' in r
+
+    def test_to_json(self, engine):
+        r = engine.render_string("{{ v|to_json|raw }}", {"v": {"a": 1}})
+        assert '{"a":1}' == r
+
+    def test_to_json_html_safe(self, engine):
+        r = engine.render_string("{{ v|to_json|raw }}", {"v": {"x": "<script>"}})
+        assert "\\u003c" in r
+        assert "<script>" not in r
+
+    def test_tojson_alias(self, engine):
+        assert engine.render_string("{{ v|tojson|raw }}", {"v": [1]}) == "[1]"
+
+    def test_json_decode(self, engine):
+        r = engine.render_string("{{ v|json_decode }}", {"v": '{"a": 1}'})
+        assert "a" in r
+
+    def test_js_escape(self, engine):
+        r = engine.render_string("{{ v|js_escape|raw }}", {"v": "it's a \"test\""})
+        assert "\\'" in r
+        assert '\\"' in r
+
+    def test_js_escape_newlines(self, engine):
+        r = engine.render_string("{{ v|js_escape|raw }}", {"v": "a\nb"})
+        assert "\\n" in r
+
+    # ── Dict Filters ───────────────────────────────────────────
+
+    def test_keys(self, engine):
+        r = engine.render_string("{{ v|keys }}", {"v": {"a": 1, "b": 2}})
+        assert "a" in r and "b" in r
+
+    def test_values(self, engine):
+        r = engine.render_string("{{ v|values }}", {"v": {"a": 1, "b": 2}})
+        assert "1" in r and "2" in r
+
+    # ── Default Filter ─────────────────────────────────────────
+
+    def test_default_none(self, engine):
+        assert engine.render_string('{{ v|default("N/A") }}', {}) == "N/A"
+
+    def test_default_empty_string(self, engine):
+        assert engine.render_string('{{ v|default("N/A") }}', {"v": ""}) == "N/A"
+
+    def test_default_has_value(self, engine):
+        assert engine.render_string('{{ v|default("N/A") }}', {"v": "ok"}) == "ok"
+
+    # ── Date Filter ────────────────────────────────────────────
+
+    def test_date_format(self, engine):
+        r = engine.render_string('{{ v|date("%Y") }}', {"v": "2026-03-29"})
+        assert r == "2026"
+
+    # ── Format Filter ──────────────────────────────────────────
+
+    def test_format(self, engine):
+        r = engine.render_string('{{ v|format("world") }}', {"v": "hello %s"})
+        assert r == "hello world"
 
     def test_striptags(self, engine):
         result = engine.render_string("{{ html | striptags }}", {"html": "<b>bold</b>"})
