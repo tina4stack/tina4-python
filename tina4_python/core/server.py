@@ -788,7 +788,7 @@ async def app(scope: dict, receive, send):
                             # Validate JWT token
                             try:
                                 from tina4_python.auth import Auth
-                                if Auth.valid_token(_token):
+                                if Auth.valid_token_static(_token):
                                     _auth_ok = True
                             except Exception:
                                 pass
