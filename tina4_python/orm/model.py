@@ -43,6 +43,22 @@ def orm_bind(db, name: str = None):
         _databases[name] = db
 
 
+def snake_to_camel(name: str) -> str:
+    """Convert snake_case to camelCase: 'first_name' -> 'firstName'."""
+    parts = name.split("_")
+    return parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+
+def camel_to_snake(name: str) -> str:
+    """Convert camelCase to snake_case: 'firstName' -> 'first_name'."""
+    result = []
+    for c in name:
+        if c.isupper() and result:
+            result.append("_")
+        result.append(c.lower())
+    return "".join(result)
+
+
 class ORMMeta(type):
     """Metaclass that collects Field definitions and relationship descriptors."""
 
@@ -79,6 +95,7 @@ class ORM(metaclass=ORMMeta):
     table_name: str = ""
     soft_delete: bool = False  # Set True to enable soft delete
     field_mapping: dict[str, str] = {}  # {"python_attribute": "db_column"}
+    auto_map: bool = False  # No-op in Python (snake_case matches DB); exists for cross-language parity
     _db: str | object | None = None  # Per-model database override
     _fields: dict[str, Field] = {}
 

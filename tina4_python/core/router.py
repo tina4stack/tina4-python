@@ -180,10 +180,12 @@ class Router:
         if cls._group_prefix:
             path = cls._group_prefix + path
 
-        # Merge group middleware with route-level middleware
-        if cls._group_middleware:
-            route_mw = options.get("middleware", [])
-            options["middleware"] = list(cls._group_middleware) + list(route_mw)
+        # Merge group middleware with route-level middleware and handler-level middleware
+        handler_mw = getattr(handler, "_middleware", [])
+        route_mw = options.get("middleware", [])
+        combined_mw = list(cls._group_middleware) + list(handler_mw) + list(route_mw)
+        if combined_mw:
+            options["middleware"] = combined_mw
 
         pattern, param_names = _compile_pattern(path)
 
@@ -251,8 +253,14 @@ def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
     param_names = []
     regex_parts = []
 
-    for segment in path.strip("/").split("/"):
-        if segment.startswith("{") and segment.endswith("}"):
+    segments = path.strip("/").split("/")
+    for i, segment in enumerate(segments):
+        if segment == "*":
+            # Wildcard: matches the rest of the path (greedy)
+            param_names.append("wildcard")
+            regex_parts.append("(.+)")
+            break  # Nothing can follow a wildcard
+        elif segment.startswith("{") and segment.endswith("}"):
             inner = segment[1:-1]
             if ":" in inner:
                 name, type_hint = inner.split(":", 1)
@@ -277,51 +285,53 @@ def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
 
 # Decorator functions — the public API
 
+def _register_route(method: str, path: str, fn, **options):
+    """Common registration logic that preserves handler attributes on the returned ref."""
+    ref = Router.add(method, path, fn, **options)
+    # Propagate handler attributes to the wrapper so stacked decorators still work
+    fn._route_ref = ref
+    return fn
+
+
 def get(path: str, **options):
     """Register a GET route."""
     def decorator(fn):
-        Router.add("GET", path, fn, **options)
-        return fn
+        return _register_route("GET", path, fn, **options)
     return decorator
 
 
 def post(path: str, **options):
     """Register a POST route."""
     def decorator(fn):
-        Router.add("POST", path, fn, **options)
-        return fn
+        return _register_route("POST", path, fn, **options)
     return decorator
 
 
 def put(path: str, **options):
     """Register a PUT route."""
     def decorator(fn):
-        Router.add("PUT", path, fn, **options)
-        return fn
+        return _register_route("PUT", path, fn, **options)
     return decorator
 
 
 def patch(path: str, **options):
     """Register a PATCH route."""
     def decorator(fn):
-        Router.add("PATCH", path, fn, **options)
-        return fn
+        return _register_route("PATCH", path, fn, **options)
     return decorator
 
 
 def delete(path: str, **options):
     """Register a DELETE route."""
     def decorator(fn):
-        Router.add("DELETE", path, fn, **options)
-        return fn
+        return _register_route("DELETE", path, fn, **options)
     return decorator
 
 
 def any_method(path: str, **options):
     """Register a route for any HTTP method."""
     def decorator(fn):
-        Router.add("ANY", path, fn, **options)
-        return fn
+        return _register_route("ANY", path, fn, **options)
     return decorator
 
 # Alias — @any() is the standard name across all Tina4 frameworks
@@ -352,6 +362,10 @@ def noauth():
     """Make a write route (POST/PUT/PATCH/DELETE) public — no auth required."""
     def decorator(fn):
         fn._noauth = True
+        # If route was already registered (decorator applied after @get/@post),
+        # update the route dict directly.
+        if hasattr(fn, "_route_ref"):
+            fn._route_ref._route["auth_required"] = False
         return fn
     return decorator
 
@@ -360,6 +374,10 @@ def secured():
     """Require auth on a GET route (which is public by default)."""
     def decorator(fn):
         fn._secured = True
+        # If route was already registered (decorator applied after @get/@post),
+        # update the route dict directly.
+        if hasattr(fn, "_route_ref"):
+            fn._route_ref._route["auth_required"] = True
         return fn
     return decorator
 
@@ -370,6 +388,11 @@ def middleware(*middleware_classes):
     """Attach middleware classes to a route handler."""
     def decorator(fn):
         fn._middleware = list(middleware_classes)
+        # If route was already registered (decorator applied after @get/@post),
+        # update the route dict directly.
+        if hasattr(fn, "_route_ref"):
+            existing = fn._route_ref._route.get("middleware", [])
+            fn._route_ref._route["middleware"] = list(middleware_classes) + existing
         return fn
     return decorator
 
