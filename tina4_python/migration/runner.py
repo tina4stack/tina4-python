@@ -24,16 +24,34 @@ def _ensure_tracking_table(db):
     When detected, adds the missing column and backfills from `description`.
     """
     if not db.table_exists("tina4_migration"):
-        db.execute("""
-            CREATE TABLE tina4_migration (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                migration_id TEXT NOT NULL UNIQUE,
-                description TEXT,
-                batch INTEGER NOT NULL DEFAULT 1,
-                executed_at TEXT NOT NULL,
-                passed INTEGER NOT NULL DEFAULT 1
-            )
-        """)
+        if _is_firebird(db):
+            # Firebird: no AUTOINCREMENT, no TEXT type, use generator for IDs
+            try:
+                db.execute("CREATE GENERATOR GEN_TINA4_MIGRATION_ID")
+                db.commit()
+            except Exception:
+                pass  # Generator may already exist
+            db.execute("""
+                CREATE TABLE tina4_migration (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    migration_id VARCHAR(500) NOT NULL UNIQUE,
+                    description VARCHAR(500),
+                    batch INTEGER DEFAULT 1 NOT NULL,
+                    executed_at VARCHAR(50) NOT NULL,
+                    passed INTEGER DEFAULT 1 NOT NULL
+                )
+            """)
+        else:
+            db.execute("""
+                CREATE TABLE tina4_migration (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    migration_id TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    batch INTEGER NOT NULL DEFAULT 1,
+                    executed_at TEXT NOT NULL,
+                    passed INTEGER NOT NULL DEFAULT 1
+                )
+            """)
         db.commit()
         return
 
@@ -43,7 +61,8 @@ def _ensure_tracking_table(db):
     except Exception:
         # migration_id column doesn't exist — v2 schema, upgrade it
         try:
-            db.execute("ALTER TABLE tina4_migration ADD migration_id TEXT")
+            col_type = "VARCHAR(500)" if _is_firebird(db) else "TEXT"
+            db.execute(f"ALTER TABLE tina4_migration ADD migration_id {col_type}")
             db.commit()
         except Exception:
             pass  # Column may already exist on some engines
@@ -70,7 +89,8 @@ def _ensure_tracking_table(db):
             db.fetch_one("SELECT executed_at FROM tina4_migration WHERE 1=0")
         except Exception:
             try:
-                db.execute("ALTER TABLE tina4_migration ADD executed_at TEXT DEFAULT ''")
+                col_type = "VARCHAR(50)" if _is_firebird(db) else "TEXT"
+                db.execute(f"ALTER TABLE tina4_migration ADD executed_at {col_type} DEFAULT ''")
                 db.commit()
             except Exception:
                 pass
@@ -252,10 +272,19 @@ def migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> l
             now = datetime.now(timezone.utc).isoformat()
             # Extract description from filename (supports both 000001_ and YYYYMMDDHHMMSS_ prefixes)
             desc = re.sub(r"^\d+_", "", migration_id, count=1).replace("_", " ")
-            db.execute(
-                "INSERT INTO tina4_migration (migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, 1)",
-                [migration_id, desc, batch, now],
-            )
+            if _is_firebird(db):
+                # Firebird: generate ID from sequence
+                row = db.fetch_one("SELECT GEN_ID(GEN_TINA4_MIGRATION_ID, 1) AS next_id FROM RDB$DATABASE")
+                next_id = row["next_id"] if row else 1
+                db.execute(
+                    "INSERT INTO tina4_migration (id, migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, 1)",
+                    [next_id, migration_id, desc, batch, now],
+                )
+            else:
+                db.execute(
+                    "INSERT INTO tina4_migration (migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, 1)",
+                    [migration_id, desc, batch, now],
+                )
             db.commit()
             ran.append(sql_file.name)
 
