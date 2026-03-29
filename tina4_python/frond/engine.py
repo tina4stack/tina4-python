@@ -1092,23 +1092,20 @@ class Frond:
             raise FileNotFoundError(f"Template not found: {path}")
 
         debug_mode = os.environ.get("TINA4_DEBUG", "").lower() == "true"
-        cached = self._compiled.get(template)
 
-        if cached is not None:
-            if debug_mode:
-                # Dev mode: check if file changed
-                mtime = path.stat().st_mtime
-                if cached[1] == mtime:
-                    return self._execute_cached(cached[0], context, template)
-            else:
-                # Production: skip mtime check, cache is permanent
+        if not debug_mode:
+            # Production: permanent cache, no filesystem checks
+            cached = self._compiled.get(template)
+            if cached is not None:
                 return self._execute_cached(cached[0], context, template)
 
-        # Cache miss — load, tokenize, cache
+        # Dev mode: skip cache entirely — always re-read and re-tokenize.
+        # mtime-based invalidation doesn't catch changes to included/extended
+        # templates (parent or partial changes don't update the caller's mtime).
         source = path.read_text(encoding="utf-8")
-        mtime = path.stat().st_mtime
         tokens = _tokenize(source)
-        self._compiled[template] = (tokens, mtime)
+        if not debug_mode:
+            self._compiled[template] = (tokens, 0)
         return self._execute_with_source(source, tokens, context, template)
 
     def render_string(self, source: str, data: dict = None) -> str:
