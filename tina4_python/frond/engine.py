@@ -438,21 +438,48 @@ def _eval_expr(expr: str, context: dict):
         if q in ('"', "'") and expr.endswith(q) and q not in expr[1:-1]:
             return expr[1:-1]
 
-    # Ternary: condition ? "yes" : "no"
-    ternary = re.match(r"^(.+?)\s*\?\s*(.+?)\s*:\s*(.+)$", expr)
-    if ternary:
-        cond = _eval_expr(ternary.group(1), context)
-        if cond:
-            return _eval_expr(ternary.group(2), context)
-        return _eval_expr(ternary.group(3), context)
+    # Parenthesized sub-expression: (expr) — strip parens and evaluate inner
+    if expr.startswith("(") and expr.endswith(")"):
+        # Verify matching parens (not just any parens)
+        depth = 0
+        matched = True
+        for i, ch in enumerate(expr):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+            if depth == 0 and i < len(expr) - 1:
+                matched = False
+                break
+        if matched:
+            return _eval_expr(expr[1:-1], context)
 
-    # Jinja2-style inline if: value if condition else other_value
-    inline_if = re.match(r"^(.+?)\s+if\s+(.+?)\s+else\s+(.+)$", expr)
-    if inline_if:
-        cond = _eval_expr(inline_if.group(2), context)
-        if cond:
-            return _eval_expr(inline_if.group(1), context)
-        return _eval_expr(inline_if.group(3), context)
+    # Ternary: condition ? "yes" : "no" — quote-aware
+    q_pos = _find_outside_quotes(expr, "?")
+    if q_pos > 0:
+        cond_part = expr[:q_pos].strip()
+        rest = expr[q_pos + 1:]
+        c_pos = _find_outside_quotes(rest, ":")
+        if c_pos >= 0:
+            true_part = rest[:c_pos].strip()
+            false_part = rest[c_pos + 1:].strip()
+            cond = _eval_expr(cond_part, context)
+            if cond:
+                return _eval_expr(true_part, context)
+            return _eval_expr(false_part, context)
+
+    # Jinja2-style inline if: value if condition else other_value — quote-aware
+    if_pos = _find_outside_quotes(expr, " if ")
+    if if_pos >= 0:
+        else_pos = _find_outside_quotes(expr, " else ")
+        if else_pos > if_pos:
+            value_part = expr[:if_pos].strip()
+            cond_part = expr[if_pos + 4:else_pos].strip()
+            else_part = expr[else_pos + 6:].strip()
+            cond = _eval_expr(cond_part, context)
+            if cond:
+                return _eval_expr(value_part, context)
+            return _eval_expr(else_part, context)
 
     # Null coalescing: value ?? "default"
     if _find_outside_quotes(expr, "??") >= 0:

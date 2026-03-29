@@ -1134,3 +1134,46 @@ class TestSafeStringFilters:
         )
         assert '"name"' in r
         assert "&quot;" not in r
+
+
+# ── Tilde Concatenation with Ternary Tests ─────────────────────
+
+
+class TestTildeTernary:
+    """Test ~ concatenation with parenthesized ternary expressions."""
+
+    def test_tilde_with_ternary(self, engine):
+        """URL with ternary: /contacts?type= ~ (var ? var : "all")"""
+        ctx = {"contact_type": "customer"}
+        r = engine.render_string(
+            '{{ "/path?type=" ~ (contact_type ? contact_type : "all") }}', ctx
+        )
+        assert r == "/path?type=customer"
+
+    def test_tilde_ternary_false_branch(self, engine):
+        ctx = {}
+        r = engine.render_string(
+            '{{ "/path?type=" ~ (contact_type ? contact_type : "all") }}', ctx
+        )
+        assert r == "/path?type=all"
+
+    def test_question_mark_in_url_string(self, engine):
+        """? inside a quoted URL string should not trigger ternary."""
+        r = engine.render_string(
+            '{{ "/search?q=hello" }}', {}
+        )
+        assert r == "/search?q=hello"
+
+    def test_tilde_concat_with_url_query(self, engine):
+        """Build URL with query params via ~ concatenation."""
+        ctx = {"base": "/api", "sort": "name"}
+        r = engine.render_string('{{ base ~ "?sort=" ~ sort }}', ctx)
+        assert r == "/api?sort=name"
+
+    def test_simple_ternary_still_works(self, engine):
+        assert engine.render_string('{{ x ? "yes" : "no" }}', {"x": True}) == "yes"
+        assert engine.render_string('{{ x ? "yes" : "no" }}', {"x": False}) == "no"
+
+    def test_inline_if_still_works(self, engine):
+        assert engine.render_string('{{ "on" if active else "off" }}', {"active": True}) == "on"
+        assert engine.render_string('{{ "on" if active else "off" }}', {"active": False}) == "off"
