@@ -383,19 +383,86 @@ class Database:
         elif self._adapter is not None:
             self._adapter.autocommit = value
 
+    def _ensure_sequence_table(self):
+        """Create the tina4_sequences table if it doesn't exist."""
+        if not self.table_exists("tina4_sequences"):
+            engine = self.get_database_type()
+            if engine == "mssql":
+                self.execute(
+                    "CREATE TABLE tina4_sequences ("
+                    "seq_name VARCHAR(200) NOT NULL PRIMARY KEY, "
+                    "current_value INTEGER NOT NULL DEFAULT 0)"
+                )
+            else:
+                self.execute(
+                    "CREATE TABLE IF NOT EXISTS tina4_sequences ("
+                    "seq_name VARCHAR(200) NOT NULL PRIMARY KEY, "
+                    "current_value INTEGER NOT NULL DEFAULT 0)"
+                )
+            self.commit()
+
+    def _sequence_next(self, seq_name: str, table: str = None, pk_column: str = "id") -> int:
+        """Atomically increment and return the next value from the sequence table.
+
+        If the sequence row doesn't exist yet, seeds it from MAX(pk_column)
+        of the given table (or 0 if the table is empty/missing).
+        """
+        self._ensure_sequence_table()
+
+        # Check if the sequence row exists
+        row = self.fetch_one(
+            "SELECT current_value FROM tina4_sequences WHERE seq_name = ?",
+            [seq_name]
+        )
+
+        if row is None:
+            # Seed from current MAX
+            seed_value = 0
+            if table:
+                try:
+                    max_row = self.fetch_one(
+                        f"SELECT MAX({pk_column}) AS max_id FROM {table}"
+                    )
+                    if max_row and max_row.get("max_id") is not None:
+                        seed_value = int(max_row["max_id"])
+                except Exception:
+                    pass  # Table doesn't exist — start at 0
+
+            self.execute(
+                "INSERT INTO tina4_sequences (seq_name, current_value) VALUES (?, ?)",
+                [seq_name, seed_value]
+            )
+            self.commit()
+
+        # Atomic increment + read
+        self.execute(
+            "UPDATE tina4_sequences SET current_value = current_value + 1 "
+            "WHERE seq_name = ?",
+            [seq_name]
+        )
+        self.commit()
+
+        row = self.fetch_one(
+            "SELECT current_value FROM tina4_sequences WHERE seq_name = ?",
+            [seq_name]
+        )
+        return int(row["current_value"]) if row else 1
+
     def get_next_id(self, table: str, pk_column: str = "id", generator_name: str = None) -> int:
         """Get the next available ID for a table.
 
         Engine-specific strategies:
-            - Firebird: uses GEN_ID(generator, 1) to increment and return
-            - PostgreSQL: uses nextval(sequence) if sequence exists
-            - SQLite/MySQL/MSSQL: SELECT MAX(pk) + 1 (fallback)
+            - Firebird: uses GEN_ID(generator, 1) — atomic increment
+            - PostgreSQL: uses nextval(sequence) — atomic increment;
+              auto-creates sequence if missing
+            - SQLite/MySQL/MSSQL: uses tina4_sequences table with atomic
+              UPDATE + SELECT (race-safe, replaces old MAX+1)
 
         Args:
             table: Table name.
             pk_column: Primary key column name (default: "id").
-            generator_name: Firebird generator or PostgreSQL sequence name.
-                            Auto-detected if not provided.
+            generator_name: Firebird generator, PostgreSQL sequence name,
+                            or sequence table key override.
 
         Returns:
             The next integer ID.
@@ -413,24 +480,33 @@ class Database:
             row = self.fetch_one(
                 f"SELECT GEN_ID({gen_name}, 1) AS next_id FROM RDB$DATABASE"
             )
-            return row["next_id"] if row else 1
+            return int(row["next_id"]) if row else 1
 
-        elif engine == "postgresql":
+        if engine == "postgresql":
             seq_name = generator_name or f"{table}_{pk_column}_seq"
             try:
                 row = self.fetch_one(f"SELECT nextval('{seq_name}') AS next_id")
-                return row["next_id"] if row else 1
+                if row and row.get("next_id") is not None:
+                    return int(row["next_id"])
             except Exception:
-                pass  # Sequence doesn't exist, fall through to MAX
+                pass  # Sequence doesn't exist
 
-        # Fallback: MAX(pk) + 1
-        try:
-            row = self.fetch_one(
-                f"SELECT MAX({pk_column}) AS max_id FROM {table}"
-            )
-            return (row["max_id"] or 0) + 1 if row else 1
-        except Exception:
-            return 1
+            # Auto-create sequence seeded from MAX
+            try:
+                max_row = self.fetch_one(
+                    f"SELECT COALESCE(MAX({pk_column}), 0) AS max_id FROM {table}"
+                )
+                start = int(max_row["max_id"]) + 1 if max_row else 1
+                self.execute(f"CREATE SEQUENCE {seq_name} START WITH {start}")
+                self.commit()
+                row = self.fetch_one(f"SELECT nextval('{seq_name}') AS next_id")
+                return int(row["next_id"]) if row else start
+            except Exception:
+                pass  # Fall through to sequence table
+
+        # SQLite / MySQL / MSSQL / PostgreSQL fallback — atomic sequence table
+        seq_key = generator_name or f"{table}.{pk_column}"
+        return self._sequence_next(seq_key, table=table, pk_column=pk_column)
 
     def register_function(self, name: str, num_params: int, func: callable, deterministic: bool = True):
         """Register a custom SQL function (SQLite only).

@@ -9,6 +9,7 @@ import re
 import html
 import hashlib
 import json
+from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
 
@@ -18,6 +19,63 @@ from tina4_python.auth import Auth as _FrondAuth
 class SafeString(str):
     """Marker subclass of str that bypasses auto-escaping in Frond."""
     pass
+
+
+# ── Lazy Context Wrapper ──────────────────────────────────────
+
+
+class _LoopContext(dict):
+    """Copy-on-write context overlay for loop iterations.
+
+    Reads fall through to the parent dict; writes go to a local overlay.
+    Avoids copying the entire parent context on every loop iteration.
+    """
+    __slots__ = ("_parent", "_local")
+
+    def __init__(self, parent: dict):
+        # Do NOT call super().__init__() — we never populate the base dict
+        self._parent = parent
+        self._local = {}
+
+    def __getitem__(self, key):
+        try:
+            return self._local[key]
+        except KeyError:
+            return self._parent[key]
+
+    def __setitem__(self, key, value):
+        self._local[key] = value
+
+    def __contains__(self, key):
+        return key in self._local or key in self._parent
+
+    def get(self, key, default=None):
+        try:
+            return self._local[key]
+        except KeyError:
+            return self._parent.get(key, default)
+
+    def __iter__(self):
+        seen = set(self._local)
+        yield from self._local
+        for k in self._parent:
+            if k not in seen:
+                yield k
+
+    def keys(self):
+        return list(self)
+
+    def values(self):
+        return [self[k] for k in self]
+
+    def items(self):
+        return [(k, self[k]) for k in self]
+
+    def __len__(self):
+        return len(set(self._local) | set(self._parent))
+
+    def __repr__(self):
+        return f"_LoopContext({dict(self.items())})"
 
 
 # ── Lexer ───────────────────────────────────────────────────────
@@ -39,6 +97,34 @@ _TOKEN_RE = re.compile(
 # Regex to extract {% raw %}...{% endraw %} blocks before tokenizing
 _RAW_BLOCK_RE = re.compile(
     r"\{%-?\s*raw\s*-?%\}(.*?)\{%-?\s*endraw\s*-?%\}",
+    re.DOTALL,
+)
+
+# ── Pre-compiled regexes for hot-path operations ───────────────
+_METHOD_CALL_RE = re.compile(r"^(\w+)\s*\((.*)?\)$", re.DOTALL)
+_FUNC_CALL_RE = re.compile(r"^([\w.]+)\s*\((.*)?\)$", re.DOTALL)
+_OR_RE = re.compile(r"\s+or\s+")
+_AND_RE = re.compile(r"\s+and\s+")
+_IS_NOT_RE = re.compile(r"^(.+?)\s+is\s+not\s+(\w+)(.*)$")
+_IS_RE = re.compile(r"^(.+?)\s+is\s+(\w+)(.*)$")
+_NOT_IN_RE = re.compile(r"^(.+?)\s+not\s+in\s+(.+)$")
+_IN_RE = re.compile(r"^(.+?)\s+in\s+(.+)$")
+_DIVISIBLE_BY_RE = re.compile(r"\s*by\s*\(\s*(\d+)\s*\)")
+_FILTER_ARGS_RE = re.compile(r"(\w+)\s*\((.*)\)$", re.DOTALL)
+_FILTER_CMP_RE = re.compile(r"(\w+)\s*(!=|==|>=|<=|>|<)\s*(.+)")
+_FOR_RE = re.compile(r"for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s+(.+)")
+_SET_RE = re.compile(r"set\s+(\w+)\s*=\s*(.+)")
+_INCLUDE_RE = re.compile(r'include\s+["\'](.+?)["\'](?:\s+with\s+(.+))?')
+_MACRO_RE = re.compile(r"macro\s+(\w+)\s*\(([^)]*)\)")
+_FROM_IMPORT_RE = re.compile(r'from\s+["\'](.+?)["\']\s+import\s+(.+)')
+_CACHE_RE = re.compile(r'cache\s+["\'](.+?)["\']\s*(\d+)?')
+_AUTOESCAPE_RE = re.compile(r"autoescape\s+(false|true)")
+_SPACELESS_RE = re.compile(r">\s+<")
+_STRIPTAGS_RE = re.compile(r"<[^>]+>")
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_EXTENDS_RE = re.compile(r"\{%[-\s]*extends\s+[\"'](.+?)[\"']\s*[-]?%\}")
+_BLOCK_RE = re.compile(
+    r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}(.*?)\{%[-\s]*endblock\s*[-]?%\}",
     re.DOTALL,
 )
 
@@ -181,6 +267,7 @@ def _find_colon(expr: str) -> int:
 # ── Expression Evaluator ────────────────────────────────────────
 
 
+@lru_cache(maxsize=1024)
 def _split_dotted(expr: str) -> list[str]:
     """Split a dotted expression into parts, respecting quotes, parens, and brackets.
 
@@ -301,7 +388,7 @@ def _resolve(expr: str, context: dict):
                     return None
         else:
             # Check if this part is a method call: name(args)
-            call_match = re.match(r"^(\w+)\s*\((.*)?\)$", part, re.DOTALL)
+            call_match = _METHOD_CALL_RE.match(part)
             if call_match:
                 method_name = call_match.group(1)
                 raw_args = call_match.group(2) or ""
@@ -482,17 +569,18 @@ def _eval_expr(expr: str, context: dict):
             return _eval_expr(else_part, context)
 
     # Null coalescing: value ?? "default"
-    if _find_outside_quotes(expr, "??") >= 0:
-        pos = _find_outside_quotes(expr, "??")
-        left = expr[:pos]
-        right = expr[pos + 2:]
+    nc_pos = _find_outside_quotes(expr, "??")
+    if nc_pos >= 0:
+        left = expr[:nc_pos]
+        right = expr[nc_pos + 2:]
         val = _eval_expr(left.strip(), context)
         if val is None:
             return _eval_expr(right.strip(), context)
         return val
 
     # String concatenation with ~
-    if _find_outside_quotes(expr, "~") >= 0:
+    tilde_pos = _find_outside_quotes(expr, "~")
+    if tilde_pos >= 0:
         parts = _split_outside_quotes(expr, "~")
         return "".join(str(_eval_expr(p, context) or "") for p in parts)
 
@@ -502,7 +590,7 @@ def _eval_expr(expr: str, context: dict):
             return _eval_comparison(expr, context)
 
     # Function call: name("arg1", "arg2") or obj.method("arg1")
-    fn_match = re.match(r"^([\w.]+)\s*\((.*)?\)$", expr, re.DOTALL)
+    fn_match = _FUNC_CALL_RE.match(expr)
     if fn_match:
         fn_name = fn_match.group(1)
         raw_args = fn_match.group(2) or ""
@@ -558,33 +646,33 @@ def _eval_comparison(expr: str, context: dict):
 
     # 'and' / 'or' (lowest precedence)
     # Split on ' or ' first (lower precedence)
-    or_parts = re.split(r"\s+or\s+", expr)
+    or_parts = _OR_RE.split(expr)
     if len(or_parts) > 1:
         return any(_eval_comparison(p, context) for p in or_parts)
 
-    and_parts = re.split(r"\s+and\s+", expr)
+    and_parts = _AND_RE.split(expr)
     if len(and_parts) > 1:
         return all(_eval_comparison(p, context) for p in and_parts)
 
     # 'is not' test
-    m = re.match(r"^(.+?)\s+is\s+not\s+(\w+)(.*)$", expr)
+    m = _IS_NOT_RE.match(expr)
     if m:
         return not _eval_test(m.group(1).strip(), m.group(2), m.group(3).strip(), context)
 
     # 'is' test
-    m = re.match(r"^(.+?)\s+is\s+(\w+)(.*)$", expr)
+    m = _IS_RE.match(expr)
     if m:
         return _eval_test(m.group(1).strip(), m.group(2), m.group(3).strip(), context)
 
     # 'not in'
-    m = re.match(r"^(.+?)\s+not\s+in\s+(.+)$", expr)
+    m = _NOT_IN_RE.match(expr)
     if m:
         val = _eval_expr(m.group(1).strip(), context)
         collection = _eval_expr(m.group(2).strip(), context)
         return val not in (collection or [])
 
     # 'in'
-    m = re.match(r"^(.+?)\s+in\s+(.+)$", expr)
+    m = _IN_RE.match(expr)
     if m:
         val = _eval_expr(m.group(1).strip(), context)
         collection = _eval_expr(m.group(2).strip(), context)
@@ -627,7 +715,7 @@ def _eval_test(value_expr: str, test_name: str, args: str, context: dict) -> boo
 
     # 'divisible by(n)'
     if test_name == "divisible":
-        m = re.match(r"\s*by\s*\(\s*(\d+)\s*\)", args)
+        m = _DIVISIBLE_BY_RE.match(args)
         if m:
             n = int(m.group(1))
             return isinstance(val, int) and val % n == 0
@@ -641,6 +729,7 @@ def _eval_test(value_expr: str, test_name: str, args: str, context: dict) -> boo
 
 # ── Filters ─────────────────────────────────────────────────────
 
+@lru_cache(maxsize=1024)
 def _split_on_pipe(expr: str) -> list[str]:
     """Split expression on | respecting quotes and parentheses."""
     parts = []
@@ -682,7 +771,7 @@ def _parse_filter_chain(expr: str) -> tuple[str, list[tuple[str, list[str]]]]:
 
     for f in parts[1:]:
         f = f.strip()
-        m = re.match(r"(\w+)\s*\((.*)\)$", f, re.DOTALL)
+        m = _FILTER_ARGS_RE.match(f)
         if m:
             name = m.group(1)
             raw_args = m.group(2).strip()
@@ -768,7 +857,7 @@ _BUILTIN_FILTERS = {
     "safe": lambda v, *a: v,
     "escape": lambda v, *a: html.escape(str(v)),
     "e": lambda v, *a: html.escape(str(v)),
-    "striptags": lambda v, *a: re.sub(r"<[^>]+>", "", str(v)),
+    "striptags": lambda v, *a: _STRIPTAGS_RE.sub("", str(v)),
     "nl2br": lambda v, *a: str(v).replace("\n", "<br>\n"),
     "abs": lambda v, *a: abs(v) if isinstance(v, (int, float)) else v,
     "round": lambda v, *a: round(float(v), int(a[0]) if a else 0),
@@ -793,7 +882,7 @@ _BUILTIN_FILTERS = {
     "date": lambda v, *a: _date_filter(v, a[0] if a else "%Y-%m-%d"),
     "truncate": lambda v, *a: (str(v)[:int(a[0])] + "...") if a and len(str(v)) > int(a[0]) else str(v),
     "wordwrap": lambda v, *a: _wordwrap(str(v), int(a[0]) if a else 75),
-    "slug": lambda v, *a: re.sub(r"[^a-z0-9]+", "-", str(v).lower()).strip("-"),
+    "slug": lambda v, *a: _SLUG_RE.sub("-", str(v).lower()).strip("-"),
     "md5": lambda v, *a: hashlib.md5(str(v).encode()).hexdigest(),
     "sha256": lambda v, *a: hashlib.sha256(str(v).encode()).hexdigest(),
     "base64_encode": lambda v, *a: __import__("base64").b64encode(v if isinstance(v, bytes) else str(v).encode()).decode(),
@@ -910,6 +999,8 @@ class Frond:
         # Token pre-compilation cache
         self._compiled: dict[str, tuple[list, float]] = {}  # {template_name: (tokens, mtime)}
         self._compiled_strings: dict[str, list] = {}  # {md5_hash: tokens}
+        # Filter chain cache: expr → (var_name, [(filter_name, [args])])
+        self._filter_chain_cache: dict[str, tuple[str, list]] = {}
 
         # Built-in global functions
         self._globals["form_token"] = _form_token
@@ -1003,6 +1094,7 @@ class Frond:
         """Clear all compiled template caches."""
         self._compiled.clear()
         self._compiled_strings.clear()
+        self._filter_chain_cache.clear()
 
     def _load(self, name: str) -> str:
         """Load template source from file."""
@@ -1036,7 +1128,7 @@ class Frond:
     def _execute_with_source(self, source: str, tokens: list, context: dict, template: str = None) -> str:
         """Execute with both source and pre-tokenized tokens available."""
         # Handle extends first
-        extends_match = re.match(r"\{%[-\s]*extends\s+[\"'](.+?)[\"']\s*[-]?%\}", source.lstrip())
+        extends_match = _EXTENDS_RE.match(source.lstrip())
         if extends_match:
             parent_name = extends_match.group(1)
             parent_source = self._load(parent_name)
@@ -1048,7 +1140,7 @@ class Frond:
     def _execute(self, source: str, context: dict) -> str:
         """Execute template source against context."""
         # Handle extends first
-        extends_match = re.match(r"\{%[-\s]*extends\s+[\"'](.+?)[\"']\s*[-]?%\}", source.lstrip())
+        extends_match = _EXTENDS_RE.match(source.lstrip())
         if extends_match:
             parent_name = extends_match.group(1)
             parent_source = self._load(parent_name)
@@ -1064,11 +1156,7 @@ class Frond:
     def _extract_blocks(self, source: str) -> dict[str, str]:
         """Extract {% block name %}...{% endblock %} from source."""
         blocks = {}
-        pattern = re.compile(
-            r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}(.*?)\{%[-\s]*endblock\s*[-]?%\}",
-            re.DOTALL,
-        )
-        for m in pattern.finditer(source):
+        for m in _BLOCK_RE.finditer(source):
             blocks[m.group(1)] = m.group(2)
         return blocks
 
@@ -1080,10 +1168,7 @@ class Frond:
             block_source = child_blocks.get(name, default_content)
             return self._render_tokens(_tokenize(block_source), context)
 
-        pattern = re.compile(
-            r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}(.*?)\{%[-\s]*endblock\s*[-]?%\}",
-            re.DOTALL,
-        )
+        pattern = _BLOCK_RE
 
         # First pass: replace blocks
         result = pattern.sub(replace_block, parent_source)
@@ -1203,6 +1288,15 @@ class Frond:
 
         return self._eval_var_inner(expr, context)
 
+    def _cached_filter_chain(self, expr: str):
+        """Return parsed filter chain from cache, or parse and cache."""
+        cached = self._filter_chain_cache.get(expr)
+        if cached is not None:
+            return cached
+        result = _parse_filter_chain(expr)
+        self._filter_chain_cache[expr] = result
+        return result
+
     def _eval_var_raw(self, expr: str, context: dict):
         """Evaluate a variable expression with filters, returning the raw
         (unescaped) value for use in boolean/comparison tests.
@@ -1213,7 +1307,7 @@ class Frond:
         ``length`` is a real filter but ``!= 1`` is a comparison, so we apply
         the filter first and then evaluate the comparison.
         """
-        var_name, filters = _parse_filter_chain(expr)
+        var_name, filters = self._cached_filter_chain(expr)
         value = _eval_expr(var_name, context)
 
         for fname, args in filters:
@@ -1227,7 +1321,7 @@ class Frond:
                 # e.g. "length != 1".  Extract the real filter name and the
                 # comparison suffix, apply the filter, then evaluate the
                 # comparison against the result.
-                m = re.match(r"(\w+)\s*(!=|==|>=|<=|>|<)\s*(.+)", fname)
+                m = _FILTER_CMP_RE.match(fname)
                 if m:
                     real_filter = m.group(1)
                     op = m.group(2)
@@ -1251,7 +1345,7 @@ class Frond:
 
     def _eval_var_inner(self, expr: str, context: dict):
         """Core variable evaluation: resolve expression, apply filters, escape."""
-        var_name, filters = _parse_filter_chain(expr)
+        var_name, filters = self._cached_filter_chain(expr)
 
         # Sandbox: check variable access
         if self._sandbox and self._allowed_vars is not None:
@@ -1271,6 +1365,36 @@ class Frond:
             if self._sandbox and self._allowed_filters is not None:
                 if fname not in self._allowed_filters:
                     continue  # Silently skip blocked filter
+
+            # Fast path for common no-arg filters
+            if not args:
+                if fname == "upper":
+                    value = str(value).upper()
+                    continue
+                if fname == "lower":
+                    value = str(value).lower()
+                    continue
+                if fname == "length":
+                    value = len(value) if value else 0
+                    continue
+                if fname == "trim":
+                    value = str(value).strip()
+                    continue
+                if fname == "capitalize":
+                    value = str(value).capitalize()
+                    continue
+                if fname == "title":
+                    value = str(value).title()
+                    continue
+                if fname == "string":
+                    value = str(value)
+                    continue
+                if fname == "int":
+                    value = int(value) if value else 0
+                    continue
+                if fname in ("e", "escape"):
+                    value = html.escape(str(value))
+                    continue
 
             fn = self._filters.get(fname)
             if fn:
@@ -1335,10 +1459,7 @@ class Frond:
         """Handle {% for item in items %}...{% else %}...{% endfor %}."""
         content, _, _ = _strip_tag(tokens[start][1])
         # Parse: for key, value in expr  OR  for item in expr
-        for_match = re.match(
-            r"for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s+(.+)",
-            content,
-        )
+        for_match = _FOR_RE.match(content)
         if not for_match:
             return "", start + 1
 
@@ -1397,7 +1518,7 @@ class Frond:
         total = len(items)
 
         for idx, item in enumerate(items):
-            loop_ctx = dict(context)
+            loop_ctx = _LoopContext(context)
             loop_ctx["loop"] = {
                 "index": idx + 1,
                 "index0": idx,
@@ -1430,7 +1551,7 @@ class Frond:
 
     def _handle_set(self, content: str, context: dict):
         """Handle {% set name = expr %}."""
-        m = re.match(r"set\s+(\w+)\s*=\s*(.+)", content)
+        m = _SET_RE.match(content)
         if m:
             name = m.group(1)
             expr = m.group(2).strip()
@@ -1442,7 +1563,7 @@ class Frond:
         content = content.replace("ignore missing", "").strip()
 
         # Parse: include "file" with { ... }
-        m = re.match(r'include\s+["\'](.+?)["\'](?:\s+with\s+(.+))?', content)
+        m = _INCLUDE_RE.match(content)
         if not m:
             return ""
 
@@ -1467,7 +1588,7 @@ class Frond:
     def _handle_macro(self, tokens: list, start: int, context: dict) -> int:
         """Handle {% macro name(args) %}...{% endmacro %}. Registers as context callable."""
         content, _, _ = _strip_tag(tokens[start][1])
-        m = re.match(r"macro\s+(\w+)\s*\(([^)]*)\)", content)
+        m = _MACRO_RE.match(content)
         if not m:
             # Skip to endmacro
             i = start + 1
@@ -1508,7 +1629,7 @@ class Frond:
         Loads the given template file, parses it for macro definitions,
         and registers the named macros as callables in the current context.
         """
-        m = re.match(r'from\s+["\'](.+?)["\']\s+import\s+(.+)', content)
+        m = _FROM_IMPORT_RE.match(content)
         if not m:
             return
 
@@ -1527,7 +1648,7 @@ class Frond:
                 tag_content, _, _ = _strip_tag(raw)
                 tag = tag_content.split()[0] if tag_content.split() else ""
                 if tag == "macro":
-                    macro_m = re.match(r"macro\s+(\w+)\s*\(([^)]*)\)", tag_content)
+                    macro_m = _MACRO_RE.match(tag_content)
                     if macro_m and macro_m.group(1) in names:
                         macro_name = macro_m.group(1)
                         param_names = [p.strip() for p in macro_m.group(2).split(",") if p.strip()]
@@ -1572,7 +1693,7 @@ class Frond:
 
         content, _, _ = _strip_tag(tokens[start][1])
         # Parse: cache "key" ttl  OR  cache "key"
-        m = re.match(r'cache\s+["\'](.+?)["\']\s*(\d+)?', content)
+        m = _CACHE_RE.match(content)
         cache_key = m.group(1) if m else "default"
         ttl = int(m.group(2)) if m and m.group(2) else 60
 
@@ -1654,7 +1775,7 @@ class Frond:
 
         rendered = self._render_tokens(list(body_tokens), context)
         # Collapse whitespace between > and <
-        rendered = re.sub(r">\s+<", "><", rendered)
+        rendered = _SPACELESS_RE.sub("><", rendered)
         return rendered, i
 
     def _handle_autoescape(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
@@ -1664,7 +1785,7 @@ class Frond:
         """
         content, _, _ = _strip_tag(tokens[start][1])
         # Parse: autoescape false|true
-        mode_match = re.match(r"autoescape\s+(false|true)", content)
+        mode_match = _AUTOESCAPE_RE.match(content)
         auto_escape_on = True
         if mode_match and mode_match.group(1) == "false":
             auto_escape_on = False
@@ -1697,7 +1818,7 @@ class Frond:
             original_eval_var = self._eval_var
 
             def _no_escape_eval_var(expr, ctx):
-                var_name, filters = _parse_filter_chain(expr)
+                var_name, filters = self._cached_filter_chain(expr)
                 if self._sandbox and self._allowed_vars is not None:
                     root_var = var_name.split(".")[0].split("[")[0].strip()
                     if root_var and root_var not in self._allowed_vars and root_var != "loop":

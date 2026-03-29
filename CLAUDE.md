@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.10.18 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.10.20 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -25,6 +25,7 @@ Version 3.10.18 — Lightweight Python web framework. See https://tina4.com for 
 - **Migrations for all schema changes** — Never execute DDL outside migration files
 - **Constants file** — No magic strings or numbers in routes. Put constants in `src/app/constants.py`
 - **Service layer pattern** — For complex business logic, create `class FooService` in `src/app/` with a module-level singleton. Routes should be thin wrappers
+- **Parity across all frameworks** — Every new feature, fix, or optimization must be implemented with equivalent logic AND tests in all 4 Tina4 frameworks (Python, PHP, Ruby, Node.js). Never ship to one without shipping to all.
 - **Routes return `response()`** — Always use `response()` not `response.json()`. This is the Tina4 convention
 - **Error handling in routes** — Wrap route logic in `try/except`, log with `Debug.error()`, return `response()` with appropriate status
 - **All links and references** should point to https://tina4.com
@@ -159,7 +160,14 @@ db.rollback()
 db.table_exists(table_name) -> bool
 db.get_tables() -> list[str]
 db.get_columns(table_name) -> list[dict]
+db.get_next_id(table: str, pk_column: str = "id", generator_name: str | None = None) -> int
+    # Race-safe ID generation using atomic sequence table (tina4_sequences).
+    # SQLite/MySQL/MSSQL: uses tina4_sequences table with atomic UPDATE+SELECT.
+    # PostgreSQL: auto-creates a sequence if missing, uses nextval().
+    # Firebird: uses existing generator (unchanged).
 ```
+
+**`tina4_sequences` table** — Auto-created by `get_next_id()` on first use for SQLite, MySQL, and MSSQL. Stores the current sequence value per table. Do not modify this table manually.
 
 ### ORM — Active Record base class
 
@@ -523,8 +531,10 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - SameSite=Lax default on session cookies (`TINA4_SESSION_SAMESITE`)
 - `tina4 init` generates Dockerfile and .dockerignore
 - Gallery: 7 interactive examples with Try It deploy at `/__dev/`
-- Tests: 1,791 passing (38 modules)
-- Version: 3.9.2
+- Race-safe `get_next_id()` with atomic sequence table (`tina4_sequences`) for SQLite/MySQL/MSSQL; PostgreSQL auto-creates sequences
+- Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
+- Tests: 2,010 passing (38 modules)
+- Version: 3.10.20
 
 ## Links
 

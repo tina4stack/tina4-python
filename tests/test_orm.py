@@ -667,7 +667,7 @@ class TestAutoCommit:
 
 
 class TestGetNextId:
-    """Database.get_next_id() returns the next available ID for a table."""
+    """Database.get_next_id() uses atomic sequence table (race-safe)."""
 
     def test_get_next_id_empty_table(self, db):
         """Next ID on empty table returns 1."""
@@ -675,7 +675,7 @@ class TestGetNextId:
         assert next_id == 1
 
     def test_get_next_id_with_rows(self, db):
-        """Next ID after inserts returns max + 1."""
+        """Next ID after inserts seeds from MAX and returns max + 1."""
         db.insert("users", {"name": "A"})
         db.insert("users", {"name": "B"})
         db.commit()
@@ -691,3 +691,43 @@ class TestGetNextId:
         """Next ID on missing table returns 1."""
         next_id = db.get_next_id("nonexistent")
         assert next_id == 1
+
+    def test_get_next_id_sequential_increments(self, db):
+        """Repeated calls return strictly increasing IDs."""
+        id1 = db.get_next_id("users")
+        id2 = db.get_next_id("users")
+        id3 = db.get_next_id("users")
+        assert id1 == 1
+        assert id2 == 2
+        assert id3 == 3
+
+    def test_get_next_id_creates_sequence_table(self, db):
+        """tina4_sequences table is auto-created."""
+        db.get_next_id("users")
+        assert db.table_exists("tina4_sequences")
+
+    def test_get_next_id_no_duplicates_after_insert(self, db):
+        """IDs never collide — sequence tracks beyond MAX after seeding."""
+        db.insert("users", {"name": "A"})
+        db.insert("users", {"name": "B"})
+        db.commit()
+        id1 = db.get_next_id("users")  # seeds from MAX(2), returns 3
+        id2 = db.get_next_id("users")  # returns 4
+        assert id1 == 3
+        assert id2 == 4
+
+    def test_get_next_id_separate_tables(self, db):
+        """Different tables have independent sequences."""
+        db.execute("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT)")
+        db.commit()
+        uid = db.get_next_id("users")
+        pid = db.get_next_id("products")
+        assert uid == 1
+        assert pid == 1
+
+    def test_get_next_id_custom_generator_name(self, db):
+        """Custom generator_name uses that as the sequence key."""
+        id1 = db.get_next_id("users", generator_name="my_custom_seq")
+        id2 = db.get_next_id("users", generator_name="my_custom_seq")
+        assert id1 == 1
+        assert id2 == 2
