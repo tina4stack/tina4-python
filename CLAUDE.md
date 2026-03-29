@@ -131,6 +131,7 @@ from tina4_python.core.router import get, post, put, patch, delete, any_method, 
 @patch(path: str | list)         # Auth required by default
 @delete(path: str | list)        # Auth required by default
 @any_method(path: str | list)    # All methods
+# Wildcard routes: @get("/api/files/*")  — * matches all remaining path segments
 @noauth()                        # Make write route public
 @secured()                       # Protect a GET route
 @cached(is_cached: bool, max_age: int = 60)
@@ -146,6 +147,7 @@ from tina4_python.core.router import get, post, put, patch, delete, any_method, 
 from tina4_python.database import Database
 
 db = Database(url: str, username="", password="")
+# Connection pooling: Database("sqlite:///app.db", pool=4)  # 4 round-robin connections
 
 db.fetch(sql, params=None, limit=10, offset=0) -> DatabaseResult
 db.fetch_one(sql, params=None) -> dict | None
@@ -165,6 +167,11 @@ db.get_next_id(table: str, pk_column: str = "id", generator_name: str | None = N
     # SQLite/MySQL/MSSQL: uses tina4_sequences table with atomic UPDATE+SELECT.
     # PostgreSQL: auto-creates a sequence if missing, uses nextval().
     # Firebird: uses existing generator (unchanged).
+db.register_function(name, num_params, func, deterministic=True)  # SQLite only
+db.cache_stats() -> dict    # {"enabled": bool, "hits": int, "misses": int, "size": int, "ttl": int}
+db.cache_clear()            # Flush query cache and reset counters
+db.adapter -> DatabaseAdapter  # Access underlying adapter for driver-specific ops
+db.pool -> ConnectionPool | None  # Access connection pool (None if pooling disabled)
 ```
 
 **`tina4_sequences` table** — Auto-created by `get_next_id()` on first use for SQLite, MySQL, and MSSQL. Stores the current sequence value per table. Do not modify this table manually.
@@ -187,9 +194,13 @@ model.fetch_one(column_names="*", filter="", params=None) -> dict | None
 model.to_dict() -> dict
 model.to_json() -> str
 model.create_table() -> bool
+model.force_delete() -> bool    # Hard delete (bypasses soft-delete)
+model.restore() -> bool         # Restore soft-deleted record
 
 orm_bind(dba: Database) -> None  # Bind database to all ORM subclasses
 ```
+
+Soft-delete: Set `soft_delete = True` on the model class. Uses `deleted_at` column. `delete()` sets deleted_at, `force_delete()` removes the row, `restore()` clears deleted_at.
 
 ### QueryBuilder — Fluent query construction
 
@@ -210,7 +221,13 @@ Frond.render_string(source: str, data: dict = None) -> str
 Frond.add_filter(name: str, func: callable)
 Frond.add_global(name: str, value: any)
 Frond.add_test(name: str, func: callable)
+engine.sandbox(allowed_filters=["upper"], allowed_tags=["if"], allowed_vars=["x"])
 ```
+
+- **SafeString**: Custom filters can return `SafeString(value)` to bypass auto-HTML-escaping.
+- **Fragment caching**: `{% cache "key" 300 %}...{% endcache %}` -- caches rendered block content for TTL seconds.
+- **Raw blocks**: `{% raw %}...{% endraw %}` -- output literal template syntax without parsing.
+- **Sandbox mode**: Restrict template capabilities via `engine.sandbox(allowed_filters=, allowed_tags=, allowed_vars=)`.
 
 ### Seeder — Fake data generation
 
@@ -498,7 +515,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Template engine via `tina4_python.frond` (Frond — Jinja2/Twig-compatible, replaces Template)
 - JWT auth via `tina4_python.auth` (zero-dep HMAC-SHA256, password hashing via PBKDF2)
 - Queue via `tina4_python.queue` (database-backed, zero deps)
-- WebSocket via `tina4_python.websocket` (RFC 6455, asyncio-based). WebSocket backplane for scaling broadcast across instances via Redis pub/sub. Configured via `TINA4_WS_BACKPLANE` and `TINA4_WS_BACKPLANE_URL` env vars
+- WebSocket via `tina4_python.websocket` (RFC 6455, asyncio-based). WebSocket backplane for scaling broadcast across instances via Redis or NATS pub/sub. Configured via `TINA4_WS_BACKPLANE` (`redis` or `nats`) and `TINA4_WS_BACKPLANE_URL` env vars
 - API client via `tina4_python.api` (urllib-based, zero deps)
 - Swagger via `tina4_python.swagger` (OpenAPI 3.0.3 generator)
 - GraphQL via `tina4_python.graphql` (recursive-descent parser, ORM auto-generation)
