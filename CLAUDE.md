@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.10.22 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.10.23 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -551,7 +551,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Race-safe `get_next_id()` with atomic sequence table (`tina4_sequences`) for SQLite/MySQL/MSSQL; PostgreSQL auto-creates sequences
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
 - Tests: 2,010 passing (38 modules)
-- Version: 3.10.22
+- Version: 3.10.23
 
 ## Links
 

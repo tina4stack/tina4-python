@@ -941,8 +941,8 @@ def _wordwrap(text: str, width: int) -> str:
 # ── Form Token ─────────────────────────────────────────────────
 
 
-def _form_token(descriptor: str = "", session_id: str = "") -> str:
-    """Generate a JWT form token and return a hidden input element.
+def _generate_form_jwt(descriptor: str = "", session_id: str = "") -> str:
+    """Generate a JWT form token string.
 
     Args:
         descriptor: Optional string to enrich the token payload.
@@ -950,11 +950,9 @@ def _form_token(descriptor: str = "", session_id: str = "") -> str:
             - ``"admin_panel"``: payload is ``{"type": "form", "context": "admin_panel"}``
             - ``"checkout|order_123"``: payload is ``{"type": "form", "context": "checkout", "ref": "order_123"}``
         session_id: Optional session ID to bind the token to a specific session.
-            When provided, the CSRF middleware will verify the token belongs to
-            the same session. If empty, checks ``_form_token_session_id`` global.
 
     Returns:
-        ``<input type="hidden" name="formToken" value="TOKEN">``
+        The raw JWT string.
     """
     payload = {"type": "form", "nonce": secrets.token_hex(8)}
     if descriptor:
@@ -974,8 +972,30 @@ def _form_token(descriptor: str = "", session_id: str = "") -> str:
     secret = os.environ.get("SECRET", "tina4-default-secret")
     ttl = int(os.environ.get("TINA4_TOKEN_EXPIRES_IN", "60"))
     auth = _FrondAuth(secret=secret, expires_in=ttl)
-    token = auth.get_token(payload)
+    return auth.get_token(payload)
+
+
+def _form_token(descriptor: str = "", session_id: str = "") -> str:
+    """Generate a JWT form token and return a hidden input element.
+
+    Usage in templates: ``{{ form_token() }}`` or ``{{ "context" | form_token }}``
+
+    Returns:
+        ``<input type="hidden" name="formToken" value="TOKEN">``
+    """
+    token = _generate_form_jwt(descriptor, session_id)
     return SafeString(f'<input type="hidden" name="formToken" value="{token}">')
+
+
+def _form_token_value(descriptor: str = "", session_id: str = "") -> str:
+    """Generate a JWT form token and return just the raw token string.
+
+    Usage in templates: ``{{ formTokenValue("Sleek") }}``
+
+    Returns:
+        The raw JWT string (no HTML wrapper).
+    """
+    return SafeString(_generate_form_jwt(descriptor, session_id))
 
 
 # Module-level session ID holder — set by the server before rendering templates
@@ -1016,6 +1036,8 @@ class Frond:
 
         # Built-in global functions
         self._globals["form_token"] = _form_token
+        self._globals["formTokenValue"] = _form_token_value
+        self._globals["form_token_value"] = _form_token_value
 
     def sandbox(self, allowed_filters: list[str] = None,
                 allowed_tags: list[str] = None,
