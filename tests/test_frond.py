@@ -1177,3 +1177,82 @@ class TestTildeTernary:
     def test_inline_if_still_works(self, engine):
         assert engine.render_string('{{ "on" if active else "off" }}', {"active": True}) == "on"
         assert engine.render_string('{{ "on" if active else "off" }}', {"active": False}) == "off"
+
+
+# ── Filter-in-Condition Tests ──────────────────────────────────
+
+
+class TestFilterInCondition:
+    """Filters used inside {% if %} conditions (e.g. items|length > 0)."""
+
+    def test_length_greater_than_zero(self, engine):
+        r = engine.render_string('{% if items|length > 0 %}yes{% else %}no{% endif %}', {"items": [1, 2]})
+        assert r == "yes"
+
+    def test_length_greater_than_zero_empty(self, engine):
+        r = engine.render_string('{% if items|length > 0 %}yes{% else %}no{% endif %}', {"items": []})
+        assert r == "no"
+
+    def test_length_equals(self, engine):
+        r = engine.render_string('{% if items|length == 3 %}three{% else %}nope{% endif %}', {"items": [1, 2, 3]})
+        assert r == "three"
+
+    def test_length_equals_zero(self, engine):
+        r = engine.render_string('{% if items|length == 0 %}empty{% else %}has{% endif %}', {"items": []})
+        assert r == "empty"
+
+    def test_length_not_equals(self, engine):
+        r = engine.render_string('{% if items|length != 1 %}multi{% else %}single{% endif %}', {"items": [1, 2]})
+        assert r == "multi"
+
+    def test_string_length(self, engine):
+        r = engine.render_string('{% if name|length > 3 %}long{% else %}short{% endif %}', {"name": "Alice"})
+        assert r == "long"
+
+    def test_upper_comparison(self, engine):
+        r = engine.render_string('{% if name|upper == "ALICE" %}yes{% else %}no{% endif %}', {"name": "alice"})
+        assert r == "yes"
+
+    def test_first_comparison(self, engine):
+        r = engine.render_string('{% if items|first == 1 %}yes{% else %}no{% endif %}', {"items": [1, 2, 3]})
+        assert r == "yes"
+
+    def test_last_comparison(self, engine):
+        r = engine.render_string('{% if items|last == 3 %}yes{% else %}no{% endif %}', {"items": [1, 2, 3]})
+        assert r == "yes"
+
+    def test_filter_with_and(self, engine):
+        r = engine.render_string(
+            '{% if items|length >= 2 and name|upper == "ALICE" %}both{% else %}nope{% endif %}',
+            {"items": [1, 2], "name": "Alice"},
+        )
+        assert r == "both"
+
+    def test_filter_with_or(self, engine):
+        r = engine.render_string(
+            '{% if items|length == 0 or name|upper == "BOB" %}match{% else %}nope{% endif %}',
+            {"items": [1], "name": "Bob"},
+        )
+        assert r == "match"
+
+    def test_filter_with_spaces(self, engine):
+        """Spaces around pipe should work too."""
+        r = engine.render_string('{% if items | length > 0 %}yes{% else %}no{% endif %}', {"items": [1]})
+        assert r == "yes"
+
+    def test_no_filter_still_works(self, engine):
+        """Non-filter conditions must keep working."""
+        assert engine.render_string('{% if x > 5 %}yes{% else %}no{% endif %}', {"x": 10}) == "yes"
+        assert engine.render_string('{% if x > 5 %}yes{% else %}no{% endif %}', {"x": 3}) == "no"
+
+    def test_truthy_check_still_works(self, engine):
+        """Simple truthy checks must keep working."""
+        assert engine.render_string('{% if items %}yes{% else %}no{% endif %}', {"items": [1]}) == "yes"
+        assert engine.render_string('{% if items %}yes{% else %}no{% endif %}', {"items": []}) == "no"
+
+    def test_filter_in_elseif(self, engine):
+        r = engine.render_string(
+            '{% if items|length == 0 %}empty{% elseif items|length == 1 %}one{% else %}many{% endif %}',
+            {"items": [42]},
+        )
+        assert r == "one"

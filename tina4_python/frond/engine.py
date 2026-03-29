@@ -636,46 +636,55 @@ def _eval_expr(expr: str, context: dict):
     return _resolve(expr, context)
 
 
-def _eval_comparison(expr: str, context: dict):
-    """Evaluate comparison/logical expressions."""
+def _eval_comparison(expr: str, context: dict, eval_fn=None):
+    """Evaluate comparison/logical expressions.
+
+    Args:
+        eval_fn: Optional evaluator function for sub-expressions.  When
+                 provided by the Frond engine this will be ``_eval_var_raw``
+                 which understands filter pipes (``items|length``).  When
+                 ``None``, falls back to ``_eval_expr`` (no pipe support).
+    """
+    if eval_fn is None:
+        eval_fn = _eval_expr
     expr = expr.strip()
 
     # Handle 'not' prefix
     if expr.startswith("not "):
-        return not _eval_comparison(expr[4:], context)
+        return not _eval_comparison(expr[4:], context, eval_fn)
 
     # 'and' / 'or' (lowest precedence)
     # Split on ' or ' first (lower precedence)
     or_parts = _OR_RE.split(expr)
     if len(or_parts) > 1:
-        return any(_eval_comparison(p, context) for p in or_parts)
+        return any(_eval_comparison(p, context, eval_fn) for p in or_parts)
 
     and_parts = _AND_RE.split(expr)
     if len(and_parts) > 1:
-        return all(_eval_comparison(p, context) for p in and_parts)
+        return all(_eval_comparison(p, context, eval_fn) for p in and_parts)
 
     # 'is not' test
     m = _IS_NOT_RE.match(expr)
     if m:
-        return not _eval_test(m.group(1).strip(), m.group(2), m.group(3).strip(), context)
+        return not _eval_test(m.group(1).strip(), m.group(2), m.group(3).strip(), context, eval_fn)
 
     # 'is' test
     m = _IS_RE.match(expr)
     if m:
-        return _eval_test(m.group(1).strip(), m.group(2), m.group(3).strip(), context)
+        return _eval_test(m.group(1).strip(), m.group(2), m.group(3).strip(), context, eval_fn)
 
     # 'not in'
     m = _NOT_IN_RE.match(expr)
     if m:
-        val = _eval_expr(m.group(1).strip(), context)
-        collection = _eval_expr(m.group(2).strip(), context)
+        val = eval_fn(m.group(1).strip(), context)
+        collection = eval_fn(m.group(2).strip(), context)
         return val not in (collection or [])
 
     # 'in'
     m = _IN_RE.match(expr)
     if m:
-        val = _eval_expr(m.group(1).strip(), context)
-        collection = _eval_expr(m.group(2).strip(), context)
+        val = eval_fn(m.group(1).strip(), context)
+        collection = eval_fn(m.group(2).strip(), context)
         return val in (collection or [])
 
     # Binary operators
@@ -684,21 +693,23 @@ def _eval_comparison(expr: str, context: dict):
                     (">", lambda a, b: a > b), ("<", lambda a, b: a < b)]:
         if op in expr:
             left, _, right = expr.partition(op)
-            l = _eval_expr(left.strip(), context)
-            r = _eval_expr(right.strip(), context)
+            l = eval_fn(left.strip(), context)
+            r = eval_fn(right.strip(), context)
             try:
                 return fn(l, r)
             except TypeError:
                 return False
 
     # Fall through to simple eval
-    val = _eval_expr(expr, context)
+    val = eval_fn(expr, context)
     return bool(val) if val is not None else False
 
 
-def _eval_test(value_expr: str, test_name: str, args: str, context: dict) -> bool:
+def _eval_test(value_expr: str, test_name: str, args: str, context: dict, eval_fn=None) -> bool:
     """Evaluate an 'is' test."""
-    val = _eval_expr(value_expr, context)
+    if eval_fn is None:
+        eval_fn = _eval_expr
+    val = eval_fn(value_expr, context)
 
     tests = {
         "defined": lambda v: v is not None,
@@ -1448,9 +1459,10 @@ class Frond:
                 current_tokens.append(tokens[i])
             i += 1
 
-        # Evaluate branches
+        # Evaluate branches — pass _eval_var_raw so filters in conditions work
+        # e.g. {% if items|length > 0 %}
         for cond, branch_tokens in branches:
-            if cond is None or _eval_comparison(cond, context):
+            if cond is None or _eval_comparison(cond, context, self._eval_var_raw):
                 return self._render_tokens(list(branch_tokens), context), i
 
         return "", i
