@@ -9,6 +9,7 @@ import re
 import html
 import hashlib
 import json
+import secrets
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
@@ -955,7 +956,7 @@ def _form_token(descriptor: str = "", session_id: str = "") -> str:
     Returns:
         ``<input type="hidden" name="formToken" value="TOKEN">``
     """
-    payload = {"type": "form"}
+    payload = {"type": "form", "nonce": secrets.token_hex(8)}
     if descriptor:
         descriptor = str(descriptor)
         if "|" in descriptor:
