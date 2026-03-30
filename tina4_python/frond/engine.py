@@ -590,6 +590,39 @@ def _eval_expr(expr: str, context: dict):
         if _find_outside_quotes(expr, op) >= 0:
             return _eval_comparison(expr, context)
 
+    # Arithmetic operators: +, -, *, /, //, %, ** (lowest to highest precedence)
+    # Check for +/- first (lower precedence), then *//, then %, then **
+    for op in (" + ", " - ", " * ", " // ", " / ", " % ", " ** "):
+        pos = _find_outside_quotes(expr, op)
+        if pos >= 0:
+            left = expr[:pos].strip()
+            right = expr[pos + len(op):].strip()
+            l_val = _eval_expr(left, context)
+            r_val = _eval_expr(right, context)
+            try:
+                l_num = float(l_val) if l_val is not None else 0
+                r_num = float(r_val) if r_val is not None else 0
+                # Preserve int type when both operands are int-like
+                if l_num == int(l_num) and r_num == int(r_num) and op.strip() not in ("/",):
+                    l_num, r_num = int(l_num), int(r_num)
+                op_s = op.strip()
+                if op_s == "+":
+                    return l_num + r_num
+                elif op_s == "-":
+                    return l_num - r_num
+                elif op_s == "*":
+                    return l_num * r_num
+                elif op_s == "//":
+                    return l_num // r_num if r_num != 0 else 0
+                elif op_s == "/":
+                    return l_num / r_num if r_num != 0 else 0
+                elif op_s == "%":
+                    return l_num % r_num if r_num != 0 else 0
+                elif op_s == "**":
+                    return l_num ** r_num
+            except (ValueError, TypeError):
+                return None
+
     # Function call: name("arg1", "arg2") or obj.method("arg1")
     fn_match = _FUNC_CALL_RE.match(expr)
     if fn_match:
@@ -1582,12 +1615,15 @@ class Frond:
         return "".join(output), i
 
     def _handle_set(self, content: str, context: dict):
-        """Handle {% set name = expr %}."""
+        """Handle {% set name = expr %}.
+
+        Uses _eval_var_raw so filter pipes work (e.g. a.dr|default(0)).
+        """
         m = _SET_RE.match(content)
         if m:
             name = m.group(1)
             expr = m.group(2).strip()
-            context[name] = _eval_expr(expr, context)
+            context[name] = self._eval_var_raw(expr, context)
 
     def _handle_include(self, content: str, context: dict) -> str:
         """Handle {% include "file.html" %} with optional 'with' and 'ignore missing'."""
