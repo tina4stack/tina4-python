@@ -1617,6 +1617,32 @@ class Frond:
 
         return self._execute(source, inc_context)
 
+    @staticmethod
+    def _parse_macro_params(raw_params):
+        """Parse macro parameter list, extracting names and default values.
+
+        Handles: name, name="default", name='default'
+        Returns list of (name, default_value) tuples.
+        default_value is None when no default is specified.
+        """
+        params = []
+        for p in raw_params.split(","):
+            p = p.strip()
+            if not p:
+                continue
+            if "=" in p:
+                name, default = p.split("=", 1)
+                name = name.strip()
+                default = default.strip()
+                # Strip surrounding quotes from default value
+                if (default.startswith('"') and default.endswith('"')) or \
+                   (default.startswith("'") and default.endswith("'")):
+                    default = default[1:-1]
+                params.append((name, default))
+            else:
+                params.append((p, None))
+        return params
+
     def _handle_macro(self, tokens: list, start: int, context: dict) -> int:
         """Handle {% macro name(args) %}...{% endmacro %}. Registers as context callable."""
         content, _, _ = _strip_tag(tokens[start][1])
@@ -1631,7 +1657,7 @@ class Frond:
             return i
 
         macro_name = m.group(1)
-        param_names = [p.strip() for p in m.group(2).split(",") if p.strip()]
+        parsed_params = self._parse_macro_params(m.group(2))
 
         # Collect body tokens
         body_tokens = []
@@ -1646,11 +1672,14 @@ class Frond:
         # Register macro as a callable in context
         engine = self
 
-        def macro_fn(*args):
+        def macro_fn(*args, _params=parsed_params, _body=list(body_tokens)):
             macro_ctx = dict(context)
-            for pi, pname in enumerate(param_names):
-                macro_ctx[pname] = args[pi] if pi < len(args) else None
-            return SafeString(engine._render_tokens(list(body_tokens), macro_ctx))
+            for pi, (pname, pdefault) in enumerate(_params):
+                if pi < len(args):
+                    macro_ctx[pname] = args[pi]
+                else:
+                    macro_ctx[pname] = pdefault
+            return SafeString(engine._render_tokens(list(_body), macro_ctx))
 
         context[macro_name] = macro_fn
         return i
@@ -1683,7 +1712,7 @@ class Frond:
                     macro_m = _MACRO_RE.match(tag_content)
                     if macro_m and macro_m.group(1) in names:
                         macro_name = macro_m.group(1)
-                        param_names = [p.strip() for p in macro_m.group(2).split(",") if p.strip()]
+                        parsed_params = self._parse_macro_params(macro_m.group(2))
 
                         # Collect body tokens until endmacro
                         body_tokens = []
@@ -1698,13 +1727,16 @@ class Frond:
                         # Register as callable
                         engine = self
                         captured_body = list(body_tokens)
-                        captured_params = list(param_names)
+                        captured_params = list(parsed_params)
                         captured_context = dict(context)
 
                         def macro_fn(*args, _params=captured_params, _body=captured_body, _ctx=captured_context):
                             macro_ctx = dict(_ctx)
-                            for pi, pname in enumerate(_params):
-                                macro_ctx[pname] = args[pi] if pi < len(args) else None
+                            for pi, (pname, pdefault) in enumerate(_params):
+                                if pi < len(args):
+                                    macro_ctx[pname] = args[pi]
+                                else:
+                                    macro_ctx[pname] = pdefault
                             return SafeString(engine._render_tokens(list(_body), macro_ctx))
 
                         context[macro_name] = macro_fn
