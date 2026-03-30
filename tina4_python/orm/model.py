@@ -229,19 +229,22 @@ class ORM(metaclass=ORMMeta):
                 db_col = self.field_mapping.get(name, field.column)
                 data[db_col] = value
 
-        if pk_value is not None:
-            # Update — use primary key as filter
-            update_data = {k: v for k, v in data.items() if k != pk_db_col}
-            if update_data:
-                db.update(table, update_data, f"{pk_db_col} = ?", [pk_value])
-        else:
-            # Insert
-            result = db.insert(table, data)
-            if result.last_id and pk in self._fields:
-                setattr(self, pk, result.last_id)
-
-        # ORM save is a discrete unit of work — always commit
-        db.commit()
+        db.start_transaction()
+        try:
+            if pk_value is not None:
+                # Update — use primary key as filter
+                update_data = {k: v for k, v in data.items() if k != pk_db_col}
+                if update_data:
+                    db.update(table, update_data, f"{pk_db_col} = ?", [pk_value])
+            else:
+                # Insert
+                result = db.insert(table, data)
+                if result.last_id and pk in self._fields:
+                    setattr(self, pk, result.last_id)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
 
         # Invalidate cached queries and relationship cache
         self.clear_cache()
@@ -259,16 +262,19 @@ class ORM(metaclass=ORMMeta):
         if pk_value is None:
             raise ValueError("Cannot delete: no primary key value")
 
-        if self.soft_delete and "deleted_at" in self._fields:
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).isoformat()
-            db.update(table, {"deleted_at": now}, f"{pk_db_col} = ?", [pk_value])
-            self.deleted_at = now
-        else:
-            db.delete(table, f"{pk_db_col} = ?", [pk_value])
-
-        # ORM delete is a discrete unit of work — always commit
-        db.commit()
+        db.start_transaction()
+        try:
+            if self.soft_delete and "deleted_at" in self._fields:
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc).isoformat()
+                db.update(table, {"deleted_at": now}, f"{pk_db_col} = ?", [pk_value])
+                self.deleted_at = now
+            else:
+                db.delete(table, f"{pk_db_col} = ?", [pk_value])
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
 
     def force_delete(self):
         """Hard delete, even if soft delete is enabled."""
@@ -281,8 +287,13 @@ class ORM(metaclass=ORMMeta):
         if pk_value is None:
             raise ValueError("Cannot delete: no primary key value")
 
-        db.delete(table, f"{pk_db_col} = ?", [pk_value])
-        db.commit()
+        db.start_transaction()
+        try:
+            db.delete(table, f"{pk_db_col} = ?", [pk_value])
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
 
     def restore(self):
         """Restore a soft-deleted record."""
@@ -295,9 +306,14 @@ class ORM(metaclass=ORMMeta):
         table = self._get_table()
         pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
-        db.update(table, {"deleted_at": None}, f"{pk_db_col} = ?", [pk_value])
-        self.deleted_at = None
-        db.commit()
+        db.start_transaction()
+        try:
+            db.update(table, {"deleted_at": None}, f"{pk_db_col} = ?", [pk_value])
+            self.deleted_at = None
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
 
     # ── Finders ─────────────────────────────────────────────────
 
