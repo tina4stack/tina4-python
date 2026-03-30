@@ -557,6 +557,17 @@ class TestMacros:
         assert "Hello World" in result
 
 
+    def test_macro_html_output(self, engine):
+        tpl = '{% macro link(url, text) %}<a href="{{ url }}">{{ text }}</a>{% endmacro %}{{ link("https://tina4.com", "Tina4") }}'
+        result = engine.render_string(tpl, {})
+        assert result == '<a href="https://tina4.com">Tina4</a>'
+
+    def test_macro_nested(self, engine):
+        tpl = '{% macro wrap(x) %}<b>{{ x }}</b>{% endmacro %}{% macro btn(label) %}{{ wrap(label) }}{% endmacro %}{{ btn("test") }}'
+        result = engine.render_string(tpl, {})
+        assert result == '<b>test</b>'
+
+
 # ── Form Token Tests ───────────────────────────────────────────
 
 
