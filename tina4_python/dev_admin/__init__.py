@@ -1718,6 +1718,7 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     """
     import sys
     python_version = sys.version.split()[0]
+    poll_interval_ms = int(os.environ.get("TINA4_DEV_POLL_INTERVAL", "3000"))
 
     return f"""<div id="tina4-dev-toolbar" style="position:fixed;bottom:0;left:0;right:0;background:#333;color:#fff;font-family:monospace;font-size:12px;padding:6px 16px;z-index:99999;display:flex;align-items:center;gap:16px;">
     <span style="color:#3572A5;font-weight:bold;">Tina4 v{__version__}</span>
@@ -1732,27 +1733,32 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
 </div>
 <script>
 (function(){{
-    var _t4_mtime=0,_t4_css_exts=['.css','.scss'];
+    var _t4_mtime=0,_t4_css_exts=['.css','.scss'],_t4_debounce=null;
+    var _t4_interval=parseInt('{poll_interval_ms}')||3000;
+    function _t4_apply(d){{
+        var f=d.file||'';
+        var isCss=_t4_css_exts.some(function(e){{return f.endsWith(e)}});
+        if(isCss){{
+            var links=document.querySelectorAll('link[rel="stylesheet"]');
+            links.forEach(function(l){{
+                var href=l.getAttribute('href');
+                if(href){{l.setAttribute('href',href.split('?')[0]+'?_t4='+d.mtime)}}
+            }});
+        }}else{{
+            location.reload();
+        }}
+    }}
     function _t4_poll(){{
         fetch('/__dev/api/mtime').then(function(r){{return r.json()}}).then(function(d){{
             if(!_t4_mtime){{_t4_mtime=d.mtime;return;}}
             if(d.mtime>_t4_mtime){{
-                var f=d.file||'';
-                var isCss=_t4_css_exts.some(function(e){{return f.endsWith(e)}});
-                if(isCss){{
-                    var links=document.querySelectorAll('link[rel="stylesheet"]');
-                    links.forEach(function(l){{
-                        var href=l.getAttribute('href');
-                        if(href){{l.setAttribute('href',href.split('?')[0]+'?_t4='+d.mtime)}}
-                    }});
-                    _t4_mtime=d.mtime;
-                }}else{{
-                    location.reload();
-                }}
+                _t4_mtime=d.mtime;
+                if(_t4_debounce)clearTimeout(_t4_debounce);
+                _t4_debounce=setTimeout(function(){{_t4_apply(d);}},500);
             }}
         }}).catch(function(){{}});
     }}
-    setInterval(_t4_poll,1500);
+    setInterval(_t4_poll,_t4_interval);
 }})();
 </script>"""
 
