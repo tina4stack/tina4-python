@@ -8,5 +8,5 @@ from tina4_python.Template import template
 async def index(request, response):
     return {
         "title": "Welcome to Tina4",
-        "message": "This is not a framework.",
+        "message": "This Is Now A 4Framework",
     }
