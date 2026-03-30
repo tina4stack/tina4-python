@@ -1650,7 +1650,7 @@ class Frond:
             macro_ctx = dict(context)
             for pi, pname in enumerate(param_names):
                 macro_ctx[pname] = args[pi] if pi < len(args) else None
-            return engine._render_tokens(list(body_tokens), macro_ctx)
+            return SafeString(engine._render_tokens(list(body_tokens), macro_ctx))
 
         context[macro_name] = macro_fn
         return i
@@ -1705,7 +1705,7 @@ class Frond:
                             macro_ctx = dict(_ctx)
                             for pi, pname in enumerate(_params):
                                 macro_ctx[pname] = args[pi] if pi < len(args) else None
-                            return engine._render_tokens(list(_body), macro_ctx)
+                            return SafeString(engine._render_tokens(list(_body), macro_ctx))
 
                         context[macro_name] = macro_fn
                         continue
