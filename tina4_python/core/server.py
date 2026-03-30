@@ -248,7 +248,7 @@ h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
 <div class="hero">
     <img src="/images/tina4-logo-icon.webp" class="logo" alt="Tina4">
     <h1>Tina4Python</h1>
-    <p class="tagline">This is not a framework</p>
+    <p class="tagline">This Is Now A 4Framework</p>
     <div class="actions">
         <a href="https://tina4.com/python" class="btn" target="_blank">Website</a>
         <a href="/__dev" class="btn">Dev Admin</a>
@@ -1174,7 +1174,7 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio"):
  / /  / / / / / /_/ /__  __/
 /_/  /_/_/ /_/\\__,_/  /_/
 {reset}
-  Tina4 Python v{__version__} — This is not a framework
+  Tina4 Python v{__version__} — This Is Now A 4Framework
 
   Server:    http://{display}:{port} ({server_name})
   Swagger:   http://localhost:{port}/swagger
