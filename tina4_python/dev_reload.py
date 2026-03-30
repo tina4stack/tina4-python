@@ -172,12 +172,13 @@ def _poll_loop(directories: list[str], interval: float = 1.0):
             # DevReload only handles route re-discovery and browser refresh.
 
 
-def start(directories: list[str] | None = None, interval: float = 1.0):
+def start(directories: list[str] | None = None, interval: float | None = None):
     """Start the DevReload file watcher in a background thread.
 
     Args:
         directories: List of directories to watch. Defaults to ["src", "public"].
-        interval: Polling interval in seconds. Default 1.0.
+        interval: Polling interval in seconds. Defaults to TINA4_DEV_POLL_INTERVAL/1000
+                  env var (milliseconds), or 3.0 seconds if not set.
     """
     global _running
 
@@ -186,6 +187,13 @@ def start(directories: list[str] | None = None, interval: float = 1.0):
 
     if directories is None:
         directories = ["src", "public"]
+
+    if interval is None:
+        env_ms = os.environ.get("TINA4_DEV_POLL_INTERVAL", "3000")
+        try:
+            interval = max(0.5, int(env_ms) / 1000.0)
+        except ValueError:
+            interval = 3.0
 
     _running = True
 
@@ -196,7 +204,7 @@ def start(directories: list[str] | None = None, interval: float = 1.0):
         name="tina4-dev-reload",
     )
     thread.start()
-    Log.info("DevReload: file watcher started")
+    Log.info(f"DevReload: file watcher started (interval={interval:.1f}s)")
 
 
 def stop():
