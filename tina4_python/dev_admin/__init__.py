@@ -277,6 +277,9 @@ def get_api_handlers() -> dict:
         "/__dev/api/gallery/deploy": ("POST", _api_gallery_deploy),
         "/__dev/api/mtime": ("GET", _api_mtime),
         "/__dev/api/version-check": ("GET", _api_version_check),
+        "/__dev/api/metrics": ("GET", _api_metrics),
+        "/__dev/api/metrics/full": ("GET", _api_metrics_full),
+        "/__dev/api/metrics/file": ("GET", _api_metrics_file),
     }
 
 
@@ -1169,6 +1172,27 @@ async def _api_version_check(request, response):
     return response({"current": current, "latest": latest})
 
 
+async def _api_metrics(request, response):
+    """Quick metrics — instant file scan."""
+    from tina4_python.dev_admin.metrics import quick_metrics
+    return response(quick_metrics())
+
+
+async def _api_metrics_full(request, response):
+    """Full analysis — AST-based, cached 60s."""
+    from tina4_python.dev_admin.metrics import full_analysis
+    return response(full_analysis())
+
+
+async def _api_metrics_file(request, response):
+    """Per-file detail metrics."""
+    from tina4_python.dev_admin.metrics import file_detail
+    path = request.params.get("path", "")
+    if not path:
+        return response({"error": "Missing path parameter"}, 400)
+    return response(file_detail(path))
+
+
 # Module startup time for uptime tracking
 _start_time = time.time()
 
@@ -1336,6 +1360,7 @@ textarea.input { resize: vertical; font-family: var(--mono); }
     <button class="dev-tab" onclick="showTab('websockets', event)">WS <span class="count" id="ws-count">0</span></button>
     <button class="dev-tab" onclick="showTab('system', event)">System</button>
     <button class="dev-tab" onclick="showTab('tools', event)">Tools</button>
+    <button class="dev-tab" onclick="showTab('metrics', event)">Metrics</button>
     <button class="dev-tab" onclick="showTab('connections', event)">Connections</button>
     <button class="dev-tab" onclick="showTab('chat', event)">Tina4</button>
 </div>
@@ -1539,6 +1564,29 @@ textarea.input { resize: vertical; font-family: var(--mono); }
     </div>
 </div>
 
+<!-- Metrics Panel -->
+<div id="panel-metrics" class="dev-panel hidden">
+    <div class="dev-panel-header">
+        <h2>Code Metrics</h2>
+        <div>
+            <button class="btn btn-sm" onclick="loadMetrics()">Refresh</button>
+            <button class="btn btn-sm" id="btn-full-analysis" onclick="loadFullAnalysis()" style="margin-left:4px;">Full Analysis</button>
+        </div>
+    </div>
+    <div id="metrics-quick" class="sys-grid"></div>
+    <div id="metrics-largest" style="margin-top:1rem;"></div>
+    <div id="metrics-full" style="margin-top:1rem;display:none;">
+        <h3 style="margin:1rem 0 0.5rem;color:var(--primary);">Complexity Heatmap</h3>
+        <div id="metrics-heatmap"></div>
+        <h3 style="margin:1rem 0 0.5rem;color:var(--primary);">Most Complex Functions</h3>
+        <div id="metrics-complex"></div>
+        <h3 style="margin:1rem 0 0.5rem;color:var(--primary);">Coupling Analysis</h3>
+        <div id="metrics-coupling"></div>
+        <h3 style="margin:1rem 0 0.5rem;color:var(--primary);">Violations</h3>
+        <div id="metrics-violations"></div>
+    </div>
+</div>
+
 <!-- Connections Panel -->
 <div id="panel-connections" class="dev-panel hidden">
     <div class="dev-panel-header">
@@ -1712,6 +1760,84 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 
 <script src="/js/tina4-dev-admin.min.js"></script>
+<script>
+// ── Metrics Panel JS ──
+function loadMetrics(){
+    var el=document.getElementById('metrics-quick');
+    el.innerHTML='<div class="sys-card"><div class="value">Loading...</div></div>';
+    fetch('/__dev/api/metrics').then(function(r){return r.json()}).then(function(d){
+        if(d.error){el.innerHTML='<div class="sys-card"><div class="value" style="color:var(--danger)">'+d.error+'</div></div>';return;}
+        el.innerHTML=
+            '<div class="sys-card"><div class="label">Python Files</div><div class="value">'+d.file_count+'</div></div>'+
+            '<div class="sys-card"><div class="label">Lines of Code</div><div class="value">'+d.total_loc.toLocaleString()+'</div></div>'+
+            '<div class="sys-card"><div class="label">Comment Lines</div><div class="value">'+d.total_comment.toLocaleString()+'</div></div>'+
+            '<div class="sys-card"><div class="label">Blank Lines</div><div class="value">'+d.total_blank.toLocaleString()+'</div></div>'+
+            '<div class="sys-card"><div class="label">Classes</div><div class="value">'+d.classes+'</div></div>'+
+            '<div class="sys-card"><div class="label">Functions</div><div class="value">'+d.functions+'</div></div>'+
+            '<div class="sys-card"><div class="label">Routes</div><div class="value">'+d.route_count+'</div></div>'+
+            '<div class="sys-card"><div class="label">ORM Models</div><div class="value">'+d.orm_count+'</div></div>'+
+            '<div class="sys-card"><div class="label">Templates</div><div class="value">'+d.template_count+'</div></div>'+
+            '<div class="sys-card"><div class="label">Migrations</div><div class="value">'+d.migration_count+'</div></div>'+
+            '<div class="sys-card"><div class="label">Avg File Size</div><div class="value">'+d.avg_file_size+' LOC</div></div>'+
+            '<div class="sys-card"><div class="label">Breakdown</div><div class="value">'+Object.entries(d.breakdown).map(function(e){return e[0]+': '+e[1]}).join(', ')+'</div></div>';
+        // Largest files table
+        var lg=document.getElementById('metrics-largest');
+        if(d.largest_files&&d.largest_files.length){
+            var h='<table style="width:100%"><thead><tr><th>File</th><th>LOC</th><th>Classes</th><th>Functions</th></tr></thead><tbody>';
+            d.largest_files.forEach(function(f){h+='<tr><td>'+f.path+'</td><td>'+f.loc+'</td><td>'+f.classes+'</td><td>'+f.functions+'</td></tr>';});
+            h+='</tbody></table>';lg.innerHTML=h;
+        }
+    }).catch(function(e){el.innerHTML='<div class="sys-card"><div class="value" style="color:var(--danger)">Error: '+e.message+'</div></div>';});
+}
+function loadFullAnalysis(){
+    var btn=document.getElementById('btn-full-analysis');
+    btn.textContent='Analyzing...';btn.disabled=true;
+    fetch('/__dev/api/metrics/full').then(function(r){return r.json()}).then(function(d){
+        btn.textContent='Full Analysis';btn.disabled=false;
+        document.getElementById('metrics-full').style.display='block';
+        if(d.error){document.getElementById('metrics-heatmap').innerHTML='<p style="color:var(--danger)">'+d.error+'</p>';return;}
+        // Heatmap
+        var hm=document.getElementById('metrics-heatmap');
+        var rows=d.file_metrics.map(function(f){
+            var color=f.maintainability>60?'#22c55e':f.maintainability>40?'#eab308':'#ef4444';
+            return '<tr><td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+color+';margin-right:6px;"></span>'+f.path+'</td><td>'+f.loc+'</td><td>'+f.complexity+'</td><td>'+f.avg_complexity+'</td><td>'+f.maintainability+'</td><td>'+f.instability+'</td></tr>';
+        }).join('');
+        hm.innerHTML='<table style="width:100%"><thead><tr><th>File</th><th>LOC</th><th>CC</th><th>Avg CC</th><th>MI</th><th>Instab.</th></tr></thead><tbody>'+rows+'</tbody></table>';
+        // Most complex functions
+        var cf=document.getElementById('metrics-complex');
+        var frows=d.most_complex_functions.map(function(f){
+            var color=f.complexity>20?'#ef4444':f.complexity>10?'#eab308':'#22c55e';
+            return '<tr><td><span style="color:'+color+';font-weight:bold;">'+f.complexity+'</span></td><td>'+f.name+'</td><td>'+f.file+':'+f.line+'</td><td>'+f.loc+'</td></tr>';
+        }).join('');
+        cf.innerHTML='<table style="width:100%"><thead><tr><th>CC</th><th>Function</th><th>File</th><th>LOC</th></tr></thead><tbody>'+frows+'</tbody></table>';
+        // Coupling
+        var cp=document.getElementById('metrics-coupling');
+        var crows=d.file_metrics.filter(function(f){return f.coupling_afferent>0||f.coupling_efferent>0}).map(function(f){
+            return '<tr><td>'+f.path+'</td><td>'+f.coupling_afferent+'</td><td>'+f.coupling_efferent+'</td><td>'+f.instability+'</td></tr>';
+        }).join('');
+        cp.innerHTML=crows?'<table style="width:100%"><thead><tr><th>File</th><th>Ca (in)</th><th>Ce (out)</th><th>Instability</th></tr></thead><tbody>'+crows+'</tbody></table>':'<p style="color:var(--muted)">No coupling data (single-file projects have no imports)</p>';
+        // Violations
+        var vl=document.getElementById('metrics-violations');
+        if(d.violations&&d.violations.length){
+            var vrows=d.violations.map(function(v){
+                var icon=v.type==='error'?'&#9888;':'&#9432;';
+                var color=v.type==='error'?'#ef4444':'#eab308';
+                return '<tr><td style="color:'+color+'">'+icon+'</td><td>'+v.message+'</td><td>'+v.file+(v.line?':'+v.line:'')+'</td></tr>';
+            }).join('');
+            vl.innerHTML='<table style="width:100%"><thead><tr><th></th><th>Issue</th><th>Location</th></tr></thead><tbody>'+vrows+'</tbody></table>';
+        }else{
+            vl.innerHTML='<p style="color:#22c55e;">&#10003; No violations found</p>';
+        }
+    }).catch(function(e){
+        btn.textContent='Full Analysis';btn.disabled=false;
+        document.getElementById('metrics-full').style.display='block';
+        document.getElementById('metrics-heatmap').innerHTML='<p style="color:var(--danger)">Error: '+e.message+'</p>';
+    });
+}
+// Auto-load metrics when tab is shown
+var metricsTab=document.querySelector('[onclick*="metrics"]');
+if(metricsTab)metricsTab.addEventListener('click',function(){loadMetrics();},{once:true});
+</script>
 <script>
 // Self-diagnostic — detect if the external JS failed to load
 (function() {
