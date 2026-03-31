@@ -1721,7 +1721,17 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     poll_interval_ms = int(os.environ.get("TINA4_DEV_POLL_INTERVAL", "3000"))
 
     return f"""<div id="tina4-dev-toolbar" style="position:fixed;bottom:0;left:0;right:0;background:#333;color:#fff;font-family:monospace;font-size:12px;padding:6px 16px;z-index:99999;display:flex;align-items:center;gap:16px;">
-    <span style="color:#3572A5;font-weight:bold;">Tina4 v{__version__}</span>
+    <span id="tina4-ver-btn" style="color:#3572A5;font-weight:bold;cursor:pointer;text-decoration:underline dotted;" onclick="tina4VersionModal()" title="Click to check for updates">Tina4 v{__version__}</span>
+    <div id="tina4-ver-modal" style="display:none;position:fixed;bottom:3rem;left:1rem;background:#1e1e2e;border:1px solid #3572A5;border-radius:8px;padding:16px 20px;z-index:100000;min-width:320px;box-shadow:0 8px 32px rgba(0,0,0,0.5);font-family:monospace;font-size:13px;color:#cdd6f4;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <strong style="color:#89b4fa;">Version Info</strong>
+        <span onclick="document.getElementById('tina4-ver-modal').style.display='none'" style="cursor:pointer;color:#888;">&times;</span>
+      </div>
+      <div id="tina4-ver-body" style="line-height:1.8;">
+        <div>Current: <strong style="color:#a6e3a1;">v{__version__}</strong></div>
+        <div id="tina4-ver-latest" style="color:#888;">Checking for updates...</div>
+      </div>
+    </div>
     <span style="color:#4caf50;">{method}</span>
     <span>{path}</span>
     <span style="color:#666;">&rarr; {matched_pattern}</span>
@@ -1760,6 +1770,49 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     }}
     setInterval(_t4_poll,_t4_interval);
 }})();
+function tina4VersionModal(){{
+    var m=document.getElementById('tina4-ver-modal');
+    if(m.style.display==='block'){{m.style.display='none';return;}}
+    m.style.display='block';
+    var el=document.getElementById('tina4-ver-latest');
+    el.innerHTML='Checking for updates...';
+    el.style.color='#888';
+    fetch('https://pypi.org/pypi/tina4-python/json')
+    .then(function(r){{return r.json()}})
+    .then(function(d){{
+        var latest=d.info.version;
+        var current='{__version__}';
+        if(latest===current){{
+            el.innerHTML='Latest: <strong style="color:#a6e3a1;">v'+latest+'</strong> &mdash; You are up to date!';
+            el.style.color='#a6e3a1';
+        }}else{{
+            var cParts=current.split('.').map(Number);
+            var lParts=latest.split('.').map(Number);
+            var isNewer=false;
+            for(var i=0;i<Math.max(cParts.length,lParts.length);i++){{
+                var c=cParts[i]||0,l=lParts[i]||0;
+                if(l>c){{isNewer=true;break;}}
+                if(l<c)break;
+            }}
+            if(isNewer){{
+                var breaking=(lParts[0]!==cParts[0]||lParts[1]!==cParts[1]);
+                el.innerHTML='Latest: <strong style="color:#f9e2af;">v'+latest+'</strong>';
+                if(breaking){{
+                    el.innerHTML+='<div style="color:#f38ba8;margin-top:6px;">&#9888; Major/minor version change &mdash; check the <a href="https://github.com/tina4stack/tina4-python/releases" target="_blank" style="color:#89b4fa;">changelog</a> for breaking changes before upgrading.</div>';
+                }}else{{
+                    el.innerHTML+='<div style="color:#f9e2af;margin-top:6px;">Patch update available. Run: <code style="background:#313244;padding:2px 6px;border-radius:3px;">pip install --upgrade tina4-python</code></div>';
+                }}
+            }}else{{
+                el.innerHTML='Latest: <strong style="color:#a6e3a1;">v'+latest+'</strong> &mdash; You are up to date!';
+                el.style.color='#a6e3a1';
+            }}
+        }}
+    }})
+    .catch(function(){{
+        el.innerHTML='Could not check for updates (offline?)';
+        el.style.color='#f38ba8';
+    }});
+}}
 </script>"""
 
 
