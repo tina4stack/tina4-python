@@ -276,6 +276,7 @@ def get_api_handlers() -> dict:
         "/__dev/api/gallery": ("GET", _api_gallery_list),
         "/__dev/api/gallery/deploy": ("POST", _api_gallery_deploy),
         "/__dev/api/mtime": ("GET", _api_mtime),
+        "/__dev/api/version-check": ("GET", _api_version_check),
     }
 
 
@@ -1150,6 +1151,24 @@ async def _api_mtime(request, response):
     })
 
 
+async def _api_version_check(request, response):
+    """Proxy version check to PyPI to avoid browser CORS errors."""
+    import urllib.request
+    current = __version__
+    latest = current
+    try:
+        req = urllib.request.Request(
+            "https://pypi.org/pypi/tina4-python/json",
+            headers={"User-Agent": "tina4-python/" + current},
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            latest = data.get("info", {}).get("version", current)
+    except Exception:
+        pass  # Offline or timeout — return current as latest
+    return response({"current": current, "latest": latest})
+
+
 # Module startup time for uptime tracking
 _start_time = time.time()
 
@@ -1777,11 +1796,11 @@ function tina4VersionModal(){{
     var el=document.getElementById('tina4-ver-latest');
     el.innerHTML='Checking for updates...';
     el.style.color='#888';
-    fetch('https://pypi.org/pypi/tina4-python/json')
+    fetch('/__dev/api/version-check')
     .then(function(r){{return r.json()}})
     .then(function(d){{
-        var latest=d.info.version;
-        var current='{__version__}';
+        var latest=d.latest;
+        var current=d.current;
         if(latest===current){{
             el.innerHTML='Latest: <strong style="color:#a6e3a1;">v'+latest+'</strong> &mdash; You are up to date!';
             el.style.color='#a6e3a1';
