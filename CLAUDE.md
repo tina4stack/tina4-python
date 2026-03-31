@@ -550,8 +550,9 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Gallery: 7 interactive examples with Try It deploy at `/__dev/`
 - Race-safe `get_next_id()` with atomic sequence table (`tina4_sequences`) for SQLite/MySQL/MSSQL; PostgreSQL auto-creates sequences
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
-- Tests: 2,010 passing (38 modules)
-- Version: 3.10.24
+- MCP server (`tina4_python.mcp`): built-in dev tools (24 tools) auto-start on `TINA4_DEBUG=true` + localhost. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. Localhost-only by default; `TINA4_MCP_REMOTE=true` for remote
+- Tests: 2,051 passing (39 modules)
+- Version: 3.10.32
 
 ## Links
 
