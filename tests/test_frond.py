@@ -1267,3 +1267,81 @@ class TestFilterInCondition:
             {"items": [42]},
         )
         assert r == "one"
+
+
+# ── Block Inheritance parent()/super() Tests ───────────────────
+
+
+class TestBlockParent:
+    """{{ parent() }} and {{ super() }} in block inheritance."""
+
+    def test_parent_includes_parent_content(self, engine, tpl_dir):
+        (tpl_dir / "base_p.html").write_text(
+            "<head>{% block head %}<title>Base</title>{% endblock %}</head>"
+        )
+        (tpl_dir / "child_p.html").write_text(
+            '{% extends "base_p.html" %}{% block head %}{{ parent() }}<link href="/app.css">{% endblock %}'
+        )
+        r = engine.render("child_p.html", {})
+        assert "<title>Base</title>" in r
+        assert "/app.css" in r
+
+    def test_super_is_alias(self, engine, tpl_dir):
+        (tpl_dir / "base_s.html").write_text(
+            "{% block footer %}Base Footer{% endblock %}"
+        )
+        (tpl_dir / "child_s.html").write_text(
+            '{% extends "base_s.html" %}{% block footer %}{{ super() }} | Child{% endblock %}'
+        )
+        r = engine.render("child_s.html", {})
+        assert "Base Footer" in r
+        assert "Child" in r
+
+    def test_no_parent_full_replace(self, engine, tpl_dir):
+        (tpl_dir / "base_r.html").write_text(
+            "{% block content %}OLD{% endblock %}"
+        )
+        (tpl_dir / "child_r.html").write_text(
+            '{% extends "base_r.html" %}{% block content %}NEW{% endblock %}'
+        )
+        r = engine.render("child_r.html", {})
+        assert "NEW" in r
+        assert "OLD" not in r
+
+    def test_parent_with_variables(self, engine, tpl_dir):
+        (tpl_dir / "base_v.html").write_text(
+            "{% block greeting %}Hello {{ name }}{% endblock %}"
+        )
+        (tpl_dir / "child_v.html").write_text(
+            '{% extends "base_v.html" %}{% block greeting %}{{ parent() }}! Welcome back.{% endblock %}'
+        )
+        r = engine.render("child_v.html", {"name": "Alice"})
+        assert "Hello Alice" in r
+        assert "Welcome back" in r
+
+    def test_parent_not_called_returns_child_only(self, engine, tpl_dir):
+        (tpl_dir / "base_nc.html").write_text(
+            "{% block nav %}Parent Nav{% endblock %} | {% block body %}Parent Body{% endblock %}"
+        )
+        (tpl_dir / "child_nc.html").write_text(
+            '{% extends "base_nc.html" %}{% block body %}Child Body{% endblock %}'
+        )
+        r = engine.render("child_nc.html", {})
+        assert "Parent Nav" in r  # Unreplaced block keeps parent content
+        assert "Child Body" in r
+        assert "Parent Body" not in r
+
+    def test_multiple_blocks_with_parent(self, engine, tpl_dir):
+        (tpl_dir / "base_m.html").write_text(
+            "{% block css %}base.css{% endblock %} {% block js %}base.js{% endblock %}"
+        )
+        (tpl_dir / "child_m.html").write_text(
+            '{% extends "base_m.html" %}'
+            '{% block css %}{{ parent() }} app.css{% endblock %}'
+            '{% block js %}{{ parent() }} app.js{% endblock %}'
+        )
+        r = engine.render("child_m.html", {})
+        assert "base.css" in r
+        assert "app.css" in r
+        assert "base.js" in r
+        assert "app.js" in r

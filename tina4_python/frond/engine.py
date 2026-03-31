@@ -1225,12 +1225,36 @@ class Frond:
         return blocks
 
     def _render_with_blocks(self, parent_source: str, context: dict, child_blocks: dict) -> str:
-        """Render parent template, replacing blocks with child content."""
+        """Render parent template, replacing blocks with child content.
+
+        Supports {{ parent() }} / {{ super() }} inside child blocks to include
+        the parent block's content (standard Twig/Jinja2 behavior).
+        """
+        engine = self
+
         def replace_block(m):
             name = m.group(1)
-            default_content = m.group(2)
-            block_source = child_blocks.get(name, default_content)
-            return self._render_tokens(_tokenize(block_source), context)
+            parent_content = m.group(2)
+            block_source = child_blocks.get(name, parent_content)
+
+            # Make parent() and super() available inside child blocks
+            # They return the rendered parent block content
+            rendered_parent = None
+
+            def get_parent():
+                nonlocal rendered_parent
+                if rendered_parent is None:
+                    rendered_parent = SafeString(
+                        engine._render_tokens(_tokenize(parent_content), context)
+                    )
+                return rendered_parent
+
+            # Inject parent/super into a block-local context
+            block_ctx = dict(context)
+            block_ctx["parent"] = get_parent
+            block_ctx["super"] = get_parent
+
+            return engine._render_tokens(_tokenize(block_source), block_ctx)
 
         pattern = _BLOCK_RE
 
