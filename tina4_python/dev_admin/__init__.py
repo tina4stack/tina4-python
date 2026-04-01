@@ -1823,7 +1823,7 @@ function renderBubbleChart(files,depGraph){
     }
     // Build edge list from dependency graph — match by filename not full path
     var edges=[];
-    function basename(p){return p.split('/').pop().replace(/\.\w+$/,'').toLowerCase();}
+    function basename(p){var n=p.split('/').pop();var d=n.lastIndexOf('.');return(d>0?n.substring(0,d):n).toLowerCase();}
     var nameIdx={};
     bubbles.forEach(function(b,i){nameIdx[basename(b.f.path)]=i;});
     Object.keys(depGraph).forEach(function(src){
@@ -1847,27 +1847,35 @@ function renderBubbleChart(files,depGraph){
     var hoveredIdx=-1,dragIdx=-1,dragOX=0,dragOY=0;
     // Physics
     function simulate(){
-        var damping=0.92,springK=0.005,repulse=800;
+        var damping=0.85,springK=0.006,repulse=80,gravity=0.04;
+        var cx=W/2,cy=H/2;
+        // Gravity: pull all bubbles toward center, bigger = stronger pull
+        bubbles.forEach(function(b,idx){
+            if(idx===dragIdx)return;
+            var dx=cx-b.x,dy=cy-b.y;
+            var pull=gravity*(b.r/maxR);
+            b.vx+=dx*pull;b.vy+=dy*pull;
+        });
         // Spring forces along edges
         edges.forEach(function(e){
             var a=bubbles[e[0]],b=bubbles[e[1]];
             var dx=b.x-a.x,dy=b.y-a.y;
             var dist=Math.sqrt(dx*dx+dy*dy)||1;
-            var rest=a.r+b.r+40;
+            var rest=a.r+b.r+10;
             var force=(dist-rest)*springK;
             var fx=dx/dist*force,fy=dy/dist*force;
             if(e[0]!==dragIdx){a.vx+=fx;a.vy+=fy;}
             if(e[1]!==dragIdx){b.vx-=fx;b.vy-=fy;}
         });
-        // Repulsion between all bubbles
+        // Soft repulsion — just enough to prevent overlap
         for(var i=0;i<bubbles.length;i++){
             for(var j=i+1;j<bubbles.length;j++){
                 var a=bubbles[i],b=bubbles[j];
                 var dx=b.x-a.x,dy=b.y-a.y;
                 var dist=Math.sqrt(dx*dx+dy*dy)||1;
-                var minDist=a.r+b.r+4;
-                if(dist<minDist*3){
-                    var force=repulse/(dist*dist);
+                var minDist=a.r+b.r+8;
+                if(dist<minDist){
+                    var force=repulse*(minDist-dist)/minDist;
                     var fx=dx/dist*force,fy=dy/dist*force;
                     if(i!==dragIdx){a.vx-=fx;a.vy-=fy;}
                     if(j!==dragIdx){b.vx+=fx;b.vy+=fy;}
@@ -1917,20 +1925,10 @@ function renderBubbleChart(files,depGraph){
             var isHovered=(idx===hoveredIdx);
             var drawR=isHovered?b.r+4:b.r;
             if(isHovered){ctx.beginPath();ctx.arc(b.x,b.y,drawR+8,0,Math.PI*2);ctx.fillStyle='rgba(255,255,255,0.08)';ctx.fill();}
-            // Metallic glossy bubble with radial gradient
+            // Matte flat bubble
             ctx.beginPath();ctx.arc(b.x,b.y,drawR,0,Math.PI*2);
-            var grad=ctx.createRadialGradient(b.x-drawR*0.3,b.y-drawR*0.3,drawR*0.05,b.x+drawR*0.1,b.y+drawR*0.1,drawR);
-            grad.addColorStop(0,'rgba(255,255,255,0.7)');
-            grad.addColorStop(0.25,b.color);
-            grad.addColorStop(0.8,b.color);
-            grad.addColorStop(1,'rgba(0,0,0,0.3)');
-            ctx.fillStyle=grad;ctx.globalAlpha=isHovered?1.0:0.9;ctx.fill();
-            ctx.globalAlpha=1;ctx.strokeStyle='rgba(255,255,255,0.35)';ctx.lineWidth=isHovered?2.5:1;ctx.stroke();
-            // Specular highlight
-            ctx.beginPath();ctx.arc(b.x-drawR*0.25,b.y-drawR*0.25,drawR*0.35,0,Math.PI*2);
-            var spec=ctx.createRadialGradient(b.x-drawR*0.25,b.y-drawR*0.25,0,b.x-drawR*0.25,b.y-drawR*0.25,drawR*0.35);
-            spec.addColorStop(0,'rgba(255,255,255,0.4)');spec.addColorStop(1,'rgba(255,255,255,0)');
-            ctx.fillStyle=spec;ctx.fill();
+            ctx.fillStyle=b.color;ctx.globalAlpha=isHovered?1.0:0.85;ctx.fill();
+            ctx.globalAlpha=1;ctx.strokeStyle=isHovered?'rgba(255,255,255,0.6)':'rgba(255,255,255,0.25)';ctx.lineWidth=isHovered?2.5:1.5;ctx.stroke();
             // Label
             var name=b.f.path.split('/').pop().replace('.py','');
             if(drawR>16){
@@ -1945,15 +1943,16 @@ function renderBubbleChart(files,depGraph){
                 }
             }
             // Markers: T (tested) and D (dependencies) — shown separately
-            var mfs=Math.max(7,drawR*0.22);
+            var mfs=Math.max(9,drawR*0.35);
+            var mpad=mfs*0.8;
             ctx.font='bold '+mfs+'px sans-serif';ctx.textAlign='center';
             if(drawR>12&&b.f.has_tests){
-                ctx.fillStyle='rgba(166,227,161,0.9)';
-                ctx.fillText('\u24c9',b.x-(b.f.dep_count>0?mfs*0.6:0),b.y-drawR+mfs+1);
+                ctx.fillStyle='#22c55e';
+                ctx.fillText('\u24c9',b.x-(b.f.dep_count>0?mpad:0),b.y-drawR+mfs+2);
             }
             if(drawR>12&&b.f.dep_count>0){
-                ctx.fillStyle='rgba(249,226,175,0.9)';
-                ctx.fillText('\u24b9',b.x+(b.f.has_tests?mfs*0.6:0),b.y-drawR+mfs+1);
+                ctx.fillStyle='#f97316';
+                ctx.fillText('\u24b9',b.x+(b.f.has_tests?mpad:0),b.y-drawR+mfs+2);
             }
             b._drawX=b.x;b._drawY=b.y;b._drawR=drawR;
         });
