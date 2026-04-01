@@ -1,5 +1,5 @@
 {
-  "date": "2026-03-22T09:32:14Z",
+  "date": "2026-04-01T09:04:12Z",
   "machine": "arm64 Darwin",
   "config": {
     "runs": 3,
@@ -9,101 +9,261 @@
   },
   "results": [
     {
+      "framework": "Tina4 Python",
+      "language": "python",
+      "json_runs": [
+        7981.1883,
+        6508.2617,
+        5596.7894
+      ],
+      "list_runs": [
+        4045.9735,
+        4177.2509,
+        4370.1264
+      ],
+      "json_median": 6508.2617,
+      "list_median": 4177.2509,
+      "warmup_time_ms": 778.872458031401,
+      "deps": 0,
+      "features": 38,
+      "server": "built-in asyncio"
+    },
+    {
+      "framework": "Flask",
+      "language": "python",
+      "json_runs": [
+        4927.8882,
+        4865.7667,
+        4977.5378
+      ],
+      "list_runs": [
+        1185.425,
+        1255.7822,
+        1262.4569
+      ],
+      "json_median": 4927.8882,
+      "list_median": 1255.7822,
+      "warmup_time_ms": 105.54966703057289,
+      "deps": 6,
+      "features": 7,
+      "server": "Werkzeug"
+    },
+    {
+      "framework": "Starlette",
+      "language": "python",
+      "json_runs": [
+        1358.7063,
+        3011.1765,
+        2528.5058
+      ],
+      "list_runs": [
+        8066.3191,
+        6701.9378,
+        2776.8899
+      ],
+      "json_median": 2528.5058,
+      "list_median": 6701.9378,
+      "warmup_time_ms": 386.05625001946464,
+      "deps": 4,
+      "features": 6,
+      "server": "uvicorn"
+    },
+    {
+      "framework": "FastAPI",
+      "language": "python",
+      "json_runs": [
+        12772.0568,
+        12511.6697,
+        12652.3368
+      ],
+      "list_runs": [
+        2567.4458,
+        2567.0071,
+        2576.1642
+      ],
+      "json_median": 12652.3368,
+      "list_median": 2567.4458,
+      "warmup_time_ms": 50.11995800305158,
+      "deps": 12,
+      "features": 8,
+      "server": "uvicorn"
+    },
+    {
+      "framework": "Bottle",
+      "language": "python",
+      "json_runs": [
+        2417.5348,
+        4362.6417,
+        4355.3898
+      ],
+      "list_runs": [
+        845.6661,
+        841.5532,
+        499.7079
+      ],
+      "json_median": 4355.3898,
+      "list_median": 841.5532,
+      "warmup_time_ms": 67.4082079785876,
+      "deps": 0,
+      "features": 5,
+      "server": "built-in wsgiref"
+    },
+    {
+      "framework": "Django",
+      "language": "python",
+      "json_runs": [
+        4049.8876,
+        3988.7927,
+        4136.6229
+      ],
+      "list_runs": [
+        2160.633,
+        2161.2006,
+        2217.9826
+      ],
+      "json_median": 4049.8876,
+      "list_median": 2161.2006,
+      "warmup_time_ms": 67.51970801269636,
+      "deps": 20,
+      "features": 22,
+      "server": "runserver"
+    },
+    {
+      "framework": "Tina4 PHP",
+      "language": "php",
+      "json_runs": [
+        29824.9647,
+        29233.1344,
+        29292.7843
+      ],
+      "list_runs": [
+        5009.3165,
+        17308.7966,
+        17489.6494
+      ],
+      "json_median": 29292.7843,
+      "list_median": 17308.7966,
+      "warmup_time_ms": 41.21937503805384,
+      "deps": 0,
+      "features": 38,
+      "server": "php -S"
+    },
+    {
+      "framework": "Slim",
+      "language": "php",
+      "json_runs": [
+        3895.469,
+        5763.5587,
+        5713.8795
+      ],
+      "list_runs": [
+        5016.3449,
+        5055.1949,
+        5028.7905
+      ],
+      "json_median": 5713.8795,
+      "list_median": 5028.7905,
+      "warmup_time_ms": 157.88704197620973,
+      "deps": 10,
+      "features": 6,
+      "server": "php -S"
+    },
+    {
+      "framework": "Laravel",
+      "language": "php",
+      "json_runs": [
+        443.5334,
+        445.807,
+        444.6083
+      ],
+      "list_runs": [
+        440.7449,
+        439.8209,
+        441.1656
+      ],
+      "json_median": 444.6083,
+      "list_median": 440.7449,
+      "warmup_time_ms": 1202.9230410116725,
+      "deps": 50,
+      "features": 25,
+      "server": "artisan serve"
+    },
+    {
+      "framework": "Tina4 Ruby",
+      "language": "ruby",
+      "json_runs": [
+        10194.0393,
+        10294.1767,
+        10243.1143
+      ],
+      "list_runs": [
+        8112.2141,
+        8104.9543,
+        8061.8467
+      ],
+      "json_median": 10243.1143,
+      "list_median": 8104.9543,
+      "warmup_time_ms": 93.93662499496713,
+      "deps": 0,
+      "features": 38,
+      "server": "WEBrick"
+    },
+    {
+      "framework": "Sinatra",
+      "language": "ruby",
+      "json_runs": [
+        9547.6985,
+        9548.0548,
+        9572.3444
+      ],
+      "list_runs": [
+        7517.8464,
+        7514.3068,
+        7481.682
+      ],
+      "json_median": 9548.0548,
+      "list_median": 7514.3068,
+      "warmup_time_ms": 83.44358298927546,
+      "deps": 5,
+      "features": 4,
+      "server": "Puma"
+    },
+    {
       "framework": "Tina4 Node.js",
       "language": "nodejs",
       "json_runs": [
-        54946.2879,
-        78422.2485,
-        78620.3698
+        69962.2379,
+        84770.6077,
+        89645.0276
       ],
       "list_runs": [
-        19161.2299,
-        23468.0222,
-        22781.9148
+        25459.1504,
+        25453.6962,
+        25655.1524
       ],
-      "json_median": 78422.2485,
-      "list_median": 22781.9148,
-      "warmup_time_ms": 52.43404200882651,
+      "json_median": 84770.6077,
+      "list_median": 25459.1504,
+      "warmup_time_ms": 35.81516700796783,
       "deps": 0,
       "features": 38,
-      "server": "built-in"
-    },
-    {
-      "framework": "Express",
-      "language": "nodejs",
-      "json_runs": [
-        41923.3599,
-        49160.1601,
-        51021.7311
-      ],
-      "list_runs": [
-        19982.3456,
-        18284.2237,
-        21379.0179
-      ],
-      "json_median": 49160.1601,
-      "list_median": 19982.3456,
-      "warmup_time_ms": 45.61533298692666,
-      "deps": 3,
-      "features": 4,
-      "server": "built-in"
-    },
-    {
-      "framework": "Fastify",
-      "language": "nodejs",
-      "json_runs": [
-        67134.3694,
-        84042.7353,
-        82482.1056
-      ],
-      "list_runs": [
-        25526.1797,
-        24767.6894,
-        24987.7767
-      ],
-      "json_median": 82482.1056,
-      "list_median": 24987.7767,
-      "warmup_time_ms": 38.205709017347544,
-      "deps": 10,
-      "features": 5,
-      "server": "built-in"
-    },
-    {
-      "framework": "Koa",
-      "language": "nodejs",
-      "json_runs": [
-        55389.6175,
-        64874.5437,
-        52823.6435
-      ],
-      "list_runs": [
-        12642.7418,
-        20601.4243,
-        20890.3829
-      ],
-      "json_median": 55389.6175,
-      "list_median": 20601.4243,
-      "warmup_time_ms": 37.038749986095354,
-      "deps": 5,
-      "features": 3,
       "server": "built-in"
     },
     {
       "framework": "Node.js raw",
       "language": "nodejs",
       "json_runs": [
-        62144.5788,
-        68181.3527,
-        73573.9077
+        78381.5256,
+        91109.7394,
+        92824.5819
       ],
       "list_runs": [
-        24865.7096,
-        26493.8561,
-        26230.6204
+        26005.5985,
+        25990.9538,
+        26030.3406
       ],
-      "json_median": 68181.3527,
-      "list_median": 26230.6204,
-      "warmup_time_ms": 37.32529198168777,
+      "json_median": 91109.7394,
+      "list_median": 26005.5985,
+      "warmup_time_ms": 51.726291014347225,
       "deps": 0,
       "features": 1,
       "server": "built-in http"

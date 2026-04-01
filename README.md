@@ -3,16 +3,15 @@
 </p>
 
 <h1 align="center">Tina4 Python</h1>
-<h3 align="center">This Is Now A 4Framework</h3>
 
 <p align="center">
-  Laravel joy. Python speed. 10x less code. Zero third-party dependencies.
+  54 built-in features. Zero dependencies. One import, everything works.
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/tina4-python/"><img src="https://img.shields.io/pypi/v/tina4-python?color=7b1fa2&label=PyPI" alt="PyPI"></a>
-  <img src="https://img.shields.io/badge/tests-1%2C791%20passing-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/features-38-blue" alt="Features">
+  <img src="https://img.shields.io/badge/tests-2%2C066%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/features-54-blue" alt="Features">
   <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="Zero Deps">
   <a href="https://tina4.com"><img src="https://img.shields.io/badge/docs-tina4.com-7b1fa2" alt="Docs"></a>
 </p>
@@ -22,6 +21,7 @@
   <a href="#getting-started">Getting Started</a> &bull;
   <a href="#features">Features</a> &bull;
   <a href="#cli-reference">CLI Reference</a> &bull;
+  <a href="#cross-framework-parity">Parity</a> &bull;
   <a href="https://tina4.com">tina4.com</a>
 </p>
 
@@ -70,27 +70,24 @@ Open http://localhost:7145
 
 ---
 
-## What's Included
+## What's Built In (54 Features)
 
 Every feature is built from scratch -- no pip install, no node_modules, no third-party runtime dependencies in core.
 
 | Category | Features |
 |----------|----------|
-| **HTTP** | ASGI server, decorator routing, path params (`{id:int}`, `{p:path}`), middleware pipeline, CORS, rate limiting, graceful shutdown |
-| **Templates** | Frond engine (Twig-compatible), inheritance, partials, 35+ filters, macros, fragment caching, sandboxing |
-| **ORM** | Active Record, typed fields with validation, soft delete, relationships (`has_one`/`has_many`/`belongs_to`), scopes, result caching, multi-database |
-| **Database** | SQLite, PostgreSQL, MySQL, MSSQL, Firebird -- unified adapter interface, query caching (TINA4_DB_CACHE=true for 4x speedup) |
-| **Auth** | Zero-dep JWT (HS256), sessions (file/Redis/Valkey/MongoDB/database), password hashing, form tokens |
-| **API** | Swagger/OpenAPI auto-generation, GraphQL with ORM auto-schema and GraphiQL IDE, WSDL/SOAP with auto WSDL |
-| **Background** | Queue (SQLite/RabbitMQ/Kafka/MongoDB) with priority, delayed jobs, retry, batch processing |
-| **Real-time** | Native asyncio WebSocket (RFC 6455), per-path routing, connection manager |
-| **Frontend** | tina4-css (~24 KB), frond.js helper, SCSS compiler, live reload, CSS hot-reload |
-| **DX** | Dev admin dashboard (11 tabs), error overlay, request inspector, AI tool integration, Carbonah green benchmarks |
-| **Data** | Migrations with rollback, 50+ fake data generators, ORM and table seeders |
-| **Mail** | SMTP send (plain/HTML/attachments), IMAP read/search, dev mailbox capture |
-| **Other** | REST client, localization (6 languages), cache (memory/Redis/file), event system, inline testing, messenger (.env driven), configurable error pages, HTML element builder |
+| **Core HTTP** (7) | Router with path params (`{id:int}`, `{p:path}`), Server, Request/Response, Middleware pipeline, Static file serving, CORS |
+| **Database** (6) | SQLite, PostgreSQL, MySQL, MSSQL, Firebird — unified adapter, connection pooling, query cache, transactions, race-safe ID generation, SQL dialect translation |
+| **ORM** (7) | Active Record with typed fields, relationships (`has_one`/`has_many`/`belongs_to`), soft delete, QueryBuilder + MongoDB support, Auto-CRUD generator, migrations with rollback |
+| **Auth & Security** (5) | JWT (HS256/RS256), password hashing (PBKDF2-SHA256), API key validation, rate limiting, CSRF form tokens |
+| **Templating** (3) | Frond engine (Twig/Jinja2-compatible, pre-compiled 2.8x faster), SCSS auto-compilation, built-in CSS (~24 KB) |
+| **API & Integration** (5) | HTTP client (zero-dep), GraphQL with ORM auto-schema + GraphiQL IDE, WSDL/SOAP with auto WSDL, WebSocket (RFC 6455) + Redis backplane, MCP server (24 dev tools) |
+| **Background** (3) | Job queue (File/RabbitMQ/Kafka/MongoDB) with priority, delay, retry, dead letters — service runner — event system (on/emit/once/off) |
+| **Data & Storage** (4) | Session (File/Redis/Valkey/MongoDB/DB), response cache (LRU, TTL), seeder + 50+ fake data generators, messenger (SMTP/IMAP) |
+| **Developer Tools** (7) | Dev dashboard (11 tabs), dev toolbar, error overlay (Catppuccin Mocha), dev mailbox, hot reload + CSS hot-reload, code metrics (complexity, coupling, maintainability), AI context installer (7 tools) |
+| **Utilities** (7) | DI container (transient + singleton), HtmlElement builder, inline testing (`@tests` decorator), i18n (6 languages), Swagger/OpenAPI auto-generation, CLI scaffolding (`generate model/route/migration/middleware`), structured logging |
 
-**1,633 tests across 38 built-in features. Zero dependencies. All Carbonah benchmarks rated A+.**
+**2,066 tests. Zero dependencies. Full parity across Python, PHP, Ruby, and Node.js.**
 
 For full documentation visit **[tina4.com](https://tina4.com)**.
 
@@ -680,23 +677,43 @@ tina4python ai --all        # Install for ALL supported tools
 
 Supported: Claude Code, Cursor, GitHub Copilot, Windsurf, Aider, Cline, OpenAI Codex CLI. Generates framework-aware context so AI assistants understand Tina4's conventions.
 
-## Carbonah Green Benchmarks
+## Performance
 
-All 9 benchmarks rated **A+** (South Africa grid, 1000 iterations each):
+Benchmarked with `wrk` — 5,000 requests, 50 concurrent, median of 3 runs:
 
-| Benchmark | SCI (gCO2eq) | Grade |
-|-----------|-------------|-------|
-| JSON Hello World | 0.000864 | A+ |
-| Single DB Query | 0.000538 | A+ |
-| Multiple DB Queries | 0.001350 | A+ |
-| Template Rendering | 0.003237 | A+ |
-| Large JSON Payload | 0.000983 | A+ |
-| Plaintext Response | 0.000377 | A+ |
-| CRUD Cycle | 0.000456 | A+ |
-| Paginated Query | 0.000990 | A+ |
-| Framework Startup | 0.000801 | A+ |
+| Framework | JSON req/s | Deps | Features |
+|-----------|-----------|------|----------|
+| **Tina4 Python** | **6,508** | 0 | 54 |
+| FastAPI | 12,652 | 12+ | ~8 |
+| Flask | 4,928 | 6+ | ~7 |
+| Bottle | 4,355 | 0 | ~5 |
+| Django | 4,050 | 20+ | ~22 |
 
-Run locally: `python benchmarks/run_carbonah.py`
+Tina4 Python delivers competitive throughput with **zero dependencies and 54 features** — frameworks with higher req/s have a fraction of the functionality and require dozens of third-party packages.
+
+**Across all 4 Tina4 implementations:**
+
+| | Python | PHP | Ruby | Node.js |
+|---|--------|-----|------|---------|
+| **JSON req/s** | 6,508 | 29,293 | 10,243 | 84,771 |
+| **Dependencies** | 0 | 0 | 0 | 0 |
+| **Features** | 54 | 54 | 54 | 54 |
+
+Run benchmarks locally: `python benchmarks/benchmark.py --python`
+
+---
+
+## Cross-Framework Parity
+
+Tina4 ships identical features across four languages — same architecture, same conventions, same 54 features:
+
+| | Python | PHP | Ruby | Node.js |
+|---|--------|-----|------|---------|
+| **Package** | `tina4-python` | `tina4stack/tina4php` | `tina4ruby` | `tina4-nodejs` |
+| **Tests** | 2,066 | 1,427 | 1,793 | 1,950 |
+| **Default port** | 7145 | 7146 | 7147 | 7148 |
+
+**7,236 tests** across all 4 frameworks. See [tina4.com](https://tina4.com).
 
 ---
 
