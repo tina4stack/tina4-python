@@ -1247,7 +1247,7 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio"):
     print(banner)
 
 
-def run(host: str | None = None, port: int | None = None):
+def run(host: str | None = None, port: int | None = None, no_browser: bool = False):
     """Start the Tina4 dev server.
 
     Discovers routes from src/, starts ASGI server, handles shutdown.
@@ -1255,6 +1255,7 @@ def run(host: str | None = None, port: int | None = None):
     Args:
         host: Bind address. Falls back to HOST env var, then 0.0.0.0.
         port: Bind port. Falls back to PORT env var, then 7146.
+        no_browser: If True, do not open browser on startup.
     """
     import time
     global _start_time
@@ -1315,8 +1316,10 @@ def run(host: str | None = None, port: int | None = None):
     display = "localhost" if host in ("0.0.0.0", "::") else host
     Log.info(f"Server started http://{display}:{port} ({server_name})")
 
-    # Open browser after a short delay
-    _open_browser(f"http://{display}:{port}")
+    # Open browser after a short delay (unless --no-browser)
+    _skip_browser = no_browser or os.environ.get("TINA4_NO_BROWSER", "").lower() in ("true", "1", "yes")
+    if not _skip_browser:
+        _open_browser(f"http://{display}:{port}")
 
     # Use production server if available
     if prod:

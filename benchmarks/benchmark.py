@@ -394,6 +394,99 @@ $app->run();
         return False
 
 
+def _setup_tina4_project(language: str, fresh: bool = False):
+    """Scaffold a Tina4 project using `tina4 init` and add benchmark routes."""
+    path = Path(f"/tmp/bench-tina4-{language}")
+    if fresh and path.exists():
+        shutil.rmtree(path)
+
+    # Route templates per language
+    routes = {
+        "python": (
+            "src/routes/bench.py",
+            'from tina4_python.core.router import get\n\n'
+            '@get("/api/bench/json")\n'
+            'async def bench_json(request, response):\n'
+            '    return response({"message": "Hello, World!", "framework": "tina4-python"})\n\n'
+            '@get("/api/bench/list")\n'
+            'async def bench_list(request, response):\n'
+            '    return response({"items": [{"id": i, "name": f"Item {i}", "price": round(i*1.99, 2)} for i in range(100)], "count": 100})\n'
+        ),
+        "php": (
+            "src/routes/bench.php",
+            '<?php\n'
+            '\\Tina4\\Router::get("/api/bench/json", function($request, $response) {\n'
+            '    return $response(["message" => "Hello, World!", "framework" => "tina4-php"]);\n'
+            '});\n\n'
+            '\\Tina4\\Router::get("/api/bench/list", function($request, $response) {\n'
+            '    $items = array_map(fn($i) => ["id" => $i, "name" => "Item $i", "price" => round($i * 1.99, 2)], range(0, 99));\n'
+            '    return $response(["items" => $items, "count" => 100]);\n'
+            '});\n'
+        ),
+        "ruby": (
+            "src/routes/bench.rb",
+            'Tina4::Router.get("/api/bench/json") do |request, response|\n'
+            '  response.json({message: "Hello, World!", framework: "tina4-ruby"})\n'
+            'end\n\n'
+            'Tina4::Router.get("/api/bench/list") do |request, response|\n'
+            '  items = (0...100).map { |i| {id: i, name: "Item #{i}", price: (i * 1.99).round(2)} }\n'
+            '  response.json({items: items, count: 100})\n'
+            'end\n'
+        ),
+        "nodejs": (
+            "src/routes/bench.ts",
+            'import { get } from "tina4-nodejs";\n\n'
+            'get("/api/bench/json", (req: any, res: any) => {\n'
+            '  return res.json({message: "Hello, World!", framework: "tina4-nodejs"});\n'
+            '});\n\n'
+            'get("/api/bench/list", (req: any, res: any) => {\n'
+            '  const items = Array.from({length: 100}, (_, i) => ({id: i, name: `Item ${i}`, price: +(i * 1.99).toFixed(2)}));\n'
+            '  return res.json({items, count: 100});\n'
+            '});\n'
+        ),
+    }
+
+    route_file, route_code = routes[language]
+
+    # Check if already scaffolded (cached)
+    markers = {"python": ".venv", "php": "vendor", "ruby": "Gemfile.lock", "nodejs": "node_modules"}
+    if (path / markers[language]).exists():
+        # Just update routes and .env
+        route_path = path / route_file
+        route_path.parent.mkdir(parents=True, exist_ok=True)
+        route_path.write_text(route_code)
+        (path / ".env").write_text("TINA4_DEBUG=false\nTINA4_LOG_LEVEL=ERROR\n")
+        return True
+
+    if not _has_command("tina4"):
+        print(f"  [WARN] tina4 CLI not found -- skipping Tina4 {language}")
+        return False
+
+    try:
+        print(f"  Setting up Tina4 {language} via `tina4 init` (cached in {path})...")
+        result = subprocess.run(
+            ["tina4", "init", language, str(path)],
+            capture_output=True, text=True, timeout=180,
+            input="n\n",  # Answer "Start server now?" with no
+        )
+        if result.returncode != 0:
+            print(f"  [WARN] tina4 init {language} failed: {result.stderr[:200]}")
+            return False
+
+        # Set production .env
+        (path / ".env").write_text("TINA4_DEBUG=false\nTINA4_LOG_LEVEL=ERROR\n")
+
+        # Add benchmark routes
+        route_path = path / route_file
+        route_path.parent.mkdir(parents=True, exist_ok=True)
+        route_path.write_text(route_code)
+
+        return True
+    except Exception as e:
+        print(f"  [WARN] Tina4 {language} setup failed: {e}")
+        return False
+
+
 # ── Server Scripts ────────────────────────────────────────────
 
 def _write_server_scripts():
@@ -475,26 +568,9 @@ if __name__ == "__main__":
     execute_from_command_line(["manage.py","runserver","127.0.0.1:9006","--noreload","--nothreading"])
 """)
 
-    # ── PHP ──
-    (TMP / "tina4_php_bench.php").write_text("""<?php
-header('Content-Type: application/json');
-$path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-if ($path === '/api/bench/json') {
-    echo json_encode(['message'=>'Hello, World!','framework'=>'tina4-php']);
-} elseif ($path === '/api/bench/list') {
-    $items=[]; for($i=0;$i<100;$i++) $items[]=['id'=>$i,'name'=>"Item $i",'price'=>round($i*1.99,2)];
-    echo json_encode(['items'=>$items,'count'=>100]);
-} else { http_response_code(404); echo '{"error":"Not found"}'; }
-""")
+    # ── PHP (Tina4 PHP uses a real project setup via _setup_tina4_php) ──
 
-    # ── Ruby ──
-    (TMP / "tina4_ruby_bench.rb").write_text(
-        'require "webrick"; require "json"\n'
-        's=WEBrick::HTTPServer.new(Port:9021,BindAddress:"127.0.0.1",Logger:WEBrick::Log.new(File::NULL),AccessLog:[])\n'
-        's.mount_proc("/api/bench/json"){|q,r|r["Content-Type"]="application/json";r.body=JSON.generate({message:"Hello, World!",framework:"tina4-ruby"})}\n'
-        's.mount_proc("/api/bench/list"){|q,r|r["Content-Type"]="application/json";r.body=JSON.generate({items:(0...100).map{|i|{id:i,name:"Item \\#{i}",price:(i*1.99).round(2)}},count:100})}\n'
-        's.start\n'
-    )
+    # ── Ruby (Tina4 Ruby uses a real project setup via _setup_tina4_ruby) ──
 
     (TMP / "sinatra_bench.rb").write_text(
         'require "sinatra/base"; require "json"\n'
@@ -506,25 +582,7 @@ if ($path === '/api/bench/json') {
         'end\n'
     )
 
-    # ── Node.js ──
-    (TMP / "tina4_nodejs_bench.mjs").write_text("""
-import http from "node:http";
-const server = http.createServer((req, res) => {
-  res.setHeader("Content-Type", "application/json");
-  if (req.url === "/api/bench/json") {
-    res.writeHead(200);
-    res.end(JSON.stringify({message: "Hello, World!", framework: "tina4-nodejs"}));
-  } else if (req.url === "/api/bench/list") {
-    const items = Array.from({length: 100}, (_, i) => ({id: i, name: `Item ${i}`, price: +(i * 1.99).toFixed(2)}));
-    res.writeHead(200);
-    res.end(JSON.stringify({items, count: 100}));
-  } else {
-    res.writeHead(404);
-    res.end(JSON.stringify({error: "Not found"}));
-  }
-});
-server.listen(9031, "127.0.0.1");
-""")
+    # ── Node.js (Tina4 Node.js uses a real project setup via _setup_tina4_nodejs) ──
 
     (TMP / "express_bench.mjs").write_text("""
 import express from "express";
@@ -622,6 +680,7 @@ def _start_server(key: str, fresh: bool = False) -> bool:
         **os.environ,
         "TINA4_DEBUG": "false",
         "TINA4_LOG_LEVEL": "ERROR",
+        "TINA4_NO_BROWSER": "true",
         "FLASK_ENV": "production",
         "NODE_ENV": "production",
         "RACK_ENV": "production",
@@ -636,7 +695,10 @@ def _start_server(key: str, fresh: bool = False) -> bool:
     cwd = str(TMP)
 
     if key == "tina4-python":
-        cmd = [VENV_PYTHON, str(TMP / "tina4_python_bench.py")]
+        if not _setup_tina4_project("python", fresh):
+            return False
+        cmd = ["tina4", "serve", "--port", str(port), "--no-browser", "--production"]
+        cwd = str(Path("/tmp/bench-tina4-python"))
     elif key == "flask":
         cmd = [VENV_PYTHON, str(TMP / "flask_bench.py")]
     elif key == "starlette":
@@ -649,10 +711,10 @@ def _start_server(key: str, fresh: bool = False) -> bool:
         cmd = [VENV_PYTHON, str(TMP / "django_bench.py")]
 
     elif key == "tina4-php":
-        if not _has_command("php"):
+        if not _setup_tina4_project("php", fresh):
             return False
-        cmd = ["php", "-S", f"127.0.0.1:{port}", "-d", "display_errors=Off",
-               str(TMP / "tina4_php_bench.php")]
+        cmd = ["tina4", "serve", "--port", str(port), "--no-browser", "--production"]
+        cwd = str(Path("/tmp/bench-tina4-php"))
 
     elif key == "slim":
         slim_dir = Path("/tmp/bench-slim")
@@ -686,7 +748,10 @@ def _start_server(key: str, fresh: bool = False) -> bool:
         cwd = str(symfony_dir / "public")
 
     elif key == "tina4-ruby":
-        cmd = [RUBY, str(TMP / "tina4_ruby_bench.rb")]
+        if not _setup_tina4_project("ruby", fresh):
+            return False
+        cmd = ["tina4", "serve", "--port", str(port), "--no-browser", "--production"]
+        cwd = str(Path("/tmp/bench-tina4-ruby"))
 
     elif key == "sinatra":
         cmd = [RUBY, str(TMP / "sinatra_bench.rb")]
@@ -713,7 +778,10 @@ def _start_server(key: str, fresh: bool = False) -> bool:
         cwd = str(rails_dir)
 
     elif key == "tina4-nodejs":
-        cmd = ["node", str(TMP / "tina4_nodejs_bench.mjs")]
+        if not _setup_tina4_project("nodejs", fresh):
+            return False
+        cmd = ["tina4", "serve", "--port", str(port), "--no-browser", "--production"]
+        cwd = str(Path("/tmp/bench-tina4-nodejs"))
     elif key == "express":
         cmd = ["node", str(TMP / "express_bench.mjs")]
     elif key == "fastify":

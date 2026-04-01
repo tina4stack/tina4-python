@@ -998,7 +998,6 @@ wheels = [
 
 [[package]]
 name = "tina4-python"
-version = "3.2.0"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -1068,7 +1067,7 @@ requires-dist = [
     { name = "pyodbc", marker = "extra == 'odbc'", specifier = ">=5.0" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5.0" },
 ]
-provides-extras = ["postgres", "mysql", "mssql", "firebird", "mongo", "odbc", "redis", "memcache", "all-db"]
+provides-extras = ["all-db", "firebird", "memcache", "mongo", "mssql", "mysql", "odbc", "postgres", "redis"]
 
 [package.metadata.requires-dev]
 dev = [
