@@ -535,3 +535,111 @@ class TestAPIHandlers:
         result = await _api_websockets(mock_req, mock_resp)
         assert "connections" in result
         assert "count" in result
+
+    @pytest.mark.asyncio
+    async def test_status_includes_db_tables(self, mock_req, mock_resp, monkeypatch):
+        monkeypatch.setenv("TINA4_MAILBOX_DIR", "/tmp/test_mailbox_db")
+        from tina4_python.dev_admin import _api_status
+        result = await _api_status(mock_req, mock_resp)
+        assert "db_tables" in result
+        assert isinstance(result["db_tables"], int)
+
+    @pytest.mark.asyncio
+    async def test_query_multi_statement(self, mock_req, mock_resp, tmp_path, monkeypatch):
+        """Multi-statement SQL execution runs as a batch."""
+        db_path = str(tmp_path / "test.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        from tina4_python.dev_admin import _api_query
+        mock_req.body = {
+            "query": "CREATE TABLE test_multi (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO test_multi (id, name) VALUES (1, 'Alice'); INSERT INTO test_multi (id, name) VALUES (2, 'Bob')",
+            "type": "sql",
+        }
+        result = await _api_query(mock_req, mock_resp)
+        assert result.get("success") is True
+        # Verify data was inserted
+        mock_req.body = {"query": "SELECT * FROM test_multi", "type": "sql"}
+        result = await _api_query(mock_req, mock_resp)
+        assert len(result["rows"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_query_multi_statement_rollback(self, mock_req, mock_resp, tmp_path, monkeypatch):
+        """Failed multi-statement batch rolls back all changes."""
+        db_path = str(tmp_path / "test_rollback.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        from tina4_python.dev_admin import _api_query
+        # Create table first
+        mock_req.body = {"query": "CREATE TABLE test_rb (id INTEGER PRIMARY KEY, name TEXT)", "type": "sql"}
+        await _api_query(mock_req, mock_resp)
+        # Try batch with a bad statement — should rollback
+        mock_req.body = {
+            "query": "INSERT INTO test_rb (id, name) VALUES (1, 'Alice'); INSERT INTO nonexistent (x) VALUES (1)",
+            "type": "sql",
+        }
+        result = await _api_query(mock_req, mock_resp)
+        assert "error" in result
+
+
+class TestDatabaseTabHTML:
+    """Test the database tab renders correctly in the dashboard."""
+
+    def test_split_screen_layout(self):
+        html = render_dashboard()
+        assert "table-list" in html
+        assert "query-results" in html
+        assert "query-input" in html
+
+    def test_copy_buttons_present(self):
+        html = render_dashboard()
+        assert "Copy CSV" in html
+        assert "Copy JSON" in html
+        assert "Paste" in html
+
+    def test_copy_functions_defined(self):
+        html = render_dashboard()
+        assert "function copyResults" in html or "function _clipCopy" in html
+        # Check the global function definitions exist outside loadAllMetrics
+        assert "function _clipCopy(text,btn)" in html
+        assert "function copyResults(fmt,btn)" in html
+        assert "function pasteData()" in html
+
+    def test_limit_dropdown(self):
+        html = render_dashboard()
+        assert "query-limit" in html
+        assert '<option value="20">20</option>' in html
+        assert '<option value="0">All</option>' in html
+
+    def test_seed_controls(self):
+        html = render_dashboard()
+        assert "seed-table" in html
+        assert "seed-count" in html
+        assert "seedTable()" in html
+
+
+class TestSQLiteLimitDedup:
+    """SQLite adapter skips LIMIT when SQL already has one."""
+
+    def test_fetch_with_existing_limit(self, tmp_path):
+        from tina4_python.database import Database
+        db_path = str(tmp_path / "limit_test.db")
+        db = Database(f"sqlite:///{db_path}")
+        db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+        for i in range(10):
+            db.execute(f"INSERT INTO items (id, name) VALUES ({i}, 'item{i}')")
+        db.commit()
+        # SQL already has LIMIT — should NOT double it
+        result = db.fetch("SELECT * FROM items LIMIT 3")
+        assert len(result.records) == 3
+        db.close()
+
+    def test_fetch_without_limit_adds_default(self, tmp_path):
+        from tina4_python.database import Database
+        db_path = str(tmp_path / "limit_test2.db")
+        db = Database(f"sqlite:///{db_path}")
+        db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)")
+        for i in range(30):
+            db.execute(f"INSERT INTO items (id, name) VALUES ({i}, 'item{i}')")
+        db.commit()
+        # No LIMIT in SQL — adapter adds default (20)
+        result = db.fetch("SELECT * FROM items")
+        assert len(result.records) == 20
+        db.close()

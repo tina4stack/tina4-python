@@ -289,12 +289,21 @@ async def _api_status(request, response):
     from tina4_python.messenger import DevMailbox
 
     mailbox = DevMailbox()
+    db_table_count = 0
+    try:
+        from tina4_python.database import Database
+        db = Database()
+        if db and db.adapter:
+            db_table_count = len(db.get_tables())
+    except Exception:
+        pass
     status = {
         "python_version": sys.version,
         "framework": "tina4-python v3",
         "debug": os.environ.get("TINA4_DEBUG", "false"),
         "log_level": os.environ.get("TINA4_LOG_LEVEL", "ERROR"),
         "database": os.environ.get("DATABASE_URL", "not configured"),
+        "db_tables": db_table_count,
         "mailbox": mailbox.count(),
         "messages": MessageLog.count(),
         "requests": RequestInspector.stats(),
@@ -498,22 +507,36 @@ async def _api_query(request, response):
         db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
 
-        upper = query.upper().lstrip()
-        is_read = upper.startswith("SELECT") or upper.startswith("PRAGMA") or upper.startswith("SHOW") or upper.startswith("DESCRIBE")
+        # Split multiple statements on semicolons
+        statements = [s.strip() for s in query.split(";") if s.strip()]
 
-        if is_read:
-            result = db.fetch(query)
-            data = result.records
-            MessageLog.log("query", f"SQL: {query[:80]}", {"rows": result.count}, level="info")
-            db.close()
-            return response({"rows": data, "count": result.count})
-        else:
-            result = db.execute(query)
+        if len(statements) == 1:
+            upper = statements[0].upper().lstrip()
+            is_read = upper.startswith("SELECT") or upper.startswith("PRAGMA") or upper.startswith("SHOW") or upper.startswith("DESCRIBE")
+
+            if is_read:
+                result = db.fetch(statements[0])
+                data = result.records
+                MessageLog.log("query", f"SQL: {statements[0][:80]}", {"rows": result.count}, level="info")
+                db.close()
+                return response({"rows": data, "count": result.count})
+
+        # Execute all statements (single write or multi-statement batch)
+        total_affected = 0
+        db.start_transaction()
+        try:
+            for stmt in statements:
+                result = db.execute(stmt)
+                total_affected += result.affected_rows if hasattr(result, "affected_rows") else 0
             db.commit()
-            affected = result.affected_rows if hasattr(result, "affected_rows") else 0
-            MessageLog.log("query", f"SQL: {query[:80]}", {"affected": affected}, level="warn")
+        except Exception as e:
+            db.rollback()
             db.close()
-            return response({"affected": affected, "success": True})
+            return response({"error": str(e)}, 400)
+
+        MessageLog.log("query", f"SQL batch: {len(statements)} statement(s)", {"affected": total_affected}, level="warn")
+        db.close()
+        return response({"affected": total_affected, "success": True})
 
     except Exception as e:
         return response({"error": str(e)}, 400)
@@ -1445,33 +1468,46 @@ textarea.input { resize: vertical; font-family: var(--mono); }
         <h2>Database</h2>
         <button class="btn btn-sm" onclick="loadTables()">Refresh</button>
     </div>
-    <div class="flex gap-md p-md">
-        <div class="flex-1">
-            <div class="flex gap-sm items-center mb-sm">
-                <select id="query-type" class="input">
-                    <option value="sql">SQL</option>
-                    <option value="graphql">GraphQL</option>
-                </select>
-                <button class="btn btn-sm btn-primary" onclick="runQuery()">Run</button>
-                <span class="text-sm text-muted">Ctrl+Enter</span>
-            </div>
-            <textarea id="query-input" rows="4" placeholder="SELECT * FROM users LIMIT 20" class="input input-mono" style="width:100%"></textarea>
-            <div id="query-error" class="hidden" style="color:var(--danger);font-size:0.75rem;margin-top:0.25rem"></div>
-        </div>
-        <div style="width:180px">
-            <div class="text-sm text-muted" style="font-weight:600;margin-bottom:0.5rem">Tables</div>
+    <div style="display:flex;height:calc(100vh - 140px);overflow:hidden">
+        <!-- Left: Tables navigation -->
+        <div style="width:200px;min-width:200px;border-right:1px solid var(--border);padding:0.5rem;overflow-y:auto;display:flex;flex-direction:column;gap:0.5rem">
+            <div class="text-sm text-muted" style="font-weight:600">Tables</div>
             <div id="table-list" class="text-sm"></div>
-            <div style="margin-top:0.75rem;border-top:1px solid var(--border);padding-top:0.75rem">
-                <div class="text-sm text-muted" style="font-weight:600;margin-bottom:0.5rem">Seed Data</div>
-                <select id="seed-table" class="input" style="width:100%;margin-bottom:0.25rem"><option value="">Pick table...</option></select>
+            <div style="border-top:1px solid var(--border);padding-top:0.5rem;margin-top:auto">
+                <div class="text-sm text-muted" style="font-weight:600;margin-bottom:0.25rem">Seed Data</div>
+                <select id="seed-table" class="input" style="width:100%;margin-bottom:0.25rem;font-size:0.75rem"><option value="">Pick table...</option></select>
                 <div class="flex gap-sm items-center">
-                    <input type="number" id="seed-count" class="input" value="10" min="1" max="1000" style="width:60px">
+                    <input type="number" id="seed-count" class="input" value="10" min="1" max="1000" style="width:60px;font-size:0.75rem">
                     <button class="btn btn-sm btn-success" onclick="seedTable()">Seed</button>
                 </div>
             </div>
         </div>
+        <!-- Right: Query + Results -->
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;padding:0.5rem">
+            <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.25rem">
+                <select id="query-type" class="input" style="width:auto;font-size:0.75rem">
+                    <option value="sql">SQL</option>
+                    <option value="graphql">GraphQL</option>
+                </select>
+                <span class="text-sm text-muted">Limit</span>
+                <select id="query-limit" class="input" style="width:70px;font-size:0.75rem">
+                    <option value="20">20</option>
+                    <option value="50">50</option>
+                    <option value="100">100</option>
+                    <option value="500">500</option>
+                    <option value="0">All</option>
+                </select>
+                <button class="btn btn-sm btn-primary" onclick="runQuery()">Run</button>
+                <button class="btn btn-sm" id="btn-csv" onclick="copyResults('csv',this)" title="Copy results as CSV">Copy CSV</button>
+                <button class="btn btn-sm" id="btn-json" onclick="copyResults('json',this)" title="Copy results as JSON">Copy JSON</button>
+                <button class="btn btn-sm" onclick="pasteData()" title="Paste tab-separated data as INSERTs">Paste</button>
+                <span class="text-sm text-muted">Ctrl+Enter</span>
+            </div>
+            <textarea id="query-input" rows="3" placeholder="SELECT * FROM users LIMIT 20" class="input input-mono" style="width:100%;font-size:0.75rem;resize:vertical"></textarea>
+            <div id="query-error" class="hidden" style="color:var(--danger);font-size:0.75rem;margin-top:0.25rem"></div>
+            <div id="query-results" style="flex:1;overflow:auto;margin-top:0.25rem;font-size:0.75rem"></div>
+        </div>
     </div>
-    <div id="query-results" style="overflow-x:auto"></div>
 </div>
 
 <!-- Requests Panel -->
@@ -2115,6 +2151,124 @@ function drillDownFile(path){
     });
     dd.scrollIntoView({behavior:'smooth',block:'start'});
 }
+function _clipCopy(text,btn){
+    var orig=btn.textContent;
+    var ta=document.createElement('textarea');
+    ta.value=text;
+    ta.style.cssText='position:fixed;left:-9999px;top:-9999px';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try{document.execCommand('copy');btn.textContent='Copied!';btn.style.color='var(--success)';}
+    catch(e){btn.textContent='Failed';btn.style.color='var(--danger)';}
+    document.body.removeChild(ta);
+    setTimeout(function(){btn.textContent=orig;btn.style.color='';},1500);
+}
+function copyResults(fmt,btn){
+    var el=document.getElementById('query-results');
+    var tbl=el?el.querySelector('table'):null;
+    if(!tbl){btn.textContent='No data';btn.style.color='var(--danger)';setTimeout(function(){btn.textContent=fmt==='json'?'Copy JSON':'Copy CSV';btn.style.color='';},1500);return;}
+    var headerCells=tbl.querySelectorAll('thead th');
+    var headers=[];headerCells.forEach(function(h){headers.push(h.textContent);});
+    var bodyRows=tbl.querySelectorAll('tbody tr');
+    var data=[];
+    bodyRows.forEach(function(row){
+        var cells=row.querySelectorAll('td');
+        var obj={};
+        cells.forEach(function(c,i){obj[headers[i]||('col'+i)]=c.textContent==='null'?null:c.textContent;});
+        data.push(obj);
+    });
+    var text='';
+    if(fmt==='json'){
+        text=JSON.stringify(data,null,2);
+    }else{
+        var lines=[headers.join(',')];
+        data.forEach(function(r){
+            lines.push(headers.map(function(h){var v=(r[h]!==null?r[h]:'');return v.indexOf(',')>=0||v.indexOf('"')>=0?'"'+v.replace(/"/g,'""')+'"':v;}).join(','));
+        });
+        text=lines.join(String.fromCharCode(10));
+    }
+    _clipCopy(text,btn);
+}
+function pasteData(){
+    var NL=String.fromCharCode(10);
+    var TAB=String.fromCharCode(9);
+    var overlay=document.createElement('div');
+    overlay.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center';
+    var box=document.createElement('div');
+    box.style.cssText='background:var(--bg,#1e293b);border:1px solid var(--border,#334155);border-radius:0.5rem;padding:1rem;width:500px;max-width:90vw';
+    box.innerHTML='<div style="font-weight:600;margin-bottom:0.5rem;color:var(--text,#e2e8f0)">Paste Data</div><div style="font-size:0.75rem;color:var(--muted,#94a3b8);margin-bottom:0.5rem">Paste JSON array or CSV/tab-separated data below</div>';
+    var ta=document.createElement('textarea');
+    ta.style.cssText='width:100%;height:150px;font-family:monospace;font-size:0.75rem;background:var(--bg-alt,#0f172a);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:0.25rem;padding:0.5rem;resize:vertical';
+    ta.placeholder='Paste here (Ctrl+V)...';
+    var btns=document.createElement('div');
+    btns.style.cssText='display:flex;gap:0.5rem;margin-top:0.5rem;justify-content:flex-end';
+    var cancelBtn=document.createElement('button');
+    cancelBtn.className='btn btn-sm';cancelBtn.textContent='Cancel';
+    cancelBtn.onclick=function(){document.body.removeChild(overlay);};
+    var goBtn=document.createElement('button');
+    goBtn.className='btn btn-sm btn-primary';goBtn.textContent='Generate SQL';
+    goBtn.onclick=function(){
+        var text=ta.value.trim();
+        if(!text){alert('Paste some data first');return;}
+        var upper=text.substring(0,50).toUpperCase();
+        if(upper.indexOf('INSERT ')>=0||upper.indexOf('CREATE ')>=0||upper.indexOf('SELECT ')>=0){
+            document.getElementById('query-input').value=text;
+            document.body.removeChild(overlay);
+            return;
+        }
+        var rows=[];
+        var parsed=null;
+        try{parsed=JSON.parse(text);}catch(e){}
+        if(parsed&&Array.isArray(parsed)&&parsed.length>0){
+            rows=parsed;
+        }else{
+            var lines=text.split(NL);
+            if(lines.length<2){alert('Need a header row + at least one data row');return;}
+            var sep=lines[0].indexOf(TAB)>=0?TAB:',';
+            var headers=lines[0].split(sep);
+            for(var i=1;i<lines.length;i++){
+                var vals=lines[i].split(sep);
+                if(!vals.length||vals.join('').trim()==='')continue;
+                var row={};
+                headers.forEach(function(h,idx){row[h.trim()]=vals[idx]!==undefined?vals[idx].trim():'';});
+                rows.push(row);
+            }
+        }
+        if(!rows.length){alert('No data rows found');return;}
+        var allCols=Object.keys(rows[0]);
+        var table=typeof _currentTable!=='undefined'&&_currentTable?_currentTable:'';
+        var isNew=false;
+        if(!table){
+            table=prompt('No table selected. Enter table name (creates if new):');
+            if(!table){return;}
+            isNew=true;
+        }
+        var sql='';
+        if(isNew){
+            var hasId=allCols.some(function(c){return c.toLowerCase()==='id';});
+            var colDefs=allCols.map(function(h){
+                if(h.toLowerCase()==='id')return h+' INTEGER PRIMARY KEY AUTOINCREMENT';
+                return h+' TEXT';
+            }).join(', ');
+            if(!hasId)colDefs='id INTEGER PRIMARY KEY AUTOINCREMENT, '+colDefs;
+            sql='CREATE TABLE IF NOT EXISTS '+table+' ('+colDefs+');'+NL;
+        }
+        sql+=rows.map(function(r){
+            var keys=Object.keys(r);
+            if(isNew){keys=keys.filter(function(k){return k.toLowerCase()!=='id';});}
+            var cols=keys.join(', ');
+            var vals=keys.map(function(k){var v=r[k];return v===null?'NULL':"'"+String(v).replace(/'/g,"''")+"'";}).join(', ');
+            return 'INSERT INTO '+table+' ('+cols+') VALUES ('+vals+')';
+        }).join(';'+NL);
+        document.getElementById('query-input').value=sql;
+        document.body.removeChild(overlay);
+    };
+    btns.appendChild(cancelBtn);btns.appendChild(goBtn);
+    box.appendChild(ta);box.appendChild(btns);
+    overlay.appendChild(box);document.body.appendChild(overlay);
+    ta.focus();
+}
 function loadAllMetrics(){
     // Stop any running animation
     if(window._metricsAnimFrame)cancelAnimationFrame(window._metricsAnimFrame);
@@ -2135,6 +2289,83 @@ function loadAllMetrics(){
             '<div class="sys-card"><div class="label">Templates</div><div class="value">'+d.template_count+'</div></div>'+
             '<div class="sys-card"><div class="label">Migrations</div><div class="value">'+d.migration_count+'</div></div>';
     }).catch(function(e){el.innerHTML='<div class="sys-card"><div class="value" style="color:var(--danger)">Error: '+e.message+'</div></div>';});
+    // ── Database functions ──
+    function loadTables(){
+        fetch('/__dev/api/tables').then(function(r){return r.json()}).then(function(d){
+            var list=document.getElementById('table-list');
+            var seed=document.getElementById('seed-table');
+            var count=document.getElementById('db-count');
+            if(d.error){list.innerHTML='<div style="color:var(--danger)">'+d.error+'</div>';return;}
+            var tables=d.tables||[];
+            count.textContent=tables.length;
+            if(!tables.length){list.innerHTML='<div class="text-muted">No tables</div>';return;}
+            list.innerHTML='';
+            tables.forEach(function(t){
+                var div=document.createElement('div');
+                div.style.cssText='cursor:pointer;padding:4px 6px;color:var(--primary);border-radius:4px;margin-bottom:1px';
+                div.textContent=t;
+                div.addEventListener('mouseenter',function(){if(t!==_currentTable)div.style.background='var(--bg-alt,rgba(255,255,255,0.05))';});
+                div.addEventListener('mouseleave',function(){if(t!==_currentTable)div.style.background='';});
+                div.addEventListener('click',function(){
+                    list.querySelectorAll('div').forEach(function(d){d.style.background='';d.style.fontWeight='';});
+                    div.style.background='var(--primary-bg,rgba(53,114,165,0.2))';div.style.fontWeight='600';
+                    browseTable(t);
+                });
+                list.appendChild(div);
+            });
+            seed.innerHTML='<option value="">Pick table...</option>'+tables.map(function(t){return '<option value="'+t+'">'+t+'</option>';}).join('');
+        }).catch(function(e){document.getElementById('table-list').innerHTML='<div style="color:var(--danger)">'+e.message+'</div>';});
+    }
+    var _currentTable='';
+    function browseTable(name){
+        _currentTable=name;
+        var lim=document.getElementById('query-limit').value;
+        document.getElementById('query-input').value='SELECT * FROM '+name+(lim!=='0'?' LIMIT '+lim:'');
+        runQuery();
+    }
+    function runQuery(){
+        var query=document.getElementById('query-input').value.trim();
+        var type=document.getElementById('query-type').value;
+        var errEl=document.getElementById('query-error');
+        var resultEl=document.getElementById('query-results');
+        if(!query){errEl.textContent='Enter a query';errEl.classList.remove('hidden');return;}
+        errEl.classList.add('hidden');
+        resultEl.innerHTML='<p class="text-muted">Running...</p>';
+        fetch('/__dev/api/query',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:query,type:type})})
+        .then(function(r){return r.json()}).then(function(d){
+            if(d.error){errEl.textContent=d.error;errEl.classList.remove('hidden');resultEl.innerHTML='';return;}
+            if(d.rows){
+                if(!d.rows.length){resultEl.innerHTML='<p class="text-muted">No results</p>';return;}
+                var cols=Object.keys(d.rows[0]);
+                var html='<div class="text-muted" style="margin-bottom:0.25rem">'+d.rows.length+' row(s)</div><table class="table"><thead><tr>'+cols.map(function(c){return '<th>'+c+'</th>';}).join('')+'</tr></thead><tbody>';
+                d.rows.forEach(function(row){html+='<tr>'+cols.map(function(c){return '<td>'+(row[c]!==null?row[c]:'<em>null</em>')+'</td>';}).join('')+'</tr>';});
+                html+='</tbody></table>';resultEl.innerHTML=html;
+            }else if(d.success){
+                resultEl.innerHTML='<p style="color:var(--success)">'+d.affected+' row(s) affected</p>';
+                loadTables();
+            }else{
+                resultEl.innerHTML='<pre>'+JSON.stringify(d,null,2)+'</pre>';
+            }
+        }).catch(function(e){errEl.textContent=e.message;errEl.classList.remove('hidden');});
+    }
+    function seedTable(){
+        var table=document.getElementById('seed-table').value;
+        var count=parseInt(document.getElementById('seed-count').value)||10;
+        if(!table){alert('Pick a table first');return;}
+        fetch('/__dev/api/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({table:table,count:count})})
+        .then(function(r){return r.json()}).then(function(d){
+            if(d.error){alert('Seed error: '+d.error);return;}
+            alert('Seeded '+d.inserted+' rows into '+table);
+            browseTable(table);
+        }).catch(function(e){alert('Seed error: '+e.message);});
+    }
+    // Ctrl+Enter to run query
+    document.getElementById('query-input').addEventListener('keydown',function(e){
+        if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();runQuery();}
+    });
+    // Auto-load tables on page load
+    loadTables();
+
     // Load full analysis (bubble chart + tables)
     document.getElementById('metrics-bubble').innerHTML='<p style="color:var(--muted);padding:1rem">Analyzing codebase...</p>';
     fetch('/__dev/api/metrics/full').then(function(r){return r.json()}).then(function(d){

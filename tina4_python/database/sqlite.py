@@ -101,9 +101,13 @@ class SQLiteAdapter(DatabaseAdapter):
         except Exception:
             total = 0
 
-        # Apply pagination
-        paginated_sql = f"{sql} LIMIT ? OFFSET ?"
-        paginated_params = (params or []) + [limit, offset]
+        # Apply pagination — skip if SQL already has LIMIT
+        if "LIMIT" in sql.upper().split("--")[0]:
+            paginated_sql = sql
+            paginated_params = params or []
+        else:
+            paginated_sql = f"{sql} LIMIT ? OFFSET ?"
+            paginated_params = (params or []) + [limit, offset]
         cursor = self._conn.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
 

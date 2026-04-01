@@ -1,6 +1,6 @@
 """Tests for host/port configuration resolution.
 
-Priority: CLI flag > ENV var > default (0.0.0.0:7145)
+Priority: CLI flag > ENV var > default (0.0.0.0:7146)
 """
 import os
 import pytest
@@ -15,7 +15,7 @@ class TestDefaults:
         monkeypatch.delenv("PORT", raising=False)
         monkeypatch.delenv("HOST", raising=False)
         _, port = resolve_config()
-        assert port == 7145
+        assert port == 7146
 
     def test_default_host(self, monkeypatch):
         monkeypatch.delenv("PORT", raising=False)
@@ -42,7 +42,7 @@ class TestEnvVars:
     def test_port_env_non_numeric_ignored(self, monkeypatch):
         monkeypatch.setenv("PORT", "not-a-number")
         _, port = resolve_config()
-        assert port == 7145
+        assert port == 7146
 
     def test_both_env_vars(self, monkeypatch):
         monkeypatch.setenv("HOST", "10.0.0.1")
