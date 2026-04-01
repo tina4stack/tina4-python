@@ -607,54 +607,33 @@ async def _handle_dev_websocket(reader, writer, headers, path):
             pass
 
 
-async def app(scope: dict, receive, send):
-    """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
-    if scope["type"] == "lifespan":
-        msg = await receive()
-        if msg["type"] == "lifespan.startup":
-            import time
-            global _start_time
-            _start_time = time.time()
-            await send({"type": "lifespan.startup.complete"})
-        elif msg["type"] == "lifespan.shutdown":
-            await send({"type": "lifespan.shutdown.complete"})
-        return
 
-    if scope["type"] == "websocket":
-        await _handle_asgi_websocket(scope, receive, send)
-        return
+async def handle(request: Request) -> Response:
+    """Dispatch a pre-built Request through the Tina4 router and return a Response.
 
-    if scope["type"] != "http":
-        return
-
-    # Read full body
-    body = b""
-    while True:
-        msg = await receive()
-        body += msg.get("body", b"")
-        if not msg.get("more_body", False):
-            break
-
-    # Build request
-    request = Request.from_scope(scope, body)
+    Handles session setup, CORS, rate limiting, routing, auth, middleware,
+    dev toolbar injection, and session saving. The caller is responsible
+    for sending the response over the wire. Useful for testing and embedding.
+    """
     request_id = request.headers.get("x-request-id", str(uuid.uuid4())[:8])
     set_request_id(request_id)
 
     # Auto-start session — lazy, reads cookie, saves on response
-    try:
-        from tina4_python.session import Session
-        cookie_header = dict(scope.get("headers", [])).get(b"cookie", b"").decode()
-        sid_match = None
-        for part in cookie_header.split(";"):
-            part = part.strip()
-            if part.startswith("tina4_session="):
-                sid_match = part.split("=", 1)[1]
-                break
-        sess = Session()
-        sess.start(sid_match)
-        request.session = sess
-    except Exception:
-        pass  # Session module not available — session stays None
+    if request.session is None:
+        try:
+            from tina4_python.session import Session
+            cookie_header = request.headers.get("cookie", "")
+            sid_match = None
+            for part in cookie_header.split(";"):
+                part = part.strip()
+                if part.startswith("tina4_session="):
+                    sid_match = part.split("=", 1)[1]
+                    break
+            sess = Session()
+            sess.start(sid_match)
+            request.session = sess
+        except Exception:
+            pass  # Session module not available — session stays None
 
     response = Response()
     response.header("x-request-id", request_id)
@@ -663,9 +642,7 @@ async def app(scope: dict, receive, send):
     if _cors.is_preflight(request):
         _cors.apply(request, response)
         response.status(204)
-        await send({"type": "http.response.start", "status": 204, "headers": response.build_headers("")})
-        await send({"type": "http.response.body", "body": b""})
-        return
+        return response
 
     # Rate limiting
     rate_enabled = os.environ.get("TINA4_RATE_LIMIT", "")
@@ -680,9 +657,7 @@ async def app(scope: dict, receive, send):
                 "status": 429,
             })
             response.header("retry-after", str(info["reset"]))
-            await send({"type": "http.response.start", "status": 429, "headers": response.build_headers("")})
-            await send({"type": "http.response.body", "body": response.content})
-            return
+            return response
 
     import time as _time
     _req_start = _time.perf_counter()
@@ -727,12 +702,9 @@ async def app(scope: dict, receive, send):
             else:
                 response.status(404).json({"error": "Not found"})
 
-        # Send dev admin response (skip overlay injection)
+        # Dev admin response (skip overlay injection)
         _cors.apply(request, response)
-        headers = response.build_headers("")
-        await send({"type": "http.response.start", "status": response.status_code, "headers": headers})
-        await send({"type": "http.response.body", "body": response.content})
-        return
+        return response
 
     # Swagger auto-register: serve /swagger and /swagger/openapi.json when debug is on
     if _is_dev and request.method == "GET":
@@ -749,10 +721,7 @@ async def app(scope: dict, receive, send):
             )
             response.html(swagger_html)
             _cors.apply(request, response)
-            headers = response.build_headers("")
-            await send({"type": "http.response.start", "status": response.status_code, "headers": headers})
-            await send({"type": "http.response.body", "body": response.content})
-            return
+            return response
         elif request.path == "/swagger/openapi.json":
             # Serve OpenAPI spec JSON from all registered routes
             from tina4_python.swagger import Swagger as _SwaggerGen
@@ -760,10 +729,7 @@ async def app(scope: dict, receive, send):
             _spec = _swagger.generate(Router.get_routes())
             response.json(_spec)
             _cors.apply(request, response)
-            headers = response.build_headers("")
-            await send({"type": "http.response.start", "status": response.status_code, "headers": headers})
-            await send({"type": "http.response.body", "body": response.content})
-            return
+            return response
 
     # Match route
     route, params = Router.match(request.method, request.path)
@@ -931,13 +897,13 @@ async def app(scope: dict, receive, send):
                     request.method, request.path, matched_pattern,
                     request_id, len(Router.get_routes()),
                 ).encode()
-                content = response.content
+                content_body = response.content
                 # Inject before </body> if present, else append
-                if b"</body>" in content:
-                    content = content.replace(b"</body>", toolbar + b"\n</body>", 1)
+                if b"</body>" in content_body:
+                    content_body = content_body.replace(b"</body>", toolbar + b"\n</body>", 1)
                 else:
-                    content = content + toolbar
-                response.content = content
+                    content_body = content_body + toolbar
+                response.content = content_body
             except Exception:
                 pass
 
@@ -953,9 +919,6 @@ async def app(scope: dict, receive, send):
             )
         except Exception:
             pass
-
-    # ETag check — 304 Not Modified
-    if_none_match = request.headers.get("if-none-match", "")
 
     # Save session and set cookie if session was used
     if request.session is not None:
@@ -973,7 +936,43 @@ async def app(scope: dict, receive, send):
         except Exception:
             pass
 
-    # Build and send response
+    return response
+
+
+async def app(scope: dict, receive, send):
+    """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
+    if scope["type"] == "lifespan":
+        msg = await receive()
+        if msg["type"] == "lifespan.startup":
+            import time
+            global _start_time
+            _start_time = time.time()
+            await send({"type": "lifespan.startup.complete"})
+        elif msg["type"] == "lifespan.shutdown":
+            await send({"type": "lifespan.shutdown.complete"})
+        return
+
+    if scope["type"] == "websocket":
+        await _handle_asgi_websocket(scope, receive, send)
+        return
+
+    if scope["type"] != "http":
+        return
+
+    # Read full body
+    body = b""
+    while True:
+        msg = await receive()
+        body += msg.get("body", b"")
+        if not msg.get("more_body", False):
+            break
+
+    # Build request and dispatch
+    request = Request.from_scope(scope, body)
+    response = await handle(request)
+
+    # ETag check — 304 Not Modified
+    if_none_match = request.headers.get("if-none-match", "")
     accept_encoding = request.headers.get("accept-encoding", "")
     headers = response.build_headers(accept_encoding)
 

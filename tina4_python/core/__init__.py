@@ -19,7 +19,7 @@ from tina4_python.core.router import (
 from tina4_python.core.middleware import CorsMiddleware, RateLimiter
 from tina4_python.core.cache import Cache
 from tina4_python.core.events import on, off, emit, emit_async, once, listeners, events, clear as clear_events
-from tina4_python.core.server import run, resolve_config
+from tina4_python.core.server import run, resolve_config, handle
 
 __all__ = [
     "Request", "Response", "Router",
@@ -28,5 +28,5 @@ __all__ = [
     "CorsMiddleware", "RateLimiter",
     "Cache",
     "on", "off", "emit", "emit_async", "once", "listeners", "events", "clear_events",
-    "run", "resolve_config",
+    "run", "resolve_config", "handle",
 ]
