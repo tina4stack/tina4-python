@@ -2108,6 +2108,14 @@ function tina4VersionModal(){{
                 if(l>c){{isNewer=true;break;}}
                 if(l<c)break;
             }}
+            var isAhead=false;
+            if(!isNewer){{
+                for(var i=0;i<Math.max(cParts.length,lParts.length);i++){{
+                    var c2=cParts[i]||0,l2=lParts[i]||0;
+                    if(c2>l2){{isAhead=true;break;}}
+                    if(c2<l2)break;
+                }}
+            }}
             if(isNewer){{
                 var breaking=(lParts[0]!==cParts[0]||lParts[1]!==cParts[1]);
                 el.innerHTML='Latest: <strong style="color:#f9e2af;">v'+latest+'</strong>';
@@ -2116,6 +2124,9 @@ function tina4VersionModal(){{
                 }}else{{
                     el.innerHTML+='<div style="color:#f9e2af;margin-top:6px;">Patch update available. Run: <code style="background:#313244;padding:2px 6px;border-radius:3px;">pip install --upgrade tina4-python</code></div>';
                 }}
+            }}else if(isAhead){{
+                el.innerHTML='You are running <strong style="color:#cba6f7;">v'+current+'</strong> (ahead of PyPI <strong>v'+latest+'</strong> &mdash; not yet published).';
+                el.style.color='#cba6f7';
             }}else{{
                 el.innerHTML='Latest: <strong style="color:#a6e3a1;">v'+latest+'</strong> &mdash; You are up to date!';
                 el.style.color='#a6e3a1';
