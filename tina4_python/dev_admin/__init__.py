@@ -1849,7 +1849,7 @@ function renderBubbleChart(files,depGraph){
     var hoveredIdx=-1,dragIdx=-1,dragOX=0,dragOY=0;
     // Physics
     function simulate(){
-        var damping=0.6,springK=0.002,repulse=60,gravity=0.012;
+        var damping=0.65,springK=0.002,repulse=40,gravity=0.008;
         var cx=W/2,cy=H/2;
         // Gravity: pull all bubbles toward center, bigger = stronger pull
         bubbles.forEach(function(b,idx){
@@ -1877,8 +1877,8 @@ function renderBubbleChart(files,depGraph){
                 var a=bubbles[i],b=bubbles[j];
                 var dx=b.x-a.x,dy=b.y-a.y;
                 var dist=Math.sqrt(dx*dx+dy*dy)||1;
-                var minDist=a.r+b.r+14;
-                if(dist<minDist*1.2){
+                var minDist=a.r+b.r+20;
+                if(dist<minDist){
                     var force=repulse*(minDist-dist)/minDist;
                     var fx=dx/dist*force,fy=dy/dist*force;
                     if(i!==dragIdx){a.vx-=fx;a.vy-=fy;}
