@@ -327,6 +327,23 @@ def file_detail(file_path: str) -> dict:
     classes = sum(1 for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
     imports = _extract_imports(tree, file_path)
 
+    # Detect empty methods/functions (body is only `pass` or a docstring)
+    warnings = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            # Strip leading docstring
+            effective = body[1:] if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) else body
+            if not effective or all(isinstance(s, ast.Pass) for s in effective):
+                parent = _get_parent_class(tree, node)
+                name = f"{parent}.{node.name}" if parent else node.name
+                warnings.append({"type": "empty_method", "message": f"Method '{name}' appears to be empty", "line": node.lineno})
+        elif isinstance(node, ast.ClassDef):
+            body = node.body
+            effective = body[1:] if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) else body
+            if not effective or all(isinstance(s, ast.Pass) for s in effective):
+                warnings.append({"type": "empty_class", "message": f"Class '{node.name}' appears to be empty", "line": node.lineno})
+
     return {
         "path": file_path,
         "loc": loc,
@@ -334,6 +351,7 @@ def file_detail(file_path: str) -> dict:
         "classes": classes,
         "functions": functions,
         "imports": imports,
+        "warnings": warnings,
     }
 
 

@@ -1924,6 +1924,15 @@ function drillDownFile(path){
             });
             html+='</div>';
         }
+        if(d.warnings&&d.warnings.length){
+            html+='<h3 style="margin:0.75rem 0 0.25rem;color:#eab308;font-size:0.85rem">&#9888; Warnings</h3>';
+            html+='<div style="display:flex;flex-direction:column;gap:4px">';
+            d.warnings.forEach(function(w){
+                html+='<div style="padding:4px 8px;background:rgba(234,179,8,0.08);border-left:3px solid #eab308;border-radius:0 4px 4px 0;font-size:0.75rem;font-family:var(--mono);color:var(--text)">';
+                html+='<span style="color:#eab308;margin-right:6px">L'+w.line+'</span>'+w.message+'</div>';
+            });
+            html+='</div>';
+        }
         dd.querySelector('.p-md').innerHTML=html;
     }).catch(function(e){
         dd.querySelector('.p-md').innerHTML='<p style="color:var(--danger)">Error: '+e.message+'</p>';
