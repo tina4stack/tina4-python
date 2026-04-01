@@ -1861,7 +1861,7 @@ function renderBubbleChart(files,depGraph){
             var a=bubbles[e[0]],b=bubbles[e[1]];
             var dx=b.x-a.x,dy=b.y-a.y;
             var dist=Math.sqrt(dx*dx+dy*dy)||1;
-            var rest=a.r+b.r+10;
+            var rest=a.r+b.r+20;
             var force=(dist-rest)*springK;
             var fx=dx/dist*force,fy=dy/dist*force;
             if(e[0]!==dragIdx){a.vx+=fx;a.vy+=fy;}
@@ -1895,10 +1895,11 @@ function renderBubbleChart(files,depGraph){
     function draw(){
         simulate();
         ctx.clearRect(0,0,W,H);
+        ctx.save();ctx.translate(panX,panY);ctx.scale(zoom,zoom);
         // Grid
-        ctx.strokeStyle='rgba(255,255,255,0.03)';ctx.lineWidth=1;
-        for(var gx=0;gx<W;gx+=50){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
-        for(var gy=0;gy<H;gy+=50){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
+        ctx.strokeStyle='rgba(255,255,255,0.03)';ctx.lineWidth=1/zoom;
+        for(var gx=0;gx<W/zoom;gx+=50){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H/zoom);ctx.stroke();}
+        for(var gy=0;gy<H/zoom;gy+=50){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W/zoom,gy);ctx.stroke();}
         // Dependency arrows
         edges.forEach(function(e){
             var a=bubbles[e[0]],b=bubbles[e[1]];
@@ -1909,10 +1910,10 @@ function renderBubbleChart(files,depGraph){
             ctx.moveTo(a.x+dx/dist*a.r,a.y+dy/dist*a.r);
             var ex=b.x-dx/dist*b.r,ey=b.y-dy/dist*b.r;
             ctx.lineTo(ex,ey);
-            ctx.strokeStyle=highlighted?'rgba(139,180,250,0.6)':'rgba(255,255,255,0.1)';
-            ctx.lineWidth=highlighted?2:1;ctx.stroke();
+            ctx.strokeStyle=highlighted?'rgba(139,180,250,0.9)':'rgba(255,255,255,0.3)';
+            ctx.lineWidth=highlighted?3:1.5;ctx.stroke();
             // Arrowhead
-            var aLen=highlighted?10:6;
+            var aLen=highlighted?14:8;
             var aAngle=Math.atan2(dy,dx);
             ctx.beginPath();
             ctx.moveTo(ex,ey);
@@ -1961,6 +1962,8 @@ function renderBubbleChart(files,depGraph){
         bubbles.forEach(function(b){totalLoc+=b.f.loc;if(b.f.has_tests)testedCount++;});
         var avgMI=bubbles.reduce(function(s,b){return s+b.f.maintainability},0)/totalFiles;
         ctx.fillStyle='rgba(255,255,255,0.35)';ctx.font='11px monospace';ctx.textAlign='right';
+        ctx.restore();
+        ctx.fillStyle='rgba(255,255,255,0.35)';ctx.font='11px monospace';ctx.textAlign='right';
         ctx.fillText(totalFiles+' files | '+totalLoc.toLocaleString()+' LOC | MI:'+avgMI.toFixed(1)+' | Tested:'+testedCount+'/'+totalFiles,W-12,H-10);
         window._metricsAnimFrame=requestAnimationFrame(draw);
     }
@@ -1998,21 +2001,21 @@ function renderBubbleChart(files,depGraph){
         if(hoveredIdx<0)return;
         drillDownFile(bubbles[hoveredIdx].f.path);
     });
-    // Zoom with mouse wheel
-    var zoom=1.0;
+    // Zoom with mouse wheel — scale viewport, not bubble sizes
+    var zoom=1.0,panX=0,panY=0;
     canvas.addEventListener('wheel',function(e){
         e.preventDefault();
         var rect=canvas.getBoundingClientRect();
-        var mx=e.clientX-rect.left,my=e.clientY-rect.top;
+        var mx=(e.clientX-rect.left-panX)/zoom;
+        var my=(e.clientY-rect.top-panY)/zoom;
         var oldZoom=zoom;
-        zoom*=e.deltaY<0?1.1:0.9;
-        zoom=Math.max(0.3,Math.min(3.0,zoom));
-        // Adjust bubble positions to zoom toward mouse
-        var factor=zoom/oldZoom;
+        zoom*=e.deltaY<0?1.08:0.93;
+        zoom=Math.max(0.5,Math.min(2.5,zoom));
+        // Pan to keep mouse point stable
+        panX+=(mx*oldZoom-mx*zoom);
+        panY+=(my*oldZoom-my*zoom);
+        // Don't touch bubble radii — keep them fixed
         bubbles.forEach(function(b){
-            b.x=mx+(b.x-mx)*factor;
-            b.y=my+(b.y-my)*factor;
-            b.r=b._baseR*zoom;
         });
     },{passive:false});
     // Store base radius for zoom
