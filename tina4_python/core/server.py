@@ -608,287 +608,274 @@ async def _handle_dev_websocket(reader, writer, headers, path):
 
 
 
-async def handle(request: Request) -> Response:
-    """Dispatch a pre-built Request through the Tina4 router and return a Response.
+def _init_session(request: Request) -> None:
+    """Auto-start session from cookie. Modifies request.session in place."""
+    if request.session is not None:
+        return
+    try:
+        from tina4_python.session import Session
+        cookie_header = request.headers.get("cookie", "")
+        sid_match = None
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith("tina4_session="):
+                sid_match = part.split("=", 1)[1]
+                break
+        sess = Session()
+        sess.start(sid_match)
+        request.session = sess
+    except Exception:
+        pass  # Session module not available — session stays None
 
-    Handles session setup, CORS, rate limiting, routing, auth, middleware,
-    dev toolbar injection, and session saving. The caller is responsible
-    for sending the response over the wire. Useful for testing and embedding.
-    """
-    request_id = request.headers.get("x-request-id", str(uuid.uuid4())[:8])
-    set_request_id(request_id)
 
-    # Auto-start session — lazy, reads cookie, saves on response
-    if request.session is None:
-        try:
-            from tina4_python.session import Session
-            cookie_header = request.headers.get("cookie", "")
-            sid_match = None
-            for part in cookie_header.split(";"):
-                part = part.strip()
-                if part.startswith("tina4_session="):
-                    sid_match = part.split("=", 1)[1]
-                    break
-            sess = Session()
-            sess.start(sid_match)
-            request.session = sess
-        except Exception:
-            pass  # Session module not available — session stays None
-
-    response = Response()
-    response.header("x-request-id", request_id)
-
-    # CORS preflight — respond immediately
-    if _cors.is_preflight(request):
-        _cors.apply(request, response)
-        response.status(204)
-        return response
-
-    # Rate limiting
+def _handle_rate_limit(request: Request, response: Response) -> Response | None:
+    """Check rate limit. Returns an error Response if blocked, else None."""
     rate_enabled = os.environ.get("TINA4_RATE_LIMIT", "")
-    if rate_enabled:
-        allowed, info = _rate_limiter.check(request.ip)
-        _rate_limiter.apply_headers(response, info)
-        if not allowed:
-            _cors.apply(request, response)
-            response.status(429).json({
-                "error": "Too Many Requests",
-                "retry_after": info["reset"],
-                "status": 429,
-            })
-            response.header("retry-after", str(info["reset"]))
-            return response
+    if not rate_enabled:
+        return None
+    allowed, info = _rate_limiter.check(request.ip)
+    _rate_limiter.apply_headers(response, info)
+    if not allowed:
+        _cors.apply(request, response)
+        response.status(429).json({
+            "error": "Too Many Requests",
+            "retry_after": info["reset"],
+            "status": 429,
+        })
+        response.header("retry-after", str(info["reset"]))
+        return response
+    return None
 
-    import time as _time
-    _req_start = _time.perf_counter()
 
-    # Dev admin dashboard and API
-    from tina4_python.dotenv import is_truthy
-    _is_dev = is_truthy(os.environ.get("TINA4_DEBUG", ""))
-
-    if _is_dev and request.path.startswith("/__dev"):
-        from tina4_python.dev_admin import get_api_handlers, render_dashboard
-        if request.path == "/__dev/" or request.path == "/__dev":
-            response.html(render_dashboard())
-        else:
-            handlers = get_api_handlers()
-            handler_info = handlers.get(request.path)
-            if handler_info and request.method == handler_info[0]:
-                try:
-                    # Dev admin handlers use response(data) callable style
-                    def _resp(data, code=200):
-                        if isinstance(data, str):
-                            response.status(code).html(data)
-                        else:
-                            response.status(code).json(data)
-                        return data
-                    _resp.render = response.render
-                    import inspect
-                    _tsig = inspect.signature(handler_info[1])
-                    _tpcount = len(_tsig.parameters)
-                    _tparams = list(_tsig.parameters.values())
-                    if _tpcount == 0:
-                        result = await handler_info[1]()
-                    elif _tpcount == 1:
-                        _tann = _tparams[0].annotation
-                        if _tann is Request or (isinstance(_tann, str) and _tann in ("Request", "request")):
-                            result = await handler_info[1](request)
-                        else:
-                            result = await handler_info[1](_resp)
+async def _handle_dev_admin(request: Request, response: Response) -> Response:
+    """Serve the /__dev dashboard and API routes."""
+    from tina4_python.dev_admin import get_api_handlers, render_dashboard
+    if request.path in ("/__dev/", "/__dev"):
+        response.html(render_dashboard())
+    else:
+        handlers = get_api_handlers()
+        handler_info = handlers.get(request.path)
+        if handler_info and request.method == handler_info[0]:
+            try:
+                def _resp(data, code=200):
+                    if isinstance(data, str):
+                        response.status(code).html(data)
                     else:
-                        result = await handler_info[1](request, _resp)
-                except Exception as e:
-                    response.status(500).json({"error": str(e)})
-            else:
-                response.status(404).json({"error": "Not found"})
+                        response.status(code).json(data)
+                    return data
+                _resp.render = response.render
+                import inspect
+                _tsig = inspect.signature(handler_info[1])
+                _tpcount = len(_tsig.parameters)
+                _tparams = list(_tsig.parameters.values())
+                if _tpcount == 0:
+                    await handler_info[1]()
+                elif _tpcount == 1:
+                    _tann = _tparams[0].annotation
+                    if _tann is Request or (isinstance(_tann, str) and _tann in ("Request", "request")):
+                        await handler_info[1](request)
+                    else:
+                        await handler_info[1](_resp)
+                else:
+                    await handler_info[1](request, _resp)
+            except Exception as e:
+                response.status(500).json({"error": str(e)})
+        else:
+            response.status(404).json({"error": "Not found"})
+    _cors.apply(request, response)
+    return response
 
-        # Dev admin response (skip overlay injection)
+
+def _handle_swagger(request: Request, response: Response) -> Response | None:
+    """Serve /swagger UI and /swagger/openapi.json. Returns Response or None."""
+    if request.path in ("/swagger", "/swagger/"):
+        swagger_html = (
+            '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+            '<title>API Documentation</title>'
+            '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">'
+            '</head><body><div id="swagger-ui"></div>'
+            '<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>'
+            '<script>SwaggerUIBundle({ url: "/swagger/openapi.json", dom_id: "#swagger-ui" });</script>'
+            '</body></html>'
+        )
+        response.html(swagger_html)
         _cors.apply(request, response)
         return response
+    if request.path == "/swagger/openapi.json":
+        from tina4_python.swagger import Swagger as _SwaggerGen
+        _swagger = _SwaggerGen()
+        _spec = _swagger.generate(Router.get_routes())
+        response.json(_spec)
+        _cors.apply(request, response)
+        return response
+    return None
 
-    # Swagger auto-register: serve /swagger and /swagger/openapi.json when debug is on
-    if _is_dev and request.method == "GET":
-        if request.path in ("/swagger", "/swagger/"):
-            # Serve Swagger UI HTML
-            swagger_html = (
-                '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
-                '<title>API Documentation</title>'
-                '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">'
-                '</head><body><div id="swagger-ui"></div>'
-                '<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>'
-                '<script>SwaggerUIBundle({ url: "/swagger/openapi.json", dom_id: "#swagger-ui" });</script>'
-                '</body></html>'
-            )
-            response.html(swagger_html)
-            _cors.apply(request, response)
-            return response
-        elif request.path == "/swagger/openapi.json":
-            # Serve OpenAPI spec JSON from all registered routes
-            from tina4_python.swagger import Swagger as _SwaggerGen
-            _swagger = _SwaggerGen()
-            _spec = _swagger.generate(Router.get_routes())
-            response.json(_spec)
-            _cors.apply(request, response)
-            return response
 
-    # Match route
-    route, params = Router.match(request.method, request.path)
-
-    if route:
-        request._route_params = params
-        request.merge_route_params()
-        try:
-            # ── Auth enforcement ────────────────────────────────────
-            _skip_handler = False
-            if route.get("auth_required"):
-                _auth_header = request.headers.get("authorization", "")
-                _api_key = os.environ.get("TINA4_API_KEY", os.environ.get("API_KEY", ""))
-                _auth_ok = False
-                if _auth_header:
-                    if _auth_header.startswith("Bearer "):
-                        _token = _auth_header[7:]
-                        # Check static API key first
-                        if _api_key and _token == _api_key:
-                            _auth_ok = True
-                        else:
-                            # Validate JWT token
-                            try:
-                                from tina4_python.auth import Auth
-                                if Auth.valid_token_static(_token):
-                                    _auth_ok = True
-                            except Exception:
-                                pass
-                if not _auth_ok:
-                    response.status(401).json({
-                        "error": "Unauthorized",
-                        "message": "Valid authorization token required",
-                        "status": 401,
-                    })
-                    _skip_handler = True
-
-            # ── Route middleware (before_* methods) ─────────────────
-            if not _skip_handler:
-                for _mw_cls in route.get("middleware", []):
-                    _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
-                    for _attr_name in dir(_mw_inst):
-                        if _attr_name.startswith("before_"):
-                            _mw_method = getattr(_mw_inst, _attr_name)
-                            if callable(_mw_method):
-                                _mw_result = _mw_method(request, response)
-                                if _mw_result is not None:
-                                    request, response = _mw_result
-                                    # If middleware returned an error status, skip handler
-                                    if response.status_code >= 400:
-                                        _skip_handler = True
-                                        break
-                    if _skip_handler:
-                        break
-
-            if not _skip_handler:
-                import inspect
-                _sig = inspect.signature(route["handler"])
-                _params = list(_sig.parameters.values())
-                _pcount = len(_params)
-
-                # Build args: inject path params by name, then request/response
-                _args = []
-                _remaining = []
-                for p in _params:
-                    name = p.name
-                    if name in params:
-                        _args.append(params[name])
-                    else:
-                        _remaining.append(p)
-
-                # Append request/response for remaining positional params
-                if len(_remaining) == 0:
-                    pass  # All params were path params
-                elif len(_remaining) == 1:
-                    _ann = _remaining[0].annotation
-                    if _ann is Request or (isinstance(_ann, str) and _ann in ("Request", "request")):
-                        _args.append(request)
-                    else:
-                        _args.append(response)
-                elif len(_remaining) >= 2:
-                    _args.append(request)
-                    _args.append(response)
-
-                if _pcount == 0:
-                    result = await route["handler"]()
-                else:
-                    result = await route["handler"](*_args)
-                if isinstance(result, Response):
-                    response = result
-
-            # ── Route middleware (after_* methods) ──────────────────
-            for _mw_cls in route.get("middleware", []):
-                _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
-                for _attr_name in dir(_mw_inst):
-                    if _attr_name.startswith("after_"):
-                        _mw_method = getattr(_mw_inst, _attr_name)
-                        if callable(_mw_method):
-                            _mw_result = _mw_method(request, response)
-                            if _mw_result is not None:
-                                request, response = _mw_result
-        except Exception as e:
-            Log.error(f"Route error: {e}", path=request.path)
-            _write_broken(request, e)
-            # Also track in BrokenTracker for admin UI
-            if _is_dev:
-                try:
-                    import traceback as _tb
-                    from tina4_python.dev_admin import BrokenTracker
-                    BrokenTracker.record(type(e).__name__, str(e), _tb.format_exc(),
-                                        {"method": request.method, "path": request.path})
-                except Exception:
-                    pass
-            if _is_dev:
-                # Rich error overlay with stack trace, source context, and line numbers
-                from tina4_python.debug.error_overlay import render_error_overlay
-                overlay_html = render_error_overlay(e, request)
-                response.status(500).html(overlay_html)
-            else:
-                import traceback
-                tb = traceback.format_exc()
-                html = _render_error_page(500, request.path, request_id, tb)
-                if html:
-                    response.status(500).html(html)
-                else:
-                    response.status(500).json({
-                        "error": "Internal Server Error",
-                        "request_id": request_id,
-                        "status": 500,
-                    })
-    else:
-        # Try serving static file
-        static = _try_static(request.path)
-        if static:
-            response = static
+def _check_auth(request: Request, response: Response, route: dict) -> bool:
+    """Validate auth on a route. Returns True if handler should be skipped."""
+    if not route.get("auth_required"):
+        return False
+    _auth_header = request.headers.get("authorization", "")
+    _api_key = os.environ.get("TINA4_API_KEY", os.environ.get("API_KEY", ""))
+    _auth_ok = False
+    if _auth_header and _auth_header.startswith("Bearer "):
+        _token = _auth_header[7:]
+        if _api_key and _token == _api_key:
+            _auth_ok = True
         else:
-            # Try serving a template file (e.g. /hello -> src/templates/hello.twig or hello.html)
-            tpl_file = _resolve_template(request.path)
-            if tpl_file:
-                from tina4_python.core.response import get_frond
-                html = get_frond().render(tpl_file, {})
-                response.html(html)
-            elif request.path == "/":
-                response.html(_render_landing_page())
-            else:
-                html = _render_error_page(404, request.path, request_id)
-                if html:
-                    response.status(404).html(html)
-                else:
-                    response.status(404).json({
-                        "error": "Not Found",
-                        "path": request.path,
-                        "status": 404,
-                    })
+            try:
+                from tina4_python.auth import Auth
+                if Auth.valid_token_static(_token):
+                    _auth_ok = True
+            except Exception:
+                pass
+    if not _auth_ok:
+        response.status(401).json({
+            "error": "Unauthorized",
+            "message": "Valid authorization token required",
+            "status": 401,
+        })
+        return True
+    return False
 
-    # Apply CORS headers to all responses
+
+def _run_before_middleware(request: Request, response: Response, route: dict) -> tuple[Request, Response, bool]:
+    """Run before_* middleware methods. Returns (request, response, skip_handler)."""
+    skip = False
+    for _mw_cls in route.get("middleware", []):
+        _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
+        for _attr_name in dir(_mw_inst):
+            if _attr_name.startswith("before_"):
+                _mw_method = getattr(_mw_inst, _attr_name)
+                if callable(_mw_method):
+                    _mw_result = _mw_method(request, response)
+                    if _mw_result is not None:
+                        request, response = _mw_result
+                        if response.status_code >= 400:
+                            skip = True
+                            break
+        if skip:
+            break
+    return request, response, skip
+
+
+def _run_after_middleware(request: Request, response: Response, route: dict) -> tuple[Request, Response]:
+    """Run after_* middleware methods."""
+    for _mw_cls in route.get("middleware", []):
+        _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
+        for _attr_name in dir(_mw_inst):
+            if _attr_name.startswith("after_"):
+                _mw_method = getattr(_mw_inst, _attr_name)
+                if callable(_mw_method):
+                    _mw_result = _mw_method(request, response)
+                    if _mw_result is not None:
+                        request, response = _mw_result
+    return request, response
+
+
+async def _invoke_handler(request: Request, response: Response, route: dict, params: dict) -> Response:
+    """Call the route handler with the correct arguments."""
+    import inspect
+    _sig = inspect.signature(route["handler"])
+    _params = list(_sig.parameters.values())
+    _pcount = len(_params)
+
+    _args = []
+    _remaining = []
+    for p in _params:
+        if p.name in params:
+            _args.append(params[p.name])
+        else:
+            _remaining.append(p)
+
+    if len(_remaining) == 1:
+        _ann = _remaining[0].annotation
+        if _ann is Request or (isinstance(_ann, str) and _ann in ("Request", "request")):
+            _args.append(request)
+        else:
+            _args.append(response)
+    elif len(_remaining) >= 2:
+        _args.append(request)
+        _args.append(response)
+
+    if _pcount == 0:
+        result = await route["handler"]()
+    else:
+        result = await route["handler"](*_args)
+    if isinstance(result, Response):
+        response = result
+    return response
+
+
+def _handle_route_error(
+    error: Exception, request: Request, response: Response,
+    request_id: str, is_dev: bool,
+) -> Response:
+    """Format an error response for a failed route handler."""
+    Log.error(f"Route error: {error}", path=request.path)
+    _write_broken(request, error)
+    if is_dev:
+        try:
+            import traceback as _tb
+            from tina4_python.dev_admin import BrokenTracker
+            BrokenTracker.record(
+                type(error).__name__, str(error), _tb.format_exc(),
+                {"method": request.method, "path": request.path},
+            )
+        except Exception:
+            pass
+        from tina4_python.debug.error_overlay import render_error_overlay
+        overlay_html = render_error_overlay(error, request)
+        response.status(500).html(overlay_html)
+    else:
+        import traceback
+        tb = traceback.format_exc()
+        html = _render_error_page(500, request.path, request_id, tb)
+        if html:
+            response.status(500).html(html)
+        else:
+            response.status(500).json({
+                "error": "Internal Server Error",
+                "request_id": request_id,
+                "status": 500,
+            })
+    return response
+
+
+def _handle_no_route(request: Request, response: Response, request_id: str) -> Response:
+    """Serve static files, templates, landing page, or 404."""
+    static = _try_static(request.path)
+    if static:
+        return static
+    tpl_file = _resolve_template(request.path)
+    if tpl_file:
+        from tina4_python.core.response import get_frond
+        html = get_frond().render(tpl_file, {})
+        response.html(html)
+    elif request.path == "/":
+        response.html(_render_landing_page())
+    else:
+        html = _render_error_page(404, request.path, request_id)
+        if html:
+            response.status(404).html(html)
+        else:
+            response.status(404).json({
+                "error": "Not Found",
+                "path": request.path,
+                "status": 404,
+            })
+    return response
+
+
+def _finalize_response(
+    request: Request, response: Response, route: dict | None,
+    request_id: str, is_dev: bool, req_start: float,
+) -> Response:
+    """Apply CORS, dev toolbar, request inspector, and session cookie."""
     _cors.apply(request, response)
 
-    # Dev mode: inject toolbar into HTML responses
-    if _is_dev and response.content_type and "text/html" in response.content_type:
+    # Dev toolbar injection
+    if is_dev and response.content_type and "text/html" in response.content_type:
         if not request.path.startswith("/__dev"):
             try:
                 from tina4_python.dev_admin import render_dev_toolbar
@@ -898,7 +885,6 @@ async def handle(request: Request) -> Response:
                     request_id, len(Router.get_routes()),
                 ).encode()
                 content_body = response.content
-                # Inject before </body> if present, else append
                 if b"</body>" in content_body:
                     content_body = content_body.replace(b"</body>", toolbar + b"\n</body>", 1)
                 else:
@@ -907,11 +893,12 @@ async def handle(request: Request) -> Response:
             except Exception:
                 pass
 
-    # Dev mode: capture request in inspector
-    if _is_dev:
+    # Request inspector
+    if is_dev:
         try:
+            import time as _time
             from tina4_python.dev_admin import RequestInspector
-            duration = (_time.perf_counter() - _req_start) * 1000
+            duration = (_time.perf_counter() - req_start) * 1000
             RequestInspector.capture(
                 request.method, request.path, response.status_code, duration,
                 body_size=len(response.content) if response.content else 0,
@@ -920,7 +907,7 @@ async def handle(request: Request) -> Response:
         except Exception:
             pass
 
-    # Save session and set cookie if session was used
+    # Session save + cookie
     if request.session is not None:
         try:
             request.session.save()
@@ -929,7 +916,6 @@ async def handle(request: Request) -> Response:
                 ttl = int(os.environ.get("TINA4_SESSION_TTL", "3600"))
                 samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
                 response.header("set-cookie", f"tina4_session={sid}; Path=/; HttpOnly; SameSite={samesite}; Max-Age={ttl}")
-            # Probabilistic garbage collection (~1% of requests)
             import random
             if random.randint(1, 100) == 1:
                 request.session.gc()
@@ -937,6 +923,68 @@ async def handle(request: Request) -> Response:
             pass
 
     return response
+
+
+async def handle(request: Request) -> Response:
+    """Dispatch a pre-built Request through the Tina4 router and return a Response.
+
+    Handles session setup, CORS, rate limiting, routing, auth, middleware,
+    dev toolbar injection, and session saving. The caller is responsible
+    for sending the response over the wire. Useful for testing and embedding.
+    """
+    import time as _time
+
+    request_id = request.headers.get("x-request-id", str(uuid.uuid4())[:8])
+    set_request_id(request_id)
+    _init_session(request)
+
+    response = Response()
+    response.header("x-request-id", request_id)
+
+    # CORS preflight
+    if _cors.is_preflight(request):
+        _cors.apply(request, response)
+        response.status(204)
+        return response
+
+    # Rate limiting
+    rate_response = _handle_rate_limit(request, response)
+    if rate_response is not None:
+        return rate_response
+
+    _req_start = _time.perf_counter()
+    from tina4_python.dotenv import is_truthy
+    _is_dev = is_truthy(os.environ.get("TINA4_DEBUG", ""))
+
+    # Dev admin
+    if _is_dev and request.path.startswith("/__dev"):
+        return await _handle_dev_admin(request, response)
+
+    # Swagger
+    if _is_dev and request.method == "GET":
+        swagger_resp = _handle_swagger(request, response)
+        if swagger_resp is not None:
+            return swagger_resp
+
+    # Route matching and dispatch
+    route, params = Router.match(request.method, request.path)
+
+    if route:
+        request._route_params = params
+        request.merge_route_params()
+        try:
+            skip = _check_auth(request, response, route)
+            if not skip:
+                request, response, skip = _run_before_middleware(request, response, route)
+            if not skip:
+                response = await _invoke_handler(request, response, route, params)
+            request, response = _run_after_middleware(request, response, route)
+        except Exception as e:
+            response = _handle_route_error(e, request, response, request_id, _is_dev)
+    else:
+        response = _handle_no_route(request, response, request_id)
+
+    return _finalize_response(request, response, route, request_id, _is_dev, _req_start)
 
 
 async def app(scope: dict, receive, send):
