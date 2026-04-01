@@ -172,21 +172,16 @@ def _init(args):
             encoding="utf-8",
         )
 
-    # Auto-detect AI tools and install context
-    from tina4_python.ai import detect_ai_names, install_context, install_all
-    detected = detect_ai_names(str(target))
-    if detected:
-        created = install_context(str(target))
-        if created:
-            print(f"\nAI context installed for: {', '.join(detected)}")
-            for f in created:
-                print(f"  + {f}")
-    elif "--ai" in args:
+    # Install AI context files if requested
+    from tina4_python.ai import install_all
+    if "--ai" in args:
         created = install_all(str(target))
         if created:
             print("\nAI context installed for all supported tools:")
             for f in created:
                 print(f"  + {f}")
+    else:
+        print("\n  Tip: run 'tina4python ai' to install AI coding assistant context files.")
 
     print(f"\nProject scaffolded at {target.resolve()}")
     print("  Run: tina4python serve")
