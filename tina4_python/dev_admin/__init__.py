@@ -1781,16 +1781,16 @@ function renderBubbleChart(files,depGraph){
     var minR=14,maxR=Math.min(70,W/10);
     // Composite health colour: complexity + tests + dependencies
     function healthColor(f){
-        var cc=Math.min((f.complexity||0)/maxCC,1); // 0=low, 1=high
+        var cc=Math.min((f.complexity||0)/maxCC,1);
         var tested=f.has_tests?1:0;
-        var deps=Math.min((f.dep_count||0)/10,1); // 0=none, 1=many
-        // Score: 0=healthy(green), 1=risky(red)
+        var deps=Math.min((f.dep_count||0)/10,1);
         var score=cc*0.5+(1-tested)*0.3+deps*0.2;
         score=Math.max(0,Math.min(1,score));
-        var r=Math.round(34+score*200);
-        var g=Math.round(197-score*160);
-        var b2=Math.round(94-score*50);
-        return 'rgb('+r+','+g+','+b2+')';
+        // Vibrant metallic: green(120) → amber(45) → red(0) via HSL
+        var hue=Math.round(120*(1-score));
+        var sat=Math.round(80+score*20); // 80-100% saturation
+        var lit=Math.round(50+10*(1-score)); // 50-60% lightness
+        return 'hsl('+hue+','+sat+'%,'+lit+'%)';
     }
     // Build path->index lookup
     var pathIdx={};
@@ -1917,9 +1917,20 @@ function renderBubbleChart(files,depGraph){
             var isHovered=(idx===hoveredIdx);
             var drawR=isHovered?b.r+4:b.r;
             if(isHovered){ctx.beginPath();ctx.arc(b.x,b.y,drawR+8,0,Math.PI*2);ctx.fillStyle='rgba(255,255,255,0.08)';ctx.fill();}
+            // Metallic glossy bubble with radial gradient
             ctx.beginPath();ctx.arc(b.x,b.y,drawR,0,Math.PI*2);
-            ctx.fillStyle=b.color;ctx.globalAlpha=isHovered?0.95:0.7;ctx.fill();
-            ctx.globalAlpha=1;ctx.strokeStyle=b.color;ctx.lineWidth=isHovered?2.5:1.5;ctx.stroke();
+            var grad=ctx.createRadialGradient(b.x-drawR*0.3,b.y-drawR*0.3,drawR*0.05,b.x+drawR*0.1,b.y+drawR*0.1,drawR);
+            grad.addColorStop(0,'rgba(255,255,255,0.7)');
+            grad.addColorStop(0.25,b.color);
+            grad.addColorStop(0.8,b.color);
+            grad.addColorStop(1,'rgba(0,0,0,0.3)');
+            ctx.fillStyle=grad;ctx.globalAlpha=isHovered?1.0:0.9;ctx.fill();
+            ctx.globalAlpha=1;ctx.strokeStyle='rgba(255,255,255,0.35)';ctx.lineWidth=isHovered?2.5:1;ctx.stroke();
+            // Specular highlight
+            ctx.beginPath();ctx.arc(b.x-drawR*0.25,b.y-drawR*0.25,drawR*0.35,0,Math.PI*2);
+            var spec=ctx.createRadialGradient(b.x-drawR*0.25,b.y-drawR*0.25,0,b.x-drawR*0.25,b.y-drawR*0.25,drawR*0.35);
+            spec.addColorStop(0,'rgba(255,255,255,0.4)');spec.addColorStop(1,'rgba(255,255,255,0)');
+            ctx.fillStyle=spec;ctx.fill();
             // Label
             var name=b.f.path.split('/').pop().replace('.py','');
             if(drawR>16){
@@ -1933,13 +1944,16 @@ function renderBubbleChart(files,depGraph){
                     ctx.fillText('CC:'+b.f.complexity+' MI:'+b.f.maintainability,b.x,b.y+fs*2);
                 }
             }
-            // Markers: T (tested) and D (dependencies)
-            var markers='';
-            if(b.f.has_tests)markers+='\u24c9';
-            if(b.f.dep_count>0)markers+='\u24b9';
-            if(markers&&drawR>12){
-                ctx.fillStyle='rgba(255,255,255,0.85)';ctx.font='bold '+Math.max(7,drawR*0.25)+'px sans-serif';
-                ctx.textAlign='center';ctx.fillText(markers,b.x,b.y-drawR+Math.max(7,drawR*0.25)+1);
+            // Markers: T (tested) and D (dependencies) — shown separately
+            var mfs=Math.max(7,drawR*0.22);
+            ctx.font='bold '+mfs+'px sans-serif';ctx.textAlign='center';
+            if(drawR>12&&b.f.has_tests){
+                ctx.fillStyle='rgba(166,227,161,0.9)';
+                ctx.fillText('\u24c9',b.x-(b.f.dep_count>0?mfs*0.6:0),b.y-drawR+mfs+1);
+            }
+            if(drawR>12&&b.f.dep_count>0){
+                ctx.fillStyle='rgba(249,226,175,0.9)';
+                ctx.fillText('\u24b9',b.x+(b.f.has_tests?mfs*0.6:0),b.y-drawR+mfs+1);
             }
             b._drawX=b.x;b._drawY=b.y;b._drawR=drawR;
         });
