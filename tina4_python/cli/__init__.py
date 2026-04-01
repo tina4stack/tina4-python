@@ -405,42 +405,19 @@ def _build(args):
 
 
 def _ai(args):
-    """Detect AI coding tools and install Tina4 context."""
-    from tina4_python.ai import detect_ai, install_context, install_all, status_report
+    """Install AI coding assistant context files."""
+    from tina4_python.ai import show_menu, install_selected, install_all
 
     root = "."
 
-    if "--all" in args:
-        # Install context for ALL known AI tools
-        created = install_all(root, force="--force" in args)
-        if created:
-            print("Installed Tina4 context for all AI tools:")
-            for f in created:
-                print(f"  + {f}")
-        else:
-            print("All AI context files already exist. Use --force to overwrite.")
-    elif "--status" in args or not args:
-        # Show detection status
-        print(status_report(root))
-
-        # Auto-install for detected tools
-        detected = [t for t in detect_ai(root) if t["installed"]]
-        if detected:
-            created = install_context(root)
-            if created:
-                print("Installed Tina4 context:")
-                for f in created:
-                    print(f"  + {f}")
-            else:
-                print("Context files already exist. Use --force to overwrite.")
+    if args and args[0].lower() == "all":
+        # Non-interactive: install everything
+        install_all(root)
     else:
-        # Install for specific tool(s)
-        created = install_context(root, tools=args, force="--force" in args)
-        if created:
-            for f in created:
-                print(f"  + {f}")
-        else:
-            print("Nothing to install.")
+        # Interactive: show menu, get selection
+        selection = show_menu(root)
+        if selection:
+            install_selected(root, selection)
 
 
 def _generate(args):

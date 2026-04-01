@@ -265,7 +265,7 @@ def full_analysis(root: str = "src") -> dict:
 
     # Sort by complexity descending
     all_functions.sort(key=lambda x: x["complexity"], reverse=True)
-    file_metrics.sort(key=lambda x: x["complexity"], reverse=True)
+    file_metrics.sort(key=lambda x: x["maintainability"])
 
     # Violations
     violations = _detect_violations(all_functions, file_metrics)

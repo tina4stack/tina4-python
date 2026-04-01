@@ -60,9 +60,6 @@ __pycache__/
 *.so
 build/
 .pytest_cache/
-demo/.env
 example/.env
-demo/data/*.db
-demo/logs/*.log
 .claude/settings.local.json
 .claude/worktrees/

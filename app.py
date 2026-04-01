@@ -99,4 +99,6 @@ async def error_demo(request, response):
 
 
 if __name__ == "__main__":
-    run("localhost", 7145)
+    import sys
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 7145
+    run("localhost", port)
