@@ -561,8 +561,8 @@ def _load_env():
     """Load .env file if it exists."""
     env_path = Path(".env")
     if env_path.exists():
-        from tina4_python.dotenv import load_dotenv
-        load_dotenv(str(env_path))
+        from tina4_python.dotenv import load_env
+        load_env(str(env_path))
 
 
 __all__ = ["main"]
