@@ -318,6 +318,18 @@ class ORM(metaclass=ORMMeta):
     # ── Finders ─────────────────────────────────────────────────
 
     @classmethod
+    def create(cls, data: dict = None, **kwargs):
+        """Create a new instance, save it, and return it.
+
+        Usage:
+            user = User.create({"name": "Alice", "email": "alice@example.com"})
+            user = User.create(name="Alice", email="alice@example.com")
+        """
+        instance = cls(data or kwargs)
+        instance.save()
+        return instance
+
+    @classmethod
     def find_by_id(cls, pk_value, include: list[str] = None):
         """Find a single record by primary key. Returns instance or None.
 

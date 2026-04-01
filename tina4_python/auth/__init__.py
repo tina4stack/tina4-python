@@ -293,7 +293,24 @@ def validate_api_key(provided: str, expected: str = None) -> bool:
     return Auth.validate_api_key(provided, expected)
 
 
+class AuthMiddleware:
+    """Built-in auth middleware. Validates JWT Bearer tokens on protected routes."""
+
+    @staticmethod
+    def before_request(request, response):
+        """Check Authorization header for valid JWT token."""
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return request, response({"error": "Unauthorized"}, 401)
+        token = auth_header[7:]
+        payload = Auth.valid_token_static(token)
+        if payload is None:
+            return request, response({"error": "Invalid token"}, 401)
+        request.auth = payload
+        return request, response
+
+
 __all__ = [
-    "Auth", "get_token", "valid_token", "get_payload", "refresh_token",
-    "authenticate_request", "validate_api_key",
+    "Auth", "AuthMiddleware", "get_token", "valid_token", "get_payload",
+    "refresh_token", "authenticate_request", "validate_api_key",
 ]
