@@ -1777,6 +1777,7 @@ function renderBubbleChart(files,depGraph){
     depGraph=depGraph||{};
     var W=container.offsetWidth||900,H=Math.max(450,Math.min(650,W*0.45));
     var maxLoc=Math.max.apply(null,files.map(function(f){return f.loc}))||1;
+    var maxDeps=Math.max.apply(null,files.map(function(f){return f.dep_count||0}))||1;
     var maxCC=Math.max.apply(null,files.map(function(f){return f.complexity||0}))||1;
     var minR=14,maxR=Math.min(70,W/10);
     // Composite health colour: complexity + tests + dependencies
@@ -1798,13 +1799,14 @@ function renderBubbleChart(files,depGraph){
     var pathIdx={};
     files.forEach(function(f,i){pathIdx[f.path]=i;});
     // Spiral placement
-    var sorted=files.slice().sort(function(a,b){return a.loc-b.loc});
+    function sizeScore(f){return (f.loc/maxLoc)*0.4+((f.avg_complexity||0)/10)*0.4+((f.dep_count||0)/maxDeps)*0.2;}
+    var sorted=files.slice().sort(function(a,b){return sizeScore(a)-sizeScore(b)});
     var cx=W/2,cy=H/2;
     var bubbles=[];
     var angle=0,spiralR=0;
     for(var i=0;i<sorted.length;i++){
         var f=sorted[i];
-        var r=minR+Math.sqrt(f.loc/maxLoc)*(maxR-minR);
+        var r=minR+Math.sqrt(sizeScore(f))*(maxR-minR);
         var color=healthColor(f);
         var placed=false;
         for(var attempt=0;attempt<800;attempt++){
