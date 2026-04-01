@@ -1,0 +1,193 @@
+# tina4-python — LLM Context
+
+Tina4 Python v3.10.40 — 54 built-in features, zero dependencies. Web framework for Python 3.12+. Routes, ORM, templates, auth, queue, websocket, graphql, WSDL — all built in.
+
+---
+
+## Quick Start
+
+```python
+from tina4_python.core import run
+run()  # starts server on port 7145
+```
+
+---
+
+## Router
+
+```python
+from tina4_python.core.router import get, post, put, patch, delete, noauth, secured, cached, template
+
+@get("/api/users")
+async def get_users(request, response):
+    return response({"users": []})
+
+@post("/api/users")
+@noauth()  # make write route public (auth required by default on POST/PUT/DELETE)
+async def create_user(request, response):
+    body = request.body
+    return response({"created": body["name"]}, 201)
+
+@get("/api/users/{id}")
+async def get_user(request, response):
+    user_id = request.params["id"]
+    return response({"id": user_id})
+```
+
+Decorator order (outermost to innermost): `@noauth`/`@secured` -> `@description`/`@tags` -> `@get`/`@post`
+
+Wildcard routes: `@get("/api/files/*")`
+
+Template rendering: `@template("page.twig")` auto-renders dict return.
+
+---
+
+## Database
+
+```python
+from tina4_python.database import Database
+
+db = Database("sqlite:///app.db")  # or postgres://, mysql://, mssql://, firebird://
+result = db.fetch("SELECT * FROM users WHERE active = ?", [True], limit=10, offset=0)
+row = db.fetch_one("SELECT * FROM users WHERE id = ?", [1])
+db.execute("INSERT INTO users (name) VALUES (?)", ["Alice"])
+db.insert("users", {"name": "Alice"})
+db.update("users", {"id": 1, "name": "Bob"})
+db.delete("users", {"id": 1})
+next_id = db.get_next_id("users")  # race-safe atomic ID generation
+```
+
+---
+
+## ORM
+
+```python
+from tina4_python.orm import ORM, orm_bind, IntegerField, StringField
+
+class User(ORM):
+    id = IntegerField(primary_key=True, auto_increment=True)
+    name = StringField()
+
+orm_bind(db)  # bind database to all ORM subclasses
+
+user = User({"name": "Alice"})
+user.save()
+user.load("id = ?", [1])
+user.delete()
+result = user.select(filter="active = ?", params=[True], order_by="name", limit=10, offset=0)
+user.to_dict()
+user.to_json()
+```
+
+---
+
+## Frond (Templates)
+
+```python
+from tina4_python.frond import Frond
+html = Frond.render("page.twig", {"title": "Home", "items": items})
+```
+
+---
+
+## Auth
+
+```python
+from tina4_python.auth import Auth
+token = Auth.get_token({"user_id": 1, "role": "admin"})
+payload = Auth.valid_token(token)  # returns dict or None
+hashed = Auth.hash_password("secret")
+valid = Auth.check_password("secret", hashed)
+```
+
+---
+
+## Queue
+
+```python
+from tina4_python.queue import Queue
+queue = Queue(topic="emails", max_retries=3)
+queue.push({"to": "alice@example.com", "subject": "Hello"})
+for job in queue.consume("emails"):
+    process(job.payload)
+    job.complete()  # or job.fail("reason")
+queue.produce("other_topic", {"data": "value"})
+dead = queue.dead_letters()
+```
+
+---
+
+## API Client
+
+```python
+from tina4_python.api import Api
+api = Api(base_url="https://api.example.com")
+result = api.get("/users")  # returns {"http_code": 200, "body": {...}}
+api.post("/users", {"name": "Alice"})
+api.set_bearer_token("token123")
+```
+
+---
+
+## WebSocket
+
+```python
+from tina4_python.websocket import WebSocketServer
+# Server-side websocket — integrated with the Tina4 server
+# Clients connect to ws://localhost:7145/ws/topic
+```
+
+---
+
+## Events
+
+```python
+from tina4_python.core.events import on, emit, once, off
+
+@on("user.created")
+def welcome(user):
+    print(f"Welcome {user['name']}")
+
+emit("user.created", {"name": "Alice"})
+```
+
+---
+
+## Migrations
+
+```python
+from tina4_python.migration import migrate, create_migration
+migrate(db)
+create_migration("add users table")
+```
+
+---
+
+## Project Structure
+
+```
+src/
+  routes/       # Auto-discovered route files
+  orm/          # ORM model definitions
+  templates/    # Frond/Twig templates
+  public/       # Static files served at /
+  app/          # Shared helpers and services
+migrations/     # SQL migration files
+tests/          # pytest test files
+.env            # Environment variables
+```
+
+---
+
+## Known Gotchas
+
+1. Routes return `response()` not `response.json()` — Tina4 convention
+2. POST/PUT/DELETE require auth by default. Use `@noauth()` to make public
+3. GET is public by default. Use `@secured()` to protect
+4. Decorator order matters: `@noauth`/`@secured` outermost, then `@description`/`@tags`, then `@get`/`@post` innermost
+5. ORM uses `to_dict()` not `to_json()` for dict output
+6. Queue job payload accessed via `job.payload` not `job.data`
+7. Database `fetch()` uses `offset=` not `skip=`
+8. Import from `tina4_python.core.router` not `tina4_python.router`
+9. Server entry point: `from tina4_python.core import run; run()`
+10. Default port: 7145

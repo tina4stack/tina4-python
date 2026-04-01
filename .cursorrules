@@ -1,0 +1,37 @@
+# tina4-python — Cursor Rules
+
+Tina4 Python v3.10.40. 54 built-in features, zero dependencies. Python 3.12+.
+
+## Key Patterns
+
+```python
+# Route registration
+from tina4_python.core.router import get, post, put, delete, noauth, secured
+
+@get("/api/users")
+async def list_users(request, response):
+    return response({"users": []})
+
+@post("/api/users")
+@noauth()
+async def create_user(request, response):
+    return response({"created": request.body["name"]}, 201)
+```
+
+## Critical Rules
+
+- Routes return `response()` NOT `response.json()`
+- POST/PUT/DELETE require auth by default — use `@noauth()` to make public
+- GET is public by default — use `@secured()` to protect
+- Decorator order: `@noauth`/`@secured` outermost, `@get`/`@post` innermost
+- Import from `tina4_python.core.router` not `tina4_python.router`
+- Queue job payload: `job.payload` not `job.data`
+- Database pagination: `offset=` not `skip=`
+- Entry point: `from tina4_python.core import run; run()`
+- Default port: 7145
+
+## Project Structure
+
+Routes in `src/routes/`, ORM in `src/orm/`, templates in `src/templates/`, static in `src/public/`.
+
+See llms.txt for complete API reference.
