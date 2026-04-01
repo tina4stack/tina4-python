@@ -1,6 +1,6 @@
 [project]
 name = "tina4-python"
-version = "3.10.42"
+dynamic = ["version"]
 description = "Tina4 for Python — 54 built-in features, zero dependencies"
 authors = [
     {name = "Andre van Zuydam", email = "andrevanzuydam@gmail.com"}
@@ -54,6 +54,9 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "tina4_python/__init__.py"
 
 [tool.hatch.build]
 include = ["tina4_python/**/*"]
