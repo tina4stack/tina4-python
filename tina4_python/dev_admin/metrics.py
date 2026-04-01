@@ -250,6 +250,9 @@ def full_analysis(root: str = "src") -> dict:
         ca = len(reverse_graph.get(rel_path, []))  # afferent
         instability = ce / (ca + ce) if (ca + ce) > 0 else 0.0
 
+        # Test coverage detection (file-based matching)
+        has_tests = _has_matching_test(rel_path)
+
         file_metrics.append({
             "path": rel_path,
             "loc": loc,
@@ -261,6 +264,8 @@ def full_analysis(root: str = "src") -> dict:
             "coupling_afferent": ca,
             "coupling_efferent": ce,
             "instability": round(instability, 3),
+            "has_tests": has_tests,
+            "dep_count": ce,
         })
 
     # Sort by complexity descending
@@ -457,6 +462,24 @@ def _count_halstead(node: ast.AST, stats: dict):
     elif isinstance(node, ast.Constant):
         stats["operands"] += 1
         stats["unique_operands"].add(str(node.value)[:50])
+
+
+def _has_matching_test(rel_path: str) -> bool:
+    """Check if a source file has a matching test file.
+
+    Looks for tests/test_{module}.py or tests/test_{module_name}.py.
+    """
+    p = Path(rel_path)
+    module = p.stem  # e.g. "auth" from "tina4_python/auth/__init__.py"
+    if module == "__init__":
+        module = p.parent.name  # use parent dir name
+    # Check common test file patterns
+    test_patterns = [
+        Path("tests") / f"test_{module}.py",
+        Path("tests") / f"test_{module}s.py",
+        Path("test") / f"test_{module}.py",
+    ]
+    return any(tp.exists() for tp in test_patterns)
 
 
 def _maintainability_index(halstead_volume: float, avg_cc: float, loc: int) -> float:

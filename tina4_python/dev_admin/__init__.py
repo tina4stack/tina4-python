@@ -1771,117 +1771,216 @@ function miColor(mi){
     if(mi>=30) return 'rgb('+(Math.round(220+((60-mi)/30)*19))+','+(Math.round(180-((60-mi)/30)*112))+',0)';
     return 'rgb(239,'+(Math.round(68-mi*2))+',0)';
 }
-function renderBubbleChart(files){
+function renderBubbleChart(files,depGraph){
     var container=document.getElementById('metrics-bubble');
-    if(!files||!files.length){container.innerHTML='<p style="color:var(--muted);padding:1rem">No files to analyze</p>';return;}
+    if(!files||!files.length){{container.innerHTML='<p style="color:var(--muted);padding:1rem">No files to analyze</p>';return;}}
+    depGraph=depGraph||{{}};
     var W=container.offsetWidth||900,H=Math.max(450,Math.min(650,W*0.45));
-    var maxLoc=Math.max.apply(null,files.map(function(f){return f.loc}))||1;
+    var maxLoc=Math.max.apply(null,files.map(function(f){{return f.loc}}))||1;
+    var maxCC=Math.max.apply(null,files.map(function(f){{return f.complexity||0}}))||1;
     var minR=14,maxR=Math.min(70,W/10);
-    // Sort smallest to biggest for spiral
-    var sorted=files.slice().sort(function(a,b){return a.loc-b.loc});
-    // Spiral placement: smallest in center, biggest on outside
+    // Composite health colour: complexity + tests + dependencies
+    function healthColor(f){{
+        var cc=Math.min((f.complexity||0)/maxCC,1); // 0=low, 1=high
+        var tested=f.has_tests?1:0;
+        var deps=Math.min((f.dep_count||0)/10,1); // 0=none, 1=many
+        // Score: 0=healthy(green), 1=risky(red)
+        var score=cc*0.5+(1-tested)*0.3+deps*0.2;
+        score=Math.max(0,Math.min(1,score));
+        var r=Math.round(34+score*200);
+        var g=Math.round(197-score*160);
+        var b2=Math.round(94-score*50);
+        return 'rgb('+r+','+g+','+b2+')';
+    }}
+    // Build path->index lookup
+    var pathIdx={{}};
+    files.forEach(function(f,i){{pathIdx[f.path]=i;}});
+    // Spiral placement
+    var sorted=files.slice().sort(function(a,b){{return a.loc-b.loc}});
     var cx=W/2,cy=H/2;
     var bubbles=[];
     var angle=0,spiralR=0;
-    for(var i=0;i<sorted.length;i++){
+    for(var i=0;i<sorted.length;i++){{
         var f=sorted[i];
         var r=minR+Math.sqrt(f.loc/maxLoc)*(maxR-minR);
-        var color=miColor(f.maintainability||0);
-        // Spiral outward — tight packing, bubbles nearly touching
+        var color=healthColor(f);
         var placed=false;
-        for(var attempt=0;attempt<800;attempt++){
+        for(var attempt=0;attempt<800;attempt++){{
             var px=cx+spiralR*Math.cos(angle);
             var py=cy+spiralR*Math.sin(angle);
-            // Check collision with existing bubbles (2px gap = nearly touching)
             var collides=false;
-            for(var j=0;j<bubbles.length;j++){
+            for(var j=0;j<bubbles.length;j++){{
                 var dx=px-bubbles[j].x,dy=py-bubbles[j].y;
-                if(Math.sqrt(dx*dx+dy*dy)<r+bubbles[j].r+2){collides=true;break;}
-            }
-            if(!collides&&px>r+2&&px<W-r-2&&py>r+25&&py<H-r-2){
-                bubbles.push({x:px,y:py,r:r,color:color,f:f,angle:Math.random()*Math.PI*2,speed:0.3+Math.random()*0.5,drift:2+Math.random()*3});
+                if(Math.sqrt(dx*dx+dy*dy)<r+bubbles[j].r+2){{collides=true;break;}}
+            }}
+            if(!collides&&px>r+2&&px<W-r-2&&py>r+25&&py<H-r-2){{
+                bubbles.push({{x:px,y:py,vx:0,vy:0,r:r,color:color,f:f}});
                 placed=true;break;
-            }
+            }}
             angle+=0.2;spiralR+=0.04;
-        }
-        if(!placed){bubbles.push({x:cx+(Math.random()-0.5)*W*0.3,y:cy+(Math.random()-0.5)*H*0.3,r:r,color:color,f:f,angle:Math.random()*Math.PI*2,speed:0.3+Math.random()*0.5,drift:2+Math.random()*3});}
-    }
-    // Create canvas for animation
+        }}
+        if(!placed){{bubbles.push({{x:cx+(Math.random()-0.5)*W*0.3,y:cy+(Math.random()-0.5)*H*0.3,vx:0,vy:0,r:r,color:color,f:f}});}}
+    }}
+    // Build edge list from dependency graph
+    var edges=[];
+    Object.keys(depGraph).forEach(function(src){{
+        var srcIdx=null;
+        bubbles.forEach(function(b,i){{if(b.f.path===src)srcIdx=i;}});
+        if(srcIdx===null)return;
+        (depGraph[src]||[]).forEach(function(tgt){{
+            var tgtIdx=null;
+            bubbles.forEach(function(b,i){{if(b.f.path===tgt)tgtIdx=i;}});
+            if(tgtIdx!==null&&srcIdx!==tgtIdx)edges.push([srcIdx,tgtIdx]);
+        }});
+    }});
+    // Canvas
     var canvas=document.createElement('canvas');
     canvas.width=W;canvas.height=H;
     canvas.style.cssText='display:block;border:1px solid var(--border);border-radius:8px;cursor:pointer;background:#0f172a';
-    container.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem"><h3 style="margin:0;color:var(--primary)">Code Landscape</h3><span style="font-size:0.7rem;color:var(--muted)">Click a bubble to drill down | Size=LOC | <span style="color:#22c55e">Green</span>=maintainable <span style="color:#eab308">Yellow</span>=moderate <span style="color:#ef4444">Red</span>=needs work</span></div>';
+    container.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem"><h3 style="margin:0;color:var(--primary)">Code Landscape</h3><span style="font-size:0.7rem;color:var(--muted)">Drag bubbles | Click to drill down | Size=LOC | Colour=health | \u24c9=tested | \u24b9=deps</span></div>';
     container.appendChild(canvas);
     var ctx=canvas.getContext('2d');
-    var hoveredIdx=-1;
-    // Animation loop
-    var t=0;
-    function draw(){
-        t+=0.016;
+    var hoveredIdx=-1,dragIdx=-1,dragOX=0,dragOY=0;
+    // Physics
+    function simulate(){{
+        var damping=0.92,springK=0.005,repulse=800;
+        // Spring forces along edges
+        edges.forEach(function(e){{
+            var a=bubbles[e[0]],b=bubbles[e[1]];
+            var dx=b.x-a.x,dy=b.y-a.y;
+            var dist=Math.sqrt(dx*dx+dy*dy)||1;
+            var rest=a.r+b.r+40;
+            var force=(dist-rest)*springK;
+            var fx=dx/dist*force,fy=dy/dist*force;
+            if(e[0]!==dragIdx){{a.vx+=fx;a.vy+=fy;}}
+            if(e[1]!==dragIdx){{b.vx-=fx;b.vy-=fy;}}
+        }});
+        // Repulsion between all bubbles
+        for(var i=0;i<bubbles.length;i++){{
+            for(var j=i+1;j<bubbles.length;j++){{
+                var a=bubbles[i],b=bubbles[j];
+                var dx=b.x-a.x,dy=b.y-a.y;
+                var dist=Math.sqrt(dx*dx+dy*dy)||1;
+                var minDist=a.r+b.r+4;
+                if(dist<minDist*3){{
+                    var force=repulse/(dist*dist);
+                    var fx=dx/dist*force,fy=dy/dist*force;
+                    if(i!==dragIdx){{a.vx-=fx;a.vy-=fy;}}
+                    if(j!==dragIdx){{b.vx+=fx;b.vy+=fy;}}
+                }}
+            }}
+        }}
+        // Apply velocity + damping + boundary
+        bubbles.forEach(function(b,idx){{
+            if(idx===dragIdx)return;
+            b.vx*=damping;b.vy*=damping;
+            b.x+=b.vx;b.y+=b.vy;
+            b.x=Math.max(b.r+2,Math.min(W-b.r-2,b.x));
+            b.y=Math.max(b.r+25,Math.min(H-b.r-2,b.y));
+        }});
+    }}
+    // Draw
+    function draw(){{
+        simulate();
         ctx.clearRect(0,0,W,H);
-        // Background grid
+        // Grid
         ctx.strokeStyle='rgba(255,255,255,0.03)';ctx.lineWidth=1;
-        for(var gx=0;gx<W;gx+=50){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
-        for(var gy=0;gy<H;gy+=50){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
-        bubbles.forEach(function(b,idx){
-            // Gentle floating motion
-            var ox=Math.sin(t*b.speed+b.angle)*b.drift;
-            var oy=Math.cos(t*b.speed*0.7+b.angle+1)*b.drift*0.6;
-            var bx=b.x+ox,by=b.y+oy;
+        for(var gx=0;gx<W;gx+=50){{ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}}
+        for(var gy=0;gy<H;gy+=50){{ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}}
+        // Dependency arrows
+        edges.forEach(function(e){{
+            var a=bubbles[e[0]],b=bubbles[e[1]];
+            var dx=b.x-a.x,dy=b.y-a.y;
+            var dist=Math.sqrt(dx*dx+dy*dy)||1;
+            var highlighted=(hoveredIdx===e[0]||hoveredIdx===e[1]);
+            ctx.beginPath();
+            ctx.moveTo(a.x+dx/dist*a.r,a.y+dy/dist*a.r);
+            var ex=b.x-dx/dist*b.r,ey=b.y-dy/dist*b.r;
+            ctx.lineTo(ex,ey);
+            ctx.strokeStyle=highlighted?'rgba(139,180,250,0.6)':'rgba(255,255,255,0.1)';
+            ctx.lineWidth=highlighted?2:1;ctx.stroke();
+            // Arrowhead
+            var aLen=highlighted?10:6;
+            var aAngle=Math.atan2(dy,dx);
+            ctx.beginPath();
+            ctx.moveTo(ex,ey);
+            ctx.lineTo(ex-aLen*Math.cos(aAngle-0.4),ey-aLen*Math.sin(aAngle-0.4));
+            ctx.lineTo(ex-aLen*Math.cos(aAngle+0.4),ey-aLen*Math.sin(aAngle+0.4));
+            ctx.closePath();ctx.fillStyle=ctx.strokeStyle;ctx.fill();
+        }});
+        // Bubbles
+        bubbles.forEach(function(b,idx){{
             var isHovered=(idx===hoveredIdx);
             var drawR=isHovered?b.r+4:b.r;
-            // Glow
-            if(isHovered){
-                ctx.beginPath();ctx.arc(bx,by,drawR+8,0,Math.PI*2);
-                ctx.fillStyle='rgba(255,255,255,0.08)';ctx.fill();
-            }
-            // Circle
-            ctx.beginPath();ctx.arc(bx,by,drawR,0,Math.PI*2);
+            if(isHovered){{ctx.beginPath();ctx.arc(b.x,b.y,drawR+8,0,Math.PI*2);ctx.fillStyle='rgba(255,255,255,0.08)';ctx.fill();}}
+            ctx.beginPath();ctx.arc(b.x,b.y,drawR,0,Math.PI*2);
             ctx.fillStyle=b.color;ctx.globalAlpha=isHovered?0.95:0.7;ctx.fill();
             ctx.globalAlpha=1;ctx.strokeStyle=b.color;ctx.lineWidth=isHovered?2.5:1.5;ctx.stroke();
             // Label
             var name=b.f.path.split('/').pop().replace('.py','');
-            if(drawR>16){
+            if(drawR>16){{
                 var fs=Math.max(8,Math.min(13,drawR*0.38));
                 ctx.fillStyle='#fff';ctx.font='600 '+fs+'px monospace';ctx.textAlign='center';
-                ctx.fillText(name,bx,by-2);
+                ctx.fillText(name,b.x,b.y-2);
                 ctx.fillStyle='rgba(255,255,255,0.65)';ctx.font=(fs-1)+'px monospace';
-                ctx.fillText(b.f.loc+' LOC',bx,by+fs);
-                if(isHovered&&drawR>25){
+                ctx.fillText(b.f.loc+' LOC',b.x,b.y+fs);
+                if(isHovered&&drawR>25){{
                     ctx.fillStyle='rgba(255,255,255,0.5)';ctx.font=(fs-2)+'px monospace';
-                    ctx.fillText('CC:'+b.f.complexity+' MI:'+b.f.maintainability,bx,by+fs*2);
-                }
-            }
-            b._drawX=bx;b._drawY=by;b._drawR=drawR;
-        });
-        // Summary bar
-        var totalLoc=0,totalFiles=bubbles.length;
-        bubbles.forEach(function(b){totalLoc+=b.f.loc});
-        var avgMI=bubbles.reduce(function(s,b){return s+b.f.maintainability},0)/totalFiles;
+                    ctx.fillText('CC:'+b.f.complexity+' MI:'+b.f.maintainability,b.x,b.y+fs*2);
+                }}
+            }}
+            // Markers: T (tested) and D (dependencies)
+            var markers='';
+            if(b.f.has_tests)markers+='\u24c9';
+            if(b.f.dep_count>0)markers+='\u24b9';
+            if(markers&&drawR>12){{
+                ctx.fillStyle='rgba(255,255,255,0.85)';ctx.font='bold '+Math.max(7,drawR*0.25)+'px sans-serif';
+                ctx.textAlign='center';ctx.fillText(markers,b.x,b.y-drawR+Math.max(7,drawR*0.25)+1);
+            }}
+            b._drawX=b.x;b._drawY=b.y;b._drawR=drawR;
+        }});
+        // Summary
+        var totalLoc=0,totalFiles=bubbles.length,testedCount=0;
+        bubbles.forEach(function(b){{totalLoc+=b.f.loc;if(b.f.has_tests)testedCount++;}});
+        var avgMI=bubbles.reduce(function(s,b){{return s+b.f.maintainability}},0)/totalFiles;
         ctx.fillStyle='rgba(255,255,255,0.35)';ctx.font='11px monospace';ctx.textAlign='right';
-        ctx.fillText(totalFiles+' files | '+totalLoc.toLocaleString()+' LOC | Avg MI: '+avgMI.toFixed(1),W-12,H-10);
+        ctx.fillText(totalFiles+' files | '+totalLoc.toLocaleString()+' LOC | MI:'+avgMI.toFixed(1)+' | Tested:'+testedCount+'/'+totalFiles,W-12,H-10);
         window._metricsAnimFrame=requestAnimationFrame(draw);
-    }
+    }}
     draw();
-    // Mouse hover
-    canvas.addEventListener('mousemove',function(e){
+    // Mouse events — hover + drag
+    canvas.addEventListener('mousemove',function(e){{
         var rect=canvas.getBoundingClientRect();
         var mx=e.clientX-rect.left,my=e.clientY-rect.top;
+        if(dragIdx>=0){{
+            bubbles[dragIdx].x=mx-dragOX;bubbles[dragIdx].y=my-dragOY;
+            bubbles[dragIdx].vx=0;bubbles[dragIdx].vy=0;return;
+        }}
         hoveredIdx=-1;
-        for(var i=bubbles.length-1;i>=0;i--){
+        for(var i=bubbles.length-1;i>=0;i--){{
             var b=bubbles[i];
             var dx=mx-b._drawX,dy=my-b._drawY;
-            if(Math.sqrt(dx*dx+dy*dy)<=b._drawR){hoveredIdx=i;break;}
-        }
-        canvas.style.cursor=hoveredIdx>=0?'pointer':'default';
-    });
-    canvas.addEventListener('mouseleave',function(){hoveredIdx=-1;});
-    // Click to drill down
-    canvas.addEventListener('click',function(e){
+            if(Math.sqrt(dx*dx+dy*dy)<=b._drawR){{hoveredIdx=i;break;}}
+        }}
+        canvas.style.cursor=hoveredIdx>=0?'grab':'default';
+    }});
+    canvas.addEventListener('mousedown',function(e){{
+        if(hoveredIdx>=0){{
+            dragIdx=hoveredIdx;
+            var rect=canvas.getBoundingClientRect();
+            dragOX=e.clientX-rect.left-bubbles[dragIdx].x;
+            dragOY=e.clientY-rect.top-bubbles[dragIdx].y;
+            canvas.style.cursor='grabbing';
+        }}
+    }});
+    canvas.addEventListener('mouseup',function(){{
+        if(dragIdx>=0){{canvas.style.cursor='grab';dragIdx=-1;}}
+    }});
+    canvas.addEventListener('mouseleave',function(){{hoveredIdx=-1;dragIdx=-1;}});
+    canvas.addEventListener('dblclick',function(e){{
         if(hoveredIdx<0)return;
-        var f=bubbles[hoveredIdx].f;
-        drillDownFile(f.path);
-    });
+        drillDownFile(bubbles[hoveredIdx].f.path);
+    }});
 }
 function drillDownFile(path){
     var dd=document.getElementById('metrics-drilldown');
@@ -1965,7 +2064,7 @@ function loadAllMetrics(){
         _metricsFullData=d;
         if(d.error){document.getElementById('metrics-bubble').innerHTML='<p style="color:var(--danger);padding:1rem">'+d.error+'</p>';return;}
         // Bubble chart
-        renderBubbleChart(d.file_metrics);
+        renderBubbleChart(d.file_metrics,d.dependency_graph);
         // File analysis table
         var hm=document.getElementById('metrics-heatmap');
         var rows=d.file_metrics.map(function(f){
