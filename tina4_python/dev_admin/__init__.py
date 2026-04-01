@@ -1781,15 +1781,17 @@ function renderBubbleChart(files,depGraph){
     var minR=14,maxR=Math.min(70,W/10);
     // Composite health colour: complexity + tests + dependencies
     function healthColor(f){
-        var cc=Math.min((f.complexity||0)/maxCC,1);
-        var tested=f.has_tests?1:0;
-        var deps=Math.min((f.dep_count||0)/10,1);
-        var score=cc*0.5+(1-tested)*0.3+deps*0.2;
+        // Absolute thresholds
+        var cc=Math.min((f.avg_complexity||0)/10,1); // 10+ avg complexity = max risk
+        var untested=f.has_tests?0:1;
+        var deps=Math.min((f.dep_count||0)/5,1); // 5+ deps = max risk
+        // Score: 0=healthy(green) 1=risky(red). Deps count negative (more=worse)
+        var score=cc*0.4+untested*0.4+deps*0.2;
         score=Math.max(0,Math.min(1,score));
-        // Vibrant metallic: green(120) → amber(45) → red(0) via HSL
+        // green(120) → amber(40) → red(0)
         var hue=Math.round(120*(1-score));
-        var sat=Math.round(80+score*20); // 80-100% saturation
-        var lit=Math.round(50+10*(1-score)); // 50-60% lightness
+        var sat=Math.round(70+score*30);
+        var lit=Math.round(42+18*(1-score));
         return 'hsl('+hue+','+sat+'%,'+lit+'%)';
     }
     // Build path->index lookup
@@ -1847,13 +1849,15 @@ function renderBubbleChart(files,depGraph){
     var hoveredIdx=-1,dragIdx=-1,dragOX=0,dragOY=0;
     // Physics
     function simulate(){
-        var damping=0.85,springK=0.006,repulse=80,gravity=0.04;
+        var damping=0.6,springK=0.002,repulse=60,gravity=0.012;
         var cx=W/2,cy=H/2;
         // Gravity: pull all bubbles toward center, bigger = stronger pull
         bubbles.forEach(function(b,idx){
             if(idx===dragIdx)return;
             var dx=cx-b.x,dy=cy-b.y;
-            var pull=gravity*(b.r/maxR);
+            // Bigger bubbles get stronger pull to centre
+            var sizeFactor=0.3+(b.r/maxR)*0.7;
+            var pull=gravity*sizeFactor*sizeFactor;
             b.vx+=dx*pull;b.vy+=dy*pull;
         });
         // Spring forces along edges
@@ -1873,8 +1877,8 @@ function renderBubbleChart(files,depGraph){
                 var a=bubbles[i],b=bubbles[j];
                 var dx=b.x-a.x,dy=b.y-a.y;
                 var dist=Math.sqrt(dx*dx+dy*dy)||1;
-                var minDist=a.r+b.r+8;
-                if(dist<minDist){
+                var minDist=a.r+b.r+14;
+                if(dist<minDist*1.2){
                     var force=repulse*(minDist-dist)/minDist;
                     var fx=dx/dist*force,fy=dy/dist*force;
                     if(i!==dragIdx){a.vx-=fx;a.vy-=fy;}
@@ -1886,6 +1890,10 @@ function renderBubbleChart(files,depGraph){
         bubbles.forEach(function(b,idx){
             if(idx===dragIdx)return;
             b.vx*=damping;b.vy*=damping;
+            // Cap velocity — no violent movements
+            var maxV=2;
+            if(b.vx>maxV)b.vx=maxV;if(b.vx<-maxV)b.vx=-maxV;
+            if(b.vy>maxV)b.vy=maxV;if(b.vy<-maxV)b.vy=-maxV;
             b.x+=b.vx;b.y+=b.vy;
             b.x=Math.max(b.r+2,Math.min(W-b.r-2,b.x));
             b.y=Math.max(b.r+25,Math.min(H-b.r-2,b.y));
@@ -1943,17 +1951,24 @@ function renderBubbleChart(files,depGraph){
                     ctx.fillText('CC:'+b.f.complexity+' MI:'+b.f.maintainability,b.x,b.y+fs*2);
                 }
             }
-            // Markers: T (tested) and D (dependencies) — shown separately
-            var mfs=Math.max(9,drawR*0.35);
-            var mpad=mfs*0.8;
-            ctx.font='bold '+mfs+'px sans-serif';ctx.textAlign='center';
-            if(drawR>12&&b.f.has_tests){
-                ctx.fillStyle='#22c55e';
-                ctx.fillText('\u24c9',b.x-(b.f.dep_count>0?mpad:0),b.y-drawR+mfs+2);
+            // Markers: T (tested) and D (dependencies) — inverted badges
+            var mfs=Math.max(9,drawR*0.3);
+            var mrad=mfs*0.7;
+            var mpad=mrad*2.4;
+            var my=b.y-drawR+mrad+3;
+            if(drawR>14&&b.f.has_tests){
+                var mx=b.x-(b.f.dep_count>0?mpad*0.5:0);
+                ctx.beginPath();ctx.arc(mx,my,mrad,0,Math.PI*2);
+                ctx.fillStyle='#16a34a';ctx.fill();
+                ctx.fillStyle='#fff';ctx.font='bold '+mfs+'px sans-serif';ctx.textAlign='center';
+                ctx.fillText('T',mx,my+mfs*0.35);
             }
-            if(drawR>12&&b.f.dep_count>0){
-                ctx.fillStyle='#f97316';
-                ctx.fillText('\u24b9',b.x+(b.f.has_tests?mpad:0),b.y-drawR+mfs+2);
+            if(drawR>14&&b.f.dep_count>0){
+                var mx2=b.x+(b.f.has_tests?mpad*0.5:0);
+                ctx.beginPath();ctx.arc(mx2,my,mrad,0,Math.PI*2);
+                ctx.fillStyle='#ea580c';ctx.fill();
+                ctx.fillStyle='#fff';ctx.font='bold '+mfs+'px sans-serif';ctx.textAlign='center';
+                ctx.fillText('D',mx2,my+mfs*0.35);
             }
             b._drawX=b.x;b._drawY=b.y;b._drawR=drawR;
         });
@@ -1968,35 +1983,55 @@ function renderBubbleChart(files,depGraph){
         window._metricsAnimFrame=requestAnimationFrame(draw);
     }
     draw();
-    // Mouse events — hover + drag
+    // Mouse events — hover + drag bubbles + right-click pan
+    var panning=false,panStartX=0,panStartY=0;
+    canvas.addEventListener('contextmenu',function(e){e.preventDefault();});
     canvas.addEventListener('mousemove',function(e){
         var rect=canvas.getBoundingClientRect();
         var mx=e.clientX-rect.left,my=e.clientY-rect.top;
+        // Right-click panning
+        if(panning){
+            panX+=(mx-panStartX);panY+=(my-panStartY);
+            panStartX=mx;panStartY=my;return;
+        }
+        // Bubble drag
         if(dragIdx>=0){
-            bubbles[dragIdx].x=mx-dragOX;bubbles[dragIdx].y=my-dragOY;
+            var wmx=(mx-panX)/zoom,wmy=(my-panY)/zoom;
+            bubbles[dragIdx].x=wmx-dragOX;bubbles[dragIdx].y=wmy-dragOY;
             bubbles[dragIdx].vx=0;bubbles[dragIdx].vy=0;return;
         }
+        // Hover detection in world coords
+        var wmx2=(mx-panX)/zoom,wmy2=(my-panY)/zoom;
         hoveredIdx=-1;
         for(var i=bubbles.length-1;i>=0;i--){
             var b=bubbles[i];
-            var dx=mx-b._drawX,dy=my-b._drawY;
-            if(Math.sqrt(dx*dx+dy*dy)<=b._drawR){hoveredIdx=i;break;}
+            var dx=wmx2-b.x,dy=wmy2-b.y;
+            if(Math.sqrt(dx*dx+dy*dy)<=b.r){hoveredIdx=i;break;}
         }
-        canvas.style.cursor=hoveredIdx>=0?'grab':'default';
+        canvas.style.cursor=panning?'move':hoveredIdx>=0?'grab':'default';
     });
     canvas.addEventListener('mousedown',function(e){
+        var rect=canvas.getBoundingClientRect();
+        var mx=e.clientX-rect.left,my=e.clientY-rect.top;
+        // Right-click = pan
+        if(e.button===2){
+            panning=true;panStartX=mx;panStartY=my;
+            canvas.style.cursor='move';return;
+        }
         if(hoveredIdx>=0){
             dragIdx=hoveredIdx;
-            var rect=canvas.getBoundingClientRect();
-            dragOX=e.clientX-rect.left-bubbles[dragIdx].x;
-            dragOY=e.clientY-rect.top-bubbles[dragIdx].y;
+            var wmx=(mx-panX)/zoom;
+            var wmy=(my-panY)/zoom;
+            dragOX=wmx-bubbles[dragIdx].x;
+            dragOY=wmy-bubbles[dragIdx].y;
             canvas.style.cursor='grabbing';
         }
     });
     canvas.addEventListener('mouseup',function(){
+        if(panning){panning=false;canvas.style.cursor='default';}
         if(dragIdx>=0){canvas.style.cursor='grab';dragIdx=-1;}
     });
-    canvas.addEventListener('mouseleave',function(){hoveredIdx=-1;dragIdx=-1;});
+    canvas.addEventListener('mouseleave',function(){hoveredIdx=-1;dragIdx=-1;panning=false;});
     canvas.addEventListener('dblclick',function(e){
         if(hoveredIdx<0)return;
         drillDownFile(bubbles[hoveredIdx].f.path);
