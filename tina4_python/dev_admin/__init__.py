@@ -542,7 +542,7 @@ async def _api_table_info(request, response):
 
         db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
-        columns = db.get_table_info(table)
+        columns = db.get_columns(table)
         sample = db.fetch(f"SELECT * FROM {table}", limit=20)
         db.close()
         return response({
@@ -636,7 +636,7 @@ async def _api_seed_table(request, response):
         db = Database(db_url)
 
         # Get table columns to auto-generate data
-        columns = db.get_table_info(table)
+        columns = db.get_columns(table)
         if not columns:
             db.close()
             return response({"error": f"Table '{table}' not found or has no columns"}, 404)
