@@ -191,4 +191,4 @@ tests/          # pytest test files
 8. Import from `tina4_python.core.router` not `tina4_python.router`
 9. Server entry point: `from tina4_python.core import run; run()`
 10. Default port: 7145
-11. ORM auto-pluralizes table names: `Contact` → `contacts`. Always set `table_name` explicitly
+11. ORM defaults table name to lowercase class name (`Contact` → `contact`). Set `ORM_PLURAL_TABLE_NAMES=true` in `.env` to append "s"

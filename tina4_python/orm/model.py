@@ -170,10 +170,18 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def _get_table(cls) -> str:
-        """Get table name — defaults to lowercase class name + 's'."""
+        """Get table name — defaults to lowercase class name.
+
+        Set ORM_PLURAL_TABLE_NAMES=true in .env to restore the old
+        behaviour that appended 's' (e.g. Contact → contacts).
+        """
         if cls.table_name:
             return cls.table_name
-        return cls.__name__.lower() + "s"
+        import os
+        name = cls.__name__.lower()
+        if os.environ.get("ORM_PLURAL_TABLE_NAMES", "").lower() in ("true", "1", "yes"):
+            name += "s"
+        return name
 
     @classmethod
     def _get_db(cls):
