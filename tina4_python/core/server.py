@@ -757,7 +757,7 @@ async def app(scope: dict, receive, send):
             # Serve OpenAPI spec JSON from all registered routes
             from tina4_python.swagger import Swagger as _SwaggerGen
             _swagger = _SwaggerGen()
-            _spec = _swagger.generate(Router.all())
+            _spec = _swagger.generate(Router.get_routes())
             response.json(_spec)
             _cors.apply(request, response)
             headers = response.build_headers("")
@@ -929,7 +929,7 @@ async def app(scope: dict, receive, send):
                 matched_pattern = route["path"] if route else "-"
                 toolbar = render_dev_toolbar(
                     request.method, request.path, matched_pattern,
-                    request_id, len(Router.all()),
+                    request_id, len(Router.get_routes()),
                 ).encode()
                 content = response.content
                 # Inject before </body> if present, else append
@@ -1216,7 +1216,7 @@ def run(host: str | None = None, port: int | None = None):
 
     # Auto-discover routes
     _auto_discover("src")
-    route_count = len(Router.all())
+    route_count = len(Router.get_routes())
     Log.info(f"Discovered {route_count} routes")
 
     # Resolve host/port (CLI arg > ENV > default)

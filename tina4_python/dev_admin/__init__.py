@@ -309,7 +309,7 @@ async def _api_routes(request, response):
     try:
         from tina4_python.core.router import Router
         internal_prefixes = ("/__dev", "/health", "/swagger")
-        routes = Router.all()
+        routes = Router.get_routes()
         result = []
         for r in routes:
             path = r.get("path", "")
@@ -926,7 +926,7 @@ async def _api_tool(request, response):
         "test": [sys.executable, "-m", "pytest", "tests/", "-q", "--tb=short"],
         "routes": [sys.executable, "-c",
                    "from tina4_python.core.router import Router; "
-                   "[print(f\"{r['method']:7} {r['path']}\") for r in Router.all()]"],
+                   "[print(f\"{r['method']:7} {r['path']}\") for r in Router.get_routes()]"],
         "migrate": [sys.executable, "-c",
                     "from tina4_python.cli import _migrate; _migrate([])"],
         "seed": [sys.executable, "-c",

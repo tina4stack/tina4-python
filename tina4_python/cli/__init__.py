@@ -363,7 +363,7 @@ def _routes(args):
         importlib.import_module("app")
 
     from tina4_python.core.router import Router
-    routes = Router.all()
+    routes = Router.get_routes()
     if not routes:
         print("No routes registered.")
         return

@@ -231,8 +231,13 @@ class Router:
         return None, {}
 
     @staticmethod
-    def all() -> list[dict]:
-        """Return all registered routes (for CLI listing and Swagger)."""
+    def get_routes() -> list[dict]:
+        """Return all registered routes."""
+        return _routes
+
+    @staticmethod
+    def list_routes() -> list[dict]:
+        """Return all registered routes (debug-friendly)."""
         return _routes
 
     @staticmethod

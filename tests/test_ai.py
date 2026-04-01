@@ -1,157 +1,143 @@
-# Tests for tina4_python.ai — AI tool detection and context scaffolding
+# Tests for tina4_python.ai — AI tool installer (menu-based)
 import pytest
 from pathlib import Path
 from tina4_python.ai import (
-    detect_ai, detect_ai_names, generate_context,
-    install_context, install_all, status_report,
+    AI_TOOLS,
+    is_installed,
+    install_selected,
+    install_all,
+    generate_context,
 )
 
 
-class TestDetectAI:
-    def test_detect_returns_all_tools(self, tmp_path):
-        tools = detect_ai(str(tmp_path))
-        names = [t["name"] for t in tools]
+class TestAITools:
+    def test_tools_is_list(self):
+        assert isinstance(AI_TOOLS, list)
+        assert len(AI_TOOLS) > 0
+
+    def test_tools_have_seven_entries(self):
+        assert len(AI_TOOLS) == 7
+
+    def test_tools_have_required_keys(self):
+        for tool in AI_TOOLS:
+            assert "name" in tool
+            assert "description" in tool
+            assert "context_file" in tool
+
+    def test_tools_include_expected_names(self):
+        names = [t["name"] for t in AI_TOOLS]
         assert "claude-code" in names
         assert "cursor" in names
         assert "copilot" in names
         assert "windsurf" in names
-
-    def test_no_tools_detected_empty_dir(self, tmp_path):
-        names = detect_ai_names(str(tmp_path))
-        assert names == []
-
-    def test_detect_claude(self, tmp_path):
-        (tmp_path / ".claude").mkdir()
-        names = detect_ai_names(str(tmp_path))
-        assert "claude-code" in names
-
-    def test_detect_claude_md(self, tmp_path):
-        (tmp_path / "CLAUDE.md").write_text("# Context")
-        names = detect_ai_names(str(tmp_path))
-        assert "claude-code" in names
-
-    def test_detect_cursor(self, tmp_path):
-        (tmp_path / ".cursor").mkdir()
-        names = detect_ai_names(str(tmp_path))
-        assert "cursor" in names
-
-    def test_detect_cursorules(self, tmp_path):
-        (tmp_path / ".cursorules").write_text("rules")
-        names = detect_ai_names(str(tmp_path))
-        assert "cursor" in names
-
-    def test_detect_copilot(self, tmp_path):
-        (tmp_path / ".github").mkdir()
-        (tmp_path / ".github" / "copilot-instructions.md").write_text("instructions")
-        names = detect_ai_names(str(tmp_path))
-        assert "copilot" in names
-
-    def test_detect_windsurf(self, tmp_path):
-        (tmp_path / ".windsurfrules").write_text("rules")
-        names = detect_ai_names(str(tmp_path))
-        assert "windsurf" in names
-
-    def test_detect_cline(self, tmp_path):
-        (tmp_path / ".clinerules").write_text("rules")
-        names = detect_ai_names(str(tmp_path))
+        assert "aider" in names
         assert "cline" in names
-
-    def test_detect_codex(self, tmp_path):
-        (tmp_path / "AGENTS.md").write_text("# Agents")
-        names = detect_ai_names(str(tmp_path))
         assert "codex" in names
 
-    def test_detect_aider(self, tmp_path):
-        (tmp_path / "CONVENTIONS.md").write_text("# Conventions")
-        names = detect_ai_names(str(tmp_path))
-        assert "aider" in names
 
-    def test_detect_multiple(self, tmp_path):
-        (tmp_path / ".claude").mkdir()
-        (tmp_path / ".cursor").mkdir()
-        names = detect_ai_names(str(tmp_path))
-        assert "claude-code" in names
-        assert "cursor" in names
+class TestIsInstalled:
+    def test_false_when_context_file_absent(self, tmp_path):
+        tool = {"name": "cursor", "context_file": ".cursorules"}
+        assert not is_installed(str(tmp_path), tool)
 
+    def test_true_when_context_file_present(self, tmp_path):
+        tool = {"name": "claude-code", "context_file": "CLAUDE.md"}
+        (tmp_path / "CLAUDE.md").write_text("context")
+        assert is_installed(str(tmp_path), tool)
 
-class TestGenerateContext:
-    def test_contains_framework_info(self):
-        ctx = generate_context()
-        assert "Tina4 Python" in ctx
-        assert "tina4.com" in ctx
-        assert "src/routes/" in ctx
+    def test_handles_nested_path(self, tmp_path):
+        tool = {"name": "copilot", "context_file": ".github/copilot-instructions.md"}
+        (tmp_path / ".github").mkdir()
+        (tmp_path / ".github" / "copilot-instructions.md").write_text("ctx")
+        assert is_installed(str(tmp_path), tool)
 
-    def test_contains_skills_table(self):
-        ctx = generate_context(include_skills=True)
-        assert "/tina4-route" in ctx
-        assert "/tina4-crud" in ctx
-        assert "/tina4-graphql" in ctx
-
-    def test_no_skills_when_disabled(self):
-        ctx = generate_context(include_skills=False)
-        assert "/tina4-route" not in ctx
-
-    def test_contains_feature_table(self):
-        ctx = generate_context()
-        assert "GraphQL" in ctx
-        assert "WebSocket" in ctx
-        assert "SOAP/WSDL" in ctx
-
-    def test_contains_conventions(self):
-        ctx = generate_context()
-        assert "response()" in ctx
-        assert "@noauth" in ctx
-        assert "base.twig" in ctx
+    def test_false_for_copilot_without_file(self, tmp_path):
+        tool = {"name": "copilot", "context_file": ".github/copilot-instructions.md"}
+        (tmp_path / ".github").mkdir()  # dir exists but not the file
+        assert not is_installed(str(tmp_path), tool)
 
 
-class TestInstallContext:
-    def test_install_for_detected_claude(self, tmp_path):
-        (tmp_path / ".claude").mkdir()
-        created = install_context(str(tmp_path))
-        assert any("CLAUDE.md" in f for f in created)
-        assert (tmp_path / "CLAUDE.md").exists()
-
-    def test_install_for_detected_cursor(self, tmp_path):
-        (tmp_path / ".cursor").mkdir()
-        created = install_context(str(tmp_path))
+class TestInstallSelected:
+    def test_install_single_tool_by_number(self, tmp_path):
+        created = install_selected(str(tmp_path), "2")  # cursor
         assert any(".cursorules" in f for f in created)
+        assert (tmp_path / ".cursorules").exists()
 
-    def test_install_specific_tool(self, tmp_path):
-        created = install_context(str(tmp_path), tools=["windsurf"])
-        assert any(".windsurfrules" in f for f in created)
-        assert (tmp_path / ".windsurfrules").exists()
+    def test_install_multiple_tools(self, tmp_path):
+        created = install_selected(str(tmp_path), "1,2")
+        assert (tmp_path / "CLAUDE.md").exists()
+        assert (tmp_path / ".cursorules").exists()
 
-    def test_install_does_not_overwrite(self, tmp_path):
-        (tmp_path / ".windsurfrules").write_text("custom rules")
-        install_context(str(tmp_path), tools=["windsurf"])
-        assert (tmp_path / ".windsurfrules").read_text() == "custom rules"
-
-    def test_install_force_overwrites(self, tmp_path):
-        (tmp_path / ".windsurfrules").write_text("custom rules")
-        install_context(str(tmp_path), tools=["windsurf"], force=True)
-        content = (tmp_path / ".windsurfrules").read_text()
-        assert "Tina4" in content
-
-    def test_install_all(self, tmp_path):
-        created = install_all(str(tmp_path))
-        assert len(created) >= 7  # At least one file per tool
+    def test_install_all_selection(self, tmp_path):
+        install_selected(str(tmp_path), "all")
         assert (tmp_path / "CLAUDE.md").exists()
         assert (tmp_path / ".cursorules").exists()
         assert (tmp_path / ".windsurfrules").exists()
+        assert (tmp_path / "CONVENTIONS.md").exists()
+        assert (tmp_path / ".clinerules").exists()
+        assert (tmp_path / "AGENTS.md").exists()
+
+    def test_always_overwrites(self, tmp_path):
+        (tmp_path / "CLAUDE.md").write_text("old content")
+        install_selected(str(tmp_path), "1")
+        content = (tmp_path / "CLAUDE.md").read_text()
+        assert content != "old content"
+
+    def test_creates_parent_directories(self, tmp_path):
+        install_selected(str(tmp_path), "3")  # copilot
         assert (tmp_path / ".github" / "copilot-instructions.md").exists()
 
+    def test_returns_list(self, tmp_path):
+        result = install_selected(str(tmp_path), "4")  # windsurf
+        assert isinstance(result, list)
+        assert len(result) > 0
 
-class TestStatusReport:
-    def test_report_no_tools(self, tmp_path):
-        report = status_report(str(tmp_path))
-        assert "No AI coding tools detected" in report
+    def test_ignores_invalid_numbers(self, tmp_path):
+        result = install_selected(str(tmp_path), "99")
+        assert isinstance(result, list)
 
-    def test_report_with_tools(self, tmp_path):
-        (tmp_path / ".claude").mkdir()
-        report = status_report(str(tmp_path))
-        assert "Claude Code" in report
-        assert "✓" in report
+    def test_handles_empty_selection(self, tmp_path):
+        result = install_selected(str(tmp_path), "")
+        assert isinstance(result, list)
 
-    def test_report_shows_missing(self, tmp_path):
-        report = status_report(str(tmp_path))
-        assert "tina4python ai --all" in report
+
+class TestInstallAll:
+    def test_installs_all_context_files(self, tmp_path):
+        install_all(str(tmp_path))
+        assert (tmp_path / "CLAUDE.md").exists()
+        assert (tmp_path / ".cursorules").exists()
+        assert (tmp_path / ".windsurfrules").exists()
+        assert (tmp_path / "CONVENTIONS.md").exists()
+        assert (tmp_path / ".clinerules").exists()
+        assert (tmp_path / "AGENTS.md").exists()
+        assert (tmp_path / ".github" / "copilot-instructions.md").exists()
+
+    def test_returns_list(self, tmp_path):
+        result = install_all(str(tmp_path))
+        assert isinstance(result, list)
+        assert len(result) >= len(AI_TOOLS)
+
+    def test_creates_subdirectories(self, tmp_path):
+        install_all(str(tmp_path))
+        assert (tmp_path / ".claude").exists()
+        assert (tmp_path / ".github").exists()
+
+
+class TestGenerateContext:
+    def test_returns_string(self):
+        ctx = generate_context()
+        assert isinstance(ctx, str)
+        assert len(ctx) > 0
+
+    def test_contains_framework_info(self):
+        ctx = generate_context()
+        assert "Tina4" in ctx
+        assert "tina4.com" in ctx
+
+    def test_contains_skills_table(self):
+        ctx = generate_context()
+        assert "Skill" in ctx
+
+    def test_contains_feature_info(self):
+        ctx = generate_context()
+        assert "GraphQL" in ctx or "WebSocket" in ctx or "ORM" in ctx

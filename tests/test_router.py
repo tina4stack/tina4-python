@@ -53,7 +53,7 @@ class TestRouterRegistration:
     def test_register_get(self):
         @get("/api/test")
         async def handler(req, res): pass
-        routes = Router.all()
+        routes = Router.get_routes()
         assert any(r["path"] == "/api/test" and r["method"] == "GET" for r in routes)
 
     def test_register_post(self):
@@ -108,7 +108,7 @@ class TestRouterRegistration:
         async def h1(req, res): pass
         @post("/two")
         async def h2(req, res): pass
-        routes = Router.all()
+        routes = Router.get_routes()
         assert len(routes) == 2
         paths = [r["path"] for r in routes]
         assert "/one" in paths
@@ -117,9 +117,9 @@ class TestRouterRegistration:
     def test_clear_removes_all(self):
         @get("/will-be-cleared")
         async def handler(req, res): pass
-        assert len(Router.all()) > 0
+        assert len(Router.get_routes()) > 0
         Router.clear()
-        assert len(Router.all()) == 0
+        assert len(Router.get_routes()) == 0
 
 
 class TestAnyMethod:

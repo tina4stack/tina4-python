@@ -113,11 +113,11 @@ class TestPasswordHashing:
 
     def test_check_password_correct(self):
         hashed = Auth.hash_password("mypassword")
-        assert Auth.check_password(hashed, "mypassword") is True
+        assert Auth.check_password("mypassword", hashed) is True
 
     def test_check_password_wrong(self):
         hashed = Auth.hash_password("mypassword")
-        assert Auth.check_password(hashed, "wrongpassword") is False
+        assert Auth.check_password("wrongpassword", hashed) is False
 
     def test_different_hashes_same_password(self):
         h1 = Auth.hash_password("same")
@@ -125,7 +125,7 @@ class TestPasswordHashing:
         assert h1 != h2  # Different salts
 
     def test_check_invalid_hash(self):
-        assert Auth.check_password("not_a_hash", "password") is False
+        assert Auth.check_password("password", "not_a_hash") is False
 
 
 # ── API Key Tests ──────────────────────────────────────────────
@@ -274,24 +274,24 @@ class TestJWTEdgeCases:
 class TestPasswordEdgeCases:
     def test_empty_password(self):
         hashed = Auth.hash_password("")
-        assert Auth.check_password(hashed, "") is True
-        assert Auth.check_password(hashed, "x") is False
+        assert Auth.check_password("", hashed) is True
+        assert Auth.check_password("x", hashed) is False
 
     def test_unicode_password(self):
         hashed = Auth.hash_password("p@$$w0rd-émoji-🔑")
-        assert Auth.check_password(hashed, "p@$$w0rd-émoji-🔑") is True
-        assert Auth.check_password(hashed, "p@$$w0rd-émoji") is False
+        assert Auth.check_password("p@$$w0rd-émoji-🔑", hashed) is True
+        assert Auth.check_password("p@$$w0rd-émoji", hashed) is False
 
     def test_long_password(self):
         long_pw = "a" * 10000
         hashed = Auth.hash_password(long_pw)
-        assert Auth.check_password(hashed, long_pw) is True
+        assert Auth.check_password(long_pw, hashed) is True
 
     def test_check_password_empty_hash(self):
-        assert Auth.check_password("", "password") is False
+        assert Auth.check_password("password", "") is False
 
     def test_check_password_wrong_prefix(self):
-        assert Auth.check_password("bcrypt$100$salt$hash", "password") is False
+        assert Auth.check_password("password", "bcrypt$100$salt$hash") is False
 
 
 # ── Request Auth Edge Cases ───────────────────────────────────

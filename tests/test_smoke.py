@@ -673,7 +673,7 @@ class TestRouterAdvanced:
         async def listed(req, res):
             pass
 
-        routes = Router.all()
+        routes = Router.get_routes()
         paths = [r["path"] for r in routes]
         assert "/smoke/listed" in paths
 

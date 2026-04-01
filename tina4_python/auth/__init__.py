@@ -14,7 +14,7 @@ No PyJWT, no cryptography package.
     payload = auth.valid_token(token)
 
     hashed = Auth.hash_password("secret123")
-    Auth.check_password(hashed, "secret123")  # True
+    Auth.check_password("secret123", hashed)  # True
 """
 import os
 import hmac
@@ -152,6 +152,25 @@ class Auth:
         auth = cls(secret=secret, expires_in=expires_in)
         return auth.refresh_token(token)
 
+    @classmethod
+    def authenticate_request_static(cls, headers: dict) -> dict | None:
+        """Extract and validate auth from request headers without instantiating Auth.
+
+        Reads SECRET from env. Checks: Bearer JWT, Bearer API key, Basic auth.
+        Returns payload dict on success, None on failure.
+        """
+        secret = os.environ.get("SECRET", "tina4-default-secret")
+        auth = cls(secret=secret)
+        return auth.authenticate_request(headers)
+
+    @staticmethod
+    def validate_api_key_static(provided: str, expected: str = None) -> bool:
+        """Validate an API key without instantiating Auth.
+
+        Alias for validate_api_key (already a staticmethod).
+        """
+        return Auth.validate_api_key(provided, expected)
+
     # ── Password Hashing ──────────────────────────────────────────
 
     @staticmethod
@@ -164,7 +183,7 @@ class Auth:
         return f"pbkdf2_sha256${iterations}${salt}${dk.hex()}"
 
     @staticmethod
-    def check_password(hashed: str, password: str) -> bool:
+    def check_password(password: str, hashed: str) -> bool:
         """Verify a password against its PBKDF2 hash."""
         try:
             parts = hashed.split("$")
@@ -183,9 +202,18 @@ class Auth:
     # ── API Key Auth ──────────────────────────────────────────────
 
     @staticmethod
-    def validate_api_key(provided: str) -> bool:
-        """Check a Bearer token against the TINA4_API_KEY env var (falls back to API_KEY)."""
-        expected = os.environ.get("TINA4_API_KEY", os.environ.get("API_KEY", ""))
+    def validate_api_key(provided: str, expected: str = None) -> bool:
+        """Check an API key against an expected value.
+
+        Args:
+            provided: The API key provided in the request.
+            expected: The expected API key. If None, reads from
+                      TINA4_API_KEY env var (falls back to API_KEY).
+
+        Returns: True if the provided key matches.
+        """
+        if expected is None:
+            expected = os.environ.get("TINA4_API_KEY", os.environ.get("API_KEY", ""))
         if not expected:
             return False
         return hmac.compare_digest(provided, expected)
@@ -255,4 +283,17 @@ def refresh_token(token: str, expires_in: int = 60) -> str | None:
     return Auth.refresh_token_static(token, expires_in=expires_in)
 
 
-__all__ = ["Auth", "get_token", "valid_token", "get_payload", "refresh_token"]
+def authenticate_request(headers: dict) -> dict | None:
+    """Validate auth from request headers — reads SECRET from env."""
+    return Auth.authenticate_request_static(headers)
+
+
+def validate_api_key(provided: str, expected: str = None) -> bool:
+    """Validate an API key. Shortcut for Auth.validate_api_key()."""
+    return Auth.validate_api_key(provided, expected)
+
+
+__all__ = [
+    "Auth", "get_token", "valid_token", "get_payload", "refresh_token",
+    "authenticate_request", "validate_api_key",
+]

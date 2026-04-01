@@ -318,7 +318,7 @@ class ORM(metaclass=ORMMeta):
     # ── Finders ─────────────────────────────────────────────────
 
     @classmethod
-    def find(cls, pk_value, include: list[str] = None):
+    def find_by_id(cls, pk_value, include: list[str] = None):
         """Find a single record by primary key. Returns instance or None.
 
         Args:
@@ -343,9 +343,19 @@ class ORM(metaclass=ORMMeta):
         return instance
 
     @classmethod
+    def find(cls, pk_value, include: list[str] = None):
+        """Alias for find_by_id()."""
+        return cls.find_by_id(pk_value, include)
+
+    @classmethod
+    def load(cls, pk_value, include: list[str] = None):
+        """Alias for find_by_id()."""
+        return cls.find_by_id(pk_value, include)
+
+    @classmethod
     def find_or_fail(cls, pk_value):
         """Find by primary key or raise ValueError."""
-        result = cls.find(pk_value)
+        result = cls.find_by_id(pk_value)
         if result is None:
             raise ValueError(f"{cls.__name__} with {cls._get_pk()}={pk_value} not found")
         return result
