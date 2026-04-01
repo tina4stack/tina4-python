@@ -3,7 +3,7 @@
 Zero-dependency ASGI application + built-in dev server.
 
     from tina4_python.core import run
-    run()  # Starts on localhost:7145
+    run()  # Starts on localhost:7146
 """
 import os
 import sys
@@ -201,7 +201,7 @@ def _gallery_btn(name: str, try_url: str) -> str:
 
 def _render_landing_page() -> str:
     """Render the built-in Tina4 welcome page shown when no / route exists."""
-    port = os.environ.get("PORT", "7145")
+    port = os.environ.get("PORT", "7146")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -274,7 +274,7 @@ h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
 <span style="color:#c084fc">async def</span> <span style="color:#38bdf8">hello</span>(request, response):
     <span style="color:#c084fc">return</span> response({{"message": <span style="color:#4ade80">"Hello World!"</span>}})
 
-run()  <span style="color:#64748b"># starts on port 7145</span></code></pre>
+run()  <span style="color:#64748b"># starts on port 7146</span></code></pre>
     </div>
 </div>
 <div class="gallery">
@@ -1184,7 +1184,7 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
         (host, port) tuple with resolved values.
     """
     default_host = "0.0.0.0"
-    default_port = 7145
+    default_port = 7146
 
     # Host: CLI flag > HOST env > default
     if cli_host is not None:
@@ -1238,7 +1238,7 @@ def run(host: str | None = None, port: int | None = None):
 
     Args:
         host: Bind address. Falls back to HOST env var, then 0.0.0.0.
-        port: Bind port. Falls back to PORT env var, then 7145.
+        port: Bind port. Falls back to PORT env var, then 7146.
     """
     import time
     global _start_time
