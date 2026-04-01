@@ -74,10 +74,9 @@ def install_selected(root: str, selection: str) -> list[str]:
             except ValueError:
                 pass
 
-    context = generate_context()
-
     for idx in indices:
         tool = AI_TOOLS[idx]
+        context = generate_context(tool["name"])
         files = _install_for_tool(root_path, tool, context)
         created.extend(files)
 
@@ -173,139 +172,289 @@ def _install_claude_skills(root: Path) -> list[str]:
     return created
 
 
-def generate_context() -> str:
-    """Generate the universal Tina4 context document for any AI assistant."""
-    return f"""# Tina4 Python — AI Context
+def generate_context(tool_name: str = "claude-code") -> str:
+    """Generate tool-specific Tina4 context. Each tool gets content suited to its format."""
+    from tina4_python import __version__
+    v = __version__
 
-This project uses **Tina4 Python**, a lightweight, batteries-included web framework
-with zero third-party dependencies for core features.
+    # Shared building blocks
+    _route_example = '''from tina4_python.core.router import get, post, noauth, secured
 
-**Documentation:** https://tina4.com
+@get("/api/users")
+async def list_users(request, response):
+    return response({{"users": []}})
 
-## Quick Start
+@post("/api/users")
+@noauth()
+async def create_user(request, response):
+    return response({{"created": request.body["name"]}}, 201)'''
 
-```bash
-tina4python init .          # Scaffold project
-tina4python serve           # Start dev server on port 7145
-tina4python migrate         # Run database migrations
-tina4python test            # Run test suite
-tina4python routes          # List all registered routes
+    _orm_example = '''from tina4_python.orm import ORM, IntegerField, StringField
+
+class User(ORM):
+    table_name = "users"
+    id = IntegerField(primary_key=True, auto_increment=True)
+    name = StringField(required=True)
+    email = StringField()'''
+
+    _conventions = """1. Routes return response() — always response(data) not response.json()
+2. GET routes are public, POST/PUT/PATCH/DELETE require auth by default
+3. Use @noauth() to make write routes public, @secured() to protect GET routes
+4. Decorator order: @noauth/@secured then @description/@tags then @get/@post (route innermost)
+5. Every template extends base.twig
+6. All schema changes via migrations — never create tables in route code
+7. Use built-in features — never install packages for things Tina4 already provides"""
+
+    _features_compact = (
+        "Router, ORM, Database (SQLite/PostgreSQL/MySQL/MSSQL/Firebird), "
+        "Frond templates (Twig-compatible), JWT auth, Sessions (File/Redis/Valkey/MongoDB/DB), "
+        "GraphQL + GraphiQL, WebSocket + Redis backplane, WSDL/SOAP, Queue (File/RabbitMQ/Kafka/MongoDB), "
+        "HTTP client, Messenger (SMTP/IMAP), FakeData/Seeder, Migrations, SCSS compiler, "
+        "Swagger/OpenAPI, i18n, Events, Container/DI, HtmlElement, Inline testing, "
+        "Error overlay, Dev dashboard, Rate limiter, Response cache, Logging, MCP server"
+    )
+
+    _project_structure = """src/routes/    — Route handlers (auto-discovered)
+src/orm/       — ORM models
+src/templates/ — Twig templates
+src/app/       — Service classes
+src/scss/      — SCSS (auto-compiled)
+src/public/    — Static assets
+src/seeds/     — Database seeders
+migrations/    — SQL migration files
+tests/         — pytest tests"""
+
+    # ── Cursor: compact key patterns ──
+    if tool_name == "cursor":
+        return f"""# tina4-python — Cursor Rules
+
+Tina4 Python v{v}. 54 built-in features, zero dependencies. Python 3.12+.
+
+## Key Patterns
+
+```python
+{_route_example}
 ```
+
+```python
+{_orm_example}
+```
+
+## Critical Rules
+
+{_conventions}
+
+## Built-in Features
+
+{_features_compact}
+
+## Docs
+
+https://tina4.com
+"""
+
+    # ── Copilot: short instructions ──
+    if tool_name == "copilot":
+        return f"""# tina4-python Copilot Instructions
+
+Tina4 Python v{v}. 54 features, zero dependencies.
+
+## Route Pattern
+
+```python
+{_route_example}
+```
+
+## Critical Rules
+
+{_conventions}
+
+## Built-in (use these, don't install alternatives)
+
+{_features_compact}
+"""
+
+    # ── Windsurf: same format as Cursor ──
+    if tool_name == "windsurf":
+        return f"""# tina4-python — Windsurf Rules
+
+Tina4 Python v{v}. 54 built-in features, zero dependencies. Python 3.12+.
+
+## Key Patterns
+
+```python
+{_route_example}
+```
+
+```python
+{_orm_example}
+```
+
+## Conventions
+
+{_conventions}
+
+## Built-in Features
+
+{_features_compact}
 
 ## Project Structure
 
 ```
-src/routes/       — Route handlers (auto-discovered, one per resource)
-src/orm/          — ORM models (one per file, filename = class name)
-src/templates/    — Twig/Jinja2 templates (extends base.twig)
-src/app/          — Shared helpers and service classes
-src/scss/         — SCSS files (auto-compiled to public/css/)
-src/public/       — Static assets served at /
-src/locales/      — Translation JSON files
-src/seeds/        — Database seeder scripts
-migrations/       — SQL migration files (sequential numbered)
-tests/            — pytest test files
+{_project_structure}
 ```
 
-## Built-in Features (No External Packages Needed)
+## Docs
 
-| Feature | Module | Import |
-|---------|--------|--------|
-| Routing | router | `from tina4_python.core.router import get, post, put, delete` |
-| ORM | orm | `from tina4_python.orm import ORM, IntegerField, StringField` |
-| Database | database | `from tina4_python.database import Database` |
-| Templates | template | `response.render("page.twig", data)` |
-| JWT Auth | auth | `from tina4_python.auth import Auth, hash_password, check_password` |
-| REST API Client | api | `from tina4_python.api import Api` |
-| GraphQL | graphql | `from tina4_python.graphql import GraphQL, Schema` |
-| WebSocket | websocket | `from tina4_python.websocket import WebSocketServer` |
-| SOAP/WSDL | wsdl | `from tina4_python.wsdl import WSDL, wsdl_operation` |
-| Email (SMTP+IMAP) | messenger | `from tina4_python.messenger import Messenger` |
-| Background Queue | queue | `from tina4_python.queue import Queue` |
-| SCSS Compilation | scss | Auto-compiled from src/scss/ |
-| Migrations | migration | `tina4python migrate` CLI command |
-| Seeder | seeder | `from tina4_python.seeder import FakeData, seed_table` |
-| i18n | localization | `from tina4_python.localization import Localization` |
-| Swagger/OpenAPI | swagger | Auto-generated at /swagger |
-| Sessions | session | `request.session.get(key)` / `.set(key, value)` |
-| Middleware | middleware | `@middleware(MyMiddleware)` decorator |
-| HTML Builder | html_element | `from tina4_python.html_element import HTMLElement` |
-| Form Tokens | template | `{{{{ form_token() }}}}` in Twig |
+https://tina4.com
+"""
 
-## Key Conventions
+    # ── Aider (CONVENTIONS.md): concise conventions ──
+    if tool_name == "aider":
+        return f"""# Tina4 Python — Conventions
 
-1. **Routes return `response()`** — always use `response(data)` not `response.json()`
-2. **GET routes are public**, POST/PUT/PATCH/DELETE require auth by default
-3. **Use `@noauth()`** to make write routes public, `@secured()` to protect GET routes
-4. **Decorator order**: `@noauth/@secured` → `@description/@tags` → `@get/@post` (route decorator innermost)
-5. **Every template extends `base.twig`** — no standalone HTML pages
-6. **No inline styles** — use SCSS in `src/scss/` with CSS variables
-7. **No hardcoded colors** — use `var(--primary)`, `var(--text)`, etc.
-8. **All schema changes via migrations** — never create tables in route code
-9. **Service pattern** — complex logic goes in `src/app/` service classes, routes stay thin
-10. **Use built-in features** — never install packages for things Tina4 already provides
+v{v} — 54 built-in features, zero dependencies.
 
-## AI Workflow — Available Skills
+## Rules
 
-When using an AI coding assistant with Tina4, these skills are available:
+{_conventions}
 
-| Skill | Description |
-|-------|-------------|
-| `/tina4-route` | Create a new route with proper decorators and auth |
-| `/tina4-orm` | Create an ORM model with migration |
-| `/tina4-crud` | Generate complete CRUD (migration, ORM, routes, template, tests) |
-| `/tina4-auth` | Set up JWT authentication with login/register |
-| `/tina4-api` | Create an external API integration |
-| `/tina4-queue` | Set up background job processing |
-| `/tina4-template` | Create a server-rendered template page |
-| `/tina4-graphql` | Set up a GraphQL endpoint |
-| `/tina4-websocket` | Set up WebSocket communication |
-| `/tina4-wsdl` | Create a SOAP/WSDL service |
-| `/tina4-messenger` | Set up email send/receive |
-| `/tina4-test` | Write tests for a feature |
-| `/tina4-migration` | Create a database migration |
-| `/tina4-seed` | Generate fake data for development |
-| `/tina4-i18n` | Set up internationalization |
-| `/tina4-scss` | Set up SCSS stylesheets |
-| `/tina4-frontend` | Set up a frontend framework |
+## Route Pattern
 
-## Common Patterns
-
-### Route
 ```python
-from tina4_python.core.router import get, post, noauth
-from tina4_python.swagger import description, tags
-
-@noauth()
-@description("Create a widget")
-@tags(["widgets"])
-@post("/api/widgets")
-async def create_widget(request, response):
-    data = request.body
-    return response({{"created": True}}, 201)
+{_route_example}
 ```
 
-### ORM Model
+## ORM Pattern
+
 ```python
-from tina4_python.orm import ORM, IntegerField, StringField
-
-class Widget(ORM):
-    id = IntegerField(primary_key=True, auto_increment=True)
-    name = StringField()
+{_orm_example}
 ```
 
-### Template
-```twig
-{{% extends "base.twig" %}}
-{{% block content %}}
-<div class="container">
-    <h1>{{{{ title }}}}</h1>
-    {{% for item in items %}}
-        <p>{{{{ item.name }}}}</p>
-    {{% endfor %}}
-</div>
-{{% endblock %}}
+## Structure
+
 ```
+{_project_structure}
+```
+
+## Built-in Features
+
+{_features_compact}
+"""
+
+    # ── Cline: same as Cursor ──
+    if tool_name == "cline":
+        return f"""# tina4-python — Cline Rules
+
+Tina4 Python v{v}. 54 built-in features, zero dependencies. Python 3.12+.
+
+## Key Patterns
+
+```python
+{_route_example}
+```
+
+```python
+{_orm_example}
+```
+
+## Conventions
+
+{_conventions}
+
+## Built-in Features
+
+{_features_compact}
+"""
+
+    # ── Codex (AGENTS.md): task-oriented ──
+    if tool_name == "codex":
+        return f"""# Tina4 Python — Agent Instructions
+
+v{v}. 54 built-in features, zero dependencies. Python 3.12+.
+
+## Framework
+
+This project uses Tina4 Python. All features are built in — do not install external packages for routing, ORM, auth, templates, GraphQL, WebSocket, email, queues, or any other feature listed below.
+
+## Conventions
+
+{_conventions}
+
+## Route Pattern
+
+```python
+{_route_example}
+```
+
+## ORM Pattern
+
+```python
+{_orm_example}
+```
+
+## Available Features
+
+{_features_compact}
+
+## Project Structure
+
+```
+{_project_structure}
+```
+
+## CLI
+
+```bash
+tina4python serve       # Dev server on port 7145
+tina4python migrate     # Run migrations
+tina4python test        # Run tests
+tina4python routes      # List routes
+```
+"""
+
+    # ── Claude Code (CLAUDE.md): full developer guide — defer to existing CLAUDE.md ──
+    # For claude-code, read the existing CLAUDE.md from the framework repo
+    # as it's the most detailed and maintained file
+    if tool_name == "claude-code":
+        framework_claude = Path(__file__).parent.parent.parent / "CLAUDE.md"
+        if framework_claude.exists():
+            return framework_claude.read_text(encoding="utf-8")
+
+    # Fallback: universal context
+    return f"""# Tina4 Python — AI Context
+
+Tina4 Python v{v}. 54 built-in features, zero dependencies.
+
+## Conventions
+
+{_conventions}
+
+## Route Pattern
+
+```python
+{_route_example}
+```
+
+## ORM Pattern
+
+```python
+{_orm_example}
+```
+
+## Built-in Features
+
+{_features_compact}
+
+## Project Structure
+
+```
+{_project_structure}
+```
+
+## Docs
+
+https://tina4.com
 """
 
 

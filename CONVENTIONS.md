@@ -1,0 +1,58 @@
+# Tina4 Python — Conventions
+
+v3.10.40 — 54 built-in features, zero dependencies.
+
+## Rules
+
+1. Routes return response() — always response(data) not response.json()
+2. GET routes are public, POST/PUT/PATCH/DELETE require auth by default
+3. Use @noauth() to make write routes public, @secured() to protect GET routes
+4. Decorator order: @noauth/@secured then @description/@tags then @get/@post (route innermost)
+5. Every template extends base.twig
+6. All schema changes via migrations — never create tables in route code
+7. Use built-in features — never install packages for things Tina4 already provides
+
+## Route Pattern
+
+```python
+from tina4_python.core.router import get, post, noauth, secured
+
+@get("/api/users")
+async def list_users(request, response):
+    return response({{"users": []}})
+
+@post("/api/users")
+@noauth()
+async def create_user(request, response):
+    return response({{"created": request.body["name"]}}, 201)
+```
+
+## ORM Pattern
+
+```python
+from tina4_python.orm import ORM, IntegerField, StringField
+
+class User(ORM):
+    table_name = "users"
+    id = IntegerField(primary_key=True, auto_increment=True)
+    name = StringField(required=True)
+    email = StringField()
+```
+
+## Structure
+
+```
+src/routes/    — Route handlers (auto-discovered)
+src/orm/       — ORM models
+src/templates/ — Twig templates
+src/app/       — Service classes
+src/scss/      — SCSS (auto-compiled)
+src/public/    — Static assets
+src/seeds/     — Database seeders
+migrations/    — SQL migration files
+tests/         — pytest tests
+```
+
+## Built-in Features
+
+Router, ORM, Database (SQLite/PostgreSQL/MySQL/MSSQL/Firebird), Frond templates (Twig-compatible), JWT auth, Sessions (File/Redis/Valkey/MongoDB/DB), GraphQL + GraphiQL, WebSocket + Redis backplane, WSDL/SOAP, Queue (File/RabbitMQ/Kafka/MongoDB), HTTP client, Messenger (SMTP/IMAP), FakeData/Seeder, Migrations, SCSS compiler, Swagger/OpenAPI, i18n, Events, Container/DI, HtmlElement, Inline testing, Error overlay, Dev dashboard, Rate limiter, Response cache, Logging, MCP server

@@ -1,6 +1,6 @@
 # tina4-python — LLM Context
 
-Tina4 Python v3.10.40 — 54 built-in features, zero dependencies. Web framework for Python 3.12+. Routes, ORM, templates, auth, queue, websocket, graphql, WSDL — all built in.
+Tina4 Python v3.10.42 — 54 built-in features, zero dependencies. Web framework for Python 3.12+. Routes, ORM, templates, auth, queue, websocket, graphql, WSDL — all built in.
 
 ---
 
