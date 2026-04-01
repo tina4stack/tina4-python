@@ -325,7 +325,6 @@ class ORM(metaclass=ORMMeta):
             pk_value: Primary key value.
             include: List of relationship names to eager-load.
         """
-        db = cls._get_db()
         pk = cls._get_pk()
         table = cls._get_table()
         pk_col = cls.field_mapping.get(pk, cls._fields[pk].column)
@@ -334,13 +333,7 @@ class ORM(metaclass=ORMMeta):
         if cls.soft_delete:
             sql += " AND deleted_at IS NULL"
 
-        row = db.fetch_one(sql, [pk_value])
-        if row is None:
-            return None
-        instance = cls(row)
-        if include:
-            cls._eager_load([instance], include)
-        return instance
+        return cls.select_one(sql, [pk_value], include=include)
 
     @classmethod
     def find(cls, pk_value, include: list[str] = None):
@@ -394,6 +387,12 @@ class ORM(metaclass=ORMMeta):
         if include:
             cls._eager_load(instances, include)
         return instances, result.count
+
+    @classmethod
+    def select_one(cls, sql: str, params: list = None, include: list[str] = None):
+        """Return a single ORM instance for a raw SQL query, or None if no rows match."""
+        instances, _ = cls.select(sql, params, limit=1, offset=0, include=include)
+        return instances[0] if instances else None
 
     @classmethod
     def where(cls, filter_sql: str, params: list = None, limit: int = 20, offset: int = 0,

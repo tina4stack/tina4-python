@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.10.40 — 54 built-in features, zero dependencies. See https://tina4.com for full documentation.
+Version 3.10.41 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -191,6 +191,8 @@ model.load(query="", params=None) -> bool
 model.delete(query="", params=None) -> bool
 model.select(column_names="*", filter="", params=None, join="", group_by="", having="", order_by="", limit=10, offset=0) -> DatabaseResult
 model.fetch_one(column_names="*", filter="", params=None) -> dict | None
+
+MyModel.select_one(sql: str, params: list = None, include: list[str] = None) -> MyModel | None  # Raw SQL, returns first match or None
 model.to_dict() -> dict
 model.to_json() -> str
 model.create_table() -> bool
@@ -551,8 +553,8 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Race-safe `get_next_id()` with atomic sequence table (`tina4_sequences`) for SQLite/MySQL/MSSQL; PostgreSQL auto-creates sequences
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
 - MCP server (`tina4_python.mcp`): built-in dev tools (24 tools) auto-start on `TINA4_DEBUG=true` + localhost. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. Localhost-only by default; `TINA4_MCP_REMOTE=true` for remote
-- Tests: 2,066 passing (39 modules)
-- Version: 3.10.40
+- Tests: 2,051 passing (39 modules)
+- Version: 3.10.32
 
 ## Links
 

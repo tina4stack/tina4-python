@@ -189,6 +189,19 @@ class TestORMCrud:
         assert users[0].name == "Alice"
         assert users[1].name == "Bob"
 
+    def test_select_one_returns_instance(self, db):
+        User({"name": "Alice"}).save()
+        User({"name": "Bob"}).save()
+        db.commit()
+
+        user = User.select_one("SELECT * FROM users WHERE name = ?", ["Alice"])
+        assert user is not None
+        assert user.name == "Alice"
+
+    def test_select_one_returns_none_when_no_match(self, db):
+        user = User.select_one("SELECT * FROM users WHERE name = ?", ["Nonexistent"])
+        assert user is None
+
     def test_find_or_fail(self, db):
         user = User({"name": "Exists"}).save()
         db.commit()
