@@ -502,7 +502,7 @@ async def _api_query(request, response):
         is_read = upper.startswith("SELECT") or upper.startswith("PRAGMA") or upper.startswith("SHOW") or upper.startswith("DESCRIBE")
 
         if is_read:
-            result = db.fetch(query, limit=100)
+            result = db.fetch(query)
             data = result.records
             MessageLog.log("query", f"SQL: {query[:80]}", {"rows": result.count}, level="info")
             db.close()
@@ -543,7 +543,7 @@ async def _api_table_info(request, response):
         db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
         columns = db.get_columns(table)
-        sample = db.fetch(f"SELECT * FROM {table}", limit=20)
+        sample = db.fetch(f"SELECT * FROM {table} LIMIT 20")
         db.close()
         return response({
             "table": table,

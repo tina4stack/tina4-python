@@ -832,8 +832,7 @@ def _gen_migration(name: str, flags: dict = None, *,
     content = (
         f"-- Migration: {name}\n"
         f"-- Created: {now.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        f"-- UP\n{up_sql}\n\n"
-        f"-- DOWN\n{down_sql}\n"
+        f"{up_sql}\n"
     )
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
