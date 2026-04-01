@@ -1771,7 +1771,7 @@ function miColor(mi){
     if(mi>=30) return 'rgb('+(Math.round(220+((60-mi)/30)*19))+','+(Math.round(180-((60-mi)/30)*112))+',0)';
     return 'rgb(239,'+(Math.round(68-mi*2))+',0)';
 }
-function renderBubbleChart(files,depGraph){
+function renderBubbleChart(files,depGraph,scanMode){
     var container=document.getElementById('metrics-bubble');
     if(!files||!files.length){container.innerHTML='<p style="color:var(--muted);padding:1rem">No files to analyze</p>';return;}
     depGraph=depGraph||{};
@@ -1845,7 +1845,8 @@ function renderBubbleChart(files,depGraph){
     var canvas=document.createElement('canvas');
     canvas.width=W;canvas.height=H;
     canvas.style.cssText='display:block;border:1px solid var(--border);border-radius:8px;cursor:pointer;background:#0f172a';
-    container.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem"><h3 style="margin:0;color:var(--primary)">Code Landscape</h3><span style="font-size:0.7rem;color:var(--muted)">Drag bubbles | Click to drill down | Size=LOC | Colour=health | \u24c9=tested | \u24b9=deps</span></div>';
+    var modeLabel=scanMode==='framework'?'<span style="color:#cba6f7;font-weight:600"> (Framework)</span> Add code to src/ to see your project':'';
+    container.innerHTML='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.5rem"><h3 style="margin:0;color:var(--primary)">Code Landscape'+modeLabel+'</h3><span style="font-size:0.7rem;color:var(--muted)">Drag bubbles | Dbl-click to drill down | Size=complexity+deps+LOC</span></div>';
     container.appendChild(canvas);
     var ctx=canvas.getContext('2d');
     var hoveredIdx=-1,dragIdx=-1,dragOX=0,dragOY=0;
@@ -2139,8 +2140,8 @@ function loadAllMetrics(){
     fetch('/__dev/api/metrics/full').then(function(r){return r.json()}).then(function(d){
         _metricsFullData=d;
         if(d.error){document.getElementById('metrics-bubble').innerHTML='<p style="color:var(--danger);padding:1rem">'+d.error+'</p>';return;}
-        // Bubble chart
-        renderBubbleChart(d.file_metrics,d.dependency_graph);
+        // Bubble chart — pass scan mode for header label
+        renderBubbleChart(d.file_metrics,d.dependency_graph,d.scan_mode);
         // File analysis table
         var hm=document.getElementById('metrics-heatmap');
         var rows=d.file_metrics.map(function(f){

@@ -18,8 +18,24 @@ from pathlib import Path
 # ── Quick Metrics ──────────────────────────────────────────────
 
 
+def _resolve_root(root: str = "src") -> str:
+    """Pick the right directory to scan.
+
+    If src/ has Python files, scan the user's project code.
+    Otherwise, scan the framework itself — so the bubble chart is never empty.
+    """
+    src = Path(root)
+    if src.exists() and list(src.rglob("*.py")):
+        return root
+    # Fallback: scan the framework package
+    import tina4_python
+    framework_dir = str(Path(tina4_python.__file__).parent)
+    return framework_dir
+
+
 def quick_metrics(root: str = "src") -> dict:
     """Scan project files and return instant metrics."""
+    root = _resolve_root(root)
     root_path = Path(root)
     if not root_path.exists():
         return {"error": f"Directory not found: {root}"}
@@ -161,8 +177,13 @@ def _files_hash(root: str = "src") -> str:
 
 
 def full_analysis(root: str = "src") -> dict:
-    """Deep AST-based analysis. Cached for 60 seconds."""
+    """Deep AST-based analysis. Cached for 60 seconds.
+
+    If src/ has no Python files, scans the framework itself
+    so the bubble chart is never empty.
+    """
     global _full_cache
+    root = _resolve_root(root)
 
     current_hash = _files_hash(root)
     now = time.time()
@@ -281,6 +302,11 @@ def full_analysis(root: str = "src") -> dict:
     total_mi = sum(f["maintainability"] for f in file_metrics) if file_metrics else 0
     avg_mi = total_mi / len(file_metrics) if file_metrics else 0
 
+    # Detect if we're scanning framework or project
+    import tina4_python
+    framework_dir = str(Path(tina4_python.__file__).parent)
+    scanning_framework = root_path == Path(framework_dir) or str(root_path).startswith(framework_dir)
+
     result = {
         "files_analyzed": len(file_metrics),
         "total_functions": len(all_functions),
@@ -290,6 +316,8 @@ def full_analysis(root: str = "src") -> dict:
         "file_metrics": file_metrics,
         "violations": violations,
         "dependency_graph": import_graph,
+        "scan_mode": "framework" if scanning_framework else "project",
+        "scan_root": str(root_path),
     }
 
     _full_cache = {"hash": current_hash, "data": result, "time": now}
