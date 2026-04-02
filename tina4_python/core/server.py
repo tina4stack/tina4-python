@@ -1238,7 +1238,7 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio", ai_port: i
     color = "\033[34m" if sys.stdout.isatty() else ""
     reset = "\033[0m" if sys.stdout.isatty() else ""
 
-    ai_port_line = f"\n  AI Port:   http://{display}:{ai_port} (no-reload)" if ai_port else ""
+    ai_port_line = f"\n  Test Port: http://{display}:{ai_port} (stable — no hot-reload)" if ai_port else ""
 
     banner = f"""{color}
   ______ _             __ __
@@ -1328,7 +1328,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
     # Determine AI dev port (port+1) when debug is on and not suppressed
     _no_ai_port = os.environ.get("TINA4_NO_AI_PORT", "").lower() in ("true", "1", "yes")
-    _ai_port = (port + 1) if (is_debug and not _no_ai_port) else None
+    _ai_port = (port + 1000) if (is_debug and not _no_ai_port) else None
 
     # Banner — printed directly to stdout, not through the logger
     _print_banner(host, port, server_name, ai_port=_ai_port)
@@ -1336,7 +1336,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     display = "localhost" if host in ("0.0.0.0", "::") else host
     Log.info(f"Server started http://{display}:{port} ({server_name})")
     if _ai_port:
-        Log.info(f"AI dev port: http://{display}:{_ai_port} (no-reload)")
+        Log.info(f"Test port: http://{display}:{_ai_port} (stable — no hot-reload)")
 
     # Open browser after a short delay (unless --no-browser)
     _skip_browser = no_browser or os.environ.get("TINA4_NO_BROWSER", "").lower() in ("true", "1", "yes")
@@ -1464,7 +1464,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
         server = await start_server(_handle_connection, host, port)
 
-        # AI dev port (port + 1) — no-reload, no live-reload WebSocket
+        # Test port (port + 1000) — stable, no live-reload WebSocket
         ai_server = None
         if _ai_port:
             try:
