@@ -156,7 +156,7 @@ Usage: tina4python <command> [options]
 
 Commands:
   init [dir]                    Scaffold a new project
-  serve [--port P] [--no-browser]  Start dev server (default: 0.0.0.0:7146)
+  serve [--port P] [--no-browser] [--no-reload]  Start dev server (default: 0.0.0.0:7146)
   migrate                      Run pending database migrations
   migrate:create <desc>         Create a new migration file
   migrate:rollback              Rollback last migration batch
@@ -327,12 +327,15 @@ def _serve(args):
     if os.environ.get("TINA4_OPEN_BROWSER", "").lower() in ("false", "0", "no"):
         no_browser = True
 
+    # --no-reload flag
+    no_reload = "no-reload" in flags
+
     # Kill existing process on port
     port = cli_port or int(os.environ.get("PORT", os.environ.get("TINA4_PORT", "7146")))
     _kill_process_on_port(port)
 
     from tina4_python.core import run
-    run(host=cli_host, port=cli_port, no_browser=no_browser)
+    run(host=cli_host, port=cli_port, no_browser=no_browser, no_reload=no_reload)
 
 
 # ── Migrate ───────────────────────────────────────────────────────────

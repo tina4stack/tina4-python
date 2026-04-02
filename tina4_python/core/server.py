@@ -1251,7 +1251,7 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio"):
     print(banner)
 
 
-def run(host: str | None = None, port: int | None = None, no_browser: bool = False):
+def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
     """Start the Tina4 dev server.
 
     Discovers routes from src/, starts ASGI server, handles shutdown.
@@ -1260,10 +1260,14 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         host: Bind address. Falls back to HOST env var, then 0.0.0.0.
         port: Bind port. Falls back to PORT env var, then 7146.
         no_browser: If True, do not open browser on startup.
+        no_reload: If True, disable the file watcher / live-reload.
     """
     import time
     global _start_time
     _start_time = time.time()
+
+    if no_reload:
+        os.environ["TINA4_NO_RELOAD"] = "true"
 
     # Ensure CWD is on sys.path so auto-discovered modules can be imported
     cwd = os.getcwd()
@@ -1302,11 +1306,13 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
     # Start DevReload file watcher in debug mode
     if is_debug:
-        try:
-            from tina4_python.dev_reload import start as _start_dev_reload
-            _start_dev_reload(["src", "public"])
-        except Exception as e:
-            Log.error(f"DevReload: failed to start: {e}")
+        no_reload = os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes")
+        if not no_reload:
+            try:
+                from tina4_python.dev_reload import start as _start_dev_reload
+                _start_dev_reload(["src", "public"])
+            except Exception as e:
+                Log.error(f"DevReload: failed to start: {e}")
 
     prod = None
     if not is_debug:

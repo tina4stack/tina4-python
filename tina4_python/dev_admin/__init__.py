@@ -2449,6 +2449,7 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     import sys
     python_version = sys.version.split()[0]
     poll_interval_ms = int(os.environ.get("TINA4_DEV_POLL_INTERVAL", "3000"))
+    no_reload = os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes")
 
     return f"""<div id="tina4-dev-toolbar" style="position:fixed;bottom:0;left:0;right:0;background:#333;color:#fff;font-family:monospace;font-size:12px;padding:6px 16px;z-index:99999;display:flex;align-items:center;gap:16px;">
     <span id="tina4-ver-btn" style="color:#3572A5;font-weight:bold;cursor:pointer;text-decoration:underline dotted;" onclick="tina4VersionModal()" title="Click to check for updates">Tina4 v{__version__}</span>
@@ -2472,7 +2473,7 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     <span onclick="this.parentElement.style.display='none'" style="cursor:pointer;color:#888;margin-left:8px;">&#10005;</span>
 </div>
 <script>
-(function(){{
+{'(function(){})();' if no_reload else f"""(function(){{
     var _t4_mtime=0,_t4_css_exts=['.css','.scss'],_t4_debounce=null;
     var _t4_interval=parseInt('{poll_interval_ms}')||3000;
     function _t4_apply(d){{
@@ -2499,7 +2500,7 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
         }}).catch(function(){{}});
     }}
     setInterval(_t4_poll,_t4_interval);
-}})();
+}})();"""}
 function tina4VersionModal(){{
     var m=document.getElementById('tina4-ver-modal');
     if(m.style.display==='block'){{m.style.display='none';return;}}
