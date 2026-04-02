@@ -123,6 +123,14 @@ register_driver("sqlserver", MSSQLAdapter)
 from tina4_python.database.firebird import FirebirdAdapter
 register_driver("firebird", FirebirdAdapter)
 
+# Register MongoDB (pymongo — optional)
+try:
+    from tina4_python.database.mongodb import MongoDBAdapter
+    register_driver("mongodb", MongoDBAdapter)
+    register_driver("pymongo", MongoDBAdapter)
+except ImportError:
+    pass
+
 
 class Database:
     """Database connection manager.
