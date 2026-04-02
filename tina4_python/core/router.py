@@ -57,6 +57,51 @@ class RouteRef:
         return self
 
 
+class RouteGroup:
+    """A group of routes sharing a common prefix and middleware.
+
+    Passed to the callback in Router.group(). Supports nesting.
+
+    Usage::
+
+        Router.group("/api", lambda group: [
+            group.get("/users", list_handler),
+            group.post("/users", create_handler),
+            group.group("/admin", lambda admin: [
+                admin.get("/stats", stats_handler),
+            ], middleware=[admin_check]),
+        ], middleware=[auth_check])
+    """
+
+    def __init__(self, router_cls, prefix: str, middleware: list = None):
+        self._router = router_cls
+        self._prefix = prefix
+        self._middleware = middleware or []
+
+    def get(self, path: str, handler, **options) -> RouteRef:
+        return self._router.add("GET", self._prefix + path, handler, middleware=self._middleware, **options)
+
+    def post(self, path: str, handler, **options) -> RouteRef:
+        return self._router.add("POST", self._prefix + path, handler, middleware=self._middleware, **options)
+
+    def put(self, path: str, handler, **options) -> RouteRef:
+        return self._router.add("PUT", self._prefix + path, handler, middleware=self._middleware, **options)
+
+    def patch(self, path: str, handler, **options) -> RouteRef:
+        return self._router.add("PATCH", self._prefix + path, handler, middleware=self._middleware, **options)
+
+    def delete(self, path: str, handler, **options) -> RouteRef:
+        return self._router.add("DELETE", self._prefix + path, handler, middleware=self._middleware, **options)
+
+    def any(self, path: str, handler, **options) -> RouteRef:
+        return self._router.add("ANY", self._prefix + path, handler, middleware=self._middleware, **options)
+
+    def group(self, prefix: str, callback, middleware=None):
+        merged = list(self._middleware) + (middleware or [])
+        nested = RouteGroup(self._router, self._prefix + prefix.rstrip("/"), merged)
+        callback(nested)
+
+
 class Router:
     """Route registry and matcher."""
 
@@ -68,14 +113,17 @@ class Router:
     def group(cls, prefix: str, callback, middleware=None):
         """Register routes with a shared prefix and optional middleware.
 
-        Saves/restores static prefix and middleware state around the
-        callback so that nested groups concatenate correctly.
+        The callback receives a RouteGroup object with get/post/put/patch/
+        delete/any/group methods for registering routes under the prefix.
 
         Usage::
 
-            Router.group("/api", lambda: [
-                Router.get("/users", handler),
-                Router.post("/users", handler),
+            Router.group("/api", lambda group: [
+                group.get("/users", list_handler),
+                group.post("/users", create_handler),
+                group.group("/admin", lambda admin: [
+                    admin.get("/stats", stats_handler),
+                ], middleware=[admin_check]),
             ], middleware=[auth_check])
         """
         prev_prefix = cls._group_prefix
@@ -85,7 +133,8 @@ class Router:
         cls._group_middleware = prev_middleware + (middleware or [])
 
         try:
-            callback()
+            group = RouteGroup(cls, cls._group_prefix, list(cls._group_middleware))
+            callback(group)
         finally:
             cls._group_prefix = prev_prefix
             cls._group_middleware = prev_middleware

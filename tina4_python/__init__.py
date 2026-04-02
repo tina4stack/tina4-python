@@ -14,7 +14,7 @@ __version__ = "3.10.54"
 from tina4_python.core.router import (  # noqa: E402, F401
     get, post, put, patch, delete, any_method,
     noauth, secured, cached, middleware, template,
-    Router,
+    Router, RouteGroup,
 )
 
 # ── HTTP Constants ──
