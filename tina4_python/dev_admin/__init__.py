@@ -2447,9 +2447,10 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     and a close button.
     """
     import sys
+    from tina4_python.core.server import _ai_port_ctx
     python_version = sys.version.split()[0]
     poll_interval_ms = int(os.environ.get("TINA4_DEV_POLL_INTERVAL", "3000"))
-    no_reload = os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes")
+    no_reload = os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes") or _ai_port_ctx.get()
 
     return f"""<div id="tina4-dev-toolbar" style="position:fixed;bottom:0;left:0;right:0;background:#333;color:#fff;font-family:monospace;font-size:12px;padding:6px 16px;z-index:99999;display:flex;align-items:center;gap:16px;">
     <span id="tina4-ver-btn" style="color:#3572A5;font-weight:bold;cursor:pointer;text-decoration:underline dotted;" onclick="tina4VersionModal()" title="Click to check for updates">Tina4 v{__version__}</span>

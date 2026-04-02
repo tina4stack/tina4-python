@@ -9,6 +9,7 @@ import os
 import sys
 import signal
 import asyncio
+import contextvars
 import importlib
 import uuid
 from pathlib import Path
@@ -24,6 +25,9 @@ from tina4_python import __version__
 _cors = CorsMiddleware()
 _rate_limiter = RateLimiter()
 
+
+# ContextVar to signal that the current request is being served on the AI dev port
+_ai_port_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("_ai_port_ctx", default=False)
 
 # Track startup time
 _start_time: float = 0
@@ -1222,7 +1226,7 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
     return host, port
 
 
-def _print_banner(host: str, port: int, server_name: str = "asyncio"):
+def _print_banner(host: str, port: int, server_name: str = "asyncio", ai_port: int | None = None):
     """Print the Tina4 Slant ASCII banner to stdout (not through the logger)."""
     from tina4_python.dotenv import is_truthy
 
@@ -1233,6 +1237,8 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio"):
     # Blue color for Python, only when stdout is a TTY
     color = "\033[34m" if sys.stdout.isatty() else ""
     reset = "\033[0m" if sys.stdout.isatty() else ""
+
+    ai_port_line = f"\n  AI Port:   http://{display}:{ai_port} (no-reload)" if ai_port else ""
 
     banner = f"""{color}
   ______ _             __ __
@@ -1246,7 +1252,7 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio"):
   Server:    http://{display}:{port} ({server_name})
   Swagger:   http://localhost:{port}/swagger
   Dashboard: http://localhost:{port}/__dev
-  Debug:     {"ON" if is_debug else "OFF"} (Log level: {log_level})
+  Debug:     {"ON" if is_debug else "OFF"} (Log level: {log_level}){ai_port_line}
 """
     print(banner)
 
@@ -1320,11 +1326,17 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
     server_name = prod[0] if prod else "asyncio"
 
+    # Determine AI dev port (port+1) when debug is on and not suppressed
+    _no_ai_port = os.environ.get("TINA4_NO_AI_PORT", "").lower() in ("true", "1", "yes")
+    _ai_port = (port + 1) if (is_debug and not _no_ai_port) else None
+
     # Banner — printed directly to stdout, not through the logger
-    _print_banner(host, port, server_name)
+    _print_banner(host, port, server_name, ai_port=_ai_port)
 
     display = "localhost" if host in ("0.0.0.0", "::") else host
     Log.info(f"Server started http://{display}:{port} ({server_name})")
+    if _ai_port:
+        Log.info(f"AI dev port: http://{display}:{_ai_port} (no-reload)")
 
     # Open browser after a short delay (unless --no-browser)
     _skip_browser = no_browser or os.environ.get("TINA4_NO_BROWSER", "").lower() in ("true", "1", "yes")
@@ -1393,6 +1405,11 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             # Check for WebSocket upgrade before reading body
             _header_dict = {k.decode(): v.decode() for k, v in headers}
             if _header_dict.get("upgrade", "").lower() == "websocket":
+                if hasattr(writer, "_tina4_ai_port") and path == "/__dev_reload":
+                    writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                    await writer.drain()
+                    writer.close()
+                    return
                 await _handle_dev_websocket(reader, writer, _header_dict, path)
                 return
 
@@ -1447,6 +1464,19 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
         server = await start_server(_handle_connection, host, port)
 
+        # AI dev port (port + 1) — no-reload, no live-reload WebSocket
+        ai_server = None
+        if _ai_port:
+            try:
+                async def _handle_ai_connection(reader, writer):
+                    _ai_port_ctx.set(True)
+                    writer._tina4_ai_port = True
+                    await _handle_connection(reader, writer)
+
+                ai_server = await start_server(_handle_ai_connection, host, _ai_port)
+            except OSError:
+                Log.warning(f"AI port {_ai_port} in use — skipping")
+
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -1455,6 +1485,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                 pass  # Windows
 
         await shutdown.wait()
+        if ai_server:
+            ai_server.close()
+            await ai_server.wait_closed()
         server.close()
         await server.wait_closed()
         Log.info("Server stopped.")
