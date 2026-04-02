@@ -204,8 +204,18 @@ class ORM(metaclass=ORMMeta):
             return cls._db  # Direct Database instance
 
         if _database is None:
+            # Try auto-discovery from DATABASE_URL
+            import os
+            url = os.environ.get("DATABASE_URL")
+            if url:
+                from tina4_python.database import Database
+                username = os.environ.get("DATABASE_USERNAME", "")
+                password = os.environ.get("DATABASE_PASSWORD", "")
+                global _database
+                _database = Database(url, username, password)
+                return _database
             raise RuntimeError(
-                "No database bound. Call orm_bind(db) before using ORM models."
+                "No database bound. Call orm_bind(db) or set DATABASE_URL in .env"
             )
         return _database
 

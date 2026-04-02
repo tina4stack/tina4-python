@@ -49,7 +49,7 @@ class FirebirdAdapter(DatabaseAdapter):
         host = parsed.hostname or "localhost"
         port = parsed.port or 3050
         # Firebird database path — decode URL-encoded characters
-        db_path = unquote(parsed.path.lstrip("/")) if parsed.path else ""
+        db_path = unquote(parsed.path[1:]) if parsed.path.startswith("/") else unquote(parsed.path)
         user = parsed.username or username or "SYSDBA"
         password = parsed.password or password or "masterkey"
         charset = kwargs.pop("charset", "UTF8")
