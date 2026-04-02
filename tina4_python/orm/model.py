@@ -211,9 +211,9 @@ class ORM(metaclass=ORMMeta):
                 from tina4_python.database import Database
                 username = os.environ.get("DATABASE_USERNAME", "")
                 password = os.environ.get("DATABASE_PASSWORD", "")
-                global _database
-                _database = Database(url, username, password)
-                return _database
+                db = Database(url, username, password)
+                orm_bind(db)
+                return db
             raise RuntimeError(
                 "No database bound. Call orm_bind(db) or set DATABASE_URL in .env"
             )
