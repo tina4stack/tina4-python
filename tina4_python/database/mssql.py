@@ -102,7 +102,7 @@ class MSSQLAdapter(DatabaseAdapter):
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, offset: int = 0) -> DatabaseResult:
+              limit: int = 100, offset: int = 0) -> DatabaseResult:
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(as_dict=True)
 

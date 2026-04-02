@@ -8,7 +8,14 @@ Tina4 Python v3.0 — Zero-dependency, lightweight web framework.
 
 One import, everything works.
 """
-__version__ = "3.10.48"
+__version__ = "3.10.50"
+
+# ── Route decorators ──
+from tina4_python.core.router import (  # noqa: E402, F401
+    get, post, put, patch, delete, any_method,
+    noauth, secured, cached, middleware, template,
+    Router,
+)
 
 # ── HTTP Constants ──
 from tina4_python.core.constants import (  # noqa: E402, F401
@@ -22,6 +29,9 @@ from tina4_python.core.constants import (  # noqa: E402, F401
     APPLICATION_OCTET, TEXT_HTML, TEXT_PLAIN, TEXT_CSV, TEXT_XML,
 )
 
+# ── Database ──
+from tina4_python.database import Database  # noqa: E402, F401
+
 # ── ORM ──
 from tina4_python.orm import (  # noqa: E402, F401
     ORM, orm_bind, Field,
@@ -31,6 +41,15 @@ from tina4_python.orm import (  # noqa: E402, F401
     has_many, has_one, belongs_to,  # relationship descriptors
 )
 
+# ── Auth ──
+from tina4_python.auth import Auth  # noqa: E402, F401
+
+# ── Queue ──
+from tina4_python.queue import Queue  # noqa: E402, F401
+
+# ── Template engine ──
+from tina4_python.frond import Frond  # noqa: E402, F401
+
 # ── Response Cache ──
 from tina4_python.cache import (  # noqa: E402, F401
     ResponseCache, cache_stats, clear_cache,
@@ -38,3 +57,6 @@ from tina4_python.cache import (  # noqa: E402, F401
 
 # ── DI Container ──
 from tina4_python.container import Container  # noqa: E402, F401
+
+# ── Server ──
+from tina4_python.core.server import run  # noqa: E402, F401

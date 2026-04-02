@@ -80,6 +80,21 @@ class Request:
         # Parse body
         req.body = _parse_body(body, req.content_type)
 
+        # Separate files from body for multipart uploads
+        if isinstance(req.body, dict) and "multipart/form-data" in req.content_type:
+            files = {}
+            fields = {}
+            for key, value in req.body.items():
+                if isinstance(value, dict) and "filename" in value:
+                    # Base64-encode file content for safe transport
+                    import base64
+                    value["content"] = base64.b64encode(value["content"]).decode()
+                    files[key] = value
+                else:
+                    fields[key] = value
+            req.files = files
+            req.body = fields
+
         return req
 
     def merge_route_params(self):

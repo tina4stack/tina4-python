@@ -118,6 +118,7 @@ _SET_RE = re.compile(r"set\s+(\w+)\s*=\s*(.+)")
 _INCLUDE_RE = re.compile(r'include\s+["\'](.+?)["\'](?:\s+with\s+(.+))?')
 _MACRO_RE = re.compile(r"macro\s+(\w+)\s*\(([^)]*)\)")
 _FROM_IMPORT_RE = re.compile(r'from\s+["\'](.+?)["\']\s+import\s+(.+)')
+_IMPORT_AS_RE = re.compile(r'import\s+["\'](.+?)["\']\s+as\s+(\w+)')
 _CACHE_RE = re.compile(r'cache\s+["\'](.+?)["\']\s*(\d+)?')
 _AUTOESCAPE_RE = re.compile(r"autoescape\s+(false|true)")
 _SPACELESS_RE = re.compile(r">\s+<")
@@ -1328,6 +1329,10 @@ class Frond:
                     self._handle_from_import(content, context)
                     i += 1
 
+                elif tag == "import":
+                    self._handle_import_as(content, context)
+                    i += 1
+
                 elif tag == "cache":
                     result, skip = self._handle_cache(tokens, i, context)
                     output.append(result)
@@ -1802,6 +1807,70 @@ class Frond:
                         context[macro_name] = macro_fn
                         continue
             i += 1
+
+    def _handle_import_as(self, content: str, context: dict):
+        """Handle {% import "file" as alias %}.
+
+        Loads ALL macros from the file and registers them as an object
+        with methods, so {{ alias.macro_name(args) }} works.
+        """
+        m = _IMPORT_AS_RE.match(content)
+        if not m:
+            return
+
+        filename = m.group(1)
+        alias = m.group(2)
+
+        # Load and tokenize the macro file
+        source = self._load(filename)
+        tokens = _tokenize(source)
+
+        # Collect all macro definitions
+        macros = {}
+        i = 0
+        while i < len(tokens):
+            ttype, raw = tokens[i]
+            if ttype == BLOCK:
+                tag_content, _, _ = _strip_tag(raw)
+                tag = tag_content.split()[0] if tag_content.split() else ""
+                if tag == "macro":
+                    macro_m = _MACRO_RE.match(tag_content)
+                    if macro_m:
+                        macro_name = macro_m.group(1)
+                        parsed_params = self._parse_macro_params(macro_m.group(2))
+
+                        body_tokens = []
+                        i += 1
+                        while i < len(tokens):
+                            if tokens[i][0] == BLOCK and "endmacro" in tokens[i][1]:
+                                i += 1
+                                break
+                            body_tokens.append(tokens[i])
+                            i += 1
+
+                        engine = self
+                        captured_body = list(body_tokens)
+                        captured_params = list(parsed_params)
+                        captured_context = dict(context)
+
+                        def make_fn(_params, _body, _ctx):
+                            def fn(*args):
+                                macro_ctx = dict(_ctx)
+                                for pi, (pname, pdefault) in enumerate(_params):
+                                    if pi < len(args):
+                                        macro_ctx[pname] = args[pi]
+                                    else:
+                                        macro_ctx[pname] = pdefault
+                                return SafeString(engine._render_tokens(list(_body), macro_ctx))
+                            return fn
+
+                        macros[macro_name] = make_fn(captured_params, captured_body, captured_context)
+                        continue
+            i += 1
+
+        # Create a namespace object so alias.macro_name() works
+        namespace = type("MacroNamespace", (), macros)()
+        context[alias] = namespace
 
     def _handle_cache(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
         """Handle {% cache "key" ttl %}...{% endcache %}.

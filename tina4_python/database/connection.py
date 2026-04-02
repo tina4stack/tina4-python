@@ -283,7 +283,7 @@ class Database:
         return adapter.execute_many(sql, params_list)
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, offset: int = 0) -> DatabaseResult:
+              limit: int = 100, offset: int = 0) -> DatabaseResult:
         """Fetch rows with pagination."""
         if self._cache_enabled:
             key = self._cache_key(sql + f":L{limit}:S{offset}", params)

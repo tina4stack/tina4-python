@@ -640,6 +640,10 @@ def _init_session(request: Request) -> None:
         sess = Session()
         sess.start(sid_match)
         request.session = sess
+        # Probabilistic garbage collection (1% of requests)
+        import random
+        if random.randint(1, 100) == 1:
+            sess.gc()
     except Exception:
         pass  # Session module not available — session stays None
 

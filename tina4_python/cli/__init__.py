@@ -202,6 +202,24 @@ def _init(args):
     for folder in folders:
         (target / folder).mkdir(parents=True, exist_ok=True)
 
+    # Copy framework public assets into the project so they're visible
+    framework_public = Path(__file__).parent.parent / "public"
+    project_public = target / "src" / "public"
+    assets_to_copy = [
+        "css/tina4.css",
+        "css/tina4.min.css",
+        "js/tina4.min.js",
+        "js/frond.min.js",
+        "images/tina4-logo-icon.webp",
+    ]
+    for asset in assets_to_copy:
+        src = framework_public / asset
+        dst = project_public / asset
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.exists() and not dst.exists():
+            import shutil
+            shutil.copy2(src, dst)
+
     # Copy frontend README
     frontend_readme = target / "frontend" / "README.md"
     if not frontend_readme.exists():

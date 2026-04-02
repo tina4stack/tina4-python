@@ -33,8 +33,10 @@ class DatabaseResult:
 
     def to_paginate(self, page: int = 1, per_page: int = 20) -> dict:
         total_pages = max(1, -(-self.count // per_page))  # ceil division
+        start = (page - 1) * per_page
+        end = start + per_page
         return {
-            "data": self.records,
+            "data": self.records[start:end],
             "total": self.count,
             "page": page,
             "per_page": per_page,
@@ -210,21 +212,31 @@ class DatabaseResult:
         return columns
 
     def _fallback_column_info(self) -> list[dict]:
-        """Derive basic column info from record keys when no adapter is available."""
+        """Derive basic column info from record keys and values when no adapter is available."""
         if not self.records:
             return []
-        keys = list(self.records[0].keys()) if isinstance(self.records[0], dict) else []
-        return [
-            {
+        row = self.records[0] if isinstance(self.records[0], dict) else {}
+        result = []
+        for k, v in row.items():
+            if isinstance(v, int):
+                col_type = "INTEGER"
+            elif isinstance(v, float):
+                col_type = "REAL"
+            elif isinstance(v, bool):
+                col_type = "BOOLEAN"
+            elif v is None:
+                col_type = "TEXT"
+            else:
+                col_type = "TEXT"
+            result.append({
                 "name": k,
-                "type": "UNKNOWN",
+                "type": col_type,
                 "size": None,
                 "decimals": None,
                 "nullable": True,
-                "primary_key": False,
-            }
-            for k in keys
-        ]
+                "primary_key": k.lower() == "id",
+            })
+        return result
 
 
 class DatabaseAdapter:
@@ -285,7 +297,7 @@ class DatabaseAdapter:
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, offset: int = 0) -> DatabaseResult:
+              limit: int = 100, offset: int = 0) -> DatabaseResult:
         """Execute a read query and return multiple rows."""
         raise NotImplementedError
 

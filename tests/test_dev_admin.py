@@ -639,7 +639,7 @@ class TestSQLiteLimitDedup:
         for i in range(30):
             db.execute(f"INSERT INTO items (id, name) VALUES ({i}, 'item{i}')")
         db.commit()
-        # No LIMIT in SQL — adapter adds default (20)
+        # No LIMIT in SQL — adapter adds default (100)
         result = db.fetch("SELECT * FROM items")
-        assert len(result.records) == 20
+        assert len(result.records) == 30  # 30 items, all returned (under 100 limit)
         db.close()

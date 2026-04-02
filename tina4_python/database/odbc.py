@@ -74,7 +74,7 @@ class ODBCAdapter(DatabaseAdapter):
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 20, offset: int = 0) -> DatabaseResult:
+              limit: int = 100, offset: int = 0) -> DatabaseResult:
         # Count total
         count_sql = f"SELECT COUNT(*) FROM ({sql}) AS _t"
         cursor = self._conn.cursor()

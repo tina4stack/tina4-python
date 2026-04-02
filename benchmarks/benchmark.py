@@ -697,7 +697,7 @@ def _start_server(key: str, fresh: bool = False) -> bool:
     if key == "tina4-python":
         if not _setup_tina4_project("python", fresh):
             return False
-        cmd = ["tina4", "serve", "--port", str(port), "--no-browser", "--production"]
+        cmd = ["tina4", "serve", "--port", str(port), "--no-browser"]
         cwd = str(Path("/tmp/bench-tina4-python"))
     elif key == "flask":
         cmd = [VENV_PYTHON, str(TMP / "flask_bench.py")]
@@ -713,7 +713,7 @@ def _start_server(key: str, fresh: bool = False) -> bool:
     elif key == "tina4-php":
         if not _setup_tina4_project("php", fresh):
             return False
-        cmd = ["tina4", "serve", "--port", str(port), "--no-browser", "--production"]
+        cmd = ["tina4", "serve", "--port", str(port), "--no-browser"]
         cwd = str(Path("/tmp/bench-tina4-php"))
 
     elif key == "slim":
@@ -750,7 +750,7 @@ def _start_server(key: str, fresh: bool = False) -> bool:
     elif key == "tina4-ruby":
         if not _setup_tina4_project("ruby", fresh):
             return False
-        cmd = ["tina4", "serve", "--port", str(port), "--no-browser", "--production"]
+        cmd = ["tina4", "serve", "--port", str(port), "--no-browser"]
         cwd = str(Path("/tmp/bench-tina4-ruby"))
 
     elif key == "sinatra":
@@ -780,7 +780,7 @@ def _start_server(key: str, fresh: bool = False) -> bool:
     elif key == "tina4-nodejs":
         if not _setup_tina4_project("nodejs", fresh):
             return False
-        cmd = ["tina4", "serve", "--port", str(port), "--no-browser", "--production"]
+        cmd = ["tina4", "serve", "--port", str(port), "--no-browser"]
         cwd = str(Path("/tmp/bench-tina4-nodejs"))
     elif key == "express":
         cmd = ["node", str(TMP / "express_bench.mjs")]

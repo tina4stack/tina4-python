@@ -262,7 +262,7 @@ def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
     for i, segment in enumerate(segments):
         if segment == "*":
             # Wildcard: matches the rest of the path (greedy)
-            param_names.append("wildcard")
+            param_names.append("*")
             regex_parts.append("(.+)")
             break  # Nothing can follow a wildcard
         elif segment.startswith("{") and segment.endswith("}"):
