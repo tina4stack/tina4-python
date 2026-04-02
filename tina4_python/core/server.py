@@ -1175,19 +1175,84 @@ def _find_production_server():
     return None
 
 
-def _find_available_port(start: int, max_tries: int = 10) -> int:
-    """Try successive ports starting from *start*, return the first available."""
-    import socket
-    for offset in range(max_tries):
-        port = start + offset
+def _kill_port(port: int) -> None:
+    """Kill whatever process is listening on *port*.
+
+    Uses lsof on macOS/Linux and netstat + taskkill on Windows.
+    Raises RuntimeError if the port cannot be freed.
+    """
+    import subprocess
+    import time
+
+    print(f"  Port {port} in use — killing existing process...")
+
+    if sys.platform == "win32":
+        # Find PID via netstat
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.bind(("127.0.0.1", port))
-            s.close()
-            return port
-        except OSError:
-            continue
-    return start
+            result = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True, text=True, timeout=5
+            )
+            pid = None
+            for line in result.stdout.splitlines():
+                if f":{port}" in line and ("LISTENING" in line or "ESTABLISHED" in line):
+                    parts = line.split()
+                    if parts:
+                        pid = parts[-1]
+                        break
+            if pid and pid.isdigit():
+                subprocess.run(["taskkill", "/PID", pid, "/F"], timeout=5)
+        except Exception as e:
+            raise RuntimeError(f"Could not free port {port}: {e}") from e
+    else:
+        # macOS / Linux — use lsof
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True, text=True, timeout=5
+            )
+            pids = result.stdout.strip().splitlines()
+            if not pids:
+                return  # Nothing found — port may have freed itself
+            for pid_str in pids:
+                pid_str = pid_str.strip()
+                if pid_str.isdigit():
+                    os.kill(int(pid_str), signal.SIGTERM)
+        except FileNotFoundError:
+            # lsof not available — try fuser
+            try:
+                result = subprocess.run(
+                    ["fuser", f"{port}/tcp"],
+                    capture_output=True, text=True, timeout=5
+                )
+                for pid_str in result.stdout.split():
+                    if pid_str.isdigit():
+                        os.kill(int(pid_str), signal.SIGTERM)
+            except Exception as e:
+                raise RuntimeError(f"Could not free port {port}: {e}") from e
+        except Exception as e:
+            raise RuntimeError(f"Could not free port {port}: {e}") from e
+
+    # Give the OS a moment to reclaim the port
+    time.sleep(0.5)
+    print(f"  Port {port} freed")
+
+
+def _find_available_port(start: int, max_tries: int = 10) -> int:
+    """Check if *start* is available; if not, kill the process on it and return *start*.
+
+    The auto-increment behaviour is intentionally removed — the server always
+    claims the requested port.  If killing fails a RuntimeError is raised.
+    """
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", start))
+        s.close()
+        return start
+    except OSError:
+        _kill_port(start)
+        return start
 
 
 def _open_browser(url: str):
@@ -1300,11 +1365,8 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
 
-    # Auto-increment port if already in use
-    original_port = port
+    # Claim the requested port — kill whatever is on it if needed
     port = _find_available_port(port)
-    if port != original_port:
-        Log.info(f"Port {original_port} in use — using {port} instead")
 
     # Detect production server (unless TINA4_DEBUG is true)
     from tina4_python.dotenv import is_truthy
