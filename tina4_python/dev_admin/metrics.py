@@ -495,7 +495,8 @@ def _count_halstead(node: ast.AST, stats: dict):
 def _has_matching_test(rel_path: str) -> bool:
     """Check if a source file has a matching test file.
 
-    Looks for tests/test_{module}.py or tests/test_{module_name}.py.
+    Looks for common test file patterns and also scans any test file
+    that imports the module by name.
     """
     p = Path(rel_path)
     module = p.stem  # e.g. "auth" from "tina4_python/auth/__init__.py"
@@ -506,8 +507,26 @@ def _has_matching_test(rel_path: str) -> bool:
         Path("tests") / f"test_{module}.py",
         Path("tests") / f"test_{module}s.py",
         Path("test") / f"test_{module}.py",
+        Path("spec") / f"test_{module}.py",
+        Path("tests") / f"{module}_test.py",
     ]
-    return any(tp.exists() for tp in test_patterns)
+    if any(tp.exists() for tp in test_patterns):
+        return True
+    # Grep-based: check if any test file imports this module
+    import re
+    import_patterns = [re.compile(rf'\bimport\s+{re.escape(module)}\b'),
+                       re.compile(rf'\bfrom\s+{re.escape(module)}\b')]
+    for test_dir in (Path("tests"), Path("test"), Path("spec")):
+        if not test_dir.is_dir():
+            continue
+        for test_file in test_dir.glob("*.py"):
+            try:
+                content = test_file.read_text(encoding="utf-8", errors="ignore")
+                if any(pat.search(content) for pat in import_patterns):
+                    return True
+            except OSError:
+                pass
+    return False
 
 
 def _maintainability_index(halstead_volume: float, avg_cc: float, loc: int) -> float:
