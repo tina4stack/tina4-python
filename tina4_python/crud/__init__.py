@@ -15,7 +15,7 @@ Discovers ORM models and registers CRUD routes automatically.
 
 Generated endpoints per model:
 
-    GET    /api/{table_name}       — list with pagination (limit, skip)
+    GET    /api/{table_name}       — list with pagination (limit, offset; also accepts page, per_page)
     GET    /api/{table_name}/{id}  — get single record by primary key
     POST   /api/{table_name}       — create new record
     PUT    /api/{table_name}/{id}  — update record by primary key
@@ -94,18 +94,37 @@ class AutoCrud:
         # ── GET /api/{table} — list with pagination ──────────────
         async def list_handler(request, response, _cls=model_class):
             try:
-                limit = int(request.params.get("limit", 10))
-                skip = int(request.params.get("skip", 0))
+                # Primary names: limit / offset
+                # Compat names: per_page / page (PHP/Ruby/Node style)
+                limit = int(request.params.get("limit", request.params.get("per_page", 10)))
+                offset = int(request.params.get("offset", 0))
+                # page/per_page compat: if page is provided, derive offset from it
+                if "page" in request.params and "offset" not in request.params:
+                    page = int(request.params.get("page", 1))
+                    per_page = int(request.params.get("per_page", limit))
+                    offset = (page - 1) * per_page
+                    limit = per_page
+                else:
+                    page = (offset // limit) + 1 if limit else 1
             except (ValueError, TypeError):
                 limit = 10
-                skip = 0
+                offset = 0
+                page = 1
 
-            records, total = _cls.all(limit=limit, skip=skip)
+            records, total = _cls.all(limit=limit, skip=offset)
+            total_pages = max(1, -(-total // limit)) if limit else 1
+            data = [r.to_dict() for r in records]
             return response({
-                "data": [r.to_dict() for r in records],
-                "total": total,
+                "records": data,       # standard name
+                "data": data,          # backwards compat
+                "count": total,        # standard name
+                "total": total,        # backwards compat
                 "limit": limit,
-                "skip": skip,
+                "offset": offset,
+                "page": page,
+                "per_page": limit,     # backwards compat
+                "totalPages": total_pages,   # camelCase standard
+                "total_pages": total_pages,  # backwards compat
             })
 
         list_handler.__name__ = f"autocrud_list_{table}"

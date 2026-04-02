@@ -33,16 +33,19 @@ class DatabaseResult:
 
     def to_paginate(self, page: int = 1, per_page: int = 20) -> dict:
         total_pages = max(1, -(-self.count // per_page))  # ceil division
-        start = (page - 1) * per_page
-        end = start + per_page
+        offset = (page - 1) * per_page
+        data = self.records[offset:offset + per_page]
         return {
-            "data": self.records[start:end],
-            "total": self.count,
+            "records": data,        # standard name
+            "data": data,           # backwards compat (PHP/Ruby/Node)
+            "count": self.count,    # standard name
+            "total": self.count,    # backwards compat
+            "limit": per_page,      # standard name
+            "offset": offset,       # standard name
             "page": page,
-            "per_page": per_page,
-            "total_pages": total_pages,
-            "has_next": page < total_pages,
-            "has_prev": page > 1,
+            "per_page": per_page,   # backwards compat
+            "totalPages": total_pages,   # camelCase standard
+            "total_pages": total_pages,  # backwards compat
         }
 
     def column_info(self) -> list[dict]:
