@@ -137,6 +137,7 @@ def main():
         "build": _build,
         "ai": _ai,
         "generate": _generate,
+        "console": _console,
         "help": _help,
     }
 
@@ -166,6 +167,7 @@ Commands:
   test                          Run test suite
   build                         Build distributable package
   ai [--all]                    Install AI coding assistant context
+  console                       Start interactive REPL with framework loaded
 
 Generators:
   generate model <Name> [--fields "name:string,price:float"]
@@ -183,6 +185,56 @@ Table names: singular by default (Product → product)
 
 https://tina4.com
 """)
+
+
+# ── Console ───────────────────────────────────────────────────────────
+
+def _console(args=None):
+    """Start an interactive REPL with the framework loaded."""
+    import code
+    import os
+
+    # Load environment
+    from tina4_python.dotenv import load_env
+    load_env()
+
+    # Import everything the user needs
+    from tina4_python import get, post, put, patch, delete, Router, Database, ORM, Auth, Queue, Frond
+    from tina4_python.debug import Log
+    from tina4_python.api import Api
+    from tina4_python.core.events import on, emit
+
+    # Try to connect database from DATABASE_URL
+    db = None
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        try:
+            db = Database(db_url)
+            print(f"  Database: {db_url}")
+        except Exception as e:
+            print(f"  Database: failed ({e})")
+
+    # Auto-discover routes
+    from tina4_python.core.server import _auto_discover
+    _auto_discover("src")
+    route_count = len(Router.get_routes())
+    print(f"  Routes: {route_count} discovered")
+
+    banner = (
+        "\n  Tina4 Python Console\n"
+        "  Type Python code. Framework is loaded.\n"
+        "  Available: db, Router, ORM, Database, Auth, Api, Log, Queue\n"
+        "  Exit: Ctrl+D or exit()\n"
+    )
+
+    local_vars = {
+        "db": db, "Database": Database, "ORM": ORM, "Router": Router,
+        "Auth": Auth, "Api": Api, "Log": Log, "Queue": Queue,
+        "Frond": Frond, "get": get, "post": post, "put": put,
+        "patch": patch, "delete": delete, "on": on, "emit": emit,
+    }
+
+    code.interact(banner=banner, local=local_vars)
 
 
 # ── Init ──────────────────────────────────────────────────────────────
