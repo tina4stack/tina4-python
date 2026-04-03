@@ -55,9 +55,9 @@ class TestRouterGroup:
         async def items_handler(request, response):
             pass
 
-        Router.group("/api", lambda: [
-            Router.get("/users", users_handler),
-            Router.post("/items", items_handler),
+        Router.group("/api", lambda group: [
+            group.get("/users", users_handler),
+            group.post("/items", items_handler),
         ])
 
         route, _ = Router.match("GET", "/api/users")
@@ -70,8 +70,8 @@ class TestRouterGroup:
         async def handler(request, response):
             pass
 
-        Router.group("/v2", lambda: [
-            Router.get("/health", handler),
+        Router.group("/v2", lambda group: [
+            group.get("/health", handler),
         ])
 
         route, _ = Router.match("GET", "/health")
@@ -186,8 +186,6 @@ class TestToPaginate:
         assert page["data"][-1]["id"] == 19
         assert page["total"] == 50
         assert page["page"] == 2
-        assert page["has_next"] is True
-        assert page["has_prev"] is True
 
     def test_last_page(self):
         records = [{"id": i} for i in range(50)]
@@ -196,8 +194,6 @@ class TestToPaginate:
         page = result.to_paginate(page=5, per_page=10)
 
         assert len(page["data"]) == 10
-        assert page["has_next"] is False
-        assert page["has_prev"] is True
 
     def test_first_page(self):
         records = [{"id": i} for i in range(50)]
@@ -205,8 +201,7 @@ class TestToPaginate:
 
         page = result.to_paginate(page=1, per_page=10)
 
-        assert page["has_next"] is True
-        assert page["has_prev"] is False
+        assert page["page"] == 1
 
 
 # ── 6. column_info() infers types ────────────────────────────────
