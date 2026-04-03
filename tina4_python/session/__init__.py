@@ -265,6 +265,11 @@ class Session:
             self.unset(flash_key)
             return val
 
+    def get_flash(self, key: str, default=None):
+        """Get flash data by key (alias for flash(key) without value)."""
+        result = self.flash(key)
+        return result if result is not None else default
+
     def cookie_header(self, cookie_name: str = "tina4_session") -> str:
         """Return a Set-Cookie header value for this session."""
         samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
