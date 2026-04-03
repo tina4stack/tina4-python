@@ -1,9 +1,0 @@
-"""Customer module."""
-
-def func_0():
-    pass
-
-
-# line 0
-# line 1
-# line 2
