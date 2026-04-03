@@ -789,6 +789,10 @@ class ORM(metaclass=ORMMeta):
 
         return result
 
+    def to_assoc(self, include: list[str] = None) -> dict:
+        """Convert to an associative dict (alias for to_dict)."""
+        return self.to_dict(include=include)
+
     def to_object(self) -> dict:
         """Convert to an object/dict (alias for to_dict)."""
         return self.to_dict()
