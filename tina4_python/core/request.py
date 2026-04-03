@@ -19,7 +19,7 @@ class Request:
     """Parsed HTTP request — everything a route handler needs."""
 
     __slots__ = (
-        "method", "path", "query_string", "params", "headers",
+        "method", "path", "query_string", "params", "query", "headers",
         "body", "raw_body", "cookies", "files", "ip",
         "content_type", "session", "_route_params",
     )
@@ -28,7 +28,8 @@ class Request:
         self.method: str = "GET"
         self.path: str = "/"
         self.query_string: str = ""
-        self.params: dict = {}          # Query string params
+        self.params: dict = {}          # Query string + route params merged
+        self.query: dict = {}           # Query string params only (separate from route params)
         self.headers: dict = {}         # Lowercase header keys
         self.body: dict | str | None = None  # Parsed body
         self.raw_body: bytes = b""
@@ -66,7 +67,8 @@ class Request:
         # Parse query params
         if req.query_string:
             parsed = parse_qs(req.query_string, keep_blank_values=True)
-            req.params = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
+            req.query = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
+            req.params = dict(req.query)  # params starts as copy of query, route params merge later
 
         # Parse cookies
         cookie_header = req.headers.get("cookie", "")
