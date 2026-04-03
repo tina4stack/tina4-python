@@ -71,24 +71,80 @@ class I18n:
         """List available locale codes."""
         if not self._locale_dir.is_dir():
             return [self._default_locale]
-        return sorted(
-            f.stem for f in self._locale_dir.glob("*.json")
-        )
+        locales = set()
+        for ext in ("*.json", "*.yml", "*.yaml"):
+            for f in self._locale_dir.glob(ext):
+                locales.add(f.stem)
+        return sorted(locales)
 
     def _load_locale(self, locale: str):
-        """Load a locale file if not already loaded."""
+        """Load a locale file if not already loaded. Supports JSON and YAML."""
         if locale in self._translations:
             return
+        # Try JSON first
         path = self._locale_dir / f"{locale}.json"
         if path.is_file():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
-                # Flatten nested dicts
                 self._translations[locale] = self._flatten(data)
+                return
             except (json.JSONDecodeError, OSError):
                 self._translations[locale] = {}
-        else:
-            self._translations[locale] = {}
+                return
+        # Try YAML (.yml or .yaml) — zero-dep parser for simple key: value files
+        for ext in (".yml", ".yaml"):
+            yaml_path = self._locale_dir / f"{locale}{ext}"
+            if yaml_path.is_file():
+                try:
+                    data = self._parse_simple_yaml(yaml_path.read_text(encoding="utf-8"))
+                    self._translations[locale] = self._flatten(data)
+                    return
+                except OSError:
+                    pass
+        self._translations[locale] = {}
+
+
+    @staticmethod
+    def _parse_simple_yaml(text: str) -> dict:
+        """Zero-dep YAML parser for simple key: value locale files.
+
+        Supports:
+          key: value
+          parent:
+            child: value    (1 level nesting via indentation)
+          key: "quoted value"
+          key: 'single quoted'
+          # comments
+        """
+        result = {}
+        current_parent = None
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(line) - len(line.lstrip())
+            if ":" not in stripped:
+                continue
+            key, _, value = stripped.partition(":")
+            key = key.strip()
+            value = value.strip()
+            # Strip quotes
+            if value and value[0] in ('"', "'") and value[-1] == value[0]:
+                value = value[1:-1]
+            if not value:
+                # Parent key — next indented lines are children
+                current_parent = key
+                result[key] = {}
+            elif indent > 0 and current_parent:
+                # Child of current parent
+                if isinstance(result.get(current_parent), dict):
+                    result[current_parent][key] = value
+                else:
+                    result[key] = value
+            else:
+                current_parent = None
+                result[key] = value
+        return result
 
     @staticmethod
     def _flatten(data: dict, prefix: str = "") -> dict:
