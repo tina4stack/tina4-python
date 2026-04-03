@@ -197,8 +197,8 @@ class TestSQLiteAdapterNegative:
         assert result.records == []
 
     def test_invalid_sql(self, db):
-        with pytest.raises(Exception):
-            db.execute("INVALID SQL STATEMENT")
+        result = db.execute("INVALID SQL STATEMENT")
+        assert result is False
 
 
 class TestDatabaseURL:

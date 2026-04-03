@@ -527,7 +527,10 @@ async def _api_query(request, response):
         try:
             for stmt in statements:
                 result = db.execute(stmt)
-                total_affected += result.affected_rows if hasattr(result, "affected_rows") else 0
+                if result is False:
+                    raise RuntimeError(f"Statement failed: {stmt[:80]}")
+                if hasattr(result, "affected_rows"):
+                    total_affected += result.affected_rows
             db.commit()
         except Exception as e:
             db.rollback()

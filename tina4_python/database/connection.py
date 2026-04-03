@@ -146,6 +146,7 @@ class Database:
         self.password = password or os.environ.get("DATABASE_PASSWORD", "")
         self.pool_size = pool  # 0 = single connection, N>0 = N pooled connections
         self._connect_kwargs = kwargs  # Extra kwargs passed through to adapter.connect()
+        self.last_error = None  # Last execute() error message
 
         if self.pool_size > 0:
             # Pooled mode — create a ConnectionPool with lazy adapter creation
@@ -278,11 +279,32 @@ class Database:
         elif self._adapter is not None:
             self._adapter.close()
 
-    def execute(self, sql: str, params: list = None) -> DatabaseResult:
+    def get_error(self) -> str | None:
+        """Return the last execute() error message, or None if no error."""
+        return self.last_error
+
+    def execute(self, sql: str, params: list = None):
+        """Execute a write statement. Returns True/False for simple writes.
+
+        If the SQL contains RETURNING, CALL, EXEC, or stored procedure calls,
+        returns a DatabaseResult with the result set instead.
+
+        On failure, returns False and stores the error in last_error.
+        """
         if self._cache_enabled:
             self._cache_invalidate()
         adapter = self._get_adapter()
-        return adapter.execute(sql, params)
+        try:
+            result = adapter.execute(sql, params)
+            self.last_error = None
+            sql_upper = sql.strip().upper()
+            if ("RETURNING" in sql_upper or sql_upper.startswith("CALL ")
+                    or sql_upper.startswith("EXEC ") or sql_upper.startswith("SELECT ")):
+                return result
+            return True
+        except Exception as e:
+            self.last_error = str(e)
+            return False
 
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
         if self._cache_enabled:

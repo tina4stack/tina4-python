@@ -125,8 +125,7 @@ class TestReturning:
     def test_insert_without_returning(self, db):
         result = db.execute("INSERT INTO items (name) VALUES (?)", ["plain"])
         db.commit()
-        assert result.last_id == 1
-        assert result.records == []
+        assert result is True  # Plain INSERT returns bool
 
 
 # ── SQLite Custom Function Tests ──────────────────────────────

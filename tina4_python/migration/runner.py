@@ -266,7 +266,8 @@ def migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> l
                 if skip_reason:
                     logger.info(f"Migration {sql_file.name}: {skip_reason}")
                     continue
-                db.execute(stmt)
+                if db.execute(stmt) is False:
+                    raise RuntimeError(f"Migration failed: {db.get_error() or stmt[:80]}")
 
             # Record as passed
             now = datetime.now(timezone.utc).isoformat()
@@ -335,7 +336,8 @@ def rollback(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
         try:
             db.start_transaction()
             for stmt in statements:
-                db.execute(stmt)
+                if db.execute(stmt) is False:
+                    raise RuntimeError(f"Rollback failed: {db.get_error() or stmt[:80]}")
             db.execute(
                 "DELETE FROM tina4_migration WHERE migration_id = ?",
                 [mid],
