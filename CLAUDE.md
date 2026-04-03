@@ -149,28 +149,24 @@ from tina4_python.database import Database
 db = Database(url: str, username="", password="")
 # Connection pooling: Database("sqlite:///app.db", pool=4)  # 4 round-robin connections
 
-db.fetch(sql, params=None, limit=10, offset=0) -> DatabaseResult
+db.fetch(sql, params=None, limit=10, offset=0) -> DatabaseResult  # records, count, limit, offset
 db.fetch_one(sql, params=None) -> dict | None
-db.execute(sql, params=None) -> DatabaseResult
+db.execute(sql, params=None) -> bool | DatabaseResult  # bool for writes, DatabaseResult for RETURNING/CALL/EXEC
 db.execute_many(sql, params=None) -> DatabaseResult
 db.insert(table_name, data: dict | list) -> DatabaseResult
 db.update(table_name, data: dict) -> DatabaseResult
 db.delete(table_name, data: dict) -> DatabaseResult
+db.get_last_id() -> int | str | None  # Last insert ID from execute/insert
+db.get_error() -> str | None          # Last execute() error message
 db.start_transaction()
 db.commit()
 db.rollback()
 db.table_exists(table_name) -> bool
 db.get_tables() -> list[str]
 db.get_columns(table_name) -> list[dict]
-db.get_next_id(table: str, pk_column: str = "id", generator_name: str | None = None) -> int
-    # Race-safe ID generation using atomic sequence table (tina4_sequences).
-    # SQLite/MySQL/MSSQL: uses tina4_sequences table with atomic UPDATE+SELECT.
-    # PostgreSQL: auto-creates a sequence if missing, uses nextval().
-    # Firebird: uses existing generator (unchanged).
-db.register_function(name, num_params, func, deterministic=True)  # SQLite only
-db.cache_stats() -> dict    # {"enabled": bool, "hits": int, "misses": int, "size": int, "ttl": int}
-db.cache_clear()            # Flush query cache and reset counters
-db.adapter -> DatabaseAdapter  # Access underlying adapter for driver-specific ops
+db.get_next_id(table, pk_column="id", generator_name=None) -> int  # Race-safe sequence
+db.cache_stats() -> dict
+db.cache_clear()
 db.pool -> ConnectionPool | None  # Access connection pool (None if pooling disabled)
 ```
 
@@ -187,38 +183,39 @@ class MyModel(ORM):
 
 # Instance methods
 model = MyModel(data: dict = None, **kwargs)
-model.save() -> self                  # Insert or update; returns self for chaining
+model.save() -> self | False          # Returns self on success (fluent), False on failure
 model.delete() -> None                # Soft-delete if enabled, else hard delete
 model.force_delete() -> None          # Hard delete (bypasses soft-delete)
 model.restore() -> None               # Restore soft-deleted record
 model.load(sql, params=None, include=None) -> bool  # selectOne into self; True if found
 model.validate() -> list[str]         # Validate fields; empty list = valid
 model.to_dict(include=None) -> dict   # Convert to dict (optionally with relationships)
+model.to_assoc(include=None) -> dict  # Alias for to_dict()
 model.to_json(include=None) -> str    # Convert to JSON string
-model.to_array() -> list              # Convert to list of values
+model.to_array() -> list              # Convert to flat list of values
 model.to_list() -> list               # Alias for to_array()
 model.to_object() -> dict             # Alias for to_dict()
 model.has_one(related_class, foreign_key=None)    # Imperative relationship query
 model.has_many(related_class, foreign_key=None)   # Imperative relationship query
 model.belongs_to(related_class, foreign_key=None) # Imperative relationship query
 
-# Class methods
-MyModel.find(pk_value, include=None) -> MyModel | None      # Find by primary key
-MyModel.find_by_id(pk_value, include=None) -> MyModel | None  # Same as find()
-MyModel.find_or_fail(pk_value) -> MyModel                   # Find or raise ValueError
-MyModel.create(data=None, **kwargs) -> MyModel              # Create + save in one call
-MyModel.all(limit=100, offset=0, include=None) -> (list, int)
-MyModel.select(sql, params=None, limit=20, offset=0, include=None) -> (list, int)
+# Class methods — also callable on instances: MyModel().all()
+MyModel.find(pk_value, include=None) -> MyModel | None
+MyModel.find_by_id(pk_value, include=None) -> MyModel | None
+MyModel.find_or_fail(pk_value) -> MyModel          # Raises ValueError if not found
+MyModel.create(data=None, **kwargs) -> MyModel     # Create + save in one call
+MyModel.all(limit=100, offset=0, include=None) -> list[MyModel]
+MyModel.select(sql, params=None, limit=20, offset=0, include=None) -> list[MyModel]
 MyModel.select_one(sql, params=None, include=None) -> MyModel | None
-MyModel.where(filter_sql, params=None, limit=20, offset=0, include=None) -> (list, int)
-MyModel.with_trashed(filter_sql="1=1", params=None, limit=20, offset=0) -> (list, int)
+MyModel.where(filter_sql, params=None, limit=20, offset=0, include=None) -> list[MyModel]
+MyModel.with_trashed(filter_sql="1=1", params=None, limit=20, offset=0) -> list[MyModel]
 MyModel.count(conditions=None, params=None) -> int
 MyModel.create_table() -> bool
-MyModel.query() -> QueryBuilder       # Fluent query builder
-MyModel.scope(name, filter_sql, params=None)  # Register reusable query scope
-MyModel.cached(sql, params=None, ttl=60, limit=20, offset=0) -> (list, int)
+MyModel.query() -> QueryBuilder
+MyModel.scope(name, filter_sql, params=None)  # Registers a reusable named method on the class
+MyModel.cached(sql, params=None, ttl=60, limit=20, offset=0) -> list[MyModel]
 
-orm_bind(dba: Database) -> None  # Bind database to all ORM subclasses
+orm_bind(dba: Database) -> None
 ```
 
 Soft-delete: Set `soft_delete = True` on the model class. Uses `deleted_at` column. `delete()` sets deleted_at, `force_delete()` removes the row, `restore()` clears deleted_at.
@@ -250,6 +247,52 @@ async def upload(request, response):
 ```
 
 Max upload size: `TINA4_MAX_UPLOAD_SIZE` env var (default 10MB).
+
+### Auth — JWT tokens and password hashing
+
+```python
+from tina4_python.auth import Auth, get_token, valid_token, get_payload
+
+# expires_in is in MINUTES (default 60). Reads SECRET from env.
+token = get_token({"user_id": 1}, expires_in=60)       # 60 minutes
+payload = valid_token(token)                            # dict | None
+payload = get_payload(token)                            # decode without verifying
+Auth.hash_password("secret") -> str                     # PBKDF2-SHA256, 260000 iterations, $ delimiter
+Auth.check_password("secret", hashed) -> bool           # timing-safe comparison
+Auth.validate_api_key(provided, expected=None) -> bool  # reads TINA4_API_KEY from env
+Auth.authenticate_request(headers) -> dict | None       # Bearer JWT, falls back to API key
+```
+
+### Session — Multi-backend session management
+
+```python
+from tina4_python.session import Session
+
+session.start(session_id=None) -> str       # Returns session ID
+session.get(key, default=None)              # Get value
+session.set(key, value)                     # Set value
+session.delete(key)                         # Remove key
+session.has(key) -> bool                    # Check existence
+session.all() -> dict                       # All data (excludes internals)
+session.clear()                             # Wipe data
+session.destroy()                           # Destroy session entirely
+session.regenerate() -> str                 # New ID, returns it
+session.flash(key, value=None)              # Dual-mode: set with value, get+remove without
+session.get_flash(key, default=None)        # Explicit getter alias for flash()
+session.save()                              # Persist to backend (lazy — called if dirty)
+session.cookie_header(name="tina4_session") -> str  # Set-Cookie header value
+session.gc()                                # Garbage collection
+```
+
+Backends: file (default), redis, valkey, mongodb, database. Set via `TINA4_SESSION_HANDLER` env var.
+
+### Request extras
+
+```python
+request.query -> dict      # Query string params only (separate from route params)
+request.cookies -> dict    # Parsed from Cookie header
+request.content_type -> str
+```
 
 ### QueryBuilder — Fluent query construction
 
@@ -334,7 +377,7 @@ queue.purge(status="completed")
 queue.retry_failed() -> int
 queue.dead_letters() -> list[dict]
 queue.produce(topic, data, priority=0, delay_seconds=0)  # Push to a specific topic
-queue.consume(topic=None, job_id=None)                     # Generator for consuming jobs
+queue.consume(topic=None, job_id=None, poll_interval=1.0)   # Long-running generator; sleeps when empty. poll_interval=0 for single-pass drain.
 
 # Job methods
 job.complete()                  # Mark as completed
