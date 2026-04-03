@@ -495,34 +495,65 @@ def _count_halstead(node: ast.AST, stats: dict):
 def _has_matching_test(rel_path: str) -> bool:
     """Check if a source file has a matching test file.
 
-    Looks for common test file patterns and also scans any test file
-    that imports the module by name.
+    Three-stage detection:
+    1. Filename matching — test_module.py, module_test.py, module_spec.py
+    2. Path matching — any test file referencing the full import path
+    3. Content matching — any test file mentioning the module or class name
     """
+    import re
+
     p = Path(rel_path)
-    module = p.stem  # e.g. "auth" from "tina4_python/auth/__init__.py"
+    module = p.stem  # e.g. "sqlite" from "tina4_python/database/sqlite.py"
     if module == "__init__":
         module = p.parent.name  # use parent dir name
-    # Check common test file patterns
-    test_patterns = [
-        Path("tests") / f"test_{module}.py",
-        Path("tests") / f"test_{module}s.py",
-        Path("test") / f"test_{module}.py",
-        Path("spec") / f"test_{module}.py",
-        Path("tests") / f"{module}_test.py",
+
+    # Build the full dotted import path for deeper matching
+    # e.g. "tina4_python/database/sqlite.py" → "tina4_python.database.sqlite"
+    parts = list(p.with_suffix("").parts)
+    dotted_path = ".".join(parts)  # "tina4_python.database.sqlite"
+
+    # Also track the parent package name for broader matching
+    # e.g. "database" from "tina4_python/database/sqlite.py"
+    parent_module = p.parent.name if len(p.parts) > 1 else ""
+
+    # Stage 1: Filename patterns
+    test_dirs = [Path("tests"), Path("test"), Path("spec")]
+    for td in test_dirs:
+        patterns = [
+            td / f"test_{module}.py",
+            td / f"test_{module}s.py",
+            td / f"{module}_test.py",
+            td / f"{module}_spec.py",
+        ]
+        # Also check parent-named tests (test_database.py covers database/sqlite.py)
+        if parent_module and parent_module != module:
+            patterns.extend([
+                td / f"test_{parent_module}.py",
+                td / f"test_{parent_module}s.py",
+                td / f"{parent_module}_test.py",
+            ])
+        if any(tp.exists() for tp in patterns):
+            return True
+
+    # Stage 2+3: Content scan — check if ANY test file references this module
+    search_terms = [
+        re.compile(rf'\b{re.escape(module)}\b', re.IGNORECASE),
     ]
-    if any(tp.exists() for tp in test_patterns):
-        return True
-    # Grep-based: check if any test file imports this module
-    import re
-    import_patterns = [re.compile(rf'\bimport\s+{re.escape(module)}\b'),
-                       re.compile(rf'\bfrom\s+{re.escape(module)}\b')]
-    for test_dir in (Path("tests"), Path("test"), Path("spec")):
-        if not test_dir.is_dir():
+    # Add dotted path patterns for import matching
+    if dotted_path:
+        search_terms.append(re.compile(rf'{re.escape(dotted_path)}'))
+    # Add class name guesses (CamelCase from snake_case module name)
+    class_name = "".join(w.capitalize() for w in module.split("_"))
+    if class_name != module:
+        search_terms.append(re.compile(rf'\b{re.escape(class_name)}\b'))
+
+    for td in test_dirs:
+        if not td.is_dir():
             continue
-        for test_file in test_dir.glob("*.py"):
+        for test_file in td.rglob("*.py"):
             try:
                 content = test_file.read_text(encoding="utf-8", errors="ignore")
-                if any(pat.search(content) for pat in import_patterns):
+                if any(pat.search(content) for pat in search_terms):
                     return True
             except OSError:
                 pass
