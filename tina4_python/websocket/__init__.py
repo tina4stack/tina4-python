@@ -192,16 +192,33 @@ class WebSocketConnection:
         except (ConnectionError, OSError):
             pass
 
+    def on(self, event: str, handler: Callable):
+        """Register an event handler by name: 'open', 'message', 'close', 'error'.
+
+        Matches PHP/Ruby/Node.js ws.on("event", handler) pattern.
+        """
+        mapping = {
+            "open": "_on_connect",
+            "message": "_on_message",
+            "close": "_on_close",
+            "error": "_on_error",
+        }
+        attr = mapping.get(event)
+        if attr is None:
+            raise ValueError(f"Unknown WebSocket event: {event}. Use: open, message, close, error")
+        setattr(self, attr, handler)
+        return self
+
     def on_message(self, handler: Callable):
-        """Register a message handler."""
+        """Register a message handler (decorator style)."""
         self._on_message = handler
 
     def on_close(self, handler: Callable):
-        """Register a close handler."""
+        """Register a close handler (decorator style)."""
         self._on_close = handler
 
     def on_error(self, handler: Callable):
-        """Register an error handler."""
+        """Register an error handler (decorator style)."""
         self._on_error = handler
 
     async def _handle_frame(self, fin: bool, opcode: int, payload: bytes):
