@@ -15,6 +15,11 @@ import hashlib
 from pathlib import Path
 
 
+# ── Scan root tracking ────────────────────────────────────────
+# Stores the resolved root so file_detail() can locate framework files.
+_last_scan_root: str = ""
+
+
 # ── Quick Metrics ──────────────────────────────────────────────
 
 
@@ -24,12 +29,15 @@ def _resolve_root(root: str = "src") -> str:
     If src/ has Python files, scan the user's project code.
     Otherwise, scan the framework itself — so the bubble chart is never empty.
     """
+    global _last_scan_root
     src = Path(root)
     if src.exists() and list(src.rglob("*.py")):
+        _last_scan_root = str(Path(root).resolve())
         return root
     # Fallback: scan the framework package
     import tina4_python
     framework_dir = str(Path(tina4_python.__file__).parent)
+    _last_scan_root = framework_dir
     return framework_dir
 
 
@@ -330,6 +338,12 @@ def full_analysis(root: str = "src") -> dict:
 def file_detail(file_path: str) -> dict:
     """Detailed metrics for a single file."""
     p = Path(file_path)
+    if not p.exists() and _last_scan_root:
+        # Try resolving relative to the last scan root (framework mode)
+        candidate = Path(_last_scan_root) / file_path
+        if candidate.exists():
+            p = candidate
+            file_path = str(p)
     if not p.exists():
         return {"error": f"File not found: {file_path}"}
 
