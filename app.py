@@ -70,7 +70,7 @@ async def home(request, response):
   <div class="content">
     <img src="https://tina4.com/logo.svg" class="logo" alt="Tina4">
     <h1>Tina4</h1>
-    <p class="subtitle">This Is Now A 4Framework</p>
+    <p class="subtitle">The Intelligent Native Application 4ramework</p>
     <div class="links">
       <a href="/__dev/" class="primary">Dev Admin</a>
       <a href="/swagger" class="secondary">Swagger</a>

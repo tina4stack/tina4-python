@@ -1,5 +1,5 @@
 """
-Tina4 - This is not a 4ramework.
+Tina4 - The Intelligent Native Application 4ramework.
 Programmatic HTML builder - avoids string concatenation.
 
 Usage:

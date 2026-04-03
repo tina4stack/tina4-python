@@ -1,4 +1,4 @@
-# Tina4 Python v3.0 — This is not a 4ramework.
+# Tina4 Python v3.0 — The Intelligent Native Application 4ramework.
 # Copyright 2007 - present Tina4
 # License: MIT https://opensource.org/licenses/MIT
 """
