@@ -143,7 +143,11 @@ def _parse_body(body: bytes, content_type: str) -> dict | str | None:
 
 
 def _parse_multipart(body: bytes, content_type: str) -> dict:
-    """Parse multipart/form-data body. Returns dict with fields and files."""
+    """Parse multipart/form-data body. Returns dict with fields and files.
+
+    Uses sequential scanning instead of split() to handle binary files
+    that may contain the boundary string in their content.
+    """
     result = {}
 
     # Extract boundary
@@ -157,20 +161,47 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
     if not boundary:
         return result
 
-    boundary_bytes = f"--{boundary}".encode()
-    parts = body.split(boundary_bytes)
+    delimiter = f"--{boundary}".encode()
+    close_delimiter = f"--{boundary}--".encode()
+    crlf = b"\r\n"
+    double_crlf = b"\r\n\r\n"
 
-    for part in parts[1:]:  # Skip preamble
-        if part.strip() == b"--" or part.strip() == b"--\r\n":
-            break  # End marker
+    # Find first delimiter
+    pos = body.find(delimiter)
+    if pos == -1:
+        return result
+    pos += len(delimiter)
 
-        # Split headers from content
-        header_end = part.find(b"\r\n\r\n")
+    while pos < len(body):
+        # Skip CRLF after delimiter
+        if body[pos:pos + 2] == crlf:
+            pos += 2
+
+        # Find end of headers (double CRLF)
+        header_end = body.find(double_crlf, pos)
         if header_end == -1:
-            continue
+            break
 
-        header_section = part[:header_end].decode(errors="replace")
-        content = part[header_end + 4:].rstrip(b"\r\n")
+        header_section = body[pos:header_end].decode(errors="replace")
+        content_start = header_end + 4
+
+        # Find next delimiter — scan for \r\n--boundary
+        next_delim = body.find(crlf + delimiter, content_start)
+        if next_delim == -1:
+            break
+
+        content = body[content_start:next_delim]
+
+        # Check if this is the close delimiter
+        after_delim = next_delim + len(crlf) + len(delimiter)
+        if body[after_delim:after_delim + 2] == b"--":
+            # This is the final part
+            is_last = True
+        else:
+            is_last = False
+
+        # Move past delimiter for next iteration
+        pos = after_delim
 
         # Parse Content-Disposition and Content-Type
         name = None
@@ -188,6 +219,8 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
                 file_type = line.split(":", 1)[1].strip()
 
         if not name:
+            if is_last:
+                break
             continue
 
         if filename:
@@ -199,5 +232,8 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
             }
         else:
             result[name] = content.decode(errors="replace")
+
+        if is_last:
+            break
 
     return result
