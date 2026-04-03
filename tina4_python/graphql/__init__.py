@@ -609,6 +609,33 @@ class GraphQL:
                 return False
         return True
 
+
+    def schema_sdl(self) -> str:
+        """Return the schema as a GraphQL SDL string."""
+        parts = []
+        brace_open = "{"
+        brace_close = "}"
+        for name, fields in self.schema.types.items():
+            lines = ["  " + field + ": " + ftype for field, ftype in fields.items()]
+            parts.append("type " + name + " " + brace_open + "\n" + "\n".join(lines) + "\n" + brace_close + "\n")
+        if self.schema.queries:
+            lines = []
+            for name, config in self.schema.queries.items():
+                args = config.get("args", {})
+                arg_parts = [k + ": " + v for k, v in args.items()]
+                arg_str = "(" + ", ".join(arg_parts) + ")" if args else ""
+                lines.append("  " + name + arg_str + ": " + config["type"])
+            parts.append("type Query " + brace_open + "\n" + "\n".join(lines) + "\n" + brace_close + "\n")
+        if self.schema.mutations:
+            lines = []
+            for name, config in self.schema.mutations.items():
+                args = config.get("args", {})
+                arg_parts = [k + ": " + v for k, v in args.items()]
+                arg_str = "(" + ", ".join(arg_parts) + ")" if args else ""
+                lines.append("  " + name + arg_str + ": " + config["type"])
+            parts.append("type Mutation " + brace_open + "\n" + "\n".join(lines) + "\n" + brace_close + "\n")
+        return "\n".join(parts)
+
     def introspect(self) -> dict:
         return {
             "types": self.schema.types,
