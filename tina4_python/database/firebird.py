@@ -160,7 +160,7 @@ class FirebirdAdapter(DatabaseAdapter):
         col_names = [d[0].strip().lower() for d in desc] if desc else []
         rows = [dict(zip(col_names, row)) for row in cursor.fetchall()]
 
-        return DatabaseResult(records=rows, count=total, sql=sql, adapter=self)
+        return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         sql = self._translate_sql(sql)

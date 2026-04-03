@@ -99,7 +99,7 @@ class ODBCAdapter(DatabaseAdapter):
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-        return DatabaseResult(records=rows, count=total, sql=sql, adapter=self)
+        return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         cursor = self._conn.cursor()

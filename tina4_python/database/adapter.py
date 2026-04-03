@@ -12,6 +12,8 @@ class DatabaseResult:
     """Standard result from any database operation."""
     records: list = field(default_factory=list)
     count: int = 0
+    limit: int = 0
+    offset: int = 0
     affected_rows: int = 0
     last_id: int | str | None = None
     error: str | None = None
