@@ -370,10 +370,43 @@ class ORM(metaclass=ORMMeta):
         """Alias for find_by_id()."""
         return cls.find_by_id(pk_value, include)
 
-    @classmethod
-    def load(cls, pk_value, include: list[str] = None):
-        """Alias for find_by_id()."""
-        return cls.find_by_id(pk_value, include)
+    def load(self, filter_or_id=None, params=None):
+        """Load a record into this instance.
+
+        Supports three calling styles:
+          model.load()                          — load by current PK value
+          model.load(42)                        — load by PK value
+          model.load("email = ?", ["a@b.com"])  — load by filter (first match)
+
+        Returns True if a record was found and loaded, False otherwise.
+        """
+        cls = type(self)
+        db = cls._get_db()
+        table = cls._get_table()
+        pk = cls._get_pk()
+
+        if filter_or_id is None or isinstance(filter_or_id, (int, float)):
+            # PK-based load
+            pk_value = filter_or_id if filter_or_id is not None else getattr(self, pk, None)
+            if pk_value is None:
+                return False
+            sql = f"SELECT * FROM {table} WHERE {pk} = ?"
+            query_params = [pk_value]
+        else:
+            # Filter-based load
+            sql = f"SELECT * FROM {table} WHERE {filter_or_id}"
+            query_params = params or []
+
+        row = db.fetch_one(sql, query_params)
+        if not row:
+            return False
+
+        # Populate instance attributes from the row
+        for key, value in row.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        self._persisted = True
+        return True
 
     @classmethod
     def find_or_fail(cls, pk_value):
