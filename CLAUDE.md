@@ -187,15 +187,12 @@ class MyModel(ORM):
 
 model = MyModel(init_object: dict | None = None)
 model.save() -> bool
-model.load(filter_or_id=None, params=None) -> bool
-    # load()                          — loads by instance's PK value
-    # load(42)                        — loads by PK value
-    # load("email = ?", ["a@b.com"])  — loads by filter (first match)
 model.delete(query="", params=None) -> bool
 model.select(column_names="*", filter="", params=None, join="", group_by="", having="", order_by="", limit=10, offset=0) -> DatabaseResult
 model.fetch_one(column_names="*", filter="", params=None) -> dict | None
 
 MyModel.find(pk_value, include: list[str] = None) -> MyModel | None  # Find by primary key
+MyModel.load(sql: str, params: list = None, include: list[str] = None) -> MyModel | None  # Alias for select_one()
 MyModel.select_one(sql: str, params: list = None, include: list[str] = None) -> MyModel | None  # Raw SQL, returns first match or None
 model.to_dict() -> dict
 model.to_json() -> str

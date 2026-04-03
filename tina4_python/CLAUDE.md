@@ -820,14 +820,14 @@ orm_bind(Database("sqlite:///app.db"))  # Assigns DB to all ORM subclasses
 user = User({"name": "Alice", "email": "alice@example.com"})
 user.save()
 
-# Load by primary key (instance method, returns bool)
-user = User()
-if user.load(1):
+# Load — alias for select_one (class method, returns instance or None)
+user = User.load("SELECT * FROM users WHERE email = ?", ["alice@example.com"])
+if user:
     print(user.name)
 
-# Load by filter (first match)
-user = User()
-if user.load("email = ?", ["alice@example.com"]):
+# Find by primary key
+user = User.find(1)
+if user:
     print(user.name)
 
 # Update
