@@ -223,6 +223,34 @@ orm_bind(dba: Database) -> None  # Bind database to all ORM subclasses
 
 Soft-delete: Set `soft_delete = True` on the model class. Uses `deleted_at` column. `delete()` sets deleted_at, `force_delete()` removes the row, `restore()` clears deleted_at.
 
+### File Uploads
+
+Multipart file uploads are available via `request.files` (dict keyed by field name). Each file is a dict:
+
+```python
+# request.files["avatar"] =>
+{
+    "fieldName": "avatar",
+    "filename": "photo.png",
+    "type": "image/png",
+    "content": b"...",       # raw bytes — NOT base64
+    "size": 102400
+}
+```
+
+```python
+@post("/api/upload")
+async def upload(request, response):
+    file = request.files.get("avatar")
+    if not file:
+        return response.json({"error": "No file"}, 400)
+    with open(f"src/public/uploads/{file['filename']}", "wb") as f:
+        f.write(file["content"])  # raw bytes, write directly
+    return response.json({"ok": True})
+```
+
+Max upload size: `TINA4_MAX_UPLOAD_SIZE` env var (default 10MB).
+
 ### QueryBuilder — Fluent query construction
 
 The ORM `select()` method supports a fluent QueryBuilder API. NoSQL support: `to_mongo()` generates MongoDB query documents from the same fluent API.

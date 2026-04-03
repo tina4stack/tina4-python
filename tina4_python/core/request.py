@@ -86,9 +86,7 @@ class Request:
             fields = {}
             for key, value in req.body.items():
                 if isinstance(value, dict) and "filename" in value:
-                    # Base64-encode file content for safe transport
-                    import base64
-                    value["content"] = base64.b64encode(value["content"]).decode()
+                    # Content stays as raw bytes — no base64 encoding
                     files[key] = value
                 else:
                     fields[key] = value
