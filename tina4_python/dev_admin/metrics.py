@@ -105,7 +105,7 @@ def quick_metrics(root: str = "src") -> dict:
         total_functions += functions
 
         file_details.append({
-            "path": str(f.relative_to(".")),
+            "path": str(f.relative_to(root_path)),
             "loc": loc,
             "blank": blank,
             "comment": comment,
@@ -211,7 +211,10 @@ def full_analysis(root: str = "src") -> dict:
         except (SyntaxError, OSError):
             continue
 
-        rel_path = str(f.relative_to("."))
+        try:
+            rel_path = str(f.relative_to(root_path))
+        except ValueError:
+            rel_path = str(f.relative_to(root_path.parent)) if root_path.parent != f else f.name
         lines = source.splitlines()
         loc = sum(1 for l in lines if l.strip() and not l.strip().startswith("#"))
 
