@@ -147,6 +147,7 @@ class Database:
         self.pool_size = pool  # 0 = single connection, N>0 = N pooled connections
         self._connect_kwargs = kwargs  # Extra kwargs passed through to adapter.connect()
         self.last_error = None  # Last execute() error message
+        self._last_id = None   # Last insert ID from execute/insert
 
         if self.pool_size > 0:
             # Pooled mode — create a ConnectionPool with lazy adapter creation
@@ -283,6 +284,10 @@ class Database:
         """Return the last execute() error message, or None if no error."""
         return self.last_error
 
+    def get_last_id(self):
+        """Return the last insert ID from execute() or insert()."""
+        return self._last_id
+
     def execute(self, sql: str, params: list = None):
         """Execute a write statement. Returns True/False for simple writes.
 
@@ -297,6 +302,9 @@ class Database:
         try:
             result = adapter.execute(sql, params)
             self.last_error = None
+            # Capture last_id from adapter result
+            if hasattr(result, "last_id") and result.last_id is not None:
+                self._last_id = result.last_id
             sql_upper = sql.strip().upper()
             if ("RETURNING" in sql_upper or sql_upper.startswith("CALL ")
                     or sql_upper.startswith("EXEC ") or sql_upper.startswith("SELECT ")):
@@ -352,7 +360,10 @@ class Database:
         if self._cache_enabled:
             self._cache_invalidate()
         adapter = self._get_adapter()
-        return adapter.insert(table, data)
+        result = adapter.insert(table, data)
+        if result.last_id is not None:
+            self._last_id = result.last_id
+        return result
 
     def update(self, table: str, data: dict,
                filter_sql: str = "", params: list = None) -> DatabaseResult:

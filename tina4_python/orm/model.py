@@ -254,9 +254,10 @@ class ORM(metaclass=ORMMeta):
                 if update_data:
                     db.update(table, update_data, f"{pk_db_col} = ?", [pk_value])
             else:
-                result = db.insert(table, data)
-                if result.last_id and pk in self._fields:
-                    setattr(self, pk, result.last_id)
+                db.insert(table, data)
+                last_id = db.get_last_id()
+                if last_id and pk in self._fields:
+                    setattr(self, pk, last_id)
             db.commit()
         except Exception:
             db.rollback()
