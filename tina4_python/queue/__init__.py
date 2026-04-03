@@ -557,15 +557,22 @@ class Queue:
             self.topic = old_topic
             self._backend = _resolve_backend(old_topic, None, self.max_retries)
 
-    def consume(self, topic: str = None, job_id: str = None):
-        """Consume jobs from a topic using a generator (yield pattern).
+    def consume(self, topic: str = None, job_id: str = None, poll_interval: float = 1.0):
+        """Consume jobs from a topic using a long-running generator.
+
+        Polls the queue continuously. When empty, sleeps for poll_interval
+        seconds before polling again. No external while-loop or sleep needed.
 
         Usage:
             for job in queue.consume("emails"):
                 process(job)
                 job.complete()
 
-            # Consume a specific job by ID:
+            # Custom poll interval (check every 5 seconds when idle):
+            for job in queue.consume("emails", poll_interval=5):
+                process(job)
+
+            # Consume a specific job by ID (single yield, no polling):
             for job in queue.consume("emails", job_id="abc-123"):
                 process(job)
                 job.complete()
@@ -573,21 +580,28 @@ class Queue:
         Args:
             topic: Topic/queue name (defaults to constructor topic)
             job_id: Optional job ID — only yield this specific job
+            poll_interval: Seconds to sleep when queue is empty (default 1.0)
         """
+        import time
+
         topic = topic or self.topic
 
         if job_id is not None:
-            # Consume a specific job by ID
+            # Consume a specific job by ID — single yield, no polling
             job = self.pop_by_id(topic, job_id)
             if job is not None:
                 yield job
             return
 
-        # Yield all available jobs
+        # poll_interval=0 → single-pass drain (returns when empty)
+        # poll_interval>0 → long-running poll (sleeps when empty, never returns)
         while True:
             job = self.pop()
             if job is None:
-                break
+                if poll_interval <= 0:
+                    break
+                time.sleep(poll_interval)
+                continue
             yield job
 
     def pop_by_id(self, topic: str, job_id: str) -> Job | None:

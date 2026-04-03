@@ -238,7 +238,7 @@ class TestProduceConsume:
         queue.push({"order": 3})
 
         results = []
-        for job in queue.consume():
+        for job in queue.consume(poll_interval=0):
             results.append(job.data["order"])
             job.complete()
 
@@ -246,7 +246,7 @@ class TestProduceConsume:
 
     def test_consume_empty_queue(self, queue):
         """consume() on empty queue yields nothing."""
-        jobs = list(queue.consume())
+        jobs = list(queue.consume(poll_interval=0))
         assert jobs == []
 
     def test_consume_by_id(self, tmp_path, monkeypatch):
@@ -259,7 +259,7 @@ class TestProduceConsume:
         id3 = q.push({"task": "third"})
 
         # Consume only the second job
-        jobs = list(q.consume("targeted", job_id=str(id2)))
+        jobs = list(q.consume("targeted", job_id=str(id2), poll_interval=0))
         assert len(jobs) == 1
         assert jobs[0].data["task"] == "second"
 
@@ -283,7 +283,7 @@ class TestProduceConsume:
 
         q.push({"to": "user@example.com", "subject": "Welcome"})
 
-        for job in q.consume("emails"):
+        for job in q.consume("emails", poll_interval=0):
             try:
                 raise ConnectionError("Connection refused: smtp.example.com:587")
             except ConnectionError as e:
@@ -327,7 +327,7 @@ class TestProduceConsume:
         q = Queue(topic="emails")
         q.push({"to": "alice@test.com", "subject": "Hello"})
 
-        for job in q.consume("emails"):
+        for job in q.consume("emails", poll_interval=0):
             job.complete()
 
         assert q.size("pending") == 0
