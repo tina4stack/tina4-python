@@ -177,7 +177,7 @@ class TestResultCaching:
 
         result1 = User.cached(f"SELECT * FROM users", ttl=60)
         result2 = User.cached(f"SELECT * FROM users", ttl=60)
-        assert result1[0][0].name == result2[0][0].name
+        assert result1[0].name == result2[0].name
 
     def test_clear_cache(self, db):
         db.insert("users", {"name": "Bob", "email": "b@b.com", "role": "user"})

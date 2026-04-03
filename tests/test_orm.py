@@ -167,8 +167,7 @@ class TestORMCrud:
         User({"name": "C"}).save()
         db.commit()
 
-        users, count = User.all()
-        assert count == 3
+        users = User.all()
         assert len(users) == 3
 
     def test_where(self, db):
@@ -176,8 +175,8 @@ class TestORMCrud:
         User({"name": "Inactive", "active": False}).save()
         db.commit()
 
-        users, count = User.where("active = ?", [1])
-        assert count == 1
+        users = User.where("active = ?", [1])
+        assert len(users) == 1
         assert users[0].name == "Active"
 
     def test_select_sql_first(self, db):
@@ -185,7 +184,7 @@ class TestORMCrud:
         User({"name": "Bob"}).save()
         db.commit()
 
-        users, count = User.select("SELECT * FROM users ORDER BY name")
+        users = User.select("SELECT * FROM users ORDER BY name")
         assert users[0].name == "Alice"
         assert users[1].name == "Bob"
 
@@ -283,8 +282,8 @@ class TestSoftDelete:
         post.delete()
         db.commit()
 
-        posts, count = Post.with_trashed()
-        assert count == 1
+        posts = Post.with_trashed()
+        assert len(posts) == 1
         assert posts[0].title == "Trashed"
 
     def test_restore(self, db):
@@ -311,7 +310,7 @@ class TestSoftDelete:
         db.commit()
 
         # Not even in trashed
-        posts, _ = Post.with_trashed(f"id = ?", [pid])
+        posts = Post.with_trashed(f"id = ?", [pid])
         assert len(posts) == 0
 
 
@@ -462,7 +461,7 @@ class TestEagerLoading:
         Post({"title": "P3", "user_id": u2.id}).save()
         db.commit()
 
-        users, _ = User.all(include=["posts"])
+        users = User.all(include=["posts"])
         assert len(users) == 2
         # Posts should be pre-loaded (no additional queries)
         for u in users:
@@ -478,7 +477,7 @@ class TestEagerLoading:
         Profile({"bio": "Bio text", "user_id": user.id}).save()
         db.commit()
 
-        users, _ = User.where("name = ?", ["WithProfile"], include=["profile"])
+        users = User.where("name = ?", ["WithProfile"], include=["profile"])
         assert len(users) == 1
         assert users[0].profile is not None
         assert users[0].profile.bio == "Bio text"
@@ -489,7 +488,7 @@ class TestEagerLoading:
         Post({"title": "Child", "user_id": user.id}).save()
         db.commit()
 
-        posts, _ = Post.where("title = ?", ["Child"], include=["author"])
+        posts = Post.where("title = ?", ["Child"], include=["author"])
         assert len(posts) == 1
         assert posts[0].author is not None
         assert posts[0].author.name == "Parent"
@@ -502,7 +501,7 @@ class TestEagerLoading:
         Comment({"text": "C1", "post_id": post.id}).save()
         db.commit()
 
-        users, _ = User.all(include=["posts.comments"])
+        users = User.all(include=["posts.comments"])
         u = users[0]
         assert len(u.posts) == 1
         assert len(u.posts[0].comments) == 1
@@ -581,8 +580,8 @@ class TestScopes:
         User({"name": "Inactive", "active": False}).save()
         db.commit()
 
-        users, count = User.active_users()
-        assert count == 1
+        users = User.active_users()
+        assert len(users) == 1
         assert users[0].name == "Active"
 
 

@@ -230,7 +230,7 @@ class ORM(metaclass=ORMMeta):
     # ── CRUD ────────────────────────────────────────────────────
 
     def save(self):
-        """Insert or update. Returns self for chaining."""
+        """Insert or update. Returns self on success, False on failure."""
         db = self._get_db()
         pk = self._get_pk()
         pk_value = getattr(self, pk, None)
@@ -250,23 +250,21 @@ class ORM(metaclass=ORMMeta):
         db.start_transaction()
         try:
             if pk_value is not None:
-                # Update — use primary key as filter
                 update_data = {k: v for k, v in data.items() if k != pk_db_col}
                 if update_data:
                     db.update(table, update_data, f"{pk_db_col} = ?", [pk_value])
             else:
-                # Insert
                 result = db.insert(table, data)
                 if result.last_id and pk in self._fields:
                     setattr(self, pk, result.last_id)
             db.commit()
         except Exception:
             db.rollback()
-            raise
+            return False
 
-        # Invalidate cached queries and relationship cache
         self.clear_cache()
         self._rel_cache = {}
+        self._persisted = True
         return self
 
     def delete(self):
@@ -411,37 +409,29 @@ class ORM(metaclass=ORMMeta):
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
-        return instances, result.count
+        return instances
 
     @classmethod
     def select(cls, sql: str, params: list = None, limit: int = 20, offset: int = 0,
-               include: list[str] = None):
-        """SQL-first query — you write the SQL, ORM maps results.
-
-        Args:
-            include: List of relationship names to eager-load.
-        """
+               include: list[str] = None) -> list:
+        """SQL-first query — returns array of ORM objects."""
         db = cls._get_db()
         result = db.fetch(sql, params, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
-        return instances, result.count
+        return instances
 
     @classmethod
     def select_one(cls, sql: str, params: list = None, include: list[str] = None):
         """Return a single ORM instance for a raw SQL query, or None if no rows match."""
-        instances, _ = cls.select(sql, params, limit=1, offset=0, include=include)
+        instances = cls.select(sql, params, limit=1, offset=0, include=include)
         return instances[0] if instances else None
 
     @classmethod
     def where(cls, filter_sql: str, params: list = None, limit: int = 20, offset: int = 0,
-              include: list[str] = None):
-        """Query with WHERE clause shorthand.
-
-        Args:
-            include: List of relationship names to eager-load.
-        """
+              include: list[str] = None) -> list:
+        """Query with WHERE clause — returns array of ORM objects."""
         db = cls._get_db()
         table = cls._get_table()
 
@@ -453,7 +443,7 @@ class ORM(metaclass=ORMMeta):
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
-        return instances, result.count
+        return instances
 
     @classmethod
     def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 20, offset: int = 0):
@@ -462,7 +452,7 @@ class ORM(metaclass=ORMMeta):
         table = cls._get_table()
         sql = f"SELECT * FROM {table} WHERE {filter_sql}"
         result = db.fetch(sql, params, limit=limit, offset=offset)
-        return [cls(row) for row in result.records], result.count
+        return [cls(row) for row in result.records]
 
     @classmethod
     def count(cls, conditions: str = None, params: list = None) -> int:
@@ -578,11 +568,7 @@ class ORM(metaclass=ORMMeta):
     @classmethod
     def cached(cls, sql: str, params: list = None, ttl: int = 60,
                limit: int = 20, offset: int = 0):
-        """SQL query with result caching.
-
-        Usage:
-            users, count = User.cached("SELECT * FROM users WHERE active = ?", [1], ttl=120)
-        """
+        """SQL query with result caching. Returns array of ORM objects."""
         cache_key = f"{cls.__name__}:{Cache.query_key(sql, params)}:{limit}:{offset}"
         cached = _query_cache.get(cache_key)
         if cached is not None:
