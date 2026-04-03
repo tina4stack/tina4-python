@@ -370,10 +370,20 @@ class ORM(metaclass=ORMMeta):
         """Alias for find_by_id()."""
         return cls.find_by_id(pk_value, include)
 
-    @classmethod
-    def load(cls, sql: str, params: list = None, include: list[str] = None):
-        """Alias for select_one()."""
-        return cls.select_one(sql, params, include=include)
+    def load(self, sql: str, params: list = None, include: list[str] = None) -> bool:
+        """Load a record into this instance via selectOne.
+
+        Returns True if a record was found and loaded, False otherwise.
+        """
+        cls = type(self)
+        result = cls.select_one(sql, params, include=include)
+        if result is None:
+            return False
+        for key, value in result.to_dict().items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        self._persisted = True
+        return True
 
     @classmethod
     def find_or_fail(cls, pk_value):
