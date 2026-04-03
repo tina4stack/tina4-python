@@ -79,22 +79,22 @@ class RouteGroup:
         self._middleware = middleware or []
 
     def get(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("GET", self._prefix + path, handler, middleware=self._middleware, **options)
+        return self._router.add("GET", path, handler, middleware=self._middleware, **options)
 
     def post(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("POST", self._prefix + path, handler, middleware=self._middleware, **options)
+        return self._router.add("POST", path, handler, middleware=self._middleware, **options)
 
     def put(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("PUT", self._prefix + path, handler, middleware=self._middleware, **options)
+        return self._router.add("PUT", path, handler, middleware=self._middleware, **options)
 
     def patch(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("PATCH", self._prefix + path, handler, middleware=self._middleware, **options)
+        return self._router.add("PATCH", path, handler, middleware=self._middleware, **options)
 
     def delete(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("DELETE", self._prefix + path, handler, middleware=self._middleware, **options)
+        return self._router.add("DELETE", path, handler, middleware=self._middleware, **options)
 
     def any(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("ANY", self._prefix + path, handler, middleware=self._middleware, **options)
+        return self._router.add("ANY", path, handler, middleware=self._middleware, **options)
 
     def group(self, prefix: str, callback, middleware=None):
         merged = list(self._middleware) + (middleware or [])

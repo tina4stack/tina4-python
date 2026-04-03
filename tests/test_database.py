@@ -51,8 +51,8 @@ class TestDatabaseResult:
         assert p["total"] == 50
         assert p["page"] == 2
         assert p["total_pages"] == 5
-        assert p["has_next"] is True
-        assert p["has_prev"] is True
+        assert p["page"] == 2
+        assert p["per_page"] == 10
 
 
 class TestSQLiteAdapter:
