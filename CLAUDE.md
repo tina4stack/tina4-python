@@ -185,20 +185,38 @@ class MyModel(ORM):
     id = IntegerField(primary_key=True, auto_increment=True)
     name = StringField()
 
-model = MyModel(init_object: dict | None = None)
-model.save() -> bool
-model.delete(query="", params=None) -> bool
-model.select(column_names="*", filter="", params=None, join="", group_by="", having="", order_by="", limit=10, offset=0) -> DatabaseResult
-model.fetch_one(column_names="*", filter="", params=None) -> dict | None
+# Instance methods
+model = MyModel(data: dict = None, **kwargs)
+model.save() -> self                  # Insert or update; returns self for chaining
+model.delete() -> None                # Soft-delete if enabled, else hard delete
+model.force_delete() -> None          # Hard delete (bypasses soft-delete)
+model.restore() -> None               # Restore soft-deleted record
+model.load(sql, params=None, include=None) -> bool  # selectOne into self; True if found
+model.validate() -> list[str]         # Validate fields; empty list = valid
+model.to_dict(include=None) -> dict   # Convert to dict (optionally with relationships)
+model.to_json(include=None) -> str    # Convert to JSON string
+model.to_array() -> list              # Convert to list of values
+model.to_list() -> list               # Alias for to_array()
+model.to_object() -> dict             # Alias for to_dict()
+model.has_one(related_class, foreign_key=None)    # Imperative relationship query
+model.has_many(related_class, foreign_key=None)   # Imperative relationship query
+model.belongs_to(related_class, foreign_key=None) # Imperative relationship query
 
-model.load(sql: str, params: list = None, include: list[str] = None) -> bool  # selectOne into instance, returns True/False
-MyModel.find(pk_value, include: list[str] = None) -> MyModel | None  # Find by primary key
-MyModel.select_one(sql: str, params: list = None, include: list[str] = None) -> MyModel | None  # Raw SQL, returns first match or None
-model.to_dict() -> dict
-model.to_json() -> str
-model.create_table() -> bool
-model.force_delete() -> bool    # Hard delete (bypasses soft-delete)
-model.restore() -> bool         # Restore soft-deleted record
+# Class methods
+MyModel.find(pk_value, include=None) -> MyModel | None      # Find by primary key
+MyModel.find_by_id(pk_value, include=None) -> MyModel | None  # Same as find()
+MyModel.find_or_fail(pk_value) -> MyModel                   # Find or raise ValueError
+MyModel.create(data=None, **kwargs) -> MyModel              # Create + save in one call
+MyModel.all(limit=100, offset=0, include=None) -> (list, int)
+MyModel.select(sql, params=None, limit=20, offset=0, include=None) -> (list, int)
+MyModel.select_one(sql, params=None, include=None) -> MyModel | None
+MyModel.where(filter_sql, params=None, limit=20, offset=0, include=None) -> (list, int)
+MyModel.with_trashed(filter_sql="1=1", params=None, limit=20, offset=0) -> (list, int)
+MyModel.count(conditions=None, params=None) -> int
+MyModel.create_table() -> bool
+MyModel.query() -> QueryBuilder       # Fluent query builder
+MyModel.scope(name, filter_sql, params=None)  # Register reusable query scope
+MyModel.cached(sql, params=None, ttl=60, limit=20, offset=0) -> (list, int)
 
 orm_bind(dba: Database) -> None  # Bind database to all ORM subclasses
 ```
