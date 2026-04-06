@@ -26,19 +26,17 @@ _last_scan_root: str = ""
 def _resolve_root(root: str = "src") -> str:
     """Pick the right directory to scan.
 
-    If src/ has Python files, scan the user's project code.
-    Otherwise, scan the framework itself — so the bubble chart is never empty.
+    Scans the user's project code only — never the framework internals.
+    If no code exists yet, returns the empty src/ directory.
     """
     global _last_scan_root
     src = Path(root)
-    if src.exists() and list(src.rglob("*.py")):
-        _last_scan_root = str(Path(root).resolve())
+    if src.exists():
+        _last_scan_root = str(src.resolve())
         return root
-    # Fallback: scan the framework package
-    import tina4_python
-    framework_dir = str(Path(tina4_python.__file__).parent)
-    _last_scan_root = framework_dir
-    return framework_dir
+    # No src/ — return it anyway, metrics will show empty state
+    _last_scan_root = str(src.resolve())
+    return root
 
 
 def quick_metrics(root: str = "src") -> dict:
