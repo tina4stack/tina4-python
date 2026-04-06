@@ -679,7 +679,7 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
         response.html("""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Tina4 Dev Admin</title></head>
 <body><div id="app" data-framework="python" data-color="#3b82f6"></div>
-<script src="/js/tina4-dev-admin.js"></script></body></html>""")
+<script src="/js/tina4-dev-admin.min.js"></script></body></html>""")
     elif request.path in ("/__dev/", "/__dev"):
         response.html(render_dashboard())
     else:
