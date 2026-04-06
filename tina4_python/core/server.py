@@ -674,13 +674,14 @@ def _handle_rate_limit(request: Request, response: Response) -> Response | None:
 async def _handle_dev_admin(request: Request, response: Response) -> Response:
     """Serve the /__dev dashboard and API routes."""
     from tina4_python.dev_admin import get_api_handlers, render_dashboard
-    if request.path in ("/__dev/v2", "/__dev/v2/"):
-        # New unified SPA dev admin
+    if request.path in ("/__dev/", "/__dev", "/__dev/v2", "/__dev/v2/"):
+        # Unified SPA dev admin
         response.html("""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Tina4 Dev Admin</title></head>
 <body><div id="app" data-framework="python" data-color="#3b82f6"></div>
 <script src="/js/tina4-dev-admin.min.js"></script></body></html>""")
-    elif request.path in ("/__dev/", "/__dev"):
+    elif request.path in ("/__dev/v1", "/__dev/v1/"):
+        # Legacy inline dev admin (kept for comparison)
         response.html(render_dashboard())
     else:
         handlers = get_api_handlers()
