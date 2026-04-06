@@ -75,7 +75,7 @@ class Response:
 
     __slots__ = (
         "status_code", "content", "content_type",
-        "_headers", "_cookies",
+        "_headers", "_cookies", "_is_streaming", "_stream_source",
     )
 
     def __init__(self):
@@ -84,6 +84,8 @@ class Response:
         self.content_type: str = "text/html; charset=utf-8"
         self._headers: list[tuple[str, str]] = []
         self._cookies: list[str] = []
+        self._is_streaming: bool = False
+        self._stream_source = None
 
     def __call__(self, data=None, status_code: int = 200, content_type: str = None) -> "Response":
         """Smart callable — auto-detects content type from data.
@@ -154,6 +156,30 @@ class Response:
         if secure:
             parts.append("Secure")
         self._cookies.append("; ".join(parts))
+        return self
+
+    def stream(self, source, content_type: str = "text/event-stream") -> "Response":
+        """Stream response from an async generator or sync iterable.
+
+        Usage (SSE):
+            @get("/events")
+            async def events(request, response):
+                async def generate():
+                    for i in range(5):
+                        yield f"data: message {i}\\n\\n"
+                        await asyncio.sleep(1)
+                return response.stream(generate())
+
+        Usage (custom content type):
+            return response.stream(generate(), "application/octet-stream")
+        """
+        self._is_streaming = True
+        self._stream_source = source
+        self.content_type = content_type
+        if content_type == "text/event-stream":
+            self._headers.append(("Cache-Control", "no-cache"))
+            self._headers.append(("Connection", "keep-alive"))
+            self._headers.append(("X-Accel-Buffering", "no"))
         return self
 
     def json(self, data, status_code: int = None) -> "Response":

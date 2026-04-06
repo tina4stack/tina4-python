@@ -470,6 +470,7 @@ return response("Not found", 404)          # With status code
 return response.redirect("/login")         # Redirect
 return response.render("page.twig", data)  # Render Twig template
 return response.file("doc.pdf")            # Serve a file
+return response.stream(generator)          # SSE/streaming response (text/event-stream)
 ```
 
 Add custom headers before returning:
@@ -1767,7 +1768,7 @@ async def dashboard(request, response):
 
 ## v3 Features Summary
 
-- **54 built-in features**, zero third-party dependencies
+- **55 built-in features**, zero third-party dependencies
 - **2,066 tests** passing across all modules
 - **Production server auto-detect**: `tina4python serve --production` auto-installs uvicorn
 - **`tina4python generate`**: model, route, migration, middleware scaffolding
@@ -1783,5 +1784,4 @@ async def dashboard(request, response):
 - **SameSite=Lax** default on session cookies (`TINA4_SESSION_SAMESITE`)
 - **`tina4 init`** generates Dockerfile and .dockerignore
 - **Gallery**: 7 interactive examples with Try It deploy at `/__dev/`
-
-
+- **SSE/Streaming**: `response.stream()` for Server-Sent Events — pass an async generator, framework handles chunked transfer encoding and keep-alive

@@ -674,7 +674,13 @@ def _handle_rate_limit(request: Request, response: Response) -> Response | None:
 async def _handle_dev_admin(request: Request, response: Response) -> Response:
     """Serve the /__dev dashboard and API routes."""
     from tina4_python.dev_admin import get_api_handlers, render_dashboard
-    if request.path in ("/__dev/", "/__dev"):
+    if request.path in ("/__dev/v2", "/__dev/v2/"):
+        # New unified SPA dev admin
+        response.html("""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Tina4 Dev Admin</title></head>
+<body><div id="app" data-framework="python" data-color="#3b82f6"></div>
+<script src="/js/tina4-dev-admin.js"></script></body></html>""")
+    elif request.path in ("/__dev/", "/__dev"):
         response.html(render_dashboard())
     else:
         handlers = get_api_handlers()
@@ -1043,12 +1049,43 @@ async def app(scope: dict, receive, send):
     request = Request.from_scope(scope, body)
     response = await handle(request)
 
+    # Streaming responses bypass ETag/compression — send immediately
+    _streaming = getattr(response, "_is_streaming", False)
+    if _streaming:
+        # Streaming response — send headers then stream chunks
+        stream_headers = [
+            (b"content-type", response.content_type.encode()),
+        ]
+        for name, value in response._headers:
+            stream_headers.append((name.lower().encode(), value.encode()))
+        for cookie_str in response._cookies:
+            stream_headers.append((b"set-cookie", cookie_str.encode()))
+        await send({"type": "http.response.start", "status": response.status_code, "headers": stream_headers})
+
+        import asyncio
+        source = response._stream_source
+        if hasattr(source, "__aiter__"):
+            # Async generator
+            async for chunk in source:
+                if isinstance(chunk, str):
+                    chunk = chunk.encode()
+                await send({"type": "http.response.body", "body": chunk, "more_body": True})
+        elif hasattr(source, "__iter__"):
+            # Sync iterable
+            for chunk in source:
+                if isinstance(chunk, str):
+                    chunk = chunk.encode()
+                await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                await asyncio.sleep(0)  # yield control
+
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+        return
+
     # ETag check — 304 Not Modified
     if_none_match = request.headers.get("if-none-match", "")
     accept_encoding = request.headers.get("accept-encoding", "")
     headers = response.build_headers(accept_encoding)
 
-    # Check ETag after building (since build_headers computes it)
     etag = ""
     for name, value in headers:
         if name == b"etag":
@@ -1503,26 +1540,50 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             async def receive():
                 return {"type": "http.request", "body": body, "more_body": False}
 
+            _headers_sent = False
+
             async def send(msg):
-                nonlocal resp_started, resp_status, resp_headers, resp_body
+                nonlocal resp_started, resp_status, resp_headers, resp_body, _headers_sent
                 if msg["type"] == "http.response.start":
                     resp_started = True
                     resp_status = msg["status"]
                     resp_headers = msg.get("headers", [])
                 elif msg["type"] == "http.response.body":
-                    resp_body = msg.get("body", b"")
+                    chunk = msg.get("body", b"")
+                    more = msg.get("more_body", False)
+
+                    if more or _headers_sent:
+                        # Streaming mode — flush headers on first chunk, then write each chunk immediately
+                        if not _headers_sent:
+                            _headers_sent = True
+                            writer.write(f"HTTP/1.1 {resp_status} OK\r\n".encode())
+                            for name, value in resp_headers:
+                                writer.write(name + b": " + value + b"\r\n")
+                            writer.write(b"\r\n")
+                            await writer.drain()
+
+                        if chunk:
+                            writer.write(chunk)
+                            await writer.drain()
+
+                        if not more:
+                            writer.close()
+                    else:
+                        # Buffered mode — accumulate body
+                        resp_body = chunk
 
             await app(scope, receive, send)
 
-            # Write HTTP/1.1 response
-            status_line = f"HTTP/1.1 {resp_status} OK\r\n"
-            writer.write(status_line.encode())
-            for name, value in resp_headers:
-                writer.write(name + b": " + value + b"\r\n")
-            writer.write(b"\r\n")
-            writer.write(resp_body)
-            await writer.drain()
-            writer.close()
+            # Write HTTP/1.1 response (only if headers weren't already sent by streaming)
+            if not _headers_sent:
+                status_line = f"HTTP/1.1 {resp_status} OK\r\n"
+                writer.write(status_line.encode())
+                for name, value in resp_headers:
+                    writer.write(name + b": " + value + b"\r\n")
+                writer.write(b"\r\n")
+                writer.write(resp_body)
+                await writer.drain()
+                writer.close()
 
         server = await start_server(_handle_connection, host, port)
 

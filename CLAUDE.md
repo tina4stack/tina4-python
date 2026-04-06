@@ -292,6 +292,7 @@ Backends: file (default), redis, valkey, mongodb, database. Set via `TINA4_SESSI
 request.query -> dict      # Query string params only (separate from route params)
 request.cookies -> dict    # Parsed from Cookie header
 request.content_type -> str
+response.stream(generator, content_type="text/event-stream", status=200)  # SSE/streaming response
 ```
 
 ### QueryBuilder — Fluent query construction
@@ -642,6 +643,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Gallery: 7 interactive examples with Try It deploy at `/__dev/`
 - Race-safe `get_next_id()` with atomic sequence table (`tina4_sequences`) for SQLite/MySQL/MSSQL; PostgreSQL auto-creates sequences
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
+- SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools (24 tools) auto-start on `TINA4_DEBUG=true` + localhost. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. Localhost-only by default; `TINA4_MCP_REMOTE=true` for remote
 - Tests: 2,068 passing (39 modules)
 - Version: 3.10.32

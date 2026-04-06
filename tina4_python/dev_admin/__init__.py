@@ -515,11 +515,13 @@ async def _api_query(request, response):
             is_read = upper.startswith("SELECT") or upper.startswith("PRAGMA") or upper.startswith("SHOW") or upper.startswith("DESCRIBE")
 
             if is_read:
-                result = db.fetch(statements[0])
+                limit = int(body.get("limit", 100))
+                offset = int(body.get("offset", 0))
+                result = db.fetch(statements[0], limit=limit, offset=offset)
                 data = result.records
                 MessageLog.log("query", f"SQL: {statements[0][:80]}", {"rows": result.count}, level="info")
                 db.close()
-                return response({"rows": data, "count": result.count})
+                return response({"rows": data, "count": result.count, "limit": limit, "offset": offset})
 
         # Execute all statements (single write or multi-statement batch)
         total_affected = 0
