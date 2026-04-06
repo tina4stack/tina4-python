@@ -533,24 +533,39 @@ def _has_matching_test(rel_path: str) -> bool:
     # e.g. "database" from "tina4_python/database/sqlite.py"
     parent_module = p.parent.name if len(p.parts) > 1 else ""
 
+    # Search both CWD and the scan root (framework dir when in fallback mode)
+    search_roots = [Path(".")]
+    if _last_scan_root:
+        scan_root = Path(_last_scan_root)
+        # Walk up from scan root to find repo root where tests/ lives
+        for _ in range(5):
+            if (scan_root / "tests").exists() or (scan_root / "test").exists() or (scan_root / "spec").exists():
+                search_roots.append(scan_root)
+                break
+            parent = scan_root.parent
+            if parent == scan_root:
+                break
+            scan_root = parent
+
     # Stage 1: Filename patterns
     test_dirs = [Path("tests"), Path("test"), Path("spec")]
-    for td in test_dirs:
-        patterns = [
-            td / f"test_{module}.py",
-            td / f"test_{module}s.py",
-            td / f"{module}_test.py",
-            td / f"{module}_spec.py",
-        ]
-        # Also check parent-named tests (test_database.py covers database/sqlite.py)
-        if parent_module and parent_module != module:
-            patterns.extend([
-                td / f"test_{parent_module}.py",
-                td / f"test_{parent_module}s.py",
-                td / f"{parent_module}_test.py",
-            ])
-        if any(tp.exists() for tp in patterns):
-            return True
+    for root in search_roots:
+        for td in test_dirs:
+            rtd = root / td
+            patterns = [
+                rtd / f"test_{module}.py",
+                rtd / f"test_{module}s.py",
+                rtd / f"{module}_test.py",
+                rtd / f"{module}_spec.py",
+            ]
+            if parent_module and parent_module != module:
+                patterns.extend([
+                    rtd / f"test_{parent_module}.py",
+                    rtd / f"test_{parent_module}s.py",
+                    rtd / f"{parent_module}_test.py",
+                ])
+            if any(tp.exists() for tp in patterns):
+                return True
 
     # Stage 2+3: Content scan — check if ANY test file references this module
     search_terms = [
@@ -564,16 +579,18 @@ def _has_matching_test(rel_path: str) -> bool:
     if class_name != module:
         search_terms.append(re.compile(rf'\b{re.escape(class_name)}\b'))
 
-    for td in test_dirs:
-        if not td.is_dir():
-            continue
-        for test_file in td.rglob("*.py"):
-            try:
-                content = test_file.read_text(encoding="utf-8", errors="ignore")
-                if any(pat.search(content) for pat in search_terms):
-                    return True
-            except OSError:
-                pass
+    for root in search_roots:
+        for td in test_dirs:
+            rtd = root / td
+            if not rtd.is_dir():
+                continue
+            for test_file in rtd.rglob("*.py"):
+                try:
+                    content = test_file.read_text(encoding="utf-8", errors="ignore")
+                    if any(pat.search(content) for pat in search_terms):
+                        return True
+                except OSError:
+                    pass
     return False
 
 
