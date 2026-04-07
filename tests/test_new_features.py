@@ -85,7 +85,7 @@ class TestMultiDatabase:
     def test_named_db_find(self, db, db2):
         log = AuditLog({"action": "logout", "user_id": 2})
         log.save()
-        found = AuditLog.find(log.id)
+        found = AuditLog.find_by_id(log.id)
         assert found is not None
         assert found.action == "logout"
 

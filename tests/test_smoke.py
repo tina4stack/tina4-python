@@ -122,14 +122,14 @@ class TestORM:
         item.save()
         db.commit()
 
-        found = Item.find(item.id)
+        found = Item.find_by_id(item.id)
         assert found is not None
         assert found.name == "Widget"
         assert found.price == 9.99
 
         found.delete()
         db.commit()
-        assert Item.find(item.id) is None
+        assert Item.find_by_id(item.id) is None
 
 
 # ── 4. Database CRUD ────────────────────────────────────────────
@@ -741,13 +741,13 @@ class TestORMAdvanced:
         item.save()
         db.commit()
 
-        found = Item.find(item.id)
+        found = Item.find_by_id(item.id)
         assert found.name == "Updated"
         assert found.price == 10.0
 
     def test_orm_find_nonexistent(self, db):
         orm_bind(db)
-        assert Item.find(99999) is None
+        assert Item.find_by_id(99999) is None
 
     def test_orm_to_dict(self, db):
         orm_bind(db)

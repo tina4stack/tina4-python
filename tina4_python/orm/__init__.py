@@ -12,7 +12,7 @@ Active Record ORM with SQL-first paradigm.
 
     # SQL-first — you write the SQL, ORM maps results
     users = User.select("SELECT * FROM users WHERE active = ?", [1])
-    user = User.find(1)
+    user = User.find_by_id(1)
     user.name = "Updated"
     user.save()
 """

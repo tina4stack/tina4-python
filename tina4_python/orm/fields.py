@@ -262,7 +262,7 @@ class BelongsToDescriptor(RelationshipDescriptor):
         fk_value = getattr(obj, fk, None)
         if fk_value is None:
             return None
-        return related_cls.find(fk_value)
+        return related_cls.find_by_id(fk_value)
 
 
 def has_many(model_name: str, foreign_key: str = None) -> HasManyDescriptor:

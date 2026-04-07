@@ -130,7 +130,7 @@ class TestORMCrud:
         user.save()
         db.commit()
 
-        found = User.find(user.id)
+        found = User.find_by_id(user.id)
         assert found is not None
         assert found.name == "Alice"
         assert found.email == "alice@test.com"
@@ -149,7 +149,7 @@ class TestORMCrud:
         user.save()
         db.commit()
 
-        found = User.find(user.id)
+        found = User.find_by_id(user.id)
         assert found.name == "Bob Updated"
 
     def test_delete(self, db):
@@ -159,7 +159,7 @@ class TestORMCrud:
         user.delete()
         db.commit()
 
-        assert User.find(uid) is None
+        assert User.find_by_id(uid) is None
 
     def test_all(self, db):
         User({"name": "A"}).save()
@@ -230,7 +230,7 @@ class TestORMCrudNegative:
     """Negative tests for ORM CRUD."""
 
     def test_find_nonexistent(self, db):
-        assert User.find(9999) is None
+        assert User.find_by_id(9999) is None
 
     def test_find_or_fail_raises(self, db):
         with pytest.raises(ValueError, match="not found"):
@@ -247,7 +247,7 @@ class TestORMCrudNegative:
         orm_module._database = None
         try:
             with pytest.raises(RuntimeError, match="No database bound"):
-                User.find(1)
+                User.find_by_id(1)
         finally:
             orm_module._database = old_db
 
@@ -267,7 +267,7 @@ class TestSoftDelete:
         db.commit()
 
         # Should not appear in normal find
-        assert Post.find(pid) is None
+        assert Post.find_by_id(pid) is None
 
     def test_soft_delete_sets_deleted_at(self, db):
         post = Post({"title": "Deleted"}).save()
@@ -293,11 +293,11 @@ class TestSoftDelete:
 
         post.delete()
         db.commit()
-        assert Post.find(pid) is None
+        assert Post.find_by_id(pid) is None
 
         post.restore()
         db.commit()
-        found = Post.find(pid)
+        found = Post.find_by_id(pid)
         assert found is not None
         assert found.title == "Restorable"
 
@@ -513,7 +513,7 @@ class TestEagerLoading:
         Post({"title": "Found", "user_id": user.id}).save()
         db.commit()
 
-        found = User.find(user.id, include=["posts"])
+        found = User.find_by_id(user.id, include=["posts"])
         assert found is not None
         assert len(found.posts) == 1
 

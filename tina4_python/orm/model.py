@@ -668,7 +668,7 @@ class ORM(metaclass=ORMMeta):
         fk_value = getattr(self, fk, None)
         if fk_value is None:
             return None
-        return related_class.find(fk_value)
+        return related_class.find_by_id(fk_value)
 
     @classmethod
     def _eager_load(cls, instances: list, include: list[str]):
