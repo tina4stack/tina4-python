@@ -106,6 +106,46 @@ class TestQueue:
         assert len(dead) == 1
         assert dead[0]["data"]["task"] == "doomed"
 
+    def test_failed(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "failed_queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="ftopic", max_retries=3)
+        q.push({"task": "will_fail"})
+        job = q.pop()
+        job.fail("first error")
+        # attempts=1, max_retries=3 → still retryable → shows in failed()
+        failed = q.failed()
+        assert len(failed) == 1
+        assert failed[0]["data"]["task"] == "will_fail"
+        # Should NOT appear in dead_letters yet
+        assert len(q.dead_letters()) == 0
+
+    def test_retry_by_id(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "retry_id_queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="rtopic", max_retries=3)
+        q.push({"task": "retry_me"})
+        job = q.pop()
+        job.fail("oops")
+        job_id = job.id
+        # Retry by ID
+        assert q.retry(job_id) is True
+        assert q.size("pending") == 1
+        # Non-existent ID returns False
+        assert q.retry("no-such-id") is False
+
+    def test_clear(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "clear_queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="ctopic")
+        q.push({"task": "a"})
+        q.push({"task": "b"})
+        q.push({"task": "c"})
+        assert q.size("pending") == 3
+        removed = q.clear()
+        assert removed == 3
+        assert q.size("pending") == 0
+
     def test_push_creates_queue_data_file(self, queue):
         queue.push({"task": "test"})
         queue_dir = os.path.join(os.environ["TINA4_QUEUE_PATH"], "test")

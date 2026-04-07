@@ -27,257 +27,8 @@ import time
 import threading
 from datetime import datetime, timezone
 
-
-class Job:
-    """A single queue job."""
-
-    def __init__(self, queue, job_id, topic: str, data: dict,
-                 priority: int = 0, attempts: int = 0):
-        self.queue = queue
-        self.id = job_id
-        self.topic = topic
-        self.payload = data
-        self.priority = priority
-        self.attempts = attempts
-
-    @property
-    def data(self):
-        """Alias for payload — deprecated, use .payload instead."""
-        return self.payload
-
-    def complete(self):
-        """Mark job as completed."""
-        self.queue._backend.complete(self)
-
-    def fail(self, error: str = ""):
-        """Mark job as failed. Will be retried if attempts < max_retries."""
-        self.queue._backend.fail(self, error)
-
-    def reject(self, reason: str = ""):
-        """Reject a job with a reason. Alias for fail()."""
-        self.fail(reason)
-
-    def retry(self, delay_seconds: int = 0):
-        """Re-queue this job with optional delay."""
-        self.queue._backend.retry(self, delay_seconds)
-
-
-class _FileAdapter:
-    """File-based queue backend — JSON files on disk. Zero dependencies.
-
-    Matches the file-based queue implementation in PHP, Ruby, and Node.js.
-    Each job is stored as a separate .queue-data JSON file.
-    """
-
-    def __init__(self, topic: str, max_retries: int):
-        self._topic = topic
-        self._max_retries = max_retries
-        self._base_path = os.environ.get("TINA4_QUEUE_PATH", "data/queue")
-        self._lock = threading.Lock()
-        self._seq = 0
-        self._ensure_dirs()
-
-    def _ensure_dirs(self):
-        queue_dir = os.path.join(self._base_path, self._topic)
-        failed_dir = os.path.join(queue_dir, "failed")
-        os.makedirs(queue_dir, exist_ok=True)
-        os.makedirs(failed_dir, exist_ok=True)
-
-    def _queue_dir(self) -> str:
-        return os.path.join(self._base_path, self._topic)
-
-    def _failed_dir(self) -> str:
-        return os.path.join(self._base_path, self._topic, "failed")
-
-    def _next_prefix(self) -> str:
-        self._seq += 1
-        return f"{int(time.time() * 1000)}-{self._seq:06d}"
-
-    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> str:
-        import uuid
-        job_id = str(uuid.uuid4())
-        available = _now() if delay_seconds == 0 else _future(delay_seconds)
-        job = {
-            "id": job_id,
-            "topic": self._topic,
-            "data": data,
-            "status": "pending",
-            "priority": priority,
-            "attempts": 0,
-            "error": None,
-            "available_at": available,
-            "created_at": _now(),
-        }
-        prefix = self._next_prefix()
-        filepath = os.path.join(self._queue_dir(), f"{prefix}_{job_id}.queue-data")
-        with open(filepath, "w") as f:
-            json.dump(job, f, indent=2, default=str)
-        return job_id
-
-    def pop(self, queue_ref) -> Job | None:
-        now = _now()
-        queue_dir = self._queue_dir()
-
-        with self._lock:
-            try:
-                files = sorted(f for f in os.listdir(queue_dir) if f.endswith(".queue-data"))
-            except FileNotFoundError:
-                return None
-
-            for filename in files:
-                filepath = os.path.join(queue_dir, filename)
-                try:
-                    with open(filepath) as f:
-                        job_data = json.load(f)
-                except (json.JSONDecodeError, FileNotFoundError):
-                    continue
-
-                if job_data.get("status") != "pending":
-                    continue
-                if job_data.get("available_at", "") > now:
-                    continue
-
-                # Claim the job by deleting the file
-                try:
-                    os.unlink(filepath)
-                except FileNotFoundError:
-                    continue  # Already consumed by another worker
-
-                return Job(
-                    queue=queue_ref,
-                    job_id=job_data["id"],
-                    topic=job_data.get("topic", self._topic),
-                    data=job_data["data"],
-                    priority=job_data.get("priority", 0),
-                    attempts=job_data.get("attempts", 0),
-                )
-
-        return None
-
-    def size(self, status: str = "pending") -> int:
-        queue_dir = self._queue_dir()
-        count = 0
-        try:
-            for filename in os.listdir(queue_dir):
-                if not filename.endswith(".queue-data"):
-                    continue
-                filepath = os.path.join(queue_dir, filename)
-                try:
-                    with open(filepath) as f:
-                        job_data = json.load(f)
-                    if job_data.get("status") == status:
-                        count += 1
-                except (json.JSONDecodeError, FileNotFoundError):
-                    continue
-        except FileNotFoundError:
-            pass
-        return count
-
-    def purge(self, status: str = "completed") -> int:
-        queue_dir = self._queue_dir()
-        count = 0
-        try:
-            for filename in os.listdir(queue_dir):
-                if not filename.endswith(".queue-data"):
-                    continue
-                filepath = os.path.join(queue_dir, filename)
-                try:
-                    with open(filepath) as f:
-                        job_data = json.load(f)
-                    if job_data.get("status") == status:
-                        os.unlink(filepath)
-                        count += 1
-                except (json.JSONDecodeError, FileNotFoundError):
-                    continue
-        except FileNotFoundError:
-            pass
-        return count
-
-    def retry_failed(self) -> int:
-        failed_dir = self._failed_dir()
-        queue_dir = self._queue_dir()
-        count = 0
-        try:
-            for filename in os.listdir(failed_dir):
-                if not filename.endswith(".queue-data"):
-                    continue
-                filepath = os.path.join(failed_dir, filename)
-                try:
-                    with open(filepath) as f:
-                        job_data = json.load(f)
-                    if job_data.get("attempts", 0) < self._max_retries:
-                        job_data["status"] = "pending"
-                        job_data["available_at"] = _now()
-                        prefix = self._next_prefix()
-                        new_path = os.path.join(queue_dir, f"{prefix}_{job_data['id']}.queue-data")
-                        with open(new_path, "w") as f:
-                            json.dump(job_data, f, indent=2, default=str)
-                        os.unlink(filepath)
-                        count += 1
-                except (json.JSONDecodeError, FileNotFoundError):
-                    continue
-        except FileNotFoundError:
-            pass
-        return count
-
-    def dead_letters(self) -> list[dict]:
-        failed_dir = self._failed_dir()
-        results = []
-        try:
-            for filename in sorted(os.listdir(failed_dir)):
-                if not filename.endswith(".queue-data"):
-                    continue
-                filepath = os.path.join(failed_dir, filename)
-                try:
-                    with open(filepath) as f:
-                        job_data = json.load(f)
-                    if job_data.get("attempts", 0) >= self._max_retries:
-                        results.append(job_data)
-                except (json.JSONDecodeError, FileNotFoundError):
-                    continue
-        except FileNotFoundError:
-            pass
-        return results
-
-    def complete(self, job: Job):
-        # Job file was already deleted on pop — nothing to do
-        pass
-
-    def fail(self, job: Job, error: str = ""):
-        job.attempts += 1
-        job_data = {
-            "id": job.id,
-            "topic": job.topic,
-            "data": job.payload,
-            "status": "failed",
-            "priority": job.priority,
-            "attempts": job.attempts,
-            "error": error,
-            "failed_at": _now(),
-        }
-        failed_dir = self._failed_dir()
-        os.makedirs(failed_dir, exist_ok=True)
-        filepath = os.path.join(failed_dir, f"{job.id}.queue-data")
-        with open(filepath, "w") as f:
-            json.dump(job_data, f, indent=2, default=str)
-
-    def retry(self, job: Job, delay_seconds: int = 0):
-        job.attempts += 1
-        available = _now() if delay_seconds == 0 else _future(delay_seconds)
-        job_data = {
-            "id": job.id,
-            "topic": job.topic,
-            "data": job.payload,
-            "status": "pending",
-            "priority": job.priority,
-            "attempts": job.attempts,
-            "available_at": available,
-            "created_at": _now(),
-        }
-        prefix = self._next_prefix()
-        filepath = os.path.join(self._queue_dir(), f"{prefix}_{job.id}.queue-data")
-        with open(filepath, "w") as f:
-            json.dump(job_data, f, indent=2, default=str)
+from tina4_python.queue.job import Job
+from tina4_python.queue.lite_backend import LiteBackend
 
 
 class _RabbitMQAdapter:
@@ -328,10 +79,78 @@ class _RabbitMQAdapter:
             self._backend.clear(self._topic)
 
     def retry_failed(self) -> int:
-        return 0  # RabbitMQ handles redelivery natively
+        jobs = self.failed()
+        count = 0
+        for job in jobs:
+            job_id = job.get("id", "")
+            if self.retry_job(job_id):
+                count += 1
+        return count
+
+    def failed(self) -> list[dict]:
+        """Drain the dead_letter queue, re-enqueue, and return jobs still under max_retries."""
+        dl_topic = f"{self._topic}.dead_letter"
+        results = []
+        requeue = []
+        while True:
+            msg = self._backend.dequeue(dl_topic)
+            if msg is None:
+                break
+            payload = msg.get("payload", msg)
+            attempts = msg.get("attempts", 0)
+            if attempts < self._max_retries:
+                results.append({"id": msg.get("id"), "data": payload,
+                                 "attempts": attempts, "error": msg.get("error")})
+            requeue.append(msg)
+        for msg in requeue:
+            self._backend.enqueue(dl_topic, msg)
+        return results
 
     def dead_letters(self) -> list[dict]:
-        return []  # Dead letters handled by RabbitMQ DLX config
+        """Drain the dead_letter queue, re-enqueue, and return jobs at/over max_retries."""
+        dl_topic = f"{self._topic}.dead_letter"
+        results = []
+        requeue = []
+        while True:
+            msg = self._backend.dequeue(dl_topic)
+            if msg is None:
+                break
+            payload = msg.get("payload", msg)
+            attempts = msg.get("attempts", 0)
+            if attempts >= self._max_retries:
+                results.append({"id": msg.get("id"), "data": payload,
+                                 "attempts": attempts, "error": msg.get("error")})
+            requeue.append(msg)
+        for msg in requeue:
+            self._backend.enqueue(dl_topic, msg)
+        return results
+
+    def retry_job(self, job_id: str, delay_seconds: int = 0) -> bool:
+        """Move a job from the dead_letter queue back to the main topic."""
+        dl_topic = f"{self._topic}.dead_letter"
+        found = None
+        requeue = []
+        while True:
+            msg = self._backend.dequeue(dl_topic)
+            if msg is None:
+                break
+            if msg.get("id") == job_id and found is None:
+                found = msg
+            else:
+                requeue.append(msg)
+        for msg in requeue:
+            self._backend.enqueue(dl_topic, msg)
+        if found is None:
+            return False
+        found["attempts"] = found.get("attempts", 0) + 1
+        found["status"] = "pending"
+        found.pop("error", None)
+        self._backend.enqueue(self._topic, found)
+        return True
+
+    def clear(self) -> int:
+        self._backend.clear(self._topic)
+        return 0
 
     def complete(self, job: Job):
         self._backend.acknowledge(self._topic, str(job.id))
@@ -400,10 +219,76 @@ class _KafkaAdapter:
         pass  # Kafka does not support purging
 
     def retry_failed(self) -> int:
-        return 0
+        jobs = self.failed()
+        count = 0
+        for job in jobs:
+            if self.retry_job(job.get("id", "")):
+                count += 1
+        return count
+
+    def failed(self) -> list[dict]:
+        """Consume dead_letter topic, republish, return jobs under max_retries."""
+        dl_topic = f"{self._topic}.dead_letter"
+        results = []
+        requeue = []
+        while True:
+            msg = self._backend.dequeue(dl_topic)
+            if msg is None:
+                break
+            payload = msg.get("payload", msg)
+            attempts = msg.get("attempts", 0)
+            if attempts < self._max_retries:
+                results.append({"id": msg.get("id"), "data": payload,
+                                 "attempts": attempts, "error": msg.get("error")})
+            requeue.append(msg)
+        for msg in requeue:
+            self._backend.enqueue(dl_topic, msg)
+        return results
 
     def dead_letters(self) -> list[dict]:
-        return []
+        """Consume dead_letter topic, republish, return jobs at/over max_retries."""
+        dl_topic = f"{self._topic}.dead_letter"
+        results = []
+        requeue = []
+        while True:
+            msg = self._backend.dequeue(dl_topic)
+            if msg is None:
+                break
+            payload = msg.get("payload", msg)
+            attempts = msg.get("attempts", 0)
+            if attempts >= self._max_retries:
+                results.append({"id": msg.get("id"), "data": payload,
+                                 "attempts": attempts, "error": msg.get("error")})
+            requeue.append(msg)
+        for msg in requeue:
+            self._backend.enqueue(dl_topic, msg)
+        return results
+
+    def retry_job(self, job_id: str, delay_seconds: int = 0) -> bool:
+        """Move job from dead_letter topic back to main topic."""
+        dl_topic = f"{self._topic}.dead_letter"
+        found = None
+        requeue = []
+        while True:
+            msg = self._backend.dequeue(dl_topic)
+            if msg is None:
+                break
+            if msg.get("id") == job_id and found is None:
+                found = msg
+            else:
+                requeue.append(msg)
+        for msg in requeue:
+            self._backend.enqueue(dl_topic, msg)
+        if found is None:
+            return False
+        found["attempts"] = found.get("attempts", 0) + 1
+        found["status"] = "pending"
+        found.pop("error", None)
+        self._backend.enqueue(self._topic, found)
+        return True
+
+    def clear(self) -> int:
+        return 0  # Kafka does not support topic purging without admin API
 
     def complete(self, job: Job):
         self._backend.acknowledge(self._topic, str(job.id))
@@ -465,10 +350,51 @@ class _MongoDBAdapter:
             self._backend.clear(self._topic)
 
     def retry_failed(self) -> int:
-        return 0  # MongoDB backend handles retries via reject(requeue=True)
+        self._backend._ensure_connected()
+        result = self._backend._collection.update_many(
+            {"topic": self._topic, "status": "failed",
+             "attempts": {"$lt": self._max_retries}},
+            {"$set": {"status": "pending", "error": None}},
+        )
+        return result.modified_count
+
+    def failed(self) -> list[dict]:
+        """Query MongoDB for jobs with status=failed and attempts < max_retries."""
+        self._backend._ensure_connected()
+        docs = self._backend._collection.find(
+            {"topic": self._topic, "status": "failed",
+             "attempts": {"$lt": self._max_retries}}
+        )
+        return [{"id": d.get("_id"), "data": d.get("payload", d.get("data")),
+                 "attempts": d.get("attempts", 0), "error": d.get("error")}
+                for d in docs]
 
     def dead_letters(self) -> list[dict]:
-        return []  # Dead letters stored in topic.dead_letter collection docs
+        """Query the dead_letter collection in MongoDB."""
+        self._backend._ensure_connected()
+        dl_topic = f"{self._topic}.dead_letter"
+        docs = self._backend._collection.find({"topic": dl_topic})
+        return [{"id": d.get("_id"), "data": d.get("data", d.get("payload")),
+                 "attempts": d.get("attempts", 0), "error": d.get("error")}
+                for d in docs]
+
+    def retry_job(self, job_id: str, delay_seconds: int = 0) -> bool:
+        """Reset a failed job back to pending by ID."""
+        self._backend._ensure_connected()
+        available = _now() if delay_seconds == 0 else _future(delay_seconds)
+        result = self._backend._collection.update_one(
+            {"_id": job_id, "topic": self._topic, "status": "failed"},
+            {"$set": {"status": "pending", "error": None,
+                      "available_at": available},
+             "$inc": {"attempts": 1}},
+        )
+        return result.modified_count == 1
+
+    def clear(self) -> int:
+        result = self._backend._collection.delete_many(
+            {"topic": self._topic, "status": "pending"}
+        )
+        return result.deleted_count
 
     def complete(self, job: Job):
         self._backend.acknowledge(self._topic, str(job.id))
@@ -493,7 +419,7 @@ def _resolve_backend(topic: str, backend: str | None, max_retries: int):
     chosen = chosen.lower().strip()
 
     if chosen in ("file", "default", "lite"):
-        return _FileAdapter(topic, max_retries)
+        return LiteBackend(topic, max_retries)
     elif chosen == "rabbitmq":
         return _RabbitMQAdapter(topic, max_retries)
     elif chosen == "kafka":
@@ -541,10 +467,21 @@ class Queue:
         """Re-queue failed jobs that haven't exceeded max_retries."""
         return self._backend.retry_failed()
 
+    def failed(self) -> list[dict]:
+        """Get jobs that failed but are still eligible for retry."""
+        return self._backend.failed()
+
     def dead_letters(self) -> list[dict]:
         """Get jobs that exceeded max retries."""
         return self._backend.dead_letters()
 
+    def retry(self, job_id: str, delay_seconds: int = 0) -> bool:
+        """Retry a specific failed job by ID. Returns True if found and re-queued."""
+        return self._backend.retry_job(job_id, delay_seconds)
+
+    def clear(self) -> int:
+        """Remove all pending jobs from the queue. Returns count removed."""
+        return self._backend.clear()
 
     def produce(self, topic: str, data: dict, priority: int = 0, delay_seconds: int = 0):
         """Produce a message onto a topic. Convenience wrapper around push()."""
@@ -557,7 +494,8 @@ class Queue:
             self.topic = old_topic
             self._backend = _resolve_backend(old_topic, None, self.max_retries)
 
-    def consume(self, topic: str = None, job_id: str = None, poll_interval: float = 1.0):
+    def consume(self, topic: str = None, job_id: str = None, poll_interval: float = 1.0,
+                iterations: int = 0):
         """Consume jobs from a topic using a long-running generator.
 
         Polls the queue continuously. When empty, sleeps for poll_interval
@@ -565,6 +503,11 @@ class Queue:
 
         Usage:
             for job in queue.consume("emails"):
+                process(job)
+                job.complete()
+
+            # Process exactly 5 jobs then stop:
+            for job in queue.consume("emails", iterations=5):
                 process(job)
                 job.complete()
 
@@ -581,6 +524,7 @@ class Queue:
             topic: Topic/queue name (defaults to constructor topic)
             job_id: Optional job ID — only yield this specific job
             poll_interval: Seconds to sleep when queue is empty (default 1.0)
+            iterations: Max number of jobs to consume (0 = unlimited, default 0)
         """
         import time
 
@@ -588,13 +532,14 @@ class Queue:
 
         if job_id is not None:
             # Consume a specific job by ID — single yield, no polling
-            job = self.pop_by_id(topic, job_id)
+            job = self.pop_by_id(job_id)
             if job is not None:
                 yield job
             return
 
         # poll_interval=0 → single-pass drain (returns when empty)
         # poll_interval>0 → long-running poll (sleeps when empty, never returns)
+        consumed = 0
         while True:
             job = self.pop()
             if job is None:
@@ -603,10 +548,13 @@ class Queue:
                 time.sleep(poll_interval)
                 continue
             yield job
+            consumed += 1
+            if iterations > 0 and consumed >= iterations:
+                break
 
-    def pop_by_id(self, topic: str, job_id: str) -> Job | None:
+    def pop_by_id(self, job_id: str) -> Job | None:
         """Pop a specific job by ID from the queue."""
-        if not isinstance(self._backend, _FileAdapter):
+        if not isinstance(self._backend, LiteBackend):
             return None
         queue_dir = self._backend._queue_dir()
         try:
@@ -623,7 +571,7 @@ class Queue:
                         os.unlink(filepath)
                         return Job(
                             queue=self, job_id=job_data["id"],
-                            topic=job_data.get("topic", topic),
+                            topic=job_data.get("topic", self.topic),
                             data=job_data["data"],
                             priority=job_data.get("priority", 0),
                             attempts=job_data.get("attempts", 0),
@@ -673,4 +621,4 @@ def _parse_amqp_url(url: str) -> dict:
     return config
 
 
-__all__ = ["Queue", "Job"]
+__all__ = ["Queue", "Job", "LiteBackend"]
