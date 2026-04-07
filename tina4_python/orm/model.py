@@ -365,9 +365,43 @@ class ORM(metaclass=ORMMeta):
         return cls.select_one(sql, [pk_value], include=include)
 
     @classmethod
-    def find(cls, pk_value, include: list[str] = None):
-        """Alias for find_by_id()."""
-        return cls.find_by_id(pk_value, include)
+    def find(cls, filter: dict = None, limit: int = 100, offset: int = 0, order_by: str = None, include: list[str] = None):
+        """Find records by filter dict.
+
+        Usage:
+            User.find({"name": "Alice"})           → [User, ...]
+            User.find({"age": 18}, limit=10)       → [User, ...]
+            User.find(order_by="name ASC")          → [User, ...]
+            User.find()                             → all records
+
+        Args:
+            filter: Dict of {column: value} pairs (AND-ed together).
+            limit: Max records to return.
+            offset: Starting offset.
+            order_by: ORDER BY clause (e.g. "name ASC").
+            include: Relationship names to eager-load.
+        """
+        db = cls._get_db()
+        table = cls._get_table()
+        conditions = []
+        params = []
+
+        if filter:
+            for key, value in filter.items():
+                col = cls.field_mapping.get(key, key)
+                conditions.append(f"{col} = ?")
+                params.append(value)
+
+        if cls.soft_delete:
+            conditions.append("deleted_at IS NULL")
+
+        sql = f"SELECT * FROM {table}"
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        if order_by:
+            sql += f" ORDER BY {order_by}"
+
+        return cls.select(sql, params, limit=limit, offset=offset, include=include)
 
     def load(self, filter: str = None, params: list = None, include: list[str] = None) -> bool:
         """Load a record into this instance.
