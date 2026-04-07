@@ -451,6 +451,11 @@ def middleware(*middleware_classes):
         if hasattr(fn, "_route_ref"):
             existing = fn._route_ref._route.get("middleware", [])
             fn._route_ref._route["middleware"] = list(middleware_classes) + existing
+            # Custom middleware means developer handles auth — disable built-in
+            # gate unless @secured() was explicitly set.
+            route = fn._route_ref._route
+            if not hasattr(fn, "_secured") and route.get("auth_required"):
+                route["auth_required"] = False
         return fn
     return decorator
 
