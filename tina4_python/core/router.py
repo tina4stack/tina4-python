@@ -238,14 +238,18 @@ class Router:
 
         pattern, param_names = _compile_pattern(path)
 
-        # Auth default: GET=public, writes=secured
+        # Auth default: GET=public, writes=secured (unless custom middleware handles auth)
         m = method.upper()
+        has_middleware = bool(options.get("middleware"))
         if "auth_required" in options:
             auth_required = options["auth_required"]
         elif hasattr(handler, "_noauth"):
             auth_required = False
         elif hasattr(handler, "_secured"):
             auth_required = True
+        elif has_middleware:
+            # Route has custom middleware — developer handles auth themselves
+            auth_required = False
         else:
             auth_required = m not in ("GET", "ANY")
 
