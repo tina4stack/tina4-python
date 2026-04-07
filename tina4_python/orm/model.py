@@ -369,11 +369,31 @@ class ORM(metaclass=ORMMeta):
         """Alias for find_by_id()."""
         return cls.find_by_id(pk_value, include)
 
-    def load(self, sql: str, params: list = None, include: list[str] = None) -> bool:
-        """Load a record into this instance via selectOne.
+    def load(self, filter: str = None, params: list = None, include: list[str] = None) -> bool:
+        """Load a record into this instance.
+
+        Usage:
+            orm.id = 1; orm.load()          — uses PK already set
+            orm.load("id = ?", [1])         — filter with params
+            orm.load("id = 1")              — filter string
 
         Returns True if a record was found and loaded, False otherwise.
         """
+        db = self._get_db()
+        table = self._get_table()
+
+        if filter is None:
+            # No args — use the primary key value already set
+            pk = self._get_pk()
+            pk_value = getattr(self, pk, None)
+            if pk_value is None:
+                return False
+            pk_col = self.field_mapping.get(pk, self._fields[pk].column)
+            sql = f"SELECT * FROM {table} WHERE {pk_col} = ?"
+            params = [pk_value]
+        else:
+            sql = f"SELECT * FROM {table} WHERE {filter}"
+
         cls = type(self)
         result = cls.select_one(sql, params, include=include)
         if result is None:
