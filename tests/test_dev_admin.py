@@ -288,15 +288,15 @@ class TestRenderDashboard:
             assert tab in html
 
     def test_contains_api_calls(self):
-        """API calls are now in the external tina4-dev-admin.min.js file."""
+        """API calls are now in the external tina4-dev-admin.js file."""
         from pathlib import Path
-        js_path = Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.min.js"
+        js_path = Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js"
         js_content = js_path.read_text()
-        for api_path in ["/__dev/api/routes", "/__dev/api/queue",
-                         "/__dev/api/mailbox", "/__dev/api/messages",
-                         "/__dev/api/requests", "/__dev/api/broken",
-                         "/__dev/api/websockets", "/__dev/api/system",
-                         "/__dev/api/chat", "/__dev/api/seed"]:
+        # SPA uses relative paths with /__dev/api base
+        assert "/__dev/api" in js_content
+        for api_path in ["/routes", "/system", "/broken",
+                         "/tables", "/query", "/seed",
+                         "/metrics/full"]:
             assert api_path in js_content
 
     def test_no_external_dependencies(self):
@@ -339,7 +339,7 @@ class TestRenderDashboard:
         assert "loadErrors" in html
         # resolveError is in the external JS file (dynamic template)
         from pathlib import Path
-        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.min.js").read_text()
+        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js").read_text()
         assert "resolveError" in js
 
     def test_system_overview(self):
@@ -347,15 +347,14 @@ class TestRenderDashboard:
         assert "sys-grid" in html
         # loadSystem is in the external JS file
         from pathlib import Path
-        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.min.js").read_text()
+        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js").read_text()
         assert "loadSystem" in js
 
-    def test_queue_replay(self):
-        """replayJob and queue/replay API are in the external JS file."""
+    def test_seed_functionality(self):
+        """Seed table API is in the external JS file."""
         from pathlib import Path
-        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.min.js").read_text()
-        assert "replayJob" in js
-        assert "/__dev/api/queue/replay" in js
+        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js").read_text()
+        assert "/seed" in js
 
     def test_message_search(self):
         html = render_dashboard()

@@ -152,13 +152,17 @@ def _mock_transport(ip="127.0.0.1"):
 
 class TestWebSocketManager:
     def _make_ws(self, path="/"):
-        reader = asyncio.StreamReader()
-        transport = _mock_transport()
-        protocol = type("P", (), {})()
         loop = asyncio.new_event_loop()
-        writer = asyncio.StreamWriter(transport, protocol, reader, loop)
-        ws = WebSocketConnection(reader, writer, path)
-        loop.close()
+        asyncio.set_event_loop(loop)
+        try:
+            reader = asyncio.StreamReader()
+            transport = _mock_transport()
+            protocol = type("P", (), {})()
+            writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            ws = WebSocketConnection(reader, writer, path)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
         return ws
 
     def test_add_remove(self):
@@ -209,27 +213,35 @@ class TestWebSocketManager:
 
 class TestWebSocketConnectionProperties:
     def test_connection_id_unique(self):
-        reader = asyncio.StreamReader()
-        transport = _mock_transport("10.0.0.1")
-        protocol = type("P", (), {})()
         loop = asyncio.new_event_loop()
-        writer = asyncio.StreamWriter(transport, protocol, reader, loop)
-        ws1 = WebSocketConnection(reader, writer, "/test", {"x-custom": "1"}, {"room": "lobby"})
-        ws2 = WebSocketConnection(reader, writer, "/test")
-        loop.close()
+        asyncio.set_event_loop(loop)
+        try:
+            reader = asyncio.StreamReader()
+            transport = _mock_transport("10.0.0.1")
+            protocol = type("P", (), {})()
+            writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            ws1 = WebSocketConnection(reader, writer, "/test", {"x-custom": "1"}, {"room": "lobby"})
+            ws2 = WebSocketConnection(reader, writer, "/test")
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
         assert ws1.id != ws2.id
         assert ws1.path == "/test"
         assert ws1.params == {"room": "lobby"}
         assert ws1.ip == "10.0.0.1"
 
     def test_closed_default(self):
-        reader = asyncio.StreamReader()
-        transport = _mock_transport()
-        protocol = type("P", (), {})()
         loop = asyncio.new_event_loop()
-        writer = asyncio.StreamWriter(transport, protocol, reader, loop)
-        ws = WebSocketConnection(reader, writer)
-        loop.close()
+        asyncio.set_event_loop(loop)
+        try:
+            reader = asyncio.StreamReader()
+            transport = _mock_transport()
+            protocol = type("P", (), {})()
+            writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            ws = WebSocketConnection(reader, writer)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
         assert ws.closed is False
 
 
@@ -568,13 +580,17 @@ class TestCloseCodes:
 
 class TestWebSocketConnectionExtra:
     def _make_ws(self, path="/", ip="127.0.0.1", headers=None, params=None):
-        reader = asyncio.StreamReader()
-        transport = _MockTransport(ip)
-        protocol = type("P", (), {})()
         loop = asyncio.new_event_loop()
-        writer = asyncio.StreamWriter(transport, protocol, reader, loop)
-        ws = WebSocketConnection(reader, writer, path, headers, params)
-        loop.close()
+        asyncio.set_event_loop(loop)
+        try:
+            reader = asyncio.StreamReader()
+            transport = _MockTransport(ip)
+            protocol = type("P", (), {})()
+            writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            ws = WebSocketConnection(reader, writer, path, headers, params)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
         return ws
 
     def test_default_path(self):
@@ -626,13 +642,17 @@ class TestWebSocketConnectionExtra:
 
 class TestWebSocketManagerExtra:
     def _make_ws(self, path="/"):
-        reader = asyncio.StreamReader()
-        transport = _MockTransport()
-        protocol = type("P", (), {})()
         loop = asyncio.new_event_loop()
-        writer = asyncio.StreamWriter(transport, protocol, reader, loop)
-        ws = WebSocketConnection(reader, writer, path)
-        loop.close()
+        asyncio.set_event_loop(loop)
+        try:
+            reader = asyncio.StreamReader()
+            transport = _MockTransport()
+            protocol = type("P", (), {})()
+            writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            ws = WebSocketConnection(reader, writer, path)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
         return ws
 
     def test_remove_nonexistent(self):
