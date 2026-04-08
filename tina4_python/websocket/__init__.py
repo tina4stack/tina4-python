@@ -130,6 +130,7 @@ class WebSocketConnection:
         self._manager: "WebSocketManager | None" = None
         self._fragments: list[bytes] = []
         self._fragment_opcode: int = 0
+        self._rooms: set[str] = set()
 
         try:
             peername = writer.get_extra_info("peername")
@@ -168,6 +169,32 @@ class WebSocketConnection:
         """Broadcast to all connections on a different path."""
         if self._manager:
             await self._manager.broadcast(path, message)
+
+    # ── Rooms ──────────────────────────────────────────────────
+
+    @property
+    def rooms(self) -> set[str]:
+        """Return the set of room names this connection has joined."""
+        return self._rooms
+
+    def join_room(self, room_name: str) -> None:
+        """Join a named room."""
+        self._rooms.add(room_name)
+        if self._manager:
+            self._manager._join_room(self.id, room_name)
+
+    def leave_room(self, room_name: str) -> None:
+        """Leave a named room."""
+        self._rooms.discard(room_name)
+        if self._manager:
+            self._manager._leave_room(self.id, room_name)
+
+    async def broadcast_to_room(self, room_name: str, message: str | bytes,
+                                 exclude_self: bool = False) -> None:
+        """Broadcast a message to all connections in a room."""
+        if self._manager:
+            exclude = self.id if exclude_self else None
+            await self._manager.broadcast_to_room(room_name, message, exclude=exclude)
 
     async def ping(self, data: bytes = b""):
         """Send a ping frame."""
@@ -293,6 +320,7 @@ class WebSocketManager:
     def __init__(self):
         self._connections: dict[str, WebSocketConnection] = {}
         self._paths: dict[str, set[str]] = {}
+        self._rooms: dict[str, set[str]] = {}  # room_name → set of connection IDs
 
     def add(self, ws: WebSocketConnection):
         """Register a connection."""
@@ -309,6 +337,10 @@ class WebSocketManager:
             self._paths[ws.path].discard(ws.id)
             if not self._paths[ws.path]:
                 del self._paths[ws.path]
+        # Remove from all rooms
+        for room_name in list(ws._rooms):
+            self._leave_room(ws.id, room_name)
+        ws._rooms.clear()
 
     def get(self, ws_id: str) -> WebSocketConnection | None:
         return self._connections.get(ws_id)
@@ -348,6 +380,36 @@ class WebSocketManager:
         for ws in targets:
             await ws.close()
             self.remove(ws)
+
+    # ── Rooms ──────────────────────────────────────────────────
+
+    def _join_room(self, ws_id: str, room_name: str) -> None:
+        """Internal: add connection ID to a room."""
+        if room_name not in self._rooms:
+            self._rooms[room_name] = set()
+        self._rooms[room_name].add(ws_id)
+
+    def _leave_room(self, ws_id: str, room_name: str) -> None:
+        """Internal: remove connection ID from a room."""
+        if room_name in self._rooms:
+            self._rooms[room_name].discard(ws_id)
+
+    def room_count(self, room_name: str) -> int:
+        """Return the number of connections in a room."""
+        return len(self._rooms.get(room_name, set()))
+
+    def get_room_connections(self, room_name: str) -> list["WebSocketConnection"]:
+        """Return the list of WebSocketConnection objects in a room."""
+        ids = self._rooms.get(room_name, set())
+        return [self._connections[i] for i in ids if i in self._connections]
+
+    async def broadcast_to_room(self, room_name: str, message: str | bytes,
+                                 exclude: str = None) -> None:
+        """Send message to all connections in a room."""
+        for ws in self.get_room_connections(room_name):
+            if exclude and ws.id == exclude:
+                continue
+            await ws.send(message)
 
 
 class WebSocketServer:

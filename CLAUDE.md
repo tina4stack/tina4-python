@@ -608,7 +608,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Template engine via `tina4_python.frond` (Frond — Jinja2/Twig-compatible, replaces Template)
 - JWT auth via `tina4_python.auth` (zero-dep HMAC-SHA256, password hashing via PBKDF2)
 - Queue via `tina4_python.queue` (database-backed, zero deps)
-- WebSocket via `tina4_python.websocket` (RFC 6455, asyncio-based). WebSocket backplane for scaling broadcast across instances via Redis or NATS pub/sub. Configured via `TINA4_WS_BACKPLANE` (`redis` or `nats`) and `TINA4_WS_BACKPLANE_URL` env vars
+- WebSocket via `tina4_python.websocket` (RFC 6455, asyncio-based). WebSocket backplane for scaling broadcast across instances via Redis or NATS pub/sub. Configured via `TINA4_WS_BACKPLANE` (`redis` or `nats`) and `TINA4_WS_BACKPLANE_URL` env vars. Rooms API: `ws.join_room(name)`, `ws.leave_room(name)`, `ws.rooms`, `ws.broadcast_to_room(name, msg)`, `mgr.room_count(name)`, `mgr.get_room_connections(name)`, `mgr.broadcast_to_room(name, msg, exclude=None)`
 - API client via `tina4_python.api` (urllib-based, zero deps)
 - Swagger via `tina4_python.swagger` (OpenAPI 3.0.3 generator)
 - GraphQL via `tina4_python.graphql` (recursive-descent parser, ORM auto-generation)

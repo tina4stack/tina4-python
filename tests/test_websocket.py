@@ -739,3 +739,154 @@ class TestWebSocketServerExtra:
 
         assert "/ws/orphan" in server._handlers
         assert "on_disconnect" in server._handlers["/ws/orphan"]
+
+
+# ── Rooms / Namespaces ────────────────────────────────────────
+
+
+class TestWebSocketRooms:
+    """Tests for named room (namespace) support on WebSocketConnection and WebSocketManager."""
+
+    def _make_ws(self, path="/"):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            reader = asyncio.StreamReader()
+            transport = _MockTransport()
+            protocol = type("P", (), {})()
+            writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            ws = WebSocketConnection(reader, writer, path)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+        return ws
+
+    # ── Connection-level rooms ─────────────────────────────────
+
+    def test_rooms_empty_initially(self):
+        ws = self._make_ws()
+        assert len(ws.rooms) == 0
+
+    def test_join_room_adds_to_rooms_set(self):
+        mgr = WebSocketManager()
+        ws = self._make_ws()
+        mgr.add(ws)
+        ws.join_room("chat")
+        assert "chat" in ws.rooms
+
+    def test_leave_room_removes_from_rooms_set(self):
+        mgr = WebSocketManager()
+        ws = self._make_ws()
+        mgr.add(ws)
+        ws.join_room("chat")
+        ws.leave_room("chat")
+        assert "chat" not in ws.rooms
+
+    def test_join_room_idempotent(self):
+        mgr = WebSocketManager()
+        ws = self._make_ws()
+        mgr.add(ws)
+        ws.join_room("chat")
+        ws.join_room("chat")
+        assert mgr.room_count("chat") == 1
+
+    def test_leave_room_nonmember_is_no_op(self):
+        mgr = WebSocketManager()
+        ws = self._make_ws()
+        mgr.add(ws)
+        ws.leave_room("nonexistent")  # must not raise
+
+    def test_connection_in_multiple_rooms(self):
+        mgr = WebSocketManager()
+        ws = self._make_ws()
+        mgr.add(ws)
+        ws.join_room("chat")
+        ws.join_room("lobby")
+        assert "chat" in ws.rooms
+        assert "lobby" in ws.rooms
+
+    # ── Manager-level rooms ────────────────────────────────────
+
+    def test_room_count_zero_for_unknown_room(self):
+        mgr = WebSocketManager()
+        assert mgr.room_count("ghost") == 0
+
+    def test_room_count_reflects_members(self):
+        mgr = WebSocketManager()
+        ws1 = self._make_ws()
+        ws2 = self._make_ws()
+        mgr.add(ws1)
+        mgr.add(ws2)
+        ws1.join_room("chat")
+        ws2.join_room("chat")
+        assert mgr.room_count("chat") == 2
+
+    def test_room_count_decreases_on_leave(self):
+        mgr = WebSocketManager()
+        ws = self._make_ws()
+        mgr.add(ws)
+        ws.join_room("chat")
+        ws.leave_room("chat")
+        assert mgr.room_count("chat") == 0
+
+    def test_get_room_connections_returns_members(self):
+        mgr = WebSocketManager()
+        ws1 = self._make_ws()
+        ws2 = self._make_ws()
+        ws3 = self._make_ws()
+        mgr.add(ws1)
+        mgr.add(ws2)
+        mgr.add(ws3)
+        ws1.join_room("chat")
+        ws2.join_room("chat")
+        conns = mgr.get_room_connections("chat")
+        assert ws1 in conns
+        assert ws2 in conns
+        assert ws3 not in conns
+
+    def test_get_room_connections_empty_for_unknown_room(self):
+        mgr = WebSocketManager()
+        assert mgr.get_room_connections("ghost") == []
+
+    def test_remove_connection_clears_all_rooms(self):
+        mgr = WebSocketManager()
+        ws = self._make_ws()
+        mgr.add(ws)
+        ws.join_room("chat")
+        ws.join_room("lobby")
+        mgr.remove(ws)
+        assert mgr.room_count("chat") == 0
+        assert mgr.room_count("lobby") == 0
+
+    def test_room_empty_after_last_member_leaves(self):
+        mgr = WebSocketManager()
+        ws = self._make_ws()
+        mgr.add(ws)
+        ws.join_room("temp")
+        ws.leave_room("temp")
+        assert mgr.get_room_connections("temp") == []
+
+    def test_multiple_connections_in_different_rooms(self):
+        mgr = WebSocketManager()
+        ws1 = self._make_ws()
+        ws2 = self._make_ws()
+        mgr.add(ws1)
+        mgr.add(ws2)
+        ws1.join_room("alpha")
+        ws2.join_room("beta")
+        assert mgr.room_count("alpha") == 1
+        assert mgr.room_count("beta") == 1
+        assert ws1 not in mgr.get_room_connections("beta")
+        assert ws2 not in mgr.get_room_connections("alpha")
+
+    def test_connection_leaves_one_room_stays_in_others(self):
+        mgr = WebSocketManager()
+        ws = self._make_ws()
+        mgr.add(ws)
+        ws.join_room("chat")
+        ws.join_room("lobby")
+        ws.leave_room("chat")
+        assert "chat" not in ws.rooms
+        assert "lobby" in ws.rooms
+        assert mgr.room_count("chat") == 0
+        assert mgr.room_count("lobby") == 1
