@@ -311,10 +311,9 @@ class AuthMiddleware:
         if not auth_header.startswith("Bearer "):
             return request, response({"error": "Unauthorized"}, 401)
         token = auth_header[7:]
-        payload = Auth.valid_token_static(token)
-        if payload is None:
+        if not Auth.valid_token_static(token):
             return request, response({"error": "Invalid token"}, 401)
-        request.auth = payload
+        request.auth = Auth.get_payload(token)
         return request, response
 
 
