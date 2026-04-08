@@ -9,6 +9,8 @@ SQL-first: you write the queries, ORM maps and manages the data.
         name = Field(str, required=True)
         email = Field(str)
 """
+from __future__ import annotations
+from typing import TYPE_CHECKING, Self
 from tina4_python.orm.fields import Field, RelationshipDescriptor
 from tina4_python.core.cache import Cache
 
@@ -78,6 +80,15 @@ class ORMMeta(type):
         namespace["_fields"] = fields
         namespace["_relationships"] = relationships
         cls = super().__new__(mcs, name, bases, namespace)
+
+        # Auto-register for CRUD if flagged
+        if namespace.get("auto_crud", False) and name != "ORM":
+            try:
+                from tina4_python.crud import AutoCrud
+                AutoCrud.register(cls)
+            except ImportError:
+                pass
+
         return cls
 
 
@@ -86,7 +97,7 @@ class ORM(metaclass=ORMMeta):
 
     Features:
     - CRUD: save(), load(), delete(), select(), find()
-    - Soft delete: deleted_at field, with_trashed(), restore(), force_delete()
+    - Soft delete: is_deleted field (0/1), with_trashed(), restore(), force_delete()
     - Scopes: reusable query filters
     - Relationships: has_one(), has_many()
     - Validation from field definitions
@@ -96,6 +107,7 @@ class ORM(metaclass=ORMMeta):
     soft_delete: bool = False  # Set True to enable soft delete
     field_mapping: dict[str, str] = {}  # {"python_attribute": "db_column"}
     auto_map: bool = False  # No-op in Python (snake_case matches DB); exists for cross-language parity
+    auto_crud: bool = False  # Set True to auto-register CRUD routes
     _db: str | object | None = None  # Per-model database override
     _fields: dict[str, Field] = {}
 
@@ -229,7 +241,7 @@ class ORM(metaclass=ORMMeta):
 
     # ── CRUD ────────────────────────────────────────────────────
 
-    def save(self):
+    def save(self) -> Self | bool:
         """Insert or update. Returns self on success, False on failure."""
         db = self._get_db()
         pk = self._get_pk()
@@ -268,7 +280,7 @@ class ORM(metaclass=ORMMeta):
         self._persisted = True
         return self
 
-    def delete(self):
+    def delete(self) -> bool:
         """Delete this record (soft or hard)."""
         db = self._get_db()
         pk = self._get_pk()
@@ -281,19 +293,18 @@ class ORM(metaclass=ORMMeta):
 
         db.start_transaction()
         try:
-            if self.soft_delete and "deleted_at" in self._fields:
-                from datetime import datetime, timezone
-                now = datetime.now(timezone.utc).isoformat()
-                db.update(table, {"deleted_at": now}, f"{pk_db_col} = ?", [pk_value])
-                self.deleted_at = now
+            if self.soft_delete:
+                db.update(table, {"is_deleted": 1}, f"{pk_db_col} = ?", [pk_value])
+                self.is_deleted = 1
             else:
                 db.delete(table, f"{pk_db_col} = ?", [pk_value])
             db.commit()
         except Exception:
             db.rollback()
             raise
+        return True
 
-    def force_delete(self):
+    def force_delete(self) -> bool:
         """Hard delete, even if soft delete is enabled."""
         db = self._get_db()
         pk = self._get_pk()
@@ -311,8 +322,9 @@ class ORM(metaclass=ORMMeta):
         except Exception:
             db.rollback()
             raise
+        return True
 
-    def restore(self):
+    def restore(self) -> bool:
         """Restore a soft-deleted record."""
         if not self.soft_delete:
             raise RuntimeError("Model does not support soft delete")
@@ -325,17 +337,18 @@ class ORM(metaclass=ORMMeta):
 
         db.start_transaction()
         try:
-            db.update(table, {"deleted_at": None}, f"{pk_db_col} = ?", [pk_value])
-            self.deleted_at = None
+            db.update(table, {"is_deleted": 0}, f"{pk_db_col} = ?", [pk_value])
+            self.is_deleted = 0
             db.commit()
         except Exception:
             db.rollback()
             raise
+        return True
 
     # ── Finders ─────────────────────────────────────────────────
 
     @classmethod
-    def create(cls, data: dict = None, **kwargs):
+    def create(cls, data: dict = None, **kwargs) -> Self:
         """Create a new instance, save it, and return it.
 
         Usage:
@@ -347,7 +360,7 @@ class ORM(metaclass=ORMMeta):
         return instance
 
     @classmethod
-    def find_by_id(cls, pk_value, include: list[str] = None):
+    def find_by_id(cls, pk_value, include: list[str] = None) -> Self | None:
         """Find a single record by primary key. Returns instance or None.
 
         Args:
@@ -360,12 +373,12 @@ class ORM(metaclass=ORMMeta):
 
         sql = f"SELECT * FROM {table} WHERE {pk_col} = ?"
         if cls.soft_delete:
-            sql += " AND deleted_at IS NULL"
+            sql += " AND (is_deleted = 0 OR is_deleted IS NULL)"
 
         return cls.select_one(sql, [pk_value], include=include)
 
     @classmethod
-    def find(cls, filter: dict = None, limit: int = 100, offset: int = 0, order_by: str = None, include: list[str] = None):
+    def find(cls, filter: dict = None, limit: int = 100, offset: int = 0, order_by: str = None, include: list[str] = None) -> list[Self]:
         """Find records by filter dict.
 
         Usage:
@@ -393,7 +406,7 @@ class ORM(metaclass=ORMMeta):
                 params.append(value)
 
         if cls.soft_delete:
-            conditions.append("deleted_at IS NULL")
+            conditions.append("(is_deleted = 0 OR is_deleted IS NULL)")
 
         sql = f"SELECT * FROM {table}"
         if conditions:
@@ -439,7 +452,7 @@ class ORM(metaclass=ORMMeta):
         return True
 
     @classmethod
-    def find_or_fail(cls, pk_value):
+    def find_or_fail(cls, pk_value) -> Self:
         """Find by primary key or raise ValueError."""
         result = cls.find_by_id(pk_value)
         if result is None:
@@ -447,7 +460,12 @@ class ORM(metaclass=ORMMeta):
         return result
 
     @classmethod
-    def all(cls, limit: int = 100, offset: int = 0, include: list[str] = None):
+    def exists(cls, pk_value) -> bool:
+        """Return True if a record with the given primary key exists."""
+        return cls.find_by_id(pk_value) is not None
+
+    @classmethod
+    def all(cls, limit: int = 100, offset: int = 0, include: list[str] = None) -> list[Self]:
         """Fetch all records (respects soft delete).
 
         Args:
@@ -458,7 +476,7 @@ class ORM(metaclass=ORMMeta):
 
         sql = f"SELECT * FROM {table}"
         if cls.soft_delete:
-            sql += " WHERE deleted_at IS NULL"
+            sql += " WHERE (is_deleted = 0 OR is_deleted IS NULL)"
 
         result = db.fetch(sql, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
@@ -468,7 +486,7 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def select(cls, sql: str, params: list = None, limit: int = 20, offset: int = 0,
-               include: list[str] = None) -> list:
+               include: list[str] = None) -> list[Self]:
         """SQL-first query — returns array of ORM objects."""
         db = cls._get_db()
         result = db.fetch(sql, params, limit=limit, offset=offset)
@@ -478,21 +496,21 @@ class ORM(metaclass=ORMMeta):
         return instances
 
     @classmethod
-    def select_one(cls, sql: str, params: list = None, include: list[str] = None):
+    def select_one(cls, sql: str, params: list = None, include: list[str] = None) -> Self | None:
         """Return a single ORM instance for a raw SQL query, or None if no rows match."""
         instances = cls.select(sql, params, limit=1, offset=0, include=include)
         return instances[0] if instances else None
 
     @classmethod
     def where(cls, filter_sql: str, params: list = None, limit: int = 20, offset: int = 0,
-              include: list[str] = None) -> list:
+              include: list[str] = None) -> list[Self]:
         """Query with WHERE clause — returns array of ORM objects."""
         db = cls._get_db()
         table = cls._get_table()
 
         sql = f"SELECT * FROM {table} WHERE {filter_sql}"
         if cls.soft_delete:
-            sql = f"SELECT * FROM {table} WHERE ({filter_sql}) AND deleted_at IS NULL"
+            sql = f"SELECT * FROM {table} WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
 
         result = db.fetch(sql, params, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
@@ -501,7 +519,7 @@ class ORM(metaclass=ORMMeta):
         return instances
 
     @classmethod
-    def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 20, offset: int = 0):
+    def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 20, offset: int = 0) -> list[Self]:
         """Query including soft-deleted records."""
         db = cls._get_db()
         table = cls._get_table()
@@ -517,7 +535,7 @@ class ORM(metaclass=ORMMeta):
 
         where_parts = []
         if cls.soft_delete:
-            where_parts.append("deleted_at IS NULL")
+            where_parts.append("(is_deleted = 0 OR is_deleted IS NULL)")
         if conditions:
             where_parts.append(f"({conditions})")
 
@@ -622,7 +640,7 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def cached(cls, sql: str, params: list = None, ttl: int = 60,
-               limit: int = 20, offset: int = 0):
+               limit: int = 20, offset: int = 0) -> list[Self]:
         """SQL query with result caching. Returns array of ORM objects."""
         cache_key = f"{cls.__name__}:{Cache.query_key(sql, params)}:{limit}:{offset}"
         cached = _query_cache.get(cache_key)
@@ -634,13 +652,13 @@ class ORM(metaclass=ORMMeta):
         return result
 
     @classmethod
-    def clear_cache(cls):
+    def clear_cache(cls) -> None:
         """Clear all cached query results for this model."""
         _query_cache.clear_tag(cls.__name__)
 
     # ── Relationships ───────────────────────────────────────────
 
-    def has_one(self, related_class, foreign_key: str = None):
+    def has_one(self, related_class, foreign_key: str = None) -> Self | None:
         """Load a single related record (imperative style)."""
         pk = self._get_pk()
         pk_value = getattr(self, pk)
@@ -651,7 +669,7 @@ class ORM(metaclass=ORMMeta):
         row = self._get_db().fetch_one(sql, [pk_value])
         return related_class(row) if row else None
 
-    def has_many(self, related_class, foreign_key: str = None, limit: int = 100, offset: int = 0):
+    def has_many(self, related_class, foreign_key: str = None, limit: int = 100, offset: int = 0) -> list[Self]:
         """Load multiple related records (imperative style)."""
         pk = self._get_pk()
         pk_value = getattr(self, pk)
@@ -662,7 +680,7 @@ class ORM(metaclass=ORMMeta):
         result = self._get_db().fetch(sql, [pk_value], limit=limit, offset=offset)
         return [related_class(row) for row in result.records]
 
-    def belongs_to(self, related_class, foreign_key: str = None):
+    def belongs_to(self, related_class, foreign_key: str = None) -> Self | None:
         """Load the parent record (imperative style)."""
         fk = foreign_key or f"{related_class.__name__.lower()}_id"
         fk_value = getattr(self, fk, None)
@@ -766,7 +784,7 @@ class ORM(metaclass=ORMMeta):
     # ── Scopes ──────────────────────────────────────────────────
 
     @classmethod
-    def scope(cls, name: str, filter_sql: str, params: list = None):
+    def scope(cls, name: str, filter_sql: str, params: list = None) -> None:
         """Register a reusable query scope on the class.
 
             User.scope("active", "active = ?", [1])

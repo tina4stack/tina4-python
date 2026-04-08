@@ -390,6 +390,72 @@ def create_migration(description: str, migration_folder: str = "migrations") -> 
     return str(filepath)
 
 
+class Migration:
+    """Object-oriented wrapper around the migration runner functions.
+
+    Provides the canonical Tina4 Migration API with parity across all 4 frameworks:
+        - migrate()          Run all pending migrations
+        - rollback(steps=1)  Roll back last N batches
+        - status()           Show completed/pending
+        - create(description) Scaffold new .sql + .down.sql files
+        - get_applied()      List applied migrations
+        - get_pending()      List pending migrations
+        - get_files()        List all migration files on disk
+
+    Example::
+
+        from tina4_python.migration import Migration
+
+        m = Migration(db, "migrations")
+        m.migrate()
+        m.rollback(steps=2)
+        m.status()
+        m.create("add users table")
+    """
+
+    def __init__(self, db, migrations_dir: str = "migrations", delimiter: str = ";"):
+        self._db = db
+        self._dir = migrations_dir
+        self._delim = delimiter
+
+    def migrate(self) -> list[str]:
+        """Run all pending migrations. Returns list of applied filenames."""
+        return migrate(self._db, self._dir, self._delim)
+
+    def rollback(self, steps: int = 1) -> list[str]:
+        """Roll back the last N batches. Returns list of rolled-back filenames."""
+        rolled: list[str] = []
+        for _ in range(steps):
+            batch = rollback(self._db, self._dir, self._delim)
+            if not batch:
+                break
+            rolled.extend(batch)
+        return rolled
+
+    def status(self) -> dict:
+        """Return {"completed": [...], "pending": [...]} migration status."""
+        return status(self._db, self._dir)
+
+    def create(self, description: str) -> str:
+        """Scaffold a new .sql + .down.sql migration file. Returns the up-file path."""
+        return create_migration(description, self._dir)
+
+    def get_applied(self) -> list[dict]:
+        """Return list of applied migration records."""
+        return self.status()["completed"]
+
+    def get_pending(self) -> list[dict]:
+        """Return list of pending migration records."""
+        return self.status()["pending"]
+
+    def get_files(self) -> list[str]:
+        """Return sorted list of all migration filenames on disk (excludes .down.sql)."""
+        folder = Path(self._dir)
+        if not folder.is_dir():
+            return []
+        return sorted(f.name for f in folder.glob("*.sql") if not f.name.endswith(".down.sql"))
+
+
 def status(db, migration_folder: str = "migrations") -> dict:
     """Get migration status: which are completed and which are pending.
 

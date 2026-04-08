@@ -26,7 +26,7 @@ class Post(ORM):
     title = Field(str, required=True)
     body = Field(str)
     user_id = Field(int)
-    deleted_at = Field(str)
+    is_deleted = Field(int, default=0)
     soft_delete = True
 
     # Descriptor-based relationships
@@ -61,7 +61,7 @@ def db(tmp_path):
     db_path = tmp_path / "orm_test.db"
     d = Database(f"sqlite:///{db_path}")
     d.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT, active INTEGER DEFAULT 1)")
-    d.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT, user_id INTEGER, deleted_at TEXT)")
+    d.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, body TEXT, user_id INTEGER, is_deleted INTEGER DEFAULT 0)")
     d.execute("CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, post_id INTEGER)")
     d.execute("CREATE TABLE profiles (id INTEGER PRIMARY KEY AUTOINCREMENT, bio TEXT, user_id INTEGER)")
     d.commit()
@@ -208,6 +208,13 @@ class TestORMCrud:
         found = User.find_or_fail(user.id)
         assert found.name == "Exists"
 
+    def test_exists(self, db):
+        user = User({"name": "ExistsCheck"}).save()
+        db.commit()
+
+        assert User.exists(user.id) is True
+        assert User.exists(99999) is False
+
     def test_to_dict(self, db):
         user = User({"name": "Alice", "email": "a@b.com"})
         d = user.to_dict()
@@ -269,12 +276,12 @@ class TestSoftDelete:
         # Should not appear in normal find
         assert Post.find_by_id(pid) is None
 
-    def test_soft_delete_sets_deleted_at(self, db):
+    def test_soft_delete_sets_is_deleted(self, db):
         post = Post({"title": "Deleted"}).save()
         db.commit()
         post.delete()
         db.commit()
-        assert post.deleted_at is not None
+        assert post.is_deleted == 1
 
     def test_with_trashed(self, db):
         post = Post({"title": "Trashed"}).save()
@@ -642,9 +649,9 @@ class TestAutoCommit:
         post.save()
         pid = post.id
         post.delete()
-        row = db.fetch_one("SELECT deleted_at FROM posts WHERE id = ?", [pid])
+        row = db.fetch_one("SELECT is_deleted FROM posts WHERE id = ?", [pid])
         assert row is not None
-        assert row["deleted_at"] is not None
+        assert row["is_deleted"] == 1
 
     def test_restore_auto_commits(self, db):
         """restore() auto-commits."""
@@ -652,8 +659,8 @@ class TestAutoCommit:
         post.save()
         post.delete()
         post.restore()
-        row = db.fetch_one("SELECT deleted_at FROM posts WHERE id = ?", [post.id])
-        assert row["deleted_at"] is None
+        row = db.fetch_one("SELECT is_deleted FROM posts WHERE id = ?", [post.id])
+        assert row["is_deleted"] == 0
 
     def test_force_delete_auto_commits(self, db):
         """force_delete() auto-commits."""

@@ -203,6 +203,7 @@ model.belongs_to(related_class, foreign_key=None) # Imperative relationship quer
 MyModel.find(pk_value, include=None) -> MyModel | None
 MyModel.find_by_id(pk_value, include=None) -> MyModel | None
 MyModel.find_or_fail(pk_value) -> MyModel          # Raises ValueError if not found
+MyModel.exists(pk_value) -> bool                   # True if record with that PK exists
 MyModel.create(data=None, **kwargs) -> MyModel     # Create + save in one call
 MyModel.all(limit=100, offset=0, include=None) -> list[MyModel]
 MyModel.select(sql, params=None, limit=20, offset=0, include=None) -> list[MyModel]

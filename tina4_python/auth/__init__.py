@@ -68,26 +68,26 @@ class Auth:
 
         return f"{h}.{p}.{signature}"
 
-    def valid_token(self, token: str) -> dict | None:
-        """Validate a JWT and return the payload. None if invalid/expired."""
+    def valid_token(self, token: str) -> bool:
+        """Validate a JWT signature and expiry. Returns True if valid, False otherwise."""
         try:
             parts = token.split(".")
             if len(parts) != 3:
-                return None
+                return False
 
             h, p, sig = parts
             expected = self._sign(f"{h}.{p}")
             if not hmac.compare_digest(sig, expected):
-                return None
+                return False
 
             payload = json.loads(_b64url_decode(p))
 
             if "exp" in payload and time.time() > payload["exp"]:
-                return None
+                return False
 
-            return payload
+            return True
         except Exception:
-            return None
+            return False
 
     def get_payload(self, token: str) -> dict | None:
         """Decode payload WITHOUT validating signature or expiry."""
@@ -105,7 +105,9 @@ class Auth:
         Args:
             expires_in: Lifetime in minutes (default: self.expires_in).
         """
-        payload = self.valid_token(token)
+        if not self.valid_token(token):
+            return None
+        payload = self.get_payload(token)
         if payload is None:
             return None
         payload.pop("iat", None)
@@ -132,7 +134,7 @@ class Auth:
         return auth.get_token(payload)
 
     @classmethod
-    def valid_token_static(cls, token: str) -> dict | None:
+    def valid_token_static(cls, token: str) -> bool:
         """Validate a JWT without instantiating Auth — reads SECRET from env."""
         secret = os.environ.get("SECRET", "tina4-default-secret")
         auth = cls(secret=secret)
@@ -237,9 +239,8 @@ class Auth:
 
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            payload = self.valid_token(token)
-            if payload:
-                return payload
+            if self.valid_token(token):
+                return self.get_payload(token)
             if self.validate_api_key(token):
                 return {"auth_type": "api_key"}
             return None
@@ -275,8 +276,8 @@ def get_token(payload: dict, expires_in: int = 60) -> str:
     return Auth.get_token_static(payload, expires_in=expires_in)
 
 
-def valid_token(token: str) -> dict | None:
-    """Validate a JWT — reads SECRET from env. Shortcut for Auth.valid_token_static()."""
+def valid_token(token: str) -> bool:
+    """Validate a JWT signature and expiry — reads SECRET from env. Returns True if valid."""
     return Auth.valid_token_static(token)
 
 

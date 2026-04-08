@@ -242,7 +242,7 @@ class CsrfMiddleware:
                 from tina4_python.auth import Auth as _CsrfAuth
                 secret = os.environ.get("SECRET", "tina4-default-secret")
                 auth = _CsrfAuth(secret=secret)
-                if auth.valid_token(bearer_token) is not None:
+                if auth.valid_token(bearer_token):
                     return request, response
 
         # Reject if token is in query string (security risk — log warning)
@@ -281,14 +281,14 @@ class CsrfMiddleware:
         from tina4_python.auth import Auth as _CsrfAuth
         secret = os.environ.get("SECRET", "tina4-default-secret")
         auth = _CsrfAuth(secret=secret)
-        payload = auth.valid_token(token)
-
-        if payload is None:
+        if not auth.valid_token(token):
             return request, response.error(
                 "CSRF_INVALID",
                 "Invalid or missing form token",
                 403,
             )
+
+        payload = auth.get_payload(token) or {}
 
         # Session binding — if token has session_id, verify it matches
         token_session_id = payload.get("session_id")
