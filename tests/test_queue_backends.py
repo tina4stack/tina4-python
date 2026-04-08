@@ -509,11 +509,11 @@ class TestResolveBackend:
 
     @_skip_no_pymongo
     def test_resolve_backend_mongodb(self, monkeypatch):
-        from tina4_python.queue import _resolve_backend, _MongoDBAdapter
+        from tina4_python.queue import _resolve_backend, MongoBackend
 
         monkeypatch.setenv("TINA4_QUEUE_BACKEND", "mongodb")
         adapter = _resolve_backend("test", None, 3)
-        assert isinstance(adapter, _MongoDBAdapter)
+        assert isinstance(adapter, MongoBackend)
 
 
 # ── Integration Tests (require actual services) ─────────────────
