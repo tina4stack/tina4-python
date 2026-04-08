@@ -313,7 +313,7 @@ class AuthMiddleware:
         token = auth_header[7:]
         if not Auth.valid_token_static(token):
             return request, response({"error": "Invalid token"}, 401)
-        request.auth = Auth.get_payload(token)
+        request.auth = Auth.get_payload_static(token)
         return request, response
 
 
