@@ -174,9 +174,16 @@ class Auth:
     # ── Password Hashing ──────────────────────────────────────────
 
     @staticmethod
-    def hash_password(password: str, iterations: int = 260000) -> str:
-        """Hash using PBKDF2-HMAC-SHA256. Returns: algorithm$iterations$salt$hash"""
-        salt = secrets.token_hex(16)
+    def hash_password(password: str, salt: str = None, iterations: int = 260000) -> str:
+        """Hash using PBKDF2-HMAC-SHA256. Returns: algorithm$iterations$salt$hash
+
+        Args:
+            password:   Plaintext password to hash.
+            salt:       Hex-encoded salt; auto-generated if None.
+            iterations: PBKDF2 iteration count (default 260000).
+        """
+        if salt is None:
+            salt = secrets.token_hex(16)
         dk = hashlib.pbkdf2_hmac(
             "sha256", password.encode(), salt.encode(), iterations
         )
