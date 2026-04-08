@@ -629,9 +629,24 @@ async def _handle_dev_websocket(reader, writer, headers, path):
 
 
 def _init_session(request: Request) -> None:
-    """Auto-start session from cookie. Modifies request.session in place."""
+    """Auto-start session from cookie. Modifies request.session in place.
+
+    Session creation is skipped for WebSocket upgrade requests — they don't send
+    cookies and would create orphaned session files that are never cleaned up.
+    A session is only created when:
+      - A tina4_session cookie is already present (resume existing session), OR
+      - The request is a normal HTTP request (not a WebSocket upgrade)
+    """
     if request.session is not None:
         return
+
+    # Skip session creation for WebSocket upgrade requests.
+    # WebSocket clients don't send cookies so sess.start(None) would create a
+    # new orphaned file every connection that is never cleaned up.
+    upgrade = request.headers.get("upgrade", "").lower()
+    if upgrade == "websocket":
+        return
+
     try:
         from tina4_python.session import Session
         cookie_header = request.headers.get("cookie", "")
@@ -641,8 +656,19 @@ def _init_session(request: Request) -> None:
             if part.startswith("tina4_session="):
                 sid_match = part.split("=", 1)[1]
                 break
-        sess = Session()
-        sess.start(sid_match)
+
+        # Only create a new session for HTTP requests that don't already have one.
+        # This prevents a new empty session file being written on every anonymous request.
+        if sid_match is None:
+            # Lazy session: attach a Session object but don't persist until the route
+            # explicitly writes to it. The session file is only created on first save().
+            sess = Session()
+            sess.start(None)
+            sess._is_new = True  # flag for _finalize_response to skip saving if unused
+        else:
+            sess = Session()
+            sess.start(sid_match)
+
         request.session = sess
         # Probabilistic garbage collection (1% of requests)
         import random
@@ -938,15 +964,22 @@ def _finalize_response(
         except Exception:
             pass
 
-    # Session save + cookie
+    # Session save + cookie.
+    # Skip saving if this was a brand-new session that the route never wrote to —
+    # that prevents empty orphaned session files accumulating on disk.
     if request.session is not None:
         try:
-            request.session.save()
-            sid = request.session.session_id if hasattr(request.session, 'session_id') else getattr(request.session, 'id', None)
-            if sid:
-                ttl = int(os.environ.get("TINA4_SESSION_TTL", "3600"))
-                samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
-                response.header("set-cookie", f"tina4_session={sid}; Path=/; HttpOnly; SameSite={samesite}; Max-Age={ttl}")
+            is_new_and_empty = (
+                getattr(request.session, '_is_new', False)
+                and not request.session.all()
+            )
+            if not is_new_and_empty:
+                request.session.save()
+                sid = request.session.session_id if hasattr(request.session, 'session_id') else getattr(request.session, 'id', None)
+                if sid:
+                    ttl = int(os.environ.get("TINA4_SESSION_TTL", "3600"))
+                    samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
+                    response.header("set-cookie", f"tina4_session={sid}; Path=/; HttpOnly; SameSite={samesite}; Max-Age={ttl}")
             import random
             if random.randint(1, 100) == 1:
                 request.session.gc()
