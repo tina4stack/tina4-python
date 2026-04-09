@@ -76,32 +76,58 @@ class Queue:
         """Atomically claim the next available job. Returns None if empty."""
         return self._backend.pop(self)
 
+    def pop_batch(self, count: int) -> list:
+        """Pop up to count jobs at once. Returns a partial batch if fewer available."""
+        if hasattr(self._backend, "pop_batch"):
+            return self._backend.pop_batch(count, self)
+        # Fallback for backends that don't implement pop_batch
+        jobs = []
+        for _ in range(count):
+            job = self._backend.pop(self)
+            if job is None:
+                break
+            jobs.append(job)
+        return jobs
+
     def get_topic(self) -> str:
         """Return the topic name this queue was constructed with."""
         return self.topic
 
-    def process(self, handler, topic: str = None, *, max_jobs: int = None) -> None:
+    def process(self, handler, topic: str = None, *, max_jobs: int = None, batch_size: int = 1) -> None:
         """Consume all available jobs and pass each to handler, then stop.
 
         Simpler alternative to consume() for drain-and-exit use cases.
 
         Args:
-            handler:  Callable that receives a Job. Should call job.complete()
-                      or job.fail() when done.
-            topic:    Override the queue's default topic.
-            max_jobs: Stop after processing this many jobs (None = drain all).
+            handler:    Callable that receives a Job (or list of Jobs when batch_size > 1).
+                        Should call job.complete() or job.fail() when done.
+            topic:      Override the queue's default topic.
+            max_jobs:   Stop after processing this many jobs (None = drain all).
+            batch_size: Number of jobs to pass to handler at once (default 1).
+                        When > 1, handler receives a list of Jobs.
         """
-        topic = topic or self.topic
         processed = 0
         while max_jobs is None or processed < max_jobs:
-            job = self._backend.dequeue(topic)
-            if job is None:
-                break
-            try:
-                handler(job)
-            except Exception as exc:  # noqa: BLE001
-                job.fail(str(exc))
-            processed += 1
+            if batch_size > 1:
+                remaining = (max_jobs - processed) if max_jobs else batch_size
+                jobs = self.pop_batch(min(batch_size, remaining))
+                if not jobs:
+                    break
+                try:
+                    handler(jobs)
+                except Exception as exc:  # noqa: BLE001
+                    for job in jobs:
+                        job.fail(str(exc))
+                processed += len(jobs)
+            else:
+                job = self._backend.pop(self)
+                if job is None:
+                    break
+                try:
+                    handler(job)
+                except Exception as exc:  # noqa: BLE001
+                    job.fail(str(exc))
+                processed += 1
 
     def size(self, status: str = "pending") -> int:
         """Count jobs by status."""
@@ -143,7 +169,7 @@ class Queue:
             self._backend = _resolve_backend(old_topic, None, self.max_retries)
 
     def consume(self, topic: str = None, job_id: str = None, poll_interval: float = 1.0,
-                iterations: int = 0):
+                iterations: int = 0, batch_size: int = 1):
         """Consume jobs from a topic using a long-running generator.
 
         Polls the queue continuously. When empty, sleeps for poll_interval
@@ -189,14 +215,24 @@ class Queue:
         # poll_interval>0 → long-running poll (sleeps when empty, never returns)
         consumed = 0
         while True:
-            job = self.pop()
-            if job is None:
-                if poll_interval <= 0:
-                    break
-                time.sleep(poll_interval)
-                continue
-            yield job
-            consumed += 1
+            if batch_size > 1:
+                jobs = self.pop_batch(batch_size)
+                if not jobs:
+                    if poll_interval <= 0:
+                        break
+                    time.sleep(poll_interval)
+                    continue
+                yield jobs
+                consumed += len(jobs)
+            else:
+                job = self.pop()
+                if job is None:
+                    if poll_interval <= 0:
+                        break
+                    time.sleep(poll_interval)
+                    continue
+                yield job
+                consumed += 1
             if iterations > 0 and consumed >= iterations:
                 break
 

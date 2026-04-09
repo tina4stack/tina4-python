@@ -114,6 +114,49 @@ class LiteBackend:
 
         return None
 
+    def pop_batch(self, count: int, queue_ref) -> list:
+        """Pop up to count jobs in one operation. Returns partial batch if fewer available."""
+        now = _now()
+        queue_dir = self._queue_dir()
+        results = []
+
+        with self._lock:
+            try:
+                files = sorted(f for f in os.listdir(queue_dir) if f.endswith(".queue-data"))
+            except FileNotFoundError:
+                return []
+
+            for filename in files:
+                if len(results) >= count:
+                    break
+                filepath = os.path.join(queue_dir, filename)
+                try:
+                    with open(filepath) as f:
+                        job_data = json.load(f)
+                except (json.JSONDecodeError, FileNotFoundError):
+                    continue
+
+                if job_data.get("status") != "pending":
+                    continue
+                if job_data.get("available_at", "") > now:
+                    continue
+
+                try:
+                    os.unlink(filepath)
+                except FileNotFoundError:
+                    continue
+
+                results.append(Job(
+                    queue=queue_ref,
+                    job_id=job_data["id"],
+                    topic=job_data.get("topic", self._topic),
+                    data=job_data["data"],
+                    priority=job_data.get("priority", 0),
+                    attempts=job_data.get("attempts", 0),
+                ))
+
+        return results
+
     def size(self, status: str = "pending") -> int:
         queue_dir = self._queue_dir()
         count = 0

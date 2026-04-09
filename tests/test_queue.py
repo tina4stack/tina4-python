@@ -371,3 +371,68 @@ class TestProduceConsume:
             job.complete()
 
         assert q.size("pending") == 0
+
+
+# --- batch tests ---
+
+def test_pop_batch_returns_list(tmp_path, monkeypatch):
+    monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path))
+    monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+    queue = Queue(topic="batch_test")
+    queue.push({"n": 1})
+    queue.push({"n": 2})
+    queue.push({"n": 3})
+    jobs = queue.pop_batch(2)
+    assert isinstance(jobs, list)
+    assert len(jobs) == 2
+
+
+def test_pop_batch_partial(tmp_path, monkeypatch):
+    """Returns fewer than requested when queue has less."""
+    monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path))
+    monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+    queue = Queue(topic="batch_partial")
+    queue.push({"n": 1})
+    jobs = queue.pop_batch(10)
+    assert len(jobs) == 1
+
+
+def test_pop_batch_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path))
+    monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+    queue = Queue(topic="batch_empty")
+    jobs = queue.pop_batch(5)
+    assert jobs == []
+
+
+def test_consume_batch_size(tmp_path, monkeypatch):
+    monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path))
+    monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+    queue = Queue(topic="batch_consume")
+    for i in range(5):
+        queue.push({"n": i})
+    batches = []
+    for jobs in queue.consume(batch_size=2, poll_interval=0):
+        batches.append(jobs)
+        for job in jobs:
+            job.complete()
+    # 5 jobs, batch_size=2 → batches of [2, 2, 1]
+    assert sum(len(b) for b in batches) == 5
+    assert all(isinstance(b, list) for b in batches)
+
+
+def test_process_batch_size(tmp_path, monkeypatch):
+    monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path))
+    monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+    queue = Queue(topic="batch_process")
+    for i in range(6):
+        queue.push({"n": i})
+    received = []
+
+    def handler(jobs):
+        for job in jobs:
+            received.append(job.data["n"])
+            job.complete()
+
+    queue.process(handler, batch_size=3)
+    assert len(received) == 6
