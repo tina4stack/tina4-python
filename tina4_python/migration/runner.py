@@ -40,11 +40,11 @@ class MigrationBase:
                 db.execute("DROP TABLE IF EXISTS users")
     """
 
-    def up(self, db) -> None:
+    def up(self, db=None) -> None:
         """Apply the migration. Override in subclass."""
         raise NotImplementedError("Migration subclass must implement up(db)")
 
-    def down(self, db) -> None:
+    def down(self, db=None) -> None:
         """Reverse the migration. Override in subclass."""
         raise NotImplementedError("Migration subclass must implement down(db)")
 
