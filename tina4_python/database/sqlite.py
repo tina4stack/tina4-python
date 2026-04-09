@@ -5,11 +5,19 @@ No external dependencies.
 """
 import re
 import sqlite3
+import threading
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
 
 
 class SQLiteAdapter(DatabaseAdapter):
     """SQLite database driver using Python stdlib."""
+
+    # Class-level write lock shared across all SQLiteAdapter instances in the
+    # process.  SQLite's WAL mode allows concurrent readers, but concurrent
+    # writers from different threads (or asyncio tasks on the same thread) will
+    # get SQLITE_BUSY.  This lock serialises all writes so the busy_timeout is
+    # a last-resort safety net rather than the primary protection.
+    _write_lock: threading.Lock = threading.Lock()
 
     def __init__(self):
         super().__init__()
@@ -23,10 +31,13 @@ class SQLiteAdapter(DatabaseAdapter):
         Connection string: path to .db file (e.g., "data/app.db")
         """
         self._conn = sqlite3.connect(
-            connection_string, check_same_thread=False,
-            isolation_level=None,  # Manual transaction control
+            connection_string,
+            check_same_thread=False,
+            isolation_level=None,   # Manual transaction control
+            timeout=30,             # sqlite3 module-level lock wait (seconds)
         )
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA busy_timeout = 30000")  # SQLite-level wait (ms)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
 
@@ -45,38 +56,41 @@ class SQLiteAdapter(DatabaseAdapter):
         # RETURNING emulation — SQLite 3.35+ supports RETURNING natively,
         # but for older versions and cross-engine compat, we emulate it.
         returning_match = None
+        returning_cols = None
         if "RETURNING" in sql.upper():
-            import re
             returning_match = re.search(r"\s+RETURNING\s+(.+)$", sql, re.IGNORECASE)
             if returning_match and not self._supports_returning():
                 returning_cols = returning_match.group(1).strip()
                 sql = sql[:returning_match.start()]
 
-        cursor = self._conn.execute(sql, params or [])
+        # Serialise writes to prevent SQLITE_BUSY / deadlock when multiple
+        # threads or asyncio tasks write concurrently (common in dev server).
+        with self._write_lock:
+            cursor = self._conn.execute(sql, params or [])
 
-        records = []
-        if returning_match and not self._supports_returning():
-            # Emulate RETURNING by fetching the last inserted/updated row
-            if cursor.lastrowid:
-                row = self._conn.execute(
-                    f"SELECT {returning_cols} FROM {self._extract_table(sql)} WHERE rowid = ?",
-                    [cursor.lastrowid],
-                ).fetchone()
-                if row:
-                    records = [dict(row)]
+            records = []
+            if returning_match and not self._supports_returning():
+                # Emulate RETURNING by fetching the last inserted/updated row
+                if cursor.lastrowid:
+                    row = self._conn.execute(
+                        f"SELECT {returning_cols} FROM {self._extract_table(sql)} WHERE rowid = ?",
+                        [cursor.lastrowid],
+                    ).fetchone()
+                    if row:
+                        records = [dict(row)]
 
-        if not self._in_transaction and self.autocommit:
-            if self._conn.in_transaction:
-                self._conn.execute("COMMIT")
+            if not self._in_transaction and self.autocommit:
+                if self._conn.in_transaction:
+                    self._conn.execute("COMMIT")
 
-        return DatabaseResult(
-            records=records,
-            count=len(records),
-            affected_rows=cursor.rowcount,
-            last_id=cursor.lastrowid,
-            sql=sql,
-            adapter=self,
-        )
+            return DatabaseResult(
+                records=records,
+                count=len(records),
+                affected_rows=cursor.rowcount,
+                last_id=cursor.lastrowid,
+                sql=sql,
+                adapter=self,
+            )
 
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
         """Optimized batch execute using SQLite's executemany."""

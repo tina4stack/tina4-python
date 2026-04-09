@@ -23,6 +23,30 @@ import time
 import base64
 import hashlib
 import secrets
+import functools
+
+
+class _DualMethod:
+    """Descriptor that makes a method callable on both the class and an instance.
+
+    - ``Auth.get_token(payload)``  — creates a temporary Auth() using env SECRET
+    - ``auth.get_token(payload)``  — uses the instance's own secret / settings
+    """
+
+    def __init__(self, func):
+        self._func = func
+        functools.update_wrapper(self, func)
+
+    def __get__(self, obj, cls=None):
+        if obj is None:
+            # Called on the class: Auth.get_token(payload, ...)
+            @functools.wraps(self._func)
+            def _class_call(*args, **kwargs):
+                inst = cls()          # Auth() reads SECRET from env
+                return self._func(inst, *args, **kwargs)
+            return _class_call
+        # Called on an instance: auth_instance.get_token(payload, ...)
+        return functools.partial(self._func, obj)
 
 
 class Auth:
@@ -44,6 +68,7 @@ class Auth:
 
     # ── JWT ────────────────────────────────────────────────────────
 
+    @_DualMethod
     def get_token(self, payload: dict, expires_in: int = None) -> str:
         """Create a signed JWT token.
 
@@ -68,6 +93,7 @@ class Auth:
 
         return f"{h}.{p}.{signature}"
 
+    @_DualMethod
     def valid_token(self, token: str) -> bool:
         """Validate a JWT signature and expiry. Returns True if valid, False otherwise."""
         try:
@@ -89,6 +115,7 @@ class Auth:
         except Exception:
             return False
 
+    @_DualMethod
     def get_payload(self, token: str) -> dict | None:
         """Decode payload WITHOUT validating signature or expiry."""
         try:
@@ -99,6 +126,7 @@ class Auth:
         except Exception:
             return None
 
+    @_DualMethod
     def refresh_token(self, token: str, expires_in: int = None) -> str | None:
         """Validate and issue a fresh token with the same claims.
 
@@ -229,6 +257,7 @@ class Auth:
 
     # ── Request Auth Helper ───────────────────────────────────────
 
+    @_DualMethod
     def authenticate_request(self, headers: dict) -> dict | None:
         """Extract and validate auth from request headers.
 

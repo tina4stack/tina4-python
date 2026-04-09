@@ -849,12 +849,34 @@ result.to_mongo()
 ```
 
 ### Available field types
-`IntegerField`, `StringField`, `TextField`, `DateTimeField`, `NumericField`, `BlobField`, `JSONBField`
+`IntegerField`, `StringField`, `TextField`, `DateTimeField`, `NumericField`, `BlobField`, `JSONBField`, `ForeignKeyField`
 
-Import from `tina4_python` or `tina4_python.orm.fields`. For foreign keys:
+Import from `tina4_python` or `tina4_python.orm.fields`.
+
+### ForeignKeyField — Auto-Wired Relationships
+
+Declaring a column with `ForeignKeyField(to=OtherModel)` auto-wires both sides of the relationship. No manual `has_many`/`belongs_to` calls are required — the ORM metaclass processes `ForeignKeyField` at class creation and injects the descriptors on both the declaring and referenced models.
+
 ```python
-from tina4_python.orm.fields import ForeignKeyField
+from tina4_python.orm import ORM, IntegerField, StringField, ForeignKeyField
+
+class Author(ORM):
+    id = IntegerField(primary_key=True, auto_increment=True)
+    name = StringField()
+
+class Post(ORM):
+    id = IntegerField(primary_key=True, auto_increment=True)
+    title = StringField()
+    author_id = ForeignKeyField(to=Author, related_name="posts")
+
+# Auto-wired:
+post = Post.find_by_id(1)
+print(post.author.name)       # belongs_to
+for p in Author.find_by_id(1).posts:
+    print(p.title)             # has_many
 ```
+
+The has-many name on the referenced model defaults to the declaring class name lowercased + `s`. Override with `related_name="..."`.
 
 ## Migrations
 

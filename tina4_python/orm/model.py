@@ -35,6 +35,11 @@ def orm_bind(db, name: str = None):
         orm_bind(db_main)                    # default for all models
         orm_bind(db_audit, name="audit")     # named connection
 
+        # Decorator style — class is returned unchanged:
+        @orm_bind(db)
+        class User(ORM):
+            ...
+
         class AuditLog(ORM):
             _db = "audit"  # uses the named connection
     """
@@ -43,6 +48,13 @@ def orm_bind(db, name: str = None):
         _database = db
     else:
         _databases[name] = db
+
+    # Return a pass-through decorator so @orm_bind(db) syntax works.
+    # Without this the decorator would set the class to None.
+    def _decorator(cls):
+        return cls
+
+    return _decorator
 
 
 def snake_to_camel(name: str) -> str:
@@ -65,6 +77,10 @@ class ORMMeta(type):
     """Metaclass that collects Field definitions and relationship descriptors."""
 
     def __new__(mcs, name, bases, namespace):
+        from tina4_python.orm.fields import (
+            ForeignKeyField, BelongsToDescriptor, HasManyDescriptor,
+        )
+
         fields = {}
         relationships = {}
         for key, value in list(namespace.items()):
@@ -76,6 +92,51 @@ class ORMMeta(type):
             elif isinstance(value, RelationshipDescriptor):
                 value.attr_name = key
                 relationships[key] = value
+
+        # ── Auto-wire ForeignKeyField relationships ─────────────────
+        # For each ForeignKeyField, create:
+        #   1. belongs_to on this model  (e.g. user_id → self.user)
+        #   2. has_many   on the referenced model  (e.g. User.posts)
+        for key, field in list(fields.items()):
+            if not isinstance(field, ForeignKeyField) or field.references is None:
+                continue
+
+            # Derive belongs_to accessor name: "user_id" → "user", "post" → "post"
+            belongs_name = key[:-3] if key.endswith("_id") else key
+            if belongs_name not in namespace and belongs_name not in relationships:
+                model_ref = (
+                    field.references.__name__
+                    if hasattr(field.references, "__name__")
+                    else str(field.references)
+                )
+                bt = BelongsToDescriptor(model_ref, foreign_key=key)
+                bt.attr_name = belongs_name
+                relationships[belongs_name] = bt
+                namespace[belongs_name] = bt
+
+            # Register has_many on the referenced model (class reference only;
+            # string references require the target to already exist in globals).
+            target = None
+            if hasattr(field.references, "_fields"):        # already an ORM class
+                target = field.references
+            elif isinstance(field.references, str):
+                # Try to find the named model in existing ORM subclasses
+                from tina4_python.orm.model import ORM as _ORM  # noqa: forward-ref guard
+                def _find(model_name):
+                    for sub in _ORM.__subclasses__():
+                        if sub.__name__ == model_name:
+                            return sub
+                    return None
+                target = _find(field.references)
+
+            if target is not None:
+                hm_name = field.related_name or (name.lower() + "s")
+                if not hasattr(target, hm_name):
+                    hm = HasManyDescriptor(name, foreign_key=key)
+                    hm.attr_name = hm_name
+                    setattr(target, hm_name, hm)
+                    if hasattr(target, "_relationships"):
+                        target._relationships[hm_name] = hm
 
         namespace["_fields"] = fields
         namespace["_relationships"] = relationships

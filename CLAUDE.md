@@ -175,11 +175,14 @@ db.pool -> ConnectionPool | None  # Access connection pool (None if pooling disa
 ### ORM — Active Record base class
 
 ```python
-from tina4_python.orm import ORM, orm_bind, Field, IntegerField, StringField
+from tina4_python.orm import ORM, orm_bind, Field, IntegerField, StringField, ForeignKeyField
 
 class MyModel(ORM):
     id = IntegerField(primary_key=True, auto_increment=True)
     name = StringField()
+    # ForeignKeyField(to=Other) auto-wires belongs_to on this class
+    # AND has_many on the referenced class (default key: ClassName.lower() + "s")
+    # author_id = ForeignKeyField(to=Author, related_name="posts")
 
 # Instance methods
 model = MyModel(data: dict = None, **kwargs)

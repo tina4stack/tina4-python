@@ -113,10 +113,9 @@ class Router:
     def group(cls, prefix: str, callback, middleware=None):
         """Register routes with a shared prefix and optional middleware.
 
-        The callback receives a RouteGroup object with get/post/put/patch/
-        delete/any/group methods for registering routes under the prefix.
-
-        Usage::
+        The callback **always** receives one positional argument: a RouteGroup
+        object with get/post/put/patch/delete/any/group methods for registering
+        routes under the shared prefix.  The callback must accept that argument::
 
             Router.group("/api", lambda group: [
                 group.get("/users", list_handler),
@@ -125,6 +124,10 @@ class Router:
                     admin.get("/stats", stats_handler),
                 ], middleware=[admin_check]),
             ], middleware=[auth_check])
+
+        Using ``lambda:`` (no argument) will raise ``TypeError`` because the
+        RouteGroup is always passed.  Always use ``lambda group:`` or a named
+        function that accepts the group parameter.
         """
         prev_prefix = cls._group_prefix
         prev_middleware = list(cls._group_middleware)

@@ -20,6 +20,7 @@ from tina4_python.orm.fields import (
     Field,
     IntegerField, StringField, BooleanField, FloatField,
     DateTimeField, TextField, BlobField, NumericField,
+    ForeignKeyField,
     IntField, StrField, BoolField,  # short aliases
     has_many, has_one, belongs_to,  # relationship descriptors
 )
@@ -31,6 +32,7 @@ __all__ = [
     # Verbose (preferred)
     "IntegerField", "StringField", "BooleanField", "FloatField",
     "DateTimeField", "TextField", "BlobField", "NumericField",
+    "ForeignKeyField",
     # Short aliases (backwards compat)
     "IntField", "StrField", "BoolField",
     # Relationships

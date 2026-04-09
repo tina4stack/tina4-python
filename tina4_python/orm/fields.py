@@ -157,6 +157,45 @@ def BlobField(**kwargs):
 def NumericField(**kwargs):
     return _make_field(float, "NumericField", **kwargs)
 
+class ForeignKeyField(Field):
+    """Integer field that references another model's primary key.
+
+    Declaring this field automatically wires up both sides of the relationship:
+    - ``belongs_to`` on the model that owns the FK
+    - ``has_many``   on the referenced model
+
+    Args:
+        to:           The referenced model class (or its name as a string for
+                      forward references).  Required.
+        on_delete:    Cascade behaviour string ('CASCADE', 'SET NULL', etc.) —
+                      stored as metadata for DDL generation.
+        related_name: Name for the ``has_many`` accessor on the referenced model.
+                      Defaults to ``<owning_model_lower>s``
+                      (e.g. Post → ``posts``).
+
+    Usage::
+
+        class Post(ORM):
+            user_id = ForeignKeyField(to=User)
+            # Automatically creates:
+            #   post.user        → User instance  (belongs_to)
+            #   user.posts       → [Post, ...]    (has_many)
+
+        class Comment(ORM):
+            post_id = ForeignKeyField(to=Post, related_name="comments")
+            # Automatically creates:
+            #   comment.post     → Post instance
+            #   post.comments    → [Comment, ...]
+    """
+
+    def __init__(self, to=None, on_delete: str = None, related_name: str = None, **kwargs):
+        super().__init__(int, **kwargs)
+        self.references = to            # model class or string name
+        self.on_delete = on_delete
+        self.related_name = related_name
+        self.kind = "ForeignKeyField"
+
+
 # Short aliases — kept for backwards compatibility
 IntField = IntegerField
 StrField = StringField
