@@ -15,7 +15,7 @@ import struct
 import zlib
 
 
-class KafkaBackend:
+class KafkaConnector:
     """Kafka queue backend implementing the Tina4 queue contract.
 
     Methods: enqueue, dequeue, acknowledge, reject, size, clear, dead_letter, close.
@@ -356,3 +356,6 @@ class KafkaBackend:
             return None
 
         return {"message": message, "next_offset": msg_offset + 1}
+
+# Backwards-compatible alias — external code and tests may use the old name.
+KafkaBackend = KafkaConnector

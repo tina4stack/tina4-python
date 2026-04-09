@@ -12,7 +12,7 @@ class KafkaBackend:
     """Backend adapter wrapping KafkaBackend for the unified Queue API."""
 
     def __init__(self, topic: str, max_retries: int):
-        from tina4_python.queue_backends import KafkaBackend as _KafkaBackend
+        from tina4_python.queue_backends import KafkaConnector as _KafkaBackend
 
         url = os.environ.get("TINA4_QUEUE_URL", "")
         config = {}

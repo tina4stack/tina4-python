@@ -24,7 +24,7 @@ class MongoBackend:
     """Backend adapter wrapping MongoBackend for the unified Queue API."""
 
     def __init__(self, topic: str, max_retries: int):
-        from tina4_python.queue_backends import MongoBackend as _MongoBackend
+        from tina4_python.queue_backends import MongoConnector as _MongoBackend
 
         url = os.environ.get("TINA4_QUEUE_URL", "")
         config = {}

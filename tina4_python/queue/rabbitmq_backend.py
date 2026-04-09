@@ -39,7 +39,7 @@ class RabbitMQBackend:
     """Backend adapter wrapping RabbitMQBackend for the unified Queue API."""
 
     def __init__(self, topic: str, max_retries: int):
-        from tina4_python.queue_backends import RabbitMQBackend as _RabbitMQBackend
+        from tina4_python.queue_backends import RabbitMQConnector as _RabbitMQBackend
 
         url = os.environ.get("TINA4_QUEUE_URL", "")
         config = {}

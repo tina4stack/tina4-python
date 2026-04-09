@@ -14,8 +14,13 @@ All external packages are optional imports with clear error messages.
     backend.acknowledge("emails", msg["id"])
 """
 
-from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
-from tina4_python.queue_backends.kafka_backend import KafkaBackend
-from tina4_python.queue_backends.mongo_backend import MongoBackend
+from tina4_python.queue_backends.rabbitmq_backend import RabbitMQConnector, RabbitMQBackend
+from tina4_python.queue_backends.kafka_backend import KafkaConnector, KafkaBackend
+from tina4_python.queue_backends.mongo_backend import MongoConnector, MongoBackend
 
-__all__ = ["RabbitMQBackend", "KafkaBackend", "MongoBackend"]
+__all__ = [
+    # Canonical names — low-level transport connectors
+    "RabbitMQConnector", "KafkaConnector", "MongoConnector",
+    # Backwards-compatible aliases
+    "RabbitMQBackend", "KafkaBackend", "MongoBackend",
+]

@@ -17,7 +17,7 @@ import socket
 import struct
 
 
-class RabbitMQBackend:
+class RabbitMQConnector:
     """RabbitMQ queue backend implementing the Tina4 queue contract.
 
     Methods: enqueue, dequeue, acknowledge, reject, size, clear, dead_letter, close.
@@ -423,3 +423,6 @@ class RabbitMQBackend:
         flags = 0b00000010 if requeue else 0
         args = struct.pack("!Q", delivery_tag) + struct.pack("!B", flags)
         self._write_method(self._channel_id, 60, 120, args)
+
+# Backwards-compatible alias — external code and tests may use the old name.
+RabbitMQBackend = RabbitMQConnector

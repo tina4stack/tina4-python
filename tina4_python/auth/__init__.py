@@ -193,14 +193,6 @@ class Auth:
         auth = cls(secret=secret)
         return auth.authenticate_request(headers)
 
-    @staticmethod
-    def validate_api_key_static(provided: str, expected: str = None) -> bool:
-        """Validate an API key without instantiating Auth.
-
-        Alias for validate_api_key (already a staticmethod).
-        """
-        return Auth.validate_api_key(provided, expected)
-
     # ── Password Hashing ──────────────────────────────────────────
 
     @staticmethod
