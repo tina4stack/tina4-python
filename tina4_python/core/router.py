@@ -45,6 +45,11 @@ class RouteRef:
         self._route["auth_required"] = True
         return self
 
+    def no_auth(self):
+        """Mark this route as public — no authentication required."""
+        self._route["auth_required"] = False
+        return self
+
     def cache(self, max_age: int | None = None):
         """Mark this route as cacheable.
 
@@ -182,6 +187,29 @@ class Router:
     def all_ws() -> list[dict]:
         """Return all registered WebSocket routes."""
         return _ws_routes
+
+    @staticmethod
+    def get_web_socket_routes() -> list[dict]:
+        """Return all registered WebSocket routes (parity alias for all_ws)."""
+        return _ws_routes
+
+    @classmethod
+    def use(cls, middleware_class) -> None:
+        """Register a global middleware class applied to every route.
+
+        Equivalent to decorating every handler with @middleware(middleware_class).
+
+        Args:
+            middleware_class: A class with before_*/after_* static methods.
+        """
+        from tina4_python.core import middleware as _mw_module  # avoid circular import
+        if hasattr(_mw_module, "register_global"):
+            _mw_module.register_global(middleware_class)
+        else:
+            # Fallback: store in a module-level list the dispatcher can pick up.
+            if not hasattr(cls, "_global_middleware"):
+                cls._global_middleware = []
+            cls._global_middleware.append(middleware_class)
 
     @classmethod
     def get(cls, path: str, handler, **options) -> "RouteRef":

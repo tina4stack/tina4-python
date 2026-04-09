@@ -76,6 +76,33 @@ class Queue:
         """Atomically claim the next available job. Returns None if empty."""
         return self._backend.pop(self)
 
+    def get_topic(self) -> str:
+        """Return the topic name this queue was constructed with."""
+        return self.topic
+
+    def process(self, handler, topic: str = None, *, max_jobs: int = None) -> None:
+        """Consume all available jobs and pass each to handler, then stop.
+
+        Simpler alternative to consume() for drain-and-exit use cases.
+
+        Args:
+            handler:  Callable that receives a Job. Should call job.complete()
+                      or job.fail() when done.
+            topic:    Override the queue's default topic.
+            max_jobs: Stop after processing this many jobs (None = drain all).
+        """
+        topic = topic or self.topic
+        processed = 0
+        while max_jobs is None or processed < max_jobs:
+            job = self._backend.dequeue(topic)
+            if job is None:
+                break
+            try:
+                handler(job)
+            except Exception as exc:  # noqa: BLE001
+                job.fail(str(exc))
+            processed += 1
+
     def size(self, status: str = "pending") -> int:
         """Count jobs by status."""
         return self._backend.size(status)
