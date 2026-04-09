@@ -30,7 +30,7 @@ from tina4_python.messenger import DevMailbox
 from tina4_python.dotenv import load_env, get_env
 from tina4_python.wsdl import WSDL, wsdl_operation
 from tina4_python.websocket import (
-    compute_accept_key, build_frame, read_frame,
+    _compute_accept_key as compute_accept_key, _build_frame as build_frame, _read_frame as read_frame,
     OP_TEXT, MAGIC_STRING,
 )
 

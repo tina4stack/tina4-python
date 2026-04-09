@@ -196,9 +196,10 @@ class LiteBackend:
             pass
         return count
 
-    def retry_failed(self) -> int:
+    def retry_failed(self, max_retries: int = None) -> int:
         failed_dir = self._failed_dir()
         queue_dir = self._queue_dir()
+        limit = max_retries if max_retries is not None else self._max_retries
         count = 0
         try:
             for filename in os.listdir(failed_dir):
@@ -208,7 +209,7 @@ class LiteBackend:
                 try:
                     with open(filepath) as f:
                         job_data = json.load(f)
-                    if job_data.get("attempts", 0) < self._max_retries:
+                    if job_data.get("attempts", 0) < limit:
                         job_data["status"] = "pending"
                         job_data["available_at"] = _now()
                         prefix = self._next_prefix()
@@ -242,8 +243,9 @@ class LiteBackend:
             pass
         return results
 
-    def dead_letters(self) -> list[dict]:
+    def dead_letters(self, max_retries: int = None) -> list[dict]:
         failed_dir = self._failed_dir()
+        limit = max_retries if max_retries is not None else self._max_retries
         results = []
         try:
             for filename in sorted(os.listdir(failed_dir)):
@@ -253,7 +255,7 @@ class LiteBackend:
                 try:
                     with open(filepath) as f:
                         job_data = json.load(f)
-                    if job_data.get("attempts", 0) >= self._max_retries:
+                    if job_data.get("attempts", 0) >= limit:
                         results.append(job_data)
                 except (json.JSONDecodeError, FileNotFoundError):
                     continue

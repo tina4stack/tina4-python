@@ -299,7 +299,7 @@ class TestProduceConsume:
         id3 = q.push({"task": "third"})
 
         # Consume only the second job
-        jobs = list(q.consume("targeted", job_id=str(id2), poll_interval=0))
+        jobs = list(q.consume("targeted", id=str(id2), poll_interval=0))
         assert len(jobs) == 1
         assert jobs[0].data["task"] == "second"
 

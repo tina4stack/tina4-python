@@ -3,7 +3,7 @@ import asyncio
 import struct
 import pytest
 from tina4_python.websocket import (
-    compute_accept_key, parse_http_headers, build_frame, read_frame,
+    _compute_accept_key as compute_accept_key, _parse_http_headers as parse_http_headers, _build_frame as build_frame, _read_frame as read_frame,
     WebSocketConnection, WebSocketManager, WebSocketServer,
     OP_TEXT, OP_BINARY, OP_CLOSE, OP_PING, OP_PONG,
     CLOSE_NORMAL, CLOSE_PROTOCOL_ERROR, MAGIC_STRING,

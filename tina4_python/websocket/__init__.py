@@ -41,13 +41,13 @@ CLOSE_UNSUPPORTED = 1003
 CLOSE_TOO_LARGE = 1009
 
 
-def compute_accept_key(key: str) -> str:
+def _compute_accept_key(key: str) -> str:
     """Compute Sec-WebSocket-Accept from Sec-WebSocket-Key per RFC 6455."""
     digest = hashlib.sha1((key + MAGIC_STRING).encode()).digest()
     return base64.b64encode(digest).decode()
 
 
-def parse_http_headers(data: bytes) -> dict:
+def _parse_http_headers(data: bytes) -> dict:
     """Parse HTTP upgrade request headers."""
     lines = data.decode("utf-8", errors="replace").split("\r\n")
     headers = {}
@@ -63,7 +63,7 @@ def parse_http_headers(data: bytes) -> dict:
     return headers
 
 
-def build_frame(opcode: int, payload: bytes, fin: bool = True) -> bytes:
+def _build_frame(opcode: int, payload: bytes, fin: bool = True) -> bytes:
     """Build a WebSocket frame (server→client, never masked)."""
     frame = bytearray()
     first_byte = (0x80 if fin else 0x00) | opcode
@@ -83,7 +83,7 @@ def build_frame(opcode: int, payload: bytes, fin: bool = True) -> bytes:
     return bytes(frame)
 
 
-async def read_frame(reader: asyncio.StreamReader, max_size: int = 1048576) -> tuple:
+async def _read_frame(reader: asyncio.StreamReader, max_size: int = 1048576) -> tuple:
     """Read one WebSocket frame. Returns (fin, opcode, payload).
 
     Raises ConnectionError on EOF or protocol violation.
@@ -147,9 +147,9 @@ class WebSocketConnection:
         if self._closed:
             return
         if isinstance(message, str):
-            self.writer.write(build_frame(OP_TEXT, message.encode("utf-8")))
+            self.writer.write(_build_frame(OP_TEXT, message.encode("utf-8")))
         else:
-            self.writer.write(build_frame(OP_BINARY, message))
+            self.writer.write(_build_frame(OP_BINARY, message))
         try:
             await self.writer.drain()
         except (ConnectionError, OSError):
@@ -200,7 +200,7 @@ class WebSocketConnection:
         """Send a ping frame."""
         if self._closed:
             return
-        self.writer.write(build_frame(OP_PING, data))
+        self.writer.write(_build_frame(OP_PING, data))
         try:
             await self.writer.drain()
         except (ConnectionError, OSError):
@@ -213,7 +213,7 @@ class WebSocketConnection:
         self._closed = True
         payload = struct.pack(">H", code) + reason.encode("utf-8")
         try:
-            self.writer.write(build_frame(OP_CLOSE, payload))
+            self.writer.write(_build_frame(OP_CLOSE, payload))
             await self.writer.drain()
             self.writer.close()
         except (ConnectionError, OSError):
@@ -267,7 +267,7 @@ class WebSocketConnection:
             return
 
         if opcode == OP_PING:
-            self.writer.write(build_frame(OP_PONG, payload))
+            self.writer.write(_build_frame(OP_PONG, payload))
             try:
                 await self.writer.drain()
             except (ConnectionError, OSError):
@@ -302,7 +302,7 @@ class WebSocketConnection:
         max_size = int(os.environ.get("TINA4_WS_MAX_FRAME_SIZE", 1048576))
         try:
             while not self._closed:
-                fin, opcode, payload = await read_frame(self.reader, max_size)
+                fin, opcode, payload = await _read_frame(self.reader, max_size)
                 await self._handle_frame(fin, opcode, payload)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
@@ -458,7 +458,7 @@ class WebSocketServer:
             writer.close()
             return
 
-        headers = parse_http_headers(request_data)
+        headers = _parse_http_headers(request_data)
         path = headers.get("_path", "/")
 
         params = {}
@@ -498,7 +498,7 @@ class WebSocketServer:
             return
 
         # Send upgrade response
-        accept = compute_accept_key(ws_key)
+        accept = _compute_accept_key(ws_key)
         response = (
             f"HTTP/1.1 101 Switching Protocols\r\n"
             f"Upgrade: websocket\r\n"
@@ -557,15 +557,18 @@ class WebSocketServer:
             self._server.close()
             await self._server.wait_closed()
 
-    def handle_upgrade(self, reader: asyncio.StreamReader,
-                       writer: asyncio.StreamWriter) -> asyncio.Task:
+    def get_clients(self) -> dict:
+        """Return a dict of all connected WebSocketConnection objects keyed by ID."""
+        return dict(self.manager._connections)
+
+    def _handle_upgrade(self, reader: asyncio.StreamReader,
+                        writer: asyncio.StreamWriter) -> asyncio.Task:
         """Handle upgrade from an existing HTTP server (integration mode)."""
         return asyncio.create_task(self.handle_connection(reader, writer))
 
 
 __all__ = [
     "WebSocketServer", "WebSocketConnection", "WebSocketManager",
-    "compute_accept_key", "parse_http_headers", "build_frame", "read_frame",
     "OP_TEXT", "OP_BINARY", "OP_CLOSE", "OP_PING", "OP_PONG",
     "CLOSE_NORMAL", "CLOSE_PROTOCOL_ERROR", "CLOSE_TOO_LARGE",
 ]

@@ -31,6 +31,13 @@ from .protocol import (
     INVALID_PARAMS, INTERNAL_ERROR,
 )
 
+# Re-export protocol helpers as public API (parity with PHP/Ruby/Node)
+__all__ = [
+    "McpServer", "mcp_tool", "mcp_resource",
+    "encode_response", "encode_error", "encode_notification", "decode_request",
+    "is_localhost", "register",
+]
+
 # Type hint → JSON Schema type mapping (reuse Swagger pattern)
 _TYPE_MAP = {
     str: "string",
@@ -67,10 +74,14 @@ def _schema_from_signature(func) -> dict:
     return schema
 
 
-def _is_localhost() -> bool:
+def is_localhost() -> bool:
     """Check if the server is running on localhost."""
     host = os.environ.get("HOST_NAME", "localhost:7145").split(":")[0]
     return host in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "")
+
+
+# Private alias kept for internal use
+_is_localhost = is_localhost
 
 
 class McpServer:
@@ -359,3 +370,12 @@ def mcp_resource(uri: str, description: str = "", mime_type: str = "application/
         func._mcp_resource_uri = uri
         return func
     return decorator
+
+
+def register(server: McpServer) -> None:
+    """Register all built-in dev tools on the given McpServer instance.
+
+    Only active when TINA4_DEBUG=true and running on localhost (or TINA4_MCP_REMOTE=true).
+    """
+    from .tools import register_dev_tools
+    register_dev_tools(server)

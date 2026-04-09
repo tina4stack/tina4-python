@@ -576,3 +576,100 @@ class Database:
     def pool(self) -> ConnectionPool | None:
         """Access the connection pool (None if pooling is disabled)."""
         return self._pool
+
+    # ── Factory methods ───────────────────────────────────────────
+
+    @staticmethod
+    def create(url: str, username: str = "", password: str = "", pool: int = 0) -> "Database":
+        """Static factory — construct and return a Database instance.
+
+        Equivalent to Database(url, username, password, pool=pool) but
+        named consistently with the PHP and Node.js Tina4 frameworks.
+
+        Args:
+            url:      Connection URL (e.g. "sqlite:///data/app.db").
+            username: Database username (optional, overrides env).
+            password: Database password (optional, overrides env).
+            pool:     Pool size — 0 for single connection, N>0 for N pooled connections.
+
+        Returns:
+            A new Database instance.
+        """
+        return Database(url, username=username, password=password, pool=pool)
+
+    @staticmethod
+    def from_env(env_key: str = "DATABASE_URL", pool: int = 0) -> "Database | None":
+        """Construct a Database instance from environment variables.
+
+        Reads the connection URL from the named env var (default DATABASE_URL),
+        and DATABASE_USERNAME / DATABASE_PASSWORD for credentials.
+
+        Args:
+            env_key: Environment variable name holding the connection URL.
+            pool:    Pool size — 0 for single connection, N>0 for N pooled connections.
+
+        Returns:
+            A new Database instance, or None if the env var is not set.
+        """
+        url = os.environ.get(env_key)
+        if not url:
+            return None
+        username = os.environ.get("DATABASE_USERNAME", "")
+        password = os.environ.get("DATABASE_PASSWORD", "")
+        return Database(url, username=username, password=password, pool=pool)
+
+    # ── Adapter / pool inspection ─────────────────────────────────
+
+    def get_adapter(self) -> DatabaseAdapter:
+        """Return the underlying driver/adapter object.
+
+        With pooling enabled, returns the next adapter from the pool
+        via round-robin (same as the internal _get_adapter()).
+        Without pooling, returns the single connection adapter.
+        """
+        return self._get_adapter()
+
+    def pool_size(self) -> int:
+        """Return the total number of connections in the pool.
+
+        Returns 1 when pooling is disabled (single-connection mode).
+        """
+        if self._pool is not None:
+            return self._pool.size
+        return 1
+
+    def active_count(self) -> int:
+        """Return the number of currently created (checked-out) connections.
+
+        In pool mode, counts how many adapter slots have been lazily created.
+        In single-connection mode, returns 1 if the adapter is connected, else 0.
+        """
+        if self._pool is not None:
+            return self._pool.active_count
+        return 1 if self._adapter is not None else 0
+
+    def checkout(self) -> DatabaseAdapter:
+        """Check out an adapter from the pool (round-robin).
+
+        In single-connection mode, returns the single adapter directly.
+        """
+        if self._pool is not None:
+            return self._pool.checkout()
+        return self._adapter
+
+    def checkin(self, adapter: DatabaseAdapter) -> None:
+        """Return an adapter to the pool.
+
+        In single-connection mode this is a no-op.
+        In pool mode, delegates to ConnectionPool.checkin() (currently a no-op
+        for round-robin pools, but provided for API consistency).
+        """
+        if self._pool is not None:
+            self._pool.checkin(adapter)
+
+    def close_all(self) -> None:
+        """Close all connections — pool or single.
+
+        After calling this, the Database instance should not be used.
+        """
+        self.close()

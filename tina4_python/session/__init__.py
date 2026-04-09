@@ -24,13 +24,13 @@ class SessionHandler:
     def read(self, session_id: str) -> dict:
         raise NotImplementedError
 
-    def write(self, session_id: str, data: dict, ttl: int):
+    def write(self, session_id: str, data: dict, ttl: int = 0):
         raise NotImplementedError
 
     def destroy(self, session_id: str):
         raise NotImplementedError
 
-    def gc(self, max_lifetime: int):
+    def gc(self, max_lifetime: int = 0):
         """Garbage-collect expired sessions."""
         pass
 
@@ -61,7 +61,7 @@ class FileSessionHandler(SessionHandler):
         except (json.JSONDecodeError, OSError):
             return {}
 
-    def write(self, session_id: str, data: dict, ttl: int):
+    def write(self, session_id: str, data: dict, ttl: int = 0):
         f = self._file(session_id)
         expires = time.time() + ttl if ttl > 0 else 0
         f.write_text(
@@ -72,7 +72,7 @@ class FileSessionHandler(SessionHandler):
     def destroy(self, session_id: str):
         self._file(session_id).unlink(missing_ok=True)
 
-    def gc(self, max_lifetime: int):
+    def gc(self, max_lifetime: int = 0):
         now = time.time()
         for f in self._path.glob("*.json"):
             try:
@@ -116,7 +116,7 @@ class DatabaseSessionHandler(SessionHandler):
         except json.JSONDecodeError:
             return {}
 
-    def write(self, session_id: str, data: dict, ttl: int):
+    def write(self, session_id: str, data: dict, ttl: int = 0):
         expires = time.time() + ttl if ttl > 0 else 0
         payload = json.dumps(data, default=str)
         existing = self._db.fetch_one(
@@ -142,7 +142,7 @@ class DatabaseSessionHandler(SessionHandler):
         )
         self._db.commit()
 
-    def gc(self, max_lifetime: int):
+    def gc(self, max_lifetime: int = 0):
         self._db.execute(
             "DELETE FROM tina4_session WHERE expires_at > 0 AND expires_at < ?",
             [time.time()],
@@ -190,6 +190,10 @@ class Session:
 
     @property
     def session_id(self) -> str | None:
+        return self._session_id
+
+    def get_session_id(self) -> str | None:
+        """Return the current session ID string."""
         return self._session_id
 
     def start(self, session_id: str = None) -> str:

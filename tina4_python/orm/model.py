@@ -526,11 +526,14 @@ class ORM(metaclass=ORMMeta):
         return cls.find_by_id(pk_value) is not None
 
     @classmethod
-    def all(cls, limit: int = 100, offset: int = 0, include: list[str] = None) -> list[Self]:
+    def all(cls, limit: int = 100, offset: int = 0, include: list[str] = None, order_by: str = None) -> list[Self]:
         """Fetch all records (respects soft delete).
 
         Args:
+            limit: Max records to return.
+            offset: Starting offset.
             include: List of relationship names to eager-load.
+            order_by: ORDER BY clause (e.g. "name ASC").
         """
         db = cls._get_db()
         table = cls._get_table()
@@ -538,6 +541,8 @@ class ORM(metaclass=ORMMeta):
         sql = f"SELECT * FROM {table}"
         if cls.soft_delete:
             sql += " WHERE (is_deleted = 0 OR is_deleted IS NULL)"
+        if order_by:
+            sql += f" ORDER BY {order_by}"
 
         result = db.fetch(sql, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
@@ -701,14 +706,14 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def cached(cls, sql: str, params: list = None, ttl: int = 60,
-               limit: int = 20, offset: int = 0) -> list[Self]:
+               limit: int = 20, offset: int = 0, include: list = None) -> list[Self]:
         """SQL query with result caching. Returns array of ORM objects."""
         cache_key = f"{cls.__name__}:{Cache.query_key(sql, params)}:{limit}:{offset}"
         cached = _query_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        result = cls.select(sql, params, limit=limit, offset=offset)
+        result = cls.select(sql, params, limit=limit, offset=offset, include=include)
         _query_cache.set(cache_key, result, ttl=ttl, tags=[cls.__name__])
         return result
 
@@ -716,6 +721,62 @@ class ORM(metaclass=ORMMeta):
     def clear_cache(cls) -> None:
         """Clear all cached query results for this model."""
         _query_cache.clear_tag(cls.__name__)
+
+    @classmethod
+    def clear_rel_cache(cls) -> None:
+        """Clear the relationship cache on this class.
+
+        Useful when you know relationships have changed and want to force
+        re-fetching on the next attribute access.
+        """
+        if hasattr(cls, "_rel_cache"):
+            cls._rel_cache = {}
+
+    @classmethod
+    def get_db(cls):
+        """Return the database connection bound to this model.
+
+        Resolution order matches _get_db():
+        1. cls._db as a Database instance
+        2. cls._db as a named string → registry lookup
+        3. Global default set via orm_bind()
+        """
+        return cls._get_db()
+
+    @classmethod
+    def get_db_column(cls, prop: str) -> str:
+        """Map a Python property/field name to its database column name.
+
+        Uses field_mapping first, then falls back to the Field's own column
+        attribute, and finally the property name itself.
+
+        Args:
+            prop: Python attribute name (e.g. "first_name").
+
+        Returns:
+            The corresponding database column name (e.g. "firstName").
+        """
+        if prop in cls.field_mapping:
+            return cls.field_mapping[prop]
+        field = cls._fields.get(prop)
+        if field is not None and field.column:
+            return field.column
+        return prop
+
+    @classmethod
+    def eager_load(cls, instances: list, include_list: list[str]) -> None:
+        """Eagerly load relationships for a list of ORM instances.
+
+        This is the public equivalent of _eager_load — it exposes the same
+        batch-loading behaviour so callers can trigger eager loading on an
+        already-fetched list of instances without re-querying.
+
+        Args:
+            instances: List of ORM instances (must all be the same model class).
+            include_list: Relationship names to load, optionally dot-separated
+                          for nesting (e.g. ["posts", "posts.comments"]).
+        """
+        cls._eager_load(instances, include_list)
 
     # ── Relationships ───────────────────────────────────────────
 

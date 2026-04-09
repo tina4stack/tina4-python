@@ -69,14 +69,18 @@ class Auth:
     # ── JWT ────────────────────────────────────────────────────────
 
     @_DualMethod
-    def get_token(self, payload: dict, expires_in: int = None) -> str:
+    def get_token(self, payload: dict, expires_in: int = None, secret: str = None) -> str:
         """Create a signed JWT token.
 
         Args:
             expires_in: Lifetime in minutes (default: self.expires_in).
+            secret:     Override signing secret (default: self.secret / SECRET env var).
 
         Returns: header.payload.signature
         """
+        if secret is not None:
+            return Auth(secret=secret, algorithm=self.algorithm,
+                        expires_in=self.expires_in).get_token(payload, expires_in=expires_in)
         exp_minutes = expires_in if expires_in is not None else self.expires_in
         exp_seconds = exp_minutes * 60
 
@@ -250,8 +254,12 @@ class Auth:
     # ── Request Auth Helper ───────────────────────────────────────
 
     @_DualMethod
-    def authenticate_request(self, headers: dict) -> dict | None:
+    def authenticate_request(self, headers: dict, secret: str = None, algorithm: str = "HS256") -> dict | None:
         """Extract and validate auth from request headers.
+
+        Args:
+            secret:    Override signing secret (default: self.secret / SECRET env var).
+            algorithm: JWT algorithm override (default: "HS256").
 
         Checks: Bearer JWT, Bearer API key, Basic auth.
         Returns payload dict on success, None on failure.
@@ -292,8 +300,10 @@ def _b64url_decode(s: str) -> bytes:
 
 # ── Module-level convenience functions (use static methods) ────
 
-def get_token(payload: dict, expires_in: int = 60) -> str:
+def get_token(payload: dict, expires_in: int = 60, secret: str = None) -> str:
     """Create a JWT — reads SECRET from env. Shortcut for Auth.get_token_static()."""
+    if secret is not None:
+        return Auth(secret=secret).get_token(payload, expires_in=expires_in)
     return Auth.get_token_static(payload, expires_in=expires_in)
 
 
@@ -312,8 +322,10 @@ def refresh_token(token: str, expires_in: int = 60) -> str | None:
     return Auth.refresh_token_static(token, expires_in=expires_in)
 
 
-def authenticate_request(headers: dict) -> dict | None:
+def authenticate_request(headers: dict, secret: str = None, algorithm: str = "HS256") -> dict | None:
     """Validate auth from request headers — reads SECRET from env."""
+    if secret is not None:
+        return Auth(secret=secret).authenticate_request(headers, algorithm=algorithm)
     return Auth.authenticate_request_static(headers)
 
 

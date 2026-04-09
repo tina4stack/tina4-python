@@ -67,6 +67,38 @@ class I18n:
 
         return value
 
+    def set_locale(self, locale: str) -> None:
+        """Set the active locale. Alias for the locale property setter."""
+        self.locale = locale
+
+    def get_locale(self) -> str:
+        """Return the currently active locale code."""
+        return self._current_locale
+
+    def translate(self, key: str, params: dict = None, locale: str = None) -> str:
+        """Translate a key with optional params dict and locale override.
+
+        Equivalent to t() but accepts a params dict instead of **kwargs.
+        """
+        if locale:
+            old = self._current_locale
+            self.locale = locale
+            result = self.t(key, **(params or {}))
+            self.locale = old
+            return result
+        return self.t(key, **(params or {}))
+
+    def load_translations(self, locale: str) -> dict:
+        """Load and return the translation dict for a locale."""
+        self._load_locale(locale)
+        return dict(self._translations.get(locale, {}))
+
+    def add_translation(self, locale: str, key: str, value: str) -> None:
+        """Add or update a single translation key for a locale."""
+        if locale not in self._translations:
+            self._translations[locale] = {}
+        self._translations[locale][key] = value
+
     def available_locales(self) -> list[str]:
         """List available locale codes."""
         if not self._locale_dir.is_dir():

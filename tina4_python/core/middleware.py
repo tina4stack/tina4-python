@@ -1,22 +1,22 @@
-# Tina4 Middleware — CORS, Rate Limiter, CSRF.
+# Tina4 Middleware — orchestrator plus built-in middleware classes.
 """
-Built-in middleware for cross-origin requests, rate limiting, and CSRF protection.
+Standardized middleware orchestrator and built-in middleware.
+
+Middleware classes follow a simple convention:
+    - Static methods named ``before_*`` run BEFORE the route handler
+    - Static methods named ``after_*`` run AFTER the route handler
+    - Each method receives ``(request, response)`` and returns ``(request, response)``
+    - If a before method sets the response status to >= 400, the chain short-circuits
+
+Usage::
+
+    from tina4_python.core.middleware import Middleware, CorsMiddleware
+
+    Middleware.use(CorsMiddleware)
+    request, response = Middleware.run_before([CorsMiddleware], request, response)
+    request, response = Middleware.run_after([RequestLoggerMiddleware], request, response)
+
 Zero dependencies — stdlib only.
-
-    from tina4_python.core.middleware import CorsMiddleware, RateLimiter, CsrfMiddleware
-
-CORS is configured via environment variables:
-    TINA4_CORS_ORIGINS=*                    # Allowed origins (* = all)
-    TINA4_CORS_METHODS=GET,POST,PUT,DELETE  # Allowed methods
-    TINA4_CORS_HEADERS=Content-Type,Authorization
-    TINA4_CORS_MAX_AGE=86400               # Preflight cache (seconds)
-
-Rate limiter uses a sliding window in memory:
-    TINA4_RATE_LIMIT=100                   # Requests per window
-    TINA4_RATE_WINDOW=60                   # Window in seconds
-
-CSRF protection (off by default):
-    TINA4_CSRF=true                        # Enable CSRF token validation
 """
 import os
 import time
@@ -24,8 +24,82 @@ import logging
 import threading
 
 
+class Middleware:
+    """Standardized middleware orchestrator.
+
+    Registers middleware classes globally and runs their ``before_*`` /
+    ``after_*`` static methods in alphabetical order. Mirrors the PHP,
+    Ruby and Node.js orchestrators.
+    """
+
+    _global_middleware: list = []
+
+    @classmethod
+    def use(cls, middleware_class) -> None:
+        """Register a middleware class to run on every request."""
+        if middleware_class not in cls._global_middleware:
+            cls._global_middleware.append(middleware_class)
+
+    @classmethod
+    def get_global(cls) -> list:
+        """Return the list of globally registered middleware classes."""
+        return list(cls._global_middleware)
+
+    @classmethod
+    def reset(cls) -> None:
+        """Clear all globally registered middleware (primarily for tests)."""
+        cls._global_middleware = []
+
+    @classmethod
+    def run_before(cls, middleware_classes, request, response):
+        """Run every ``before_*`` static method on the given classes.
+
+        Short-circuits if the response status becomes >= 400.
+        Returns ``(request, response)``.
+        """
+        for mw_class in middleware_classes:
+            for method_name in cls._discover_methods(mw_class, "before_"):
+                result = getattr(mw_class, method_name)(request, response)
+                if isinstance(result, tuple) and len(result) >= 2:
+                    request, response = result[0], result[1]
+                status = getattr(response, "status_code", None) or getattr(response, "status", 0)
+                if isinstance(status, int) and status >= 400:
+                    return request, response
+        return request, response
+
+    @classmethod
+    def run_after(cls, middleware_classes, request, response):
+        """Run every ``after_*`` static method on the given classes."""
+        for mw_class in middleware_classes:
+            for method_name in cls._discover_methods(mw_class, "after_"):
+                result = getattr(mw_class, method_name)(request, response)
+                if isinstance(result, tuple) and len(result) >= 2:
+                    request, response = result[0], result[1]
+        return request, response
+
+    @staticmethod
+    def _discover_methods(mw_class, prefix: str) -> list:
+        """Return sorted list of public static method names with ``prefix``."""
+        names = [
+            name
+            for name in dir(mw_class)
+            if name.startswith(prefix) and callable(getattr(mw_class, name, None))
+        ]
+        return sorted(names)
+
+
 class CorsMiddleware:
     """CORS handler — reads config from env, injects headers."""
+
+    @staticmethod
+    def before_cors(request, response):
+        """Inject CORS headers on every request (class-based middleware convention)."""
+        instance = CorsMiddleware()
+        if instance.is_preflight(request):
+            instance.apply(request, response)
+            return request, response
+        instance.apply(request, response)
+        return request, response
 
     def __init__(self):
         self.origins = os.environ.get("TINA4_CORS_ORIGINS", "*")
@@ -79,6 +153,32 @@ class RateLimiter:
 
     Thread-safe. Automatically cleans up expired entries.
     """
+
+    _shared_instance = None
+    _shared_lock = threading.Lock()
+
+    @classmethod
+    def _shared(cls) -> "RateLimiter":
+        with cls._shared_lock:
+            if cls._shared_instance is None:
+                cls._shared_instance = cls()
+            return cls._shared_instance
+
+    @staticmethod
+    def before_rate_limit(request, response):
+        """Class-based middleware entry point — enforces the shared rate limit."""
+        limiter = RateLimiter._shared()
+        ip = getattr(request, "ip", None) or "unknown"
+        allowed, info = limiter.check(ip)
+        limiter.apply_headers(response, info)
+        if not allowed:
+            retry_after = max(1, int(info.get("reset", limiter.window)))
+            response.header("retry-after", str(retry_after))
+            if hasattr(response, "error"):
+                response.error("Too Many Requests", f"Rate limit exceeded. Retry in {retry_after}s.", 429)
+            else:
+                setattr(response, "status_code", 429)
+        return request, response
 
     def __init__(self):
         self.limit = int(os.environ.get("TINA4_RATE_LIMIT", "100"))
@@ -307,4 +407,38 @@ class CsrfMiddleware:
                     403,
                 )
 
+        return request, response
+
+
+class RequestLoggerMiddleware:
+    """Request logger — stamps start time before the handler and logs elapsed time after.
+
+    Mirrors the PHP, Ruby and Node.js RequestLogger classes.
+    """
+
+    _logger = logging.getLogger("tina4.request")
+    _start_times: dict = {}
+    _lock = threading.Lock()
+
+    @staticmethod
+    def before_log(request, response):
+        """Record the request start time."""
+        key = id(request)
+        with RequestLoggerMiddleware._lock:
+            RequestLoggerMiddleware._start_times[key] = time.monotonic()
+        return request, response
+
+    @staticmethod
+    def after_log(request, response):
+        """Log the request method, path, status code, and elapsed time."""
+        key = id(request)
+        with RequestLoggerMiddleware._lock:
+            start = RequestLoggerMiddleware._start_times.pop(key, None)
+        elapsed_ms = round((time.monotonic() - start) * 1000, 3) if start is not None else 0.0
+        method = getattr(request, "method", "?")
+        path = getattr(request, "url", None) or getattr(request, "path", "/")
+        status = getattr(response, "status_code", None) or getattr(response, "status", 0)
+        RequestLoggerMiddleware._logger.info(
+            "[RequestLogger] %s %s -> %s (%sms)", method, path, status, elapsed_ms
+        )
         return request, response

@@ -3,6 +3,7 @@ import pytest
 from tina4_python.database import Database
 from tina4_python.orm import ORM, orm_bind, Field, IntField, StrField, BoolField
 from tina4_python.orm import has_many, has_one, belongs_to
+from tina4_python.orm.model import snake_to_camel, camel_to_snake
 
 
 # ── Test Models ─────────────────────────────────────────────────
@@ -750,3 +751,17 @@ class TestGetNextId:
         id2 = db.get_next_id("users", generator_name="my_custom_seq")
         assert id1 == 1
         assert id2 == 2
+
+
+class TestSnakeCamelUtils:
+    def test_snake_to_camel(self):
+        assert snake_to_camel("first_name") == "firstName"
+        assert snake_to_camel("user_id") == "userId"
+        assert snake_to_camel("id") == "id"
+        assert snake_to_camel("my_field_name") == "myFieldName"
+
+    def test_camel_to_snake(self):
+        assert camel_to_snake("firstName") == "first_name"
+        assert camel_to_snake("userId") == "user_id"
+        assert camel_to_snake("id") == "id"
+        assert camel_to_snake("myFieldName") == "my_field_name"

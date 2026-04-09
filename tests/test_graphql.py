@@ -107,28 +107,19 @@ class TestExecutor:
     def _make_gql(self):
         gql = GraphQL()
         gql.schema.add_type("User", {"id": "ID", "name": "String", "email": "String"})
-        gql.schema.add_query("user", {
-            "type": "User",
-            "args": {"id": "ID!"},
-            "resolve": lambda root, args, ctx: {
-                "id": args["id"], "name": "Alice", "email": "alice@test.com"
-            },
-        })
-        gql.schema.add_query("users", {
-            "type": "[User]",
-            "args": {"limit": "Int"},
-            "resolve": lambda root, args, ctx: [
-                {"id": "1", "name": "Alice", "email": "alice@test.com"},
-                {"id": "2", "name": "Bob", "email": "bob@test.com"},
-            ][:args.get("limit", 10)],
-        })
-        gql.schema.add_mutation("createUser", {
-            "type": "User",
-            "args": {"name": "String!", "email": "String!"},
-            "resolve": lambda root, args, ctx: {
-                "id": "3", "name": args["name"], "email": args["email"]
-            },
-        })
+        gql.schema.add_query("user", {"id": "ID!"}, "User",
+                              lambda root, args, ctx: {
+                                  "id": args["id"], "name": "Alice", "email": "alice@test.com"
+                              })
+        gql.schema.add_query("users", {"limit": "Int"}, "[User]",
+                              lambda root, args, ctx: [
+                                  {"id": "1", "name": "Alice", "email": "alice@test.com"},
+                                  {"id": "2", "name": "Bob", "email": "bob@test.com"},
+                              ][:args.get("limit", 10)])
+        gql.schema.add_mutation("createUser", {"name": "String!", "email": "String!"}, "User",
+                                 lambda root, args, ctx: {
+                                     "id": "3", "name": args["name"], "email": args["email"]
+                                 })
         return gql
 
     def test_simple_query(self):
@@ -199,10 +190,7 @@ class TestExecutor:
 
     def test_resolver_error(self):
         gql = GraphQL()
-        gql.schema.add_query("broken", {
-            "type": "String",
-            "resolve": lambda r, a, c: 1 / 0,
-        })
+        gql.schema.add_query("broken", {}, "String", lambda r, a, c: 1 / 0)
         result = gql.execute("{ broken }")
         assert result["errors"]
         assert "division by zero" in result["errors"][0]["message"]
@@ -222,13 +210,11 @@ class TestExecutor:
 
     def test_nested_selection(self):
         gql = GraphQL()
-        gql.schema.add_query("company", {
-            "type": "Company",
-            "resolve": lambda r, a, c: {
-                "name": "Acme",
-                "ceo": {"name": "Alice", "title": "CEO"},
-            },
-        })
+        gql.schema.add_query("company", {}, "Company",
+                              lambda r, a, c: {
+                                  "name": "Acme",
+                                  "ceo": {"name": "Alice", "title": "CEO"},
+                              })
         result = gql.execute("{ company { name ceo { name title } } }")
         assert result["data"]["company"]["name"] == "Acme"
         assert result["data"]["company"]["ceo"]["name"] == "Alice"
@@ -242,9 +228,7 @@ class TestExecutor:
 
     def test_context_passed(self):
         gql = GraphQL()
-        gql.schema.add_query("whoami", {
-            "type": "String",
-            "resolve": lambda r, a, ctx: ctx.get("user", "anon"),
-        })
+        gql.schema.add_query("whoami", {}, "String",
+                              lambda r, a, ctx: ctx.get("user", "anon"))
         result = gql.execute("{ whoami }", context={"user": "admin"})
         assert result["data"]["whoami"] == "admin"

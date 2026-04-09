@@ -1387,3 +1387,28 @@ class TestBlockParent:
         assert "app.css" in r
         assert "base.js" in r
         assert "app.js" in r
+
+
+# ── render_dump Tests ──────────────────────────────────────
+
+
+class TestRenderDump:
+    def test_render_dump_silent_in_production(self, engine, monkeypatch):
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        result = engine.render_dump({"key": "value"})
+        assert result == ""
+
+    def test_render_dump_returns_html_in_debug(self, engine, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        result = engine.render_dump({"key": "value"})
+        assert "<pre>" in result
+
+    def test_render_dump_handles_none(self, engine, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        result = engine.render_dump(None)
+        assert isinstance(result, str)
+
+    def test_render_dump_handles_list(self, engine, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        result = engine.render_dump([1, 2, 3])
+        assert "<pre>" in result

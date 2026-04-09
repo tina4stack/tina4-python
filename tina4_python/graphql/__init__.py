@@ -6,11 +6,8 @@ Recursive-descent parser, schema builder, and query executor.
 
     gql = GraphQL()
     gql.schema.add_type("User", {"id": "ID", "name": "String", "email": "String"})
-    gql.schema.add_query("user", {
-        "type": "User",
-        "args": {"id": "ID!"},
-        "resolve": lambda root, args, ctx: get_user(args["id"]),
-    })
+    gql.schema.add_query("user", {"id": "ID!"}, "User",
+                          lambda root, args, ctx: get_user(args["id"]))
     result = gql.execute('{ user(id: "1") { name email } }')
 
 Supported:
@@ -334,11 +331,11 @@ class Schema:
     def add_type(self, name: str, fields: dict[str, str]):
         self.types[name] = fields
 
-    def add_query(self, name: str, config: dict):
-        self.queries[name] = config
+    def add_query(self, name: str, args: dict, return_type: str, resolver: callable):
+        self.queries[name] = {"args": args, "type": return_type, "resolve": resolver}
 
-    def add_mutation(self, name: str, config: dict):
-        self.mutations[name] = config
+    def add_mutation(self, name: str, args: dict, return_type: str, resolver: callable):
+        self.mutations[name] = {"args": args, "type": return_type, "resolve": resolver}
 
     def from_orm(self, orm_class):
         """Auto-generate type, queries, and CRUD mutations from an ORM class."""
@@ -367,36 +364,23 @@ class Schema:
         self.add_type(class_name, gql_fields)
 
         singular = class_name.lower()
-        self.add_query(singular, {
-            "type": class_name,
-            "args": {"id": "ID!"},
-            "resolve": _make_orm_single_resolver(orm_class, pk_field),
-        })
+        self.add_query(singular, {"id": "ID!"}, class_name,
+                       _make_orm_single_resolver(orm_class, pk_field))
 
         plural = singular + "s"
-        self.add_query(plural, {
-            "type": f"[{class_name}]",
-            "args": {"limit": "Int", "offset": "Int"},
-            "resolve": _make_orm_list_resolver(orm_class),
-        })
+        self.add_query(plural, {"limit": "Int", "offset": "Int"}, f"[{class_name}]",
+                       _make_orm_list_resolver(orm_class))
 
-        self.add_mutation(f"create{class_name}", {
-            "type": class_name,
-            "args": {f: "String" for f in gql_fields if f != pk_field},
-            "resolve": _make_orm_create_resolver(orm_class),
-        })
+        self.add_mutation(f"create{class_name}",
+                          {f: "String" for f in gql_fields if f != pk_field},
+                          class_name, _make_orm_create_resolver(orm_class))
 
-        self.add_mutation(f"update{class_name}", {
-            "type": class_name,
-            "args": {"id": "ID!", **{f: "String" for f in gql_fields if f != pk_field}},
-            "resolve": _make_orm_update_resolver(orm_class, pk_field),
-        })
+        self.add_mutation(f"update{class_name}",
+                          {"id": "ID!", **{f: "String" for f in gql_fields if f != pk_field}},
+                          class_name, _make_orm_update_resolver(orm_class, pk_field))
 
-        self.add_mutation(f"delete{class_name}", {
-            "type": "Boolean",
-            "args": {"id": "ID!"},
-            "resolve": _make_orm_delete_resolver(orm_class, pk_field),
-        })
+        self.add_mutation(f"delete{class_name}", {"id": "ID!"}, "Boolean",
+                          _make_orm_delete_resolver(orm_class, pk_field))
 
 
 def _make_orm_single_resolver(orm_class, pk_field):

@@ -1184,6 +1184,13 @@ class Frond:
         self._compiled_strings.clear()
         self._filter_chain_cache.clear()
 
+    def render_dump(self, v) -> str:
+        """Render a debug dump of a value as HTML — parity with PHP/Ruby.
+
+        Gated on TINA4_DEBUG=true. Returns empty string in production.
+        """
+        return _render_dump(v)
+
     def _load(self, name: str) -> str:
         """Load template source from file."""
         path = self.template_dir / name

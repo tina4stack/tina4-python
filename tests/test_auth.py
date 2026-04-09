@@ -342,3 +342,43 @@ class TestAPIKeyEdgeCases:
             assert Auth.validate_api_key("mykey123") is False
         finally:
             del os.environ["API_KEY"]
+
+
+# ── Secret Override ─────────────────────────────────────────────
+
+
+class TestSecretOverride:
+    def test_get_token_with_explicit_secret(self):
+        token = Auth.get_token({"user": 1}, secret="custom-secret")
+        assert isinstance(token, str)
+        # Token signed with custom-secret — default env secret should not validate it
+        import os
+        os.environ["SECRET"] = "env-secret"
+        try:
+            assert not Auth.valid_token_static(token)
+        finally:
+            del os.environ["SECRET"]
+
+    def test_get_token_module_level_with_secret(self):
+        from tina4_python.auth import get_token, valid_token
+        token = get_token({"user": 2}, secret="my-secret")
+        assert isinstance(token, str)
+
+    def test_authenticate_request_with_secret_param(self):
+        auth = Auth(secret="test-secret")
+        token = auth.get_token({"user": 3})
+        result = auth.authenticate_request(
+            {"authorization": f"Bearer {token}"},
+            secret="test-secret"
+        )
+        assert result is not None
+        assert result["user"] == 3
+
+    def test_authenticate_request_with_algorithm_param(self):
+        auth = Auth(secret="algo-test")
+        token = auth.get_token({"user": 4})
+        result = auth.authenticate_request(
+            {"authorization": f"Bearer {token}"},
+            algorithm="HS256"
+        )
+        assert result is not None

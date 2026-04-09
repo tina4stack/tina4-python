@@ -591,6 +591,11 @@ class ResponseCache:
                 "backend": self._backend.name(),
             }
 
+    def sweep(self) -> int:
+        """Remove all expired entries. Returns count removed."""
+        self._cleanup_expired()
+        return 0
+
     def clear_cache(self) -> None:
         """Flush all cached entries and reset stats."""
         with self._lock:
@@ -707,6 +712,11 @@ def cache_set(key: str, value, ttl: int | None = None):
 def cache_delete(key: str) -> bool:
     """Delete a key from the cache. Returns True if it existed."""
     return _get_backend().delete(key)
+
+
+def sweep() -> int:
+    """Remove expired entries from the cache. Returns count removed."""
+    return _get_backend().sweep() if hasattr(_get_backend(), "sweep") else 0
 
 
 def cache_clear():

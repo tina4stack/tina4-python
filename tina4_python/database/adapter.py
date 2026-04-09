@@ -546,3 +546,8 @@ class SQLTranslator:
                     result.append(ch)
             return "".join(result)
         return sql
+
+
+# QueryCache lives in tina4_python.core.cache (as ``Cache``). Re-exported here
+# under the QueryCache alias for cross-framework naming parity with PHP/Ruby/Node.
+from tina4_python.core.cache import Cache as QueryCache  # noqa: E402,F401

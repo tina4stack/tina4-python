@@ -35,6 +35,7 @@ class Api:
         """Add custom headers to all requests."""
         self._headers.update(headers)
 
+
     def set_basic_auth(self, username: str, password: str):
         """Set Basic authentication."""
         creds = base64.b64encode(f"{username}:{password}".encode()).decode()
@@ -67,7 +68,7 @@ class Api:
         """HTTP DELETE request."""
         return self._request("DELETE", self._url(path), body)
 
-    def send(self, method: str, path: str = "", body=None,
+    def send_request(self, method: str, path: str = "", body=None,
              content_type: str = "application/json") -> dict:
         """Generic request method."""
         return self._request(method.upper(), self._url(path), body, content_type)

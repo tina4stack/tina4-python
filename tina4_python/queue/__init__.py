@@ -133,24 +133,29 @@ class Queue:
         """Count jobs by status."""
         return self._backend.size(status)
 
-    def purge(self, status: str = "completed") -> int:
+    def purge(self, status: str, max_retries: int = None) -> int:
         """Remove all jobs with the given status. Returns count removed."""
         return self._backend.purge(status)
 
-    def retry_failed(self) -> int:
+    def retry_failed(self, max_retries: int = None) -> int:
         """Re-queue failed jobs that haven't exceeded max_retries."""
-        return self._backend.retry_failed()
+        return self._backend.retry_failed(max_retries=max_retries if max_retries is not None else self.max_retries)
 
     def failed(self) -> list[dict]:
         """Get jobs that failed but are still eligible for retry."""
         return self._backend.failed()
 
-    def dead_letters(self) -> list[dict]:
+    def dead_letters(self, max_retries: int = None) -> list[dict]:
         """Get jobs that exceeded max retries."""
-        return self._backend.dead_letters()
+        return self._backend.dead_letters(max_retries=max_retries if max_retries is not None else self.max_retries)
 
-    def retry(self, job_id: str, delay_seconds: int = 0) -> bool:
-        """Retry a specific failed job by ID. Returns True if found and re-queued."""
+    def retry(self, job_id: str = None, delay_seconds: int = 0) -> bool:
+        """Retry a failed job by ID, or all dead-letter jobs if no ID given."""
+        if job_id is None:
+            dead = self.dead_letters()
+            if not dead:
+                return False
+            return any(self._backend.retry_job(j["id"], delay_seconds) for j in dead)
         return self._backend.retry_job(job_id, delay_seconds)
 
     def clear(self) -> int:
@@ -168,7 +173,7 @@ class Queue:
             self.topic = old_topic
             self._backend = _resolve_backend(old_topic, None, self.max_retries)
 
-    def consume(self, topic: str = None, job_id: str = None, poll_interval: float = 1.0,
+    def consume(self, topic: str = None, id: str = None, poll_interval: float = 1.0,
                 iterations: int = 0, batch_size: int = 1):
         """Consume jobs from a topic using a long-running generator.
 
@@ -190,13 +195,13 @@ class Queue:
                 process(job)
 
             # Consume a specific job by ID (single yield, no polling):
-            for job in queue.consume("emails", job_id="abc-123"):
+            for job in queue.consume("emails", id="abc-123"):
                 process(job)
                 job.complete()
 
         Args:
             topic: Topic/queue name (defaults to constructor topic)
-            job_id: Optional job ID — only yield this specific job
+            id: Optional job ID — only yield this specific job
             poll_interval: Seconds to sleep when queue is empty (default 1.0)
             iterations: Max number of jobs to consume (0 = unlimited, default 0)
         """
@@ -204,9 +209,9 @@ class Queue:
 
         topic = topic or self.topic
 
-        if job_id is not None:
+        if id is not None:
             # Consume a specific job by ID — single yield, no polling
-            job = self.pop_by_id(job_id)
+            job = self.pop_by_id(id)
             if job is not None:
                 yield job
             return
@@ -236,8 +241,9 @@ class Queue:
             if iterations > 0 and consumed >= iterations:
                 break
 
-    def pop_by_id(self, job_id: str) -> Job | None:
+    def pop_by_id(self, id: str) -> Job | None:
         """Pop a specific job by ID from the queue."""
+        job_id = id
         if not isinstance(self._backend, LiteBackend):
             return None
         queue_dir = self._backend._queue_dir()

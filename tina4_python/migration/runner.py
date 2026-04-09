@@ -524,6 +524,10 @@ class Migration:
         """Return list of applied migration records."""
         return self.status()["completed"]
 
+    def get_applied_migrations(self) -> list[dict]:
+        """Alias for get_applied() — parity with PHP/Node."""
+        return self.get_applied()
+
     def get_pending(self) -> list[dict]:
         """Return list of pending migration records."""
         return self.status()["pending"]
@@ -534,6 +538,41 @@ class Migration:
         if not folder.is_dir():
             return []
         return sorted(f.name for f in folder.glob("*.sql") if not f.name.endswith(".down.sql"))
+
+    def record_migration(self, name: str, batch: int, passed: int = 1) -> None:
+        """Insert a record into the migration tracking table.
+
+        Args:
+            name: Migration ID (stem of the filename, e.g. "20240101000000_create_users").
+            batch: Batch number this migration belongs to.
+            passed: 1 if the migration succeeded (default), 0 if it failed.
+        """
+        _ensure_tracking_table(self._db)
+        now = datetime.now(timezone.utc).isoformat()
+        desc = re.sub(r"^\d+_", "", name, count=1).replace("_", " ")
+        if _is_firebird(self._db):
+            row = self._db.fetch_one("SELECT GEN_ID(GEN_TINA4_MIGRATION_ID, 1) AS next_id FROM RDB$DATABASE")
+            next_id = row["next_id"] if row else 1
+            self._db.execute(
+                "INSERT INTO tina4_migration (id, migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, ?)",
+                [next_id, name, desc, batch, now, passed],
+            )
+        else:
+            self._db.execute(
+                "INSERT INTO tina4_migration (migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?)",
+                [name, desc, batch, now, passed],
+            )
+
+    def remove_migration_record(self, name: str) -> None:
+        """Delete a migration record from the tracking table by migration ID.
+
+        Args:
+            name: Migration ID to remove (stem of the filename).
+        """
+        self._db.execute(
+            "DELETE FROM tina4_migration WHERE migration_id = ?",
+            [name],
+        )
 
 
 def status(db, migration_folder: str = "migrations") -> dict:

@@ -50,15 +50,25 @@ class RouteRef:
         self._route["auth_required"] = False
         return self
 
-    def cache(self, max_age: int | None = None):
-        """Mark this route as cacheable.
-
-        Args:
-            max_age: Optional TTL override in seconds.
-        """
+    def cache(self):
+        """Mark this route as cacheable."""
         self._route["cached"] = True
-        if max_age is not None:
-            self._route["cache_max_age"] = max_age
+        return self
+
+    def middleware(self, *middleware_classes):
+        """Append middleware class(es) to this route.
+
+        Usage::
+
+            Router.post("/api/data", handler).middleware(AuthMiddleware)
+            Router.get("/api/slow", handler).middleware(CacheMiddleware, LogMiddleware)
+        """
+        existing = self._route.get("middleware", [])
+        self._route["middleware"] = list(existing) + list(middleware_classes)
+        # Custom middleware means developer handles auth — disable built-in gate
+        # unless .secure() was explicitly called.
+        if not self._route.get("auth_required"):
+            self._route["auth_required"] = False
         return self
 
 
@@ -212,37 +222,37 @@ class Router:
             cls._global_middleware.append(middleware_class)
 
     @classmethod
-    def get(cls, path: str, handler, **options) -> "RouteRef":
+    def get(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
         """Register a GET route (imperative, non-decorator style)."""
-        return cls.add("GET", path, handler, **options)
+        return cls.add("GET", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
 
     @classmethod
-    def post(cls, path: str, handler, **options) -> "RouteRef":
+    def post(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
         """Register a POST route (imperative, non-decorator style)."""
-        return cls.add("POST", path, handler, **options)
+        return cls.add("POST", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
 
     @classmethod
-    def put(cls, path: str, handler, **options) -> "RouteRef":
+    def put(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
         """Register a PUT route (imperative, non-decorator style)."""
-        return cls.add("PUT", path, handler, **options)
+        return cls.add("PUT", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
 
     @classmethod
-    def patch(cls, path: str, handler, **options) -> "RouteRef":
+    def patch(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
         """Register a PATCH route (imperative, non-decorator style)."""
-        return cls.add("PATCH", path, handler, **options)
+        return cls.add("PATCH", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
 
     @classmethod
-    def delete(cls, path: str, handler, **options) -> "RouteRef":
+    def delete(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
         """Register a DELETE route (imperative, non-decorator style)."""
-        return cls.add("DELETE", path, handler, **options)
+        return cls.add("DELETE", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
 
     @classmethod
-    def any(cls, path: str, handler, **options) -> "RouteRef":
+    def any(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
         """Register a route for any HTTP method (imperative, non-decorator style)."""
-        return cls.add("ANY", path, handler, **options)
+        return cls.add("ANY", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
 
     @classmethod
-    def add(cls, method: str, path: str, handler, **options) -> "RouteRef":
+    def add(cls, method: str, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
         """Register a route handler.
 
         Auth defaults:
@@ -262,16 +272,15 @@ class Router:
 
         # Merge group middleware with route-level middleware and handler-level middleware
         handler_mw = getattr(handler, "_middleware", [])
-        route_mw = options.get("middleware", [])
-        combined_mw = list(cls._group_middleware) + list(handler_mw) + list(route_mw)
-        if combined_mw:
-            options["middleware"] = combined_mw
+        route_mw = list(middleware or []) + list(options.get("middleware", []))
+        combined_mw = list(cls._group_middleware) + list(handler_mw) + route_mw
+        effective_middleware = combined_mw or []
 
         pattern, param_names = _compile_pattern(path)
 
         # Auth default: GET=public, writes=secured (unless custom middleware handles auth)
         m = method.upper()
-        has_middleware = bool(options.get("middleware"))
+        has_middleware = bool(effective_middleware)
         if "auth_required" in options:
             auth_required = options["auth_required"]
         elif hasattr(handler, "_noauth"):
@@ -290,10 +299,12 @@ class Router:
             "pattern": pattern,
             "param_names": param_names,
             "handler": handler,
-            "middleware": options.get("middleware", []),
+            "middleware": effective_middleware,
             "auth_required": auth_required,
             "cached": options.get("cached", False),
             "cache_max_age": options.get("cache_max_age", 60),
+            "swagger_meta": swagger_meta or options.get("swagger_meta", {}),
+            "template": template or options.get("template"),
         }
         _routes.append(route)
         Log.debug(f"Route registered: {m} {path} (auth={'required' if auth_required else 'public'})")
