@@ -17,6 +17,64 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 
+class MigrationBase:
+    """Base class for programmatic Python migrations.
+
+    Subclass this and implement up(db) and down(db).
+
+    Example migration file (20240101000000_create_users.py)::
+
+        from tina4_python.migration import MigrationBase
+
+        class CreateUsers(MigrationBase):
+            def up(self, db):
+                db.execute(\"\"\"
+                    CREATE TABLE users (
+                        id INTEGER PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        email TEXT NOT NULL
+                    )
+                \"\"\")
+
+            def down(self, db):
+                db.execute("DROP TABLE IF EXISTS users")
+    """
+
+    def up(self, db) -> None:
+        """Apply the migration. Override in subclass."""
+        raise NotImplementedError("Migration subclass must implement up(db)")
+
+    def down(self, db) -> None:
+        """Reverse the migration. Override in subclass."""
+        raise NotImplementedError("Migration subclass must implement down(db)")
+
+
+def _execute_python_migration(db, filepath: Path, direction: str) -> None:
+    """Load a .py migration file and call its up() or down() method."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_tina4_migration", filepath)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    # Find the MigrationBase subclass defined in the module
+    klass = None
+    for attr in dir(module):
+        obj = getattr(module, attr)
+        if (
+            isinstance(obj, type)
+            and issubclass(obj, MigrationBase)
+            and obj is not MigrationBase
+        ):
+            klass = obj
+            break
+
+    if klass is None:
+        raise RuntimeError(f"No MigrationBase subclass found in {filepath}")
+
+    instance = klass()
+    getattr(instance, direction)(db)
+
+
 def _ensure_tracking_table(db):
     """Create or upgrade the migration tracking table.
 
@@ -241,40 +299,40 @@ def migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> l
     batch = _get_next_batch(db)
     ran = []
 
-    # Get all .sql files sorted by name (excluding .down.sql)
-    sql_files = sorted(
-        f for f in folder.glob("*.sql")
-        if not f.name.endswith(".down.sql")
+    # Collect both .sql and .py migration files, sorted by filename prefix
+    migration_files = sorted(
+        [f for f in folder.glob("*.sql") if not f.name.endswith(".down.sql")]
+        + [f for f in folder.glob("*.py") if not f.name.startswith("__")],
+        key=lambda f: f.name,
     )
 
-    for sql_file in sql_files:
-        migration_id = sql_file.stem  # e.g., "000001_create_users_table"
+    for mig_file in migration_files:
+        migration_id = mig_file.stem  # e.g., "000001_create_users_table"
 
         if migration_id in executed:
             continue
 
-        sql = sql_file.read_text(encoding="utf-8")
-        statements = _split_statements(sql, delimiter)
-
         try:
             db.start_transaction()
-            for stmt in statements:
-                # Firebird lacks IF NOT EXISTS for ALTER TABLE ADD.
-                # Pre-check the system catalogue so duplicate columns are
-                # silently skipped instead of raising an error.
-                skip_reason = _should_skip_for_firebird(db, stmt)
-                if skip_reason:
-                    logger.info(f"Migration {sql_file.name}: {skip_reason}")
-                    continue
-                if db.execute(stmt) is False:
-                    raise RuntimeError(f"Migration failed: {db.get_error() or stmt[:80]}")
+
+            if mig_file.suffix == ".py":
+                _execute_python_migration(db, mig_file, "up")
+            else:
+                sql = mig_file.read_text(encoding="utf-8")
+                statements = _split_statements(sql, delimiter)
+                for stmt in statements:
+                    # Firebird lacks IF NOT EXISTS for ALTER TABLE ADD.
+                    skip_reason = _should_skip_for_firebird(db, stmt)
+                    if skip_reason:
+                        logger.info(f"Migration {mig_file.name}: {skip_reason}")
+                        continue
+                    if db.execute(stmt) is False:
+                        raise RuntimeError(f"Migration failed: {db.get_error() or stmt[:80]}")
 
             # Record as passed
             now = datetime.now(timezone.utc).isoformat()
-            # Extract description from filename (supports both 000001_ and YYYYMMDDHHMMSS_ prefixes)
             desc = re.sub(r"^\d+_", "", migration_id, count=1).replace("_", " ")
             if _is_firebird(db):
-                # Firebird: generate ID from sequence
                 row = db.fetch_one("SELECT GEN_ID(GEN_TINA4_MIGRATION_ID, 1) AS next_id FROM RDB$DATABASE")
                 next_id = row["next_id"] if row else 1
                 db.execute(
@@ -287,12 +345,12 @@ def migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> l
                     [migration_id, desc, batch, now],
                 )
             db.commit()
-            ran.append(sql_file.name)
+            ran.append(mig_file.name)
 
         except Exception as e:
             db.rollback()
             raise RuntimeError(
-                f"Migration failed: {sql_file.name} — {e}"
+                f"Migration failed: {mig_file.name} — {e}"
             ) from e
 
     return ran
@@ -323,27 +381,33 @@ def rollback(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
 
     for migration in result.records:
         mid = migration["migration_id"]
+        py_file = folder / f"{mid}.py"
         down_file = folder / f"{mid}.down.sql"
-
-        if not down_file.exists():
-            raise RuntimeError(
-                f"Cannot rollback {mid}: no .down.sql file found at {down_file}"
-            )
-
-        sql = down_file.read_text(encoding="utf-8")
-        statements = _split_statements(sql, delimiter)
 
         try:
             db.start_transaction()
-            for stmt in statements:
-                if db.execute(stmt) is False:
-                    raise RuntimeError(f"Rollback failed: {db.get_error() or stmt[:80]}")
+
+            if py_file.exists():
+                _execute_python_migration(db, py_file, "down")
+                rolled_back_name = f"{mid}.py"
+            elif down_file.exists():
+                sql = down_file.read_text(encoding="utf-8")
+                statements = _split_statements(sql, delimiter)
+                for stmt in statements:
+                    if db.execute(stmt) is False:
+                        raise RuntimeError(f"Rollback failed: {db.get_error() or stmt[:80]}")
+                rolled_back_name = f"{mid}.down.sql"
+            else:
+                raise RuntimeError(
+                    f"Cannot rollback {mid}: no .py or .down.sql file found"
+                )
+
             db.execute(
                 "DELETE FROM tina4_migration WHERE migration_id = ?",
                 [mid],
             )
             db.commit()
-            rolled_back.append(f"{mid}.down.sql")
+            rolled_back.append(rolled_back_name)
 
         except Exception as e:
             db.rollback()
@@ -354,24 +418,41 @@ def rollback(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
     return rolled_back
 
 
-def create_migration(description: str, migration_folder: str = "migrations") -> str:
-    """Create a new migration .sql file with a YYYYMMDDHHMMSS timestamp prefix.
+def create_migration(description: str, migration_folder: str = "migrations", kind: str = "sql") -> str:
+    """Create a new migration file with a YYYYMMDDHHMMSS timestamp prefix.
 
-    Also creates a matching .down.sql rollback template.
+    kind="sql"    — creates {timestamp}_{description}.sql + .down.sql (default)
+    kind="python" — creates {timestamp}_{description}.py with MigrationBase subclass
+
     Returns the path to the created file.
     """
     folder = Path(migration_folder)
     folder.mkdir(parents=True, exist_ok=True)
 
-    # Use timestamp format (matches PHP/Ruby/Node.js convention)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-
-    # Clean description for filename
     clean = re.sub(r"[^a-z0-9]+", "_", description.lower()).strip("_")
+    created_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+    if kind == "python":
+        # Derive a CamelCase class name from description
+        class_name = "".join(word.capitalize() for word in re.split(r"[^a-z0-9]+", description.lower()) if word)
+        filename = f"{timestamp}_{clean}.py"
+        filepath = folder / filename
+        filepath.write_text(
+            f"# Migration: {description}\n"
+            f"# Created: {created_at}\n\n"
+            f"from tina4_python.migration import MigrationBase\n\n\n"
+            f"class {class_name}(MigrationBase):\n"
+            f"    def up(self, db) -> None:\n"
+            f"        pass  # db.execute(\"CREATE TABLE ...\")\n\n"
+            f"    def down(self, db) -> None:\n"
+            f"        pass  # db.execute(\"DROP TABLE IF EXISTS ...\")\n",
+            encoding="utf-8",
+        )
+        return str(filepath)
+
     filename = f"{timestamp}_{clean}.sql"
     filepath = folder / filename
-
-    created_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
     filepath.write_text(
         f"-- Migration: {description}\n"
@@ -379,7 +460,6 @@ def create_migration(description: str, migration_folder: str = "migrations") -> 
         encoding="utf-8",
     )
 
-    # Also create .down.sql
     down_path = folder / f"{timestamp}_{clean}.down.sql"
     down_path.write_text(
         f"-- Rollback: {description}\n"
@@ -436,9 +516,9 @@ class Migration:
         """Return {"completed": [...], "pending": [...]} migration status."""
         return status(self._db, self._dir)
 
-    def create(self, description: str) -> str:
-        """Scaffold a new .sql + .down.sql migration file. Returns the up-file path."""
-        return create_migration(description, self._dir)
+    def create(self, description: str, kind: str = "sql") -> str:
+        """Scaffold a new migration file. Returns the up-file path."""
+        return create_migration(description, self._dir, kind=kind)
 
     def get_applied(self) -> list[dict]:
         """Return list of applied migration records."""

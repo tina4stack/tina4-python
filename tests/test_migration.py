@@ -190,7 +190,7 @@ class TestRollbackNegative:
         (mig_dir / "000001_no_down.sql").write_text("CREATE TABLE nd (id INTEGER);")
         migrate(db, str(mig_dir))
 
-        with pytest.raises(RuntimeError, match="no .down.sql"):
+        with pytest.raises(RuntimeError, match="no .py or .down.sql"):
             rollback(db, str(mig_dir))
 
 
