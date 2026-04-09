@@ -938,7 +938,7 @@ _BUILTIN_FILTERS = {
     "data_uri": lambda v, *a: f"data:{v.get('type', 'application/octet-stream')};base64,{__import__('base64').b64encode(v['content'] if isinstance(v['content'], bytes) else v['content'].encode()).decode()}" if isinstance(v, dict) else str(v),
     "url_encode": lambda v, *a: __import__("urllib.parse", fromlist=["quote"]).quote(str(v)),
     "format": lambda v, *a: str(v) % tuple(a) if a else str(v),
-    "dump": lambda v, *a: repr(v),
+    "dump": lambda v, *a: _render_dump(v),
     "form_token": lambda v, *a: _form_token(str(v) if v else ""),
 }
 
@@ -1009,6 +1009,24 @@ def _generate_form_jwt(descriptor: str = "", session_id: str = "") -> str:
     return auth.get_token(payload)
 
 
+def _render_dump(value) -> str:
+    """Render a value as a pre-formatted repr() wrapped in <pre> tags.
+
+    Gated on ``TINA4_DEBUG=true``. In production (``TINA4_DEBUG`` unset or
+    false) this returns an empty ``SafeString`` to avoid leaking internal
+    state, object shapes, or sensitive values into rendered HTML.
+
+    Shared by the ``{{ value|dump }}`` filter and the ``{{ dump(value) }}``
+    global function so both produce identical output and obey the same
+    gating.
+    """
+    if os.environ.get("TINA4_DEBUG", "").lower() != "true":
+        return SafeString("")
+    dumped = repr(value)
+    escaped = html.escape(dumped, quote=True)
+    return SafeString(f"<pre>{escaped}</pre>")
+
+
 def _form_token(descriptor: str = "", session_id: str = "") -> str:
     """Generate a JWT form token and return a hidden input element.
 
@@ -1072,6 +1090,11 @@ class Frond:
         self._globals["form_token"] = _form_token
         self._globals["formTokenValue"] = _form_token_value
         self._globals["form_token_value"] = _form_token_value
+
+        # Debug helper: {{ dump(x) }} — gated on TINA4_DEBUG=true.
+        # Both this global and the |dump filter call _render_dump() which
+        # returns an empty string in production so dump never leaks state.
+        self._globals["dump"] = _render_dump
 
     def sandbox(self, allowed_filters: list[str] = None,
                 allowed_tags: list[str] = None,

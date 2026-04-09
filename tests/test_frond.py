@@ -547,6 +547,48 @@ class TestGlobals:
         assert engine.render_string("{{ name }}", {"name": "Local"}) == "Local"
 
 
+# ── Dump filter + dump() function ─────────────────────────────
+
+
+class TestDump:
+    def test_dump_filter_debug_mode(self, engine, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        result = engine.render_string("{{ val | dump | raw }}", {"val": {"a": 1}})
+        assert result.startswith("<pre>")
+        assert "a" in result
+
+    def test_dump_filter_production_mode(self, engine, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "false")
+        result = engine.render_string("{{ val | dump | raw }}", {"val": {"secret": "hunter2"}})
+        assert result == ""
+
+    def test_dump_filter_unset_env_is_production(self, engine, monkeypatch):
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        result = engine.render_string("{{ val | dump | raw }}", {"val": {"secret": "x"}})
+        assert result == ""
+
+    def test_dump_function_form_matches_filter(self, engine, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        data = {"val": {"a": 1, "b": "hi"}}
+        filter_out = engine.render_string("{{ val | dump | raw }}", data)
+        fn_out = engine.render_string("{{ dump(val) | raw }}", data)
+        assert filter_out == fn_out
+        assert "<pre>" in fn_out
+
+    def test_dump_function_silent_in_production(self, engine, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "false")
+        result = engine.render_string("{{ dump(val) | raw }}", {"val": {"secret": "x"}})
+        assert result == ""
+
+    def test_dump_does_not_crash_on_circular_dict(self, engine, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        circ = {"name": "root"}
+        circ["self"] = circ
+        result = engine.render_string("{{ dump(val) | raw }}", {"val": circ})
+        assert "root" in result
+        assert "..." in result  # Python repr uses {...} for cycles
+
+
 # ── Macro Tests ─────────────────────────────────────────────────
 
 
