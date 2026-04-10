@@ -318,6 +318,35 @@ class Parser:
         return t
 
 
+# ── Type System ───────────────────────────────────────────────
+
+class GraphQLType:
+    """Lightweight type wrapper matching Ruby's GraphQLType."""
+
+    SCALARS = ("String", "Int", "Float", "Boolean", "ID")
+
+    __slots__ = ("name", "kind", "of_type")
+
+    def __init__(self, name: str, kind: str = "object", of_type: "GraphQLType | None" = None):
+        self.name = name
+        self.kind = kind
+        self.of_type = of_type
+
+    @staticmethod
+    def parse(type_str: str) -> "GraphQLType":
+        """Parse a GraphQL type string like ``"String"``, ``"String!"``, ``"[Int!]!"``."""
+        s = str(type_str).strip()
+        if s.endswith("!"):
+            inner = GraphQLType.parse(s[:-1])
+            return GraphQLType(s, "non_null", of_type=inner)
+        if s.startswith("[") and s.endswith("]"):
+            inner = GraphQLType.parse(s[1:-1])
+            return GraphQLType(s, "list", of_type=inner)
+        if s in GraphQLType.SCALARS:
+            return GraphQLType(s, "scalar")
+        return GraphQLType(s, "object")
+
+
 # ── Schema ────────────────────────────────────────────────────
 
 class Schema:

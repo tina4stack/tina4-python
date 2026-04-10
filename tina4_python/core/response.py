@@ -283,6 +283,20 @@ class Response:
         """Alias for render() — parity with PHP/Node.js naming."""
         return self.render(template, data)
 
+    def send(self, data=None, status_code: int = None, content_type: str = None) -> "Response":
+        """Finalize and return the response — matches PHP/Ruby/Node API."""
+        if data is not None:
+            if isinstance(data, (dict, list)):
+                return self.__call__(data, status_code or 200)
+            if isinstance(data, str):
+                if content_type:
+                    self.content_type = content_type
+                self.content = data.encode()
+                if status_code:
+                    self.status_code = status_code
+                return self
+        return self
+
     def build_headers(self, accept_encoding: str = "") -> list[tuple[bytes, bytes]]:
         """Build final ASGI headers with compression and ETag."""
         # Compress if applicable

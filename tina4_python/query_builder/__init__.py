@@ -50,6 +50,11 @@ class QueryBuilder:
         """
         return QueryBuilder(table_name, db)
 
+    @staticmethod
+    def from_(table_name: str, db=None) -> "QueryBuilder":
+        """Alias for from_table — matches PHP/Ruby/Node ``from()`` API name."""
+        return QueryBuilder(table_name, db)
+
     def select(self, *columns: str) -> "QueryBuilder":
         """Set the columns to select.
 
