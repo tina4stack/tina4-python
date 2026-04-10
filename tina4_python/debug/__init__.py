@@ -144,12 +144,6 @@ class Log:
         cls._initialized = True
 
     @classmethod
-    def configure(cls, log_dir: str = "logs", level: str = "info",
-                  production: bool = False):
-        """Alias for init — matches PHP/Node ``configure()`` API name."""
-        cls.init(log_dir, level, production)
-
-    @classmethod
     def _should_log(cls, level: str) -> bool:
         return cls.LEVELS.get(level, 0) >= cls.LEVELS.get(cls._level, 0)
 

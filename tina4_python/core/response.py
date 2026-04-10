@@ -279,10 +279,6 @@ class Response:
 
         return self.html(f"<pre>Template not found: {template}</pre>", 404)
 
-    def template(self, template: str, data: dict = None) -> "Response":
-        """Alias for render() — parity with PHP/Node.js naming."""
-        return self.render(template, data)
-
     def send(self, data=None, status_code: int = None, content_type: str = None) -> "Response":
         """Finalize and return the response — matches PHP/Ruby/Node API."""
         if data is not None:
