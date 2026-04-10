@@ -18,8 +18,8 @@ Usage:
         return a + b
 
 Run all tests:
-    from tina4_python.Testing import run_all_tests
-    run_all_tests()
+    from tina4_python.Testing import run_all
+    run_all()
 """
 
 import sys
@@ -58,7 +58,7 @@ def tests(*assertions):
     """Decorator that attaches inline test assertions to a function.
 
     The decorated function is returned unchanged; the assertions are
-    stored in a global registry and executed by ``run_all_tests()``.
+    stored in a global registry and executed by ``run_all()``.
     """
     def decorator(fn):
         _registry.append({
@@ -73,7 +73,7 @@ def tests(*assertions):
 
 # ── Runner ──────────────────────────────────────────────────────────
 
-def run_all_tests(quiet: bool = False, failfast: bool = False) -> dict:
+def run_all(quiet: bool = False, failfast: bool = False) -> dict:
     """Discover and run every ``@tests``-decorated function.
 
     Returns a dict with keys ``passed``, ``failed``, ``errors``, ``details``.
@@ -169,6 +169,11 @@ def _assertion_label(assertion: dict, fn_name: str) -> str:
     elif atype == "false":
         return f"{fn_name}{args} is falsy"
     return f"{fn_name} [{atype}]"
+
+
+def reset():
+    """Reset the test registry (useful between test runs)."""
+    _registry.clear()
 
 
 def _print_summary(results: dict, quiet: bool):

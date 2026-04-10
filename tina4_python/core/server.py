@@ -1423,7 +1423,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # Init logger
     is_production = os.environ.get("TINA4_ENV", "development") == "production"
     log_level = os.environ.get("TINA4_LOG_LEVEL", "error" if not is_production else "error")
-    Log.init(level=log_level, production=is_production)
+    Log.configure(level=log_level, production=is_production)
 
     # Ensure folders
     _ensure_folders()
@@ -1653,3 +1653,25 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         asyncio.run(_serve())
     except KeyboardInterrupt:
         pass
+
+
+# ── Module-level server reference for start()/stop() ────────────────────
+_server_handle: dict | None = None
+
+
+def start(host: str | None = None, port: int | None = None, no_browser: bool = True, no_reload: bool = False):
+    """Start the Tina4 HTTP server.
+
+    Thin wrapper around run() for cross-framework parity with PHP and Ruby.
+    """
+    run(host=host, port=port, no_browser=no_browser, no_reload=no_reload)
+
+
+def stop():
+    """Stop the running Tina4 server gracefully.
+
+    Sends SIGTERM to the current process which triggers the asyncio
+    shutdown event inside run(). Safe to call from signal handlers or
+    separate threads.
+    """
+    os.kill(os.getpid(), signal.SIGTERM)

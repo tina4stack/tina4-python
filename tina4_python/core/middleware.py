@@ -23,6 +23,8 @@ import time
 import logging
 import threading
 
+from tina4_python.core.rate_limiter import RateLimiter  # noqa: F401 — re-export for backward compat
+
 
 class Middleware:
     """Standardized middleware orchestrator.
@@ -148,26 +150,27 @@ class CorsMiddleware:
         )
 
 
-class RateLimiter:
-    """Sliding window rate limiter — per-IP, in-memory.
+class RateLimiterMiddleware:
+    """Static rate limiter middleware — tracks requests per IP, returns 429 when exceeded.
 
-    Thread-safe. Automatically cleans up expired entries.
+    Config via env: TINA4_RATE_LIMIT (default 100), TINA4_RATE_WINDOW (default 60s).
+    Delegates to the RateLimiter class for the actual sliding window logic.
     """
 
-    _shared_instance = None
-    _shared_lock = threading.Lock()
+    _limiter = None
+    _lock = threading.Lock()
 
     @classmethod
-    def _shared(cls) -> "RateLimiter":
-        with cls._shared_lock:
-            if cls._shared_instance is None:
-                cls._shared_instance = cls()
-            return cls._shared_instance
+    def _get_limiter(cls):
+        with cls._lock:
+            if cls._limiter is None:
+                cls._limiter = RateLimiter()
+            return cls._limiter
 
     @staticmethod
     def before_rate_limit(request, response):
-        """Class-based middleware entry point — enforces the shared rate limit."""
-        limiter = RateLimiter._shared()
+        """Middleware hook — enforces rate limiting before the route handler."""
+        limiter = RateLimiterMiddleware._get_limiter()
         ip = getattr(request, "ip", None) or "unknown"
         allowed, info = limiter.check(ip)
         limiter.apply_headers(response, info)
@@ -180,67 +183,11 @@ class RateLimiter:
                 setattr(response, "status_code", 429)
         return request, response
 
-    def __init__(self):
-        self.limit = int(os.environ.get("TINA4_RATE_LIMIT", "100"))
-        self.window = int(os.environ.get("TINA4_RATE_WINDOW", "60"))
-        self._requests: dict[str, list[float]] = {}
-        self._lock = threading.Lock()
-        self._last_cleanup = time.monotonic()
-
-    def check(self, ip: str) -> tuple[bool, dict]:
-        """Check if request is allowed.
-
-        Returns (allowed, info) where info has remaining/limit/reset fields.
-        """
-        now = time.monotonic()
-
-        with self._lock:
-            # Periodic cleanup every 60 seconds
-            if now - self._last_cleanup > 60:
-                self._cleanup(now)
-                self._last_cleanup = now
-
-            if ip not in self._requests:
-                self._requests[ip] = []
-
-            # Remove expired timestamps
-            cutoff = now - self.window
-            timestamps = self._requests[ip]
-            self._requests[ip] = [t for t in timestamps if t > cutoff]
-            timestamps = self._requests[ip]
-
-            remaining = max(0, self.limit - len(timestamps))
-            reset = int(self.window - (now - timestamps[0])) if timestamps else self.window
-
-            if len(timestamps) >= self.limit:
-                return False, {
-                    "limit": self.limit,
-                    "remaining": 0,
-                    "reset": reset,
-                    "window": self.window,
-                }
-
-            timestamps.append(now)
-            return True, {
-                "limit": self.limit,
-                "remaining": remaining - 1,
-                "reset": self.window,
-                "window": self.window,
-            }
-
-    def _cleanup(self, now: float):
-        """Remove IPs with no recent requests."""
-        cutoff = now - self.window
-        expired = [ip for ip, ts in self._requests.items() if not ts or ts[-1] < cutoff]
-        for ip in expired:
-            del self._requests[ip]
-
-    def apply_headers(self, response, info: dict):
-        """Add rate limit headers to response."""
-        response.header("x-ratelimit-limit", str(info["limit"]))
-        response.header("x-ratelimit-remaining", str(info["remaining"]))
-        response.header("x-ratelimit-reset", str(info["reset"]))
-        return response
+    @staticmethod
+    def check(ip: str):
+        """Check if an IP is within rate limits. Returns (allowed, info)."""
+        limiter = RateLimiterMiddleware._get_limiter()
+        return limiter.check(ip)
 
 
 class SecurityHeadersMiddleware:

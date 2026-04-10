@@ -181,12 +181,15 @@ class ServiceContext:
 # ServiceRunner
 # ---------------------------------------------------------------------------
 
+_list = list  # preserve builtin before class scope shadows it
+
+
 class ServiceRunner:
     """Manages long-running background services with cron scheduling and daemon mode."""
 
     def __init__(self):
-        self.services: list[dict] = []
-        self._threads: list[threading.Thread] = []
+        self.services: _list[dict] = []
+        self._threads: _list[threading.Thread] = []
         self._stop_event = threading.Event()
         self._started = False
 
@@ -259,7 +262,7 @@ class ServiceRunner:
         self._started = False
         _get_log().info("All services stopped")
 
-    def status(self) -> list[dict]:
+    def status(self) -> _list[dict]:
         """Return status of all registered services.
 
         Returns:
@@ -281,9 +284,67 @@ class ServiceRunner:
             for svc in self.services
         ]
 
+    def list(self) -> _list[dict]:
+        """Return a list of all registered services with their current state.
+
+        Returns:
+            A list of dicts, each containing ``name``, ``options``, ``running``,
+            ``last_run``, and ``retries``.
+        """
+        result = []
+        for svc in self.services:
+            result.append({
+                "name": svc["name"],
+                "options": {
+                    "interval": svc["interval"],
+                    "cron": svc["cron"],
+                    "daemon": svc["daemon"],
+                    "max_retries": svc["max_retries"],
+                },
+                "running": svc["running"],
+                "last_run": svc["last_run"],
+                "retries": svc["retries"],
+                "started_at": svc.get("started_at"),
+            })
+        return result
+
+    def is_running(self, name: str) -> bool:
+        """Check if a specific service is currently running.
+
+        Args:
+            name: The service name to check.
+
+        Returns:
+            ``True`` if the service exists and is running, ``False`` otherwise.
+        """
+        for svc in self.services:
+            if svc["name"] == name:
+                return svc["running"]
+        return False
+
+    def clear(self):
+        """Stop all running services and remove all registrations."""
+        if self._started:
+            self.stop()
+        self.services.clear()
+        self._threads.clear()
+
+    @staticmethod
+    def match_cron(pattern: str, now: datetime = None) -> bool:
+        """Check if a 5-field cron pattern matches the given (or current) time.
+
+        Args:
+            pattern: Cron expression, e.g. ``"*/5 * * * *"``.
+            now: Optional datetime to test against (defaults to ``datetime.now()``).
+
+        Returns:
+            ``True`` if the pattern matches, ``False`` otherwise.
+        """
+        return cron_matches(pattern, now)
+
     # -- Discovery ----------------------------------------------------------
 
-    def discover(self, service_dir: str = "") -> list[str]:
+    def discover(self, service_dir: str = "") -> _list[str]:
         """Auto-discover service files from a directory.
 
         Each ``.py`` file in *service_dir* must define a module-level dict
@@ -305,7 +366,7 @@ class ServiceRunner:
         if not svc_path.is_dir():
             return []
 
-        discovered: list[str] = []
+        discovered: _list[str] = []
 
         for py_file in sorted(svc_path.glob("*.py")):
             if py_file.name.startswith("_"):

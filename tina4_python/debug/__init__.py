@@ -129,9 +129,9 @@ class Log:
     LEVELS = {"debug": 0, "info": 1, "warning": 2, "error": 3}
 
     @classmethod
-    def init(cls, log_dir: str = "logs", level: str = "info",
-             production: bool = False):
-        """Initialize the logger. Called once at startup."""
+    def configure(cls, log_dir: str = "logs", level: str = "info",
+                  production: bool = False):
+        """Configure the logger. Called once at startup."""
         cls._level = level.lower()
         cls._is_production = production
 

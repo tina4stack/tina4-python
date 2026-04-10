@@ -186,11 +186,11 @@ def register_dev_tools(server):
     def migration_run() -> dict:
         """Run all pending migrations."""
         from tina4_python.orm.model import ORM
-        from tina4_python.migration import migrate
+        from tina4_python.migration import Migration
         db = ORM._database
         if db is None:
             return {"error": "No database connection"}
-        result = migrate(db)
+        result = Migration(db).migrate()
         return {"result": str(result)}
 
     # ── Queue Tools ─────────────────────────────────────────────

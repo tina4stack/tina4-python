@@ -318,6 +318,23 @@ class AutoCrud:
         return dict(AutoCrud._registered)
 
     @staticmethod
+    def generate_routes() -> list[dict]:
+        """Return route definitions for all registered models.
+
+        Routes are already registered during register()/discover() calls.
+        This method returns the route metadata for introspection.
+        """
+        routes = []
+        for table, model_class in AutoCrud._registered.items():
+            base = f"/api/{table}"
+            routes.append({"method": "GET", "path": base, "table": table})
+            routes.append({"method": "GET", "path": f"{base}/{{id}}", "table": table})
+            routes.append({"method": "POST", "path": base, "table": table})
+            routes.append({"method": "PUT", "path": f"{base}/{{id}}", "table": table})
+            routes.append({"method": "DELETE", "path": f"{base}/{{id}}", "table": table})
+        return routes
+
+    @staticmethod
     def clear():
         """Clear all registered models (useful for testing)."""
         AutoCrud._registered.clear()

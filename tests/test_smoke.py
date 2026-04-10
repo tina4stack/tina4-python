@@ -22,7 +22,7 @@ from tina4_python.graphql import GraphQL
 from tina4_python.swagger import Swagger, description, tags
 from tina4_python.i18n import I18n
 from tina4_python.seeder import FakeData
-from tina4_python.migration import migrate, create_migration
+from tina4_python.migration import create_migration, Migration
 from tina4_python.crud import AutoCrud
 from tina4_python.cache import ResponseCache
 from tina4_python.container import Container
@@ -30,7 +30,7 @@ from tina4_python.messenger import DevMailbox
 from tina4_python.dotenv import load_env, get_env
 from tina4_python.wsdl import WSDL, wsdl_operation
 from tina4_python.websocket import (
-    _compute_accept_key as compute_accept_key, _build_frame as build_frame, _read_frame as read_frame,
+    compute_accept_key, build_frame, _read_frame as read_frame,
     OP_TEXT, MAGIC_STRING,
 )
 
@@ -290,16 +290,8 @@ class TestGraphQL:
     def test_type_query_mutation(self):
         gql = GraphQL()
         gql.schema.add_type("Widget", {"id": "ID", "name": "String"})
-        gql.schema.add_query("widget", {
-            "type": "Widget",
-            "args": {"id": "ID!"},
-            "resolve": lambda r, a, c: {"id": a["id"], "name": "Cog"},
-        })
-        gql.schema.add_mutation("createWidget", {
-            "type": "Widget",
-            "args": {"name": "String!"},
-            "resolve": lambda r, a, c: {"id": "1", "name": a["name"]},
-        })
+        gql.schema.add_query("widget", {"id": "ID!"}, "Widget", lambda r, a, c: {"id": a["id"], "name": "Cog"})
+        gql.schema.add_mutation("createWidget", {"name": "String!"}, "Widget", lambda r, a, c: {"id": "1", "name": a["name"]})
 
         result = gql.execute('{ widget(id: "1") { name } }')
         assert result["data"]["widget"]["name"] == "Cog"
@@ -380,7 +372,7 @@ class TestMigrations:
         (mig_dir / "000001_create_products.sql").write_text(
             "CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT);"
         )
-        ran = migrate(db, str(mig_dir))
+        ran = Migration(db, str(mig_dir)).migrate()
         assert ran == ["000001_create_products.sql"]
         assert db.table_exists("products")
         db.close()
@@ -1017,11 +1009,7 @@ class TestGraphQLAdvanced:
     def test_query_with_args(self):
         gql = GraphQL()
         gql.schema.add_type("Item", {"id": "ID", "title": "String"})
-        gql.schema.add_query("item", {
-            "type": "Item",
-            "args": {"id": "ID!"},
-            "resolve": lambda r, a, c: {"id": a["id"], "title": "Found"},
-        })
+        gql.schema.add_query("item", {"id": "ID!"}, "Item", lambda r, a, c: {"id": a["id"], "title": "Found"})
         result = gql.execute('{ item(id: "5") { id title } }')
         assert result["data"]["item"]["title"] == "Found"
         assert result["data"]["item"]["id"] == "5"
@@ -1029,11 +1017,7 @@ class TestGraphQLAdvanced:
     def test_introspect_has_queries_and_types(self):
         gql = GraphQL()
         gql.schema.add_type("Product", {"id": "ID", "name": "String", "price": "Float"})
-        gql.schema.add_query("product", {
-            "type": "Product",
-            "args": {"id": "ID!"},
-            "resolve": lambda r, a, c: None,
-        })
+        gql.schema.add_query("product", {"id": "ID!"}, "Product", lambda r, a, c: None)
         schema = gql.introspect()
         assert "Product" in schema["types"]
         assert "product" in schema["queries"]
@@ -1121,10 +1105,10 @@ class TestMigrationAdvanced:
         (mig_dir / "000001_create_things.sql").write_text(
             "CREATE TABLE things (id INTEGER PRIMARY KEY, val TEXT);"
         )
-        ran1 = migrate(db, str(mig_dir))
+        ran1 = Migration(db, str(mig_dir)).migrate()
         assert ran1 == ["000001_create_things.sql"]
         # Second run should skip already-applied migration
-        ran2 = migrate(db, str(mig_dir))
+        ran2 = Migration(db, str(mig_dir)).migrate()
         assert ran2 == []
         db.close()
 
@@ -1138,7 +1122,7 @@ class TestMigrationAdvanced:
         (mig_dir / "000002_second.sql").write_text(
             "CREATE TABLE second_table (id INTEGER PRIMARY KEY);"
         )
-        ran = migrate(db, str(mig_dir))
+        ran = Migration(db, str(mig_dir)).migrate()
         assert ran == ["000001_first.sql", "000002_second.sql"]
         assert db.table_exists("first_table")
         assert db.table_exists("second_table")

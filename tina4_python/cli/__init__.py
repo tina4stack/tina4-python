@@ -396,12 +396,12 @@ def _migrate(args):
     """Run pending migrations."""
     _load_env()
     from tina4_python.database import Database
-    from tina4_python.migration import migrate
+    from tina4_python.migration import Migration
 
     db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
     db = Database(db_url)
     mig_dir = args[0] if args else "migrations"
-    ran = migrate(db, mig_dir)
+    ran = Migration(db, mig_dir).migrate()
     if ran:
         for f in ran:
             print(f"  Migrated: {f}")
@@ -426,12 +426,12 @@ def _migrate_rollback(args):
     """Rollback the last migration batch."""
     _load_env()
     from tina4_python.database import Database
-    from tina4_python.migration import rollback
+    from tina4_python.migration import Migration
 
     db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
     db = Database(db_url)
     mig_dir = args[0] if args else "migrations"
-    rolled = rollback(db, mig_dir)
+    rolled = Migration(db, mig_dir).rollback()
     if rolled:
         for f in rolled:
             print(f"  Rolled back: {f}")
@@ -445,11 +445,11 @@ def _migrate_status(args):
     """Show migration status."""
     _load_env()
     from tina4_python.database import Database
-    from tina4_python.migration import status
+    from tina4_python.migration import Migration
 
     db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
     db = Database(db_url)
-    result = status(db, args[0] if args else "migrations")
+    result = Migration(db, args[0] if args else "migrations").status()
     completed, pending = result["completed"], result["pending"]
 
     if completed:

@@ -41,7 +41,7 @@ CLOSE_UNSUPPORTED = 1003
 CLOSE_TOO_LARGE = 1009
 
 
-def _compute_accept_key(key: str) -> str:
+def compute_accept_key(key: str) -> str:
     """Compute Sec-WebSocket-Accept from Sec-WebSocket-Key per RFC 6455."""
     digest = hashlib.sha1((key + MAGIC_STRING).encode()).digest()
     return base64.b64encode(digest).decode()
@@ -63,7 +63,7 @@ def _parse_http_headers(data: bytes) -> dict:
     return headers
 
 
-def _build_frame(opcode: int, payload: bytes, fin: bool = True) -> bytes:
+def build_frame(opcode: int, payload: bytes, fin: bool = True) -> bytes:
     """Build a WebSocket frame (server→client, never masked)."""
     frame = bytearray()
     first_byte = (0x80 if fin else 0x00) | opcode
@@ -147,9 +147,9 @@ class WebSocketConnection:
         if self._closed:
             return
         if isinstance(message, str):
-            self.writer.write(_build_frame(OP_TEXT, message.encode("utf-8")))
+            self.writer.write(build_frame(OP_TEXT, message.encode("utf-8")))
         else:
-            self.writer.write(_build_frame(OP_BINARY, message))
+            self.writer.write(build_frame(OP_BINARY, message))
         try:
             await self.writer.drain()
         except (ConnectionError, OSError):
@@ -162,13 +162,14 @@ class WebSocketConnection:
     async def broadcast(self, message: str | bytes, exclude_self: bool = False):
         """Broadcast to all connections on the same path."""
         if self._manager:
-            await self._manager.broadcast(self.path, message,
-                                          exclude=self.id if exclude_self else None)
+            await self._manager.broadcast(message,
+                                          exclude=self.id if exclude_self else None,
+                                          path=self.path)
 
     async def broadcast_to(self, path: str, message: str | bytes):
         """Broadcast to all connections on a different path."""
         if self._manager:
-            await self._manager.broadcast(path, message)
+            await self._manager.broadcast(message, path=path)
 
     # ── Rooms ──────────────────────────────────────────────────
 
@@ -200,7 +201,7 @@ class WebSocketConnection:
         """Send a ping frame."""
         if self._closed:
             return
-        self.writer.write(_build_frame(OP_PING, data))
+        self.writer.write(build_frame(OP_PING, data))
         try:
             await self.writer.drain()
         except (ConnectionError, OSError):
@@ -213,7 +214,7 @@ class WebSocketConnection:
         self._closed = True
         payload = struct.pack(">H", code) + reason.encode("utf-8")
         try:
-            self.writer.write(_build_frame(OP_CLOSE, payload))
+            self.writer.write(build_frame(OP_CLOSE, payload))
             await self.writer.drain()
             self.writer.close()
         except (ConnectionError, OSError):
@@ -267,7 +268,7 @@ class WebSocketConnection:
             return
 
         if opcode == OP_PING:
-            self.writer.write(_build_frame(OP_PONG, payload))
+            self.writer.write(build_frame(OP_PONG, payload))
             try:
                 await self.writer.drain()
             except (ConnectionError, OSError):
@@ -355,9 +356,10 @@ class WebSocketManager:
     def count_by_path(self, path: str) -> int:
         return len(self._paths.get(path, set()))
 
-    async def broadcast(self, path: str, message: str | bytes, exclude: str = None):
-        """Send message to all connections on a path."""
-        for ws in self.get_by_path(path):
+    async def broadcast(self, message: str | bytes, exclude: str = None, path: str = None):
+        """Send message to all connections, optionally filtered by path."""
+        targets = self.get_by_path(path) if path else list(self._connections.values())
+        for ws in targets:
             if exclude and ws.id == exclude:
                 continue
             await ws.send(message)
@@ -366,6 +368,19 @@ class WebSocketManager:
         """Send message to ALL connections."""
         for ws in list(self._connections.values()):
             await ws.send(message)
+
+    async def send_to(self, client_id: str, message: str | bytes):
+        """Send a message to a specific client by ID."""
+        ws = self._connections.get(client_id)
+        if ws:
+            await ws.send(message)
+
+    async def close(self, client_id: str, code: int = 1000, reason: str = ""):
+        """Close a specific client connection by ID."""
+        ws = self._connections.get(client_id)
+        if ws:
+            await ws.close(code, reason)
+            self.remove(ws)
 
     async def disconnect(self, ws_id: str):
         """Force disconnect a connection."""
@@ -498,7 +513,7 @@ class WebSocketServer:
             return
 
         # Send upgrade response
-        accept = _compute_accept_key(ws_key)
+        accept = compute_accept_key(ws_key)
         response = (
             f"HTTP/1.1 101 Switching Protocols\r\n"
             f"Upgrade: websocket\r\n"
@@ -569,6 +584,7 @@ class WebSocketServer:
 
 __all__ = [
     "WebSocketServer", "WebSocketConnection", "WebSocketManager",
+    "compute_accept_key", "build_frame",
     "OP_TEXT", "OP_BINARY", "OP_CLOSE", "OP_PING", "OP_PONG",
     "CLOSE_NORMAL", "CLOSE_PROTOCOL_ERROR", "CLOSE_TOO_LARGE",
 ]

@@ -30,8 +30,39 @@ class DatabaseResult:
     def __bool__(self):
         return self.error is None
 
+    def size(self) -> int:
+        """Return the total count of records."""
+        return self.count
+
     def to_list(self) -> list:
         return self.records
+
+    def to_array(self) -> list:
+        """Return list of row dicts (alias for records)."""
+        return self.records
+
+    def to_json(self) -> str:
+        """Return JSON string of records."""
+        import json
+        return json.dumps(self.records)
+
+    def to_csv(self) -> str:
+        """Return CSV string with header row."""
+        if not self.records:
+            return ""
+        columns = list(self.records[0].keys())
+
+        def escape(val) -> str:
+            if val is None:
+                return ""
+            s = str(val)
+            if "," in s or '"' in s or "\n" in s:
+                return f'"{s.replace(chr(34), chr(34)+chr(34))}"'
+            return s
+
+        header = ",".join(escape(c) for c in columns)
+        rows = [",".join(escape(row.get(c)) for c in columns) for row in self.records]
+        return "\n".join([header] + rows)
 
     def to_paginate(self, page: int = 1, per_page: int = 20) -> dict:
         total_pages = max(1, -(-self.count // per_page))  # ceil division

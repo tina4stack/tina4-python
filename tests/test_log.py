@@ -23,54 +23,54 @@ def reset_log(tmp_path):
 class TestLogInit:
 
     def test_init_sets_level(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug")
+        Log.configure(log_dir=str(tmp_path), level="debug")
         assert Log._level == "debug"
 
     def test_init_sets_production(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), production=True)
+        Log.configure(log_dir=str(tmp_path), production=True)
         assert Log._is_production is True
 
     def test_init_creates_writer(self, tmp_path):
-        Log.init(log_dir=str(tmp_path))
+        Log.configure(log_dir=str(tmp_path))
         assert Log._writer is not None
 
     def test_init_creates_error_writer(self, tmp_path):
-        Log.init(log_dir=str(tmp_path))
+        Log.configure(log_dir=str(tmp_path))
         assert Log._error_writer is not None
 
     def test_init_marks_initialized(self, tmp_path):
-        Log.init(log_dir=str(tmp_path))
+        Log.configure(log_dir=str(tmp_path))
         assert Log._initialized is True
 
     def test_init_level_is_case_insensitive(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="WARNING")
+        Log.configure(log_dir=str(tmp_path), level="WARNING")
         assert Log._level == "warning"
 
 
 class TestLogLevels:
 
     def test_should_log_info_at_info_level(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="info")
+        Log.configure(log_dir=str(tmp_path), level="info")
         assert Log._should_log("info") is True
 
     def test_should_not_log_debug_at_info_level(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="info")
+        Log.configure(log_dir=str(tmp_path), level="info")
         assert Log._should_log("debug") is False
 
     def test_should_log_error_at_info_level(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="info")
+        Log.configure(log_dir=str(tmp_path), level="info")
         assert Log._should_log("error") is True
 
     def test_should_log_warning_at_warning_level(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="warning")
+        Log.configure(log_dir=str(tmp_path), level="warning")
         assert Log._should_log("warning") is True
 
     def test_should_not_log_info_at_error_level(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="error")
+        Log.configure(log_dir=str(tmp_path), level="error")
         assert Log._should_log("info") is False
 
     def test_debug_level_logs_everything(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug")
+        Log.configure(log_dir=str(tmp_path), level="debug")
         for level in ("debug", "info", "warning", "error"):
             assert Log._should_log(level) is True
 
@@ -78,41 +78,41 @@ class TestLogLevels:
 class TestLogFormat:
 
     def test_dev_format_contains_level(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug", production=False)
+        Log.configure(log_dir=str(tmp_path), level="debug", production=False)
         line = Log._format("info", "test message")
         assert "INFO" in line
 
     def test_dev_format_contains_message(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug", production=False)
+        Log.configure(log_dir=str(tmp_path), level="debug", production=False)
         line = Log._format("info", "hello world")
         assert "hello world" in line
 
     def test_dev_format_contains_timestamp(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug", production=False)
+        Log.configure(log_dir=str(tmp_path), level="debug", production=False)
         line = Log._format("info", "test")
         # ISO 8601 timestamp should contain T
         assert "T" in line
 
     def test_dev_format_contains_kwargs(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug", production=False)
+        Log.configure(log_dir=str(tmp_path), level="debug", production=False)
         line = Log._format("info", "test", user="alice")
         assert "alice" in line
 
     def test_production_format_is_json(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug", production=True)
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         line = Log._format("info", "test message")
         data = json.loads(line)
         assert data["level"] == "INFO"
         assert data["message"] == "test message"
 
     def test_production_format_includes_context(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug", production=True)
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         line = Log._format("error", "fail", code=500)
         data = json.loads(line)
         assert data["context"]["code"] == 500
 
     def test_format_with_request_id(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug", production=True)
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         set_request_id("req-123")
         line = Log._format("info", "test")
         data = json.loads(line)
@@ -122,7 +122,7 @@ class TestLogFormat:
 class TestLogOutput:
 
     def test_info_writes_to_file(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug", production=True)
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         Log.info("file write test")
         log_file = tmp_path / "tina4.log"
         assert log_file.exists()
@@ -130,7 +130,7 @@ class TestLogOutput:
         assert "file write test" in content
 
     def test_error_writes_to_error_log(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="debug", production=True)
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         Log.error("error write test")
         error_file = tmp_path / "error.log"
         assert error_file.exists()
@@ -139,14 +139,14 @@ class TestLogOutput:
 
     def test_debug_always_logged_to_file(self, tmp_path):
         """File captures ALL levels regardless of the configured level."""
-        Log.init(log_dir=str(tmp_path), level="info", production=True)
+        Log.configure(log_dir=str(tmp_path), level="info", production=True)
         Log.debug("should still appear in file")
         log_file = tmp_path / "tina4.log"
         assert log_file.exists()
         assert "should still appear in file" in log_file.read_text()
 
     def test_warning_logged_at_info_level(self, tmp_path):
-        Log.init(log_dir=str(tmp_path), level="info", production=True)
+        Log.configure(log_dir=str(tmp_path), level="info", production=True)
         Log.warning("warn test")
         content = (tmp_path / "tina4.log").read_text()
         assert "warn test" in content

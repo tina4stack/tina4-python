@@ -3,7 +3,7 @@ import re
 import pytest
 from pathlib import Path
 from tina4_python.database import Database
-from tina4_python.migration import migrate, create_migration, rollback, status
+from tina4_python.migration import create_migration, Migration
 
 
 @pytest.fixture
@@ -33,24 +33,27 @@ class TestMigrate:
         (mig_dir / "000001_create_items.sql").write_text(
             "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);"
         )
-        ran = migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        ran = m.migrate()
         assert ran == ["000001_create_items.sql"]
         assert db.table_exists("items")
 
     def test_run_multiple_in_order(self, db, mig_dir):
         (mig_dir / "000001_create_a.sql").write_text("CREATE TABLE a (id INTEGER);")
         (mig_dir / "000002_create_b.sql").write_text("CREATE TABLE b (id INTEGER);")
-        ran = migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        ran = m.migrate()
         assert ran == ["000001_create_a.sql", "000002_create_b.sql"]
         assert db.table_exists("a")
         assert db.table_exists("b")
 
     def test_skip_already_executed(self, db, mig_dir):
         (mig_dir / "000001_create_x.sql").write_text("CREATE TABLE x (id INTEGER);")
-        migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        m.migrate()
 
         (mig_dir / "000002_create_y.sql").write_text("CREATE TABLE y (id INTEGER);")
-        ran = migrate(db, str(mig_dir))
+        ran = m.migrate()
         assert ran == ["000002_create_y.sql"]
 
     def test_multi_statement_migration(self, db, mig_dir):
@@ -58,30 +61,35 @@ class TestMigrate:
             "CREATE TABLE t1 (id INTEGER);\n"
             "CREATE TABLE t2 (id INTEGER);"
         )
-        ran = migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        ran = m.migrate()
         assert len(ran) == 1
         assert db.table_exists("t1")
         assert db.table_exists("t2")
 
     def test_empty_folder(self, db, mig_dir):
-        ran = migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        ran = m.migrate()
         assert ran == []
 
     def test_missing_folder(self, db, tmp_path):
-        ran = migrate(db, str(tmp_path / "nonexistent"))
+        m = Migration(db, str(tmp_path / "nonexistent"))
+        ran = m.migrate()
         assert ran == []
 
     def test_tracking_table_created(self, db, mig_dir):
         (mig_dir / "000001_test.sql").write_text("CREATE TABLE test (id INTEGER);")
-        migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        m.migrate()
         assert db.table_exists("tina4_migration")
 
     def test_batch_numbers(self, db, mig_dir):
+        m = Migration(db, str(mig_dir))
         (mig_dir / "000001_first.sql").write_text("CREATE TABLE first (id INTEGER);")
-        migrate(db, str(mig_dir))
+        m.migrate()
 
         (mig_dir / "000002_second.sql").write_text("CREATE TABLE second (id INTEGER);")
-        migrate(db, str(mig_dir))
+        m.migrate()
 
         row1 = db.fetch_one("SELECT batch FROM tina4_migration WHERE migration_id = ?", ["000001_first"])
         row2 = db.fetch_one("SELECT batch FROM tina4_migration WHERE migration_id = ?", ["000002_second"])
@@ -96,7 +104,8 @@ class TestMigrate:
             "-- Another comment\n"
             "INSERT INTO commented (id) VALUES (1); -- inline comment\n"
         )
-        ran = migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        ran = m.migrate()
         assert ran == ["000001_comments.sql"]
         assert db.table_exists("commented")
         row = db.fetch_one("SELECT id FROM commented WHERE id = ?", [1])
@@ -109,7 +118,8 @@ class TestMigrate:
             "CREATE TABLE blocked (id INTEGER);\n"
             "/* inline block */ INSERT INTO blocked (id) VALUES (42);\n"
         )
-        ran = migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        ran = m.migrate()
         assert ran == ["000001_block.sql"]
         assert db.table_exists("blocked")
 
@@ -119,7 +129,8 @@ class TestMigrate:
             "-- Nothing to execute\n"
             "/* Also nothing */\n"
         )
-        ran = migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        ran = m.migrate()
         assert ran == ["000001_empty.sql"]
 
 
@@ -128,8 +139,9 @@ class TestMigrateNegative:
 
     def test_invalid_sql_rolls_back(self, db, mig_dir):
         (mig_dir / "000001_bad.sql").write_text("THIS IS NOT SQL;")
+        m = Migration(db, str(mig_dir))
         with pytest.raises(RuntimeError, match="Migration failed"):
-            migrate(db, str(mig_dir))
+            m.migrate()
         # Tracking table should exist but no passed migration
         assert db.table_exists("tina4_migration")
         row = db.fetch_one("SELECT * FROM tina4_migration WHERE migration_id = ?", ["000001_bad"])
@@ -140,8 +152,9 @@ class TestMigrateNegative:
             "CREATE TABLE good (id INTEGER);\n"
             "THIS WILL FAIL;"
         )
+        m = Migration(db, str(mig_dir))
         with pytest.raises(RuntimeError):
-            migrate(db, str(mig_dir))
+            m.migrate()
         # The good table should NOT exist (rolled back)
         assert not db.table_exists("good")
 
@@ -155,31 +168,34 @@ class TestRollback:
     def test_rollback_last_batch(self, db, mig_dir):
         (mig_dir / "000001_create_r.sql").write_text("CREATE TABLE r (id INTEGER);")
         (mig_dir / "000001_create_r.down.sql").write_text("DROP TABLE r;")
-        migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        m.migrate()
         assert db.table_exists("r")
 
-        rolled = rollback(db, str(mig_dir))
+        rolled = m.rollback()
         assert len(rolled) == 1
         assert not db.table_exists("r")
 
     def test_rollback_only_last_batch(self, db, mig_dir):
+        m = Migration(db, str(mig_dir))
         # Batch 1
         (mig_dir / "000001_a.sql").write_text("CREATE TABLE a (id INTEGER);")
         (mig_dir / "000001_a.down.sql").write_text("DROP TABLE a;")
-        migrate(db, str(mig_dir))
+        m.migrate()
 
         # Batch 2
         (mig_dir / "000002_b.sql").write_text("CREATE TABLE b (id INTEGER);")
         (mig_dir / "000002_b.down.sql").write_text("DROP TABLE b;")
-        migrate(db, str(mig_dir))
+        m.migrate()
 
-        rolled = rollback(db, str(mig_dir))
+        rolled = m.rollback()
         assert len(rolled) == 1
         assert db.table_exists("a")  # Batch 1 untouched
         assert not db.table_exists("b")  # Batch 2 rolled back
 
     def test_rollback_nothing_to_rollback(self, db, mig_dir):
-        rolled = rollback(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        rolled = m.rollback()
         assert rolled == []
 
 
@@ -188,10 +204,11 @@ class TestRollbackNegative:
 
     def test_missing_down_file(self, db, mig_dir):
         (mig_dir / "000001_no_down.sql").write_text("CREATE TABLE nd (id INTEGER);")
-        migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        m.migrate()
 
         with pytest.raises(RuntimeError, match="no .py or .down.sql"):
-            rollback(db, str(mig_dir))
+            m.rollback()
 
 
 # ── create_migration() Tests ──────────────────────────────────
@@ -234,14 +251,16 @@ class TestMigrationStatus:
     """Tests for migration status reporting."""
 
     def test_status_empty(self, db, mig_dir):
-        result = status(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        result = m.status()
         assert result == {"completed": [], "pending": []}
 
     def test_status_with_pending(self, db, mig_dir):
         (mig_dir / "000001_create_users.sql").write_text(
             "CREATE TABLE users (id INTEGER PRIMARY KEY);", encoding="utf-8"
         )
-        result = status(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        result = m.status()
         assert len(result["completed"]) == 0
         assert len(result["pending"]) == 1
         assert result["pending"][0]["migration_id"] == "000001_create_users"
@@ -250,8 +269,9 @@ class TestMigrationStatus:
         (mig_dir / "000001_create_users.sql").write_text(
             "CREATE TABLE users (id INTEGER PRIMARY KEY);", encoding="utf-8"
         )
-        migrate(db, str(mig_dir))
-        result = status(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        m.migrate()
+        result = m.status()
         assert len(result["completed"]) == 1
         assert len(result["pending"]) == 0
         assert result["completed"][0]["migration_id"] == "000001_create_users"
@@ -262,11 +282,12 @@ class TestMigrationStatus:
         (mig_dir / "000001_create_users.sql").write_text(
             "CREATE TABLE users (id INTEGER PRIMARY KEY);", encoding="utf-8"
         )
-        migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        m.migrate()
         (mig_dir / "000002_add_email.sql").write_text(
             "ALTER TABLE users ADD COLUMN email TEXT;", encoding="utf-8"
         )
-        result = status(db, str(mig_dir))
+        result = m.status()
         assert len(result["completed"]) == 1
         assert len(result["pending"]) == 1
 
@@ -274,6 +295,7 @@ class TestMigrationStatus:
         (mig_dir / "20260324120000_create_orders.sql").write_text(
             "CREATE TABLE orders (id INTEGER PRIMARY KEY);", encoding="utf-8"
         )
-        result = status(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        result = m.status()
         assert len(result["pending"]) == 1
         assert result["pending"][0]["migration_id"] == "20260324120000_create_orders"

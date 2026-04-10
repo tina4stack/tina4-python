@@ -438,7 +438,7 @@ class TestMigrationRollback:
         assert "Rollback" in down.read_text()
 
     def test_rollback_last_batch(self, tmp_path, db):
-        from tina4_python.migration.runner import migrate, rollback
+        from tina4_python.migration import Migration
         mig_dir = tmp_path / "migrations"
         mig_dir.mkdir()
 
@@ -450,10 +450,11 @@ class TestMigrationRollback:
             "DROP TABLE test_roll;"
         )
 
-        ran = migrate(db, str(mig_dir))
+        m = Migration(db, str(mig_dir))
+        ran = m.migrate()
         assert len(ran) == 1
         assert db.table_exists("test_roll")
 
-        rolled = rollback(db, str(mig_dir))
+        rolled = m.rollback()
         assert len(rolled) == 1
         assert not db.table_exists("test_roll")

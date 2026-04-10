@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from tina4_python.Testing import (
     tests, assert_equal, assert_raises, assert_true, assert_false,
-    run_all_tests, _registry,
+    run_all, _registry,
 )
 
 
@@ -54,7 +54,7 @@ def is_truthy(value):
 
 def test_inline_testing_framework():
     """Run all @tests-decorated functions and assert the summary."""
-    results = run_all_tests(quiet=True)
+    results = run_all(quiet=True)
 
     assert results["passed"] == 11, f"expected 11 passed, got {results['passed']}"
     assert results["failed"] == 0, f"expected 0 failed, got {results['failed']}"
@@ -78,7 +78,7 @@ def test_failed_assertion_is_reported():
     def bad_add(a, b):
         return a + b
 
-    results = run_all_tests(quiet=True)
+    results = run_all(quiet=True)
     assert results["failed"] == 1, f"expected 1 failed, got {results['failed']}"
     assert results["passed"] == 0
 
@@ -98,7 +98,7 @@ def test_error_is_reported():
     def will_crash(a):
         raise RuntimeError("boom")
 
-    results = run_all_tests(quiet=True)
+    results = run_all(quiet=True)
     assert results["errors"] == 1, f"expected 1 error, got {results['errors']}"
 
     _registry.clear()

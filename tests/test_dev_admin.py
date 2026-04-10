@@ -225,6 +225,35 @@ class TestBrokenTracker:
         entry = BrokenTracker.get_all()[0]
         assert "line 42" in entry["traceback"]
 
+    def test_unresolved_count(self):
+        BrokenTracker.record("Error", "one")
+        sig = BrokenTracker.record("Error", "two")
+        BrokenTracker.resolve(sig)
+        assert BrokenTracker.unresolved_count() == 1
+
+    def test_unresolved_count_empty(self):
+        assert BrokenTracker.unresolved_count() == 0
+
+    def test_clear_all(self):
+        BrokenTracker.record("Error", "one")
+        BrokenTracker.record("Error", "two")
+        BrokenTracker.clear_all()
+        assert len(BrokenTracker.get_all()) == 0
+
+    def test_reset(self):
+        BrokenTracker.record("Error", "one")
+        BrokenTracker.reset()
+        assert len(BrokenTracker.get_all()) == 0
+
+    def test_capture_alias(self):
+        """capture() delegates to record() with file/line in context."""
+        sig = BrokenTracker.capture("TypeError", "bad type", "traceback here", "app.py", 42)
+        entries = BrokenTracker.get_all()
+        assert len(entries) == 1
+        assert entries[0]["error_type"] == "TypeError"
+        assert entries[0]["context"]["file"] == "app.py"
+        assert entries[0]["context"]["line"] == 42
+
 
 class TestGetAPIHandlers:
     def test_returns_handlers(self):

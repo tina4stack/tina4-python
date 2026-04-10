@@ -2,12 +2,14 @@
 """
 SQL-file-based migrations with tracking table.
 
-    from tina4_python.migration import migrate, create_migration, rollback
+    from tina4_python.migration import Migration, create_migration
 
-    migrate(db)                          # Run all pending
+    m = Migration(db)
+    m.migrate()                          # Run all pending
+    m.rollback()                         # Rollback last batch
+    m.status()                           # Show completed/pending
     create_migration("add users table")  # Create new .sql file
-    rollback(db)                         # Rollback last batch
 """
-from tina4_python.migration.runner import migrate, create_migration, rollback, status, Migration, MigrationBase
+from tina4_python.migration.runner import create_migration, Migration, MigrationBase
 
-__all__ = ["migrate", "create_migration", "rollback", "status", "Migration", "MigrationBase"]
+__all__ = ["create_migration", "Migration", "MigrationBase"]

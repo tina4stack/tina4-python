@@ -284,10 +284,11 @@ def _should_skip_for_firebird(db, stmt: str) -> str | None:
     return None
 
 
-def migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
-    """Run all pending migrations.
+def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
+    """Run all pending migrations (internal implementation).
 
     Returns list of executed migration filenames.
+    Use Migration class for the public API.
     """
     _ensure_tracking_table(db)
 
@@ -356,11 +357,12 @@ def migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> l
     return ran
 
 
-def rollback(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
-    """Rollback the last batch of migrations.
+def _rollback(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
+    """Rollback the last batch of migrations (internal implementation).
 
     Looks for matching .down.sql files and executes them in reverse order.
     Returns list of rolled-back migration filenames.
+    Use Migration class for the public API.
     """
     _ensure_tracking_table(db)
 
@@ -500,13 +502,13 @@ class Migration:
 
     def migrate(self) -> list[str]:
         """Run all pending migrations. Returns list of applied filenames."""
-        return migrate(self._db, self._dir, self._delim)
+        return _migrate(self._db, self._dir, self._delim)
 
     def rollback(self, steps: int = 1) -> list[str]:
         """Roll back the last N batches. Returns list of rolled-back filenames."""
         rolled: list[str] = []
         for _ in range(steps):
-            batch = rollback(self._db, self._dir, self._delim)
+            batch = _rollback(self._db, self._dir, self._delim)
             if not batch:
                 break
             rolled.extend(batch)
@@ -514,7 +516,7 @@ class Migration:
 
     def status(self) -> dict:
         """Return {"completed": [...], "pending": [...]} migration status."""
-        return status(self._db, self._dir)
+        return _status(self._db, self._dir)
 
     def create(self, description: str, kind: str = "sql") -> str:
         """Scaffold a new migration file. Returns the up-file path."""
@@ -575,8 +577,8 @@ class Migration:
         )
 
 
-def status(db, migration_folder: str = "migrations") -> dict:
-    """Get migration status: which are completed and which are pending.
+def _status(db, migration_folder: str = "migrations") -> dict:
+    """Get migration status (internal implementation).
 
     Returns {"completed": [...], "pending": [...]}, where each entry is
     a dict with 'migration_id', 'description', and (for completed)

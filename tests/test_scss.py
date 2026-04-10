@@ -1,7 +1,7 @@
 # Tests for tina4_python.scss
 import pytest
 from pathlib import Path
-from tina4_python.scss import compile_scss, compile_string
+from tina4_python.scss import compile_scss, compile_string, ScssCompiler
 
 
 @pytest.fixture
@@ -212,3 +212,77 @@ class TestEdgeCases:
         d.mkdir()
         css = compile_scss(str(d), str(tmp_path / "out.css"))
         assert css == ""
+
+
+# ── ScssCompiler Class Tests ──────────────────────────────────
+
+
+class TestScssCompilerClass:
+    def test_compile_string(self):
+        compiler = ScssCompiler()
+        css = compiler.compile("$color: red;\n.box { color: $color; }")
+        assert "red" in css
+        assert "$color" not in css
+
+    def test_set_variable(self):
+        compiler = ScssCompiler()
+        compiler.set_variable("$primary", "#ff0000")
+        css = compiler.compile(".btn { color: $primary; }")
+        assert "#ff0000" in css
+
+    def test_set_variable_without_dollar(self):
+        compiler = ScssCompiler()
+        compiler.set_variable("accent", "blue")
+        css = compiler.compile(".link { color: $accent; }")
+        assert "blue" in css
+
+    def test_compile_file(self, tmp_path):
+        scss_file = tmp_path / "test.scss"
+        scss_file.write_text("$bg: #eee;\n.page { background: $bg; }")
+        compiler = ScssCompiler()
+        css = compiler.compile_file(str(scss_file))
+        assert "#eee" in css
+
+    def test_compile_file_with_import(self, tmp_path):
+        (tmp_path / "_vars.scss").write_text("$primary: #007bff;")
+        (tmp_path / "main.scss").write_text('@import "vars";\n.btn { color: $primary; }')
+        compiler = ScssCompiler()
+        css = compiler.compile_file(str(tmp_path / "main.scss"))
+        assert "#007bff" in css
+
+    def test_add_import_path(self, tmp_path):
+        lib_dir = tmp_path / "lib"
+        lib_dir.mkdir()
+        (lib_dir / "_colors.scss").write_text("$red: #f00;")
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        (src_dir / "app.scss").write_text('@import "colors";\n.x { color: $red; }')
+
+        compiler = ScssCompiler()
+        compiler.add_import_path(str(lib_dir))
+        css = compiler.compile_file(str(src_dir / "app.scss"))
+        assert "#f00" in css
+
+    def test_compile_scss_directory(self, tmp_path):
+        scss_dir = tmp_path / "scss"
+        scss_dir.mkdir()
+        (scss_dir / "main.scss").write_text(".main { color: green; }")
+        output = str(tmp_path / "css" / "out.css")
+
+        compiler = ScssCompiler()
+        css = compiler.compile_scss(str(scss_dir), output)
+        assert ".main" in css
+        assert Path(output).exists()
+
+    def test_compile_file_nonexistent(self):
+        compiler = ScssCompiler()
+        css = compiler.compile_file("/nonexistent/path.scss")
+        assert css == ""
+
+    def test_constructor_with_variables(self):
+        compiler = ScssCompiler(variables={"theme": "dark"})
+        css = compiler.compile(".x { content: '$theme'; }")
+        # Variable in quotes won't be substituted, but outside quotes it will
+        compiler2 = ScssCompiler(variables={"size": "16px"})
+        css2 = compiler2.compile(".x { font-size: $size; }")
+        assert "16px" in css2

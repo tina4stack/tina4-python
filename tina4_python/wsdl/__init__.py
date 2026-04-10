@@ -245,8 +245,10 @@ class WSDL:
             f"</soap:Envelope>"
         )
 
-    def generate_wsdl(self) -> str:
+    def generate_wsdl(self, endpoint_url: str = "") -> str:
         """Generate a WSDL 1.1 definition from the class's operations."""
+        if endpoint_url:
+            self._service_url = endpoint_url
         service_name = type(self).__name__
         tns = f"urn:{service_name}"
 

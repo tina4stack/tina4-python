@@ -453,4 +453,82 @@ def _minify(css: str) -> str:
     return css.strip()
 
 
-__all__ = ["compile_scss", "compile_string"]
+class ScssCompiler:
+    """Class-based SCSS compiler with import paths and preset variables."""
+
+    def __init__(self, import_paths: list[str] | None = None, variables: dict[str, str] | None = None):
+        self._import_paths: list[str] = list(import_paths) if import_paths else []
+        self._variables: dict[str, str] = dict(variables) if variables else {}
+
+    def compile(self, source: str) -> str:
+        """Compile an SCSS string to CSS."""
+        # Inject preset variables at the top
+        if self._variables:
+            var_block = "\n".join(f"${name}: {value};" for name, value in self._variables.items())
+            source = var_block + "\n" + source
+        return _compile(source)
+
+    def compile_file(self, path: str) -> str:
+        """Compile a single SCSS file to CSS, resolving imports."""
+        file_path = Path(path)
+        if not file_path.is_file():
+            return ""
+
+        base_dir = file_path.parent
+        # Add the file's directory as an import path
+        import_paths = [str(base_dir)] + self._import_paths
+
+        imported: set[str] = {str(file_path)}
+        content = file_path.read_text(encoding="utf-8")
+
+        # Resolve imports using all import paths
+        def _replace_import(m):
+            name = m.group(1).strip("\"'")
+            candidates = []
+            for search_dir in import_paths:
+                search_path = Path(search_dir)
+                candidates.extend([
+                    search_path / f"{name}.scss",
+                    search_path / f"_{name}.scss",
+                    search_path / name,
+                ])
+            for candidate in candidates:
+                if candidate.is_file() and str(candidate) not in imported:
+                    # Read the file content directly and resolve its imports
+                    imported.add(str(candidate))
+                    file_content = candidate.read_text(encoding="utf-8")
+                    # Recursively resolve imports in the imported file
+                    file_content = re.sub(
+                        r'@import\s+["\']?([^"\';\n]+)["\']?\s*;',
+                        _replace_import, file_content
+                    )
+                    return file_content
+            return f"/* IMPORT NOT FOUND: {name} */"
+
+        content = re.sub(r'@import\s+["\']?([^"\';\n]+)["\']?\s*;', _replace_import, content)
+
+        # Inject preset variables
+        if self._variables:
+            var_block = "\n".join(f"${name}: {value};" for name, value in self._variables.items())
+            content = var_block + "\n" + content
+
+        return _compile(content)
+
+    def compile_scss(self, scss_dir: str = "src/scss", output: str = "public/css/default.css",
+                     minify: bool = False) -> str:
+        """Compile all .scss files in a directory into a single CSS file."""
+        return compile_scss(scss_dir, output, minify)
+
+    def add_import_path(self, path: str) -> None:
+        """Add a search path for @import resolution."""
+        self._import_paths.append(path)
+
+    def set_variable(self, name: str, value: str) -> None:
+        """Set a variable that will be available during compilation."""
+        # Strip leading $ if provided
+        if name.startswith("$"):
+            name = name[1:]
+        self._variables[name] = value
+
+
+__all__ = ["compile_scss", "compile_string", "ScssCompiler"]

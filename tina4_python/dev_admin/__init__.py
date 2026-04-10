@@ -235,6 +235,60 @@ class BrokenTracker:
             "resolved": len(entries) - len(unresolved),
         }
 
+    @classmethod
+    def unresolved_count(cls) -> int:
+        """Count of unresolved errors."""
+        entries = cls.get_all()
+        return sum(1 for e in entries if not e.get("resolved"))
+
+    @classmethod
+    def clear_all(cls):
+        """Remove ALL broken files."""
+        broken_dir = Path(cls._broken_dir)
+        if not broken_dir.exists():
+            return
+        for f in broken_dir.glob("*.json"):
+            try:
+                f.unlink()
+            except OSError:
+                continue
+
+    @classmethod
+    def reset(cls):
+        """Reset all state (for testing). Alias for clear_all."""
+        cls.clear_all()
+
+    @classmethod
+    def capture(cls, error_type: str, message: str, traceback_str: str = "",
+                file: str = "", line: int = 0):
+        """Capture an error (parity alias for record).
+
+        Accepts the same 5-param signature as PHP/Ruby ErrorTracker.capture.
+        The file and line params are stored in context.
+        """
+        context = {}
+        if file:
+            context["file"] = file
+        if line:
+            context["line"] = line
+        return cls.record(error_type, message, traceback_str, context)
+
+
+def register():
+    """Register dev admin routes on the router.
+
+    Parity method matching PHP DevAdmin::register() and Node DevAdmin.register().
+    In Python, routes are registered via get_api_handlers() called from the server;
+    this function provides an explicit entry point for the same operation.
+    """
+    from tina4_python.core.router import Router
+    handlers = get_api_handlers()
+    for path, (method, handler) in handlers.items():
+        if method == "GET":
+            Router.get(path, handler)
+        else:
+            Router.post(path, handler)
+
 
 def get_api_handlers() -> dict:
     """Return dev admin API handler functions keyed by path.

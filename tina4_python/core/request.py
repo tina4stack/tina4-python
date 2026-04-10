@@ -106,6 +106,20 @@ class Request:
         """Get a route parameter (from URL path). Alias for params[key]."""
         return self.params.get(key, self._route_params.get(key, default))
 
+    def header(self, name: str) -> str | None:
+        """Get a specific header value by name (case-insensitive)."""
+        return self.headers.get(name.lower().replace("-", "_"), self.headers.get(name.lower(), None))
+
+    def bearer_token(self) -> str | None:
+        """Extract the Bearer token from the Authorization header."""
+        auth = self.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            return auth[7:]
+        return None
+
+    def parse_body(self) -> dict | str | None:
+        """Parse the raw body based on content type. Returns the parsed result."""
+        return _parse_body(self.raw_body, self.content_type)
 
 
 def _extract_ip(scope: dict, headers: dict) -> str:
