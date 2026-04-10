@@ -199,11 +199,13 @@ class Database:
         parsed = urlparse(self.url)
 
         if parsed.scheme.startswith("sqlite"):
-            # sqlite:///data/app.db → data/app.db
-            # sqlite:////absolute/path.db → /absolute/path.db
+            # urlparse("sqlite:///path").path = "/path"
+            # Strip the leading / only when it precedes a Windows drive
+            # letter (e.g. /C:/Users/app.db → C:/Users/app.db). On Linux
+            # the leading / is the root directory and must be kept.
             path = parsed.path
-            if path.startswith("/"):
-                path = path[1:]  # Remove leading slash for relative paths
+            if len(path) >= 3 and path[0] == "/" and path[1].isalpha() and path[2] == ":":
+                path = path[1:]  # Windows: /C:/... → C:/...
 
             # Ensure directory exists
             directory = os.path.dirname(path)
