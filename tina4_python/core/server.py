@@ -1550,9 +1550,10 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
     # ── Require tina4 CLI ─────────────────────────────────────────
     # The framework must be launched via `tina4 serve`, not `python app.py`.
-    # The tina4 CLI sets TINA4_CLI=true when spawning the server process.
+    # The tina4 CLI passes --managed when spawning the server process.
     # Users can bypass this by adding TINA4_OVERRIDE_CLIENT=true to .env
-    if os.environ.get("TINA4_CLI") != "true" and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
+    is_managed = "--managed" in sys.argv
+    if not is_managed and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
         # Load .env early so TINA4_OVERRIDE_CLIENT can be read
         from tina4_python.dotenv import load_env
         load_env()
