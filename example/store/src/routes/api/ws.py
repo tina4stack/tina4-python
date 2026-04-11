@@ -1,7 +1,12 @@
 import json
 from tina4_python.websocket import WebSocketServer
+from tina4_python.database import Database
 
 ws = WebSocketServer()
+
+
+def _get_db():
+    return Database("sqlite:data/store.db")
 
 
 @ws.route("/ws/orders")
@@ -59,13 +64,25 @@ async def live_chat(conn):
                 sender = data.get("sender", "Guest")
                 text = data.get("text", "")
                 is_admin = "chat_admin" in conn.rooms
+                client_id = data.get("target_client_id", conn.id)
+
+                # Persist to database
+                try:
+                    db = _get_db()
+                    db.execute(
+                        "INSERT INTO chat_messages (client_id, sender, text, is_admin) VALUES (?, ?, ?, ?)",
+                        [client_id, sender, text, 1 if is_admin else 0]
+                    )
+                    db.commit()
+                except Exception:
+                    pass  # Don't break chat if DB write fails
 
                 payload = json.dumps({
                     "type": "message",
                     "sender": sender,
                     "text": text,
                     "is_admin": is_admin,
-                    "client_id": conn.id,
+                    "client_id": client_id,
                 })
 
                 await conn.broadcast_to_room("chat_lobby", payload)

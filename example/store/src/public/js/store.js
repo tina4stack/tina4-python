@@ -51,13 +51,12 @@ function showCartToast(message) {
 }
 
 // Fetch initial count from session
-api.get("/api/cart/count").then(r => {
-    var data = (r && r.body) ? r.body : r;
+api.get("/api/cart/count").then(function(data) {
     if (data && typeof data.count === "number") {
         cartCount.value = data.count;
         updateCartBadge(data.count);
     }
-});
+}).catch(function() {});
 
 // Cart badge web component — re-renders reactively when cartCount changes
 class CartBadge extends Tina4Element {
@@ -87,15 +86,7 @@ document.addEventListener("click", function(e) {
     btn.disabled = true;
     btn.textContent = "Adding...";
 
-    fetch("/cart/add", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        },
-        body: JSON.stringify({ product_id: parseInt(productId, 10), quantity: quantity })
-    })
-    .then(function(r) { return r.json(); })
+    api.post("/cart/add", { product_id: parseInt(productId, 10), quantity: quantity })
     .then(function(data) {
         if (data.ok) {
             cartCount.value = data.count;
@@ -122,7 +113,9 @@ const orderStatus = signal("pending");
 const orderMessages = signal([]);
 
 function trackOrder(orderId) {
-    var socket = ws.connect("ws://" + location.hostname + ":7146/ws/orders", {
+    var wsPort = location.port || (location.protocol === "https:" ? "443" : "80");
+    var wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+    var socket = ws.connect(wsProtocol + "//" + location.hostname + ":" + wsPort + "/ws/orders", {
         reconnect: true,
         reconnectDelay: 3000,
         onOpen: function() {
@@ -202,75 +195,82 @@ customElements.define("order-tracker", OrderTracker);
     }
 })();
 
-// ── GraphQL Product Search ────────────────────────────────────
+// ── GraphQL Product Search (handles both desktop + mobile inputs) ──
 (function() {
-    var searchInput = document.getElementById("product-search");
-    var searchResults = document.getElementById("search-results");
-    if (!searchInput || !searchResults) return;
+    var pairs = [
+        { input: document.getElementById("product-search-desktop"), results: document.getElementById("search-results-desktop") },
+        { input: document.getElementById("product-search-mobile"), results: document.getElementById("search-results-mobile") }
+    ];
 
-    var debounceTimer = null;
+    pairs.forEach(function(pair) {
+        var searchInput = pair.input;
+        var searchResults = pair.results;
+        if (!searchInput || !searchResults) return;
 
-    searchInput.addEventListener("input", function() {
-        clearTimeout(debounceTimer);
-        var term = searchInput.value.trim();
+        var debounceTimer = null;
 
-        if (term.length < 2) {
-            searchResults.classList.remove("open");
-            searchResults.innerHTML = "";
-            return;
-        }
+        searchInput.addEventListener("input", function() {
+            clearTimeout(debounceTimer);
+            var term = searchInput.value.trim();
 
-        debounceTimer = setTimeout(function() {
-            api.graphql("/api/graphql",
-                '{ search_products(term: "' + term.replace(/"/g, '\\"') + '", limit: 8) { id name slug price image_url } }'
-            ).then(function(result) {
-                var data = result.data || result;
-                var errors = result.errors;
+            if (term.length < 2) {
+                searchResults.classList.remove("open");
+                searchResults.innerHTML = "";
+                return;
+            }
 
-                if (errors || !data || !data.search_products) {
-                    searchResults.classList.remove("open");
-                    return;
-                }
+            debounceTimer = setTimeout(function() {
+                api.graphql("/api/graphql",
+                    '{ search_products(term: "' + term.replace(/"/g, '\\"') + '", limit: 8) { id name slug price image_url } }'
+                ).then(function(result) {
+                    var data = result.data || result;
+                    var errors = result.errors;
 
-                var products = data.search_products;
-                if (products.length === 0) {
-                    searchResults.innerHTML = '<div class="search-empty">No products found</div>';
+                    if (errors || !data || !data.search_products) {
+                        searchResults.classList.remove("open");
+                        return;
+                    }
+
+                    var products = data.search_products;
+                    if (products.length === 0) {
+                        searchResults.innerHTML = '<div class="search-empty">No products found</div>';
+                        searchResults.classList.add("open");
+                        return;
+                    }
+
+                    var items = "";
+                    for (var i = 0; i < products.length; i++) {
+                        var p = products[i];
+                        items += '<div class="search-item">'
+                            + '<a href="/products/' + p.slug + '" class="search-item-link">'
+                            + '<img src="' + (p.image_url || '/img/placeholder.png') + '" alt="">'
+                            + '<div class="search-item-info">'
+                            + '<div class="search-item-name">' + p.name + '</div>'
+                            + '<div class="search-item-price">$' + Number(p.price).toFixed(2) + '</div>'
+                            + '</div></a>'
+                            + '<button class="search-cart-btn add-to-cart-btn" data-product-id="' + p.id + '" data-label="&#128722;" title="Add to Cart">&#128722;</button>'
+                            + '</div>';
+                    }
+                    searchResults.innerHTML = items;
                     searchResults.classList.add("open");
-                    return;
-                }
+                });
+            }, 300);
+        });
 
-                var items = "";
-                for (var i = 0; i < products.length; i++) {
-                    var p = products[i];
-                    items += '<div class="search-item">'
-                        + '<a href="/products/' + p.slug + '" class="search-item-link">'
-                        + '<img src="' + (p.image_url || '/img/placeholder.png') + '" alt="">'
-                        + '<div class="search-item-info">'
-                        + '<div class="search-item-name">' + p.name + '</div>'
-                        + '<div class="search-item-price">$' + Number(p.price).toFixed(2) + '</div>'
-                        + '</div></a>'
-                        + '<button class="search-cart-btn add-to-cart-btn" data-product-id="' + p.id + '" data-label="&#128722;" title="Add to Cart">&#128722;</button>'
-                        + '</div>';
-                }
-                searchResults.innerHTML = items;
-                searchResults.classList.add("open");
-            });
-        }, 300);
-    });
+        // Close dropdown when clicking outside
+        document.addEventListener("click", function(e) {
+            if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
+                searchResults.classList.remove("open");
+            }
+        });
 
-    // Close dropdown when clicking outside
-    document.addEventListener("click", function(e) {
-        if (!searchInput.contains(e.target) && !searchResults.contains(e.target)) {
-            searchResults.classList.remove("open");
-        }
-    });
-
-    // Close on Escape
-    searchInput.addEventListener("keydown", function(e) {
-        if (e.key === "Escape") {
-            searchResults.classList.remove("open");
-            searchInput.blur();
-        }
+        // Close on Escape
+        searchInput.addEventListener("keydown", function(e) {
+            if (e.key === "Escape") {
+                searchResults.classList.remove("open");
+                searchInput.blur();
+            }
+        });
     });
 })();
 

@@ -31,6 +31,9 @@ def render(template_name, data=None, request=None):
         if locale:
             i18n.locale = locale
 
+    # Pass current locale to templates for the language toggle
+    context["locale"] = i18n.locale
+
     # Override t() with our session-aware i18n instance
     context["t"] = i18n.t
 

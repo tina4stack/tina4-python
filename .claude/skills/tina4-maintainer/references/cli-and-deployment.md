@@ -154,6 +154,10 @@ tina4 serve         # Hot reload, SCSS compilation, debug overlay, Swagger UI
 or `uv run python app.py` directly. The `tina4` Rust binary handles SCSS compilation,
 file watching, and browser auto-open — `python app.py` skips all of this.
 
+**CLI Guard (`--managed`):** The tina4 CLI passes `--managed` as a CLI argument when spawning
+the framework server. The framework checks `"--managed" in sys.argv` and refuses to start
+without it. To bypass (e.g. Docker, CI), set `TINA4_OVERRIDE_CLIENT=true` in `.env`.
+
 ### Staging
 ```bash
 tina4 stage         # Build + push + deploy in ~33 seconds

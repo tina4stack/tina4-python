@@ -1,13 +1,28 @@
 <nav class="navbar navbar-dark">
     <div class="container">
-        <a href="/" class="navbar-brand">{{ t("store_name") }}</a>
-        <button class="navbar-toggler" type="button" onclick="this.parentElement.querySelector('.navbar-collapse').classList.toggle('show')">
-            &#9776;
-        </button>
-        <div class="navbar-search">
+        <div class="navbar-top-row">
+            <a href="/" class="navbar-brand">{{ t("store_name") }}</a>
+            <div class="navbar-search navbar-search-desktop">
+                <div class="search-wrapper">
+                    <input type="text" id="product-search-desktop" class="search-input" placeholder="{{ t('search_placeholder') }}" autocomplete="off">
+                    <div id="search-results-desktop" class="search-dropdown"></div>
+                </div>
+            </div>
+            <a href="/api/locale/{{ locale == 'fr' ? 'en' : 'fr' }}" class="nav-lang-toggle" title="{{ locale == 'fr' ? 'English' : 'Français' }}">
+                {{ locale == 'fr' ? '🇬🇧' : '🇫🇷' }}
+            </a>
+            <a href="/cart" class="nav-cart-icon" title="{{ t('cart') }}">
+                &#128722;
+                <span id="cart-badge" class="badge-cart" style="display:none;"></span>
+            </a>
+            <button class="navbar-toggler" type="button" onclick="this.closest('.container').querySelector('.navbar-collapse').classList.toggle('show')">
+                &#9776;
+            </button>
+        </div>
+        <div class="navbar-search navbar-search-mobile">
             <div class="search-wrapper">
-                <input type="text" id="product-search" class="search-input" placeholder="{{ t('search_placeholder') }}" autocomplete="off">
-                <div id="search-results" class="search-dropdown"></div>
+                <input type="text" id="product-search-mobile" class="search-input" placeholder="{{ t('search_placeholder') }}" autocomplete="off">
+                <div id="search-results-mobile" class="search-dropdown"></div>
             </div>
         </div>
         <div class="navbar-collapse">
@@ -25,9 +40,5 @@
                 {% endif %}
             </div>
         </div>
-        <a href="/cart" class="nav-cart-icon" title="{{ t('cart') }}">
-            &#128722;
-            <span id="cart-badge" class="badge-cart" style="display:none;"></span>
-        </a>
     </div>
 </nav>

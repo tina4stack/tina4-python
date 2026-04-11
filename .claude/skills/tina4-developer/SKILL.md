@@ -52,6 +52,9 @@ tina4 serve     # ALWAYS use this — handles SCSS compilation, file watching, h
 The `tina4` binary is a Rust-based CLI that handles SCSS compilation, file watching, browser
 auto-open, and hot reload. Running `python app.py` directly skips all of this.
 
+The CLI passes `--managed` to the framework server. The framework refuses to start without it.
+To bypass (e.g. Docker, CI), set `TINA4_OVERRIDE_CLIENT=true` in `.env`.
+
 Language-specific aliases also work:
 ```bash
 tina4py serve   # Python

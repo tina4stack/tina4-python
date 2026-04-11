@@ -26,7 +26,39 @@
         sidebarBadge.classList.remove("active");
     }
 
-    connectChat();
+    // Load chat history from database, then connect WebSocket
+    loadChatHistory(function() {
+        connectChat();
+    });
+
+    function loadChatHistory(callback) {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "/api/chat/history", true);
+        xhr.setRequestHeader("Accept", "application/json");
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState === 4) {
+                if (xhr.status === 200) {
+                    try {
+                        var data = JSON.parse(xhr.responseText);
+                        if (data.sessions && data.sessions.length > 0) {
+                            for (var i = 0; i < data.sessions.length; i++) {
+                                var s = data.sessions[i];
+                                addSession(s.client_id, s.name);
+                                for (var j = 0; j < s.messages.length; j++) {
+                                    var m = s.messages[j];
+                                    addMessageToSession(s.client_id, m.sender, m.text, m.is_admin, false);
+                                }
+                            }
+                        }
+                    } catch(e) {
+                        console.error("Failed to parse chat history:", e);
+                    }
+                }
+                if (callback) callback();
+            }
+        };
+        xhr.send();
+    }
 
     function connectChat() {
         var wsPort = location.port || (location.protocol === "https:" ? "443" : "80");
@@ -208,7 +240,8 @@
         chatSocket.send(JSON.stringify({
             type: "message",
             sender: "Support",
-            text: text
+            text: text,
+            target_client_id: activeSession
         }));
 
         // Add to local session immediately (don't wait for echo)
