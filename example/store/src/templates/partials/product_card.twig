@@ -1,0 +1,22 @@
+<div class="card">
+    <a href="/products/{{ product.slug }}">
+        <img src="{{ product.image_url }}" alt="{{ product.name }}" class="card-img-top">
+    </a>
+    <div class="card-body">
+        <h3><a href="/products/{{ product.slug }}">{{ product.name }}</a></h3>
+        <p class="product-price">{{ t("currency") }}{{ product.price|number_format(2) }}</p>
+        {% if product.stock > 0 %}
+            <span class="badge badge-success btn-full text-center">{{ t("in_stock") }}</span>
+        {% else %}
+            <span class="badge badge-danger btn-full text-center">{{ t("out_of_stock") }}</span>
+        {% endif %}
+        {% if product.stock > 0 %}
+            <form id="add-cart-{{ product.id }}" method="POST" action="/cart/add">
+                {{ form_token() }}
+                <input type="hidden" name="product_id" value="{{ product.id }}">
+                <input type="hidden" name="quantity" value="1">
+                <button type="button" class="btn btn-primary mt-2 btn-full" onclick="frond.form.submit('add-cart-{{ product.id }}', '/cart/add', null, function(){ window.location='/cart'; })">{{ t("add_to_cart") }}</button>
+            </form>
+        {% endif %}
+    </div>
+</div>

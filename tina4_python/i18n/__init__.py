@@ -180,14 +180,26 @@ class I18n:
 
     @staticmethod
     def _flatten(data: dict, prefix: str = "") -> dict:
-        """Flatten nested dict: {"a": {"b": "c"}} → {"a.b": "c"}"""
+        """Flatten nested dict with leaf-key aliasing.
+
+        {"nav": {"home": "Home"}} → {"nav.home": "Home", "home": "Home"}
+
+        Both the full dot-path AND the leaf key are stored, so templates
+        can use either ``t("home")`` or ``t("nav.home")``.  If two
+        sections define the same leaf key, the full dot-path always works
+        and the leaf key keeps whichever value was seen first.
+        """
         result = {}
         for key, value in data.items():
             full_key = f"{prefix}.{key}" if prefix else key
             if isinstance(value, dict):
                 result.update(I18n._flatten(value, full_key))
             else:
-                result[full_key] = str(value)
+                str_value = str(value)
+                result[full_key] = str_value
+                # Also store the leaf key as a shortcut (first-wins on conflict)
+                if key not in result:
+                    result[key] = str_value
         return result
 
     @staticmethod

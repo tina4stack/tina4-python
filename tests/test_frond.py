@@ -7,6 +7,7 @@ from tina4_python.frond import Frond
 @pytest.fixture
 def engine(tmp_path):
     """Frond engine with temp template dir."""
+    Frond.clear_registry()
     return Frond(template_dir=str(tmp_path))
 
 
@@ -509,6 +510,59 @@ class TestSetIncludeExtends:
         result = engine.render("page.html", {"message": "Included!"})
         assert "<main>" in result
         assert "<p>Included!</p>" in result
+
+    def test_two_level_extends(self, engine, tpl_dir):
+        """Multi-level extends: grandchild → child → base."""
+        (tpl_dir / "base.html").write_text(
+            "<html><head><title>{% block title %}Site{% endblock %}</title></head>"
+            "<body>{% block content %}{% endblock %}</body></html>"
+        )
+        (tpl_dir / "layout_admin.html").write_text(
+            '{% extends "base.html" %}'
+            '{% block title %}Admin — {{ parent() }}{% endblock %}'
+            '{% block content %}<nav>Sidebar</nav><main>{% block admin_content %}{% endblock %}</main>{% endblock %}'
+        )
+        (tpl_dir / "dashboard.html").write_text(
+            '{% extends "layout_admin.html" %}'
+            '{% block title %}Dashboard{% endblock %}'
+            '{% block admin_content %}<h1>Hello {{ user }}</h1>{% endblock %}'
+        )
+        result = engine.render("dashboard.html", {"user": "Admin"})
+        assert "<html>" in result
+        assert "<title>Dashboard</title>" in result
+        assert "<nav>Sidebar</nav>" in result
+        assert "<h1>Hello Admin</h1>" in result
+
+    def test_three_level_extends(self, engine, tpl_dir):
+        """Three-level chain: page → section → layout → base."""
+        (tpl_dir / "root.html").write_text(
+            "<div>{% block body %}default{% endblock %}</div>"
+        )
+        (tpl_dir / "mid.html").write_text(
+            '{% extends "root.html" %}{% block body %}<section>{% block inner %}{% endblock %}</section>{% endblock %}'
+        )
+        (tpl_dir / "leaf.html").write_text(
+            '{% extends "mid.html" %}{% block inner %}LEAF{% endblock %}'
+        )
+        result = engine.render("leaf.html", {})
+        assert "<div>" in result
+        assert "<section>" in result
+        assert "LEAF" in result
+
+    def test_two_level_extends_default_block(self, engine, tpl_dir):
+        """Child defines a block, grandchild doesn't override it — default should show."""
+        (tpl_dir / "base.html").write_text(
+            "<h1>{% block title %}Base{% endblock %}</h1>{% block content %}{% endblock %}"
+        )
+        (tpl_dir / "child.html").write_text(
+            '{% extends "base.html" %}{% block content %}<p>Default content</p>{% endblock %}'
+        )
+        (tpl_dir / "grandchild.html").write_text(
+            '{% extends "child.html" %}{% block title %}Override{% endblock %}'
+        )
+        result = engine.render("grandchild.html", {})
+        assert "<h1>Override</h1>" in result
+        assert "<p>Default content</p>" in result
 
 
 # ── Whitespace Control Tests ────────────────────────────────────

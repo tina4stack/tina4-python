@@ -1,0 +1,14 @@
+{
+  "id": "982dc6aa9c54",
+  "error_type": "FileNotFoundError",
+  "message": "Template not found: src/templates/index.twig",
+  "traceback": "Traceback (most recent call last):\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 1044, in handle\n    response = await _invoke_handler(request, response, route, params)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 861, in _invoke_handler\n    result = await route[\"handler\"](*_args)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/example/store/src/routes/index.py\", line 16, in home\n    return response(frond.render(\"index.twig\", {\n                    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^\n        \"featured_products\": products,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n        \"categories\": categories,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^\n    }))\n    ^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/frond/engine.py\", line 1149, in render\n    raise FileNotFoundError(f\"Template not found: {path}\")\nFileNotFoundError: Template not found: src/templates/index.twig\n",
+  "context": {
+    "method": "GET",
+    "path": "/"
+  },
+  "count": 2,
+  "first_seen": "2026-04-11T13:35:01.377566+00:00",
+  "last_seen": "2026-04-11T13:35:03.026469+00:00",
+  "resolved": false
+}

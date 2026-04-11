@@ -111,7 +111,8 @@ class AutoCrud:
                 offset = 0
                 page = 1
 
-            records, total = _cls.all(limit=limit, skip=offset)
+            records = _cls.all(limit=limit, offset=offset)
+            total = _cls.count()
             total_pages = max(1, -(-total // limit)) if limit else 1
             data = [r.to_dict() for r in records]
             return response({

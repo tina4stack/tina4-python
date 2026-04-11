@@ -1,0 +1,39 @@
+{% extends "admin/base_admin.twig" %}
+
+{% block title %}Categories — Admin{% endblock %}
+
+{% block admin_content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">{{ t("categories") }}</h1>
+    <a href="/admin/categories/new" class="btn btn-primary">{{ t("add_category") }}</a>
+</div>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Slug</th>
+            <th>Description</th>
+            <th></th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for cat in categories %}
+        <tr>
+            <td>{{ cat.id }}</td>
+            <td>{{ cat.name }}</td>
+            <td>{{ cat.slug }}</td>
+            <td>{{ cat.description }}</td>
+            <td><a href="/admin/categories/{{ cat.id }}/edit" class="text-decoration-underline">{{ t("edit") }}</a></td>
+            <td>
+                <form method="POST" action="/admin/categories/{{ cat.id }}/delete" class="d-inline">
+                    <button type="submit" class="btn-icon text-danger" onclick="return confirm('{{ t('confirm_delete') }}')" title="{{ t('delete') }}">&times;</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

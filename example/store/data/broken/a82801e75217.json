@@ -1,0 +1,14 @@
+{
+  "id": "a82801e75217",
+  "error_type": "TypeError",
+  "message": "ORM.all() got an unexpected keyword argument 'skip'",
+  "traceback": "Traceback (most recent call last):\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 1044, in handle\n    response = await _invoke_handler(request, response, route, params)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 861, in _invoke_handler\n    result = await route[\"handler\"](*_args)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/crud/__init__.py\", line 114, in list_handler\n    records, total = _cls.all(limit=limit, skip=offset)\n                     ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^\nTypeError: ORM.all() got an unexpected keyword argument 'skip'\n",
+  "context": {
+    "method": "GET",
+    "path": "/api/products"
+  },
+  "count": 5,
+  "first_seen": "2026-04-11T13:33:41.368392+00:00",
+  "last_seen": "2026-04-11T14:33:19.538217+00:00",
+  "resolved": false
+}

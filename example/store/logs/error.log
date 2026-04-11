@@ -1,0 +1,36 @@
+2026-04-11T13:32:44.427Z [ERROR  ] [aedb0adc] Route error: no such column: created_at {"path": "/"}
+2026-04-11T13:33:40.136Z [ERROR  ] [1f87e66f] Route error: 'str' object has no attribute '_globals' {"path": "/"}
+2026-04-11T13:33:41.354Z [ERROR  ] [5005b1e8] Route error: 'str' object has no attribute '_globals' {"path": "/"}
+2026-04-11T13:33:41.366Z [ERROR  ] [ce097f3a] Route error: ORM.all() got an unexpected keyword argument 'skip' {"path": "/api/products"}
+2026-04-11T13:33:41.378Z [ERROR  ] [8c58d974] Route error: ORM.all() got an unexpected keyword argument 'skip' {"path": "/api/categories"}
+2026-04-11T13:35:01.372Z [ERROR  ] [b5b1b97d] Route error: Template not found: src/templates/index.twig {"path": "/"}
+2026-04-11T13:35:03.024Z [ERROR  ] [e93526f7] Route error: Template not found: src/templates/index.twig {"path": "/"}
+2026-04-11T13:35:03.035Z [ERROR  ] [7c3f68cb] Route error: ORM.all() got an unexpected keyword argument 'skip' {"path": "/api/products"}
+2026-04-11T13:35:03.046Z [ERROR  ] [4e366535] Route error: ORM.all() got an unexpected keyword argument 'skip' {"path": "/api/categories"}
+2026-04-11T13:37:38.000Z [ERROR  ] [b29927e4] Route error: no such column: created_at {"path": "/products"}
+2026-04-11T14:33:19.528Z [ERROR  ] [0d95df03] Route error: ORM.all() got an unexpected keyword argument 'skip' {"path": "/api/products"}
+2026-04-11T14:39:51.848Z [ERROR  ] [8ac224c1] Route error: object list can't be used in 'await' expression {"path": "/register"}
+2026-04-11T14:40:33.756Z [ERROR  ] [4f31f3b6] Route error: object list can't be used in 'await' expression {"path": "/register"}
+2026-04-11T14:40:48.239Z [ERROR  ] [8ae87ab4] Route error: object list can't be used in 'await' expression {"path": "/register"}
+2026-04-11T14:40:53.873Z [ERROR  ] [30e2d4d9] Route error: object list can't be used in 'await' expression {"path": "/register"}
+2026-04-11T14:41:00.037Z [ERROR  ] [66ff2017] Route error: object list can't be used in 'await' expression {"path": "/register"}
+2026-04-11T14:41:04.841Z [ERROR  ] [2be12c5b] Route error: object list can't be used in 'await' expression {"path": "/register"}
+2026-04-11T15:25:14.566Z [ERROR  ] [27cd2965] Route error: no such column: stock_quantity {"path": "/admin"}
+2026-04-11T15:25:21.200Z [ERROR  ] [9f59bd95] Route error: no such column: stock_quantity {"path": "/admin"}
+2026-04-11T15:27:11.930Z [ERROR  ] [d5ba9d08] Route error: Template not found: src/templates/admin/sidebar.twig {"path": "/admin"}
+2026-04-11T15:28:01.665Z [ERROR  ] [d0197b35] Route error: no such column: p.created_at {"path": "/admin/products"}
+2026-04-11T15:31:02.504Z [ERROR  ] [60c39176] Route error: no such column: p.created_at {"path": "/admin/products"}
+2026-04-11T15:51:26.655Z [ERROR  ] [304bf523] Route error: object list can't be used in 'await' expression {"path": "/admin/orders/11/status"}
+2026-04-11T15:52:35.447Z [ERROR  ] [98d3dbfa] Route error: Template not found: src/templates/admin/product_edit.twig {"path": "/admin/products/50/edit"}
+2026-04-11T16:09:57.069Z [ERROR  ] [cacac30f] Route error: 'NoneType' object has no attribute 'get' {"path": "/login"}
+2026-04-11T17:46:16.641Z [ERROR  ] [34cb883d] Route error: 'int' object has no attribute 'items' {"path": "/cart/add"}
+2026-04-11T17:46:21.185Z [ERROR  ] [8cf09f5f] Route error: 'int' object has no attribute 'items' {"path": "/cart/add"}
+2026-04-11T17:46:26.928Z [ERROR  ] [9864ceee] Route error: 'int' object has no attribute 'items' {"path": "/cart/add"}
+2026-04-11T17:46:37.663Z [ERROR  ] [a5133c42] Route error: 'int' object has no attribute 'items' {"path": "/cart/add"}
+2026-04-11T17:47:15.705Z [ERROR  ] [9cbddd55] Route error: 'int' object has no attribute 'items' {"path": "/cart/add"}
+2026-04-11T17:47:42.332Z [ERROR  ] [dc53c15d] Route error: 'int' object has no attribute 'items' {"path": "/cart/add"}
+2026-04-11T17:47:55.575Z [ERROR  ] [e30c73f3] Route error: 'int' object has no attribute 'items' {"path": "/cart/add"}
+2026-04-11T17:50:39.048Z [ERROR  ] [f6fd9649] Route error: 'int' object has no attribute 'items' {"path": "/cart"}
+2026-04-11T17:50:53.533Z [ERROR  ] [4b57dd9a] Route error: 'int' object has no attribute 'items' {"path": "/cart/add"}
+2026-04-11T17:52:36.708Z [ERROR  ] [67332c22] Route error: 'int' object has no attribute 'items' {"path": "/cart"}
+2026-04-11T18:07:02.496Z [ERROR  ] [1876b5a5] Route error: 'int' object has no attribute 'items' {"path": "/cart"}

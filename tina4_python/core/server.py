@@ -69,6 +69,37 @@ def _ensure_folders():
         Path(folder).mkdir(parents=True, exist_ok=True)
 
 
+def _auto_wire_i18n():
+    """Auto-register t() as a Frond global if locale files exist.
+
+    Convention: if src/locales/ contains .json files, create an I18n
+    instance and register its .t() method as the Frond global ``t``.
+    Reads TINA4_LOCALE and TINA4_LOCALE_DIR from the environment.
+    """
+    locale_dir = Path(os.environ.get("TINA4_LOCALE_DIR", "src/locales"))
+    if not locale_dir.is_dir():
+        return
+    json_files = list(locale_dir.glob("*.json"))
+    if not json_files:
+        return
+
+    try:
+        from tina4_python.i18n import I18n
+        from tina4_python.frond import Frond
+
+        i18n = I18n(
+            locale_dir=str(locale_dir),
+            default_locale=os.environ.get("TINA4_LOCALE", "en"),
+        )
+
+        # Only register if t() hasn't been explicitly set by the user
+        if "t" not in Frond._class_globals:
+            Frond._class_globals["t"] = i18n.t
+            Log.info(f"i18n: auto-registered t() with {len(json_files)} locale(s)")
+    except Exception as e:
+        Log.error(f"i18n: auto-wire failed: {e}")
+
+
 async def _health_handler(request: Request, response: Response) -> Response:
     """Built-in /health endpoint."""
     import time
@@ -786,6 +817,35 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
                     _auth_ok = True
             except Exception:
                 pass
+    # Fall back to formToken in request body (frond.js sends token here)
+    if not _auth_ok:
+        _body = getattr(request, "body", None) or {}
+        _form_token = _body.get("formToken", "") if isinstance(_body, dict) else ""
+        if _form_token:
+            try:
+                from tina4_python.auth import Auth
+                if Auth.valid_token_static(_form_token):
+                    _auth_ok = True
+                    # Return a FreshToken header so frond.js can use
+                    # the Authorization header on subsequent requests
+                    from tina4_python.auth import refresh_token as _refresh
+                    _fresh = _refresh(_form_token)
+                    if _fresh:
+                        response.add_header("FreshToken", _fresh)
+            except Exception:
+                pass
+    # Fall back to session token (for @secured() GET routes after login)
+    if not _auth_ok:
+        _session = getattr(request, "session", None)
+        if _session:
+            _session_token = _session.get("token") if _session else ""
+            if _session_token:
+                try:
+                    from tina4_python.auth import Auth
+                    if Auth.valid_token_static(_session_token):
+                        _auth_ok = True
+                except Exception:
+                    pass
     if not _auth_ok:
         response.status(401).json({
             "error": "Unauthorized",
@@ -1427,6 +1487,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
     # Ensure folders
     _ensure_folders()
+
+    # Auto-wire i18n → Frond global t() if locale files exist
+    _auto_wire_i18n()
 
     # Auto-discover routes
     _auto_discover("src")

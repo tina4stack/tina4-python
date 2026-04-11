@@ -1,0 +1,41 @@
+{% extends "admin/base_admin.twig" %}
+
+{% block title %}{{ t("admin") }} - {{ t("products") }}{% endblock %}
+
+{% block admin_content %}
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="mb-0">{{ t("products") }}</h1>
+        <a href="/admin/products/new" class="btn btn-primary">{{ t("add_product") }}</a>
+    </div>
+
+    <table class="table">
+        <thead>
+            <tr>
+                <th>{{ t("name") }}</th>
+                <th>{{ t("price") }}</th>
+                <th>{{ t("stock") }}</th>
+                <th>{{ t("category") }}</th>
+                <th></th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for product in products %}
+                <tr>
+                    <td>{{ product.name }}</td>
+                    <td>{{ t("currency") }}{{ product.price|number_format(2) }}</td>
+                    <td>{{ product.stock }}</td>
+                    <td>{{ product.category_name }}</td>
+                    <td>
+                        <a href="/admin/products/{{ product.id }}/edit" class="text-decoration-underline">{{ t("edit") }}</a>
+                    </td>
+                    <td>
+                        <form method="POST" action="/admin/products/{{ product.id }}/delete" class="d-inline">
+                            <button type="submit" class="btn-icon text-danger" onclick="return confirm('{{ t('confirm_delete') }}')" title="{{ t('delete') }}">&times;</button>
+                        </form>
+                    </td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

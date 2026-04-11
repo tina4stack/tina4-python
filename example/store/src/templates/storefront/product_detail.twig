@@ -1,0 +1,31 @@
+{% extends "base.twig" %}
+
+{% block title %}{{ product.name }}{% endblock %}
+
+{% block content %}
+    <div class="row g-4">
+        <div class="col-md-6">
+            <img src="{{ product.image_url }}" alt="{{ product.name }}" class="product-detail-image">
+        </div>
+        <div class="col-md-6 p-4">
+            <h1>{{ product.name }}</h1>
+            <p class="text-muted">{{ product.category_name }}</p>
+            <p>{{ product.description }}</p>
+            <h2>{{ t("currency") }}{{ product.price|number_format(2) }}</h2>
+            {% if product.stock > 0 %}
+                <span class="badge badge-success mb-3">{{ t("in_stock") }} ({{ product.stock }})</span>
+                <form id="add-cart-detail" method="POST" action="/cart/add">
+                    {{ form_token() }}
+                    <input type="hidden" name="product_id" value="{{ product.id }}">
+                    <div class="mb-3">
+                        <label for="quantity">{{ t("quantity") }}</label>
+                        <input type="number" id="quantity" name="quantity" value="1" min="1" max="{{ product.stock }}" class="form-control" placeholder="1">
+                    </div>
+                    <button type="button" class="btn btn-primary" onclick="frond.form.submit('add-cart-detail', '/cart/add', null, function(){ window.location='/cart'; })">{{ t("add_to_cart") }}</button>
+                </form>
+            {% else %}
+                <span class="badge badge-danger">{{ t("out_of_stock") }}</span>
+            {% endif %}
+        </div>
+    </div>
+{% endblock %}

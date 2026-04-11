@@ -1,0 +1,54 @@
+{% extends "base.twig" %}
+
+{% block title %}{{ t("cart") }}{% endblock %}
+
+{% block content %}
+    <h1>{{ t("cart") }}</h1>
+
+    {% if cart_items %}
+        <table class="table">
+            <thead>
+                <tr>
+                    <th></th>
+                    <th>{{ t("product") }}</th>
+                    <th>{{ t("quantity") }}</th>
+                    <th class="text-end">{{ t("price") }}</th>
+                    <th class="text-end">{{ t("subtotal") }}</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in cart_items %}
+                    <tr>
+                        <td><img src="{{ item.image_url }}" alt="{{ item.name }}" width="60"></td>
+                        <td>{{ item.name }}</td>
+                        <td>{{ item.quantity }}</td>
+                        <td class="text-end">{{ t("currency") }}{{ item.price|number_format(2) }}</td>
+                        <td class="text-end">{{ t("currency") }}{{ item.subtotal|number_format(2) }}</td>
+                        <td>
+                            <form id="remove-cart-{{ item.product_id }}" method="POST" action="/cart/remove">
+                                {{ form_token() }}
+                                <input type="hidden" name="product_id" value="{{ item.product_id }}">
+                                <button type="button" class="btn btn-danger btn-sm" onclick="frond.form.submit('remove-cart-{{ item.product_id }}', '/cart/remove', null, function(){ window.location='/cart'; })">{{ t("remove") }}</button>
+                            </form>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="4" class="text-end"><strong>{{ t("total") }}</strong></td>
+                    <td class="text-end"><strong>{{ t("currency") }}{{ cart_total|number_format(2) }}</strong></td>
+                    <td></td>
+                </tr>
+            </tfoot>
+        </table>
+        <div class="mt-3">
+            <a href="/checkout" class="btn btn-primary">{{ t("checkout") }}</a>
+            <a href="/products" class="btn">{{ t("continue_shopping") }}</a>
+        </div>
+    {% else %}
+        <p class="text-muted">{{ t("cart_empty") }}</p>
+        <a href="/products" class="btn btn-primary">{{ t("continue_shopping") }}</a>
+    {% endif %}
+{% endblock %}

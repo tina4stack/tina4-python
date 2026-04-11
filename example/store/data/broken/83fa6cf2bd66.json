@@ -1,0 +1,14 @@
+{
+  "id": "83fa6cf2bd66",
+  "error_type": "AttributeError",
+  "message": "'NoneType' object has no attribute 'get'",
+  "traceback": "Traceback (most recent call last):\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 1104, in handle\n    response = await _invoke_handler(request, response, route, params)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 921, in _invoke_handler\n    result = await route[\"handler\"](*_args)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/example/store/src/routes/auth.py\", line 19, in login\n    email = request.body.get(\"email\", \"\")\n            ^^^^^^^^^^^^^^^^\nAttributeError: 'NoneType' object has no attribute 'get'\n",
+  "context": {
+    "method": "POST",
+    "path": "/login"
+  },
+  "count": 1,
+  "first_seen": "2026-04-11T16:09:57.107374+00:00",
+  "last_seen": "2026-04-11T16:09:57.107393+00:00",
+  "resolved": false
+}

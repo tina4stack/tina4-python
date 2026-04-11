@@ -301,12 +301,41 @@ response.stream(generator, content_type="text/event-stream", status=200)  # SSE/
 
 ### QueryBuilder — Fluent query construction
 
-The ORM `select()` method supports a fluent QueryBuilder API. NoSQL support: `to_mongo()` generates MongoDB query documents from the same fluent API.
+Use `QueryBuilder` for complex queries with JOINs, aggregates, GROUP BY. Always prefer over raw `db.fetch()`.
 
 ```python
-result = User().select(filter="active = ?", params=[True], order_by="name", limit=10)
-result.to_mongo()  # Returns MongoDB query document equivalent
+from tina4_python.query_builder import QueryBuilder
+
+# JOINs
+orders = QueryBuilder.from_table("orders o") \
+    .select("o.*", "c.name as customer_name") \
+    .join("customers c", "o.customer_id = c.id") \
+    .where("o.status = ?", ["pending"]) \
+    .order_by("o.created_at DESC") \
+    .limit(20) \
+    .get()                     # -> DatabaseResult
+
+# LEFT JOIN
+products = QueryBuilder.from_table("products p") \
+    .select("p.*", "c.name as category_name") \
+    .left_join("categories c", "p.category_id = c.id") \
+    .get()
+
+# Aggregates
+total = QueryBuilder.from_table("orders") \
+    .select("coalesce(sum(total), 0) as total") \
+    .where("status != ?", ["cancelled"]) \
+    .first()["total"]          # -> single row dict
+
+# From ORM model
+results = User.query().where("age > ?", [18]).order_by("name").get()
+
+# Methods: from_table(), select(), where(), or_where(), join(), left_join(),
+#          group_by(), having(), order_by(), limit(), get(), first(), count(),
+#          exists(), to_sql(), to_mongo()
 ```
+
+NoSQL support: `to_mongo()` generates MongoDB query documents from the same fluent API.
 
 ### Frond — Template engine (replaces Template)
 

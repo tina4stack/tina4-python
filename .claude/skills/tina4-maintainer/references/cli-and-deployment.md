@@ -147,8 +147,12 @@ Local dev → Staging → Production. No shortcuts.
 ### Local Development
 ```bash
 tina4 init          # Creates project with SQLite, zero Docker needed
-tina4 serve         # Hot reload, debug overlay, Swagger UI, console
+tina4 serve         # Hot reload, SCSS compilation, debug overlay, Swagger UI
 ```
+
+**IMPORTANT:** Always use `tina4 serve` to run the dev server. Never use `python app.py`
+or `uv run python app.py` directly. The `tina4` Rust binary handles SCSS compilation,
+file watching, and browser auto-open — `python app.py` skips all of this.
 
 ### Staging
 ```bash

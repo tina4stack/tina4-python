@@ -114,7 +114,7 @@ _DIVISIBLE_BY_RE = re.compile(r"\s*by\s*\(\s*(\d+)\s*\)")
 _FILTER_ARGS_RE = re.compile(r"(\w+)\s*\((.*)\)$", re.DOTALL)
 _FILTER_CMP_RE = re.compile(r"(\w+)\s*(!=|==|>=|<=|>|<)\s*(.+)")
 _FOR_RE = re.compile(r"for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s+(.+)")
-_SET_RE = re.compile(r"set\s+(\w+)\s*=\s*(.+)")
+_SET_RE = re.compile(r"set\s+(\w+)\s*=\s*(.+)", re.DOTALL)
 _INCLUDE_RE = re.compile(r'include\s+["\'](.+?)["\'](?:\s+with\s+(.+))?')
 _MACRO_RE = re.compile(r"macro\s+(\w+)\s*\(([^)]*)\)")
 _FROM_IMPORT_RE = re.compile(r'from\s+["\'](.+?)["\']\s+import\s+(.+)')
@@ -363,8 +363,11 @@ def _resolve(expr: str, context: dict):
             if ":" in raw_idx and not ((raw_idx.startswith('"') and raw_idx.endswith('"')) or (raw_idx.startswith("'") and raw_idx.endswith("'"))):
                 idx_clean = raw_idx.strip("'\"")
                 slice_parts = idx_clean.split(":", 1)
-                s_start = int(slice_parts[0]) if slice_parts[0].strip() else None
-                s_end = int(slice_parts[1]) if slice_parts[1].strip() else None
+                s_start = _eval_expr(slice_parts[0].strip(), context) if slice_parts[0].strip() else None
+                s_end = _eval_expr(slice_parts[1].strip(), context) if slice_parts[1].strip() else None
+                # Convert to int for slicing
+                if s_start is not None: s_start = int(s_start)
+                if s_end is not None: s_end = int(s_end)
                 try:
                     value = value[s_start:s_end]
                 except (TypeError, IndexError):
@@ -380,8 +383,8 @@ def _resolve(expr: str, context: dict):
                         # Integer literal: items[0]
                         idx = int(raw_idx)
                     except ValueError:
-                        # Variable key: balances[k] or balances[cb.glcode]
-                        idx = _resolve(raw_idx, context)
+                        # Expression key: loop.index0 % 2, variable, etc.
+                        idx = _eval_expr(raw_idx, context)
                         if idx is None:
                             return None
                 try:
@@ -453,16 +456,17 @@ def _split_args(raw: str) -> list[str]:
 
 
 def _find_outside_quotes(expr: str, needle: str) -> int:
-    """Find the first occurrence of *needle* that is not inside quotes or parens.
+    """Find the first occurrence of *needle* that is not inside quotes, parens, or brackets.
 
     Returns the index, or -1 if not found outside quotes.
     """
     in_q = None
     depth = 0
+    bracket_depth = 0
     i = 0
     while i <= len(expr) - len(needle):
         ch = expr[i]
-        if ch in ('"', "'") and depth == 0:
+        if ch in ('"', "'") and depth == 0 and bracket_depth == 0:
             if in_q is None:
                 in_q = ch
             elif ch == in_q:
@@ -476,22 +480,27 @@ def _find_outside_quotes(expr: str, needle: str) -> int:
             depth += 1
         elif ch == ")":
             depth -= 1
-        if depth == 0 and expr[i:i + len(needle)] == needle:
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth -= 1
+        if depth == 0 and bracket_depth == 0 and expr[i:i + len(needle)] == needle:
             return i
         i += 1
     return -1
 
 
 def _split_outside_quotes(expr: str, sep: str) -> list[str]:
-    """Split *expr* on *sep* only when *sep* is outside quotes and parens."""
+    """Split *expr* on *sep* only when *sep* is outside quotes, parens, and brackets."""
     parts = []
     current_start = 0
     in_q = None
     depth = 0
+    bracket_depth = 0
     i = 0
     while i <= len(expr) - len(sep):
         ch = expr[i]
-        if ch in ('"', "'") and depth == 0:
+        if ch in ('"', "'") and depth == 0 and bracket_depth == 0:
             if in_q is None:
                 in_q = ch
             elif ch == in_q:
@@ -505,7 +514,11 @@ def _split_outside_quotes(expr: str, sep: str) -> list[str]:
             depth += 1
         elif ch == ")":
             depth -= 1
-        if depth == 0 and expr[i:i + len(sep)] == sep:
+        elif ch == "[":
+            bracket_depth += 1
+        elif ch == "]":
+            bracket_depth -= 1
+        if depth == 0 and bracket_depth == 0 and expr[i:i + len(sep)] == sep:
             parts.append(expr[current_start:i])
             i += len(sep)
             current_start = i
@@ -518,6 +531,77 @@ def _split_outside_quotes(expr: str, sep: str) -> list[str]:
 def _eval_expr(expr: str, context: dict):
     """Evaluate a full expression (with ~, ternary, ??, comparisons)."""
     expr = expr.strip()
+
+    # Array literal: ["a", "b", "c"] or [1, 2, 3]
+    if expr.startswith("[") and expr.endswith("]"):
+        inner = expr[1:-1].strip()
+        if not inner:
+            return []
+        # Split on commas, respecting quotes
+        items = []
+        current = ""
+        in_q = None
+        depth = 0
+        for ch in inner:
+            if ch in ('"', "'") and in_q is None:
+                in_q = ch
+                current += ch
+            elif ch == in_q:
+                in_q = None
+                current += ch
+            elif ch == "[" and in_q is None:
+                depth += 1
+                current += ch
+            elif ch == "]" and in_q is None:
+                depth -= 1
+                current += ch
+            elif ch == "," and in_q is None and depth == 0:
+                items.append(current.strip())
+                current = ""
+            else:
+                current += ch
+        if current.strip():
+            items.append(current.strip())
+        return [_eval_expr(item, context) for item in items]
+
+    # Dict literal: {"key": "value", ...}
+    if expr.startswith("{") and expr.endswith("}"):
+        inner = expr[1:-1].strip()
+        if not inner:
+            return {}
+        result = {}
+        # Split on commas, respecting quotes and nesting
+        pairs = []
+        current = ""
+        in_q = None
+        depth = 0
+        for ch in inner:
+            if ch in ('"', "'") and in_q is None:
+                in_q = ch
+                current += ch
+            elif ch == in_q:
+                in_q = None
+                current += ch
+            elif ch in ("{", "[") and in_q is None:
+                depth += 1
+                current += ch
+            elif ch in ("}", "]") and in_q is None:
+                depth -= 1
+                current += ch
+            elif ch == "," and in_q is None and depth == 0:
+                pairs.append(current.strip())
+                current = ""
+            else:
+                current += ch
+        if current.strip():
+            pairs.append(current.strip())
+        for pair in pairs:
+            colon_pos = _find_outside_quotes(pair, ":")
+            if colon_pos > 0:
+                key = _eval_expr(pair[:colon_pos].strip(), context)
+                val = _eval_expr(pair[colon_pos + 1:].strip(), context)
+                result[key] = val
+        return result
 
     # String literal — only match if the entire expression is a single quoted
     # string with no unescaped matching quotes inside (avoids catching
@@ -1067,6 +1151,26 @@ def set_form_token_session_id(session_id: str) -> None:
 class Frond:
     """Twig-like template engine with sandboxing and fragment caching."""
 
+    # ── Class-level registries ──────────────────────────────────
+    # Persist globals, filters, and tests across hot-reloads.
+    # When a module creates ``frond = Frond()`` and a hot-reload
+    # re-executes that line, the NEW instance inherits everything
+    # previously registered via add_global / add_filter / add_test.
+    _class_globals: dict = {}
+    _class_filters: dict = {}
+    _class_tests: dict = {}
+
+    @classmethod
+    def clear_registry(cls):
+        """Clear the class-level globals/filters/tests registries.
+
+        Useful in test fixtures to prevent leaking state between tests.
+        Does NOT affect built-in filters or globals — only user-registered ones.
+        """
+        cls._class_globals.clear()
+        cls._class_filters.clear()
+        cls._class_tests.clear()
+
     def __init__(self, template_dir: str = "src/templates"):
         self.template_dir = Path(template_dir)
         self._filters = dict(_BUILTIN_FILTERS)
@@ -1095,6 +1199,14 @@ class Frond:
         # Both this global and the |dump filter call _render_dump() which
         # returns an empty string in production so dump never leaks state.
         self._globals["dump"] = _render_dump
+
+        # Restore any globals/filters/tests registered on prior instances.
+        # This is the key to surviving hot-reloads: app.py calls
+        # frond.add_global("t", _t) once, the class remembers it, and
+        # every future Frond() instance gets it automatically.
+        self._globals.update(Frond._class_globals)
+        self._filters.update(Frond._class_filters)
+        self._tests.update(Frond._class_tests)
 
     def sandbox(self, allowed_filters: list[str] = None,
                 allowed_tags: list[str] = None,
@@ -1128,16 +1240,31 @@ class Frond:
         return self
 
     def add_filter(self, name: str, fn):
-        """Register a custom filter."""
+        """Register a custom filter.
+
+        Persisted at class level so new instances created by hot-reload
+        inherit it automatically.
+        """
         self._filters[name] = fn
+        Frond._class_filters[name] = fn
 
     def add_global(self, name: str, value):
-        """Register a global variable available in all templates."""
+        """Register a global variable available in all templates.
+
+        Persisted at class level so new instances created by hot-reload
+        inherit it automatically.
+        """
         self._globals[name] = value
+        Frond._class_globals[name] = value
 
     def add_test(self, name: str, fn):
-        """Register a custom test."""
+        """Register a custom test.
+
+        Persisted at class level so new instances created by hot-reload
+        inherit it automatically.
+        """
         self._tests[name] = fn
+        Frond._class_tests[name] = fn
 
     def render(self, template: str, data: dict = None) -> str:
         """Render a template with data. Uses token caching for performance."""
@@ -1249,18 +1376,90 @@ class Frond:
         return self._render_tokens(_tokenize(source), context)
 
     def _extract_blocks(self, source: str) -> dict[str, str]:
-        """Extract {% block name %}...{% endblock %} from source."""
+        """Extract {% block name %}...{% endblock %} from source.
+
+        Handles nested blocks correctly by counting depth rather than using
+        a single non-greedy regex (which fails on nested block tags).
+        """
         blocks = {}
-        for m in _BLOCK_RE.finditer(source):
-            blocks[m.group(1)] = m.group(2)
+        block_open = re.compile(r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}")
+        block_close = re.compile(r"\{%[-\s]*endblock\s*[-]?%\}")
+
+        pos = 0
+        while pos < len(source):
+            m_open = block_open.search(source, pos)
+            if not m_open:
+                break
+
+            name = m_open.group(1)
+            content_start = m_open.end()
+            depth = 1
+            scan = content_start
+
+            while depth > 0 and scan < len(source):
+                next_open = block_open.search(source, scan)
+                next_close = block_close.search(source, scan)
+
+                if next_close is None:
+                    break  # malformed — no matching endblock
+
+                if next_open and next_open.start() < next_close.start():
+                    depth += 1
+                    scan = next_open.end()
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        blocks[name] = source[content_start:next_close.start()]
+                        pos = next_close.end()
+                        break
+                    scan = next_close.end()
+            else:
+                pos = content_start  # malformed, skip forward
+
         return blocks
 
     def _render_with_blocks(self, parent_source: str, context: dict, child_blocks: dict) -> str:
         """Render parent template, replacing blocks with child content.
 
+        Supports multi-level inheritance: if the parent itself extends another
+        template, blocks are merged (child overrides parent) and the chain is
+        followed recursively until a root template with no {% extends %} is
+        reached.
+
         Supports {{ parent() }} / {{ super() }} inside child blocks to include
         the parent block's content (standard Twig/Jinja2 behavior).
         """
+        # --- Multi-level extends: check if parent itself extends a grandparent ---
+        extends_match = _EXTENDS_RE.match(parent_source.lstrip())
+        if extends_match:
+            grandparent_name = extends_match.group(1)
+            grandparent_source = self._load(grandparent_name)
+
+            # Extract block defaults defined in the parent template
+            parent_blocks = self._extract_blocks(parent_source)
+
+            # Child blocks override parent blocks at the same name
+            merged_blocks = {**parent_blocks, **child_blocks}
+
+            # Resolve nested blocks: if a block value contains {% block inner %}
+            # tags, replace them with child_blocks values too
+            changed = True
+            while changed:
+                changed = False
+                for name, source in list(merged_blocks.items()):
+                    def _resolve_nested(m, _blocks=merged_blocks):
+                        inner_name = m.group(1)
+                        inner_default = m.group(2)
+                        return _blocks.get(inner_name, inner_default)
+                    resolved = _BLOCK_RE.sub(_resolve_nested, source)
+                    if resolved != source:
+                        merged_blocks[name] = resolved
+                        changed = True
+
+            # Recurse up the chain (handles 3+, 4+, ... levels)
+            return self._render_with_blocks(grandparent_source, context, merged_blocks)
+
+        # --- Leaf parent (no extends) — resolve blocks and render ---
         engine = self
 
         def replace_block(m):

@@ -59,6 +59,7 @@ def orm_bind(db, name: str = None):
 
 def snake_to_camel(name: str) -> str:
     """Convert snake_case to camelCase: 'first_name' -> 'firstName'."""
+    name = name.lower()
     parts = name.split("_")
     return parts[0] + "".join(p.capitalize() for p in parts[1:])
 

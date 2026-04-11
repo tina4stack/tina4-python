@@ -1,0 +1,41 @@
+{% extends "admin/base_admin.twig" %}
+
+{% block title %}{{ t("admin") }} - {{ t("orders") }}{% endblock %}
+
+{% block admin_content %}
+    <h1>{{ t("orders") }}</h1>
+
+    <div class="mb-3">
+        <label for="status-filter">{{ t("filter_by_status") }}</label>
+        <select id="status-filter" class="form-control" onchange="window.location='/admin/orders?status='+this.value">
+            <option value="">{{ t("all") }}</option>
+            <option value="pending" {% if selected_status == "pending" %}selected{% endif %}>{{ t("pending") }}</option>
+            <option value="shipped" {% if selected_status == "shipped" %}selected{% endif %}>{{ t("shipped") }}</option>
+            <option value="delivered" {% if selected_status == "delivered" %}selected{% endif %}>{{ t("delivered") }}</option>
+            <option value="cancelled" {% if selected_status == "cancelled" %}selected{% endif %}>{{ t("cancelled") }}</option>
+        </select>
+    </div>
+
+    <table class="table">
+        <thead>
+            <tr>
+                <th>{{ t("order_number") }}</th>
+                <th>{{ t("customer") }}</th>
+                <th>{{ t("status") }}</th>
+                <th>{{ t("total") }}</th>
+                <th>{{ t("date") }}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for order in orders %}
+                <tr>
+                    <td><a href="/admin/orders/{{ order.id }}">#{{ order.id }}</a></td>
+                    <td>{{ order.customer_name }}</td>
+                    <td>{{ order.status }}</td>
+                    <td>{{ t("currency") }}{{ order.total|number_format(2) }}</td>
+                    <td>{{ order.created_at }}</td>
+                </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% endblock %}

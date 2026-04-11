@@ -145,6 +145,10 @@ class Response:
         self._headers.append((name, value))
         return self
 
+    def add_header(self, name: str, value: str) -> "Response":
+        """Add a response header (chainable). Alias for header()."""
+        return self.header(name, value)
+
     def cookie(self, name: str, value: str, path: str = "/",
                max_age: int = 3600, http_only: bool = True,
                secure: bool = False, same_site: str = "Lax") -> "Response":

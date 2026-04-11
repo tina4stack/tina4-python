@@ -1,0 +1,30 @@
+<nav class="navbar navbar-dark">
+    <div class="container">
+        <a href="/" class="navbar-brand">{{ t("store_name") }}</a>
+        <button class="navbar-toggler" type="button" onclick="this.parentElement.querySelector('.navbar-collapse').classList.toggle('show')">
+            &#9776;
+        </button>
+        <div class="navbar-search">
+            <div class="search-wrapper">
+                <input type="text" id="product-search" class="search-input" placeholder="{{ t('search_placeholder') }}" autocomplete="off">
+                <div id="search-results" class="search-dropdown"></div>
+            </div>
+        </div>
+        <div class="navbar-collapse">
+            <div class="navbar-nav">
+                <a href="/" class="nav-link">{{ t("home") }}</a>
+                <a href="/products" class="nav-link">{{ t("products") }}</a>
+                <a href="/cart" class="nav-link">{{ t("cart") }} <cart-badge></cart-badge></a>
+                {% if customer_name %}
+                    <a href="/account" class="nav-link">{{ t("account") }}</a>
+                    {% if role == "admin" %}
+                        <a href="/admin" class="nav-link">{{ t("admin") }}</a>
+                    {% endif %}
+                    <a href="/logout" class="nav-link">{{ t("logout") }}</a>
+                {% else %}
+                    <a href="/login" class="nav-link">{{ t("login") }}</a>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</nav>

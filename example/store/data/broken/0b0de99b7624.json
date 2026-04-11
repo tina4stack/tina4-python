@@ -1,0 +1,14 @@
+{
+  "id": "0b0de99b7624",
+  "error_type": "OperationalError",
+  "message": "no such column: p.created_at",
+  "traceback": "Traceback (most recent call last):\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 1104, in handle\n    response = await _invoke_handler(request, response, route, params)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 921, in _invoke_handler\n    result = await route[\"handler\"](*_args)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/example/store/src/routes/admin/products.py\", line 13, in admin_product_list\n    products = db.fetch(\n        \"select p.*, c.name as category_name from products p \"\n        \"left join categories c on p.category_id = c.id order by p.created_at desc\"\n    )\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/database/connection.py\", line 342, in fetch\n    return adapter.fetch(sql, params, limit, offset)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/database/sqlite.py\", line 125, in fetch\n    cursor = self._conn.execute(paginated_sql, paginated_params)\nsqlite3.OperationalError: no such column: p.created_at\n",
+  "context": {
+    "method": "GET",
+    "path": "/admin/products"
+  },
+  "count": 2,
+  "first_seen": "2026-04-11T15:28:01.670231+00:00",
+  "last_seen": "2026-04-11T15:31:02.511407+00:00",
+  "resolved": false
+}

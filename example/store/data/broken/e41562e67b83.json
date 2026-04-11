@@ -1,0 +1,14 @@
+{
+  "id": "e41562e67b83",
+  "error_type": "OperationalError",
+  "message": "no such column: stock_quantity",
+  "traceback": "Traceback (most recent call last):\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 1104, in handle\n    response = await _invoke_handler(request, response, route, params)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/core/server.py\", line 921, in _invoke_handler\n    result = await route[\"handler\"](*_args)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/example/store/src/routes/admin/dashboard.py\", line 21, in admin_dashboard\n    low_stock = db.fetch(\n        \"select * from products where stock_quantity <= 5 and is_active = 1 order by stock_quantity\"\n    )\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/database/connection.py\", line 342, in fetch\n    return adapter.fetch(sql, params, limit, offset)\n           ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/andrevanzuydam/IdeaProjects/tina4-python/tina4_python/database/sqlite.py\", line 125, in fetch\n    cursor = self._conn.execute(paginated_sql, paginated_params)\nsqlite3.OperationalError: no such column: stock_quantity\n",
+  "context": {
+    "method": "GET",
+    "path": "/admin"
+  },
+  "count": 2,
+  "first_seen": "2026-04-11T15:25:14.579254+00:00",
+  "last_seen": "2026-04-11T15:25:21.204455+00:00",
+  "resolved": false
+}

@@ -97,7 +97,7 @@ async def chat(connection):
 Tracks all connections by ID and path. Handles upgrade handshake, frame protocol
 (FIN, opcodes, masking/unmasking, payload encoding), and auto ping/pong.
 
-### WebSocketBackplane rename (v3.10.92 — breaking)
+### WebSocketBackplane rename
 `create()` renamed to `create_backplane()` (Python/Ruby) / `createBackplane()` (PHP/Node) across all frameworks.
 
 ### Integration with Frond Live Blocks
@@ -197,7 +197,7 @@ class Calculator(WSDL):
 
 Built-in, zero-dependency. Compiles `.scss` files to CSS.
 
-### ScssCompiler parity (v3.10.92)
+### ScssCompiler parity
 - Python: `ScssCompiler` class with `compile()`, `compile_file()`, `add_import_path()`, `set_variable()`
 - PHP: Added `compileScss()`
 - Ruby: Added `compile`, `add_import_path`, `set_variable`
@@ -299,7 +299,7 @@ result = api.send_request("/users", method="GET")
 
 ---
 
-## RateLimiterMiddleware (v3.10.91+)
+## RateLimiterMiddleware
 
 Wrapper class around `RateLimiter` for use as route middleware. All 4 frameworks have both `RateLimiter` and `RateLimiterMiddleware`.
 
@@ -309,7 +309,7 @@ Wrapper class around `RateLimiter` for use as route middleware. All 4 frameworks
 
 ---
 
-## ErrorOverlay renames (v3.10.92 — breaking)
+## ErrorOverlay renames
 
 Old names removed across all frameworks: `render()`, `renderProduction()`, `render_production()`, `debug_mode?`.
 
@@ -321,33 +321,33 @@ Old names removed across all frameworks: `render()`, `renderProduction()`, `rend
 
 ---
 
-## Server parity (v3.10.92)
+## Server parity
 
 - Python/Node: Added `start()` and `stop()` methods.
 - PHP/Ruby: Added `handle()` method.
 
 ---
 
-## DatabaseResult parity (v3.10.92)
+## DatabaseResult parity
 
 - Python: Added `size()`, `to_array()`, `to_json()`, `to_csv()`.
 - PHP/Node: Added `size()`.
 
 ---
 
-## QueryBuilder rename (v3.10.91 — breaking)
+## QueryBuilder rename
 
 `from()` renamed to `from_table()` (Python/Ruby) / `fromTable()` (PHP/Node) across all frameworks.
 
 ---
 
-## DevReload parity (v3.10.92)
+## DevReload parity
 
 - Node: Added `start()` and `stop()` methods.
 
 ---
 
-## DevAdmin parity (v3.10.92)
+## DevAdmin parity
 
 - Python: Added `unresolved_count()`, `clear_all()`, `reset()`, `capture()` (5-param), `register()`.
 - PHP: Added `health()`.
