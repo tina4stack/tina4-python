@@ -283,6 +283,55 @@ document.querySelectorAll("[data-lang]").forEach(function(btn) {
     });
 });
 
+// ── Currency Switcher (Forex via Api client) ─────────────────
+(function() {
+    var select = document.getElementById("currency-select");
+    if (!select) return;
+
+    var rates = null;
+    var baseCurrency = "USD";
+    var symbols = { USD: "$", EUR: "€", GBP: "£", ZAR: "R", JPY: "¥" };
+
+    // Restore saved currency
+    var saved = localStorage.getItem("store_currency");
+    if (saved && select.querySelector('option[value="' + saved + '"]')) {
+        select.value = saved;
+    }
+
+    // Fetch rates once
+    api.get("/api/forex/rates").then(function(data) {
+        if (data && data.rates) {
+            rates = data.rates;
+            // Apply if not USD
+            if (select.value !== "USD") {
+                convertAllPrices(select.value);
+            }
+        }
+    }).catch(function() {});
+
+    select.addEventListener("change", function() {
+        var currency = select.value;
+        localStorage.setItem("store_currency", currency);
+        if (rates) {
+            convertAllPrices(currency);
+        }
+    });
+
+    function convertAllPrices(currency) {
+        var rate = rates[currency] || 1;
+        var sym = symbols[currency] || "$";
+        // Find all price elements and convert from USD
+        var priceEls = document.querySelectorAll("[data-price-usd], .product-price, .price");
+        priceEls.forEach(function(el) {
+            var usd = parseFloat(el.dataset.priceUsd || el.textContent.replace(/[^0-9.]/g, ""));
+            if (isNaN(usd)) return;
+            if (!el.dataset.priceUsd) el.dataset.priceUsd = usd.toFixed(2);
+            var converted = (usd * rate).toFixed(currency === "JPY" ? 0 : 2);
+            el.textContent = sym + converted;
+        });
+    }
+})();
+
 // ── WebSocket Live Chat (Customer Widget) ────────────────────
 (function() {
     var isAdmin = document.body.dataset.role === "admin";

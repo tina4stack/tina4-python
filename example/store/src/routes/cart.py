@@ -36,7 +36,8 @@ async def add_to_cart(request, response):
 
     # AJAX: return JSON; regular form submit: redirect
     accept = request.headers.get("accept", "")
-    if "application/json" in accept:
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in accept or "application/json" in content_type:
         from src.app.services.cart_service import cart_count
         return response({"ok": True, "count": cart_count(request.session), "product_name": product_name})
 
@@ -46,11 +47,33 @@ async def add_to_cart(request, response):
 
 # @noauth: anonymous users must manage cart before logging in (session-based cart)
 @noauth()
+@post("/cart/update")
+async def update_cart(request, response):
+    product_id = str(request.body.get("product_id"))
+    quantity = int(request.body.get("quantity", 1))
+    cart = request.session.get("cart") or {}
+    if quantity <= 0:
+        cart.pop(product_id, None)
+    else:
+        cart[product_id] = quantity
+    request.session.set("cart", cart)
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        from src.app.services.cart_service import cart_count
+        return response({"ok": True, "count": cart_count(request.session)})
+    return response.redirect("/cart")
+
+
+@noauth()
 @post("/cart/remove")
 async def remove_from_cart(request, response):
     product_id = str(request.body.get("product_id"))
     cart = request.session.get("cart") or {}
     cart.pop(product_id, None)
     request.session.set("cart", cart)
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        from src.app.services.cart_service import cart_count
+        return response({"ok": True, "count": cart_count(request.session)})
     request.session.flash("success", "Item removed from cart")
     return response.redirect("/cart")

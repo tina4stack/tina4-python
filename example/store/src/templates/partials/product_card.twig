@@ -5,7 +5,8 @@
     <div class="card-body">
         <h3><a href="/products/{{ product.slug }}">{{ product.name }}</a></h3>
         <div class="product-price-row">
-            <span class="product-price">{{ t("currency") }}{{ product.price|number_format(2) }}</span>
+            <span class="product-price">${{ product.price|number_format(2) }}</span>
+            <small class="text-muted price-conversions">{{ product.price|currency }}</small>
             {% if product.stock > 0 %}
                 <span class="stock-pill in-stock">&#10003; {{ t("in_stock") }}</span>
             {% else %}

@@ -27,7 +27,7 @@ from src.orm.category import Category
 
 # ── Dependency Injection Container ─────────────────────────────
 container = Container()
-container.singleton("db", lambda: Database("sqlite:data/store.db"))
+container.singleton("db", lambda: Database("sqlite:data/store.db", pool=4))
 container.singleton("queue", lambda: Queue(topic="orders"))
 container.singleton("i18n", lambda: I18n(locale_dir="src/locales", default_locale="en"))
 container.singleton("mail", lambda: create_messenger())
@@ -67,6 +67,9 @@ seed(db)
 # ── Register Event Handlers ────────────────────────────────────
 # Import triggers @on() decorator registrations
 import src.app.services.notification_service  # noqa: F401
+
+# ── Register MCP Tools (AI assistant stock queries) ────────────
+import src.app.services.mcp_tools  # noqa: F401
 
 # ── Start Queue Worker in Background Thread ────────────────────
 from src.app.services.order_service import process_orders

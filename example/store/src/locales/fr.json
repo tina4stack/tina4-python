@@ -1,7 +1,7 @@
 {
     "store_name": "Tina4 Store",
     "store_tagline": "Simple. Rapide. Humain.",
-    "currency": "",
+    "currency": "$",
     "home": "Accueil",
     "products": "Produits",
     "cart": "Panier",

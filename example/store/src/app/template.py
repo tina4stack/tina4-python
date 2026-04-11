@@ -1,10 +1,37 @@
 """Shared Frond template engine instance with session-aware rendering."""
 from tina4_python.frond import Frond
 from tina4_python.i18n import I18n
+from src.app.services.forex_service import get_rates, get_currency_info, convert
 import os
 
 # Single shared instance — all routes import this
 frond = Frond()
+
+# ── Currency filter: {{ 49.99|currency }} → "$49.99 / €45.99 / R905.38"
+_DISPLAY_CURRENCIES = ["USD", "EUR", "GBP", "ZAR"]
+
+
+def _currency_filter(price):
+    """Format a USD price with conversions to selected currencies."""
+    try:
+        price = float(price or 0)
+    except (ValueError, TypeError):
+        return str(price)
+    rates = get_rates("USD")
+    info = get_currency_info()
+    parts = []
+    for code in _DISPLAY_CURRENCIES:
+        rate = rates.get(code, 1)
+        sym = info.get(code, {}).get("symbol", "")
+        converted = convert(price, rate)
+        if code == "JPY":
+            parts.append(f"{sym}{converted:,.0f}")
+        else:
+            parts.append(f"{sym}{converted:,.2f}")
+    return " / ".join(parts)
+
+
+frond.add_filter("currency", _currency_filter)
 
 # I18n instance for locale switching
 i18n = I18n(

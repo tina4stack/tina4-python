@@ -8,6 +8,13 @@
                     <div id="search-results-desktop" class="search-dropdown"></div>
                 </div>
             </div>
+            <select id="currency-select" class="nav-currency-select" title="Currency">
+                <option value="USD">$ USD</option>
+                <option value="EUR">€ EUR</option>
+                <option value="GBP">£ GBP</option>
+                <option value="ZAR">R ZAR</option>
+                <option value="JPY">¥ JPY</option>
+            </select>
             <a href="/api/locale/{{ locale == 'fr' ? 'en' : 'fr' }}" class="nav-lang-toggle" title="{{ locale == 'fr' ? 'English' : 'Français' }}">
                 {{ locale == 'fr' ? '🇬🇧' : '🇫🇷' }}
             </a>
@@ -29,6 +36,7 @@
             <div class="navbar-nav">
                 <a href="/" class="nav-link">{{ t("home") }}</a>
                 <a href="/products" class="nav-link">{{ t("products") }}</a>
+                <a href="/contact" class="nav-link">Contact</a>
                 {% if customer_name %}
                     <a href="/account" class="nav-link">{{ t("account") }}</a>
                     {% if role == "admin" %}

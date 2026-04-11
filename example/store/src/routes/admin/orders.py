@@ -45,7 +45,10 @@ async def admin_order_detail(id, request, response):
         .where("oi.order_id = ?", [id]) \
         .get()
 
-    return response(render("admin/order_detail.twig", {"order": order, "items": items}, request))
+    return response(render("admin/order_detail.twig", {
+        "order": order,
+        "items": items.records if items else [],
+    }, request))
 
 
 @noauth()

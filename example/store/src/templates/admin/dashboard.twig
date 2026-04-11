@@ -46,7 +46,7 @@
                 <th>{{ t("order_number") }}</th>
                 <th>{{ t("customer") }}</th>
                 <th>{{ t("status") }}</th>
-                <th>{{ t("total") }}</th>
+                <th class="text-end">{{ t("total") }}</th>
                 <th>{{ t("date") }}</th>
             </tr>
         </thead>
@@ -55,9 +55,23 @@
                 <tr>
                     <td><a href="/admin/orders/{{ order.id }}">#{{ order.id }}</a></td>
                     <td>{{ order.customer_name }}</td>
-                    <td>{{ order.status }}</td>
-                    <td>{{ t("currency") }}{{ order.total|number_format(2) }}</td>
-                    <td>{{ order.created_at }}</td>
+                    <td>
+                        {% if order.status == "pending" %}
+                            <span class="badge" style="background:#f0ad4e;color:#fff;">{{ t(order.status) }}</span>
+                        {% elif order.status == "processing" %}
+                            <span class="badge" style="background:#5bc0de;color:#fff;">{{ t(order.status) }}</span>
+                        {% elif order.status == "shipped" %}
+                            <span class="badge" style="background:#337ab7;color:#fff;">{{ t(order.status) }}</span>
+                        {% elif order.status == "delivered" %}
+                            <span class="badge" style="background:#5cb85c;color:#fff;">{{ t(order.status) }}</span>
+                        {% elif order.status == "cancelled" %}
+                            <span class="badge" style="background:#d9534f;color:#fff;">{{ t(order.status) }}</span>
+                        {% else %}
+                            <span class="badge">{{ order.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-end">{{ t("currency") }}{{ order.total|number_format(2) }}</td>
+                    <td>{{ order.created_at[:16]|replace({"T": " "}) }}</td>
                 </tr>
             {% endfor %}
         </tbody>

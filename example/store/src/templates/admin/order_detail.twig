@@ -38,12 +38,12 @@
             </tr>
         </thead>
         <tbody>
-            {% for item in order.items %}
+            {% for item in items %}
                 <tr>
-                    <td>{{ item.product_name }}</td>
+                    <td>{{ item.name }}</td>
                     <td>{{ item.quantity }}</td>
-                    <td>{{ t("currency") }}{{ item.unit_price|number_format(2) }}</td>
-                    <td>{{ t("currency") }}{{ item.subtotal|number_format(2) }}</td>
+                    <td>${{ item.unit_price|number_format(2) }}</td>
+                    <td>${{ (item.quantity * item.unit_price)|number_format(2) }}</td>
                 </tr>
             {% endfor %}
         </tbody>

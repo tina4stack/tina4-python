@@ -11,7 +11,8 @@
             <h1>{{ product.name }}</h1>
             <p class="text-muted">{{ product.category_name }}</p>
             <p>{{ product.description }}</p>
-            <h2>{{ t("currency") }}{{ product.price|number_format(2) }}</h2>
+            <h2>${{ product.price|number_format(2) }}</h2>
+            <p class="text-muted price-conversions">{{ product.price|currency }}</p>
             {% if product.stock > 0 %}
                 <span class="stock-pill in-stock mb-3">&#10003; {{ t("in_stock") }} ({{ product.stock }})</span>
                 <div class="mb-3">

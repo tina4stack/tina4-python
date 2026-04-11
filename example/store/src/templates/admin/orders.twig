@@ -33,19 +33,21 @@
                     <td>{{ order.customer_name }}</td>
                     <td>
                         {% if order.status == "pending" %}
-                            <span class="badge" style="background:#f0ad4e;color:#fff;">{{ order.status }}</span>
+                            <span class="badge" style="background:#f0ad4e;color:#fff;">{{ t("pending") }}</span>
+                        {% elif order.status == "processing" %}
+                            <span class="badge" style="background:#5bc0de;color:#fff;">{{ t("processing") }}</span>
                         {% elif order.status == "shipped" %}
-                            <span class="badge" style="background:#5bc0de;color:#fff;">{{ order.status }}</span>
+                            <span class="badge" style="background:#337ab7;color:#fff;">{{ t("shipped") }}</span>
                         {% elif order.status == "delivered" %}
-                            <span class="badge" style="background:#5cb85c;color:#fff;">{{ order.status }}</span>
+                            <span class="badge" style="background:#5cb85c;color:#fff;">{{ t("delivered") }}</span>
                         {% elif order.status == "cancelled" %}
-                            <span class="badge" style="background:#d9534f;color:#fff;">{{ order.status }}</span>
+                            <span class="badge" style="background:#d9534f;color:#fff;">{{ t("cancelled") }}</span>
                         {% else %}
                             <span class="badge">{{ order.status }}</span>
                         {% endif %}
                     </td>
                     <td class="text-end">{{ t("currency") }}{{ order.total|number_format(2) }}</td>
-                    <td>{{ order.created_at[:16]|replace({"T": " "}) }}</td>
+                    <td>{{ order.created_at[:19]|replace({"T": " "}) }}</td>
                 </tr>
             {% endfor %}
         </tbody>

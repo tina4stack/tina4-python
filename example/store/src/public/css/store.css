@@ -255,6 +255,21 @@ body {
   background: #f0f0f0;
 }
 
+.nav-currency-select {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  outline: none;
+}
+.nav-currency-select option {
+  background: var(--primary);
+  color: #fff;
+}
+
 .nav-lang-toggle {
   font-size: 1.4rem;
   text-decoration: none;
@@ -304,6 +319,48 @@ body {
 }
 .cart-header h1 {
   margin: 0;
+}
+
+.price-conversions {
+  font-size: 0.78rem;
+  display: block;
+  margin-top: 0.15rem;
+  opacity: 0.7;
+}
+
+.qty-spinner {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 4px;
+  overflow: hidden;
+  float: right;
+}
+
+.qty-btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: var(--bg, #f5f5f5);
+  cursor: pointer;
+  font-size: 1.1rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text, #333);
+  transition: background 0.15s;
+}
+.qty-btn:hover {
+  background: var(--primary);
+  color: #fff;
+}
+
+.qty-value {
+  display: inline-block;
+  min-width: 36px;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.95rem;
 }
 
 .cart-toast-container {
@@ -396,7 +453,8 @@ body {
 }
 
 .admin-sidebar-col {
-  width: 200px;
+  width: 220px;
+  min-width: 220px;
   flex-shrink: 0;
   background: var(--primary-hover);
   border-top: 2px solid rgba(255, 255, 255, 0.2);
@@ -404,7 +462,9 @@ body {
 
 .admin-main {
   flex: 1;
+  min-width: 0;
   padding: 1.5rem 2rem;
+  overflow-x: auto;
 }
 
 .admin-main .row > .col {
