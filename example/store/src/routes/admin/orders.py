@@ -54,7 +54,7 @@ async def admin_order_detail(id, request, response):
 async def admin_update_order_status(id, request, response):
     new_status = request.body.get("status", "")
 
-    order = Order.find(id)
+    order = Order.find_by_id(id)
     if order:
         order.status = new_status
         order.save()

@@ -362,6 +362,8 @@ tina4_python/               # Core framework package (v3.0.0)
 
 ## Starting the Server
 
+**IMPORTANT:** Always use `tina4 serve` to start Tina4 projects. Never run `python app.py` directly — the framework will refuse to start without the tina4 CLI. The CLI handles SCSS compilation, file watching, and server lifecycle.
+
 ```python
 # app.py
 from tina4_python.core import run
@@ -372,19 +374,28 @@ if __name__ == "__main__":
 
 `run()` automatically discovers and imports all Python files in `src/` — no manual imports needed. Route decorators (`@get`, `@post`, etc.) register themselves on import. Configure host/port via environment variables or `resolve_config()`.
 
+### Running the Server
+
+```bash
+tina4 serve                                 # Start dev server (SCSS watch + live reload)
+tina4 serve --production                    # Start with production server (auto-installs uvicorn)
+tina4 serve --no-browser                    # Don't open browser on startup
+```
+
+To run without the tina4 CLI (e.g. in Docker or CI), add `TINA4_OVERRIDE_CLIENT=true` to your `.env` file.
+
 ### Package Manager
 
 ```bash
 uv add tina4-python                         # Add dependency
-uv run tina4python start                    # Start dev server on port 7145
-uv run tina4python serve --production       # Auto-install and use uvicorn
-uv run tina4python init .                   # Scaffold project structure
-uv run tina4python migrate                  # Run pending SQL migrations
-uv run tina4python migrate:create "desc"    # Create a migration file
-uv run tina4python generate model <name>    # Generate ORM model scaffold
-uv run tina4python generate route <name>    # Generate route scaffold
-uv run tina4python generate migration <d>   # Generate migration file
-uv run tina4python generate middleware <n>  # Generate middleware scaffold
+tina4 serve                                 # Start dev server
+tina4 serve --production                    # Production server
+tina4 init python .                         # Scaffold project structure
+tina4 migrate                               # Run pending SQL migrations
+tina4 generate model <name>                 # Generate ORM model scaffold
+tina4 generate route <name>                 # Generate route scaffold
+tina4 generate migration <desc>             # Generate migration file
+tina4 generate middleware <name>            # Generate middleware scaffold
 ```
 
 ## Development Mode (DevReload)
@@ -1560,6 +1571,7 @@ TINA4_DEBUG=true                  # Enable dev mode (toolbar, live reload, error
 TINA4_LOG_LEVEL=ERROR             # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR (default: ERROR)
 TINA4_LOCALE=en                   # Language for framework messages (en, fr, af, zh, ja, es)
 TINA4_DEFAULT_WEBSERVER=FALSE     # Set to TRUE to use Tina4's built-in webserver instead of ASGI
+TINA4_OVERRIDE_CLIENT=false       # Set to true to allow running without tina4 CLI (e.g. Docker)
 HOST_NAME=localhost:7145
 
 # Sessions
@@ -1791,7 +1803,7 @@ async def dashboard(request, response):
 ## v3 Features Summary
 
 - **55 built-in features**, zero third-party dependencies
-- **2,066 tests** passing across all modules
+- **2,299 tests** passing across all modules
 - **Production server auto-detect**: `tina4python serve --production` auto-installs uvicorn
 - **`tina4python generate`**: model, route, migration, middleware scaffolding
 - **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), query caching (`TINA4_DB_CACHE=true`, `cache_stats()`, `cache_clear()`)

@@ -92,5 +92,10 @@
     "cancel": "Cancel",
     "search_placeholder": "Search products...",
     "search_no_results": "No products found",
-    "search": "Search"
+    "search": "Search",
+    "help_desk": "Help Desk",
+    "active_chats": "Active Chats",
+    "no_active_chats": "No active chats",
+    "waiting_for_customers": "Waiting for customers to connect...",
+    "type_reply": "Type a reply..."
 }

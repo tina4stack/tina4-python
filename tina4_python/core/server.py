@@ -485,20 +485,26 @@ async def _handle_asgi_websocket(scope: dict, receive, send):
     conn = _AsgiWebSocketConnection(scope, receive, send, path, params, _ws_manager)
     _ws_manager.add(conn)
 
-    # Fire "open" event
+    # Fire "open" event — this may set conn._on_message / conn._on_close
+    # via WebSocketServer's decorator-style handler
     try:
         await handler(conn, "open", None)
     except Exception as e:
         Log.error(f"WebSocket open handler error: {e}")
 
-    # Message loop
+    # Message loop — prefer decorator-style handlers if set during open
     try:
         while True:
             msg = await receive()
             if msg["type"] == "websocket.receive":
                 data = msg.get("text") or (msg.get("bytes", b"").decode("utf-8", errors="replace") if msg.get("bytes") else "")
                 try:
-                    await handler(conn, "message", data)
+                    if conn._on_message:
+                        result = conn._on_message(data)
+                        if asyncio.iscoroutine(result):
+                            await result
+                    else:
+                        await handler(conn, "message", data)
                 except Exception as e:
                     Log.error(f"WebSocket message handler error: {e}")
             elif msg["type"] == "websocket.disconnect":
@@ -506,16 +512,29 @@ async def _handle_asgi_websocket(scope: dict, receive, send):
     except Exception:
         pass
     finally:
-        # Fire "close" event
+        # Fire "close" event — prefer decorator-style if set
         try:
-            await handler(conn, "close", None)
+            if conn._on_close:
+                result = conn._on_close()
+                if asyncio.iscoroutine(result):
+                    await result
+            else:
+                await handler(conn, "close", None)
         except Exception as e:
             Log.error(f"WebSocket close handler error: {e}")
+        # Clean up rooms
+        for room_name in list(conn._rooms):
+            _ws_manager._leave_room(conn.id, room_name)
+        conn._rooms.clear()
         _ws_manager.remove(conn)
 
 
 class _AsgiWebSocketConnection:
-    """WebSocket connection wrapper for ASGI servers (uvicorn, etc.)."""
+    """WebSocket connection wrapper for ASGI servers (uvicorn, etc.).
+
+    Supports both Router's (conn, event, data) style and WebSocketServer's
+    decorator style (@conn.on_message / @conn.on_close).
+    """
 
     def __init__(self, scope, receive, send, path, params, manager):
         self.id = str(uuid.uuid4())[:8]
@@ -530,6 +549,10 @@ class _AsgiWebSocketConnection:
         self._send = send
         self._manager = manager
         self._closed = False
+        self._on_message = None
+        self._on_close = None
+        self._on_error = None
+        self._rooms: set = set()
 
         client = scope.get("client", ("unknown", 0))
         self.ip = client[0] if client else "unknown"
@@ -539,6 +562,42 @@ class _AsgiWebSocketConnection:
     @property
     def closed(self) -> bool:
         return self._closed
+
+    @property
+    def rooms(self) -> set:
+        """Return the set of room names this connection has joined."""
+        return self._rooms
+
+    def on_message(self, handler):
+        """Register a message handler (decorator style)."""
+        self._on_message = handler
+
+    def on_close(self, handler):
+        """Register a close handler (decorator style)."""
+        self._on_close = handler
+
+    def on_error(self, handler):
+        """Register an error handler (decorator style)."""
+        self._on_error = handler
+
+    def join_room(self, room_name: str) -> None:
+        """Join a named room."""
+        self._rooms.add(room_name)
+        if self._manager:
+            self._manager._join_room(self.id, room_name)
+
+    def leave_room(self, room_name: str) -> None:
+        """Leave a named room."""
+        self._rooms.discard(room_name)
+        if self._manager:
+            self._manager._leave_room(self.id, room_name)
+
+    async def broadcast_to_room(self, room_name: str, message: str | bytes,
+                                 exclude_self: bool = False) -> None:
+        """Broadcast a message to all connections in a room."""
+        if self._manager:
+            exclude = self.id if exclude_self else None
+            await self._manager.broadcast_to_room(room_name, message, exclude=exclude)
 
     async def send(self, message: str | bytes):
         """Send a text or binary message."""
@@ -611,35 +670,51 @@ async def _handle_dev_websocket(reader, writer, headers, path):
 
     handler = route["handler"]
 
-    # Fire "open" event
+    # Fire "open" event — this may set ws._on_message / ws._on_close
+    # via WebSocketServer's decorator-style handler
     try:
         await handler(ws, "open", None)
     except Exception as e:
         Log.error(f"WebSocket open handler error: {e}")
 
-    # Wire up message/close callbacks and run the frame loop
-    async def on_message(message):
-        try:
-            await handler(ws, "message", message)
-        except Exception as e:
-            Log.error(f"WebSocket message handler error: {e}")
+    # If the open handler set decorator-style callbacks, use those directly.
+    # Otherwise fall back to calling handler(ws, "message/close", data).
+    decorator_on_message = ws._on_message
+    decorator_on_close = ws._on_close
 
-    ws._on_message = on_message
+    if not decorator_on_message:
+        async def on_message(message):
+            try:
+                await handler(ws, "message", message)
+            except Exception as e:
+                Log.error(f"WebSocket message handler error: {e}")
+        ws._on_message = on_message
 
-    original_on_close = ws._on_close
+    if not decorator_on_close:
+        original_on_close = ws._on_close
 
-    async def on_close():
-        try:
-            await handler(ws, "close", None)
-        except Exception as e:
-            Log.error(f"WebSocket close handler error: {e}")
-        _ws_manager.remove(ws)
-        if original_on_close:
-            result = original_on_close()
-            if asyncio.iscoroutine(result):
-                await result
+        async def on_close():
+            try:
+                await handler(ws, "close", None)
+            except Exception as e:
+                Log.error(f"WebSocket close handler error: {e}")
+            _ws_manager.remove(ws)
 
-    ws._on_close = on_close
+        ws._on_close = on_close
+    else:
+        # Wrap the decorator close handler to also clean up the manager
+        _user_on_close = decorator_on_close
+
+        async def on_close_with_cleanup():
+            try:
+                result = _user_on_close()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                Log.error(f"WebSocket close handler error: {e}")
+            _ws_manager.remove(ws)
+
+        ws._on_close = on_close_with_cleanup
 
     # Enter the frame loop
     await ws._run()
@@ -648,7 +723,12 @@ async def _handle_dev_websocket(reader, writer, headers, path):
     if not ws._closed:
         ws._closed = True
         try:
-            await handler(ws, "close", None)
+            if decorator_on_close:
+                result = decorator_on_close()
+                if asyncio.iscoroutine(result):
+                    await result
+            else:
+                await handler(ws, "close", None)
         except Exception:
             pass
         _ws_manager.remove(ws)
@@ -1467,6 +1547,33 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     import time
     global _start_time
     _start_time = time.time()
+
+    # ── Require tina4 CLI ─────────────────────────────────────────
+    # The framework must be launched via `tina4 serve`, not `python app.py`.
+    # The tina4 CLI sets TINA4_CLI=true when spawning the server process.
+    # Users can bypass this by adding TINA4_OVERRIDE_CLIENT=true to .env
+    if os.environ.get("TINA4_CLI") != "true" and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
+        # Load .env early so TINA4_OVERRIDE_CLIENT can be read
+        from tina4_python.dotenv import load_env
+        load_env()
+        if os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
+            print()
+            print("=" * 60)
+            print()
+            print("  Tina4 must be started with the tina4 CLI:")
+            print()
+            print("    tina4 serve              (development)")
+            print("    tina4 serve --production (production)")
+            print()
+            print("  Install: cargo install tina4")
+            print("  Docs:    https://tina4.com")
+            print()
+            print("  To run directly, add to .env:")
+            print("    TINA4_OVERRIDE_CLIENT=true")
+            print()
+            print("=" * 60)
+            print()
+            sys.exit(1)
 
     if no_reload:
         os.environ["TINA4_NO_RELOAD"] = "true"

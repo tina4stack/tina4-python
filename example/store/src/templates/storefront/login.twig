@@ -22,7 +22,7 @@
                             <label for="login-password">{{ t("password") }}</label>
                             <input type="password" id="login-password" name="password" class="form-control" placeholder="Your password" required>
                         </div>
-                        <button type="button" class="btn btn-primary" onclick="frond.form.submit('login-form', '/login', null, function(){ window.location='/account'; })">{{ t("login") }}</button>
+                        <button type="submit" class="btn btn-primary">{{ t("login") }}</button>
                     </form>
                     <p class="mt-3 text-muted">{{ t("no_account") }} <a href="/register">{{ t("register") }}</a></p>
                 </div>

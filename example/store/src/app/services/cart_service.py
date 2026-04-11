@@ -9,7 +9,11 @@ def get_cart_items(session):
         return []
     items = []
     for product_id, quantity in cart.items():
-        product = Product.find(int(product_id))
+        try:
+            pid = int(product_id)
+        except (ValueError, TypeError):
+            continue
+        product = Product.find_by_id(pid)
         if product:
             item = product.to_dict()
             item["product_id"] = product.id

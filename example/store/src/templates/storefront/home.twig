@@ -3,11 +3,6 @@
 {% block title %}{{ t("store_name") }} - {{ t("home") }}{% endblock %}
 
 {% block content %}
-    <section class="text-center mb-4">
-        <h1>{{ t("store_name") }}</h1>
-        <p class="text-muted">{{ t("store_tagline") }}</p>
-    </section>
-
     {% if categories %}
         <section class="mb-4">
             <h2>{{ t("categories") }}</h2>

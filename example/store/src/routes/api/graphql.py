@@ -10,7 +10,9 @@ graphql.schema.from_orm(Product)
 graphql.schema.from_orm(Category)
 
 
-def products_by_price(min_price=0, max_price=99999, **kwargs):
+def products_by_price(root, args, context):
+    min_price = args.get("min_price", 0)
+    max_price = args.get("max_price", 99999)
     return [p.to_dict() for p in Product.where(
         "price between ? and ? and is_active = 1",
         params=[min_price, max_price],
@@ -18,8 +20,10 @@ def products_by_price(min_price=0, max_price=99999, **kwargs):
     )]
 
 
-def search_products(term="", limit=10, **kwargs):
+def search_products(root, args, context):
     """Search products by name or description — powers the frontend search bar."""
+    term = args.get("term", "")
+    limit = args.get("limit", 10)
     if not term or len(term) < 2:
         return []
     like = f"%{term}%"

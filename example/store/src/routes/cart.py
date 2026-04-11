@@ -21,10 +21,10 @@ async def add_to_cart(request, response):
     cart = request.session.get("cart") or {}
     cart[product_id] = cart.get(product_id, 0) + quantity
     request.session.set("cart", cart)
-    request.session.flash("success", "Item added to cart")
 
     # Emit event for SSE admin feed
-    product = Product.find(int(product_id))
+    product = Product.find_by_id(int(product_id))
+    product_name = product.name if product else "Unknown"
     if product:
         customer_name = request.session.get("customer_name", "Guest")
         emit("cart.item_added", {
@@ -34,6 +34,13 @@ async def add_to_cart(request, response):
             "customer": customer_name,
         })
 
+    # AJAX: return JSON; regular form submit: redirect
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept:
+        from src.app.services.cart_service import cart_count
+        return response({"ok": True, "count": cart_count(request.session), "product_name": product_name})
+
+    request.session.flash("success", "Item added to cart")
     return response.redirect("/cart")
 
 

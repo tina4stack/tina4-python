@@ -3,7 +3,12 @@
 {% block title %}{{ t("cart") }}{% endblock %}
 
 {% block content %}
-    <h1>{{ t("cart") }}</h1>
+    <div class="cart-header">
+        <h1>{{ t("cart") }}</h1>
+        {% if cart_items %}
+            <a href="/checkout" class="btn btn-primary">{{ t("checkout") }}</a>
+        {% endif %}
+    </div>
 
     {% if cart_items %}
         <table class="table">
@@ -44,7 +49,6 @@
             </tfoot>
         </table>
         <div class="mt-3">
-            <a href="/checkout" class="btn btn-primary">{{ t("checkout") }}</a>
             <a href="/products" class="btn">{{ t("continue_shopping") }}</a>
         </div>
     {% else %}

@@ -14,7 +14,6 @@
             <div class="navbar-nav">
                 <a href="/" class="nav-link">{{ t("home") }}</a>
                 <a href="/products" class="nav-link">{{ t("products") }}</a>
-                <a href="/cart" class="nav-link">{{ t("cart") }} <cart-badge></cart-badge></a>
                 {% if customer_name %}
                     <a href="/account" class="nav-link">{{ t("account") }}</a>
                     {% if role == "admin" %}
@@ -26,5 +25,9 @@
                 {% endif %}
             </div>
         </div>
+        <a href="/cart" class="nav-cart-icon" title="{{ t('cart') }}">
+            &#128722;
+            <span id="cart-badge" class="badge-cart" style="display:none;"></span>
+        </a>
     </div>
 </nav>

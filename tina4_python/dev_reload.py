@@ -168,7 +168,7 @@ def _poll_loop(directories: list[str], interval: float = 1.0):
                 except Exception as e:
                     Log.error(f"DevReload: route re-discovery failed: {e}")
 
-            # Note: SCSS compilation is handled by the Rust CLI watcher.
+            # Note: SCSS compilation is handled by the tina4 CLI (Rust).
             # DevReload only handles route re-discovery and browser refresh.
 
 

@@ -42,7 +42,7 @@ async def admin_create_product(request, response):
 @middleware(AdminAuth)
 @get("/admin/products/{id:int}/edit")
 async def admin_edit_product(id, request, response):
-    product = Product.find(id)
+    product = Product.find_by_id(id)
     if not product:
         request.session.flash("error", "Product not found")
         return response.redirect("/admin/products")
@@ -57,7 +57,7 @@ async def admin_edit_product(id, request, response):
 @middleware(AdminAuth)
 @post("/admin/products/{id:int}/edit")
 async def admin_update_product(id, request, response):
-    product = Product.find(id)
+    product = Product.find_by_id(id)
     if not product:
         request.session.flash("error", "Product not found")
         return response.redirect("/admin/products")
@@ -79,7 +79,7 @@ async def admin_update_product(id, request, response):
 @middleware(AdminAuth)
 @post("/admin/products/{id:int}/delete")
 async def admin_delete_product(id, request, response):
-    product = Product.find(id)
+    product = Product.find_by_id(id)
     if product:
         product.delete()
     request.session.flash("success", "Product deleted")

@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.10.93 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.10.95 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -10,8 +10,10 @@ Version 3.10.93 — Lightweight Python web framework. See https://tina4.com for 
 - Run all tests: `.venv/bin/python -m pytest tests/`
 - Run single test: `.venv/bin/python -m pytest tests/test_file.py::TestClass::test_method`
 - Coverage: `.venv/bin/python -m pytest tests/ --cov=tina4_python`
-- Start server: `python app.py`
+- Start server: `tina4 serve` (development) or `tina4 serve --production` (production)
 - CLI: `tina4python` (entry point defined in pyproject.toml)
+
+**IMPORTANT:** Never run `python app.py` directly. Always use `tina4 serve`. The `tina4` Rust CLI handles SCSS compilation, file watching, and server management. To bypass this requirement (e.g. Docker), set `TINA4_OVERRIDE_CLIENT=true` in `.env`.
 
 ## Code Principles
 
@@ -222,7 +224,7 @@ MyModel.cached(sql, params=None, ttl=60, limit=20, offset=0) -> list[MyModel]
 orm_bind(dba: Database) -> None
 ```
 
-Soft-delete: Set `soft_delete = True` on the model class. Uses `deleted_at` column. `delete()` sets deleted_at, `force_delete()` removes the row, `restore()` clears deleted_at.
+Soft-delete: Set `soft_delete = True` on the model class. Uses `is_deleted` column (INTEGER, 0/1). `delete()` sets deleted_at, `force_delete()` removes the row, `restore()` clears deleted_at.
 
 ### File Uploads
 
@@ -678,7 +680,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
 - SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools (24 tools) auto-start on `TINA4_DEBUG=true` + localhost. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. Localhost-only by default; `TINA4_MCP_REMOTE=true` for remote
-- Tests: 2,068 passing (39 modules)
+- Tests: 2,299 passing (40 modules)
 - Version: 3.10.93
 
 ## Links

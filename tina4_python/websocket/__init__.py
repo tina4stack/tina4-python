@@ -438,9 +438,38 @@ class WebSocketServer:
         self._server: asyncio.AbstractServer | None = None
 
     def route(self, path: str):
-        """Decorator to register a WebSocket handler for a path."""
+        """Decorator to register a WebSocket handler for a path.
+
+        Registers both on this server instance (standalone mode) and on the
+        main Router (integrated mode) so routes work either way.
+
+        The handler uses WebSocketServer style: ``async def handler(conn)``
+        with ``@conn.on_message`` / ``@conn.on_close`` decorators.
+        This is automatically adapted to the Router's ``(conn, event, data)``
+        style for integrated mode.
+        """
         def decorator(func):
             self._handlers[path] = {"handler": func}
+
+            # Adapt to Router's (conn, event, data) style
+            async def _router_adapter(conn, event, data):
+                if event == "open":
+                    result = func(conn)
+                    if asyncio.iscoroutine(result):
+                        await result
+                elif event == "message":
+                    if conn._on_message:
+                        result = conn._on_message(data)
+                        if asyncio.iscoroutine(result):
+                            await result
+                elif event == "close":
+                    if conn._on_close:
+                        result = conn._on_close()
+                        if asyncio.iscoroutine(result):
+                            await result
+
+            from tina4_python.core.router import Router
+            Router.websocket(path, _router_adapter)
             return func
         return decorator
 
