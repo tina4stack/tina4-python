@@ -168,7 +168,7 @@ class ORM(metaclass=ORMMeta):
     table_name: str = ""
     soft_delete: bool = False  # Set True to enable soft delete
     field_mapping: dict[str, str] = {}  # {"python_attribute": "db_column"}
-    auto_map: bool = False  # No-op in Python (snake_case matches DB); exists for cross-language parity
+    auto_map: bool = True  # No-op in Python (snake_case matches DB); exists for cross-language parity
     auto_crud: bool = False  # Set True to auto-register CRUD routes
     _db: str | object | None = None  # Per-model database override
     _fields: dict[str, Field] = {}
@@ -933,14 +933,18 @@ class ORM(metaclass=ORMMeta):
 
     # ── Serialization ───────────────────────────────────────────
 
-    def to_dict(self, include: list[str] = None) -> dict:
+    def to_dict(self, include: list[str] = None, case: str = "snake") -> dict:
         """Convert to dict (field values only, optionally with relationships).
 
         Args:
             include: List of relationship names to include. Supports dot notation
                      for nested relationships (e.g., ["posts.comments"]).
+            case: Key casing — 'snake' (default for Python), 'camel' (matches PHP).
         """
-        result = {name: getattr(self, name) for name in self._fields}
+        if case == "camel":
+            result = {snake_to_camel(name): getattr(self, name) for name in self._fields}
+        else:
+            result = {name: getattr(self, name) for name in self._fields}
 
         if include:
             # Group includes: top-level and nested
@@ -957,27 +961,28 @@ class ORM(metaclass=ORMMeta):
                 if rel_name in self._relationships:
                     # Access the relationship (triggers lazy load if not cached)
                     related = getattr(self, rel_name)
+                    key = snake_to_camel(rel_name) if case == "camel" else rel_name
                     if related is None:
-                        result[rel_name] = None
+                        result[key] = None
                     elif isinstance(related, list):
-                        result[rel_name] = [
-                            r.to_dict(include=nested if nested else None)
+                        result[key] = [
+                            r.to_dict(include=nested if nested else None, case=case)
                             for r in related
                         ]
                     else:
-                        result[rel_name] = related.to_dict(
-                            include=nested if nested else None
+                        result[key] = related.to_dict(
+                            include=nested if nested else None, case=case
                         )
 
         return result
 
-    def to_assoc(self, include: list[str] = None) -> dict:
+    def to_assoc(self, include: list[str] = None, case: str = "snake") -> dict:
         """Convert to an associative dict (alias for to_dict)."""
-        return self.to_dict(include=include)
+        return self.to_dict(include=include, case=case)
 
-    def to_object(self) -> dict:
+    def to_object(self, case: str = "snake") -> dict:
         """Convert to an object/dict (alias for to_dict)."""
-        return self.to_dict()
+        return self.to_dict(case=case)
 
     def to_array(self) -> list:
         """Convert to a list of values."""

@@ -6,12 +6,12 @@ Browse: http://localhost:7145
 """
 import os
 import sys
-import threading
 
 # Add store root to path so src.* imports work
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from tina4_python.core import run
+from tina4_python.core.server import background
 from tina4_python.database import Database
 from tina4_python.orm import orm_bind
 from tina4_python.migration import Migration
@@ -71,23 +71,16 @@ import src.app.services.notification_service  # noqa: F401
 # ── Register MCP Tools (AI assistant stock queries) ────────────
 import src.app.services.mcp_tools  # noqa: F401
 
-# ── Start Queue Worker in Background Thread ────────────────────
+# ── Background Tasks ──────────────────────────────────────────
 from src.app.services.order_service import process_orders
+from src.app.services.order_simulator import simulate_order
 
+# Queue worker — processes orders every 2 seconds
+_queue = container.get("queue")
+background(lambda: process_orders(_queue), interval=2.0)
 
-def _run_worker():
-    queue = container.get("queue")
-    process_orders(queue)
-
-
-worker_thread = threading.Thread(target=_run_worker, daemon=True)
-worker_thread.start()
-
-# ── Start Order Simulator (demo: creates order every 60s) ─────
-from src.app.services.order_simulator import run_order_simulator
-
-simulator_thread = threading.Thread(target=run_order_simulator, args=(60,), daemon=True)
-simulator_thread.start()
+# Order simulator — creates a demo order every 60 seconds
+background(simulate_order, interval=60.0)
 
 # ── Start Server ───────────────────────────────────────────────
 if __name__ == "__main__":

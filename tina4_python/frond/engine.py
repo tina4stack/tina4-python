@@ -914,8 +914,40 @@ def _parse_filter_chain(expr: str) -> tuple[str, list[tuple[str, list[str]]]]:
     return variable, filters
 
 
-def _parse_args(raw: str) -> list[str]:
-    """Parse filter arguments, respecting quoted strings and backslash escapes."""
+def _coerce_arg(s: str):
+    """Try to convert a string argument to a Python object (dict, list, number, bool).
+
+    Returns the original string unchanged if no conversion applies.
+    """
+    if s.startswith("{") and s.endswith("}"):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+    if s in ("true", "True"):
+        return True
+    if s in ("false", "False"):
+        return False
+    if s in ("null", "None", "none"):
+        return None
+    try:
+        return int(s)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        pass
+    return s
+
+
+def _parse_args(raw: str) -> list:
+    """Parse filter arguments, respecting quoted strings, braces, and backslash escapes."""
     args = []
     current = ""
     in_quote = None
@@ -926,9 +958,9 @@ def _parse_args(raw: str) -> list[str]:
             in_quote = ch
         elif ch == in_quote:
             in_quote = None
-        elif ch == "(" and not in_quote:
+        elif ch in ("(", "{", "[") and not in_quote:
             depth += 1
-        elif ch == ")" and not in_quote:
+        elif ch in (")", "}", "]") and not in_quote:
             depth -= 1
         elif ch == "," and not in_quote and depth == 0:
             args.append(_strip_outer_quotes(current.strip()))
@@ -939,7 +971,7 @@ def _parse_args(raw: str) -> list[str]:
     if current.strip():
         args.append(_strip_outer_quotes(current.strip()))
 
-    return args
+    return [_coerce_arg(a) for a in args]
 
 
 def _strip_outer_quotes(s: str) -> str:
@@ -964,6 +996,13 @@ def _strip_outer_quotes(s: str) -> str:
     return s
 
 
+def _dict_replace(s: str, mapping: dict) -> str:
+    """Apply multiple replacements from a dict (Twig-style replace filter)."""
+    for old, new in mapping.items():
+        s = s.replace(str(old), str(new))
+    return s
+
+
 # Built-in filters
 _BUILTIN_FILTERS = {
     "upper": lambda v, *a: str(v).upper(),
@@ -981,7 +1020,11 @@ _BUILTIN_FILTERS = {
     "last": lambda v, *a: v[-1] if v else None,
     "join": lambda v, *a: (a[0] if a else ", ").join(str(i) for i in v) if isinstance(v, list) else str(v),
     "split": lambda v, *a: str(v).split(a[0] if a else " "),
-    "replace": lambda v, *a: str(v).replace(a[0], a[1]) if len(a) >= 2 else str(v),
+    "replace": lambda v, *a: (
+        _dict_replace(str(v), a[0]) if len(a) == 1 and isinstance(a[0], dict)
+        else str(v).replace(a[0], a[1]) if len(a) >= 2
+        else str(v)
+    ),
     "default": lambda v, *a: v if v is not None and v != "" else (a[0] if a else ""),
     "raw": lambda v, *a: v,  # Mark as safe (no escaping)
     "safe": lambda v, *a: v,

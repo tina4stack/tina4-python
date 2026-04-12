@@ -245,6 +245,7 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 | Dependency injection | `Container` from `tina4_python.container` |
 | Structured logging | `Log` from `tina4_python.debug` |
 | Error overlay (dev) | `render_error_overlay`, `is_debug_mode` from `tina4_python.debug.error_overlay` |
+| Periodic background work | `background()` from `tina4_python.core.server` |
 
 **Bad — writing a custom queue:**
 ```python
@@ -289,6 +290,7 @@ Queue(topic="tasks").push({"action": "send_email"})
 6. **Connection strings**: v3 uses standard URL format: `driver://host:port/database` with separate `username` and `password` parameters. Example: `Database("firebird://localhost:3050//path/to/db", "SYSDBA", "masterkey")`. Environment variable: `DATABASE_URL`.
 7. **Running the app**: `uv run python app.py <port> <name>` — port and name are CLI args handled by tina4_python
 8. **SCSS**: Files in `src/scss/` are auto-compiled to `src/public/css/` on startup
+12. **Background tasks**: Use `background(fn, interval)` from `tina4_python.core.server` — never use `threading.Thread` for periodic work. The `background()` function runs tasks cooperatively in the asyncio event loop with proper shutdown handling.
 
 
 ---

@@ -4,45 +4,51 @@ from tina4_python.orm import ORM
 
 
 def process_orders(queue):
-    """Consume from 'orders' topic and process each order."""
-    for job in queue.consume("orders"):
-        db = ORM.get_db()
-        data = job.data if hasattr(job, 'data') else job
-        order_id = data.get("order_id") if isinstance(data, dict) else data
+    """Process a single order from the queue (non-blocking).
 
-        items = db.fetch(
-            "select oi.product_id, oi.quantity, p.stock "
-            "from order_items oi join products p on oi.product_id = p.id "
-            "where oi.order_id = ?",
-            [order_id],
-        )
+    Designed for use with background() — pops one job per tick.
+    """
+    job = queue.pop()
+    if job is None:
+        return
 
-        out_of_stock = False
-        if items and items.records:
-            for item in items.records:
-                if item["stock"] < item["quantity"]:
-                    out_of_stock = True
-                    break
+    db = ORM.get_db()
+    data = job.data if hasattr(job, "data") else job
+    order_id = data.get("order_id") if isinstance(data, dict) else data
 
-        if out_of_stock:
-            db.execute("update orders set status = 'failed' where id = ?", [order_id])
-            db.commit()
-            emit("order.failed", {"order_id": order_id, "reason": "insufficient stock"})
-            if hasattr(job, 'complete'):
-                job.complete()
-            continue
+    items = db.fetch(
+        "select oi.product_id, oi.quantity, p.stock "
+        "from order_items oi join products p on oi.product_id = p.id "
+        "where oi.order_id = ?",
+        [order_id],
+    )
 
-        if items and items.records:
-            for item in items.records:
-                db.execute(
-                    "update products set stock = stock - ? where id = ?",
-                    [item["quantity"], item["product_id"]],
-                )
-                if item["stock"] - item["quantity"] <= 5:
-                    emit("stock.low", {"product_id": item["product_id"], "remaining": item["stock"] - item["quantity"]})
+    out_of_stock = False
+    if items and items.records:
+        for item in items.records:
+            if item["stock"] < item["quantity"]:
+                out_of_stock = True
+                break
 
-        db.execute("update orders set status = 'processing' where id = ?", [order_id])
+    if out_of_stock:
+        db.execute("update orders set status = 'failed' where id = ?", [order_id])
         db.commit()
-        emit("order.processing", {"order_id": order_id})
-        if hasattr(job, 'complete'):
+        emit("order.failed", {"order_id": order_id, "reason": "insufficient stock"})
+        if hasattr(job, "complete"):
             job.complete()
+        return
+
+    if items and items.records:
+        for item in items.records:
+            db.execute(
+                "update products set stock = stock - ? where id = ?",
+                [item["quantity"], item["product_id"]],
+            )
+            if item["stock"] - item["quantity"] <= 5:
+                emit("stock.low", {"product_id": item["product_id"], "remaining": item["stock"] - item["quantity"]})
+
+    db.execute("update orders set status = 'processing' where id = ?", [order_id])
+    db.commit()
+    emit("order.processing", {"order_id": order_id})
+    if hasattr(job, "complete"):
+        job.complete()

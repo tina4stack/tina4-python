@@ -102,11 +102,30 @@
     });
 
     var totalEl = document.getElementById("cart-total");
-    if (totalEl) {
-        effect(function() {
-            totalEl.textContent = "$" + cartTotal.value.toFixed(2);
-        });
+    var badge = document.getElementById("cart-badge");
+    var navTotal = document.getElementById("cart-total-display");
+    var currency = navTotal ? (navTotal.dataset.currency || "$") : "$";
+
+    // Update nav badge and total display from current signals
+    function updateNav() {
+        var totalQty = 0;
+        for (var p in items) { totalQty += items[p].qty.value; }
+        var totalVal = cartTotal.value;
+        if (badge) {
+            badge.textContent = totalQty;
+            badge.style.display = totalQty > 0 ? "flex" : "none";
+        }
+        if (navTotal) {
+            navTotal.textContent = currency + totalVal.toFixed(2);
+            navTotal.style.display = totalQty > 0 ? "" : "none";
+        }
     }
+
+    // Effect: update table total and nav whenever cart changes
+    effect(function() {
+        if (totalEl) totalEl.textContent = "$" + cartTotal.value.toFixed(2);
+        updateNav();
+    });
 
     // Qty spinner: + and - buttons
     document.addEventListener("click", function(e) {
@@ -133,20 +152,13 @@
         Tina4.api.post("/cart/remove", { product_id: parseInt(pid, 10) }).then(function() {
             var row = document.getElementById("cart-row-" + pid);
             if (row) row.remove();
+            // Set qty to 0 first so cartTotal recomputes (items is not reactive)
+            if (items[pid]) items[pid].qty.value = 0;
             delete items[pid];
-            // Recompute total
-            if (totalEl) totalEl.textContent = "$" + cartTotal.value.toFixed(2);
-            // Update badge
-            Tina4.api.get("/api/cart/count").then(function(data) {
-                if (data && typeof data.count === "number") {
-                    var badge = document.getElementById("cart-badge");
-                    if (badge) {
-                        if (data.count > 0) { badge.textContent = data.count; badge.style.display = "flex"; }
-                        else { badge.style.display = "none"; }
-                    }
-                    if (data.count === 0) location.reload();
-                }
-            });
+            // Reload if cart empty
+            var remaining = 0;
+            for (var p in items) { remaining++; }
+            if (remaining === 0) location.reload();
         });
     });
 })();

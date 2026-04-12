@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.10.97 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.10.99 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -467,6 +467,33 @@ off("user.created", send_welcome_email)  # remove specific
 off("user.created")                       # remove all for event
 ```
 
+### Background Tasks — Periodic background work in the server event loop
+
+Register callbacks that run periodically in the asyncio event loop. No threads, no separate processes — tasks run cooperatively alongside HTTP request handling.
+
+```python
+from tina4_python.core.server import background
+
+# Process queue jobs every 2 seconds
+queue = container.get("queue")
+background(lambda: process_orders(queue), interval=2.0)
+
+# Health check every 30 seconds
+async def check_health():
+    api = Api("https://api.example.com")
+    result = api.get("/health")
+    if result["error"]:
+        Log.warning("Health check failed")
+
+background(check_health, interval=30.0)
+```
+
+**Never use `threading.Thread` for periodic work.** Use `background()` instead — it integrates with the server lifecycle, handles errors gracefully, supports both sync and async callbacks, and cancels cleanly on shutdown.
+
+```python
+background(callback: callable, interval: float = 1.0) -> None
+```
+
 ### AI Integration — AI assistant context scaffolding
 
 Detect AI coding tools in a project and install framework-aware context files.
@@ -653,6 +680,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Auto-CRUD via `tina4_python.crud` (AutoCrud — REST from ORM models)
 - Seeder via `tina4_python.seeder` (FakeData, seed_table)
 - i18n via `tina4_python.i18n` (I18n — JSON-based translations)
+- Background tasks via `background()` — cooperative periodic callbacks in the asyncio event loop (no threads)
 - Event system via `tina4_python.core.events` (observer pattern, async support)
 - AI context scaffolding via `tina4_python.ai` (Claude, Cursor, Copilot, etc.)
 - Response caching via `tina4_python.cache` (LRU, TTL, middleware)
@@ -681,7 +709,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools (24 tools) auto-start on `TINA4_DEBUG=true` + localhost. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. Localhost-only by default; `TINA4_MCP_REMOTE=true` for remote
 - Tests: 2,299 passing (40 modules)
-- Version: 3.10.93
+- Version: 3.10.99
 
 ## Links
 

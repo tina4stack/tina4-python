@@ -8,7 +8,7 @@ Tina4 Python v3.0 — Zero-dependency, lightweight web framework.
 
 One import, everything works.
 """
-__version__ = "3.10.98"
+__version__ = "3.10.99"
 
 # ── Route decorators ──
 from tina4_python.core.router import (  # noqa: E402, F401
@@ -60,4 +60,4 @@ from tina4_python.cache import (  # noqa: E402, F401
 from tina4_python.container import Container  # noqa: E402, F401
 
 # ── Server ──
-from tina4_python.core.server import run  # noqa: E402, F401
+from tina4_python.core.server import run, background  # noqa: E402, F401

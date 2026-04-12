@@ -32,6 +32,21 @@ _ai_port_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("_ai_port_ct
 # Track startup time
 _start_time: float = 0
 
+# ── Background tasks registry ────────────────────────────────────────────
+_background_tasks: list[dict] = []
+
+
+def background(callback, interval: float = 1.0):
+    """Register a background task that runs periodically in the server event loop.
+
+    Matches PHP's $app->background(fn, interval) pattern.
+
+    Args:
+        callback: Function to call (sync or async, no arguments).
+        interval: Seconds between invocations (default: 1.0).
+    """
+    _background_tasks.append({"callback": callback, "interval": interval})
+
 
 def _auto_discover(root_dir: str = "src"):
     """Auto-import all .py files in src/ to trigger route decorators."""
@@ -1812,7 +1827,48 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             except NotImplementedError:
                 pass  # Windows
 
+        # Start registered background tasks as asyncio tasks.
+        # Sync callbacks run in a thread pool so they CANNOT block the event loop.
+        # A timeout (2x interval, min 5s) cancels runaway tasks.
+        import concurrent.futures
+        _executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(len(_background_tasks), 2),
+            thread_name_prefix="tina4_bg",
+        )
+        bg_tasks = []
+        for task_def in _background_tasks:
+            cb = task_def["callback"]
+            iv = task_def["interval"]
+
+            async def _tick_loop(_cb=cb, _iv=iv):
+                timeout = max(_iv * 2, 5.0)
+                while not shutdown.is_set():
+                    try:
+                        if asyncio.iscoroutinefunction(_cb):
+                            await asyncio.wait_for(_cb(), timeout=timeout)
+                        else:
+                            # Run sync callback in thread pool — never blocks the event loop
+                            await asyncio.wait_for(
+                                loop.run_in_executor(_executor, _cb),
+                                timeout=timeout,
+                            )
+                    except asyncio.TimeoutError:
+                        Log.warning(
+                            f"Background task exceeded {timeout:.1f}s timeout and was interrupted. "
+                            f"Use non-blocking calls (e.g. queue.pop() instead of queue.consume())."
+                        )
+                    except Exception as e:
+                        Log.error(f"Background task error: {e}")
+                    await asyncio.sleep(_iv)
+
+            bg_tasks.append(asyncio.create_task(_tick_loop()))
+
         await shutdown.wait()
+
+        # Cancel background tasks
+        for t in bg_tasks:
+            t.cancel()
+
         if ai_server:
             ai_server.close()
             await ai_server.wait_closed()
