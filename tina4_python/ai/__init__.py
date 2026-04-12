@@ -106,7 +106,10 @@ def _install_for_tool(root: Path, tool: dict, context: str) -> list[str]:
     action = "Updated" if context_path.exists() else "Installed"
     rel = str(context_path.relative_to(root))
     created.append(rel)
-    print(f"  \033[32m✓\033[0m {action} {rel}")
+    try:
+        print(f"  \033[32m\u2713\033[0m {action} {rel}")
+    except UnicodeEncodeError:
+        print(f"  [OK] {action} {rel}")
 
     # Claude-specific extras
     if tool["name"] == "claude-code":
