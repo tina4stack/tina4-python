@@ -1,0 +1,12 @@
+.venv
+__pycache__
+*.pyc
+data/
+store/
+tests/
+.tina4/
+.DS_Store
+*.db
+*.db-wal
+*.db-shm
+logs/
