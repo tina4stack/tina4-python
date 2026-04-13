@@ -522,7 +522,7 @@ class GraphQL:
         """
         errors = []
         for sel in selections:
-            if not self._check_directives(sel.get("directives", []), variables):
+            if not self._check_directives(sel.get("directives", []), variables, context):
                 continue
 
             if sel["kind"] == "fragment_spread":
@@ -565,10 +565,19 @@ class GraphQL:
                 value = getattr(parent, name, None)
         elif name in resolvers:
             config = resolvers[name]
+
+            # Input validation
+            validation_errors = self._validate_args(args, config.get("args", {}), name)
+            if validation_errors:
+                return None, validation_errors
+
             resolver = config.get("resolve")
             if resolver:
+                # Inject sub-selections into context for DataLoader/eager-loading
+                ctx = dict(context)
+                ctx["__selections"] = sel.get("selections", [])
                 try:
-                    value = resolver(None, args, context)
+                    value = resolver(None, args, ctx)
                 except Exception as e:
                     errors.append({"message": str(e), "path": [name]})
                     return None, errors
@@ -611,16 +620,109 @@ class GraphQL:
                 resolved[k] = v
         return resolved
 
-    def _check_directives(self, directives: list, variables: dict) -> bool:
+    def _check_directives(self, directives: list, variables: dict, context: dict = None) -> bool:
+        context = context or {}
         for d in directives:
             val = d["args"].get("if")
             if isinstance(val, dict) and "$var" in val:
                 val = variables.get(val["$var"], False)
+
+            # Built-in: @skip and @include
             if d["name"] == "skip" and val:
                 return False
             if d["name"] == "include" and not val:
                 return False
+
+            # Auth: @auth — requires any authenticated user
+            if d["name"] == "auth" and not context.get("user"):
+                return False
+
+            # Auth: @role(role: "admin") — requires specific role
+            if d["name"] == "role":
+                required = d["args"].get("role")
+                user = context.get("user") or {}
+                actual = user.get("role") if isinstance(user, dict) else getattr(user, "role", None)
+                if actual is None:
+                    actual = context.get("role")
+                if required is None or actual != required:
+                    return False
+
+            # Auth: @guest — only for unauthenticated
+            if d["name"] == "guest" and context.get("user"):
+                return False
+
         return True
+
+    def _validate_args(self, args: dict, arg_configs: dict, field_name: str) -> list:
+        """Validate resolved args against declared types. Returns list of errors."""
+        errors = []
+        for arg_name, declared_type in arg_configs.items():
+            value = args.get(arg_name)
+            is_non_null = declared_type.endswith("!")
+            base_type = declared_type.rstrip("!").strip("[]")
+
+            if is_non_null and (value is None or value == ""):
+                errors.append({
+                    "message": f"Argument '{arg_name}' on field '{field_name}' is required (type: {declared_type})",
+                    "path": [field_name],
+                })
+                continue
+
+            if value is None:
+                continue
+
+            # List validation
+            if declared_type.lstrip("!").startswith("[") and isinstance(value, list):
+                for i, item in enumerate(value):
+                    if not self._coerce_value(item, base_type):
+                        errors.append({
+                            "message": f"Argument '{arg_name}[{i}]' on field '{field_name}' expected {base_type}, got {type(item).__name__}",
+                            "path": [field_name],
+                        })
+                continue
+
+            # Scalar validation
+            if base_type in ("Int", "Float", "Boolean", "String", "ID"):
+                if not self._coerce_value(value, base_type):
+                    errors.append({
+                        "message": f"Argument '{arg_name}' on field '{field_name}' expected type {base_type}, got {type(value).__name__}",
+                        "path": [field_name],
+                    })
+
+        return errors
+
+    @staticmethod
+    def _coerce_value(value, type_name: str) -> bool:
+        """Check if a value can be coerced to the given GraphQL scalar type."""
+        if type_name in ("String", "ID"):
+            return isinstance(value, (str, int, float))
+        if type_name == "Int":
+            if isinstance(value, bool):
+                return False
+            if isinstance(value, int):
+                return True
+            if isinstance(value, str):
+                try:
+                    int(value)
+                    return True
+                except ValueError:
+                    return False
+            return False
+        if type_name == "Float":
+            if isinstance(value, bool):
+                return False
+            if isinstance(value, (int, float)):
+                return True
+            if isinstance(value, str):
+                try:
+                    float(value)
+                    return True
+                except ValueError:
+                    return False
+            return False
+        if type_name == "Boolean":
+            return isinstance(value, (bool, int)) or value in ("true", "false", "0", "1")
+        return True  # Custom types pass through
 
 
     def schema_sdl(self) -> str:
