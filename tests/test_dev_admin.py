@@ -5,7 +5,7 @@ import tempfile
 import os
 from tina4_python.dev_admin import (
     MessageLog, RequestInspector, BrokenTracker,
-    get_api_handlers, render_dashboard, render_dev_toolbar,
+    get_api_handlers,
 )
 
 
@@ -301,115 +301,31 @@ class TestGetAPIHandlers:
 
     def test_handler_count(self):
         handlers = get_api_handlers()
-        assert len(handlers) == 37
+        assert len(handlers) == 38
 
+    def test_tables_handler_registered(self):
+        handlers = get_api_handlers()
+        assert "/__dev/api/tables" in handlers
+        method, handler = handlers["/__dev/api/tables"]
+        assert method == "GET"
 
-class TestRenderDashboard:
-    def test_returns_html(self):
-        html = render_dashboard()
-        assert "<!DOCTYPE html>" in html
-        assert "Tina4 Dev Admin" in html
+    def test_mtime_handler_registered(self):
+        handlers = get_api_handlers()
+        assert "/__dev/api/mtime" in handlers
+        method, handler = handlers["/__dev/api/mtime"]
+        assert method == "GET"
 
-    def test_contains_all_tabs(self):
-        html = render_dashboard()
-        for tab in ["Routes", "Queue", "Mailbox", "Messages", "Database",
-                     "Requests", "Errors", "WS", "System", "Tools", "Tina4"]:
-            assert tab in html
+    def test_connections_handler_registered(self):
+        handlers = get_api_handlers()
+        assert "/__dev/api/connections" in handlers
+        method, handler = handlers["/__dev/api/connections"]
+        assert method == "GET"
 
-    def test_contains_api_calls(self):
-        """API calls are now in the external tina4-dev-admin.js file."""
-        from pathlib import Path
-        js_path = Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js"
-        js_content = js_path.read_text()
-        # SPA uses relative paths with /__dev/api base
-        assert "/__dev/api" in js_content
-        for api_path in ["/routes", "/system", "/broken",
-                         "/tables", "/query", "/seed",
-                         "/metrics/full"]:
-            assert api_path in js_content
-
-    def test_no_external_dependencies(self):
-        html = render_dashboard()
-        assert "cdn." not in html.lower()
-        assert "unpkg" not in html.lower()
-        assert "jsdelivr" not in html.lower()
-
-    def test_uses_css_variables(self):
-        html = render_dashboard()
-        assert "<style>" in html
-        assert "var(--bg)" in html
-        assert "var(--primary)" in html
-        assert "var(--surface)" in html
-        assert "var(--border)" in html
-        assert "var(--text)" in html
-        assert "var(--muted)" in html
-        assert "var(--success)" in html
-        assert "var(--danger)" in html
-        assert "var(--warn)" in html
-
-    def test_chat_panel(self):
-        html = render_dashboard()
-        assert "chat-container" in html
-        assert "Tina4" in html
-        assert "sendChat" in html
-
-    def test_seed_from_admin(self):
-        html = render_dashboard()
-        assert "seed-table" in html
-        assert "seedTable" in html
-
-    def test_request_inspector(self):
-        html = render_dashboard()
-        assert "loadRequests" in html
-        assert "req-body" in html
-
-    def test_error_tracker(self):
-        html = render_dashboard()
-        assert "loadErrors" in html
-        # resolveError is in the external JS file (dynamic template)
-        from pathlib import Path
-        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js").read_text()
-        assert "resolveError" in js
-
-    def test_system_overview(self):
-        html = render_dashboard()
-        assert "sys-grid" in html
-        # loadSystem is in the external JS file
-        from pathlib import Path
-        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js").read_text()
-        assert "loadSystem" in js
-
-    def test_seed_functionality(self):
-        """Seed table API is in the external JS file."""
-        from pathlib import Path
-        js = (Path(__file__).parent.parent / "tina4_python" / "public" / "js" / "tina4-dev-admin.js").read_text()
-        assert "/seed" in js
-
-    def test_message_search(self):
-        html = render_dashboard()
-        assert "searchMessages" in html
-        assert "msg-search" in html
-
-
-class TestDevToolbar:
-    def test_returns_toolbar(self):
-        toolbar = render_dev_toolbar("GET", "/", "-", "-", 0)
-        assert "tina4-dev-toolbar" in toolbar
-        assert "/__dev" in toolbar
-
-    def test_no_external_deps(self):
-        toolbar = render_dev_toolbar("GET", "/", "-", "-", 0)
-        assert "cdn." not in toolbar.lower()
-
-    def test_dev_toolbar_with_context(self):
-        toolbar = render_dev_toolbar("POST", "/api/users", "/api/users/{id:int}", "abc123", 5)
-        assert "tina4-dev-toolbar" in toolbar
-        assert "POST" in toolbar
-        assert "/api/users" in toolbar
-        assert "abc123" in toolbar
-        assert "5 routes" in toolbar
-        assert "Python" in toolbar
-        assert "/__dev" in toolbar
+    def test_version_check_handler_registered(self):
+        handlers = get_api_handlers()
+        assert "/__dev/api/version-check" in handlers
+        method, handler = handlers["/__dev/api/version-check"]
+        assert method == "GET"
 
 
 class TestAPIHandlers:
@@ -590,6 +506,53 @@ class TestAPIHandlers:
         assert len(result["rows"]) == 2
 
     @pytest.mark.asyncio
+    async def test_tables_handler(self, mock_req, mock_resp, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "test_tables.db")
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        from tina4_python.database import Database
+        db = Database(f"sqlite:///{db_path}")
+        db.execute("CREATE TABLE test_tbl (id INTEGER PRIMARY KEY, name TEXT)")
+        db.commit()
+        db.close()
+        from tina4_python.dev_admin import _api_tables
+        result = await _api_tables(mock_req, mock_resp)
+        assert "tables" in result
+        assert isinstance(result["tables"], list)
+        assert "test_tbl" in result["tables"]
+
+    @pytest.mark.asyncio
+    async def test_tables_handler_no_db(self, mock_req, mock_resp, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", "sqlite:///nonexistent_path/no_db.db")
+        from tina4_python.dev_admin import _api_tables
+        result = await _api_tables(mock_req, mock_resp)
+        assert "tables" in result
+        assert isinstance(result["tables"], list)
+
+    @pytest.mark.asyncio
+    async def test_mtime_handler(self, mock_req, mock_resp):
+        from tina4_python.dev_admin import _api_mtime
+        result = await _api_mtime(mock_req, mock_resp)
+        assert "mtime" in result
+        assert isinstance(result["mtime"], (int, float))
+
+    @pytest.mark.asyncio
+    async def test_connections_handler(self, mock_req, mock_resp):
+        from tina4_python.dev_admin import _api_connections
+        result = await _api_connections(mock_req, mock_resp)
+        assert "url" in result
+        assert "username" in result
+        assert "password" in result
+
+    @pytest.mark.asyncio
+    async def test_version_check_handler(self, mock_req, mock_resp):
+        from tina4_python.dev_admin import _api_version_check
+        result = await _api_version_check(mock_req, mock_resp)
+        assert "current" in result
+        assert "latest" in result
+        assert isinstance(result["current"], str)
+        assert isinstance(result["latest"], str)
+
+    @pytest.mark.asyncio
     async def test_query_multi_statement_rollback(self, mock_req, mock_resp, tmp_path, monkeypatch):
         """Failed multi-statement batch rolls back all changes."""
         db_path = str(tmp_path / "test_rollback.db")
@@ -605,42 +568,6 @@ class TestAPIHandlers:
         }
         result = await _api_query(mock_req, mock_resp)
         assert "error" in result
-
-
-class TestDatabaseTabHTML:
-    """Test the database tab renders correctly in the dashboard."""
-
-    def test_split_screen_layout(self):
-        html = render_dashboard()
-        assert "table-list" in html
-        assert "query-results" in html
-        assert "query-input" in html
-
-    def test_copy_buttons_present(self):
-        html = render_dashboard()
-        assert "Copy CSV" in html
-        assert "Copy JSON" in html
-        assert "Paste" in html
-
-    def test_copy_functions_defined(self):
-        html = render_dashboard()
-        assert "function copyResults" in html or "function _clipCopy" in html
-        # Check the global function definitions exist outside loadAllMetrics
-        assert "function _clipCopy(text,btn)" in html
-        assert "function copyResults(fmt,btn)" in html
-        assert "function pasteData()" in html
-
-    def test_limit_dropdown(self):
-        html = render_dashboard()
-        assert "query-limit" in html
-        assert '<option value="20">20</option>' in html
-        assert '<option value="0">All</option>' in html
-
-    def test_seed_controls(self):
-        html = render_dashboard()
-        assert "seed-table" in html
-        assert "seed-count" in html
-        assert "seedTable()" in html
 
 
 class TestSQLiteLimitDedup:
