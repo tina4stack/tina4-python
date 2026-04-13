@@ -3,7 +3,7 @@ name: Publish to PyPI
 on:
   push:
     tags:
-      - 'v*'
+      - '[0-9]*.*.*'
 
 jobs:
   publish:
@@ -20,7 +20,7 @@ jobs:
 
       - name: Set version from tag
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${GITHUB_REF_NAME}"
           sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
           echo "Building version $VERSION"
 
