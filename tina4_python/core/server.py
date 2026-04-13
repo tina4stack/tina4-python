@@ -1629,18 +1629,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     from tina4_python.dotenv import is_truthy
     is_debug = is_truthy(os.environ.get("TINA4_DEBUG", ""))
 
-    # Start DevReload file watcher in debug mode — but NOT when launched
-    # by the Rust CLI (--managed). The Rust CLI owns file watching, SCSS
-    # compilation, and browser reload. Running both causes double-reloads
-    # and SCSS recompile loops.
-    if is_debug and not is_managed:
-        no_reload = os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes")
-        if not no_reload:
-            try:
-                from tina4_python.dev_reload import start as _start_dev_reload
-                _start_dev_reload(["src", "public"])
-            except Exception as e:
-                Log.error(f"DevReload: failed to start: {e}")
+    # File watching is handled by the Rust CLI (tina4 serve). The framework
+    # only needs to receive POST /__dev/api/reload and update the mtime counter
+    # so the browser's polling fallback triggers a refresh. No internal watcher.
 
     prod = None
     if not is_debug:

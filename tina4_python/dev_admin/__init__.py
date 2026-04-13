@@ -330,6 +330,7 @@ def get_api_handlers() -> dict:
         "/__dev/api/gallery": ("GET", _api_gallery_list),
         "/__dev/api/gallery/deploy": ("POST", _api_gallery_deploy),
         "/__dev/api/mtime": ("GET", _api_mtime),
+        "/__dev/api/reload": ("POST", _api_reload),
         "/__dev/api/version-check": ("GET", _api_version_check),
         "/__dev/api/metrics": ("GET", _api_metrics),
         "/__dev/api/metrics/full": ("GET", _api_metrics_full),
@@ -1223,17 +1224,36 @@ async def _api_gallery_deploy(request, response):
     return response({"deployed": name, "files": copied})
 
 
+# Mtime counter — incremented by POST /__dev/api/reload from Rust CLI.
+# The browser polls /__dev/api/mtime and reloads when this changes.
+_reload_mtime = [0]
+_reload_file = [""]
+
+
 async def _api_mtime(request, response):
-    """Return the last file modification timestamp for DevReload polling.
+    """Return the last reload timestamp for browser polling.
 
     The dev toolbar JS polls this endpoint and triggers a browser refresh
-    when the mtime changes, indicating source files have been modified.
+    when the mtime changes. Updated by the Rust CLI via POST /__dev/api/reload.
     """
-    from tina4_python.dev_reload import get_last_mtime, get_last_change_file
     return response({
-        "mtime": get_last_mtime(),
-        "file": get_last_change_file(),
+        "mtime": _reload_mtime[0],
+        "file": _reload_file[0],
     })
+
+
+async def _api_reload(request, response):
+    """Trigger a browser reload — called by the Rust CLI on file changes.
+
+    Updates the mtime counter so the polling fallback detects the change.
+    """
+    import time
+    _reload_mtime[0] = int(time.time())
+    _reload_file[0] = (request.body or {}).get("file", "")
+    reload_type = (request.body or {}).get("type", "reload")
+    from tina4_python.debug import Log
+    Log.info(f"External reload trigger: {reload_type}" + (f" ({_reload_file[0]})" if _reload_file[0] else ""))
+    return response({"ok": True, "type": reload_type})
 
 
 async def _api_version_check(request, response):
