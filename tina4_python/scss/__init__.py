@@ -62,10 +62,15 @@ def compile_scss(scss_dir: str = "src/scss", output: str = "public/css/default.c
     if minify:
         css = _minify(css)
 
-    # Write output
+    # Write output only if content changed (avoids triggering DevReload loops)
     out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(css, encoding="utf-8")
+    try:
+        existing = out_path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        existing = None
+    if existing != css:
+        out_path.write_text(css, encoding="utf-8")
 
     return css
 

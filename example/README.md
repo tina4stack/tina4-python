@@ -9,7 +9,15 @@ and full test coverage — all in a single self-contained application.
 
 ## Quick Start
 
-### macOS / Linux
+### macOS / Linux (uv)
+
+```bash
+cd example
+uv sync
+uv run python app.py
+```
+
+### macOS / Linux (pip)
 
 ```bash
 cd example
