@@ -24,10 +24,15 @@ def on_order_placed(data):
     })
 
     # Send order confirmation email via Messenger
+    # Templates expect order.id / order.total (object), so fetch from ORM
     try:
+        from src.orm.order import Order
+        from src.orm.customer import Customer
+        order = Order.find_by_id(data["order_id"])
+        customer = Customer.find_by_id(data.get("customer_id")) if data.get("customer_id") else None
         html = frond.render("email/order_confirmation.twig", {
-            "order_id": data["order_id"],
-            "total": data["total"],
+            "order": order.to_dict() if order else {"id": data["order_id"], "total": data["total"]},
+            "customer_name": customer.name if customer else "Customer",
         })
         messenger.send(
             to=data.get("email", ""),
@@ -57,8 +62,13 @@ def on_order_status_changed(data):
 
     if data["status"] == "shipped":
         try:
+            from src.orm.order import Order
+            from src.orm.customer import Customer
+            order = Order.find_by_id(data["order_id"])
+            customer = Customer.find_by_id(order.customer_id) if order else None
             html = frond.render("email/shipping_notification.twig", {
-                "order_id": data["order_id"],
+                "order": order.to_dict() if order else {"id": data["order_id"]},
+                "customer_name": customer.name if customer else "Customer",
             })
             messenger.send(
                 to=data.get("email", ""),

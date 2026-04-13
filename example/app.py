@@ -57,8 +57,10 @@ orm_bind(db)
 Migration(db).migrate()
 
 # ── Auto-CRUD for admin REST endpoints ─────���───────────────────
-AutoCrud.register(Product, prefix="/api")
-AutoCrud.register(Category, prefix="/api")
+# Use /api/admin prefix so AutoCrud doesn't override the custom storefront routes
+# in src/routes/api/products.py and src/routes/api/categories.py
+AutoCrud.register(Product, prefix="/api/admin")
+AutoCrud.register(Category, prefix="/api/admin")
 
 # ── Seed Demo Data (only if DB is empty) ───────────────────────
 from src.seeds.seed_store import seed
