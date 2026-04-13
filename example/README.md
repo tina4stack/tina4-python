@@ -7,10 +7,22 @@ a real-world use case. Every feature has a natural business reason — nothing i
 REST/GraphQL/SOAP APIs, real-time order tracking, background job processing, email notifications,
 and full test coverage — all in a single self-contained application.
 
-## Quick Start
+## Quick Start (one command)
 
 ```bash
 cd example
+bash setup.sh
+```
+
+Then start the server:
+
+```bash
+.venv/bin/python app.py
+```
+
+Or if you have the Tina4 CLI installed:
+
+```bash
 tina4 serve
 ```
 
