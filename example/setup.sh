@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Tina4 Store Demo — One-command setup
+# Tina4 Store Demo — One-command setup (macOS / Linux)
 # Usage: bash setup.sh
+#
+# Windows users: see setup.bat
 set -euo pipefail
 
 echo "=== Tina4 Store (Python) Setup ==="
@@ -15,7 +17,6 @@ else
     echo "ERROR: Python not found. Install Python 3.12+ first."
     echo "  macOS:   brew install python"
     echo "  Ubuntu:  sudo apt install python3 python3-venv"
-    echo "  Windows: https://python.org/downloads/"
     exit 1
 fi
 
@@ -31,10 +32,10 @@ else
     echo "[OK] Virtual environment exists"
 fi
 
-# Activate and install
-echo "Installing tina4-python..."
+# Install from local framework source
+echo "Installing tina4-python from local source..."
 .venv/bin/pip install --quiet --upgrade pip
-.venv/bin/pip install --quiet tina4-python 2>&1 | tail -3
+.venv/bin/pip install --quiet -r requirements.txt
 echo "[OK] tina4-python installed"
 
 # Create .env if missing

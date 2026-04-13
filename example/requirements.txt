@@ -1,0 +1,3 @@
+# Install from local framework source (parent directory)
+# For production: replace with tina4-python>=3.10.99
+-e ..
