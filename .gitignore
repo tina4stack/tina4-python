@@ -61,5 +61,16 @@ __pycache__/
 build/
 .pytest_cache/
 example/.env
+example/data/*.db
+example/data/*.db-*
+example/store/data/*.db
+example/store/data/*.db-*
+example/store/data/broken/
+example/store/data/.broken/
+example/store/data/mailbox/
+example/store/data/sessions/
+example/store/.tina4/
+example/store/__pycache__/
+example/store/src/**/__pycache__/
 .claude/settings.local.json
 .claude/worktrees/
