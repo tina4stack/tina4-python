@@ -1629,8 +1629,11 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     from tina4_python.dotenv import is_truthy
     is_debug = is_truthy(os.environ.get("TINA4_DEBUG", ""))
 
-    # Start DevReload file watcher in debug mode
-    if is_debug:
+    # Start DevReload file watcher in debug mode — but NOT when launched
+    # by the Rust CLI (--managed). The Rust CLI owns file watching, SCSS
+    # compilation, and browser reload. Running both causes double-reloads
+    # and SCSS recompile loops.
+    if is_debug and not is_managed:
         no_reload = os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes")
         if not no_reload:
             try:
