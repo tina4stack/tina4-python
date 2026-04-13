@@ -4,7 +4,7 @@ Compiles .scss files into a single default.css. No libsass, no node-sass.
 
     from tina4_python.scss import compile_scss
 
-    compile_scss("src/scss", "public/css/default.css")
+    compile_scss("src/scss", "src/public/css/default.css")
 
 Supported features:
     - Variables ($color: #333;)
@@ -26,7 +26,7 @@ import colorsys
 from pathlib import Path
 
 
-def compile_scss(scss_dir: str = "src/scss", output: str = "public/css/default.css",
+def compile_scss(scss_dir: str = "src/scss", output: str = "src/public/css/default.css",
                  minify: bool = False) -> str:
     """Compile all .scss files into a single CSS file.
 
@@ -519,7 +519,7 @@ class ScssCompiler:
 
         return _compile(content)
 
-    def compile_scss(self, scss_dir: str = "src/scss", output: str = "public/css/default.css",
+    def compile_scss(self, scss_dir: str = "src/scss", output: str = "src/public/css/default.css",
                      minify: bool = False) -> str:
         """Compile all .scss files in a directory into a single CSS file."""
         return compile_scss(scss_dir, output, minify)

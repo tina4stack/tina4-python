@@ -77,7 +77,7 @@ def _ensure_folders():
     folders = [
         "src/routes", "src/orm", "src/migrations", "src/seeds",
         "src/templates", "src/templates/errors",
-        "public", "public/js", "public/css", "public/icons",
+        "src/public", "src/public/js", "src/public/css", "src/public/icons",
         "src/locales", "data", "data/.broken", "logs", "secrets", "tests",
     ]
     for folder in folders:
