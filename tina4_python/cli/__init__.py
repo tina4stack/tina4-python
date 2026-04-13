@@ -70,13 +70,19 @@ def _parse_fields(fields_str: str) -> list[tuple[str, str]]:
 
 def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
     """Parse --key value and --flag from args. Returns (flags, positional)."""
+    # Boolean-only flags that never take a value argument
+    boolean_flags = {"no-browser", "no-reload", "production", "managed", "all", "clear"}
+
     flags = {}
     positional = []
     i = 0
     while i < len(args):
         if args[i].startswith("--"):
             key = args[i][2:]
-            if i + 1 < len(args) and not args[i + 1].startswith("--"):
+            if key in boolean_flags:
+                flags[key] = True
+                i += 1
+            elif i + 1 < len(args) and not args[i + 1].startswith("--"):
                 flags[key] = args[i + 1]
                 i += 2
             else:
