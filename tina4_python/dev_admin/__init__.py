@@ -302,7 +302,8 @@ def get_api_handlers() -> dict:
         "/__dev/api/queue": ("GET", _api_queue),
         "/__dev/api/queue/retry": ("POST", _api_queue_retry),
         "/__dev/api/queue/purge": ("POST", _api_queue_purge),
-        "/__dev/api/queue/replay": ("POST", _api_queue_replay),
+        "/__dev/api/queue/replay": ("POST", _api_queue_replay_job),
+        "/__dev/api/queue/dead-letters": ("GET", _api_queue_dead_letters),
         "/__dev/api/mailbox": ("GET", _api_mailbox),
         "/__dev/api/mailbox/read": ("GET", _api_mailbox_read),
         "/__dev/api/mailbox/seed": ("POST", _api_mailbox_seed),
@@ -470,6 +471,37 @@ async def _api_queue_purge(request, response):
         queue.purge(status=status)
         MessageLog.log("queue", f"Purged {status} jobs", {"topic": topic})
         return response({"purged": True})
+    except Exception as e:
+        return response({"error": str(e)}, 500)
+
+
+async def _api_queue_dead_letters(request, response):
+    """List dead letter queue jobs (exceeded max retries)."""
+    try:
+        from tina4_python.queue import Queue
+        topic = request.params.get("topic", "default") if hasattr(request, "params") else "default"
+        queue = Queue(topic=topic)
+        jobs = queue.dead_letters()
+        return response({"jobs": jobs, "count": len(jobs), "topic": topic})
+    except Exception as e:
+        return response({"jobs": [], "error": str(e)})
+
+
+async def _api_queue_replay_job(request, response):
+    """Replay a specific queue job by ID (re-queue from dead letters or failed)."""
+    try:
+        from tina4_python.queue import Queue
+        body = request.body or {}
+        topic = body.get("topic", "default")
+        job_id = body.get("id")
+        delay = int(body.get("delay", 0))
+        queue = Queue(topic=topic)
+        if job_id:
+            result = queue.retry(job_id=job_id, delay_seconds=delay)
+            MessageLog.log("queue", f"Replayed job {job_id}", {"topic": topic})
+            return response({"replayed": result, "id": job_id})
+        else:
+            return response({"error": "Missing job id"}, 400)
     except Exception as e:
         return response({"error": str(e)}, 500)
 
