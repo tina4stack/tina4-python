@@ -423,8 +423,21 @@ async def _api_queue(request, response):
             "reserved": queue.size("reserved"),
         }
 
-        # Jobs by status
+        # Jobs by status — list pending by reading queue files directly
         jobs = []
+        if status_filter == "pending" or not status_filter:
+            queue_dir = os.path.join(os.getcwd(), "data", "queue", topic)
+            if os.path.isdir(queue_dir):
+                for filename in sorted(os.listdir(queue_dir)):
+                    if filename.endswith(".queue-data"):
+                        filepath = os.path.join(queue_dir, filename)
+                        try:
+                            with open(filepath, "r") as fh:
+                                job = json.load(fh)
+                                job["status"] = "pending"
+                                jobs.append(job)
+                        except Exception:
+                            pass
         if status_filter == "failed" or not status_filter:
             for j in queue.failed():
                 j["status"] = "failed"
