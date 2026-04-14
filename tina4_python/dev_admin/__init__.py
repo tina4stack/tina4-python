@@ -300,6 +300,7 @@ def get_api_handlers() -> dict:
         "/__dev/api/status": ("GET", _api_status),
         "/__dev/api/routes": ("GET", _api_routes),
         "/__dev/api/queue": ("GET", _api_queue),
+        "/__dev/api/queue/topics": ("GET", _api_queue_topics),
         "/__dev/api/queue/retry": ("POST", _api_queue_retry),
         "/__dev/api/queue/purge": ("POST", _api_queue_purge),
         "/__dev/api/queue/replay": ("POST", _api_queue_replay_job),
@@ -391,6 +392,19 @@ async def _api_routes(request, response):
         return response({"routes": result, "count": len(result)})
     except Exception as e:
         return response({"routes": [], "count": 0, "error": str(e)})
+
+
+async def _api_queue_topics(request, response):
+    """List available queue topics by scanning the queue data directory."""
+    try:
+        queue_dir = os.path.join(os.getcwd(), "data", "queue")
+        if os.path.isdir(queue_dir):
+            topics = sorted([d for d in os.listdir(queue_dir) if os.path.isdir(os.path.join(queue_dir, d))])
+        else:
+            topics = ["default"]
+        return response({"topics": topics})
+    except Exception as e:
+        return response({"topics": ["default"], "error": str(e)})
 
 
 async def _api_queue(request, response):
