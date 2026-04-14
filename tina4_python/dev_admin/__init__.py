@@ -394,58 +394,35 @@ async def _api_routes(request, response):
 
 
 async def _api_queue(request, response):
-    """Queue status and jobs."""
+    """Queue status and jobs — works with any backend (lite, kafka, mongo, rabbitmq)."""
     try:
-        from tina4_python.database import Database
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
-        db = Database(db_url)
-
-        if not db.table_exists("tina4_queue"):
-            db.close()
-            return response({"jobs": [], "stats": {"pending": 0, "completed": 0, "failed": 0, "reserved": 0}})
-
+        from tina4_python.queue import Queue
+        topic = request.params.get("topic", "default") if hasattr(request, "params") else "default"
         status_filter = request.params.get("status", None) if hasattr(request, "params") else None
-        topic = request.params.get("topic", None) if hasattr(request, "params") else None
-        limit = int(request.params.get("limit", "50")) if hasattr(request, "params") else 50
+        queue = Queue(topic=topic)
 
         # Stats
-        stats = {}
-        for s in ["pending", "completed", "failed", "reserved"]:
-            row = db.fetch_one(
-                "SELECT COUNT(*) as cnt FROM tina4_queue WHERE status = ?", [s]
-            )
-            stats[s] = row["cnt"] if row else 0
+        stats = {
+            "pending": queue.size("pending"),
+            "completed": queue.size("completed"),
+            "failed": queue.size("failed"),
+            "reserved": queue.size("reserved"),
+        }
 
-        # Jobs
-        sql = "SELECT * FROM tina4_queue"
-        params = []
-        conditions = []
-        if status_filter:
-            conditions.append("status = ?")
-            params.append(status_filter)
-        if topic:
-            conditions.append("topic = ?")
-            params.append(topic)
-        if conditions:
-            sql += " WHERE " + " AND ".join(conditions)
-        sql += " ORDER BY id DESC"
-
-        result = db.fetch(sql, params, limit=limit)
+        # Jobs by status
         jobs = []
-        for row in result.records:
-            job = dict(row)
-            # Parse data JSON
-            if isinstance(job.get("data"), str):
-                try:
-                    job["data"] = json.loads(job["data"])
-                except (json.JSONDecodeError, TypeError):
-                    pass
-            jobs.append(job)
+        if status_filter == "failed" or not status_filter:
+            for j in queue.failed():
+                j["status"] = "failed"
+                jobs.append(j)
+        if status_filter == "dead" or not status_filter:
+            for j in queue.dead_letters():
+                j["status"] = "dead_letter"
+                jobs.append(j)
 
-        db.close()
         return response({"jobs": jobs, "stats": stats})
     except Exception as e:
-        return response({"jobs": [], "stats": {}, "error": str(e)})
+        return response({"jobs": [], "stats": {"pending": 0, "completed": 0, "failed": 0, "reserved": 0}, "error": str(e)})
 
 
 async def _api_queue_retry(request, response):
