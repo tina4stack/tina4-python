@@ -693,7 +693,7 @@ async def list_{route_path}(request, response):
     page = int(request.params.get("page", 1))
     per_page = int(request.params.get("per_page", 20))
     offset = (page - 1) * per_page
-    results = {model}().select(limit=per_page, skip=offset)
+    results = {model}().select(limit=per_page, offset=offset)
     return response(results.to_paginate(page=page, per_page=per_page))
 
 
