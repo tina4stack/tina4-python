@@ -113,7 +113,7 @@ def quick_metrics(root: str = "src") -> dict:
         total_functions += functions
 
         file_details.append({
-            "path": str(f.relative_to(root_path)),
+            "path": str(f.relative_to(root_path)).replace("\\", "/"),
             "loc": loc,
             "blank": blank,
             "comment": comment,
@@ -220,9 +220,9 @@ def full_analysis(root: str = "src") -> dict:
             continue
 
         try:
-            rel_path = str(f.relative_to(root_path))
+            rel_path = str(f.relative_to(root_path)).replace("\\", "/")
         except ValueError:
-            rel_path = str(f.relative_to(root_path.parent)) if root_path.parent != f else f.name
+            rel_path = (str(f.relative_to(root_path.parent)) if root_path.parent != f else f.name).replace("\\", "/")
         lines = source.splitlines()
         loc = sum(1 for l in lines if l.strip() and not l.strip().startswith("#"))
 
