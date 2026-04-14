@@ -425,8 +425,8 @@ def _make_orm_list_resolver(orm_class):
     def resolve(root, args, ctx):
         limit = args.get("limit", 10)
         offset = args.get("offset", 0)
-        result = orm_class().select(limit=limit, skip=offset)
-        return result.to_array() if hasattr(result, "to_array") else list(result)
+        records = orm_class.all(limit=limit, offset=offset)
+        return [r.to_dict() for r in records]
     return resolve
 
 
