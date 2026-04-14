@@ -335,6 +335,7 @@ def get_api_handlers() -> dict:
         "/__dev/api/metrics": ("GET", _api_metrics),
         "/__dev/api/metrics/full": ("GET", _api_metrics_full),
         "/__dev/api/metrics/file": ("GET", _api_metrics_file),
+        "/__dev/api/graphql/schema": ("GET", _api_graphql_schema),
     }
 
 
@@ -1310,6 +1311,27 @@ async def _api_metrics_file(request, response):
     if not path:
         return response({"error": "Missing path parameter"}, 400)
     return response(file_detail(path))
+
+
+async def _api_graphql_schema(request, response):
+    """GraphQL schema introspection — auto-discovers ORM models and returns schema + SDL."""
+    try:
+        from tina4_python.graphql import GraphQL
+        from tina4_python.orm.model import ORM
+
+        gql = GraphQL()
+        # Auto-discover all ORM subclasses
+        for cls in ORM.__subclasses__():
+            try:
+                gql.schema.from_orm(cls)
+            except Exception:
+                pass  # Skip models that can't be introspected
+        return response({
+            "schema": gql.introspect(),
+            "sdl": gql.schema_sdl(),
+        })
+    except Exception as e:
+        return response({"error": str(e)}, 400)
 
 
 # Module startup time for uptime tracking
