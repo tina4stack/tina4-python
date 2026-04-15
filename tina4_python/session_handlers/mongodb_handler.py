@@ -7,7 +7,7 @@ Environment variables:
     TINA4_SESSION_MONGO_URL        — MongoDB URL (default: mongodb://localhost:27017)
     TINA4_SESSION_MONGO_DB         — database name (default: tina4)
     TINA4_SESSION_MONGO_COLLECTION — collection name (default: sessions)
-    TINA4_SESSION_TTL              — session TTL in seconds (default: 1800)
+    TINA4_SESSION_TTL              — session TTL in seconds (default: 3600)
 """
 import json
 import os
@@ -28,7 +28,7 @@ class MongoDBSessionHandler(SessionHandler):
         mongo_url = config.get("url", os.environ.get("TINA4_SESSION_MONGO_URL", "mongodb://localhost:27017"))
         self._database = config.get("database", os.environ.get("TINA4_SESSION_MONGO_DB", "tina4"))
         self._collection_name = config.get("collection", os.environ.get("TINA4_SESSION_MONGO_COLLECTION", "sessions"))
-        self._ttl = int(config.get("ttl", os.environ.get("TINA4_SESSION_TTL", "1800")))
+        self._ttl = int(config.get("ttl", os.environ.get("TINA4_SESSION_TTL", "3600")))
 
         self._pymongo_client = None
         self._collection = None

@@ -890,3 +890,53 @@ class TestWebSocketRooms:
         assert "lobby" in ws.rooms
         assert mgr.room_count("chat") == 0
         assert mgr.room_count("lobby") == 1
+
+
+class TestWebSocketParityGaps:
+    """Parity additions: get_client_rooms() and route(handler=) overload."""
+
+    def _make_ws(self, path="/"):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            reader = asyncio.StreamReader()
+            transport = _mock_transport()
+            protocol = type("P", (), {})()
+            writer = asyncio.StreamWriter(transport, protocol, reader, loop)
+            ws = WebSocketConnection(reader, writer, path)
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+        return ws
+
+    def test_get_client_rooms_returns_room_names(self):
+        mgr = WebSocketManager()
+        ws1 = self._make_ws()
+        ws2 = self._make_ws()
+        mgr.add(ws1)
+        mgr.add(ws2)
+        ws1.join_room("alpha")
+        ws1.join_room("beta")
+        ws2.join_room("beta")
+
+        rooms1 = mgr.get_client_rooms(ws1.id)
+        rooms2 = mgr.get_client_rooms(ws2.id)
+        rooms_missing = mgr.get_client_rooms("nonexistent-id")
+
+        assert sorted(rooms1) == ["alpha", "beta"]
+        assert rooms2 == ["beta"]
+        assert rooms_missing == []
+
+    def test_route_accepts_optional_handler(self):
+        server = WebSocketServer()
+
+        async def my_handler(ws):
+            pass
+
+        # Direct registration (non-decorator form)
+        result = server.route("/ws/direct", my_handler)
+
+        assert "/ws/direct" in server._handlers
+        assert server._handlers["/ws/direct"]["handler"] is my_handler
+        # Returns the handler itself for fluent use
+        assert result is my_handler

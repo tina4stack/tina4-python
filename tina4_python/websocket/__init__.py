@@ -418,6 +418,15 @@ class WebSocketManager:
         ids = self._rooms.get(room_name, set())
         return [self._connections[i] for i in ids if i in self._connections]
 
+    def get_client_rooms(self, client_id: str) -> list[str]:
+        """Return the list of room names a specific client belongs to.
+
+        Mirrors PHP's ``getClientRooms()`` and the per-connection ``conn.rooms``
+        property — useful when you have a client ID but not the connection
+        object itself.
+        """
+        return [room for room, members in self._rooms.items() if client_id in members]
+
     async def broadcast_to_room(self, room_name: str, message: str | bytes,
                                  exclude: str = None) -> None:
         """Send message to all connections in a room."""
@@ -437,8 +446,12 @@ class WebSocketServer:
         self._handlers: dict[str, dict[str, Callable]] = {}
         self._server: asyncio.AbstractServer | None = None
 
-    def route(self, path: str):
-        """Decorator to register a WebSocket handler for a path.
+    def route(self, path: str, handler: Callable | None = None):
+        """Register a WebSocket handler for a path.
+
+        Can be used either as a decorator (``@server.route("/chat")``) or
+        called directly with a handler (``server.route("/chat", chat_handler)``)
+        for parity with PHP/Ruby/Node.
 
         Registers both on this server instance (standalone mode) and on the
         main Router (integrated mode) so routes work either way.
@@ -471,6 +484,9 @@ class WebSocketServer:
             from tina4_python.core.router import Router
             Router.websocket(path, _router_adapter)
             return func
+
+        if handler is not None:
+            return decorator(handler)
         return decorator
 
     def on_connect(self, path: str):
