@@ -30,6 +30,14 @@ class TestVariables:
     def test_array_access(self, engine):
         assert engine.render_string("{{ items[0] }}", {"items": ["first", "second"]}) == "first"
 
+    def test_numeric_dotted_index(self, engine):
+        # Parity with PHP/Ruby Frond: items.0.name resolves to "Alice"
+        data = {"items": [{"name": "Alice"}, {"name": "Bob"}]}
+        assert engine.render_string("{{ items.0.name }}", data) == "Alice"
+        assert engine.render_string("{{ items.1.name }}", data) == "Bob"
+        # Out-of-range returns empty string, not an error
+        assert engine.render_string("{{ items.5.name }}", data) == ""
+
     def test_missing_variable(self, engine):
         assert engine.render_string("{{ missing }}", {}) == ""
 

@@ -414,6 +414,13 @@ def _resolve(expr: str, context: dict):
                     return None
             elif isinstance(value, dict):
                 value = value.get(part)
+            elif isinstance(value, (list, tuple)) and part.isdigit():
+                # Numeric dot-index into a list/tuple: items.0.name
+                idx = int(part)
+                try:
+                    value = value[idx]
+                except IndexError:
+                    return None
             elif hasattr(value, part):
                 attr = getattr(value, part)
                 value = attr() if callable(attr) else attr
