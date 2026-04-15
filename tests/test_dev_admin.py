@@ -301,7 +301,7 @@ class TestGetAPIHandlers:
 
     def test_handler_count(self):
         handlers = get_api_handlers()
-        assert len(handlers) == 38
+        assert len(handlers) == 41
 
     def test_tables_handler_registered(self):
         handlers = get_api_handlers()
