@@ -535,6 +535,68 @@ class TestAPIHandlers:
         assert "mtime" in result
         assert isinstance(result["mtime"], (int, float))
 
+    # ── Hot-reload parity tests ────────────────────────────────────
+    # Mirrors tina4-php/tests/DevAdminTest.php, tina4-ruby/spec/dev_admin_spec.rb,
+    # tina4-nodejs/test/devAdmin.test.ts. The mtime counter must only
+    # advance when POST /__dev/api/reload is called. No filesystem scan.
+
+    @pytest.mark.asyncio
+    async def test_hot_reload_mtime_starts_at_zero(self, mock_req, mock_resp):
+        from tina4_python import dev_admin
+        dev_admin._reload_mtime[0] = 0
+        dev_admin._reload_file[0] = ""
+        result = await dev_admin._api_mtime(mock_req, mock_resp)
+        assert result["mtime"] == 0
+        assert result["file"] == ""
+
+    @pytest.mark.asyncio
+    async def test_hot_reload_post_bumps_mtime(self, mock_resp):
+        import time as _time
+        from tina4_python import dev_admin
+        dev_admin._reload_mtime[0] = 0
+        dev_admin._reload_file[0] = ""
+
+        req = type("Req", (), {"params": {}, "body": {"file": "src/routes/home.py", "type": "reload"}})()
+        before = int(_time.time())
+        await dev_admin._api_reload(req, mock_resp)
+        after = int(_time.time())
+
+        got = await dev_admin._api_mtime(req, mock_resp)
+        assert before <= got["mtime"] <= after
+        assert got["file"] == "src/routes/home.py"
+
+    @pytest.mark.asyncio
+    async def test_hot_reload_does_not_touch_filesystem(self, mock_resp, tmp_path, monkeypatch):
+        """Regression: no sentinel file under src/ or .tina4/."""
+        from tina4_python import dev_admin
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        dev_admin._reload_mtime[0] = 0
+
+        req = type("Req", (), {"params": {}, "body": {"file": "whatever.py"}})()
+        await dev_admin._api_reload(req, mock_resp)
+
+        assert not (tmp_path / "src" / ".reload_sentinel").exists()
+        assert not (tmp_path / ".tina4" / ".reload_sentinel").exists()
+
+    @pytest.mark.asyncio
+    async def test_hot_reload_mtime_is_monotonic(self, mock_resp):
+        import time as _time
+        from tina4_python import dev_admin
+        dev_admin._reload_mtime[0] = 0
+
+        req1 = type("Req", (), {"params": {}, "body": {"file": "a.py"}})()
+        req2 = type("Req", (), {"params": {}, "body": {"file": "b.py"}})()
+
+        await dev_admin._api_reload(req1, mock_resp)
+        m1 = (await dev_admin._api_mtime(req1, mock_resp))["mtime"]
+        _time.sleep(1)
+        await dev_admin._api_reload(req2, mock_resp)
+        m2 = (await dev_admin._api_mtime(req2, mock_resp))["mtime"]
+
+        assert m2 > m1
+        assert (await dev_admin._api_mtime(req2, mock_resp))["file"] == "b.py"
+
     @pytest.mark.asyncio
     async def test_connections_handler(self, mock_req, mock_resp):
         from tina4_python.dev_admin import _api_connections
