@@ -55,9 +55,17 @@ Set `TINA4_DEBUG=true` in `.env` to enable:
 - **CSS hot-reload** — SCSS/CSS changes refresh stylesheets without full page reload
 - **SCSS auto-compile** — `.scss` files in `src/scss/` compiled to `src/public/css/` on save
 - **Error overlay** — Runtime errors display a rich, syntax-highlighted overlay in the browser
-- **Hot-patching** — Python code changes are live-patched via jurigged (no server restart)
 
-DevReload connects via WebSocket at `/__dev_reload`. No configuration needed.
+### How DevReload works
+
+The `tina4` Rust CLI is the sole file watcher for the Tina4 stack — there is no framework-side watcher (removed in 3.11.x). The flow is:
+
+1. Rust CLI (`tina4 serve`) watches `src/`, `migrations/`, `.env`. Noise is filtered (Access/Metadata events, `__pycache__`, `.git`, `node_modules`, `logs`, `.log`/`.db*`/`.swp`/`.pyc` files) and a real mtime check defeats overlayfs spurious events.
+2. On a real change, the CLI POSTs `/__dev/api/reload` to the running framework.
+3. The framework bumps its in-memory reload counter and (a) broadcasts `{type: 'reload'}` over WebSocket at `/__dev_reload`, and (b) exposes the counter at `GET /__dev/api/mtime` for the polling fallback.
+4. The browser's dev toolbar JS listens on the WS (primary) and polls `/__dev/api/mtime` every 3s (fallback). On a change it reloads the page, or swaps the stylesheet if the change was CSS.
+
+No configuration needed. If you're running without the Rust CLI (e.g. Docker), set `TINA4_OVERRIDE_CLIENT=true` — in that mode there is no automatic reload.
 
 ## Project Structure
 
