@@ -5,13 +5,13 @@
 <h1 align="center">Tina4 Python</h1>
 
 <p align="center">
-  54 built-in features. Zero dependencies. One import, everything works.
+  55 built-in features. Zero dependencies. One import, everything works.
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/tina4-python/"><img src="https://img.shields.io/pypi/v/tina4-python?color=7b1fa2&label=PyPI" alt="PyPI"></a>
-  <img src="https://img.shields.io/badge/tests-2%2C068%20passing-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/features-54-blue" alt="Features">
+  <img src="https://img.shields.io/badge/tests-2%2C281%20passing-brightgreen" alt="Tests">
+  <img src="https://img.shields.io/badge/features-55-blue" alt="Features">
   <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="Zero Deps">
   <a href="https://tina4.com"><img src="https://img.shields.io/badge/docs-tina4.com-7b1fa2" alt="Docs"></a>
 </p>
@@ -40,10 +40,12 @@ tina4 init python ./my-app
 cd my-app && tina4 serve
 ```
 
-Open http://localhost:7145 — your app is running.
+Open http://localhost:7146 — your app is running.
 
 <details>
-<summary><strong>Without the Tina4 CLI</strong></summary>
+<summary><strong>Without the Tina4 CLI (Docker / CI only)</strong></summary>
+
+The framework normally refuses to start without the `tina4` Rust CLI (it owns file watching and SCSS compilation). To bypass — e.g. inside a Docker image where you've already built the assets — set `TINA4_OVERRIDE_CLIENT=true` in `.env`:
 
 ```bash
 # 1. Create project
@@ -53,24 +55,25 @@ uv init && uv add tina4-python
 # 2. Create entry point
 echo 'from tina4_python.core import run; run()' > app.py
 
-# 3. Create .env
+# 3. Create .env (note the override)
 echo 'TINA4_DEBUG=true' > .env
 echo 'TINA4_LOG_LEVEL=ALL' >> .env
+echo 'TINA4_OVERRIDE_CLIENT=true' >> .env
 
 # 4. Create route directory
 mkdir -p src/routes
 
-# 5. Run
+# 5. Run (no file watching, no hot reload in this mode)
 uv run python app.py
 ```
 
-Open http://localhost:7145
+Open http://localhost:7146
 
 </details>
 
 ---
 
-## What's Built In (54 Features)
+## What's Built In (55 Features)
 
 Every feature is built from scratch -- no pip install, no node_modules, no third-party runtime dependencies in core.
 
@@ -87,7 +90,7 @@ Every feature is built from scratch -- no pip install, no node_modules, no third
 | **Developer Tools** (7) | Dev dashboard (11 tabs), dev toolbar, error overlay (Catppuccin Mocha), dev mailbox, hot reload + CSS hot-reload, code metrics (complexity, coupling, maintainability), AI context installer (7 tools) |
 | **Utilities** (7) | DI container (transient + singleton), HtmlElement builder, inline testing (`@tests` decorator), i18n (6 languages), Swagger/OpenAPI auto-generation, CLI scaffolding (`generate model/route/migration/middleware`), structured logging |
 
-**2,066 tests. Zero dependencies. Full parity across Python, PHP, Ruby, and Node.js.**
+**2,281 tests. Zero dependencies. Full parity across Python, PHP, Ruby, and Node.js.**
 
 For full documentation visit **[tina4.com](https://tina4.com)**.
 
@@ -166,7 +169,7 @@ async def hello_name(request, response):
     return response({"message": f"Hello, {name}!"})
 ```
 
-Visit `http://localhost:7145/api/hello` -- routes are auto-discovered, no imports needed.
+Visit `http://localhost:7146/api/hello` -- routes are auto-discovered, no imports needed.
 
 ### 3. Add a database
 
@@ -570,10 +573,10 @@ cache.tag("users").flush()
 
 Set `TINA4_DEBUG=true` in `.env` to enable:
 
-- **Live reload** -- browser auto-refreshes on code changes
-- **CSS hot-reload** -- SCSS changes apply without page refresh
+- **Live reload** -- the `tina4` Rust CLI watches `src/`, `migrations/`, `.env` and POSTs `/__dev/api/reload` to the running server; the framework broadcasts to the browser via WebSocket (`/__dev_reload`) with a polling fallback (`GET /__dev/api/mtime`)
+- **CSS hot-reload** -- SCSS changes apply without a full page refresh
 - **Error overlay** -- rich error display in the browser
-- **Dev admin** at `/__dev/` with 11 tabs: Routes, Queue, Mailbox, Messages, Database, Requests, Errors, WebSocket, System, Tools, Tina4
+- **Dev admin** at `/__dev/` with tabs: Routes, Queue, Mailbox, Messages, Database, Requests, Errors, WebSocket, System, Tools, Tina4
 
 ---
 
@@ -581,7 +584,7 @@ Set `TINA4_DEBUG=true` in `.env` to enable:
 
 ```bash
 tina4python init [dir]             # Scaffold a new project
-tina4python serve [port]           # Start dev server (default: 7145)
+tina4python serve [--port P] [--no-browser] [--no-reload]  # Dev server (default: 0.0.0.0:7146)
 tina4python serve --production     # Auto-install and use best production server (uvicorn)
 tina4python migrate                # Run pending migrations
 tina4python migrate:create <desc>  # Create a migration file
@@ -683,13 +686,13 @@ Benchmarked with `wrk` — 5,000 requests, 50 concurrent, median of 3 runs:
 
 | Framework | JSON req/s | Deps | Features |
 |-----------|-----------|------|----------|
-| **Tina4 Python** | **6,508** | 0 | 54 |
+| **Tina4 Python** | **6,508** | 0 | 55 |
 | FastAPI | 12,652 | 12+ | ~8 |
 | Flask | 4,928 | 6+ | ~7 |
 | Bottle | 4,355 | 0 | ~5 |
 | Django | 4,050 | 20+ | ~22 |
 
-Tina4 Python delivers competitive throughput with **zero dependencies and 54 features** — frameworks with higher req/s have a fraction of the functionality and require dozens of third-party packages.
+Tina4 Python delivers competitive throughput with **zero dependencies and 55 features** — frameworks with higher req/s have a fraction of the functionality and require dozens of third-party packages.
 
 **Across all 4 Tina4 implementations:**
 
@@ -697,7 +700,7 @@ Tina4 Python delivers competitive throughput with **zero dependencies and 54 fea
 |---|--------|-----|------|---------|
 | **JSON req/s** | 6,508 | 29,293 | 10,243 | 84,771 |
 | **Dependencies** | 0 | 0 | 0 | 0 |
-| **Features** | 54 | 54 | 54 | 54 |
+| **Features** | 55 | 55 | 55 | 55 |
 
 Run benchmarks locally: `python benchmarks/benchmark.py --python`
 
@@ -705,15 +708,15 @@ Run benchmarks locally: `python benchmarks/benchmark.py --python`
 
 ## Cross-Framework Parity
 
-Tina4 ships identical features across four languages — same architecture, same conventions, same 54 features:
+Tina4 ships identical features across four languages — same architecture, same conventions, same 55 features:
 
 | | Python | PHP | Ruby | Node.js |
 |---|--------|-----|------|---------|
 | **Package** | `tina4-python` | `tina4stack/tina4php` | `tina4ruby` | `tina4-nodejs` |
-| **Tests** | 2,066 | 1,427 | 1,793 | 1,950 |
-| **Default port** | 7145 | 7146 | 7147 | 7148 |
+| **Tests (v3.11.12)** | 2,281 | 2,073 | 2,508 | 2,897 |
+| **Default port** | 7146 | 7145 | 7147 | 7148 |
 
-**7,236 tests** across all 4 frameworks. See [tina4.com](https://tina4.com).
+**~9,700 tests** across all 4 frameworks. See [tina4.com](https://tina4.com).
 
 ---
 
