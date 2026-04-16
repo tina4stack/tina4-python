@@ -253,7 +253,7 @@ def _is_gallery_deployed(name: str) -> bool:
 def _gallery_btn(name: str, try_url: str) -> str:
     """Render a Try It or View button depending on deployment state."""
     if _is_gallery_deployed(name):
-        return f'<button class="try-btn" style="background:#22c55e;" onclick="window.location.href=\'{try_url}\'" data-deployed="1">View &#8599;</button>'
+        return f'<button class="try-btn" style="background:#22c55e;" onclick="window.open(\'{try_url}\',\'_blank\')" data-deployed="1">View &#8599;</button>'
     return f'<button class="try-btn" onclick="deployGallery(\'{name}\',\'{try_url}\')">Try It</button>'
 
 
@@ -437,18 +437,20 @@ function deployGallery(name, tryUrl) {{
             btn.style.background = '#22c55e';
             btn.disabled = false;
             btn.dataset.deployed = '1';
-            // Wait for the newly deployed route to become reachable before navigating
+            // Wait for the newly deployed route to become reachable, then
+            // open it in a new tab so the dev-admin / gallery home stays
+            // open (fixes tina4-book#115).
             var attempts = 0;
             var maxAttempts = 5;
             function pollRoute() {{
                 fetch(tryUrl, {{method: 'HEAD'}}).then(function() {{
-                    window.location.href = tryUrl;
+                    window.open(tryUrl, '_blank');
                 }}).catch(function() {{
                     attempts++;
                     if (attempts < maxAttempts) {{
                         setTimeout(pollRoute, 500);
                     }} else {{
-                        window.location.href = tryUrl;
+                        window.open(tryUrl, '_blank');
                     }}
                 }});
             }}
