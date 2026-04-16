@@ -181,11 +181,71 @@ class TestPatternEdgeCases:
         pattern, _ = _compile_pattern("/")
         assert pattern.match("/")
 
-    def test_unknown_type_hint_treated_as_segment(self):
+    def test_uuid_param_matches_valid_uuid(self):
         pattern, params = _compile_pattern("/api/{id:uuid}")
         m = pattern.match("/api/550e8400-e29b-41d4-a716-446655440000")
         assert m is not None
         assert params == ["id"]
+
+    def test_uuid_param_rejects_non_uuid(self):
+        pattern, _ = _compile_pattern("/api/{id:uuid}")
+        assert pattern.match("/api/not-a-uuid") is None
+        assert pattern.match("/api/123") is None
+
+    def test_alpha_param_matches_letters_only(self):
+        pattern, params = _compile_pattern("/api/{name:alpha}")
+        assert pattern.match("/api/alice") is not None
+        assert pattern.match("/api/Alice") is not None
+        assert params == ["name"]
+
+    def test_alpha_param_rejects_digits(self):
+        # fixes tina4-book#125 — developer expectation: :alpha = letters only
+        pattern, _ = _compile_pattern("/api/{name:alpha}")
+        assert pattern.match("/api/alice123") is None
+        assert pattern.match("/api/123") is None
+        assert pattern.match("/api/alice-bob") is None  # hyphen rejected
+
+    def test_alnum_param_matches_letters_and_digits(self):
+        pattern, _ = _compile_pattern("/api/{code:alnum}")
+        assert pattern.match("/api/abc123") is not None
+        assert pattern.match("/api/ABC") is not None
+        assert pattern.match("/api/123") is not None
+
+    def test_alnum_param_rejects_punctuation(self):
+        pattern, _ = _compile_pattern("/api/{code:alnum}")
+        assert pattern.match("/api/abc-123") is None
+        assert pattern.match("/api/abc.123") is None
+
+    def test_slug_param_matches_urlsafe_slug(self):
+        pattern, _ = _compile_pattern("/posts/{slug:slug}")
+        assert pattern.match("/posts/hello-world") is not None
+        assert pattern.match("/posts/post-123") is not None
+        assert pattern.match("/posts/a") is not None
+
+    def test_slug_param_rejects_uppercase_and_underscore(self):
+        pattern, _ = _compile_pattern("/posts/{slug:slug}")
+        assert pattern.match("/posts/Hello-World") is None   # uppercase rejected
+        assert pattern.match("/posts/hello_world") is None   # underscore rejected
+        assert pattern.match("/posts/hello world") is None   # space rejected
+
+    def test_explicit_string_type_matches_default(self):
+        """``{name:string}`` should behave identically to ``{name}``."""
+        explicit, _ = _compile_pattern("/users/{name:string}")
+        implicit, _ = _compile_pattern("/users/{name}")
+        assert explicit.match("/users/alice") is not None
+        assert implicit.match("/users/alice") is not None
+        assert explicit.match("/users/alice").groups() == implicit.match("/users/alice").groups()
+
+    def test_unknown_type_raises_at_registration(self):
+        """Typos like ``:inetger`` or unsupported types like ``:word`` must
+        raise at route registration so the developer sees the error at boot —
+        not silently fall through to the default matcher (tina4-book#125)."""
+        with pytest.raises(ValueError, match="Unknown param type"):
+            _compile_pattern("/api/{id:inetger}")
+        with pytest.raises(ValueError, match="Unknown param type"):
+            _compile_pattern("/api/{name:word}")
+        with pytest.raises(ValueError, match="Unknown param type"):
+            _compile_pattern("/api/{name:str}")  # the one from #125
 
 
 class TestAuthDecorators:

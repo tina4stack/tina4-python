@@ -77,7 +77,7 @@ class TestRedisHandlerConfig:
         assert handler._host == "localhost"
         assert handler._port == 6379
         assert handler._db == 0
-        assert handler._ttl == 1800
+        assert handler._ttl == 3600  # default documented in redis_handler.py
         assert handler._prefix == "tina4:session:"
 
     def test_custom_config(self):
@@ -190,7 +190,7 @@ class TestMongoDBHandlerConfig:
         assert handler._port == 27017
         assert handler._database == "tina4"
         assert handler._collection_name == "sessions"
-        assert handler._ttl == 1800
+        assert handler._ttl == 3600  # default documented in mongodb_handler.py
 
     def test_custom_config(self):
         from tina4_python.session_handlers.mongodb_handler import MongoDBSessionHandler
@@ -303,7 +303,7 @@ class TestValkeyHandlerConfig:
         assert handler._host == "localhost"
         assert handler._port == 6379
         assert handler._db == 0
-        assert handler._ttl == 1800
+        assert handler._ttl == 3600  # default documented in valkey_handler.py
         assert handler._prefix == "tina4:session:"
 
     def test_custom_config(self):

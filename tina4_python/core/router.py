@@ -342,19 +342,49 @@ class Router:
         _ws_routes.clear()
 
 
+# Supported typed-parameter constraints. Keys are the type name written in
+# the route pattern (e.g. ``{id:int}``); values are the regex that the param
+# must match. Mirrored verbatim in PHP/Ruby/Node.js for cross-framework parity.
+#
+# Any type name that isn't in this table raises at route registration time —
+# we never silently fall through to the default matcher, because a typo like
+# ``{id:inetger}`` would otherwise match anything and create a security
+# footgun (see tina4-book#125).
+_TYPE_PATTERNS = {
+    "string":   "[^/]+",                                         # default, any non-slash segment
+    "int":      r"\d+",
+    "integer":  r"\d+",
+    "float":    r"[\d.]+",
+    "number":   r"[\d.]+",
+    "alpha":    "[A-Za-z]+",                                     # letters only
+    "alnum":    "[A-Za-z0-9]+",                                  # letters + digits
+    "slug":     "[a-z0-9-]+",                                    # URL slug
+    "uuid":     "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+    "path":     ".+",                                            # greedy — matches remaining path
+    ".*":       ".+",
+}
+
+
 def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
     """Convert a route path to a regex pattern.
 
     Supports:
-        /api/users          → exact match
-        /api/users/{id}     → named parameter (any non-slash chars)
-        /api/files/{path:path}  → greedy (matches remaining path)
+        /api/users                → exact match
+        /api/users/{id}           → named parameter (any non-slash chars)
+        /api/users/{id:int}       → digits only
+        /api/users/{name:alpha}   → letters only
+        /api/users/{slug:slug}    → URL slug (a-z 0-9 -)
+        /api/users/{id:uuid}      → UUID v4 format
+        /api/files/{p:path}       → greedy (matches remaining path)
+        /api/docs/*               → bare-wildcard catch-all (key "*")
+
+    Unknown type names raise ``ValueError`` at route registration time.
     """
     param_names = []
     regex_parts = []
 
     segments = path.strip("/").split("/")
-    for i, segment in enumerate(segments):
+    for segment in segments:
         if segment == "*":
             # Wildcard: matches the rest of the path (greedy)
             param_names.append("*")
@@ -364,14 +394,12 @@ def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
             inner = segment[1:-1]
             if ":" in inner:
                 name, type_hint = inner.split(":", 1)
-                if type_hint == "path":
-                    regex_parts.append("(.+)")
-                elif type_hint == "int":
-                    regex_parts.append("(\\d+)")
-                elif type_hint == "float":
-                    regex_parts.append("([\\d.]+)")
-                else:
-                    regex_parts.append("([^/]+)")
+                if type_hint not in _TYPE_PATTERNS:
+                    raise ValueError(
+                        f"Unknown param type {type_hint!r} in route {path!r}. "
+                        f"Valid types: {', '.join(sorted(k for k in _TYPE_PATTERNS if k != '.*'))}."
+                    )
+                regex_parts.append("(" + _TYPE_PATTERNS[type_hint] + ")")
             else:
                 name = inner
                 regex_parts.append("([^/]+)")
