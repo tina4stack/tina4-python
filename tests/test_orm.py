@@ -120,6 +120,115 @@ class TestFieldsNegative:
             f.validate("not_a_number")
 
 
+class TestFieldsNativeTypes:
+    """Read-path tests: drivers return native Python types, Field.validate must
+    NOT re-coerce them. Previously, psycopg2 / pyodbc / mssql handing back a
+    datetime.datetime crashed every ORM read of a DateTimeField because
+    `datetime(datetime_instance)` raises TypeError. See
+    plan/orm-field-validate-native-types.md.
+    """
+
+    def test_datetime_field_accepts_native_datetime(self):
+        from datetime import datetime
+        from tina4_python.orm.fields import DateTimeField
+
+        f = DateTimeField()
+        f.name = "created_at"
+        now = datetime.now()
+        assert f.validate(now) == now
+
+    def test_datetime_field_accepts_iso_string(self):
+        """SQLite returns datetimes as ISO strings — field must parse."""
+        from datetime import datetime
+        from tina4_python.orm.fields import DateTimeField
+
+        f = DateTimeField()
+        f.name = "created_at"
+        iso = "2026-04-16T22:30:00"
+        assert f.validate(iso) == datetime(2026, 4, 16, 22, 30, 0)
+
+    def test_datetime_field_none_returns_default(self):
+        from datetime import datetime
+        from tina4_python.orm.fields import DateTimeField
+
+        default = datetime(2020, 1, 1)
+        f = DateTimeField(default=default)
+        f.name = "created_at"
+        assert f.validate(None) == default
+
+    def test_boolean_field_coerces_int_0_1(self):
+        """SQLite/MySQL/Firebird return 0/1 for bool columns — still coerce."""
+        from tina4_python.orm.fields import BooleanField
+
+        f = BooleanField()
+        f.name = "active"
+        assert f.validate(1) is True
+        assert f.validate(0) is False
+
+    def test_boolean_field_accepts_native_bool(self):
+        """psycopg2 returns native True/False — short-circuit, don't re-wrap."""
+        from tina4_python.orm.fields import BooleanField
+
+        f = BooleanField()
+        f.name = "active"
+        assert f.validate(True) is True
+        assert f.validate(False) is False
+
+    def test_integer_field_coerces_bool_to_int(self):
+        """Preserve legacy semantics: True -> 1, False -> 0."""
+        from tina4_python.orm.fields import IntegerField
+
+        f = IntegerField()
+        f.name = "count"
+        assert f.validate(True) == 1
+        assert type(f.validate(True)) is int
+        assert f.validate(False) == 0
+        assert type(f.validate(False)) is int
+
+    def test_integer_field_short_circuits_native_int(self):
+        from tina4_python.orm.fields import IntegerField
+
+        f = IntegerField()
+        f.name = "count"
+        assert f.validate(42) == 42
+
+    def test_blob_field_accepts_native_bytes(self):
+        """PostgreSQL/MSSQL return bytes directly — don't re-wrap."""
+        from tina4_python.orm.fields import BlobField
+
+        f = BlobField()
+        f.name = "payload"
+        data = b"\x00\x01binary"
+        assert f.validate(data) == data
+
+    def test_float_field_short_circuits_native_float(self):
+        from tina4_python.orm.fields import FloatField
+
+        f = FloatField()
+        f.name = "price"
+        assert f.validate(3.14) == 3.14
+
+    def test_string_field_length_still_enforced(self):
+        """Regression guard: short-circuit must not skip length/regex checks."""
+        from tina4_python.orm.fields import StringField
+
+        f = StringField(max_length=5)
+        f.name = "name"
+        with pytest.raises(ValueError, match="maximum length"):
+            f.validate("toolong")
+
+    def test_foreign_key_field_short_circuits_native_int(self):
+        from tina4_python.orm.fields import ForeignKeyField
+
+        class _Dummy:
+            pass
+
+        f = ForeignKeyField(to=_Dummy)
+        f.name = "dummy_id"
+        assert f.validate(42) == 42
+        assert f.validate(True) == 1  # bool -> int legacy
+
+
 # ── ORM CRUD Tests ──────────────────────────────────────────────
 
 

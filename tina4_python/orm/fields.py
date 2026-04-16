@@ -58,10 +58,41 @@ class Field:
                 raise ValueError(f"Field '{self.name}' is required")
             return self.default
 
-        # Type coercion
+        # Type coercion.
+        #
+        # `validate()` runs on BOTH the write path (user input from routes/forms)
+        # and the read path (rows coming back from the database driver). Drivers
+        # return values in different shapes per engine:
+        #
+        #   engine        datetime column     bool column    numeric column
+        #   --------      ----------------    -----------    --------------
+        #   SQLite        str                 int (0/1)      float / int
+        #   PostgreSQL    datetime            bool           Decimal
+        #   MySQL         datetime            int (0/1)      Decimal
+        #   MSSQL         datetime            bool           Decimal
+        #   Firebird      datetime            int (0/1)      Decimal
+        #
+        # So the rule is: if the driver already handed us the right type,
+        # accept it as-is. Otherwise coerce. This avoids the classic crash
+        # `datetime(datetime_instance)` that hit every PostgreSQL ORM read.
+        #
+        # Care is needed around `bool` being a subclass of `int` in Python —
+        # we handle those two paths explicitly before the generic fast path.
         try:
-            if self.field_type == bool and isinstance(value, int):
+            # BooleanField receiving an int (e.g. SQLite 0/1) → cast to bool
+            if self.field_type is bool and isinstance(value, int) and not isinstance(value, bool):
                 value = bool(value)
+            # IntegerField receiving a bool → cast to int (preserve legacy behaviour
+            # where True/False round-trip as 1/0 in numeric columns)
+            elif self.field_type is int and isinstance(value, bool):
+                value = int(value)
+            # DateTimeField receiving an ISO-8601 string (SQLite default) → parse
+            elif self.field_type is datetime and isinstance(value, str):
+                value = datetime.fromisoformat(value)
+            # Fast path: driver already handed us the correct type. Don't re-coerce —
+            # `datetime(datetime_instance)` etc. raises TypeError otherwise.
+            elif isinstance(value, self.field_type):
+                pass
             else:
                 value = self.field_type(value)
         except (TypeError, ValueError) as e:
