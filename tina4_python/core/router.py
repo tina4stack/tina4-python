@@ -518,9 +518,13 @@ def cached(max_age: int = 60):
 def template(template_name: str):
     """Auto-render a dict return value through a Frond/Twig template.
 
-    Usage:
-        @template("pages/dashboard.twig")
+    IMPORTANT: ``@template`` must sit BELOW the route decorator so the
+    wrapper is registered (route decorators capture the current function
+    reference when applied — a @template above @get never reaches the
+    router). Correct order:
+
         @get("/dashboard")
+        @template("pages/dashboard.twig")
         async def dashboard(request, response):
             return {"title": "Dashboard", "items": get_items()}
 

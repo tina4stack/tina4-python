@@ -15,8 +15,9 @@ class TestAITools:
         assert isinstance(AI_TOOLS, list)
         assert len(AI_TOOLS) > 0
 
-    def test_tools_have_seven_entries(self):
-        assert len(AI_TOOLS) == 7
+    def test_tools_count_matches_known_set(self):
+        # Bumped to 8 in 3.11.13: added Google Antigravity (tina4-book#75)
+        assert len(AI_TOOLS) == 8
 
     def test_tools_have_required_keys(self):
         for tool in AI_TOOLS:
@@ -33,6 +34,7 @@ class TestAITools:
         assert "aider" in names
         assert "cline" in names
         assert "codex" in names
+        assert "antigravity" in names  # Google Antigravity
 
 
 class TestIsInstalled:

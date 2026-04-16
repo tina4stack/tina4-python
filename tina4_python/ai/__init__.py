@@ -20,6 +20,7 @@ AI_TOOLS = [
     {"name": "aider", "description": "Aider", "context_file": "CONVENTIONS.md", "config_dir": None},
     {"name": "cline", "description": "Cline", "context_file": ".clinerules", "config_dir": None},
     {"name": "codex", "description": "OpenAI Codex", "context_file": "AGENTS.md", "config_dir": None},
+    {"name": "antigravity", "description": "Google Antigravity", "context_file": ".antigravity/context.md", "config_dir": ".antigravity"},
 ]
 
 
@@ -40,10 +41,11 @@ def show_menu(root: str = ".") -> str:
         marker = f"  {green}[installed]{reset}" if installed else ""
         print(f"  {i}. {tool['description']:<20s} {tool['context_file']}{marker}")
 
-    # tina4-ai tools option
+    # tina4-ai tools option — rendered AFTER the tool list, always the last number
+    tina4_ai_num = len(AI_TOOLS) + 1
     tina4_ai_installed = shutil.which("mdview") is not None
     marker = f"  {green}[installed]{reset}" if tina4_ai_installed else ""
-    print(f"  8. Install tina4-ai tools  (requires Python){marker}")
+    print(f"  {tina4_ai_num}. Install tina4-ai tools  (requires Python){marker}")
     print()
     return input("  Select (comma-separated, or 'all'): ").strip()
 
@@ -56,6 +58,7 @@ def install_selected(root: str, selection: str) -> list[str]:
     """
     root_path = Path(root).resolve()
     created = []
+    tina4_ai_num = len(AI_TOOLS) + 1  # keep menu numbering aligned with show_menu
 
     if selection.lower() == "all":
         indices = list(range(len(AI_TOOLS)))
@@ -67,7 +70,7 @@ def install_selected(root: str, selection: str) -> list[str]:
         for p in parts:
             try:
                 n = int(p)
-                if n == 8:
+                if n == tina4_ai_num:
                     install_tina4_ai = True
                 elif 1 <= n <= len(AI_TOOLS):
                     indices.append(n - 1)

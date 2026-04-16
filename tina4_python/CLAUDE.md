@@ -632,12 +632,13 @@ Frond.add_test("positive", lambda x: x > 0)
 
 ### The @template() decorator
 
-Auto-renders a dict return value through a template:
+Auto-renders a dict return value through a template. **Stack `@template` BELOW the route decorator** — route decorators capture the current function when applied, so `@template` above `@get` is never reached by the router:
+
 ```python
 from tina4_python.core.router import get, template
 
-@template("pages/dashboard.twig")
 @get("/dashboard")
+@template("pages/dashboard.twig")
 async def dashboard(request, response):
     return {"title": "Dashboard", "stats": get_stats()}
 ```
@@ -1779,8 +1780,8 @@ for job in queue.consume("emails"):
 # src/routes/dashboard.py
 from tina4_python.core.router import get, template
 
-@template("pages/dashboard.twig")
 @get("/dashboard")
+@template("pages/dashboard.twig")
 async def dashboard(request, response):
     stats = db.fetch("SELECT count(*) as total FROM orders").to_array()
     return {"title": "Dashboard", "stats": stats}
