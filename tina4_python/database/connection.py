@@ -195,27 +195,67 @@ class Database:
         return _DRIVERS[scheme]()
 
     def _connection_path(self) -> str:
-        """Extract connection-specific path/params from the URL."""
+        """Extract connection-specific path/params from the URL.
+
+        SQLite URL convention (matches PHP and the Python CLAUDE.md docs):
+
+            sqlite::memory:                → in-memory database
+            sqlite:///:memory:             → in-memory database (URL form)
+            sqlite:///app.db               → ./app.db  (relative to cwd)
+            sqlite:///data/app.db          → ./data/app.db  (relative)
+            sqlite:///./data/app.db        → ./data/app.db  (relative, explicit)
+            sqlite:////absolute/path.db    → /absolute/path.db  (absolute)
+            sqlite:///C:/Users/app.db      → C:/Users/app.db  (Windows absolute)
+
+        Directories are auto-created ONLY when the resolved path is
+        inside the current working directory (the project root). We
+        never try to ``os.makedirs`` at root (``/data``, ``C:\\data``)
+        — that's both hostile on read-only filesystems and not what
+        any project actually wants.
+        """
         parsed = urlparse(self.url)
 
-        if parsed.scheme.startswith("sqlite"):
-            # urlparse("sqlite:///path").path = "/path"
-            # Strip the leading / only when it precedes a Windows drive
-            # letter (e.g. /C:/Users/app.db → C:/Users/app.db). On Linux
-            # the leading / is the root directory and must be kept.
-            path = parsed.path
-            if len(path) >= 3 and path[0] == "/" and path[1].isalpha() and path[2] == ":":
-                path = path[1:]  # Windows: /C:/... → C:/...
+        if not parsed.scheme.startswith("sqlite"):
+            # For other drivers, return the full URL (adapter parses it)
+            return self.url
 
-            # Ensure directory exists
+        # In-memory forms — passthrough
+        raw_path = parsed.path
+        if raw_path in (":memory:", "/:memory:"):
+            return ":memory:"
+
+        # Strip exactly one leading "/" — the URL "/"-delimiter between the
+        # empty netloc and the start of the path.
+        if raw_path.startswith("/"):
+            stripped = raw_path[1:]
+        else:
+            stripped = raw_path
+
+        # Windows absolute path (drive-letter form): C:/... or C:\...
+        is_windows_abs = (
+            len(stripped) >= 3
+            and stripped[0].isalpha()
+            and stripped[1] == ":"
+            and stripped[2] in ("/", "\\")
+        )
+        # Unix absolute path: urlparse("sqlite:////abs/app.db").path == "//abs/app.db"
+        # After one strip it's still "/abs/app.db" → still starts with "/".
+        is_unix_abs = stripped.startswith("/")
+
+        if is_windows_abs or is_unix_abs:
+            path = stripped
+            # Don't auto-create directories outside cwd. If the user gave
+            # an absolute path, they're responsible for it existing.
+        else:
+            # Relative — resolve under the project root (cwd).
+            cwd = os.getcwd()
+            path = os.path.join(cwd, stripped)
+            # Only auto-create subdirectories *inside* cwd.
             directory = os.path.dirname(path)
-            if directory:
+            if directory and os.path.commonpath([os.path.abspath(directory), cwd]) == cwd:
                 os.makedirs(directory, exist_ok=True)
 
-            return path
-
-        # For other drivers, return the full URL (adapter parses it)
-        return self.url
+        return path
 
     # ── Query Cache ──────────────────────────────────────────────
 

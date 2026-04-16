@@ -214,3 +214,81 @@ class TestDatabaseURL:
     def test_invalid_driver(self):
         with pytest.raises(ValueError, match="Unknown database driver"):
             Database("fakedb://localhost/test")
+
+
+class TestSQLiteConnectionPath:
+    """``sqlite:///X`` must resolve relative to the project root (cwd),
+    matching the documented convention and the PHP implementation. Absolute
+    paths use four slashes (``sqlite:////abs/path``) or a Windows drive
+    letter (``sqlite:///C:/Users/app.db``). The directory auto-creation
+    must NEVER reach outside cwd — that was the root cause of the
+    ``Read-only file system: '/data'`` crash on macOS.
+
+    These tests exercise ``_connection_path`` without opening a real
+    connection (the constructor path depends on whether the resolved
+    path is writable), by building a stand-in object that owns just the
+    ``url`` attribute and binding the method."""
+
+    def _resolve(self, url: str) -> str:
+        ns = type("DatabaseStub", (), {"url": url})()
+        return Database._connection_path(ns)
+
+    def test_relative_bare_filename(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert self._resolve("sqlite:///app.db") == os.path.join(str(tmp_path), "app.db")
+
+    def test_relative_subdir_bruce_case(self, tmp_path, monkeypatch):
+        # The exact string bruceproject had in its .env that used to
+        # crash with `Read-only file system: '/data'`.
+        monkeypatch.chdir(tmp_path)
+        resolved = self._resolve("sqlite:///data/app.db")
+        assert resolved == os.path.join(str(tmp_path), "data", "app.db")
+        # Subdir auto-created under cwd
+        assert os.path.isdir(os.path.join(str(tmp_path), "data"))
+
+    def test_relative_with_dot_prefix(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        resolved = self._resolve("sqlite:///./data/app.db")
+        assert os.path.dirname(resolved).endswith("data")
+
+    def test_absolute_unix(self, tmp_path):
+        abs_path = str(tmp_path / "absolute.db")
+        # Build the four-slash form
+        url = f"sqlite:////{abs_path.lstrip('/')}"
+        assert self._resolve(url) == abs_path
+
+    def test_absolute_windows_drive_letter(self, tmp_path, monkeypatch):
+        # urlparse("sqlite:///C:/Users/app.db").path == "/C:/Users/app.db"
+        # Strip one "/" → "C:/Users/app.db" which is_windows_abs=True.
+        monkeypatch.chdir(tmp_path)
+        assert self._resolve("sqlite:///C:/Users/app.db") == "C:/Users/app.db"
+
+    def test_in_memory_short_form(self):
+        assert self._resolve("sqlite::memory:") == ":memory:"
+
+    def test_in_memory_url_form(self):
+        assert self._resolve("sqlite:///:memory:") == ":memory:"
+
+    def test_does_not_create_dirs_outside_cwd(self, tmp_path, monkeypatch):
+        """Regression guard: the bug that crashed ``tina4 migrate``
+        tried to ``os.makedirs('/data')`` on macOS (read-only root).
+        Absolute paths must NOT auto-create parent dirs outside cwd."""
+        monkeypatch.chdir(tmp_path)
+        resolved = self._resolve("sqlite:////does/not/exist/app.db")
+        assert resolved == "/does/not/exist/app.db"
+        assert not os.path.exists("/does")
+
+
+class TestProjectFolders:
+    """Project-structure audit: ``src/migrations`` must NOT be auto-created.
+    The canonical migrations directory lives at the project root (matches
+    the CLI's default and the documented layout)."""
+
+    def test_migrations_root_not_src_migrations(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from tina4_python.core.server import _ensure_folders
+        _ensure_folders()
+        assert (tmp_path / "migrations").is_dir(), "project-root migrations/ must exist"
+        assert not (tmp_path / "src" / "migrations").exists(), (
+            "src/migrations must NOT be auto-created — migrations live at the project root"
+        )

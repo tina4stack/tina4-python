@@ -73,12 +73,20 @@ def _auto_discover(root_dir: str = "src"):
 
 
 def _ensure_folders():
-    """Create project folders if missing (auto-repair)."""
+    """Create project folders if missing (auto-repair).
+
+    Note: ``migrations/`` lives at the project root (matches the CLI's
+    ``migrations`` default and the documented project structure), never
+    under ``src/``. Don't add ``src/migrations`` here — it creates an
+    empty directory that the migration runner ignores and confuses users.
+    """
     folders = [
-        "src/routes", "src/orm", "src/migrations", "src/seeds",
+        "src/routes", "src/orm", "src/seeds",
         "src/templates", "src/templates/errors",
         "src/public", "src/public/js", "src/public/css", "src/public/icons",
-        "src/locales", "data", "data/.broken", "logs", "secrets", "tests",
+        "src/locales",
+        "migrations",
+        "data", "data/.broken", "logs", "secrets", "tests",
     ]
     for folder in folders:
         Path(folder).mkdir(parents=True, exist_ok=True)
