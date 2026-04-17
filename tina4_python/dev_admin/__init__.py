@@ -338,6 +338,16 @@ def get_api_handlers() -> dict:
         "/__dev/api/metrics/full": ("GET", _api_metrics_full),
         "/__dev/api/metrics/file": ("GET", _api_metrics_file),
         "/__dev/api/graphql/schema": ("GET", _api_graphql_schema),
+        # ── Editor endpoints ──
+        "/__dev/api/files": ("GET", _api_files),
+        "/__dev/api/file": ("GET", _api_file_read),
+        "/__dev/api/file/save": ("POST", _api_file_save),
+        "/__dev/api/file/raw": ("GET", _api_file_raw),
+        "/__dev/api/file/rename": ("POST", _api_file_rename),
+        "/__dev/api/file/delete": ("POST", _api_file_delete),
+        "/__dev/api/deps/search": ("GET", _api_deps_search),
+        "/__dev/api/deps/install": ("POST", _api_deps_install),
+        "/__dev/api/git/status": ("GET", _api_git_status),
     }
 
 
@@ -1497,6 +1507,553 @@ function tina4VersionModal(){{
     }});
 }}
 </script>"""
+
+
+# ── Editor API endpoints ──────────────────────────────────────
+
+async def _api_files(request, response):
+    """List files in a directory with git status.
+
+    Query params:
+        path — relative directory path (default: project root)
+    """
+    import os, subprocess
+    rel = (request.params.get("path") or "").strip("/")
+    base = os.getcwd()
+    target = os.path.normpath(os.path.join(base, rel))
+
+    # Security: must stay within project root
+    if not target.startswith(base):
+        return response({"error": "Path outside project"}, 403)
+
+    if not os.path.isdir(target):
+        return response({"error": "Not a directory"}, 404)
+
+    # Find git root (may differ from cwd)
+    git_root = base
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, cwd=base, timeout=5
+        )
+        if out.returncode == 0:
+            git_root = out.stdout.strip().replace("\\", "/")
+    except Exception:
+        pass
+
+    # Prefix to prepend to entry_rel paths to match git's paths
+    cwd_in_git = os.path.relpath(base, git_root).replace("\\", "/")
+    if cwd_in_git == ".":
+        cwd_in_git = ""
+    else:
+        cwd_in_git += "/"
+
+    # Get git status for the project
+    git_status = {}
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain", "-uall"],
+            capture_output=True, text=True, cwd=base, timeout=5
+        )
+        for line in out.stdout.strip().split("\n"):
+            if len(line) >= 4:
+                status_code = line[:2].strip()
+                file_path = line[3:].strip()
+                git_status[file_path] = status_code
+    except Exception:
+        pass
+
+    # Get current branch
+    branch = ""
+    try:
+        out = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True, text=True, cwd=base, timeout=5
+        )
+        branch = out.stdout.strip()
+    except Exception:
+        pass
+
+    entries = []
+    try:
+        for name in sorted(os.listdir(target)):
+            full = os.path.join(target, name)
+            entry_rel = os.path.relpath(full, base).replace("\\", "/")
+
+            # Skip hidden dirs and noise
+            if name.startswith(".") and name not in (".env", ".env.example"):
+                continue
+            if name in ("__pycache__", "node_modules", "vendor", ".git",
+                        "venv", ".venv", "dist", "target", ".tina4"):
+                continue
+
+            is_dir = os.path.isdir(full)
+
+            # Git path = cwd_in_git + entry_rel (what git reports)
+            git_path = cwd_in_git + entry_rel
+
+            # Git status for this entry
+            status = "clean"
+            if git_path in git_status:
+                code = git_status[git_path]
+                if code == "??":
+                    status = "untracked"
+                elif "M" in code:
+                    status = "modified"
+                elif "A" in code:
+                    status = "added"
+                elif "D" in code:
+                    status = "deleted"
+            elif is_dir:
+                # Check if any child is dirty
+                dir_prefix = git_path + "/"
+                for gf, gc in git_status.items():
+                    if gf.startswith(dir_prefix):
+                        if gc == "??":
+                            status = "untracked"
+                        else:
+                            status = "modified"
+                        break
+
+            # Check if directory has children (for arrow display)
+            has_children = False
+            if is_dir:
+                try:
+                    contents = os.listdir(full)
+                    has_children = any(
+                        not n.startswith(".") and n not in (
+                            "__pycache__", "node_modules", "vendor",
+                            ".git", "venv", ".venv", "dist", "target", ".tina4"
+                        ) for n in contents
+                    )
+                except PermissionError:
+                    pass
+
+            entries.append({
+                "name": name,
+                "path": entry_rel,
+                "is_dir": is_dir,
+                "has_children": has_children if is_dir else None,
+                "git_status": status,
+                "size": os.path.getsize(full) if not is_dir else None,
+            })
+    except PermissionError:
+        return response({"error": "Permission denied"}, 403)
+
+    return response({
+        "path": rel or ".",
+        "branch": branch,
+        "entries": entries,
+    })
+
+
+async def _api_file_read(request, response):
+    """Read a file's content.
+
+    Query params:
+        path — relative file path
+    """
+    import os
+    rel = (request.params.get("path") or "").strip("/")
+    if not rel:
+        return response({"error": "path required"}, 400)
+
+    base = os.getcwd()
+    target = os.path.normpath(os.path.join(base, rel))
+
+    if not target.startswith(base):
+        return response({"error": "Path outside project"}, 403)
+
+    if not os.path.isfile(target):
+        return response({"error": "File not found"}, 404)
+
+    # Size guard: don't load huge files into JSON
+    size = os.path.getsize(target)
+    if size > 2 * 1024 * 1024:  # 2MB
+        return response({"error": "File too large", "size": size}, 413)
+
+    try:
+        with open(target, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+    except Exception as e:
+        return response({"error": str(e)}, 500)
+
+    # Detect language from extension
+    ext = os.path.splitext(rel)[1].lower()
+    # Also detect Dockerfile (no extension)
+    basename = os.path.basename(rel)
+    if basename.lower() in ("dockerfile", "dockerfile.dev", "dockerfile.prod"):
+        return response({
+            "path": rel, "content": content,
+            "language": "dockerfile", "size": size,
+        })
+
+    lang_map = {
+        ".py": "python", ".php": "php", ".rb": "ruby",
+        ".ts": "typescript", ".js": "javascript", ".jsx": "javascript",
+        ".tsx": "typescript", ".json": "json", ".html": "html",
+        ".twig": "html", ".css": "css", ".scss": "css",
+        ".md": "markdown", ".sql": "sql", ".yaml": "yaml",
+        ".yml": "yaml", ".toml": "toml", ".xml": "html",
+        ".env": "env", ".env.example": "env",
+        ".sh": "shell", ".bash": "shell",
+        ".bat": "shell", ".cmd": "shell", ".ps1": "shell",
+        ".rs": "rust", ".go": "go", ".java": "java",
+        ".txt": "text", ".csv": "text", ".log": "text",
+        ".gemspec": "ruby", ".rake": "ruby",
+        ".svg": "svg",
+    }
+
+    return response({
+        "path": rel,
+        "content": content,
+        "language": lang_map.get(ext, "text"),
+        "size": size,
+    })
+
+
+async def _api_file_raw(request, response):
+    """Serve a raw file with correct content-type (for image preview etc).
+
+    Query params:
+        path — relative file path
+    """
+    import os, mimetypes
+    rel = (request.params.get("path") or "").strip("/")
+    if not rel:
+        return response({"error": "path required"}, 400)
+
+    base = os.getcwd()
+    target = os.path.normpath(os.path.join(base, rel))
+
+    if not target.startswith(base):
+        return response({"error": "Path outside project"}, 403)
+    if not os.path.isfile(target):
+        return response({"error": "File not found"}, 404)
+
+    # Size guard
+    size = os.path.getsize(target)
+    if size > 10 * 1024 * 1024:
+        return response({"error": "File too large"}, 413)
+
+    content_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
+
+    try:
+        with open(target, "rb") as f:
+            data = f.read()
+    except Exception as e:
+        return response({"error": str(e)}, 500)
+
+    from tina4_python.core.response import Response
+    Response.add_header("Content-Type", content_type)
+    Response.add_header("Cache-Control", "no-cache")
+    # Return raw bytes — the response handler will detect binary
+    import base64
+    return response({
+        "_raw": True,
+        "data": base64.b64encode(data).decode("ascii"),
+        "content_type": content_type,
+        "size": size,
+    })
+
+
+async def _api_file_save(request, response):
+    """Save content to a file.
+
+    Body: { "path": "...", "content": "..." }
+    """
+    import os
+    body = request.body or {}
+    rel = (body.get("path") or "").strip("/")
+    content = body.get("content")
+
+    if not rel:
+        return response({"error": "path required"}, 400)
+    if content is None:
+        return response({"error": "content required"}, 400)
+
+    base = os.getcwd()
+    target = os.path.normpath(os.path.join(base, rel))
+
+    if not target.startswith(base):
+        return response({"error": "Path outside project"}, 403)
+
+    # Don't allow overwriting framework internals
+    if "tina4_python/" in rel or "vendor/" in rel or "node_modules/" in rel:
+        return response({"error": "Cannot write to framework directories"}, 403)
+
+    try:
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+    except Exception as e:
+        return response({"error": str(e)}, 500)
+
+    return response({"saved": True, "path": rel, "size": len(content)})
+
+
+async def _api_file_rename(request, response):
+    """Rename/move a file or directory.
+
+    Body: { "from": "old/path", "to": "new/path" }
+    """
+    import os, shutil
+    body = request.body or {}
+    from_rel = (body.get("from") or "").strip("/")
+    to_rel = (body.get("to") or "").strip("/")
+    if not from_rel or not to_rel:
+        return response({"error": "from and to required"}, 400)
+
+    base = os.getcwd()
+    from_abs = os.path.normpath(os.path.join(base, from_rel))
+    to_abs = os.path.normpath(os.path.join(base, to_rel))
+
+    if not from_abs.startswith(base) or not to_abs.startswith(base):
+        return response({"error": "Path outside project"}, 403)
+    if not os.path.exists(from_abs):
+        return response({"error": "Source not found"}, 404)
+
+    try:
+        os.makedirs(os.path.dirname(to_abs), exist_ok=True)
+        shutil.move(from_abs, to_abs)
+    except Exception as e:
+        return response({"error": str(e)}, 500)
+
+    return response({"renamed": True, "from": from_rel, "to": to_rel})
+
+
+async def _api_file_delete(request, response):
+    """Delete a file or directory.
+
+    Body: { "path": "...", "is_dir": false }
+    """
+    import os, shutil
+    body = request.body or {}
+    rel = (body.get("path") or "").strip("/")
+    is_dir = body.get("is_dir", False)
+
+    if not rel:
+        return response({"error": "path required"}, 400)
+
+    base = os.getcwd()
+    target = os.path.normpath(os.path.join(base, rel))
+
+    if not target.startswith(base):
+        return response({"error": "Path outside project"}, 403)
+    if not os.path.exists(target):
+        return response({"error": "Not found"}, 404)
+
+    # Safety: don't delete project root or key config
+    if rel in (".", "..", "app.py", "index.php", "app.rb", "app.ts",
+               "composer.json", "Gemfile", "package.json", "pyproject.toml"):
+        return response({"error": "Cannot delete project root files"}, 403)
+
+    try:
+        if is_dir:
+            shutil.rmtree(target)
+        else:
+            os.remove(target)
+    except Exception as e:
+        return response({"error": str(e)}, 500)
+
+    return response({"deleted": True, "path": rel})
+
+
+async def _api_deps_search(request, response):
+    """Search package registries.
+
+    Query params: q (search term), registry (pypi|npm|packagist|rubygems|crates)
+    """
+    import urllib.request, json
+    query = request.params.get("q", "").strip()
+    registry = request.params.get("registry", "pypi")
+    if not query:
+        return response({"packages": []})
+
+    packages = []
+    try:
+        if registry == "pypi":
+            url = f"https://pypi.org/pypi/{query}/json"
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Tina4-DevAdmin/1.0"})
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    data = json.loads(r.read())
+                    info = data.get("info", {})
+                    packages.append({
+                        "name": info.get("name", query),
+                        "description": (info.get("summary") or "")[:120],
+                        "version": info.get("version", ""),
+                    })
+            except Exception:
+                # Fallback: search API
+                url = f"https://pypi.org/search/?q={urllib.parse.quote(query)}&o="
+                # Simple search not available via JSON — just return empty
+                pass
+
+            # Also try search via simple JSON API
+            if not packages:
+                search_url = f"https://pypi.org/simple/"
+                # PyPI doesn't have a search JSON API, use the name directly
+                pass
+
+        elif registry == "npm":
+            url = f"https://registry.npmjs.org/-/v1/search?text={urllib.parse.quote(query)}&size=10"
+            req = urllib.request.Request(url, headers={"User-Agent": "Tina4-DevAdmin/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read())
+                for obj in data.get("objects", []):
+                    pkg = obj.get("package", {})
+                    packages.append({
+                        "name": pkg.get("name", ""),
+                        "description": (pkg.get("description") or "")[:120],
+                        "version": pkg.get("version", ""),
+                    })
+
+        elif registry == "packagist":
+            url = f"https://packagist.org/search.json?q={urllib.parse.quote(query)}&per_page=10"
+            req = urllib.request.Request(url, headers={"User-Agent": "Tina4-DevAdmin/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read())
+                for pkg in data.get("results", []):
+                    packages.append({
+                        "name": pkg.get("name", ""),
+                        "description": (pkg.get("description") or "")[:120],
+                        "version": "",
+                    })
+
+        elif registry == "rubygems":
+            url = f"https://rubygems.org/api/v1/search.json?query={urllib.parse.quote(query)}&page=1"
+            req = urllib.request.Request(url, headers={"User-Agent": "Tina4-DevAdmin/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read())
+                for pkg in data[:10]:
+                    packages.append({
+                        "name": pkg.get("name", ""),
+                        "description": (pkg.get("info") or "")[:120],
+                        "version": pkg.get("version", ""),
+                    })
+
+        elif registry == "crates":
+            url = f"https://crates.io/api/v1/crates?q={urllib.parse.quote(query)}&per_page=10"
+            req = urllib.request.Request(url, headers={"User-Agent": "Tina4-DevAdmin/1.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read())
+                for pkg in data.get("crates", []):
+                    packages.append({
+                        "name": pkg.get("name", ""),
+                        "description": (pkg.get("description") or "")[:120],
+                        "version": pkg.get("max_version", ""),
+                    })
+
+    except Exception as e:
+        return response({"packages": [], "error": str(e)})
+
+    return response({"packages": packages})
+
+
+async def _api_deps_install(request, response):
+    """Install a package dependency.
+
+    Body: { "name": "...", "version": "...", "registry": "pypi|npm|...", "file": "..." }
+    """
+    import subprocess
+    body = request.body or {}
+    name = body.get("name", "").strip()
+    version = body.get("version", "").strip()
+    registry = body.get("registry", "pypi")
+
+    if not name:
+        return response({"error": "name required"}, 400)
+
+    try:
+        if registry == "pypi":
+            pkg = f"{name}>={version}" if version else name
+            result = subprocess.run(
+                ["pip", "install", pkg],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                return response({"error": result.stderr.strip()}, 500)
+            return response({"message": f"Installed {name} {version}".strip(), "output": result.stdout})
+
+        elif registry == "npm":
+            pkg = f"{name}@{version}" if version else name
+            result = subprocess.run(
+                ["npm", "install", pkg],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                return response({"error": result.stderr.strip()}, 500)
+            return response({"message": f"Installed {name}", "output": result.stdout})
+
+        elif registry == "packagist":
+            pkg = f"{name}:{version}" if version else name
+            result = subprocess.run(
+                ["composer", "require", pkg],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                return response({"error": result.stderr.strip()}, 500)
+            return response({"message": f"Installed {name}", "output": result.stdout})
+
+        elif registry == "rubygems":
+            result = subprocess.run(
+                ["gem", "install", name, "-v", version] if version else ["gem", "install", name],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                return response({"error": result.stderr.strip()}, 500)
+            return response({"message": f"Installed {name}", "output": result.stdout})
+
+        else:
+            return response({"error": f"Unsupported registry: {registry}"}, 400)
+
+    except subprocess.TimeoutExpired:
+        return response({"error": "Install timed out (60s)"}, 500)
+    except FileNotFoundError as e:
+        return response({"error": f"Package manager not found: {e}"}, 500)
+    except Exception as e:
+        return response({"error": str(e)}, 500)
+
+
+async def _api_git_status(request, response):
+    """Return git branch, changed files, and summary."""
+    import os, subprocess
+    base = os.getcwd()
+
+    result = {"branch": "", "changes": [], "clean": True}
+
+    try:
+        out = subprocess.run(
+            ["git", "branch", "--show-current"],
+            capture_output=True, text=True, cwd=base, timeout=5
+        )
+        result["branch"] = out.stdout.strip()
+    except Exception:
+        return response(result)
+
+    try:
+        out = subprocess.run(
+            ["git", "status", "--porcelain", "-uall"],
+            capture_output=True, text=True, cwd=base, timeout=5
+        )
+        for line in out.stdout.strip().split("\n"):
+            if len(line) >= 4:
+                code = line[:2].strip()
+                path = line[3:].strip()
+                status = "modified"
+                if code == "??":
+                    status = "untracked"
+                elif "A" in code:
+                    status = "added"
+                elif "D" in code:
+                    status = "deleted"
+                result["changes"].append({"path": path, "status": status})
+        result["clean"] = len(result["changes"]) == 0
+    except Exception:
+        pass
+
+    return response(result)
 
 
 __all__ = ["MessageLog", "RequestInspector", "BrokenTracker",
