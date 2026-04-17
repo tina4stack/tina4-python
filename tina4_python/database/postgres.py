@@ -119,7 +119,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
         paginated_sql = f"{sql} LIMIT %s OFFSET %s"
         paginated_params = (params or []) + [limit, offset]
         cursor.execute(paginated_sql, paginated_params)
-        rows = [dict(row) for row in cursor.fetchall()]
+        rows = [self._decode_blobs(dict(row)) for row in cursor.fetchall()]
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -130,7 +130,15 @@ class PostgreSQLAdapter(DatabaseAdapter):
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor.execute(sql, params or [])
         row = cursor.fetchone()
-        return dict(row) if row else None
+        return self._decode_blobs(dict(row)) if row else None
+
+    @staticmethod
+    def _decode_blobs(row: dict) -> dict:
+        """Ensure binary columns (bytea) are proper bytes, not memoryview."""
+        for key, value in row.items():
+            if isinstance(value, memoryview):
+                row[key] = bytes(value)
+        return row
 
     def insert(self, table: str, data: dict) -> DatabaseResult:
         columns = ", ".join(data.keys())

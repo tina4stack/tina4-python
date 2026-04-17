@@ -158,7 +158,7 @@ class FirebirdAdapter(DatabaseAdapter):
 
         desc = cursor.description
         col_names = [d[0].strip().lower() for d in desc] if desc else []
-        rows = [dict(zip(col_names, row)) for row in cursor.fetchall()]
+        rows = [self._decode_blobs(dict(zip(col_names, row))) for row in cursor.fetchall()]
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -171,7 +171,15 @@ class FirebirdAdapter(DatabaseAdapter):
         if row is None:
             return None
         col_names = [d[0].strip().lower() for d in desc] if desc else []
-        return dict(zip(col_names, row))
+        return self._decode_blobs(dict(zip(col_names, row)))
+
+    @staticmethod
+    def _decode_blobs(row: dict) -> dict:
+        """Ensure Firebird BLOB columns are proper bytes, not memoryview."""
+        for key, value in row.items():
+            if isinstance(value, memoryview):
+                row[key] = bytes(value)
+        return row
 
     def insert(self, table: str, data: dict) -> DatabaseResult:
         columns = ", ".join(data.keys())
