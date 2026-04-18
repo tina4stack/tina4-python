@@ -326,9 +326,28 @@ _default_server: McpServer | None = None
 
 
 def _get_default_server() -> McpServer:
+    """Return the singleton default McpServer, creating + populating
+    it on first use.
+
+    First-call side effect: the 24-tool built-in dev toolkit (file
+    I/O, plan_*, docs_*, project_overview, etc.) is registered on the
+    server. Without this call the server exists but its `_tools` dict
+    stays empty — any GET /mcp/tools request then returns [] and
+    dev-admin has nothing to work with. Registration is idempotent
+    (tool names are dict keys) so repeated calls are safe.
+    """
     global _default_server
     if _default_server is None:
         _default_server = McpServer("/__dev/mcp", name="Tina4 Dev Tools")
+        try:
+            from .tools import register_dev_tools
+            register_dev_tools(_default_server)
+        except Exception as exc:
+            # Don't let a bad tool module prevent the server from
+            # existing — the REST shim should still return an empty
+            # list rather than crashing the request.
+            import sys
+            print(f"[mcp] dev tool registration failed: {exc}", file=sys.stderr)
     return _default_server
 
 

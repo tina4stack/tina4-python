@@ -348,6 +348,20 @@ def get_api_handlers() -> dict:
         "/__dev/api/deps/search": ("GET", _api_deps_search),
         "/__dev/api/deps/install": ("POST", _api_deps_install),
         "/__dev/api/git/status": ("GET", _api_git_status),
+        # ── MCP REST shim ──
+        # Dev-admin speaks a REST flavour of MCP (plain GET/POST with
+        # JSON bodies) rather than the JSON-RPC SSE protocol used by
+        # Claude Desktop et al. Both surfaces share the same
+        # `_default_server` tool registry, so tools registered via the
+        # @mcp_tool decorator appear in both immediately.
+        "/__dev/api/mcp/tools": ("GET", _api_mcp_tools),
+        "/__dev/api/mcp/call": ("POST", _api_mcp_call),
+        # ── Scaffold REST shim ──
+        # Wraps the tina4python CLI's `generate <kind> <name>` so the
+        # + Route / + Model / + Migration / + Middleware buttons work
+        # without shelling out from the browser.
+        "/__dev/api/scaffold": ("GET", _api_scaffold_list),
+        "/__dev/api/scaffold/run": ("POST", _api_scaffold_run),
     }
 
 
@@ -2054,6 +2068,182 @@ async def _api_git_status(request, response):
         pass
 
     return response(result)
+
+
+# ─── MCP REST shim ─────────────────────────────────────────────────
+#
+# Exposes the framework's MCP tool registry (`_default_server`) over
+# plain GET/POST JSON so the dev-admin browser panel and any other
+# REST client can enumerate and invoke tools without speaking the full
+# JSON-RPC 2.0 over SSE protocol.
+#
+# The JSON-RPC endpoint at `/__dev/mcp/{message,sse}` stays live for
+# proper MCP clients (Claude Desktop et al.) — the two surfaces share
+# the same registry, so tools registered via the `@mcp_tool` decorator
+# show up on both immediately.
+
+async def _api_mcp_tools(request, response):
+    """GET — return the MCP tool registry as a plain JSON list.
+
+    Shape matches what dev-admin's `listMcpTools()` expects:
+        {"tools": [{"name": "...", "description": "...", "schema": {...}}, ...]}
+    """
+    try:
+        from tina4_python.mcp import _get_default_server
+        server = _get_default_server()
+        tools = [
+            {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "schema": t.get("inputSchema") or {"type": "object", "properties": {}},
+            }
+            for t in server._tools.values()
+        ]
+        return response({"tools": tools})
+    except Exception as exc:
+        return response({"tools": [], "error": str(exc)}, 500)
+
+
+async def _api_mcp_call(request, response):
+    """POST — invoke an MCP tool by name.
+
+    Request:  {"name": "tool_name", "arguments": {...}}
+    Response: {"ok": true, "name": "...", "result": ...}
+           or {"ok": false, "error": "..."}
+
+    The wrapper uses the tool's handler directly rather than routing
+    through `handle_message` — we already know the name and args, no
+    need to round-trip through JSON-RPC framing.
+    """
+    body = request.body or {}
+    if not isinstance(body, dict):
+        return response({"ok": False, "error": "body must be a JSON object"}, 400)
+
+    name = body.get("name")
+    if not name or not isinstance(name, str):
+        return response({"ok": False, "error": "missing 'name'"}, 400)
+
+    args = body.get("arguments") or body.get("args") or {}
+    if not isinstance(args, dict):
+        return response({"ok": False, "error": "'arguments' must be an object"}, 400)
+
+    try:
+        from tina4_python.mcp import _get_default_server
+        server = _get_default_server()
+        tool = server._tools.get(name)
+        if tool is None:
+            return response({"ok": False, "error": f"unknown tool: {name}"}, 404)
+
+        handler = tool["handler"]
+        # Tools are registered as regular functions or coroutines;
+        # await the result when the handler returns an awaitable.
+        import inspect
+        if inspect.iscoroutinefunction(handler):
+            result = await handler(**args)
+        else:
+            result = handler(**args)
+
+        return response({"ok": True, "name": name, "result": result})
+    except TypeError as exc:
+        # Bad args shape — surface the Python error cleanly rather
+        # than returning a 500. Callers see "argument X missing" etc.
+        return response({"ok": False, "name": name, "error": f"argument error: {exc}"}, 400)
+    except Exception as exc:
+        return response({"ok": False, "name": name, "error": str(exc)}, 500)
+
+
+# ─── Scaffold REST shim ────────────────────────────────────────────
+#
+# Wraps the tina4python `generate <kind> <name>` CLI commands so the
+# + Route / + Model / + Migration / + Middleware buttons in dev-admin
+# can call them without shelling out from the browser. The handlers
+# import the generator functions directly rather than shelling out —
+# avoids spawning a subprocess per click and surfaces errors as JSON.
+
+_SCAFFOLD_KINDS = [
+    {"kind": "route",      "label": "+ Route",      "needs_name": True},
+    {"kind": "model",      "label": "+ Model",      "needs_name": True},
+    {"kind": "migration",  "label": "+ Migration",  "needs_name": True},
+    {"kind": "middleware", "label": "+ Middleware", "needs_name": True},
+]
+
+
+async def _api_scaffold_list(request, response):
+    """GET — list the scaffold kinds this framework knows how to emit.
+
+    Dev-admin renders one button per item. Each carries a `kind` the
+    /scaffold/run endpoint expects and a human `label` for the UI.
+    """
+    return response({"kinds": _SCAFFOLD_KINDS})
+
+
+async def _api_scaffold_run(request, response):
+    """POST — invoke a generator.
+
+    Request:  {"kind": "route", "name": "contact"}
+    Response: {"ok": true, "files": ["src/routes/contact.py"]}
+           or {"ok": false, "error": "..."}
+
+    Uses tina4_python.cli's module-level generator functions rather
+    than shelling out via subprocess — faster, no path/env lookup.
+    """
+    body = request.body or {}
+    if not isinstance(body, dict):
+        return response({"ok": False, "error": "body must be a JSON object"}, 400)
+
+    kind = (body.get("kind") or "").strip().lower()
+    name = (body.get("name") or "").strip()
+    if not kind:
+        return response({"ok": False, "error": "missing 'kind'"}, 400)
+    if not name and kind != "auth":
+        return response({"ok": False, "error": "missing 'name'"}, 400)
+
+    # Guard against path traversal / shell-metacharacter injection in
+    # the name — generator functions pass it into file paths.
+    import re
+    if not re.match(r"^[A-Za-z][A-Za-z0-9_\-]*$", name):
+        return response({"ok": False, "error": "name must match [A-Za-z][A-Za-z0-9_-]*"}, 400)
+
+    generator_map = {
+        "route":      "generate_route",
+        "model":      "generate_model",
+        "migration":  "generate_migration",
+        "middleware": "generate_middleware",
+    }
+    fn_name = generator_map.get(kind)
+    if fn_name is None:
+        return response({"ok": False, "error": f"unknown scaffold kind: {kind}"}, 400)
+
+    try:
+        from tina4_python import cli as cli_module
+        fn = getattr(cli_module, fn_name, None)
+        if fn is None:
+            # Fall back to shelling out — keeps the endpoint useful
+            # even if the generator function names drift.
+            import subprocess
+            cp = subprocess.run(
+                ["tina4python", "generate", kind, name],
+                capture_output=True, text=True, timeout=30,
+            )
+            if cp.returncode != 0:
+                return response({"ok": False, "error": cp.stderr.strip() or cp.stdout.strip()}, 500)
+            return response({"ok": True, "output": cp.stdout.strip()})
+
+        # Invoke the generator directly. The CLI functions typically
+        # print to stdout + write files; we don't capture their
+        # output here — the file tree will refresh and show the new
+        # files, which is what the user actually cares about.
+        result = fn(name) if fn.__code__.co_argcount == 1 else fn(name, None)
+
+        # Most generators return a path or list of paths; normalise.
+        files: list[str] = []
+        if isinstance(result, str):
+            files = [result]
+        elif isinstance(result, list):
+            files = [str(p) for p in result]
+        return response({"ok": True, "kind": kind, "name": name, "files": files})
+    except Exception as exc:
+        return response({"ok": False, "error": str(exc)}, 500)
 
 
 __all__ = ["MessageLog", "RequestInspector", "BrokenTracker",
