@@ -68,6 +68,37 @@ class TestVariables:
 class TestFilters:
     """Comprehensive tests for every builtin Frond filter."""
 
+    # ── Filter + property-access chain ───────────────────────────
+    #
+    # Regression for `{{ details | first.groupSummary }}`:
+    # evaluateFilterPipe used to hand the whole string "first.groupSummary"
+    # to the filter lookup, find nothing, and silently return the
+    # unfiltered input. The fix splits on the first `.` outside parens +
+    # quotes, applies the filter, then traverses the path on the result.
+    # Parity with tina4-php 3.11.21.
+
+    def test_filter_followed_by_property_access(self, engine):
+        data = {"details": [{"groupSummary": "Alpha"}, {"groupSummary": "Beta"}]}
+        assert engine.render_string(
+            "{{ details | first.groupSummary }}", data
+        ) == "Alpha"
+
+    def test_filter_followed_by_chained_property_access(self, engine):
+        data = {"invoices": [{"customer": {"name": "Acme", "address": {"city": "Johannesburg"}}}]}
+        assert engine.render_string(
+            "{{ invoices | first.customer.address.city }}", data
+        ) == "Johannesburg"
+
+    def test_last_filter_with_property_access(self, engine):
+        data = {"rows": [{"sku": "A1"}, {"sku": "B2"}, {"sku": "C3"}]}
+        assert engine.render_string("{{ rows | last.sku }}", data) == "C3"
+
+    def test_filter_dot_inside_args_not_split(self, engine):
+        # Guard: `.` inside filter arguments must NOT be treated as a
+        # property-access separator. `round(2)` is one filter with a
+        # numeric arg, not a `round(2)` filter + `.` + something.
+        assert engine.render_string("{{ price | round(2) }}", {"price": 1.5}) == "1.5"
+
     # ── String Filters ─────────────────────────────────────────
 
     def test_upper(self, engine):

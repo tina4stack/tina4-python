@@ -900,6 +900,41 @@ def _split_on_pipe(expr: str) -> list[str]:
     return parts
 
 
+def _split_filter_name_and_path(fname: str) -> tuple[str, str]:
+    """Split `first.groupSummary` into (`first`, `groupSummary`).
+
+    Returns (fname, "") when no structural `.` is present. The split
+    point must be outside parens, brackets, braces, and quotes so
+    filter args like ``number_format(1.5)`` or ``date("Y.m.d")`` don't
+    trip false splits.
+
+    Used by the filter-application loops to support `{{ x | first.foo }}`
+    syntax — apply the filter, then traverse the property path on the
+    filter's result. Parity with tina4-php's findDotOutsideParens().
+    """
+    depth = 0
+    in_q = None
+    i = 0
+    n = len(fname)
+    while i < n:
+        ch = fname[i]
+        if in_q is not None:
+            if ch == in_q and (i == 0 or fname[i - 1] != "\\"):
+                in_q = None
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_q = ch
+        elif ch in ("(", "[", "{"):
+            depth += 1
+        elif ch in (")", "]", "}"):
+            depth -= 1
+        elif ch == "." and depth == 0:
+            return fname[:i], fname[i + 1:]
+        i += 1
+    return fname, ""
+
+
 def _parse_filter_chain(expr: str) -> tuple[str, list[tuple[str, list[str]]]]:
     """Parse 'variable | filter1 | filter2(arg)' into (variable, [(name, args)])."""
     parts = _split_on_pipe(expr)
@@ -1685,6 +1720,20 @@ class Frond:
         for fname, args in filters:
             if fname in ("raw", "safe"):
                 continue
+
+            # Support `{{ x | first.foo.bar }}` — filter followed by
+            # property access. Split on the first structural `.`; apply
+            # the filter, then traverse the path on the result via a
+            # synthetic context so we reuse _eval_expr's dotted/bracket
+            # resolution.
+            real_fname, tail_path = _split_filter_name_and_path(fname)
+            fn = self._filters.get(real_fname) if tail_path else None
+            if tail_path and fn is not None:
+                value = fn(value, *args)
+                value = _eval_expr("__frond_filter_tmp." + tail_path,
+                                   {"__frond_filter_tmp": value})
+                continue
+
             fn = self._filters.get(fname)
             if fn:
                 value = fn(value, *args)
@@ -1737,6 +1786,24 @@ class Frond:
             if self._sandbox and self._allowed_filters is not None:
                 if fname not in self._allowed_filters:
                     continue  # Silently skip blocked filter
+
+            # Support `{{ x | first.foo.bar }}` — filter followed by
+            # property access. Split on the first structural `.`; apply
+            # the filter, then traverse the path on the result via a
+            # synthetic context so we reuse _eval_expr's dotted/bracket
+            # resolution. Done BEFORE the fast-path switch so chained
+            # cases like `items|first.name` are always handled.
+            real_fname, tail_path = _split_filter_name_and_path(fname)
+            if tail_path:
+                fn = self._filters.get(real_fname)
+                if fn is not None:
+                    value = fn(value, *args)
+                    value = _eval_expr("__frond_filter_tmp." + tail_path,
+                                       {"__frond_filter_tmp": value})
+                    continue
+                # Fall through if the leading segment isn't a known
+                # filter — lets legacy filter names with dots (unusual)
+                # still hit the registered-filter lookup below.
 
             # Fast path for common no-arg filters
             if not args:
@@ -2301,6 +2368,15 @@ class Frond:
                         continue
                     if self._sandbox and self._allowed_filters is not None:
                         if fname not in self._allowed_filters:
+                            continue
+                    # Filter + property access: e.g. `items|first.name`.
+                    real_fname, tail_path = _split_filter_name_and_path(fname)
+                    if tail_path:
+                        fn = self._filters.get(real_fname)
+                        if fn is not None:
+                            value = fn(value, *args)
+                            value = _eval_expr("__frond_filter_tmp." + tail_path,
+                                               {"__frond_filter_tmp": value})
                             continue
                     fn = self._filters.get(fname)
                     if fn:
