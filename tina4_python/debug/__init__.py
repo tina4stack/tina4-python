@@ -200,12 +200,15 @@ class Log:
             color = cls.COLORS.get(level, "")
             print(f"{color}{line}{cls.RESET}")
 
-        # Always write ALL levels to file (raw log, no filtering)
+        # Always write ALL levels to the main file (raw log, no filtering)
         if cls._writer:
             cls._writer.write(line)
 
-        # Write errors to separate file
-        if level == "error" and cls._error_writer:
+        # Mirror WARNING and ERROR into the dedicated error log so
+        # `tail -f logs/error.log` gives just the stuff worth looking
+        # at, without wading through DEBUG / INFO noise. Parity with
+        # tina4-php's Log class.
+        if cls._error_writer and cls.LEVELS.get(level, 0) >= cls.LEVELS["warning"]:
             cls._error_writer.write(line)
 
     @classmethod

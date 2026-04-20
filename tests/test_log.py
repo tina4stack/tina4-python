@@ -137,6 +137,38 @@ class TestLogOutput:
         content = error_file.read_text()
         assert "error write test" in content
 
+    def test_warning_also_writes_to_error_log(self, tmp_path):
+        # Parity with tina4-php: error.log catches WARNING and ERROR,
+        # not just ERROR. DEBUG and INFO stay out.
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
+        Log.warning("warn into errors")
+        error_file = tmp_path / "error.log"
+        assert error_file.exists()
+        assert "warn into errors" in error_file.read_text()
+
+    def test_info_and_debug_do_not_write_to_error_log(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
+        Log.debug("debug noise")
+        Log.info("info noise")
+        error_file = tmp_path / "error.log"
+        # Either the file doesn't exist yet, or it does but is empty /
+        # contains only previous test's content. Most importantly:
+        # neither of these two messages should appear in it.
+        if error_file.exists():
+            content = error_file.read_text()
+            assert "debug noise" not in content
+            assert "info noise" not in content
+
+    def test_error_log_format_matches_main_log(self, tmp_path):
+        # An error written via Log.error should appear with the same
+        # JSON shape in both tina4.log and error.log.
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
+        Log.error("parity check", code=500)
+        main = (tmp_path / "tina4.log").read_text().splitlines()[0]
+        err  = (tmp_path / "error.log").read_text().splitlines()[0]
+        import json as _json
+        assert _json.loads(main) == _json.loads(err)
+
     def test_debug_always_logged_to_file(self, tmp_path):
         """File captures ALL levels regardless of the configured level."""
         Log.configure(log_dir=str(tmp_path), level="info", production=True)

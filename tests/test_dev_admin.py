@@ -300,8 +300,14 @@ class TestGetAPIHandlers:
         assert "/__dev/api/chat" in post_paths
 
     def test_handler_count(self):
+        # Sanity check against accidental endpoint additions. Bump
+        # this number intentionally when a new /__dev/api route
+        # lands so review catches silent growth.
+        #
+        # Current: 41 base + 13 (file I/O × 6, deps × 2, git × 1,
+        #          mcp × 2, scaffold × 2) = 54.
         handlers = get_api_handlers()
-        assert len(handlers) == 41
+        assert len(handlers) == 54
 
     def test_tables_handler_registered(self):
         handlers = get_api_handlers()

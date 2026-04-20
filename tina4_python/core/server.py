@@ -1615,6 +1615,38 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     log_level = os.environ.get("TINA4_LOG_LEVEL", "error" if not is_production else "error")
     Log.configure(level=log_level, production=is_production)
 
+    # Install a top-level exception hook so uncaught exceptions bubbling
+    # out of anything (a route handler, a background task, the event
+    # loop itself on startup) land in logs/error.log. Without this,
+    # an uncaught exception surfaces only via Python's default stderr
+    # writer and never touches Log — the same gap PHP had before its
+    # set_exception_handler fix. Chains to the previous hook so any
+    # debugger / IDE hook already in place still fires.
+    import sys as _sys
+    import traceback as _traceback
+    _prior_excepthook = _sys.excepthook
+
+    def _tina4_excepthook(exc_type, exc_value, exc_tb):
+        # KeyboardInterrupt is a user-initiated Ctrl+C, not an error —
+        # defer to the prior hook (which prints a clean traceback).
+        if issubclass(exc_type, KeyboardInterrupt):
+            _prior_excepthook(exc_type, exc_value, exc_tb)
+            return
+        try:
+            trace_text = "".join(_traceback.format_exception(exc_type, exc_value, exc_tb))
+            Log.error(
+                f"Uncaught {exc_type.__name__}: {exc_value}",
+                trace=trace_text,
+            )
+        except Exception:
+            # If logging itself fails (disk full, permissions, logger
+            # not initialised yet), fall through to the prior hook so
+            # the user still sees something in stderr.
+            pass
+        _prior_excepthook(exc_type, exc_value, exc_tb)
+
+    _sys.excepthook = _tina4_excepthook
+
     # Ensure folders
     _ensure_folders()
 
