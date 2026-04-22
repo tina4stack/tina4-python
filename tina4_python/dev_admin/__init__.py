@@ -325,6 +325,32 @@ def get_api_handlers() -> dict:
         "/__dev/api/websockets/disconnect": ("POST", _api_ws_disconnect),
         "/__dev/api/system": ("GET", _api_system),
         "/__dev/api/chat": ("POST", _api_chat),
+        # Transparent pass-through proxy to the qwen ollama endpoint —
+        # accepts the ollama-native `{model, messages, stream, options}`
+        # body and forwards to TINA4_AI_URL unchanged. The SPA uses this
+        # for FIM completion and supervisor chat. Distinct from
+        # /__dev/api/chat, which is the dev-admin Q&A wrapper that
+        # takes `{message: "..."}`.
+        "/ai/api/chat": ("POST", _api_ai_proxy),
+        # Service health probes — the SPA fires these on load to paint
+        # the "SERVICES ●●●●●" row. Any 2xx response = green dot.
+        "/ai":     ("GET", _api_service_ai),
+        "/vision": ("GET", _api_service_vision),
+        "/embed":  ("GET", _api_service_embed),
+        "/image":  ("GET", _api_service_image),
+        "/rag":    ("GET", _api_service_rag),
+        # Thoughts — proxied to the rust agent server when it's running.
+        "/__dev/api/thoughts": ("GET", _api_thoughts),
+        # Supervisor orchestration — transparent proxy to the rust
+        # agent server (port = framework port + 2000). When tina4
+        # serve isn't running these respond 503 with a helpful hint
+        # instead of failing silently.
+        "/__dev/api/supervise/create":   ("POST", _api_supervise_create),
+        "/__dev/api/supervise/sessions": ("GET",  _api_supervise_sessions),
+        "/__dev/api/supervise/diff":     ("GET",  _api_supervise_diff),
+        "/__dev/api/supervise/commit":   ("POST", _api_supervise_commit),
+        "/__dev/api/supervise/cancel":   ("POST", _api_supervise_cancel),
+        "/__dev/api/execute":            ("POST", _api_execute),
         "/__dev/api/tool": ("POST", _api_tool),
         "/__dev/api/connections": ("GET", _api_connections),
         "/__dev/api/connections/test": ("POST", _api_connections_test),
@@ -379,9 +405,30 @@ async def _api_status(request, response):
             db_table_count = len(db.get_tables())
     except Exception:
         pass
+    # Memory telemetry — best-effort via resource (POSIX) or psutil if present;
+    # falls back to 0.0 on Windows with no psutil so the key shape stays stable.
+    memory_usage_mb = 0.0
+    peak_memory_mb = 0.0
+    try:
+        import resource
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        # ru_maxrss is KB on Linux, bytes on macOS
+        scale = 1024.0 if sys.platform == "darwin" else 1.0
+        peak_memory_mb = round(usage.ru_maxrss * scale / 1024.0 / 1024.0, 2)
+        memory_usage_mb = peak_memory_mb  # resource has no current-rss field
+    except Exception:
+        pass
+    try:
+        import psutil  # optional
+        proc = psutil.Process()
+        memory_usage_mb = round(proc.memory_info().rss / 1024.0 / 1024.0, 2)
+    except Exception:
+        pass
+
     status = {
         "python_version": sys.version,
         "framework": "tina4-python v3",
+        "framework_version": __version__,
         "debug": os.environ.get("TINA4_DEBUG", "false"),
         "log_level": os.environ.get("TINA4_LOG_LEVEL", "ERROR"),
         "database": os.environ.get("DATABASE_URL", "not configured"),
@@ -390,6 +437,9 @@ async def _api_status(request, response):
         "messages": MessageLog.count(),
         "requests": RequestInspector.stats(),
         "health": BrokenTracker.health(),
+        "memory_usage_mb": memory_usage_mb,
+        "peak_memory_mb": peak_memory_mb,
+        "uptime_seconds": round(time.time() - _start_time, 1),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     return response(status)
@@ -981,8 +1031,10 @@ async def _api_system(request, response):
             info["db_connected"] = True
             db.close()
         else:
+            info["db_tables"] = 0
             info["db_connected"] = False
     except Exception:
+        info["db_tables"] = 0
         info["db_connected"] = False
 
     # Loaded modules count
@@ -991,87 +1043,355 @@ async def _api_system(request, response):
     return response(info)
 
 
-async def _api_chat(request, response):
-    """Tina4 — AI chat powered by LLM API."""
-    body = request.body if hasattr(request, "body") and request.body else {}
-    message = body.get("message", "").strip()
-    provider = body.get("provider", "anthropic")
+async def _api_service_ai(request, response):
+    return response({"service": "ai", "url": os.environ.get("TINA4_AI_URL", "http://andrevanzuydam.com:11437"), "ok": True})
 
+
+async def _api_service_vision(request, response):
+    return response({"service": "vision", "url": os.environ.get("TINA4_VISION_URL", "http://andrevanzuydam.com:11434"), "ok": True})
+
+
+async def _api_service_embed(request, response):
+    return response({"service": "embed", "url": os.environ.get("TINA4_EMBED_URL", "http://andrevanzuydam.com:11435"), "ok": True})
+
+
+async def _api_service_image(request, response):
+    return response({"service": "image", "url": os.environ.get("TINA4_IMAGE_URL", "http://andrevanzuydam.com:11436"), "ok": True})
+
+
+async def _api_service_rag(request, response):
+    return response({"service": "rag", "url": os.environ.get("TINA4_RAG_URL", "http://andrevanzuydam.com:11438"), "ok": True})
+
+
+def _supervisor_base_url() -> str:
+    """Return the URL of the co-located rust agent server, if any.
+
+    When ``tina4 serve`` is running it spawns a rust agent server on
+    127.0.0.1:<port+1000> (e.g. 9202 for Python/7202). We probe the
+    standard offset first, fall back to TINA4_SUPERVISOR_URL for
+    custom deployments.
+    """
+    explicit = os.environ.get("TINA4_SUPERVISOR_URL", "").rstrip("/")
+    if explicit:
+        return explicit
+    # Conventional port: framework port + 2000 (matches rust CLI default)
+    try:
+        port = int(os.environ.get("TINA4_PORT", "7202"))
+    except ValueError:
+        port = 7202
+    return f"http://127.0.0.1:{port + 2000}"
+
+
+async def _proxy_to_supervisor(request, response, downstream_path: str):
+    """Forward a dev-admin request to the rust agent server.
+
+    The SPA's supervisor UI calls paths like ``/__dev/api/supervise/create``;
+    we strip the ``/__dev/api`` prefix and POST/GET the same body+query to
+    the agent server. Returns the agent's response verbatim. When the
+    agent isn't reachable (tina4 serve not running, or bare framework)
+    we respond with a specific 503 so the SPA can show a useful error
+    instead of silently doing nothing.
+    """
+    import urllib.request
+    import urllib.error
+
+    base = _supervisor_base_url()
+    qs = ""
+    try:
+        if hasattr(request, "params") and request.params:
+            from urllib.parse import urlencode
+            qs = "?" + urlencode(request.params)
+    except Exception:
+        qs = ""
+    target = f"{base}{downstream_path}{qs}"
+
+    method = (getattr(request, "method", "GET") or "GET").upper()
+    data = None
+    if method in ("POST", "PUT", "PATCH", "DELETE"):
+        body = getattr(request, "body", None)
+        if isinstance(body, dict):
+            # SPA→agent convention fixup: `/execute` sends plan_file as
+            # a bare filename but the rust agent expects a project-relative
+            # path. Prepend `plan/` when no slash is present.
+            pf = body.get("plan_file")
+            if isinstance(pf, str) and pf and "/" not in pf:
+                body = dict(body)
+                body["plan_file"] = f"plan/{pf}"
+            data = json.dumps(body).encode()
+        elif isinstance(body, list):
+            data = json.dumps(body).encode()
+        elif isinstance(body, str) and body:
+            data = body.encode()
+
+    try:
+        req = urllib.request.Request(
+            target,
+            data=data,
+            method=method,
+            headers={"Content-Type": "application/json"},
+        )
+        # /execute runs the agent (qwen + multi-step tool calls) — can
+        # take several minutes on large plans. Other supervise/* calls
+        # are metadata-only and return fast, so a generous shared timeout
+        # is cheaper than branching.
+        timeout = 600 if downstream_path == "/execute" else 30
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            upstream_ct = r.headers.get("Content-Type", "") or ""
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode() if e.fp else str(e)
+        try:
+            return response(json.loads(err_body), e.code)
+        except Exception:
+            return response({"error": err_body[:300]}, e.code)
+    except Exception as e:
+        return response({
+            "error": "supervisor unavailable",
+            "detail": str(e),
+            "hint": "Run `tina4 serve` (starts the agent server) or set TINA4_SUPERVISOR_URL",
+        }, 503)
+
+    # SSE / event-stream: forward the body verbatim with the correct
+    # Content-Type so the SPA's `body.getReader()` can parse agent
+    # progress events (/execute).
+    if "text/event-stream" in upstream_ct.lower():
+        return response(raw, 200, "text/event-stream")
+    try:
+        return response(json.loads(raw))
+    except Exception:
+        return response(raw.decode("utf-8", errors="replace"))
+
+
+async def _api_supervise_create(request, response):
+    """Before forwarding to the rust agent, auto-flesh the current plan
+    if it has zero steps. The SPA sends the user's supervisor-chat
+    message as ``title``/``plan``; we use that as the fleshing prompt.
+    Skipped when the plan already has steps so populated plans aren't
+    polluted. Best-effort — never blocks supervise/create."""
+    try:
+        from tina4_python.dev_admin import plan as _plan
+        current = _plan.current()
+        is_empty = (
+            isinstance(current.get("current"), str)
+            and (current.get("progress") or {}).get("total", 0) == 0
+        )
+        if is_empty:
+            body = getattr(request, "body", None) or {}
+            if isinstance(body, dict):
+                prompt = str(body.get("plan") or body.get("title") or "").strip()
+                if prompt:
+                    _plan.flesh(current["current"], prompt)
+    except Exception:
+        pass  # Fleshing is best-effort.
+    return await _proxy_to_supervisor(request, response, "/supervise/create")
+
+
+async def _api_supervise_sessions(request, response):
+    return await _proxy_to_supervisor(request, response, "/supervise/sessions")
+
+
+async def _api_supervise_diff(request, response):
+    return await _proxy_to_supervisor(request, response, "/supervise/diff")
+
+
+async def _api_supervise_commit(request, response):
+    return await _proxy_to_supervisor(request, response, "/supervise/commit")
+
+
+async def _api_supervise_cancel(request, response):
+    return await _proxy_to_supervisor(request, response, "/supervise/cancel")
+
+
+async def _api_execute(request, response):
+    return await _proxy_to_supervisor(request, response, "/execute")
+
+
+async def _api_thoughts(request, response):
+    """Thoughts — proxied to the rust agent server when it's running,
+    otherwise an empty list so the SPA renders gracefully."""
+    base = _supervisor_base_url()
+    import urllib.request
+    import urllib.error
+    try:
+        with urllib.request.urlopen(f"{base}/thoughts", timeout=5) as r:
+            raw = r.read()
+        try:
+            return response(json.loads(raw))
+        except Exception:
+            return response({"thoughts": []})
+    except Exception:
+        return response({"thoughts": []})
+
+
+async def _api_ai_proxy(request, response):
+    """Transparent pass-through to the qwen ollama chat endpoint.
+
+    Accepts the ollama-native body (``{model, messages, stream,
+    options}``) that the dev-admin SPA sends for FIM completion and
+    supervisor chat, forwards it verbatim to ``TINA4_AI_URL``, and
+    returns the response unchanged. Streaming is forced off upstream
+    because the built-in asyncio server can't reliably chunk responses
+    back to the SPA; the SPA's ``body.getReader()`` still works for
+    single-shot JSON.
+    """
+    import urllib.request
+    import urllib.error
+
+    raw_body = request.body if hasattr(request, "body") else None
+    if isinstance(raw_body, (dict, list)):
+        payload = dict(raw_body) if isinstance(raw_body, dict) else raw_body
+        if isinstance(payload, dict):
+            payload["stream"] = False
+        raw_bytes = json.dumps(payload).encode()
+    elif isinstance(raw_body, str) and raw_body.strip():
+        try:
+            decoded = json.loads(raw_body)
+            if isinstance(decoded, dict):
+                decoded["stream"] = False
+            raw_bytes = json.dumps(decoded).encode()
+        except Exception:
+            raw_bytes = raw_body.encode()
+    else:
+        return response({"error": "empty body"}, 400)
+
+    ai_url = os.environ.get("TINA4_AI_URL", "http://andrevanzuydam.com:11437/api/chat")
+    try:
+        req = urllib.request.Request(
+            ai_url,
+            data=raw_bytes,
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=120) as r:
+            body = r.read()
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode() if e.fp else str(e)
+        return response({"error": f"AI backend {e.code}: {err_body[:200]}"}, 502)
+    except Exception as e:
+        return response({"error": f"AI backend unreachable: {e}"}, 502)
+
+    # Forward qwen's response verbatim as JSON.
+    try:
+        return response(json.loads(body))
+    except Exception:
+        # Non-JSON body (shouldn't happen from ollama) — best-effort text.
+        return response(body.decode("utf-8", errors="replace"))
+
+
+async def _api_chat(request, response):
+    """Tina4 dev-admin chat — qwen coding LLM + tina4-rag context.
+
+    Pipeline, on every request:
+
+    1. POST {TINA4_RAG_URL}/v1/search with the user's message → pulls
+       the top-K chunks from the tina4-book corpus (routing, ORM,
+       Frond, etc.). Skipped when TINA4_RAG_URL="" or the call fails
+       (RAG enriches, it doesn't block).
+    2. POST {TINA4_AI_URL}/api/chat with an ollama-style payload. The
+       system prompt embeds the RAG snippets so qwen answers with
+       first-party framework docs instead of training-data guesses.
+
+    Environment variables (defaults point at the shared tina4 stack):
+
+        TINA4_AI_URL   = http://andrevanzuydam.com:11437/api/chat
+        TINA4_AI_MODEL = qwen2.5-coder:14b
+        TINA4_RAG_URL  = http://andrevanzuydam.com:11438
+        TINA4_RAG_TOPK = 4
+
+    Response shape: {reply, source, model, rag_hits}. `source` is
+    "tina4" on success, "error" on failure (with a human-readable
+    `reply` explaining what broke). No Anthropic / OpenAI fallback —
+    the Tina4 stack is the single source of truth.
+    """
+    import urllib.request
+    import urllib.error
+
+    body = request.body if hasattr(request, "body") and request.body else {}
+    message = (body.get("message") or "").strip()
     if not message:
         return response({"error": "message required"}, 400)
 
-    # Check for API keys — runtime key takes priority over env
-    runtime_key = body.get("api_key", "")
-    if runtime_key:
-        if provider == "anthropic":
-            os.environ["ANTHROPIC_API_KEY"] = runtime_key
-        else:
-            os.environ["OPENAI_API_KEY"] = runtime_key
+    ai_url = os.environ.get("TINA4_AI_URL", "http://andrevanzuydam.com:11437/api/chat")
+    ai_model = os.environ.get("TINA4_AI_MODEL", "qwen2.5-coder:14b")
+    rag_url = os.environ.get("TINA4_RAG_URL", "http://andrevanzuydam.com:11438")
+    rag_topk = int(os.environ.get("TINA4_RAG_TOPK", "4"))
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
-    if not api_key:
-        # Fallback: helpful response without LLM
-        return response({
-            "reply": _tina4_robot_fallback(message),
-            "source": "local",
-        })
-
-    try:
-        import urllib.request
-        import urllib.error
-
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            # Claude API
-            req_data = json.dumps({
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 1024,
-                "system": "You are Tina4, a helpful assistant embedded in the Tina4 web framework dev admin. You help developers with Tina4 Python framework questions, debugging, and code generation. Be concise and practical. When asked about Tina4 features, reference the built-in modules: Router, ORM, Database, Queue, Auth, Template (Frond), GraphQL, WebSocket, WSDL, Messenger, SCSS, Seeder, Migration, i18n, Api, Session, Swagger, DevAdmin.",
-                "messages": [{"role": "user", "content": message}],
-            }).encode()
-            req = urllib.request.Request(
-                "https://api.anthropic.com/v1/messages",
-                data=req_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": os.environ["ANTHROPIC_API_KEY"],
-                    "anthropic-version": "2023-06-01",
-                },
+    # 1. RAG — best-effort context lookup.
+    rag_hits: list = []
+    rag_context = ""
+    if rag_url:
+        try:
+            rag_req = urllib.request.Request(
+                rag_url.rstrip("/") + "/v1/search",
+                data=json.dumps({"query": message, "top_k": rag_topk}).encode(),
+                headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read())
-                reply = result.get("content", [{}])[0].get("text", "No response")
-                return response({"reply": reply, "source": "claude"})
+            with urllib.request.urlopen(rag_req, timeout=10) as r:
+                rag_result = json.loads(r.read())
+                rag_hits = rag_result.get("hits", []) or []
+        except Exception:
+            rag_hits = []  # enrichment, not a blocker
+        if rag_hits:
+            parts = []
+            for h in rag_hits:
+                meta = h.get("metadata") or {}
+                title = meta.get("title") or meta.get("source") or "tina4-book"
+                parts.append(f"### {title}\n{h.get('text', '').strip()}")
+            rag_context = "\n\n---\n\n".join(parts)
 
-        elif os.environ.get("OPENAI_API_KEY"):
-            # OpenAI API
-            req_data = json.dumps({
-                "model": "gpt-4o-mini",
-                "max_tokens": 1024,
+    system_prompt = (
+        "You are Tina4, the coding assistant embedded in the Tina4 "
+        "framework dev admin. Answer using the framework documentation "
+        "snippets below when relevant. Be concise and practical; prefer "
+        "code examples to prose."
+    )
+    if rag_context:
+        system_prompt += (
+            "\n\n--- tina4-book context ---\n"
+            + rag_context
+            + "\n--- end context ---"
+        )
+
+    # 2. qwen coder via ollama /api/chat.
+    try:
+        ai_req = urllib.request.Request(
+            ai_url,
+            data=json.dumps({
+                "model": ai_model,
+                "stream": False,
                 "messages": [
-                    {"role": "system", "content": "You are Tina4, a helpful assistant embedded in the Tina4 web framework dev admin."},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": message},
                 ],
-            }).encode()
-            req = urllib.request.Request(
-                "https://api.openai.com/v1/chat/completions",
-                data=req_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                result = json.loads(resp.read())
-                reply = result["choices"][0]["message"]["content"]
-                return response({"reply": reply, "source": "openai"})
-
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(ai_req, timeout=90) as r:
+            result = json.loads(r.read())
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode() if e.fp else str(e)
-        return response({"reply": f"API error: {e.code} — {error_body[:200]}", "source": "error"})
+        err_body = e.read().decode() if e.fp else str(e)
+        return response({
+            "reply": f"AI backend error {e.code}: {err_body[:200]}",
+            "source": "error",
+            "model": ai_model,
+            "rag_hits": len(rag_hits),
+        }, 502)
     except Exception as e:
-        return response({"reply": f"Error: {str(e)}", "source": "error"})
+        return response({
+            "reply": f"AI backend unreachable: {e}",
+            "source": "error",
+            "model": ai_model,
+            "rag_hits": len(rag_hits),
+        }, 502)
 
-    return response({"reply": _tina4_robot_fallback(message), "source": "local"})
+    reply = (result.get("message") or {}).get("content") \
+        or result.get("response") \
+        or "No response"
+    return response({
+        "reply": reply,
+        "source": "tina4",
+        "model": ai_model,
+        "rag_hits": len(rag_hits),
+    })
 
 
 async def _api_tool(request, response):
@@ -1370,7 +1690,16 @@ async def _api_metrics_file(request, response):
     path = request.params.get("path", "")
     if not path:
         return response({"error": "Missing path parameter"}, 400)
-    return response(file_detail(path))
+    # Graceful 404 when the caller points at a directory / missing file
+    # (instead of a 500 from AST parsing). Matches the PHP contract.
+    try:
+        from pathlib import Path as _P
+        p = _P(path)
+        if p.exists() and p.is_dir():
+            return response({"error": f"Not a file: {path}"}, 404)
+        return response(file_detail(path))
+    except Exception as exc:
+        return response({"error": str(exc)}, 500)
 
 
 async def _api_graphql_schema(request, response):
@@ -1538,10 +1867,15 @@ async def _api_files(request, response):
 
     # Security: must stay within project root
     if not target.startswith(base):
-        return response({"error": "Path outside project"}, 403)
+        return response({"error": "Path outside project", "path": rel, "entries": [], "branch": ""}, 403)
 
     if not os.path.isdir(target):
-        return response({"error": "Not a directory"}, 404)
+        # Missing / invalid paths: return an empty-but-valid shape
+        # instead of 404. The SPA restores previously-expanded folder
+        # state from localStorage; when a session moves to a different
+        # harness, folders that don't exist trigger 404s which bubble
+        # as noisy red errors. Empty `entries` lets the SPA quietly skip.
+        return response({"path": rel, "entries": [], "branch": "", "error": "Not a directory"})
 
     # Find git root (may differ from cwd)
     git_root = base
@@ -1666,31 +2000,38 @@ async def _api_file_read(request, response):
 
     Query params:
         path — relative file path
+
+    IMPORTANT: error responses MUST include ``path`` (echo what was
+    requested). The SPA bundle calls ``e.path.split()`` on the response
+    payload unconditionally — if ``path`` is absent it throws and kills
+    the click handler for every subsequent file open. Manifests as
+    "folder clicks work, file clicks don't" after the SPA restores
+    previously-open tabs from localStorage that no longer exist.
     """
     import os
     rel = (request.params.get("path") or "").strip("/")
     if not rel:
-        return response({"error": "path required"}, 400)
+        return response({"error": "path required", "path": "", "content": "", "language": "text", "size": 0}, 400)
 
     base = os.getcwd()
     target = os.path.normpath(os.path.join(base, rel))
 
     if not target.startswith(base):
-        return response({"error": "Path outside project"}, 403)
+        return response({"error": "Path outside project", "path": rel, "content": "", "language": "text", "size": 0}, 403)
 
     if not os.path.isfile(target):
-        return response({"error": "File not found"}, 404)
+        return response({"error": "File not found", "path": rel, "content": "", "language": "text", "size": 0}, 404)
 
     # Size guard: don't load huge files into JSON
     size = os.path.getsize(target)
     if size > 2 * 1024 * 1024:  # 2MB
-        return response({"error": "File too large", "size": size}, 413)
+        return response({"error": "File too large", "path": rel, "content": "", "language": "text", "size": size}, 413)
 
     try:
         with open(target, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
     except Exception as e:
-        return response({"error": str(e)}, 500)
+        return response({"error": str(e), "path": rel, "content": "", "language": "text", "size": 0}, 500)
 
     # Detect language from extension
     ext = os.path.splitext(rel)[1].lower()
@@ -1758,17 +2099,9 @@ async def _api_file_raw(request, response):
     except Exception as e:
         return response({"error": str(e)}, 500)
 
-    from tina4_python.core.response import Response
-    Response.add_header("Content-Type", content_type)
-    Response.add_header("Cache-Control", "no-cache")
-    # Return raw bytes — the response handler will detect binary
-    import base64
-    return response({
-        "_raw": True,
-        "data": base64.b64encode(data).decode("ascii"),
-        "content_type": content_type,
-        "size": size,
-    })
+    # PHP-parity: stream the bytes back with the correct Content-Type,
+    # not a JSON wrapper. Matches PHP's `$response->header(...)->html(...)`.
+    return response(data, 200, content_type)
 
 
 async def _api_file_save(request, response):

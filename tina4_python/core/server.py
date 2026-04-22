@@ -837,7 +837,10 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
     """Serve the /__dev dashboard and API routes."""
     from tina4_python.dev_admin import get_api_handlers
     if request.path in ("/__dev/", "/__dev", "/__dev/v2", "/__dev/v2/"):
-        # Unified SPA dev admin
+        # Unified SPA dev admin. The bundle derives its WS URL from
+        # `location.host` directly, so no environment shim is needed —
+        # the framework serves /__dev_reload on its own port and the
+        # SPA reaches it as `ws://<page-host>/__dev_reload`.
         response.html("""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Tina4 Dev Admin</title></head>
 <body><div id="app" data-framework="python" data-color="#3b82f6"></div>
@@ -847,8 +850,19 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
         handler_info = handlers.get(request.path)
         if handler_info and request.method == handler_info[0]:
             try:
-                def _resp(data, code=200):
-                    if isinstance(data, str):
+                def _resp(data, code=200, content_type=None):
+                    # content_type overrides the auto-detected MIME —
+                    # lets handlers stream binary with an explicit
+                    # Content-Type (e.g. /__dev/api/file/raw).
+                    if content_type is not None:
+                        response.status(code)
+                        response.content_type = content_type
+                        response.content = data if isinstance(data, (bytes, bytearray)) else str(data).encode("utf-8")
+                    elif isinstance(data, (bytes, bytearray)):
+                        response.status(code)
+                        response.content_type = "application/octet-stream"
+                        response.content = data
+                    elif isinstance(data, str):
                         response.status(code).html(data)
                     else:
                         response.status(code).json(data)
@@ -1182,8 +1196,14 @@ async def handle(request: Request) -> Response:
     from tina4_python.dotenv import is_truthy
     _is_dev = is_truthy(os.environ.get("TINA4_DEBUG", ""))
 
-    # Dev admin
-    if _is_dev and request.path.startswith("/__dev"):
+    # Dev admin — also catches /ai/api/chat (SPA's ollama proxy) and the
+    # bare /ai /vision /embed /image /rag service-health probes that
+    # drive the "SERVICES ●●●●●" dots in the dev-admin UI.
+    _dev_extra_paths = {"/ai/api/chat", "/ai", "/vision", "/embed", "/image", "/rag"}
+    if _is_dev and (
+        request.path.startswith("/__dev")
+        or request.path in _dev_extra_paths
+    ):
         return await _handle_dev_admin(request, response)
 
     # Swagger

@@ -505,6 +505,13 @@ def register_dev_tools(server):
         from tina4_python.dev_admin import plan as _plan
         return _plan.read(name)
 
+    def plan_flesh(name: str = "", prompt: str = "") -> dict:
+        """Auto-generate concrete build steps via qwen and append to an
+        existing plan. Thin wrapper around ``plan.flesh`` — use when a
+        plan has a title/goal but no steps yet."""
+        from tina4_python.dev_admin import plan as _plan
+        return _plan.flesh(name, prompt)
+
     # ── Project index — persistent "where is what" map ────────
 
     def index_rebuild() -> dict:
@@ -736,6 +743,7 @@ def register_dev_tools(server):
         ("plan_note", plan_note, "Append a timestamped note/breadcrumb to the current plan"),
         ("plan_archive", plan_archive, "Move a finished plan to plan/done/ and clear the current pointer"),
         ("plan_read", plan_read, "Full structured view of any plan by filename"),
+        ("plan_flesh", plan_flesh, "Auto-generate concrete build steps via qwen and append them to an existing plan — use when a plan has a title/goal but no steps yet"),
     ]
 
     for name, handler, description in tools:

@@ -432,6 +432,114 @@ def summarise_execution(name: str = "") -> dict:
     }
 
 
+def flesh(name: str = "", prompt: str = "") -> dict:
+    """Auto-generate concrete build steps for an existing (usually empty)
+    plan by asking the Tina4 AI backend. Mirrors PHP ``Plan::flesh()``.
+
+    1. Loads plan by ``name`` (defaults to current).
+    2. Builds a structured qwen prompt from title + goal + existing
+       steps + caller-supplied ``prompt``.
+    3. Posts to ``TINA4_AI_URL`` with ``stream: false`` and parses the
+       response as a JSON array of step strings. Falls back to
+       extracting ``- item`` / ``1. item`` lines on parse failure.
+    4. Calls :func:`add_step` for each proposed step, skipping dupes.
+    """
+    import os as _os
+    import urllib.request as _urlreq
+
+    target = (name or "").strip() or current_name()
+    if not target:
+        return {"ok": False, "error": "No current plan and no name given"}
+    current_plan = read(target)
+    if "error" in current_plan:
+        return {"ok": False, "error": current_plan["error"]}
+
+    existing = [s.get("text", "") for s in current_plan.get("steps", [])]
+    title = current_plan.get("title") or target
+    goal = current_plan.get("goal") or ""
+
+    system_prompt = (
+        "You are Tina4, a coding planner embedded in the Tina4 dev "
+        "admin. Return ONLY a JSON array of short imperative step "
+        "strings (no prose, no code-fences, no numbering). 3-8 steps, "
+        "each referencing concrete files/routes/migrations. Example: "
+        '["Create src/orm/Duck.py with id/name/sighted_at", '
+        '"Add migration 001_create_ducks.sql", '
+        '"Add GET/POST/PUT/DELETE /api/ducks routes in '
+        'src/routes/ducks.py"]'
+    )
+    user_parts = [f"Plan title: {title}"]
+    if goal:
+        user_parts.append(f"Goal: {goal}")
+    if existing:
+        user_parts.append("Existing steps (don't repeat):\n- " + "\n- ".join(existing))
+    if prompt:
+        user_parts.append(f"Extra context from caller: {prompt}")
+    user_parts.append("Reply with ONLY the JSON array — no explanation, no markdown fences.")
+
+    ai_url = _os.environ.get("TINA4_AI_URL", "http://andrevanzuydam.com:11437/api/chat")
+    ai_model = _os.environ.get("TINA4_AI_MODEL", "qwen2.5-coder:14b")
+    try:
+        req = _urlreq.Request(
+            ai_url,
+            data=json.dumps({
+                "model": ai_model,
+                "stream": False,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": "\n\n".join(user_parts)},
+                ],
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with _urlreq.urlopen(req, timeout=120) as r:
+            result = json.loads(r.read())
+    except Exception as exc:
+        return {"ok": False, "error": f"AI backend unreachable: {exc}"}
+
+    reply = (result.get("message") or {}).get("content") or result.get("response") or ""
+    body = reply.strip()
+    if body.startswith("```"):
+        body = body.strip("`")
+        if body.lower().startswith("json"):
+            body = body[4:].strip()
+        body = body.rstrip("`").strip()
+
+    proposed: list = []
+    try:
+        parsed = json.loads(body)
+        if isinstance(parsed, list):
+            proposed = [str(x).strip() for x in parsed if str(x).strip()]
+    except Exception:
+        import re as _re
+        for line in reply.splitlines():
+            m = _re.match(r"^\s*(?:[-*]|\d+[.)])\s+(.+?)\s*$", line)
+            if m:
+                proposed.append(m.group(1).strip())
+
+    if not proposed:
+        return {"ok": False, "error": "AI returned no usable steps", "raw_reply": reply[:400]}
+
+    existing_lc = {s.lower() for s in existing}
+    added: list = []
+    for step in proposed:
+        if step.lower() in existing_lc:
+            continue
+        res = add_step(step, target)
+        if res.get("ok"):
+            added.append(step)
+            existing_lc.add(step.lower())
+
+    return {
+        "ok": True,
+        "plan": target,
+        "added": added,
+        "added_count": len(added),
+        "proposed_count": len(proposed),
+        "plan_after": read(target),
+    }
+
+
 def archive(name: str = "") -> dict:
     """Move a plan to plan/done/ and clear the current pointer if it
     was pointing at this plan. A no-op + warning if it's already

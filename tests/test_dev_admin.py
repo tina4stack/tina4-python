@@ -305,9 +305,11 @@ class TestGetAPIHandlers:
         # lands so review catches silent growth.
         #
         # Current: 41 base + 13 (file I/O × 6, deps × 2, git × 1,
-        #          mcp × 2, scaffold × 2) = 54.
+        #          mcp × 2, scaffold × 2) + 7 (ollama proxy alias,
+        #          5 service-health probes, thoughts stub) + 6 (5
+        #          supervise/* proxies + /execute) = 67.
         handlers = get_api_handlers()
-        assert len(handlers) == 54
+        assert len(handlers) == 67
 
     def test_tables_handler_registered(self):
         handlers = get_api_handlers()
@@ -441,17 +443,6 @@ class TestAPIHandlers:
         assert result["framework"] == "tina4-python v3"
 
     @pytest.mark.asyncio
-    async def test_chat_handler_no_api_key(self, mock_req, mock_resp, monkeypatch):
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        from tina4_python.dev_admin import _api_chat
-        mock_req.body = {"message": "what is a route?"}
-        result = await _api_chat(mock_req, mock_resp)
-        assert "reply" in result
-        assert result["source"] == "local"
-        assert "route" in result["reply"].lower()
-
-    @pytest.mark.asyncio
     async def test_chat_handler_empty_message(self, mock_req, mock_resp):
         from tina4_python.dev_admin import _api_chat
         mock_req.body = {"message": ""}
@@ -459,25 +450,20 @@ class TestAPIHandlers:
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_chat_fallback_topics(self, mock_req, mock_resp, monkeypatch):
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    async def test_chat_backend_unreachable_returns_error_source(self, mock_req, mock_resp, monkeypatch):
+        """When the qwen/RAG stack is unreachable, /chat returns source=error
+        with a clear message. There is no local / fallback provider — Tina4 is
+        the only supported backend (Anthropic/OpenAI branches were removed)."""
+        # Point at an unroutable address so urlopen fails fast.
+        monkeypatch.setenv("TINA4_AI_URL", "http://127.0.0.1:1/api/chat")
+        monkeypatch.setenv("TINA4_RAG_URL", "")
         from tina4_python.dev_admin import _api_chat
-        topics = {
-            "how do I use ORM?": "orm",
-            "database setup": "database",
-            "queue processing": "queue",
-            "twig templates": "template",
-            "authentication": "auth",
-            "write tests": "test",
-            "create migration": "migration",
-            "seed data": "seed",
-            "random question": "tina4",
-        }
-        for question, expected_word in topics.items():
-            mock_req.body = {"message": question}
-            result = await _api_chat(mock_req, mock_resp)
-            assert expected_word.lower() in result["reply"].lower(), f"Expected '{expected_word}' in response to '{question}'"
+        mock_req.body = {"message": "ping"}
+        result = await _api_chat(mock_req, mock_resp)
+        assert result.get("source") == "error"
+        assert "reply" in result
+        assert result.get("model") == "qwen2.5-coder:14b"
+        assert result.get("rag_hits") == 0
 
     @pytest.mark.asyncio
     async def test_websockets_handler(self, mock_req, mock_resp):
