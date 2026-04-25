@@ -74,3 +74,7 @@ example/store/__pycache__/
 example/store/src/**/__pycache__/
 .claude/settings.local.json
 .claude/worktrees/
+/nonexistent_path/
+/data/store.db
+/example/store/
+/example/uv.lock

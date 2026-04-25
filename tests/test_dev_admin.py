@@ -516,8 +516,12 @@ class TestAPIHandlers:
         assert "test_tbl" in result["tables"]
 
     @pytest.mark.asyncio
-    async def test_tables_handler_no_db(self, mock_req, mock_resp, monkeypatch):
-        monkeypatch.setenv("DATABASE_URL", "sqlite:///nonexistent_path/no_db.db")
+    async def test_tables_handler_no_db(self, mock_req, mock_resp, tmp_path, monkeypatch):
+        # Use tmp_path so the (possibly-created) bogus DB lands in a sandboxed
+        # tempdir, not in the repo root. The handler should still return an
+        # empty/safe result for an un-initialised database.
+        db_path = tmp_path / "no_such_dir" / "no_db.db"
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
         from tina4_python.dev_admin import _api_tables
         result = await _api_tables(mock_req, mock_resp)
         assert "tables" in result
