@@ -950,8 +950,11 @@ async def _api_broken_resolve(request, response):
 
 
 async def _api_broken_clear(request, response):
-    """Clear resolved errors."""
-    BrokenTracker.clear_resolved()
+    """Clear ALL tracked errors. The SPA's "Clear All" button hits here,
+    and a user clicking "Clear All" expects the panel to actually empty —
+    not just hide entries they've individually marked resolved. Use
+    clear_all() so the button does what it says on the tin."""
+    BrokenTracker.clear_all()
     return response({"cleared": True})
 
 
