@@ -288,6 +288,94 @@ def register():
             Router.get(path, handler)
         else:
             Router.post(path, handler)
+    # Auto-discovery: drop `.tina4/mcp.json` so MCP-aware AI tools
+    # (Claude Code, Cursor, etc.) discover the local Live Docs +
+    # MCP server without the user authoring config. Idempotent.
+    write_mcp_discovery_file()
+
+
+def write_mcp_discovery_file() -> None:
+    """Drop `.tina4/mcp.json` and append `.tina4/` to `.gitignore`.
+
+    Both are idempotent — running twice is a no-op when the state is
+    already correct. Skipped silently outside debug mode and on
+    filesystem errors (read-only project dir, etc.) — discovery is
+    a convenience, not a requirement.
+
+    See plan/v3/22-LIVE-API-RAG.md §"Auto-discovery file" for the
+    JSON shape.
+    """
+    import json
+    import os
+
+    is_dev = os.environ.get("TINA4_DEBUG", "false").lower() in ("1", "true", "yes")
+    if not is_dev:
+        return
+    root = os.getcwd()
+    tina4_dir = os.path.join(root, ".tina4")
+    mcp_file = os.path.join(tina4_dir, "mcp.json")
+    port = (os.environ.get("TINA4_PORT")
+            or os.environ.get("PORT")
+            or "7146")
+    expected = {
+        "mcpServers": {
+            "tina4-live-docs": {
+                "url": f"http://localhost:{port}/__dev/api/mcp",
+                "description": "Live API docs for this Tina4 project (framework + user code)",
+            }
+        }
+    }
+    expected_json = json.dumps(expected, indent=2) + "\n"
+
+    try:
+        if os.path.isfile(mcp_file):
+            with open(mcp_file, "r", encoding="utf-8") as f:
+                existing = f.read()
+            if existing.strip() == expected_json.strip():
+                _ensure_gitignore(root)
+                return
+        os.makedirs(tina4_dir, exist_ok=True)
+        with open(mcp_file, "w", encoding="utf-8") as f:
+            f.write(expected_json)
+        _ensure_gitignore(root)
+    except OSError:
+        # Read-only fs, permission denied, etc. Silently skip —
+        # discovery is convenience.
+        return
+
+
+def _ensure_gitignore(root: str) -> None:
+    """Append `.tina4/` to `.gitignore` if not already excluded.
+
+    Tolerates leading slashes, trailing slashes, and existing comment
+    lines so we never duplicate. Only touches `.gitignore` if `.git/`
+    exists (don't pollute non-git projects).
+    """
+    import os
+
+    if not os.path.isdir(os.path.join(root, ".git")):
+        return
+    gi_path = os.path.join(root, ".gitignore")
+    existing = ""
+    if os.path.isfile(gi_path):
+        try:
+            with open(gi_path, "r", encoding="utf-8") as f:
+                existing = f.read()
+        except OSError:
+            return
+    for raw in existing.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        normal = line.strip("/").strip()
+        if normal == ".tina4":
+            return  # already excluded
+    suffix = "" if existing.endswith("\n") or existing == "" else "\n"
+    try:
+        with open(gi_path, "a", encoding="utf-8") as f:
+            f.write(suffix + ".tina4/\n")
+    except OSError:
+        pass
 
 
 def get_api_handlers() -> dict:
@@ -388,6 +476,17 @@ def get_api_handlers() -> dict:
         # without shelling out from the browser.
         "/__dev/api/scaffold": ("GET", _api_scaffold_list),
         "/__dev/api/scaffold/run": ("POST", _api_scaffold_run),
+        # ── Live Docs (per plan/v3/22-LIVE-API-RAG.md) ──
+        # Thin HTTP wrappers around tina4_python.docs.Docs. Both
+        # framework public API and the user's src/ surface are
+        # returned, tagged with `source = framework | user`. AI tools
+        # (Claude Code, Cursor, dev-admin chat) hit these for ground-
+        # truth introspection instead of guessing from training data.
+        "/__dev/api/docs/search": ("GET", _api_docs_search),
+        "/__dev/api/docs/class": ("GET", _api_docs_class),
+        "/__dev/api/docs/method": ("GET", _api_docs_method),
+        "/__dev/api/docs/index": ("GET", _api_docs_index),
+        "/__dev/api/docs/.well-known.json": ("GET", _api_docs_well_known),
     }
 
 
@@ -1766,9 +1865,55 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     <span style="color:#ffeb3b;">req:{request_id}</span>
     <span style="color:#90caf9;">{route_count} routes</span>
     <span style="color:#888;">Python {python_version}</span>
-    <a href="#" onclick="(function(e){{e.preventDefault();var p=document.getElementById('tina4-dev-panel');if(p){{p.style.display=p.style.display==='none'?'block':'none';return;}}var c=document.createElement('div');c.id='tina4-dev-panel';c.style.cssText='position:fixed;top:3rem;left:0;right:0;bottom:2rem;z-index:99998;transition:all 0.2s';var f=document.createElement('iframe');f.src='/__dev';f.style.cssText='width:100%;height:100%;border:1px solid #3572A5;border-radius:0.5rem;box-shadow:0 8px 32px rgba(0,0,0,0.5);background:#0f172a';c.appendChild(f);document.body.appendChild(c);}})(event)" style="color:#ef9a9a;margin-left:auto;text-decoration:none;cursor:pointer;">Dashboard &#8599;</a>
+    <a href="#" onclick="window.__tina4ToggleOverlay(event)" style="color:#ef9a9a;margin-left:auto;text-decoration:none;cursor:pointer;">Dashboard &#8599;</a>
     <span onclick="this.parentElement.style.display='none'" style="cursor:pointer;color:#888;margin-left:8px;">&#10005;</span>
 </div>
+<script>
+// Overlay open/toggle helper + auto-restore. Persist the dev-admin
+// iframe's open/closed state across parent reloads so saving a file
+// (which kicks the watcher → location.reload) doesn't lose the
+// user's dev-admin chat / plan / file tree. Cross-framework parity
+// with PHP / Ruby / Node — same localStorage key, same shape.
+(function(){{
+    var STATE_KEY = 'tina4_dev_overlay_open';
+    function buildOverlay() {{
+        var c = document.createElement('div');
+        c.id = 'tina4-dev-panel';
+        c.style.cssText = 'position:fixed;top:3rem;left:0;right:0;bottom:2rem;z-index:99998;transition:all 0.2s';
+        var f = document.createElement('iframe');
+        f.src = '/__dev';
+        f.style.cssText = 'width:100%;height:100%;border:1px solid #3572A5;border-radius:0.5rem;box-shadow:0 8px 32px rgba(0,0,0,0.5);background:#0f172a';
+        c.appendChild(f);
+        document.body.appendChild(c);
+        return c;
+    }}
+    window.__tina4ToggleOverlay = function(e) {{
+        if (e) e.preventDefault();
+        var p = document.getElementById('tina4-dev-panel');
+        if (p) {{
+            var hide = p.style.display !== 'none';
+            p.style.display = hide ? 'none' : 'block';
+            try {{ localStorage.setItem(STATE_KEY, hide ? '0' : '1'); }} catch (_) {{}}
+            return;
+        }}
+        buildOverlay();
+        try {{ localStorage.setItem(STATE_KEY, '1'); }} catch (_) {{}}
+    }};
+    function restoreIfOpen() {{
+        try {{
+            if (location.pathname.indexOf('/__dev') === 0) return;
+            if (localStorage.getItem(STATE_KEY) === '1' && !document.getElementById('tina4-dev-panel')) {{
+                buildOverlay();
+            }}
+        }} catch (_) {{}}
+    }}
+    if (document.readyState === 'loading') {{
+        document.addEventListener('DOMContentLoaded', restoreIfOpen);
+    }} else {{
+        restoreIfOpen();
+    }}
+}})();
+</script>
 <script>
 {'(function(){})();' if no_reload else f"""(function(){{
     var _t4_mtime=0,_t4_css_exts=['.css','.scss'],_t4_debounce=null;
@@ -2580,6 +2725,91 @@ async def _api_scaffold_run(request, response):
         return response({"ok": True, "kind": kind, "name": name, "files": files})
     except Exception as exc:
         return response({"ok": False, "error": str(exc)}, 500)
+
+
+_DOCS_SINGLETON = None  # cached per-process so the framework index
+                         # builds once. User portion still mtime-refreshes
+                         # inside Docs.
+
+def _docs_instance():
+    """Lazy singleton for the Live Docs module — bound to the project
+    cwd at first call. Subsequent calls reuse the same Docs instance,
+    which keeps the framework index hot across requests while still
+    refreshing the user portion when src/ files change."""
+    global _DOCS_SINGLETON
+    if _DOCS_SINGLETON is None:
+        import os
+        from tina4_python.docs import Docs
+        _DOCS_SINGLETON = Docs(project_root=os.getcwd())
+    return _DOCS_SINGLETON
+
+
+async def _api_docs_search(request, response):
+    """GET /__dev/api/docs/search?q=...&k=...&source=...&include_private=..."""
+    q = (request.query.get("q") or "").strip() if hasattr(request, "query") else ""
+    if not q:
+        return response({"ok": False, "error": "missing required 'q' param"}, 400)
+    try:
+        k = int(request.query.get("k", 5))
+    except (TypeError, ValueError):
+        k = 5
+    source = request.query.get("source", "all")
+    include_private = (request.query.get("include_private", "")
+                       or "").lower() in ("1", "true", "yes")
+    import time
+    t0 = time.perf_counter()
+    hits = _docs_instance().search(q, k=k, source=source, include_private=include_private)
+    took_ms = int((time.perf_counter() - t0) * 1000)
+    return response({"ok": True, "query": q, "results": hits, "took_ms": took_ms})
+
+
+async def _api_docs_class(request, response):
+    """GET /__dev/api/docs/class?name=<fqn>"""
+    name = (request.query.get("name") or "").strip()
+    if not name:
+        return response({"ok": False, "error": "missing required 'name' param"}, 400)
+    spec = _docs_instance().class_spec(name)
+    if spec is None:
+        return response({"ok": False, "error": f"class not found: {name}"}, 404)
+    return response({"ok": True, "class": spec})
+
+
+async def _api_docs_method(request, response):
+    """GET /__dev/api/docs/method?class=<fqn>&name=<method>"""
+    cls = (request.query.get("class") or "").strip()
+    name = (request.query.get("name") or "").strip()
+    if not cls or not name:
+        return response({"ok": False, "error": "both 'class' and 'name' params are required"}, 400)
+    spec = _docs_instance().method_spec(cls, name)
+    if spec is None:
+        return response({"ok": False, "error": f"method not found: {cls}.{name}"}, 404)
+    return response({"ok": True, "method": spec})
+
+
+async def _api_docs_index(request, response):
+    """GET /__dev/api/docs/index?source=<framework|user|all>"""
+    source = request.query.get("source", "all")
+    entities = _docs_instance().index()
+    if source != "all":
+        entities = [e for e in entities if e.get("source") == source]
+    return response({"ok": True, "count": len(entities), "entities": entities})
+
+
+async def _api_docs_well_known(request, response):
+    """Public well-known doc — describes what the docs surface offers
+    so non-MCP AI tools know what endpoints to call."""
+    return response({
+        "ok": True,
+        "service": "tina4-live-docs",
+        "version": "1",
+        "endpoints": {
+            "search": "/__dev/api/docs/search?q={query}&k={int}&source={framework|user|all}",
+            "class":  "/__dev/api/docs/class?name={fqn}",
+            "method": "/__dev/api/docs/method?class={fqn}&name={method}",
+            "index":  "/__dev/api/docs/index?source={framework|user|all}",
+        },
+        "description": "Live API reflection for this Tina4 project — framework + user code combined.",
+    })
 
 
 __all__ = ["MessageLog", "RequestInspector", "BrokenTracker",

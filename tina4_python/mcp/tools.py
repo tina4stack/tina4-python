@@ -696,6 +696,27 @@ def register_dev_tools(server):
         except ImportError:
             return "unknown"
 
+    # ── Live API RAG (per plan/v3/22-LIVE-API-RAG.md) ───────────
+    # Wrappers around tina4_python.docs.Docs for AI-tool consumption.
+    # See the api_* registrations below — these are distinct from
+    # docs_* which searches prose markdown.
+
+    def api_search(query: str, k: int = 5, source: str = "all", include_private: bool = False) -> list:
+        from tina4_python.docs import Docs
+        return Docs(project_root=str(project_root)).search(query, k=k, source=source, include_private=include_private)
+
+    def api_class(name: str) -> dict:
+        from tina4_python.docs import Docs
+        spec = Docs(project_root=str(project_root)).class_spec(name)
+        return spec if spec is not None else {"error": f"class not found: {name}"}
+
+    def api_method(class_: str, name: str) -> dict:
+        # `class` is a Python keyword — accept it via `class_` and let
+        # the MCP layer pass either through to the wrapper.
+        from tina4_python.docs import Docs
+        spec = Docs(project_root=str(project_root)).method_spec(class_, name)
+        return spec if spec is not None else {"error": f"method not found: {class_}.{name}"}
+
     # ── Register all tools ──────────────────────────────────────
 
     tools = [
@@ -744,6 +765,16 @@ def register_dev_tools(server):
         ("plan_archive", plan_archive, "Move a finished plan to plan/done/ and clear the current pointer"),
         ("plan_read", plan_read, "Full structured view of any plan by filename"),
         ("plan_flesh", plan_flesh, "Auto-generate concrete build steps via qwen and append them to an existing plan — use when a plan has a title/goal but no steps yet"),
+
+        # ── Live API RAG (per plan/v3/22-LIVE-API-RAG.md) ──
+        # Distinct from docs_* (prose markdown search). api_* tools
+        # query the live framework reflection — actual class/method
+        # signatures, file/line locations, source tagging (framework
+        # vs user). Use api_* for "what's the signature of X?" and
+        # docs_* for "explain queues conceptually".
+        ("api_search", api_search, "Live API search — finds framework + user classes/methods by name/summary. Use BEFORE guessing a method exists."),
+        ("api_class", api_class, "Live class reflection — returns full method list + signatures for an FQN."),
+        ("api_method", api_method, "Live method reflection — returns signature, params, return type, file, line."),
     ]
 
     for name, handler, description in tools:

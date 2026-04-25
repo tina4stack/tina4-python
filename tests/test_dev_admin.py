@@ -307,9 +307,12 @@ class TestGetAPIHandlers:
         # Current: 41 base + 13 (file I/O × 6, deps × 2, git × 1,
         #          mcp × 2, scaffold × 2) + 7 (ollama proxy alias,
         #          5 service-health probes, thoughts stub) + 6 (5
-        #          supervise/* proxies + /execute) = 67.
+        #          supervise/* proxies + /execute) + 5 (docs/search,
+        #          docs/class, docs/method, docs/index,
+        #          docs/.well-known.json — Live API RAG endpoints
+        #          per plan/v3/22-LIVE-API-RAG.md) = 72.
         handlers = get_api_handlers()
-        assert len(handlers) == 67
+        assert len(handlers) == 72
 
     def test_tables_handler_registered(self):
         handlers = get_api_handlers()
