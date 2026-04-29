@@ -166,6 +166,11 @@ class Database:
             self._adapter: DatabaseAdapter = self._create_adapter()
             self._adapter.connect(self._connection_path(), username=self.username, password=self.password, **kwargs)
 
+        # Per-thread transaction adapter pin. While set, every operation
+        # on this thread routes to the same adapter — so the round-robin
+        # pool can't rotate mid-transaction and silently break atomicity.
+        self._tx_local = threading.local()
+
         # Query cache — off by default, opt-in via TINA4_DB_CACHE=true
         from tina4_python.dotenv import is_truthy
         self._cache_enabled: bool = is_truthy(os.environ.get("TINA4_DB_CACHE", "false"))
@@ -308,7 +313,25 @@ class Database:
     # ── Pool-aware adapter access ─────────────────────────────
 
     def _get_adapter(self) -> DatabaseAdapter:
-        """Get an adapter — from pool (round-robin) or single connection."""
+        """Get an adapter for the next operation.
+
+        With pooling enabled, ordinary calls round-robin through the pool.
+        Inside a transaction, however, all calls must land on the SAME
+        adapter — otherwise start_transaction(), execute() and commit()
+        each rotate to a different connection and the transaction is
+        meaningless (executes autocommit on whatever adapter they hit;
+        the final commit lands on yet another adapter that has nothing
+        to commit; rollback() is silently no-op'd).
+
+        We pin the adapter to the calling thread for the duration of the
+        transaction. start_transaction() sets the pin, commit()/rollback()
+        clear it. While pinned, _get_adapter() returns that same adapter
+        for every call so the whole transaction is atomic on one
+        connection.
+        """
+        pinned = getattr(self._tx_local, "adapter", None)
+        if pinned is not None:
+            return pinned
         if self._pool is not None:
             return self._pool.checkout()
         return self._adapter
@@ -422,16 +445,24 @@ class Database:
         return adapter.delete(table, filter_sql, params)
 
     def start_transaction(self):
+        """Begin a transaction. Pins the adapter to this thread for the
+        whole transaction so executes and the final commit/rollback all
+        run on the same connection."""
         adapter = self._get_adapter()
+        self._tx_local.adapter = adapter
         adapter.start_transaction()
 
     def commit(self):
+        """Commit the current transaction and release the adapter pin."""
         adapter = self._get_adapter()
         adapter.commit()
+        self._tx_local.adapter = None
 
     def rollback(self):
+        """Roll back the current transaction and release the adapter pin."""
         adapter = self._get_adapter()
         adapter.rollback()
+        self._tx_local.adapter = None
 
     def table_exists(self, name: str) -> bool:
         adapter = self._get_adapter()

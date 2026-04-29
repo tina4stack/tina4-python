@@ -292,3 +292,92 @@ class TestProjectFolders:
         assert not (tmp_path / "src" / "migrations").exists(), (
             "src/migrations must NOT be auto-created — migrations live at the project root"
         )
+
+
+class TestPoolTransactionAtomicity:
+    """Regression tests for the pool round-robin transaction bug.
+
+    Before the adapter-pin fix, every Database method call rotated to a
+    different pooled connection. Result: start_transaction() pinned a flag
+    on adapter A, the executes autocommitted on adapters B and C, and the
+    final commit/rollback landed on adapter D — meaningless. Rollbacks
+    were silently no-op'd and writes leaked through.
+
+    These tests fail (3 rows leaking despite rollback) before the
+    _tx_local pin in Database._get_adapter() and pass after it.
+    """
+
+    @pytest.fixture
+    def pooled_db(self, tmp_path):
+        path = tmp_path / "pool.db"
+        d = Database(f"sqlite:///{path}", pool=4)
+        d.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+        d.commit()
+        yield d
+        d.close()
+
+    def test_rollback_undoes_inserts_under_pool(self, pooled_db):
+        """rollback() must actually undo every insert, even with pool>0."""
+        pooled_db.start_transaction()
+        pooled_db.execute("INSERT INTO t (id, val) VALUES (1, 'a')")
+        pooled_db.execute("INSERT INTO t (id, val) VALUES (2, 'b')")
+        pooled_db.execute("INSERT INTO t (id, val) VALUES (3, 'c')")
+        pooled_db.rollback()
+
+        n = pooled_db.fetch_one("SELECT count(*) AS n FROM t")["n"]
+        assert n == 0, (
+            f"rollback() leaked {n} of 3 rows under pool=4 — adapter pin not honoured"
+        )
+
+    def test_commit_persists_inserts_under_pool(self, pooled_db):
+        """commit() must persist every insert as one atomic batch."""
+        pooled_db.start_transaction()
+        pooled_db.execute("INSERT INTO t (id, val) VALUES (10, 'x')")
+        pooled_db.execute("INSERT INTO t (id, val) VALUES (20, 'y')")
+        pooled_db.execute("INSERT INTO t (id, val) VALUES (30, 'z')")
+        pooled_db.commit()
+
+        n = pooled_db.fetch_one("SELECT count(*) AS n FROM t")["n"]
+        assert n == 3, f"commit() persisted only {n} of 3 rows under pool=4"
+
+    def test_pin_releases_after_commit(self, pooled_db):
+        """After commit(), _get_adapter() must round-robin again."""
+        pooled_db.start_transaction()
+        pinned_during = pooled_db._get_adapter()
+        pooled_db.commit()
+
+        # After commit, the next call should NOT be pinned to the same adapter.
+        # Round-robin should resume.
+        seen = set()
+        for _ in range(8):
+            seen.add(id(pooled_db._get_adapter()))
+        assert len(seen) > 1, (
+            "after commit() the pin was not released — _get_adapter() never rotated"
+        )
+
+    def test_pin_releases_after_rollback(self, pooled_db):
+        """After rollback(), _get_adapter() must round-robin again."""
+        pooled_db.start_transaction()
+        pooled_db.rollback()
+
+        seen = set()
+        for _ in range(8):
+            seen.add(id(pooled_db._get_adapter()))
+        assert len(seen) > 1, (
+            "after rollback() the pin was not released — _get_adapter() never rotated"
+        )
+
+    def test_no_pool_no_regression(self, tmp_path):
+        """Single-connection mode (pool=0) must still work correctly — the
+        pin code path should be a no-op when there's no pool to fight."""
+        path = tmp_path / "nopool.db"
+        d = Database(f"sqlite:///{path}", pool=0)
+        d.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+        d.commit()
+
+        d.start_transaction()
+        d.execute("INSERT INTO t (id, val) VALUES (1, 'r')")
+        d.rollback()
+        n = d.fetch_one("SELECT count(*) AS n FROM t")["n"]
+        d.close()
+        assert n == 0, f"pool=0 broke after the pin fix: {n} rows leaked"
