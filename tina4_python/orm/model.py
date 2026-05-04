@@ -569,6 +569,12 @@ class ORM(metaclass=ORMMeta):
         return instances[0] if instances else None
 
     @classmethod
+    def select_one(cls, sql: str, params: list = None, include: list[str] = None):
+        """Return a single ORM instance for a raw SQL query, or None if no rows match."""
+        instances, _ = cls.select(sql, params, limit=1, offset=0, include=include)
+        return instances[0] if instances else None
+
+    @classmethod
     def where(cls, filter_sql: str, params: list = None, limit: int = 20, offset: int = 0,
               include: list[str] = None) -> list[Self]:
         """Query with WHERE clause — returns array of ORM objects."""

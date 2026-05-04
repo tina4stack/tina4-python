@@ -28,10 +28,27 @@ except ImportError:
 class FirebirdAdapter(DatabaseAdapter):
     """Firebird database driver using firebird-driver or fdb."""
 
+    # Substring markers (lowercased) that identify a dead-socket Firebird
+    # error worth reconnecting for. Idle Firebird connections die silently
+    # behind NAT timeouts, server-side ConnectionIdleTimeout, or Docker
+    # network rotation; without this the next prepare() crashes the request.
+    _DEAD_CONN_MARKERS = (
+        "error writing data to the connection",
+        "error reading data from the connection",
+        "connection shutdown",
+        "connection lost",
+        "network error",
+        "connection is not active",
+        "broken pipe",
+    )
+
     def __init__(self):
         super().__init__()
         self._conn = None
         self._in_transaction: bool = False
+        # Remembered connection params — populated by connect(), used by
+        # _reconnect() when a dead socket is detected mid-request.
+        self._connect_params: dict | None = None
 
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to Firebird.
@@ -54,27 +71,81 @@ class FirebirdAdapter(DatabaseAdapter):
         password = parsed.password or password or "masterkey"
         charset = kwargs.pop("charset", "UTF8")
 
+        # Cache for transparent reconnect — never logged, lives only in
+        # adapter memory alongside the connection it owns.
+        self._connect_params = {
+            "host": host, "port": port, "db_path": db_path,
+            "user": user, "password": password, "charset": charset,
+            "extra": dict(kwargs),
+        }
+        self._open()
+
+    def _open(self) -> None:
+        """Open the underlying Firebird connection from cached params."""
+        p = self._connect_params
+        if p is None:
+            raise RuntimeError("FirebirdAdapter._open called before connect()")
+
         if _driver_name == "firebird-driver":
             # Modern firebird-driver uses dsn format: host/port:path
-            dsn = f"{host}/{port}:{db_path}" if port != 3050 else f"{host}:{db_path}"
+            dsn = f"{p['host']}/{p['port']}:{p['db_path']}" if p['port'] != 3050 else f"{p['host']}:{p['db_path']}"
             self._conn = _driver.connect(
                 dsn,
-                user=user,
-                password=password,
-                charset=charset,
-                **kwargs,
+                user=p["user"],
+                password=p["password"],
+                charset=p["charset"],
+                **p["extra"],
             )
         else:
             # Legacy fdb
             self._conn = _driver.connect(
-                host=host,
-                port=port,
-                database=db_path,
-                user=user,
-                password=password,
-                charset=charset,
-                **kwargs,
+                host=p["host"],
+                port=p["port"],
+                database=p["db_path"],
+                user=p["user"],
+                password=p["password"],
+                charset=p["charset"],
+                **p["extra"],
             )
+
+    @classmethod
+    def _is_dead_connection(cls, exc: BaseException) -> bool:
+        """Match dead-socket error messages from firebird-driver / fdb.
+        Substring + case-insensitive so we catch both driver wording variants.
+        """
+        msg = str(exc).lower()
+        return any(m in msg for m in cls._DEAD_CONN_MARKERS)
+
+    def _reconnect(self) -> None:
+        """Force-close any stale handle and reopen. Safe to call repeatedly;
+        idempotent on a dead connection."""
+        try:
+            if self._conn is not None:
+                self._conn.close()
+        except Exception:
+            pass  # connection already gone — nothing to clean up
+        self._conn = None
+        self._in_transaction = False
+        self._open()
+
+    def _safe_cursor_execute(self, cursor, sql: str, params: list | None):
+        """Execute on a cursor with one transparent reconnect+retry on
+        dead-connection errors. Skipped inside an explicit transaction —
+        atomicity beats resilience there; the caller handles rollback.
+
+        Returns the cursor (possibly a fresh one after reconnect) so the
+        caller can fetch results from it.
+        """
+        try:
+            cursor.execute(sql, params or [])
+            return cursor
+        except Exception as e:
+            if not self._is_dead_connection(e) or self._in_transaction:
+                raise
+            self._reconnect()
+            cursor = self._conn.cursor()
+            cursor.execute(sql, params or [])
+            return cursor
 
     def close(self):
         if self._conn:
@@ -92,7 +163,7 @@ class FirebirdAdapter(DatabaseAdapter):
             sql = sql[:returning_match.start()]
 
         cursor = self._conn.cursor()
-        cursor.execute(sql, params or [])
+        cursor = self._safe_cursor_execute(cursor, sql, params)
 
         records = []
         last_id = None
@@ -145,16 +216,19 @@ class FirebirdAdapter(DatabaseAdapter):
         # Count total rows
         count_sql = f"SELECT COUNT(*) FROM ({sql})"
         try:
-            cursor.execute(count_sql, params or [])
+            cursor = self._safe_cursor_execute(cursor, count_sql, params)
             total = cursor.fetchone()[0]
         except Exception:
             total = 0
+            # Reconnect may have just happened — get a fresh cursor for the
+            # paginated query below regardless of whether count succeeded.
+            cursor = self._conn.cursor()
 
         # Apply Firebird pagination — ROWS start TO end
         start = offset + 1
         end = offset + limit
         paginated_sql = f"{sql} ROWS {start} TO {end}"
-        cursor.execute(paginated_sql, params or [])
+        cursor = self._safe_cursor_execute(cursor, paginated_sql, params)
 
         desc = cursor.description
         col_names = [d[0].strip().lower() for d in desc] if desc else []
@@ -165,7 +239,7 @@ class FirebirdAdapter(DatabaseAdapter):
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor()
-        cursor.execute(sql, params or [])
+        cursor = self._safe_cursor_execute(cursor, sql, params)
         desc = cursor.description
         row = cursor.fetchone()
         if row is None:
