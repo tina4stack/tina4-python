@@ -60,7 +60,7 @@ class Auth:
             algorithm:  JWT algorithm (default HS256).
             expires_in: Token lifetime in seconds (default 3600).
         """
-        self.secret = secret or os.environ.get("SECRET", "tina4-default-secret")
+        self.secret = secret or os.environ.get("TINA4_SECRET", "tina4-default-secret")
         self.algorithm = algorithm
         self.expires_in = expires_in or int(
             os.environ.get("TINA4_TOKEN_LIMIT", "60")
@@ -161,28 +161,28 @@ class Auth:
     @classmethod
     def get_token_static(cls, payload: dict, expires_in: int = 60) -> str:
         """Create a JWT without instantiating Auth — reads SECRET from env."""
-        secret = os.environ.get("SECRET", "tina4-default-secret")
+        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
         auth = cls(secret=secret, expires_in=expires_in)
         return auth.get_token(payload)
 
     @classmethod
     def valid_token_static(cls, token: str) -> bool:
         """Validate a JWT without instantiating Auth — reads SECRET from env."""
-        secret = os.environ.get("SECRET", "tina4-default-secret")
+        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
         auth = cls(secret=secret)
         return auth.valid_token(token)
 
     @classmethod
     def get_payload_static(cls, token: str) -> dict | None:
         """Decode payload (no validation) without instantiating Auth."""
-        secret = os.environ.get("SECRET", "tina4-default-secret")
+        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
         auth = cls(secret=secret)
         return auth.get_payload(token)
 
     @classmethod
     def refresh_token_static(cls, token: str, expires_in: int = 60) -> str | None:
         """Refresh a JWT without instantiating Auth — reads SECRET from env."""
-        secret = os.environ.get("SECRET", "tina4-default-secret")
+        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
         auth = cls(secret=secret, expires_in=expires_in)
         return auth.refresh_token(token)
 
@@ -193,7 +193,7 @@ class Auth:
         Reads SECRET from env. Checks: Bearer JWT, Bearer API key, Basic auth.
         Returns payload dict on success, None on failure.
         """
-        secret = os.environ.get("SECRET", "tina4-default-secret")
+        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
         auth = cls(secret=secret)
         return auth.authenticate_request(headers)
 
@@ -246,7 +246,7 @@ class Auth:
         Returns: True if the provided key matches.
         """
         if expected is None:
-            expected = os.environ.get("TINA4_API_KEY", os.environ.get("API_KEY", ""))
+            expected = os.environ.get("TINA4_API_KEY", "")
         if not expected:
             return False
         return hmac.compare_digest(provided, expected)

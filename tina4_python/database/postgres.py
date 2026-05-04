@@ -74,16 +74,30 @@ class PostgreSQLAdapter(DatabaseAdapter):
                 last_id = records[0]["id"]
 
         if not has_returning:
-            # Try to get last inserted ID for INSERT statements
+            # Try to get last inserted ID for INSERT statements.
+            #
+            # Issue #38: ``SELECT lastval()`` raises on tables with no sequence
+            # (UUID, ULID, hash PKs etc.). The exception itself isn't fatal,
+            # but psycopg2 marks the whole transaction as aborted, so every
+            # subsequent statement on this connection fails with
+            # ``InFailedSqlTransaction`` — far away from the real cause and
+            # with ``last_error`` still ``None``.
+            #
+            # Fix: wrap the probe in a SAVEPOINT. If ``lastval()`` raises, we
+            # ROLLBACK TO SAVEPOINT and the outer transaction stays usable;
+            # ``last_id`` just stays ``None`` (same as before for non-INSERT
+            # statements). On success we RELEASE SAVEPOINT.
             sql_upper = sql.strip().upper()
             if sql_upper.startswith("INSERT"):
+                cursor.execute("SAVEPOINT _t4_lastval_probe")
                 try:
                     cursor.execute("SELECT lastval()")
                     row = cursor.fetchone()
                     if row:
                         last_id = list(row.values())[0]
+                    cursor.execute("RELEASE SAVEPOINT _t4_lastval_probe")
                 except Exception:
-                    pass
+                    cursor.execute("ROLLBACK TO SAVEPOINT _t4_lastval_probe")
 
         affected = cursor.rowcount if cursor.rowcount >= 0 else 0
 

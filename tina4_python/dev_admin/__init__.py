@@ -530,7 +530,7 @@ async def _api_status(request, response):
         "framework_version": __version__,
         "debug": os.environ.get("TINA4_DEBUG", "false"),
         "log_level": os.environ.get("TINA4_LOG_LEVEL", "ERROR"),
-        "database": os.environ.get("DATABASE_URL", "not configured"),
+        "database": os.environ.get("TINA4_DATABASE_URL", "not configured"),
         "db_tables": db_table_count,
         "mailbox": mailbox.count(),
         "messages": MessageLog.count(),
@@ -786,7 +786,7 @@ async def _api_query(request, response):
 
         # SQL query
         from tina4_python.database import Database
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+        db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
 
         # Split multiple statements on semicolons
@@ -833,7 +833,7 @@ async def _api_tables(request, response):
     """List all database tables."""
     try:
         from tina4_python.database import Database
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+        db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
         tables = db.get_tables()
         db.close()
@@ -850,7 +850,7 @@ async def _api_table_info(request, response):
         if not table:
             return response({"error": "name required"}, 400)
 
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+        db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
         columns = db.get_columns(table)
         sample = db.fetch(f"SELECT * FROM {table} LIMIT 20")
@@ -870,7 +870,7 @@ async def _api_queue_replay(request, response):
     try:
         from tina4_python.database import Database
         from tina4_python.queue import Queue
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+        db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
         body = request.body if hasattr(request, "body") and request.body else {}
         job_id = body.get("job_id")
@@ -942,7 +942,7 @@ async def _api_seed_table(request, response):
         if count > 1000:
             count = 1000
 
-        db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+        db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
 
         # Get table columns to auto-generate data
@@ -1108,7 +1108,7 @@ async def _api_system(request, response):
         "cwd": os.getcwd(),
         "debug": os.environ.get("TINA4_DEBUG", "false"),
         "log_level": os.environ.get("TINA4_LOG_LEVEL", "ERROR"),
-        "database": os.environ.get("DATABASE_URL", "not configured"),
+        "database": os.environ.get("TINA4_DATABASE_URL", "not configured"),
     }
 
     # Memory info
@@ -1125,7 +1125,7 @@ async def _api_system(request, response):
     # DB status
     try:
         from tina4_python.database import Database
-        db_url = os.environ.get("DATABASE_URL", "")
+        db_url = os.environ.get("TINA4_DATABASE_URL", "")
         if db_url:
             db = Database(db_url)
             tables = db.get_tables()
@@ -1575,11 +1575,11 @@ async def _api_connections(request, response):
             key, _, val = line.partition("=")
             key = key.strip()
             val = val.strip().strip('"').strip("'")
-            if key == "DATABASE_URL":
+            if key == "TINA4_DATABASE_URL":
                 url = val
-            elif key == "DATABASE_USERNAME":
+            elif key == "TINA4_DATABASE_USERNAME":
                 username = val
-            elif key == "DATABASE_PASSWORD":
+            elif key == "TINA4_DATABASE_PASSWORD":
                 password = "***" if val else ""
     return response({"url": url, "username": username, "password": password})
 
@@ -1641,7 +1641,7 @@ async def _api_connections_save(request, response):
         lines = []
         if env_path.exists():
             lines = env_path.read_text().splitlines()
-        keys_found = {"DATABASE_URL": False, "DATABASE_USERNAME": False, "DATABASE_PASSWORD": False}
+        keys_found = {"TINA4_DATABASE_URL": False, "TINA4_DATABASE_USERNAME": False, "TINA4_DATABASE_PASSWORD": False}
         new_lines = []
         for line in lines:
             stripped = line.strip()
@@ -1649,20 +1649,20 @@ async def _api_connections_save(request, response):
                 new_lines.append(line)
                 continue
             key = stripped.split("=", 1)[0].strip()
-            if key == "DATABASE_URL":
+            if key == "TINA4_DATABASE_URL":
                 new_lines.append(f"DATABASE_URL={url}")
-                keys_found["DATABASE_URL"] = True
-            elif key == "DATABASE_USERNAME":
+                keys_found["TINA4_DATABASE_URL"] = True
+            elif key == "TINA4_DATABASE_USERNAME":
                 new_lines.append(f"DATABASE_USERNAME={username}")
-                keys_found["DATABASE_USERNAME"] = True
-            elif key == "DATABASE_PASSWORD":
+                keys_found["TINA4_DATABASE_USERNAME"] = True
+            elif key == "TINA4_DATABASE_PASSWORD":
                 new_lines.append(f"DATABASE_PASSWORD={password}")
-                keys_found["DATABASE_PASSWORD"] = True
+                keys_found["TINA4_DATABASE_PASSWORD"] = True
             else:
                 new_lines.append(line)
         for key, found in keys_found.items():
             if not found:
-                val = {"DATABASE_URL": url, "DATABASE_USERNAME": username, "DATABASE_PASSWORD": password}[key]
+                val = {"TINA4_DATABASE_URL": url, "TINA4_DATABASE_USERNAME": username, "TINA4_DATABASE_PASSWORD": password}[key]
                 new_lines.append(f"{key}={val}")
         env_path.write_text("\n".join(new_lines) + "\n")
         return response({"success": True})

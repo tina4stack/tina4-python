@@ -7,7 +7,7 @@ Usage:
 
     load_env()                           # Load .env from current directory
     load_env(".env.staging")             # Load specific file
-    db_url = get_env("DATABASE_URL")     # Get with None default
+    db_url = get_env("TINA4_DATABASE_URL")     # Get with None default
     secret = require_env("JWT_SECRET")   # Raises on missing
     if has_env("DEBUG"):                 # Check if variable exists
         ...

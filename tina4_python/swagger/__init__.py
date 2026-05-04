@@ -125,9 +125,9 @@ class Swagger:
 
     def __init__(self, title: str = None, version: str = None,
                  description: str = "", server_url: str = None):
-        self.title = title or os.environ.get("SWAGGER_TITLE", "Tina4 API")
-        self.version = version or os.environ.get("SWAGGER_VERSION", "1.0.0")
-        self.description = description or os.environ.get("SWAGGER_DESCRIPTION", "")
+        self.title = title or os.environ.get("TINA4_SWAGGER_TITLE", "Tina4 API")
+        self.version = version or os.environ.get("TINA4_SWAGGER_VERSION", "1.0.0")
+        self.description = description or os.environ.get("TINA4_SWAGGER_DESCRIPTION", "")
         self.server_url = server_url or os.environ.get(
             "SWAGGER_DEV_URL", "http://localhost:7145"
         )

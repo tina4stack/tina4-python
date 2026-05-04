@@ -49,7 +49,7 @@ class MockResponse:
 @pytest.fixture(autouse=True)
 def set_secret(monkeypatch):
     """Ensure SECRET env var is set for every test."""
-    monkeypatch.setenv("SECRET", SECRET)
+    monkeypatch.setenv("TINA4_SECRET", SECRET)
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────

@@ -137,6 +137,7 @@ def main():
         "migrate:create": _migrate_create,
         "migrate:rollback": _migrate_rollback,
         "migrate:status": _migrate_status,
+        "env-migrate": _env_migrate,
         "seed": _seed,
         "routes": _routes,
         "test": _test,
@@ -155,6 +156,52 @@ def main():
         _help([])
 
 
+def _env_migrate(args):
+    """Rewrite a .env file in place, renaming pre-3.12 names to TINA4_ form.
+
+    Usage: tina4python env-migrate [path]   (default path: .env)
+
+    Backs the original up to <path>.bak before rewriting. Prints a diff of
+    each rename. Idempotent — running twice is a no-op on the second run.
+    """
+    from tina4_python.core.server import _LEGACY_ENV_VARS
+    target = Path(args[0]) if args else Path(".env")
+    if not target.is_file():
+        print(f"  no .env at {target}")
+        return
+    text = target.read_text(encoding="utf-8")
+    backup = target.with_suffix(target.suffix + ".bak")
+    backup.write_text(text, encoding="utf-8")
+    print(f"  backup written: {backup}")
+
+    renamed = 0
+    new_lines = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if not stripped or stripped.startswith("#"):
+            new_lines.append(line); continue
+        if "=" not in stripped:
+            new_lines.append(line); continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in _LEGACY_ENV_VARS:
+            new_key = _LEGACY_ENV_VARS[key]
+            new_line = line.replace(key, new_key, 1)
+            print(f"  {key:<28}  →  {new_key}")
+            new_lines.append(new_line)
+            renamed += 1
+        else:
+            new_lines.append(line)
+
+    if renamed == 0:
+        print("  nothing to rename — your .env is already on the new convention")
+        backup.unlink()  # don't leave a noise backup
+        return
+
+    target.write_text("".join(new_lines), encoding="utf-8")
+    print(f"\n  done: {renamed} rename(s) applied to {target}")
+    print(f"  original kept at {backup} (delete once you've verified)")
+
+
 def _help(args=None):
     print("""
 Tina4 Python — CLI
@@ -168,6 +215,7 @@ Commands:
   migrate:create <desc>         Create a new migration file
   migrate:rollback              Rollback last migration batch
   migrate:status                Show migration status
+  env-migrate [path]            Rewrite .env to TINA4_-prefixed names (v3.12 migration)
   seed                          Run database seeders
   routes                        List all registered routes
   test                          Run test suite
@@ -212,7 +260,7 @@ def _console(args=None):
 
     # Try to connect database from DATABASE_URL
     db = None
-    db_url = os.environ.get("DATABASE_URL")
+    db_url = os.environ.get("TINA4_DATABASE_URL")
     if db_url:
         try:
             db = Database(db_url)
@@ -404,7 +452,7 @@ def _migrate(args):
     from tina4_python.database import Database
     from tina4_python.migration import Migration
 
-    db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+    db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
     db = Database(db_url)
     mig_dir = args[0] if args else "migrations"
     ran = Migration(db, mig_dir).migrate()
@@ -434,7 +482,7 @@ def _migrate_rollback(args):
     from tina4_python.database import Database
     from tina4_python.migration import Migration
 
-    db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+    db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
     db = Database(db_url)
     mig_dir = args[0] if args else "migrations"
     rolled = Migration(db, mig_dir).rollback()
@@ -453,7 +501,7 @@ def _migrate_status(args):
     from tina4_python.database import Database
     from tina4_python.migration import Migration
 
-    db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+    db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
     db = Database(db_url)
     result = Migration(db, args[0] if args else "migrations").status()
     completed, pending = result["completed"], result["pending"]
@@ -489,7 +537,7 @@ def _seed(args):
     import importlib.util
     from tina4_python.database import Database
 
-    db_url = os.environ.get("DATABASE_URL", "sqlite:///data/app.db")
+    db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
     db = Database(db_url)
     sys.path.insert(0, str(Path.cwd()))
 

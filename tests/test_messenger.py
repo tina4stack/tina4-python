@@ -19,10 +19,10 @@ class TestMessengerInit:
         assert m.port == 465
 
     def test_env_config(self, monkeypatch):
-        monkeypatch.setenv("SMTP_HOST", "env.host.com")
-        monkeypatch.setenv("SMTP_PORT", "2525")
-        monkeypatch.setenv("SMTP_USERNAME", "envuser")
-        monkeypatch.setenv("SMTP_FROM", "from@test.com")
+        monkeypatch.setenv("TINA4_MAIL_HOST", "env.host.com")
+        monkeypatch.setenv("TINA4_MAIL_PORT", "2525")
+        monkeypatch.setenv("TINA4_MAIL_USERNAME", "envuser")
+        monkeypatch.setenv("TINA4_MAIL_FROM", "from@test.com")
         m = Messenger()
         assert m.host == "env.host.com"
         assert m.port == 2525
@@ -200,8 +200,8 @@ class TestIMAPConfig:
         assert m.imap_port == 143
 
     def test_env_imap_config(self, monkeypatch):
-        monkeypatch.setenv("IMAP_HOST", "imap.env.com")
-        monkeypatch.setenv("IMAP_PORT", "143")
+        monkeypatch.setenv("TINA4_MAIL_IMAP_HOST", "imap.env.com")
+        monkeypatch.setenv("TINA4_MAIL_IMAP_PORT", "143")
         m = Messenger()
         assert m.imap_host == "imap.env.com"
         assert m.imap_port == 143

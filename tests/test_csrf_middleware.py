@@ -24,10 +24,10 @@ from tina4_python.core.response import Response
 def csrf_env():
     """Ensure CSRF is enabled and SECRET is set for every test."""
     os.environ["TINA4_CSRF"] = "true"
-    os.environ["SECRET"] = "test-csrf-secret"
+    os.environ["TINA4_SECRET"] = "test-csrf-secret"
     yield
     os.environ.pop("TINA4_CSRF", None)
-    os.environ.pop("SECRET", None)
+    os.environ.pop("TINA4_SECRET", None)
 
 
 class _TestRequest:

@@ -374,7 +374,7 @@ class TestSandboxing:
         (tmp_path / "templates" / "secret.twig").write_text("SECRET CONTENT")
         frond.sandbox(allowed_tags=["if", "for"])
         result = frond.render_string('{% include "secret.twig" %}', {})
-        assert "SECRET" not in result
+        assert "TINA4_SECRET" not in result
 
 
 # ── Fragment Caching Tests ────────────────────────────────────

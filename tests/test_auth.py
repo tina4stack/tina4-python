@@ -135,12 +135,12 @@ class TestPasswordHashing:
 
 class TestAPIKey:
     def test_validate_api_key(self):
-        os.environ["API_KEY"] = "test-api-key-123"
+        os.environ["TINA4_API_KEY"] = "test-api-key-123"
         try:
             assert Auth.validate_api_key("test-api-key-123") is True
             assert Auth.validate_api_key("wrong-key") is False
         finally:
-            del os.environ["API_KEY"]
+            del os.environ["TINA4_API_KEY"]
 
     def test_no_api_key_configured(self):
         assert Auth.validate_api_key("anything") is False
@@ -157,13 +157,13 @@ class TestRequestAuth:
         assert result["user_id"] == 1
 
     def test_bearer_api_key(self, auth):
-        os.environ["API_KEY"] = "my-api-key"
+        os.environ["TINA4_API_KEY"] = "my-api-key"
         try:
             result = auth.authenticate_request({"authorization": "Bearer my-api-key"})
             assert result is not None
             assert result["auth_type"] == "api_key"
         finally:
-            del os.environ["API_KEY"]
+            del os.environ["TINA4_API_KEY"]
 
     def test_basic_auth(self, auth):
         creds = base64.b64encode(b"admin:pass123").decode()
@@ -184,12 +184,12 @@ class TestRequestAuth:
 
 class TestAuthConfig:
     def test_secret_from_env(self):
-        os.environ["SECRET"] = "env-secret"
+        os.environ["TINA4_SECRET"] = "env-secret"
         try:
             auth = Auth()
             assert auth.secret == "env-secret"
         finally:
-            del os.environ["SECRET"]
+            del os.environ["TINA4_SECRET"]
 
     def test_token_limit_from_env(self):
         os.environ["TINA4_TOKEN_EXPIRES_IN"] = "60"
@@ -201,7 +201,7 @@ class TestAuthConfig:
 
     def test_default_secret(self):
         # When no env var and no kwarg, uses default
-        os.environ.pop("SECRET", None)
+        os.environ.pop("TINA4_SECRET", None)
         auth = Auth()
         assert auth.secret == "tina4-default-secret"
 
@@ -329,19 +329,19 @@ class TestRequestAuthEdgeCases:
 
 class TestAPIKeyEdgeCases:
     def test_api_key_empty_env(self):
-        os.environ["API_KEY"] = ""
+        os.environ["TINA4_API_KEY"] = ""
         try:
             assert Auth.validate_api_key("") is False
         finally:
-            del os.environ["API_KEY"]
+            del os.environ["TINA4_API_KEY"]
 
     def test_api_key_case_sensitive(self):
-        os.environ["API_KEY"] = "MyKey123"
+        os.environ["TINA4_API_KEY"] = "MyKey123"
         try:
             assert Auth.validate_api_key("MyKey123") is True
             assert Auth.validate_api_key("mykey123") is False
         finally:
-            del os.environ["API_KEY"]
+            del os.environ["TINA4_API_KEY"]
 
 
 # ── Secret Override ─────────────────────────────────────────────
@@ -353,11 +353,11 @@ class TestSecretOverride:
         assert isinstance(token, str)
         # Token signed with custom-secret — default env secret should not validate it
         import os
-        os.environ["SECRET"] = "env-secret"
+        os.environ["TINA4_SECRET"] = "env-secret"
         try:
             assert not Auth.valid_token_static(token)
         finally:
-            del os.environ["SECRET"]
+            del os.environ["TINA4_SECRET"]
 
     def test_get_token_module_level_with_secret(self):
         from tina4_python.auth import get_token, valid_token

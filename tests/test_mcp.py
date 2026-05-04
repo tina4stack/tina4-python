@@ -245,21 +245,21 @@ class TestSecurity:
 
     def test_localhost_detection(self):
         from tina4_python.mcp import _is_localhost
-        old = os.environ.get("HOST_NAME")
+        old = os.environ.get("TINA4_HOST_NAME")
         try:
-            os.environ["HOST_NAME"] = "localhost:7145"
+            os.environ["TINA4_HOST_NAME"] = "localhost:7145"
             assert _is_localhost() is True
-            os.environ["HOST_NAME"] = "127.0.0.1:7145"
+            os.environ["TINA4_HOST_NAME"] = "127.0.0.1:7145"
             assert _is_localhost() is True
-            os.environ["HOST_NAME"] = "0.0.0.0:7145"
+            os.environ["TINA4_HOST_NAME"] = "0.0.0.0:7145"
             assert _is_localhost() is True
-            os.environ["HOST_NAME"] = "myserver.example.com:7145"
+            os.environ["TINA4_HOST_NAME"] = "myserver.example.com:7145"
             assert _is_localhost() is False
         finally:
             if old is not None:
-                os.environ["HOST_NAME"] = old
-            elif "HOST_NAME" in os.environ:
-                del os.environ["HOST_NAME"]
+                os.environ["TINA4_HOST_NAME"] = old
+            elif "TINA4_HOST_NAME" in os.environ:
+                del os.environ["TINA4_HOST_NAME"]
 
     def test_file_sandbox(self, tmp_path):
         from tina4_python.mcp.tools import register_dev_tools

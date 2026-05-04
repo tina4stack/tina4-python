@@ -36,10 +36,10 @@ def _extract_token_from_html(html_output: str) -> str:
 
 @pytest.fixture
 def engine(tmp_path):
-    os.environ["SECRET"] = "test-secret-key"
+    os.environ["TINA4_SECRET"] = "test-secret-key"
     e = Frond(template_dir=str(tmp_path))
     yield e
-    os.environ.pop("SECRET", None)
+    os.environ.pop("TINA4_SECRET", None)
 
 
 class TestFormTokenGlobal:

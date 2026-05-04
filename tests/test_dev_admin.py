@@ -487,7 +487,7 @@ class TestAPIHandlers:
     async def test_query_multi_statement(self, mock_req, mock_resp, tmp_path, monkeypatch):
         """Multi-statement SQL execution runs as a batch."""
         db_path = str(tmp_path / "test.db")
-        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setenv("TINA4_DATABASE_URL", f"sqlite:///{db_path}")
         from tina4_python.dev_admin import _api_query
         mock_req.body = {
             "query": "CREATE TABLE test_multi (id INTEGER PRIMARY KEY, name TEXT); INSERT INTO test_multi (id, name) VALUES (1, 'Alice'); INSERT INTO test_multi (id, name) VALUES (2, 'Bob')",
@@ -503,7 +503,7 @@ class TestAPIHandlers:
     @pytest.mark.asyncio
     async def test_tables_handler(self, mock_req, mock_resp, tmp_path, monkeypatch):
         db_path = str(tmp_path / "test_tables.db")
-        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setenv("TINA4_DATABASE_URL", f"sqlite:///{db_path}")
         from tina4_python.database import Database
         db = Database(f"sqlite:///{db_path}")
         db.execute("CREATE TABLE test_tbl (id INTEGER PRIMARY KEY, name TEXT)")
@@ -521,7 +521,7 @@ class TestAPIHandlers:
         # tempdir, not in the repo root. The handler should still return an
         # empty/safe result for an un-initialised database.
         db_path = tmp_path / "no_such_dir" / "no_db.db"
-        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setenv("TINA4_DATABASE_URL", f"sqlite:///{db_path}")
         from tina4_python.dev_admin import _api_tables
         result = await _api_tables(mock_req, mock_resp)
         assert "tables" in result
@@ -617,7 +617,7 @@ class TestAPIHandlers:
     async def test_query_multi_statement_rollback(self, mock_req, mock_resp, tmp_path, monkeypatch):
         """Failed multi-statement batch rolls back all changes."""
         db_path = str(tmp_path / "test_rollback.db")
-        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path}")
+        monkeypatch.setenv("TINA4_DATABASE_URL", f"sqlite:///{db_path}")
         from tina4_python.dev_admin import _api_query
         # Create table first
         mock_req.body = {"query": "CREATE TABLE test_rb (id INTEGER PRIMARY KEY, name TEXT)", "type": "sql"}

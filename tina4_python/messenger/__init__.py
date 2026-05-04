@@ -73,17 +73,17 @@ class Messenger:
                  imap_host: str = None, imap_port: int = None):
         # SMTP (send) — priority: constructor > .env > sensible default
         self.host = host or os.environ.get("TINA4_MAIL_HOST",
-                          os.environ.get("SMTP_HOST", "localhost"))
+                          os.environ.get("TINA4_MAIL_HOST", "localhost"))
         self.port = port or int(os.environ.get("TINA4_MAIL_PORT",
-                                os.environ.get("SMTP_PORT", "587")))
+                                os.environ.get("TINA4_MAIL_PORT", "587")))
         self.username = username or os.environ.get("TINA4_MAIL_USERNAME",
-                                   os.environ.get("SMTP_USERNAME", ""))
+                                   os.environ.get("TINA4_MAIL_USERNAME", ""))
         self.password = password or os.environ.get("TINA4_MAIL_PASSWORD",
-                                   os.environ.get("SMTP_PASSWORD", ""))
+                                   os.environ.get("TINA4_MAIL_PASSWORD", ""))
         self.from_address = from_address or os.environ.get("TINA4_MAIL_FROM",
-                                            os.environ.get("SMTP_FROM", self.username or "noreply@localhost"))
+                                            os.environ.get("TINA4_MAIL_FROM", self.username or "noreply@localhost"))
         self.from_name = from_name or os.environ.get("TINA4_MAIL_FROM_NAME",
-                                      os.environ.get("SMTP_FROM_NAME", ""))
+                                      os.environ.get("TINA4_MAIL_FROM_NAME", ""))
 
         # Encryption: constructor > .env > backward-compat use_tls > default "tls"
         resolved_encryption = encryption or os.environ.get("TINA4_MAIL_ENCRYPTION", None)
@@ -100,9 +100,9 @@ class Messenger:
 
         # IMAP (read)
         self.imap_host = imap_host or os.environ.get("TINA4_MAIL_IMAP_HOST",
-                                      os.environ.get("IMAP_HOST", ""))
+                                      os.environ.get("TINA4_MAIL_IMAP_HOST", ""))
         self.imap_port = imap_port or int(os.environ.get("TINA4_MAIL_IMAP_PORT",
-                                          os.environ.get("IMAP_PORT", "993")))
+                                          os.environ.get("TINA4_MAIL_IMAP_PORT", "993")))
 
     def add_header(self, name: str, value: str):
         """Add a default header to all outgoing emails."""
@@ -761,7 +761,7 @@ class DevMailbox:
                 "id": msg_id,
                 "type": "inbox",
                 "from": f"{sender_name} <{sender_email}>",
-                "to": [os.environ.get("TINA4_MAIL_FROM", os.environ.get("SMTP_FROM", "dev@localhost"))],
+                "to": [os.environ.get("TINA4_MAIL_FROM", os.environ.get("TINA4_MAIL_FROM", "dev@localhost"))],
                 "cc": [],
                 "bcc": [],
                 "reply_to": sender_email,

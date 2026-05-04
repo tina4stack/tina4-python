@@ -76,7 +76,7 @@ def _schema_from_signature(func) -> dict:
 
 def is_localhost() -> bool:
     """Check if the server is running on localhost."""
-    host = os.environ.get("HOST_NAME", "localhost:7145").split(":")[0]
+    host = os.environ.get("TINA4_HOST_NAME", "localhost:7145").split(":")[0]
     return host in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "")
 
 

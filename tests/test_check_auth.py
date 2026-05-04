@@ -21,9 +21,9 @@ SECRET = "test-check-auth-secret"
 @pytest.fixture(autouse=True)
 def auth_env(monkeypatch):
     """Set SECRET for JWT operations and clear API key."""
-    monkeypatch.setenv("SECRET", SECRET)
+    monkeypatch.setenv("TINA4_SECRET", SECRET)
     monkeypatch.delenv("TINA4_API_KEY", raising=False)
-    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("TINA4_API_KEY", raising=False)
     yield
 
 

@@ -287,7 +287,7 @@ class CsrfMiddleware:
             bearer_token = auth_header[7:].strip()
             if bearer_token:
                 from tina4_python.auth import Auth as _CsrfAuth
-                secret = os.environ.get("SECRET", "tina4-default-secret")
+                secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
                 auth = _CsrfAuth(secret=secret)
                 if auth.valid_token(bearer_token):
                     return request, response
@@ -326,7 +326,7 @@ class CsrfMiddleware:
 
         # Validate the token
         from tina4_python.auth import Auth as _CsrfAuth
-        secret = os.environ.get("SECRET", "tina4-default-secret")
+        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
         auth = _CsrfAuth(secret=secret)
         if not auth.valid_token(token):
             return request, response.error(

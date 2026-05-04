@@ -253,7 +253,7 @@ class ORM(metaclass=ORMMeta):
             return cls.table_name
         import os
         name = cls.__name__.lower()
-        if os.environ.get("ORM_PLURAL_TABLE_NAMES", "").lower() in ("true", "1", "yes"):
+        if os.environ.get("TINA4_ORM_PLURAL_TABLE_NAMES", "").lower() in ("true", "1", "yes"):
             name += "s"
         return name
 
@@ -280,11 +280,11 @@ class ORM(metaclass=ORMMeta):
         if _database is None:
             # Try auto-discovery from DATABASE_URL
             import os
-            url = os.environ.get("DATABASE_URL")
+            url = os.environ.get("TINA4_DATABASE_URL")
             if url:
                 from tina4_python.database import Database
-                username = os.environ.get("DATABASE_USERNAME", "")
-                password = os.environ.get("DATABASE_PASSWORD", "")
+                username = os.environ.get("TINA4_DATABASE_USERNAME", "")
+                password = os.environ.get("TINA4_DATABASE_PASSWORD", "")
                 db = Database(url, username, password)
                 orm_bind(db)
                 return db

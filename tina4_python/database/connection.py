@@ -140,10 +140,10 @@ class Database:
     """
 
     def __init__(self, url: str = None, username: str = "", password: str = "", pool: int = 0, **kwargs):
-        self.url = url or os.environ.get("DATABASE_URL", "sqlite:///data/tina4.db")
+        self.url = url or os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/tina4.db")
         # Priority: constructor params > env vars > empty
-        self.username = username or os.environ.get("DATABASE_USERNAME", "")
-        self.password = password or os.environ.get("DATABASE_PASSWORD", "")
+        self.username = username or os.environ.get("TINA4_DATABASE_USERNAME", "")
+        self.password = password or os.environ.get("TINA4_DATABASE_PASSWORD", "")
         self.pool_size = pool  # 0 = single connection, N>0 = N pooled connections
         self._connect_kwargs = kwargs  # Extra kwargs passed through to adapter.connect()
         self.last_error = None  # Last execute() error message
@@ -671,7 +671,7 @@ class Database:
         return Database(url, username=username, password=password, pool=pool)
 
     @staticmethod
-    def from_env(env_key: str = "DATABASE_URL", pool: int = 0) -> "Database | None":
+    def from_env(env_key: str = "TINA4_DATABASE_URL", pool: int = 0) -> "Database | None":
         """Construct a Database instance from environment variables.
 
         Reads the connection URL from the named env var (default DATABASE_URL),
@@ -687,8 +687,8 @@ class Database:
         url = os.environ.get(env_key)
         if not url:
             return None
-        username = os.environ.get("DATABASE_USERNAME", "")
-        password = os.environ.get("DATABASE_PASSWORD", "")
+        username = os.environ.get("TINA4_DATABASE_USERNAME", "")
+        password = os.environ.get("TINA4_DATABASE_PASSWORD", "")
         return Database(url, username=username, password=password, pool=pool)
 
     # ── Adapter / pool inspection ─────────────────────────────────

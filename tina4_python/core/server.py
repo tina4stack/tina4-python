@@ -193,20 +193,93 @@ def _render_error_page(status_code: int, path: str, request_id: str, error_messa
 _template_cache: dict[str, str] | None = None
 
 
+# Auto-routing scans this single subdirectory of src/templates/. Only files
+# in src/templates/pages/ become URLs — everything else (partials, layouts,
+# base.twig, errors, components, macros) is never URL-exposed and remains
+# renderable only via {% include %} / {% extends %} / response.render().
+#
+# Convention adapted from Next.js' pages/ directory and Nuxt's pages/ folder.
+# Explicit, secure by default, no skip lists to maintain.
+_TEMPLATE_PAGES_DIR = "pages"
+
+
+def _is_dev_mode() -> bool:
+    """True when ``TINA4_DEBUG`` is one of the truthy values (true|1|yes).
+
+    Centralised so every dev-mode gate (landing page, dev toolbar, error
+    overlay, dev admin) reads the same flag the same way.
+    """
+    return os.environ.get("TINA4_DEBUG", "false").strip().lower() in ("true", "1", "yes")
+
+
+# RFC 7231 / RFC 9110 status reason phrases. We use this to write a correct
+# HTTP status line in the dev server's HTTP/1.1 → ASGI bridge — previously
+# the bridge wrote "HTTP/1.1 404 OK" regardless of code, which is malformed.
+_HTTP_REASON_PHRASES: dict[int, str] = {
+    100: "Continue", 101: "Switching Protocols",
+    200: "OK", 201: "Created", 202: "Accepted", 204: "No Content",
+    206: "Partial Content",
+    301: "Moved Permanently", 302: "Found", 303: "See Other",
+    304: "Not Modified", 307: "Temporary Redirect", 308: "Permanent Redirect",
+    400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
+    404: "Not Found", 405: "Method Not Allowed", 406: "Not Acceptable",
+    409: "Conflict", 410: "Gone", 413: "Content Too Large",
+    415: "Unsupported Media Type", 422: "Unprocessable Content",
+    429: "Too Many Requests",
+    500: "Internal Server Error", 501: "Not Implemented",
+    502: "Bad Gateway", 503: "Service Unavailable", 504: "Gateway Timeout",
+}
+
+
+def _http_reason(status: int) -> str:
+    """Return the canonical HTTP reason phrase for ``status``.
+
+    Falls back to a sensible label when an exotic status is used. Never
+    returns an empty string — the HTTP/1.1 status line requires a phrase.
+    """
+    return _HTTP_REASON_PHRASES.get(int(status), "OK" if 200 <= status < 300 else "Error")
+
+
+def _template_auto_routing_enabled() -> bool:
+    """Honour TINA4_TEMPLATE_ROUTING=off|false|0|no as an explicit kill switch.
+
+    Default: enabled. Drop a file in src/templates/pages/ and it serves at
+    the matching URL — the zero-config Tina4 convention. Operators who want
+    explicit-only routing can set TINA4_TEMPLATE_ROUTING=off and every URL
+    must be registered via @get / @post (or be a static file).
+    """
+    val = os.environ.get("TINA4_TEMPLATE_ROUTING", "on").strip().lower()
+    return val not in ("off", "false", "0", "no", "disabled")
+
+
 def _resolve_template(path: str) -> str | None:
-    """Resolve a URL path to a template file in src/templates/.
+    """Resolve a URL path to a template file in src/templates/pages/.
+
+    Only files inside ``src/templates/pages/`` auto-route from a URL.
+    Anything in ``src/templates/`` outside ``pages/`` (partials, layouts,
+    base.twig, errors, components) is never served standalone.
+
     Dev mode: checks filesystem every time for live changes.
     Production: uses a cached lookup built once at startup.
+
+    The whole feature can be turned off with ``TINA4_TEMPLATE_ROUTING=off``.
     """
+    if not _template_auto_routing_enabled():
+        return None
+
     clean_path = path.strip("/") or "index"
     is_dev = os.environ.get("TINA4_DEBUG", "false").lower() in ("true", "1", "yes")
 
     if is_dev:
-        template_dir = Path("src/templates")
+        # Skip underscore-prefixed files even within pages/ — they're private
+        # by Hugo/Jekyll convention (helpers, fragments) and shouldn't auto-serve.
+        if any(seg.startswith("_") for seg in clean_path.split("/")):
+            return None
+        pages_dir = Path("src/templates") / _TEMPLATE_PAGES_DIR
         for ext in (".twig", ".html"):
-            candidate = clean_path + ext
-            if (template_dir / candidate).is_file():
-                return candidate
+            candidate_rel = f"{_TEMPLATE_PAGES_DIR}/{clean_path}{ext}"
+            if (pages_dir / (clean_path + ext)).is_file():
+                return candidate_rel
         return None
 
     global _template_cache
@@ -216,17 +289,25 @@ def _resolve_template(path: str) -> str | None:
 
 
 def _build_template_cache() -> None:
-    """Scan src/templates/ once and build url_path -> template_file lookup."""
+    """Scan src/templates/pages/ once and build url_path -> template_file lookup.
+    Only files under ``pages/`` are eligible — partials, layouts, base.twig,
+    errors etc remain renderable via explicit response.render() but never
+    auto-serve from a URL.
+    """
     global _template_cache
     _template_cache = {}
-    template_dir = Path("src/templates")
-    if not template_dir.is_dir():
+    pages_dir = Path("src/templates") / _TEMPLATE_PAGES_DIR
+    if not pages_dir.is_dir():
         return
-    for f in template_dir.rglob("*"):
+    for f in pages_dir.rglob("*"):
         if not f.is_file() or f.suffix not in (".twig", ".html"):
             continue
-        rel = str(f.relative_to(template_dir)).replace("\\", "/")
-        url_path = rel.rsplit(".", 1)[0]
+        # Skip private files even within pages/ (e.g. pages/_helper.twig)
+        rel_inside_pages = f.relative_to(pages_dir)
+        if any(p.startswith("_") for p in rel_inside_pages.parts):
+            continue
+        rel = str(f.relative_to(Path("src/templates"))).replace("\\", "/")
+        url_path = str(rel_inside_pages).replace("\\", "/").rsplit(".", 1)[0]
         if url_path not in _template_cache:
             _template_cache[url_path] = rel
 
@@ -920,7 +1001,7 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
     if not route.get("auth_required"):
         return False
     _auth_header = request.headers.get("authorization", "")
-    _api_key = os.environ.get("TINA4_API_KEY", os.environ.get("API_KEY", ""))
+    _api_key = os.environ.get("TINA4_API_KEY", "")
     _auth_ok = False
     if _auth_header and _auth_header.startswith("Bearer "):
         _token = _auth_header[7:]
@@ -1076,7 +1157,19 @@ def _handle_route_error(
 
 
 def _handle_no_route(request: Request, response: Response, request_id: str) -> Response:
-    """Serve static files, templates, landing page, or 404."""
+    """Serve static files, templates, landing page, or 404.
+
+    Lookup order at any URL with no registered route:
+      1. Static file (public/, src/public/, framework public/, with /
+         resolving to index.html so SPAs Just Work)
+      2. Auto-routed template from src/templates/pages/ (gated by
+         TINA4_TEMPLATE_ROUTING)
+      3. Framework landing page — only at "/", and only in dev
+         (``TINA4_DEBUG=true``). Production never shows it, so the
+         framework version, dev-admin link, and gallery never leak
+         to real users.
+      4. 404
+    """
     static = _try_static(request.path)
     if static:
         return static
@@ -1085,7 +1178,7 @@ def _handle_no_route(request: Request, response: Response, request_id: str) -> R
         from tina4_python.core.response import get_frond
         html = get_frond().render(tpl_file, {})
         response.html(html)
-    elif request.path == "/":
+    elif request.path == "/" and _is_dev_mode():
         response.html(_render_landing_page())
     else:
         html = _render_error_page(404, request.path, request_id)
@@ -1324,8 +1417,16 @@ def _try_static(path: str) -> Response | None:
     2. public/           (simple, IDE-friendly)
     3. src/public/       (nested convention)
     4. tina4_python/public/  (framework built-in assets)
+
+    Index resolution: when ``path`` is ``/`` or ends with ``/``, the lookup
+    appends ``index.html`` so a Vite/SPA build with ``src/public/index.html``
+    serves at the matching URL — no custom ``@get("/")`` route needed.
     """
     clean = path.lstrip("/")
+    # Index resolution: '/' or '/foo/' -> append 'index.html' so SPA builds
+    # in src/public/ Just Work without a custom root route.
+    if clean == "" or clean.endswith("/"):
+        clean = clean + "index.html"
     custom = os.environ.get("TINA4_PUBLIC_DIR")
     candidates = []
     if custom:
@@ -1575,6 +1676,69 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio", ai_port: i
     print(banner)
 
 
+# Legacy env var names that v3.12 has retired. If any of these are set in
+# the environment we refuse to boot — silently ignoring them would cause
+# auth/db/mail to fall back to defaults with no warning. Each maps to its
+# new TINA4_-prefixed canonical name (or DROPPED for deleted features).
+_LEGACY_ENV_VARS: dict[str, str] = {
+    "DATABASE_URL":           "TINA4_DATABASE_URL",
+    "DATABASE_USERNAME":      "TINA4_DATABASE_USERNAME",
+    "DATABASE_PASSWORD":      "TINA4_DATABASE_PASSWORD",
+    "DB_URL":                 "TINA4_DATABASE_URL",
+    "SECRET":                 "TINA4_SECRET",
+    "API_KEY":                "TINA4_API_KEY",
+    "JWT_ALGORITHM":          "TINA4_JWT_ALGORITHM",
+    "SMTP_HOST":              "TINA4_MAIL_HOST",
+    "SMTP_PORT":              "TINA4_MAIL_PORT",
+    "SMTP_USERNAME":          "TINA4_MAIL_USERNAME",
+    "SMTP_PASSWORD":          "TINA4_MAIL_PASSWORD",
+    "SMTP_FROM":              "TINA4_MAIL_FROM",
+    "SMTP_FROM_NAME":         "TINA4_MAIL_FROM_NAME",
+    "IMAP_HOST":              "TINA4_MAIL_IMAP_HOST",
+    "IMAP_PORT":              "TINA4_MAIL_IMAP_PORT",
+    "IMAP_USER":              "TINA4_MAIL_IMAP_USERNAME",
+    "IMAP_PASS":              "TINA4_MAIL_IMAP_PASSWORD",
+    "HOST_NAME":              "TINA4_HOST_NAME",
+    "SWAGGER_TITLE":          "TINA4_SWAGGER_TITLE",
+    "SWAGGER_DESCRIPTION":    "TINA4_SWAGGER_DESCRIPTION",
+    "SWAGGER_VERSION":        "TINA4_SWAGGER_VERSION",
+    "ORM_PLURAL_TABLE_NAMES": "TINA4_ORM_PLURAL_TABLE_NAMES",
+}
+
+
+def _check_legacy_env_vars() -> None:
+    """Refuse to boot if pre-3.12 un-prefixed env vars are still set.
+
+    Tina4 v3.12 hard-renamed every framework-specific env var to use the
+    ``TINA4_`` prefix. Booting silently with a legacy ``DATABASE_URL`` or
+    ``SECRET`` would let auth, DB, or mail fall back to insecure defaults
+    while the user thought their config was being read. Better to die
+    loudly with a list of names to fix.
+
+    Bypass with ``TINA4_ALLOW_LEGACY_ENV=true`` in CI / migration scripts
+    that genuinely need both names set during a transition window.
+    """
+    if os.environ.get("TINA4_ALLOW_LEGACY_ENV", "").lower() in ("true", "1", "yes"):
+        return
+    found = sorted(name for name in _LEGACY_ENV_VARS if name in os.environ)
+    if not found:
+        return
+    msg = ["", "─" * 72,
+           "Tina4 v3.12 requires TINA4_ prefix on all framework env vars.",
+           "Your environment still has these legacy names:",
+           ""]
+    for old in found:
+        new = _LEGACY_ENV_VARS[old]
+        msg.append(f"    {old:<28}  →  {new}")
+    msg.extend(["",
+                "Run `tina4 env-migrate` to rewrite your .env automatically,",
+                "or rename manually. See https://tina4.com/release/3.12.0",
+                "Set TINA4_ALLOW_LEGACY_ENV=true to bypass during migration.",
+                "─" * 72, ""])
+    print("\n".join(msg), file=sys.stderr)
+    sys.exit(2)
+
+
 def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
     """Start the Tina4 dev server.
 
@@ -1589,6 +1753,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     import time
     global _start_time
     _start_time = time.time()
+
+    # Refuse to boot with v3.11 / v2 era un-prefixed env vars set.
+    _check_legacy_env_vars()
 
     # ── Require tina4 CLI ─────────────────────────────────────────
     # The framework must be launched via `tina4 serve`, not `python app.py`.
@@ -1829,7 +1996,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                         # Streaming mode — flush headers on first chunk, then write each chunk immediately
                         if not _headers_sent:
                             _headers_sent = True
-                            writer.write(f"HTTP/1.1 {resp_status} OK\r\n".encode())
+                            writer.write(f"HTTP/1.1 {resp_status} {_http_reason(resp_status)}\r\n".encode())
                             for name, value in resp_headers:
                                 writer.write(name + b": " + value + b"\r\n")
                             writer.write(b"\r\n")
@@ -1849,7 +2016,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
             # Write HTTP/1.1 response (only if headers weren't already sent by streaming)
             if not _headers_sent:
-                status_line = f"HTTP/1.1 {resp_status} OK\r\n"
+                status_line = f"HTTP/1.1 {resp_status} {_http_reason(resp_status)}\r\n"
                 writer.write(status_line.encode())
                 for name, value in resp_headers:
                     writer.write(name + b": " + value + b"\r\n")

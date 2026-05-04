@@ -1172,7 +1172,7 @@ def _generate_form_jwt(descriptor: str = "", session_id: str = "") -> str:
     if sid:
         payload["session_id"] = sid
 
-    secret = os.environ.get("SECRET", "tina4-default-secret")
+    secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
     ttl = int(os.environ.get("TINA4_TOKEN_EXPIRES_IN", "60"))
     auth = _FrondAuth(secret=secret, expires_in=ttl)
     return auth.get_token(payload)
