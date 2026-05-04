@@ -242,7 +242,12 @@ class TestSQLiteConnectionPath:
         # crash with `Read-only file system: '/data'`.
         monkeypatch.chdir(tmp_path)
         resolved = self._resolve("sqlite:///data/app.db")
-        assert resolved == os.path.join(str(tmp_path), "data", "app.db")
+        # Normalise both sides — _connection_path stitches the URL "data/app.db"
+        # onto cwd with raw "/", leaving mixed separators on Windows; the
+        # logical path is what matters.
+        assert os.path.normpath(resolved) == os.path.normpath(
+            os.path.join(str(tmp_path), "data", "app.db")
+        )
         # Subdir auto-created under cwd
         assert os.path.isdir(os.path.join(str(tmp_path), "data"))
 
@@ -252,6 +257,13 @@ class TestSQLiteConnectionPath:
         assert os.path.dirname(resolved).endswith("data")
 
     def test_absolute_unix(self, tmp_path):
+        # On POSIX, /tmp/.../absolute.db → sqlite:////tmp/.../absolute.db
+        # On Windows the four-slash form encodes a UNIX-shape path (which
+        # cannot exist as a Windows drive); skip there. Windows absolute
+        # paths use the test_absolute_windows_drive_letter form instead.
+        import sys
+        if sys.platform.startswith("win"):
+            pytest.skip("four-slash absolute form is POSIX-shaped; Windows uses drive-letter form")
         abs_path = str(tmp_path / "absolute.db")
         # Build the four-slash form
         url = f"sqlite:////{abs_path.lstrip('/')}"

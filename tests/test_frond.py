@@ -552,19 +552,25 @@ class TestSetIncludeExtends:
 
     def test_two_level_extends(self, engine, tpl_dir):
         """Multi-level extends: grandchild → child → base."""
+        # All write_text calls use explicit utf-8 — on Windows the default
+        # encoding is cp1252, which encodes the em-dash below as a single
+        # byte 0x97; Frond then reads with utf-8 and crashes.
         (tpl_dir / "base.html").write_text(
             "<html><head><title>{% block title %}Site{% endblock %}</title></head>"
-            "<body>{% block content %}{% endblock %}</body></html>"
+            "<body>{% block content %}{% endblock %}</body></html>",
+            encoding="utf-8",
         )
         (tpl_dir / "layout_admin.html").write_text(
             '{% extends "base.html" %}'
             '{% block title %}Admin — {{ parent() }}{% endblock %}'
-            '{% block content %}<nav>Sidebar</nav><main>{% block admin_content %}{% endblock %}</main>{% endblock %}'
+            '{% block content %}<nav>Sidebar</nav><main>{% block admin_content %}{% endblock %}</main>{% endblock %}',
+            encoding="utf-8",
         )
         (tpl_dir / "dashboard.html").write_text(
             '{% extends "layout_admin.html" %}'
             '{% block title %}Dashboard{% endblock %}'
-            '{% block admin_content %}<h1>Hello {{ user }}</h1>{% endblock %}'
+            '{% block admin_content %}<h1>Hello {{ user }}</h1>{% endblock %}',
+            encoding="utf-8",
         )
         result = engine.render("dashboard.html", {"user": "Admin"})
         assert "<html>" in result

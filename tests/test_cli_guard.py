@@ -29,22 +29,27 @@ def _run_guard(extra_args: list = None, env_overrides: dict = None) -> subproces
         env.update(env_overrides)
 
     args = [sys.executable]
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write(_GUARD_SCRIPT)
-        f.flush()
-        args.append(f.name)
+    # mkstemp + explicit close — see _run_app_with_args below for the
+    # Windows "file in use" race rationale.
+    fd, temp_path = tempfile.mkstemp(suffix=".py")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(_GUARD_SCRIPT)
+        args.append(temp_path)
         if extra_args:
             args.extend(extra_args)
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=env,
+        )
+    finally:
         try:
-            return subprocess.run(
-                args,
-                capture_output=True,
-                text=True,
-                timeout=5,
-                env=env,
-            )
-        finally:
-            os.unlink(f.name)
+            os.unlink(temp_path)
+        except OSError:
+            pass
 
 
 def _run_app_with_args(extra_args: list = None, env_overrides: dict = None, timeout: int = 10) -> subprocess.CompletedProcess:
@@ -60,22 +65,32 @@ def _run_app_with_args(extra_args: list = None, env_overrides: dict = None, time
         "from tina4_python.core.server import run\n"
         "run()\n"
     )
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-        f.write(code)
-        f.flush()
-        args = [sys.executable, f.name]
+    # mkstemp + explicit close avoids Windows' "file in use" race: on Windows
+    # NamedTemporaryFile(delete=False) keeps a handle open in the with-block
+    # and the subprocess we just spawned can still hold its own handle long
+    # enough to make os.unlink fail with PermissionError [WinError 32].
+    fd, temp_path = tempfile.mkstemp(suffix=".py")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(code)
+        args = [sys.executable, temp_path]
         if extra_args:
             args.extend(extra_args)
+        return subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    finally:
+        # Best-effort cleanup — Windows may briefly hold the file even after
+        # the subprocess exits; leaking a 100-byte temp file is preferable
+        # to failing the test.
         try:
-            return subprocess.run(
-                args,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=env,
-            )
-        finally:
-            os.unlink(f.name)
+            os.unlink(temp_path)
+        except OSError:
+            pass
 
 
 class TestCliGuard:

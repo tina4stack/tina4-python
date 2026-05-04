@@ -70,7 +70,9 @@ class TestAutoWireI18n:
         _auto_wire_i18n()
         engine = Frond(template_dir=str(tmp_path))
         tpl = tmp_path / "test.twig"
-        tpl.write_text('{{ t("greeting") }} — {{ t("store_name") }}')
+        # Explicit utf-8 — Windows default cp1252 encodes the em-dash as a
+        # single byte 0x97; Frond reads with utf-8 and would crash.
+        tpl.write_text('{{ t("greeting") }} — {{ t("store_name") }}', encoding="utf-8")
         result = engine.render("test.twig")
         assert result == "Hello — Test Store"
 
