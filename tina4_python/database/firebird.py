@@ -6,9 +6,67 @@ Firebird adapter using firebird-driver (preferred) or fdb (fallback).
 
 Requires: pip install firebird-driver  (or pip install fdb for legacy)
 """
+import os
 import re
 from urllib.parse import urlparse, unquote
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
+
+
+# Detects a Windows drive-letter prefix like "C:/" or "C:\". The leading-slash
+# variant ("/C:/...") shows up after a URL parse strips one slash off
+# "firebird://host:port/C:/...".
+_WIN_DRIVE_RE = re.compile(r"^/?[A-Za-z]:[/\\]")
+
+
+def _normalize_firebird_db_identifier(raw_path: str) -> str:
+    """Turn the URL path component into a Firebird database identifier.
+
+    Firebird is the awkward one — it needs either an absolute file path
+    on the server, a Windows drive-letter path, or an alias name. The
+    classic URI form uses a double-slash to keep the leading "/" of an
+    absolute path through ``urlparse``::
+
+        firebird://host:port//firebird/data/app.fdb   →  /firebird/data/app.fdb
+
+    But that double slash is unintuitive to anyone used to the way
+    postgres / mysql / mssql encode the database name. We accept five
+    equivalent forms and normalise all of them:
+
+    * ``//abs/path/db.fdb``    → ``/abs/path/db.fdb``    (classic double-slash)
+    * ``/abs/path/db.fdb``     → ``/abs/path/db.fdb``    (single-slash, what most people type)
+    * ``/C:/Data/db.fdb``      → ``C:/Data/db.fdb``      (Windows, leading URL slash dropped)
+    * ``/C%3A/Data/db.fdb``    → ``C:/Data/db.fdb``      (Windows with URL-encoded colon)
+    * ``/employee``            → ``employee``            (alias — single token)
+
+    Aliases are detected as the leftover case: a single token with no
+    slashes. Anything path-like is kept as a path.
+    """
+    decoded = unquote(raw_path)
+
+    # Classic double-slash form: //abs/path → /abs/path
+    if decoded.startswith("//"):
+        decoded = decoded[1:]
+
+    # Windows drive-letter — drop the URL-introduced leading slash.
+    # /C:/Data/db.fdb → C:/Data/db.fdb
+    if _WIN_DRIVE_RE.match(decoded):
+        if decoded.startswith("/"):
+            decoded = decoded[1:]
+        return decoded
+
+    # Look at the content after stripping the leading slash. If it's a
+    # single token with no separators, it's a Firebird alias — return
+    # WITHOUT the leading slash (the alias name itself is the identifier).
+    body = decoded[1:] if decoded.startswith("/") else decoded
+    if body and "/" not in body and "\\" not in body:
+        return body
+
+    # Otherwise it's a file path. If it already has a leading slash,
+    # keep it. If it's a relative-looking path (slash-separated but no
+    # leading "/") promote it to absolute — Firebird needs absolute paths
+    # and we don't know the server's CWD anyway.
+    return decoded if decoded.startswith("/") else "/" + decoded
+
 
 # Try modern firebird-driver first, fall back to legacy fdb
 _driver = None
@@ -65,8 +123,21 @@ class FirebirdAdapter(DatabaseAdapter):
         parsed = urlparse(connection_string)
         host = parsed.hostname or "localhost"
         port = parsed.port or 3050
-        # Firebird database path — decode URL-encoded characters
-        db_path = unquote(parsed.path[1:]) if parsed.path.startswith("/") else unquote(parsed.path)
+
+        # Firebird database identifier resolution — two layers:
+        #
+        # 1. ``TINA4_DATABASE_FIREBIRD_PATH`` env override wins if set.
+        #    Useful for Windows users with raw backslash paths (no URL
+        #    encoding required) and for ops setups that keep server URL
+        #    and DB location in separate config layers.
+        # 2. Otherwise normalise the URL path component — accepts every
+        #    sensible variant (single/double slash, drive letter, alias).
+        env_override = os.environ.get("TINA4_DATABASE_FIREBIRD_PATH", "")
+        if env_override:
+            db_path = env_override
+        else:
+            db_path = _normalize_firebird_db_identifier(parsed.path)
+
         user = parsed.username or username or "SYSDBA"
         password = parsed.password or password or "masterkey"
         charset = kwargs.pop("charset", "UTF8")
