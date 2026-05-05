@@ -1511,3 +1511,56 @@ class TestRenderDump:
         monkeypatch.setenv("TINA4_DEBUG", "true")
         result = engine.render_dump([1, 2, 3])
         assert "<pre>" in result
+
+
+# ── Filter + property chain (regression for tina4-php#113) ────────
+
+
+class TestFilterPropertyChainPHP113:
+    """Regression for tina4-php#113 — property access chained after a
+    filter must resolve as ``(filter).property``, never as a literal
+    ``filter.property`` filter name. Silent ``null`` here once cost a
+    receipt template the entire invoice total — render shows R0.00.
+    """
+
+    def test_filter_then_single_property(self, engine):
+        data = {"details": [{"groupSummary": {"totalAmount": 190}}]}
+        out = engine.render_string(
+            "{{ details|first.groupSummary.totalAmount }}", data
+        )
+        assert out == "190"
+
+    def test_filter_then_property_in_set(self, engine):
+        data = {"details": [{"groupSummary": {"totalAmount": 190}}]}
+        tpl = (
+            "{% set summary = details|first.groupSummary %}"
+            "{{ summary.totalAmount }}"
+        )
+        assert engine.render_string(tpl, data) == "190"
+
+    def test_filter_then_multi_level_chain(self, engine):
+        data = {"invoices": [{"customer": {"address": {"city": "Cape Town"}}}]}
+        out = engine.render_string(
+            "{{ invoices|first.customer.address.city }}", data
+        )
+        assert out == "Cape Town"
+
+    def test_last_filter_then_property(self, engine):
+        data = {"rows": [{"sku": "A1"}, {"sku": "B2"}]}
+        out = engine.render_string("{{ rows|last.sku }}", data)
+        assert out == "B2"
+
+    def test_dot_inside_filter_args_is_not_a_property(self, engine):
+        # number_format(2) — the `.` is part of the arg, NOT a property split
+        out = engine.render_string("{{ price|number_format(2) }}", {"price": 19.5})
+        assert out == "19.50"
+
+    def test_dot_inside_quoted_filter_args_is_not_a_property(self, engine):
+        # Replacing "." with "-" — the dot is inside a quoted arg and
+        # must NOT be treated as a property-path split. If the parser
+        # split on the inner dot it would call the filter as just
+        # `replace("` and miss the second arg, returning the input.
+        out = engine.render_string(
+            '{{ stamp|replace(".", "-") }}', {"stamp": "2026.05.05"}
+        )
+        assert out == "2026-05-05"
