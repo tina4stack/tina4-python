@@ -144,7 +144,15 @@ class Database:
         # Priority: constructor params > env vars > empty
         self.username = username or os.environ.get("TINA4_DATABASE_USERNAME", "")
         self.password = password or os.environ.get("TINA4_DATABASE_PASSWORD", "")
-        self.pool_size = pool  # 0 = single connection, N>0 = N pooled connections
+        # Pool size — caller's explicit value wins; otherwise honour
+        # TINA4_DB_POOL so deployments can flip pooling on without code
+        # changes. 0 = single connection, N>0 = N pooled connections.
+        if pool == 0:
+            try:
+                pool = int(os.environ.get("TINA4_DB_POOL", "0"))
+            except (TypeError, ValueError):
+                pool = 0
+        self.pool_size = pool
         self._connect_kwargs = kwargs  # Extra kwargs passed through to adapter.connect()
         self.last_error = None  # Last execute() error message
         self._last_id = None   # Last insert ID from execute/insert

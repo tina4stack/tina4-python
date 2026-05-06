@@ -120,16 +120,50 @@ def deprecated():
 
 # ── Swagger Generator ──────────────────────────────────────────
 
+def _swagger_truthy(val) -> bool:
+    return str(val or "").strip().lower() in ("true", "1", "yes", "on")
+
+
+def is_enabled() -> bool:
+    """Whether Swagger UI should be served.
+
+    Resolution order:
+        1. TINA4_SWAGGER_ENABLED env var — explicit on/off override.
+        2. TINA4_DEBUG=true — implicit on for dev.
+        3. Otherwise off (production default).
+
+    Cross-framework parity v3.12.4 — same rule across PHP/Ruby/Node.
+    """
+    explicit = os.environ.get("TINA4_SWAGGER_ENABLED")
+    if explicit is not None and explicit != "":
+        return _swagger_truthy(explicit)
+    return _swagger_truthy(os.environ.get("TINA4_DEBUG"))
+
+
 class Swagger:
     """OpenAPI 3.0.3 specification generator."""
 
     def __init__(self, title: str = None, version: str = None,
-                 description: str = "", server_url: str = None):
+                 description: str = "", server_url: str = None,
+                 contact_email: str = None, license_name: str = None):
         self.title = title or os.environ.get("TINA4_SWAGGER_TITLE", "Tina4 API")
         self.version = version or os.environ.get("TINA4_SWAGGER_VERSION", "1.0.0")
         self.description = description or os.environ.get("TINA4_SWAGGER_DESCRIPTION", "")
         self.server_url = server_url or os.environ.get(
             "SWAGGER_DEV_URL", "http://localhost:7145"
+        )
+        # Contact email surfaces in the OpenAPI `info.contact` block. Empty
+        # string suppresses the entry — same convention across frameworks.
+        self.contact_email = (
+            contact_email
+            if contact_email is not None
+            else os.environ.get("TINA4_SWAGGER_CONTACT_EMAIL", "")
+        )
+        # License name surfaces in `info.license`. Empty string suppresses.
+        self.license_name = (
+            license_name
+            if license_name is not None
+            else os.environ.get("TINA4_SWAGGER_LICENSE", "")
         )
 
     def generate(self, routes: list[dict]) -> dict:
@@ -138,13 +172,19 @@ class Swagger:
         Each route dict should have:
             method, path, handler, auth_required (optional)
         """
+        info = {
+            "title": self.title,
+            "version": self.version,
+            "description": self.description,
+        }
+        if self.contact_email:
+            info["contact"] = {"email": self.contact_email}
+        if self.license_name:
+            info["license"] = {"name": self.license_name}
+
         spec = {
             "openapi": "3.0.3",
-            "info": {
-                "title": self.title,
-                "version": self.version,
-                "description": self.description,
-            },
+            "info": info,
             "servers": [{"url": self.server_url}],
             "paths": {},
             "components": {
@@ -279,7 +319,7 @@ class Swagger:
 
 
 __all__ = [
-    "Swagger",
+    "Swagger", "is_enabled",
     "description", "summary", "tags",
     "example", "example_response", "deprecated",
 ]

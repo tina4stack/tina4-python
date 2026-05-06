@@ -103,6 +103,12 @@ class Messenger:
                                       os.environ.get("TINA4_MAIL_IMAP_HOST", ""))
         self.imap_port = imap_port or int(os.environ.get("TINA4_MAIL_IMAP_PORT",
                                           os.environ.get("TINA4_MAIL_IMAP_PORT", "993")))
+        # IMAP encryption — independent of SMTP encryption above. Lets ops
+        # connect to e.g. an SMTP relay over starttls while reading mail
+        # over implicit TLS. Cross-framework parity v3.12.4.
+        self.imap_encryption = (
+            os.environ.get("TINA4_MAIL_IMAP_ENCRYPTION", "tls").lower().strip()
+        )
 
     def add_header(self, name: str, value: str):
         """Add a default header to all outgoing emails."""
@@ -265,15 +271,37 @@ class Messenger:
     # ── IMAP (Read) ────────────────────────────────────────────
 
     def _imap_connect(self) -> imaplib.IMAP4_SSL | imaplib.IMAP4:
-        """Connect and authenticate to the IMAP server."""
+        """Connect and authenticate to the IMAP server.
+
+        Honours TINA4_MAIL_IMAP_ENCRYPTION:
+            "tls"      → implicit TLS (IMAP4_SSL). Default.
+            "starttls" → plain IMAP4, then STARTTLS upgrade.
+            "none"     → plain IMAP4, no encryption (lab/dev only).
+
+        Falls back to "use port 993 = TLS" for back-compat when the env
+        var is missing — that's how the previous version behaved.
+        """
         if not self.imap_host:
             raise MessengerError("IMAP host not configured (set imap_host or IMAP_HOST env)")
-        if self.imap_port == 993:
+
+        enc = self.imap_encryption
+        if enc == "none":
+            conn = imaplib.IMAP4(self.imap_host, self.imap_port)
+        elif enc == "starttls":
+            conn = imaplib.IMAP4(self.imap_host, self.imap_port)
+            conn.starttls()
+        elif enc == "tls":
             conn = imaplib.IMAP4_SSL(self.imap_host, self.imap_port)
         else:
-            conn = imaplib.IMAP4(self.imap_host, self.imap_port)
-            if self.use_tls:
-                conn.starttls()
+            # Unknown value — fall back to historical port-based logic so
+            # a typo doesn't break a working deployment.
+            if self.imap_port == 993:
+                conn = imaplib.IMAP4_SSL(self.imap_host, self.imap_port)
+            else:
+                conn = imaplib.IMAP4(self.imap_host, self.imap_port)
+                if self.use_tls:
+                    conn.starttls()
+
         if self.username and self.password:
             conn.login(self.username, self.password)
         return conn

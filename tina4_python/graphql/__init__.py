@@ -23,6 +23,7 @@ Supported:
     - Error capture (resolver exceptions become GraphQL errors)
 """
 import json
+import os
 import re
 from typing import Any
 
@@ -464,10 +465,45 @@ def _make_orm_delete_resolver(orm_class, pk_field):
 # ── Executor ──────────────────────────────────────────────────
 
 class GraphQL:
-    """GraphQL engine — parse, validate, execute."""
+    """GraphQL engine — parse, validate, execute.
+
+    Env vars (cross-framework parity v3.12.4):
+        TINA4_GRAPHQL_AUTO_SCHEMA  When truthy (default), discovered ORM
+                                   subclasses passed via auto_register()
+                                   are wired into the schema. Set to false
+                                   to opt out and build the schema manually.
+        TINA4_GRAPHQL_ENDPOINT     Default URL path for the HTTP endpoint
+                                   (default: "/graphql"). Read by .endpoint.
+    """
 
     def __init__(self):
         self.schema = Schema()
+        # Default endpoint URL — env-overridable so deployments can mount
+        # GraphQL at e.g. /api/graphql without changing app code.
+        self.endpoint: str = os.environ.get("TINA4_GRAPHQL_ENDPOINT", "/graphql")
+        # Auto-schema toggle. The flag is stored on the instance so the
+        # outer app can introspect it (e.g. dev_admin shows "auto-schema:
+        # off" in the GraphQL panel) and so test fixtures can flip it
+        # without monkey-patching env.
+        self.auto_schema: bool = str(
+            os.environ.get("TINA4_GRAPHQL_AUTO_SCHEMA", "true")
+        ).strip().lower() in ("true", "1", "yes", "on")
+
+    def auto_register(self, *orm_classes) -> int:
+        """Wire each ORM class into the schema via from_orm().
+
+        No-op when TINA4_GRAPHQL_AUTO_SCHEMA is falsy. Returns the number
+        of classes actually registered. Callers (dev_admin, app bootstrap)
+        use this instead of looping themselves so the env-var gate is
+        honoured in one place.
+        """
+        if not self.auto_schema:
+            return 0
+        count = 0
+        for cls in orm_classes:
+            self.schema.from_orm(cls)
+            count += 1
+        return count
 
     def execute(self, query: str, variables: dict = None, context: dict = None) -> dict:
         """Execute a GraphQL query string. Returns {"data": ..., "errors": [...]}."""

@@ -150,8 +150,14 @@ async def _health_handler(request: Request, response: Response) -> Response:
     return response.status(code).json(health)
 
 
-# Register health check
-Router.add("GET", "/health", _health_handler)
+# Register health check.
+# TINA4_HEALTH_PATH overrides the URL path. We also keep /health registered
+# under the env path; if the env path differs we register both so existing
+# probes don't break. Default "/__health" matches PHP/Ruby/Node parity.
+_HEALTH_PATH = os.environ.get("TINA4_HEALTH_PATH", "/__health")
+Router.add("GET", _HEALTH_PATH, _health_handler)
+if _HEALTH_PATH != "/health":
+    Router.add("GET", "/health", _health_handler)
 
 
 def _render_error_page(status_code: int, path: str, request_id: str, error_message: str = "") -> str | None:
@@ -1289,6 +1295,17 @@ async def handle(request: Request) -> Response:
     from tina4_python.dotenv import is_truthy
     _is_dev = is_truthy(os.environ.get("TINA4_DEBUG", ""))
 
+    # Trailing-slash redirect — when TINA4_TRAILING_SLASH_REDIRECT=true and a
+    # request arrives at `/foo/`, return 301 to `/foo`. Skip the root `/` so
+    # the homepage still works. Cross-framework parity v3.12.4.
+    if (
+        is_truthy(os.environ.get("TINA4_TRAILING_SLASH_REDIRECT", ""))
+        and len(request.path) > 1
+        and request.path.endswith("/")
+    ):
+        canonical = request.path.rstrip("/") or "/"
+        return response.status(301).header("location", canonical)
+
     # Dev admin — also catches /ai/api/chat (SPA's ollama proxy) and the
     # bare /ai /vision /embed /image /rag service-health probes that
     # drive the "SERVICES ●●●●●" dots in the dev-admin UI.
@@ -1629,11 +1646,14 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
     default_host = "0.0.0.0"
     default_port = 7146
 
-    # Host: CLI flag > HOST env > default
+    # Host: CLI flag > TINA4_HOST env > HOST env > default.
+    # TINA4_HOST takes precedence over the legacy plain HOST so a stray
+    # OS-level HOST (common on shared CI runners) can't silently override
+    # the framework's bind address. See cross-framework v3.12.4 plan.
     if cli_host is not None:
         host = cli_host
     else:
-        host = os.environ.get("HOST", default_host)
+        host = os.environ.get("TINA4_HOST") or os.environ.get("HOST", default_host)
 
     # Port: CLI flag > PORT env > default
     if cli_port is not None:
@@ -1869,8 +1889,12 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     _no_ai_port = os.environ.get("TINA4_NO_AI_PORT", "").lower() in ("true", "1", "yes")
     _ai_port = (port + 1000) if (is_debug and not _no_ai_port) else None
 
-    # Banner — printed directly to stdout, not through the logger
-    _print_banner(host, port, server_name, ai_port=_ai_port)
+    # Banner — printed directly to stdout, not through the logger.
+    # TINA4_SUPPRESS=true silences the startup banner (useful in CI / Docker
+    # logs where the ASCII art is just noise). Cross-framework parity v3.12.4.
+    from tina4_python.dotenv import is_truthy as _is_truthy
+    if not _is_truthy(os.environ.get("TINA4_SUPPRESS", "")):
+        _print_banner(host, port, server_name, ai_port=_ai_port)
 
     display = "localhost" if host in ("0.0.0.0", "::") else host
     Log.info(f"Server started http://{display}:{port} ({server_name})")

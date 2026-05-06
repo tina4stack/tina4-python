@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 
 
-def load_env(file_path: str = ".env", override: bool = False) -> dict:
+def load_env(file_path: str = None, override: bool = False) -> dict:
     """Load environment variables from a .env file.
 
     Supports:
@@ -31,12 +31,16 @@ def load_env(file_path: str = ".env", override: bool = False) -> dict:
         multi-word unquoted values
 
     Args:
-        file_path: Path to .env file (default: ".env")
+        file_path: Path to .env file. When None, falls back to the
+            TINA4_ENV_FILE env var, then ".env". This lets ops point at
+            an alternate file (e.g. ".env.staging") without code changes.
         override: If True, overwrite existing env vars (default: False)
 
     Returns:
         Dict of loaded key-value pairs
     """
+    if file_path is None:
+        file_path = os.environ.get("TINA4_ENV_FILE", ".env")
     env_file = Path(file_path)
     loaded = {}
 

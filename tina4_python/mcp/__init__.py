@@ -35,7 +35,7 @@ from .protocol import (
 __all__ = [
     "McpServer", "mcp_tool", "mcp_resource",
     "encode_response", "encode_error", "encode_notification", "decode_request",
-    "is_localhost", "register",
+    "is_localhost", "is_enabled", "resolve_port", "register",
 ]
 
 # Type hint → JSON Schema type mapping (reuse Swagger pattern)
@@ -82,6 +82,44 @@ def is_localhost() -> bool:
 
 # Private alias kept for internal use
 _is_localhost = is_localhost
+
+
+def _is_truthy(val) -> bool:
+    return str(val or "").strip().lower() in ("true", "1", "yes", "on")
+
+
+def is_enabled() -> bool:
+    """Whether the built-in MCP dev tools should be enabled.
+
+    Resolution order (highest priority first):
+        1. TINA4_MCP env var — explicit on/off override.
+        2. TINA4_DEBUG=true — implicit on for dev.
+        3. Otherwise off.
+
+    Cross-framework parity v3.12.4: `TINA4_MCP=true` on its own (without
+    TINA4_DEBUG) lets a sysadmin keep the MCP endpoint exposed in a
+    debug-disabled deployment, e.g. for a remote AI assistant.
+    """
+    explicit = os.environ.get("TINA4_MCP")
+    if explicit is not None and explicit != "":
+        return _is_truthy(explicit)
+    return _is_truthy(os.environ.get("TINA4_DEBUG"))
+
+
+def resolve_port(framework_port: int = 7145) -> int:
+    """Resolve the MCP server port.
+
+    Honours TINA4_MCP_PORT. Default is `framework_port + 2000` so the
+    MCP endpoint never collides with either the main server (default
+    7145) or the AI test port (default framework_port + 1000).
+    """
+    raw = os.environ.get("TINA4_MCP_PORT", "")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return framework_port + 2000
 
 
 class McpServer:

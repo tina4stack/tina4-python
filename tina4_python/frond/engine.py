@@ -10,6 +10,7 @@ import html
 import hashlib
 import json
 import secrets
+import time
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
@@ -1270,10 +1271,20 @@ class Frond:
         # Fragment cache (key → (html, expires_at))
         self._fragment_cache: dict[str, tuple[str, float]] = {}
         # Token pre-compilation cache
-        self._compiled: dict[str, tuple[list, float]] = {}  # {template_name: (tokens, mtime)}
+        self._compiled: dict[str, tuple[list, float]] = {}  # {template_name: (tokens, expires_at)}
         self._compiled_strings: dict[str, list] = {}  # {md5_hash: tokens}
         # Filter chain cache: expr → (var_name, [(filter_name, [args])])
         self._filter_chain_cache: dict[str, tuple[str, list]] = {}
+        # Compile-cache TTL — TINA4_TEMPLATE_CACHE_TTL in seconds.
+        # 0 (default) means "no expiry" so the existing permanent-cache
+        # behaviour is preserved. Anything >0 forces re-tokenisation
+        # after that many seconds, which is handy for long-running
+        # workers that want to pick up template edits without a full
+        # restart but without paying the dev-mode "always re-read" tax.
+        try:
+            self._cache_ttl: int = int(os.environ.get("TINA4_TEMPLATE_CACHE_TTL", "0"))
+        except (TypeError, ValueError):
+            self._cache_ttl = 0
 
         # Built-in global functions
         self._globals["form_token"] = _form_token
@@ -1363,18 +1374,22 @@ class Frond:
         debug_mode = os.environ.get("TINA4_DEBUG", "").lower() == "true"
 
         if not debug_mode:
-            # Production: permanent cache, no filesystem checks
+            # Production: cached. If TINA4_TEMPLATE_CACHE_TTL > 0 we honour
+            # the expiry; otherwise the cache is permanent (legacy behaviour).
             cached = self._compiled.get(template)
             if cached is not None:
-                return self._execute_cached(cached[0], context, template)
+                tokens_cached, expires_at = cached
+                if self._cache_ttl <= 0 or time.time() < expires_at:
+                    return self._execute_cached(tokens_cached, context, template)
 
-        # Dev mode: skip cache entirely — always re-read and re-tokenize.
+        # Dev mode (or expired entry): re-read and re-tokenize.
         # mtime-based invalidation doesn't catch changes to included/extended
         # templates (parent or partial changes don't update the caller's mtime).
         source = path.read_text(encoding="utf-8")
         tokens = _tokenize(source)
         if not debug_mode:
-            self._compiled[template] = (tokens, 0)
+            expires_at = (time.time() + self._cache_ttl) if self._cache_ttl > 0 else 0
+            self._compiled[template] = (tokens, expires_at)
         return self._execute_with_source(source, tokens, context, template)
 
     def render_string(self, source: str, data: dict = None) -> str:

@@ -274,10 +274,34 @@ class Session:
         result = self.flash(key)
         return result if result is not None else default
 
-    def cookie_header(self, cookie_name: str = "tina4_session") -> str:
-        """Return a Set-Cookie header value for this session."""
+    def cookie_header(self, cookie_name: str = None) -> str:
+        """Return a Set-Cookie header value for this session.
+
+        Cookie attributes are env-driven so deployments can flip security
+        flags without redeploying app code:
+
+            TINA4_SESSION_NAME      Cookie name (default: tina4_session)
+            TINA4_SESSION_HTTPONLY  HttpOnly flag (default: true)
+            TINA4_SESSION_SECURE    Secure flag (default: false). Set to
+                                    true only when serving over HTTPS.
+            TINA4_SESSION_SAMESITE  SameSite attribute (default: Lax)
+        """
+        if cookie_name is None:
+            cookie_name = os.environ.get("TINA4_SESSION_NAME", "tina4_session")
         samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
-        return f"{cookie_name}={self._session_id}; Path=/; HttpOnly; SameSite={samesite}; Max-Age={self._ttl}"
+        # Default true for HttpOnly (matches v2 behaviour) — only drop the
+        # flag when the operator explicitly opts out.
+        httponly = str(os.environ.get("TINA4_SESSION_HTTPONLY", "true")).strip().lower() in ("true", "1", "yes", "on")
+        secure = str(os.environ.get("TINA4_SESSION_SECURE", "false")).strip().lower() in ("true", "1", "yes", "on")
+
+        parts = [f"{cookie_name}={self._session_id}", "Path=/"]
+        if httponly:
+            parts.append("HttpOnly")
+        if secure:
+            parts.append("Secure")
+        parts.append(f"SameSite={samesite}")
+        parts.append(f"Max-Age={self._ttl}")
+        return "; ".join(parts)
 
     def gc(self):
         """Run garbage collection on the backend."""
