@@ -20,6 +20,28 @@ class PostgreSQLAdapter(DatabaseAdapter):
         self._conn = None
         self._in_transaction: bool = False
 
+    @staticmethod
+    def _safe_execute(cursor, sql: str, params=None):
+        """Wrapper for ``cursor.execute`` that side-steps psycopg2's
+        always-on ``%`` substitution when no params are needed.
+
+        Issue #40: psycopg2 interprets ``%`` characters in the SQL
+        as parameter placeholders WHENEVER the ``params`` argument is
+        supplied — even an empty list ``[]``. So a migration body
+        containing ``RAISE EXCEPTION 'thing % conflicts with %', a, b``
+        (perfectly valid PL/pgSQL) blows up with the misleading
+        ``list index out of range`` because psycopg2 thinks ``%`` is a
+        placeholder and there are no values to substitute.
+
+        Pass ``None`` (or omit the second arg) and psycopg2 skips the
+        substitution pass entirely — literal ``%`` flows through
+        untouched. So we route empty/None params through that path.
+        """
+        if params:
+            cursor.execute(sql, params)
+        else:
+            cursor.execute(sql)
+
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to PostgreSQL.
 
@@ -63,7 +85,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
         )
 
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute(sql, params or [])
+        self._safe_execute(cursor, sql, params)
 
         records = []
         last_id = None
@@ -124,7 +146,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
         # Count total rows
         count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
         try:
-            cursor.execute(count_sql, params or [])
+            self._safe_execute(cursor, count_sql, params)
             total = cursor.fetchone()["cnt"]
         except Exception:
             total = 0
@@ -132,7 +154,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
         # Apply pagination
         paginated_sql = f"{sql} LIMIT %s OFFSET %s"
         paginated_params = (params or []) + [limit, offset]
-        cursor.execute(paginated_sql, paginated_params)
+        self._safe_execute(cursor, paginated_sql, paginated_params)
         rows = [self._decode_blobs(dict(row)) for row in cursor.fetchall()]
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
@@ -142,7 +164,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
 
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        cursor.execute(sql, params or [])
+        self._safe_execute(cursor, sql, params)
         row = cursor.fetchone()
         return self._decode_blobs(dict(row)) if row else None
 
