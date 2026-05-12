@@ -247,6 +247,33 @@ class Router:
         return cls.add("DELETE", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
 
     @classmethod
+    def head(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
+        """Register an explicit HEAD route.
+
+        By default the framework auto-handles HEAD by falling back to the GET
+        route and stripping the body (RFC 9110 §9.3.2). Use this method only
+        when you need a HEAD handler that does something different from GET —
+        e.g. cheaper existence-check logic, custom validator headers without
+        the cost of building the body.
+
+        The framework still strips the response body for you on the way out —
+        HEAD MUST NOT return content, even if your handler does, so we
+        enforce that unconditionally rather than relying on developer care.
+        """
+        return cls.add("HEAD", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
+
+    @classmethod
+    def options(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
+        """Register an explicit OPTIONS route.
+
+        By default the framework auto-handles OPTIONS by building an Allow
+        header from every method registered for the path and returning 204
+        (RFC 9110 §9.3.7). Use this method to take over that behaviour —
+        e.g. to return a richer OPTIONS payload describing the resource.
+        """
+        return cls.add("OPTIONS", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
+
+    @classmethod
     def any(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":
         """Register a route for any HTTP method (imperative, non-decorator style)."""
         return cls.add("ANY", path, handler, middleware=middleware, swagger_meta=swagger_meta, template=template, **options)
@@ -291,7 +318,11 @@ class Router:
             # Route has custom middleware — developer handles auth themselves
             auth_required = False
         else:
-            auth_required = m not in ("GET", "ANY")
+            # GET, HEAD, OPTIONS, and ANY are public by default. HEAD and
+            # OPTIONS are safe/idempotent introspection methods (RFC 9110
+            # §9.2.1) — requiring auth on them breaks cache validators
+            # and CORS preflight probes.
+            auth_required = m not in ("GET", "HEAD", "OPTIONS", "ANY")
 
         route = {
             "method": m,
@@ -312,9 +343,18 @@ class Router:
 
     @staticmethod
     def match(method: str, path: str) -> tuple[dict | None, dict]:
-        """Find a route matching method + path. Returns (route, params)."""
+        """Find a route matching method + path. Returns (route, params).
+
+        RFC 9110 §9.3.2: HEAD is identical to GET except the response carries
+        no body. If the app didn't register a dedicated HEAD route, we
+        transparently match the GET route; the dispatcher strips the body on
+        the way out, so the handler doesn't need to know HEAD even happened.
+        """
+        method_upper = method.upper()
+
+        # First pass: exact method match (covers HEAD → explicit HEAD route too)
         for route in _routes:
-            if route["method"] not in (method.upper(), "ANY"):
+            if route["method"] not in (method_upper, "ANY"):
                 continue
             m = route["pattern"].match(path)
             if m:
@@ -323,7 +363,57 @@ class Router:
                     params[name] = m.group(i + 1)
                 return route, params
 
+        # Second pass: HEAD auto-fallback to GET when no HEAD route registered
+        if method_upper == "HEAD":
+            for route in _routes:
+                if route["method"] not in ("GET", "ANY"):
+                    continue
+                m = route["pattern"].match(path)
+                if m:
+                    params = {}
+                    for i, name in enumerate(route["param_names"]):
+                        params[name] = m.group(i + 1)
+                    return route, params
+
         return None, {}
+
+    @staticmethod
+    def methods_allowed_for_path(path: str) -> list[str]:
+        """Return the list of HTTP methods registered for ``path``, in the
+        order GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS. Used by
+        the dispatcher to build the ``Allow:`` header on 405 / OPTIONS
+        responses (RFC 9110 §10.2.1, §9.3.7).
+
+        If GET is registered, HEAD is appended implicitly (the framework
+        auto-falls-back HEAD to GET). OPTIONS is appended whenever the
+        path has any registered method (the framework auto-handles OPTIONS).
+        """
+        # ANY routes count for every method but we don't enumerate them
+        # individually — flag whether ANY matched and union it with the
+        # concrete-method matches.
+        method_order = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+        seen: set[str] = set()
+        any_matched = False
+
+        for route in _routes:
+            if not route["pattern"].match(path):
+                continue
+            m = route["method"]
+            if m == "ANY":
+                any_matched = True
+            elif m in method_order:
+                seen.add(m)
+
+        if any_matched:
+            seen.update(method_order)
+
+        # GET implies HEAD; any registered method implies OPTIONS.
+        if seen:
+            if "GET" in seen:
+                seen.add("HEAD")
+            seen.add("OPTIONS")
+
+        return [m for m in method_order if m in seen]
 
     @staticmethod
     def get_routes() -> list[dict]:

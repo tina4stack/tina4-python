@@ -1338,7 +1338,43 @@ async def handle(request: Request) -> Response:
         except Exception as e:
             response = _handle_route_error(e, request, response, request_id, _is_dev)
     else:
-        response = _handle_no_route(request, response, request_id)
+        # RFC 9110 conformance — before falling through to 404 / static / template,
+        # check whether the PATH is known to the router under any OTHER method.
+        # If yes:
+        #   - OPTIONS request → 204 No Content with Allow listing the methods
+        #     (RFC 9110 §9.3.7). Generic OPTIONS handler.
+        #   - Any other method (PUT on GET-only route, TRACE, CONNECT, etc.)
+        #     → 405 Method Not Allowed with Allow header (§15.5.6 + §10.2.1).
+        allowed = Router.methods_allowed_for_path(request.path)
+        if allowed:
+            allow_header = ", ".join(allowed)
+            if request.method.upper() == "OPTIONS":
+                response.header("Allow", allow_header)
+                response.status(204)
+            else:
+                response.header("Allow", allow_header)
+                response.status(405).json({
+                    "error": "Method Not Allowed",
+                    "path": request.path,
+                    "method": request.method,
+                    "allow": allowed,
+                    "status": 405,
+                })
+        else:
+            response = _handle_no_route(request, response, request_id)
+
+    # RFC 9110 §9.3.2: a HEAD response MUST NOT include content. Strip the
+    # body unconditionally (even for explicit Router.head() handlers that
+    # accidentally returned one) and record what Content-Length the GET
+    # would have sent — cache validators / link checkers / monitoring
+    # probes rely on that header to size estimates.
+    if request.method.upper() == "HEAD":
+        body = response.content if response.content is not None else b""
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        if body:
+            response.header("Content-Length", str(len(body)))
+            response.content = b""
 
     return _finalize_response(request, response, route, request_id, _is_dev, _req_start)
 
