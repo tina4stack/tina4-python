@@ -19,7 +19,7 @@ class Request:
     """Parsed HTTP request — everything a route handler needs."""
 
     __slots__ = (
-        "method", "path", "query_string", "params", "query", "headers",
+        "method", "path", "url", "query_string", "params", "query", "headers",
         "body", "raw_body", "cookies", "files", "ip",
         "content_type", "session", "_route_params",
     )
@@ -27,6 +27,7 @@ class Request:
     def __init__(self):
         self.method: str = "GET"
         self.path: str = "/"
+        self.url: str = "/"
         self.query_string: str = ""
         self.params: dict = {}          # Query string + route params merged
         self.query: dict = {}           # Query string params only (separate from route params)
@@ -55,6 +56,24 @@ class Request:
 
         req.content_type = req.headers.get("content-type", "")
         req.ip = _extract_ip(scope, req.headers)
+
+        # Reconstruct the full absolute URL — scheme://host[:port]/path[?query].
+        # Honours x-forwarded-proto and x-forwarded-host so apps behind a proxy
+        # still see the URL the client used. Matches PHP/Ruby/Node parity.
+        scheme = (
+            req.headers.get("x-forwarded-proto")
+            or scope.get("scheme")
+            or "http"
+        )
+        host = (
+            req.headers.get("x-forwarded-host")
+            or req.headers.get("host")
+            or "localhost"
+        )
+        url = f"{scheme}://{host}{req.path}"
+        if req.query_string:
+            url = f"{url}?{req.query_string}"
+        req.url = url
 
         # Check upload size limit
         content_length = int(req.headers.get("content-length", 0) or 0)
