@@ -1745,7 +1745,10 @@ async def _api_mtime(request, response):
 async def _api_reload(request, response):
     """Trigger a browser reload — called by the Rust CLI on file changes.
 
-    Updates the mtime counter so the polling fallback detects the change.
+    Updates the mtime counter so the polling fallback detects the change AND
+    re-runs auto-discover so new files in src/routes/, src/orm/, src/app/
+    register their decorators without a server restart. `_auto_discover` is
+    idempotent — already-imported modules are skipped.
     """
     import time
     _reload_mtime[0] = int(time.time())
@@ -1753,7 +1756,29 @@ async def _api_reload(request, response):
     reload_type = (request.body or {}).get("type", "reload")
     from tina4_python.debug import Log
     Log.info(f"External reload trigger: {reload_type}" + (f" ({_reload_file[0]})" if _reload_file[0] else ""))
+
+    # Re-discover so brand-new route/model/middleware files load on reload.
+    # Imports already in sys.modules are skipped, so existing files are not
+    # re-imported (use a full restart for that).
+    try:
+        from tina4_python.core.server import _auto_discover
+        before = _route_count()
+        _auto_discover("src")
+        after = _route_count()
+        if after > before:
+            Log.info(f"Re-discovered {after - before} new route(s) on reload")
+    except Exception as e:
+        Log.error(f"Re-discover on reload failed: {e}")
+
     return response({"ok": True, "type": reload_type})
+
+
+def _route_count() -> int:
+    try:
+        from tina4_python.core.router import Router
+        return len(Router.get_routes())
+    except Exception:
+        return 0
 
 
 async def _api_version_check(request, response):

@@ -49,18 +49,44 @@ def background(callback, interval: float = 1.0):
 
 
 def _auto_discover(root_dir: str = "src"):
-    """Auto-import all .py files in src/ to trigger route decorators."""
+    """Auto-import all .py files in ``root_dir`` to trigger route decorators.
+
+    Idempotent and re-runnable: skips modules already in ``sys.modules`` so
+    re-discovery on /__dev/api/reload is cheap. New files added after server
+    boot get picked up on the next reload signal.
+
+    Import failures are recorded to ``data/.broken/`` so /health surfaces them
+    instead of swallowing them into a console line nobody reads.
+    """
     root = Path(root_dir).resolve()
     if not root.is_dir():
         return
 
+    # Folders to skip — non-Python sub-trees inside src/.
     skip = {"public", "templates", "scss", "locales", "icons"}
+    # Routes folder is special-cased so the user gets a clear warning when
+    # it exists but contains zero discoverable Python files.
+    routes_dir = root / "routes"
+    found_route_files = 0
 
     for py_file in sorted(root.rglob("*.py")):
-        if any(part.startswith("_") for part in py_file.parts):
+        # Only filter on parts INSIDE src/, not the absolute path. Previously
+        # `py_file.parts` included every ancestor, so a project living under
+        # something like /Users/me/_archive/myapp would silently skip every
+        # file. Compute the relative parts first and filter on those.
+        try:
+            rel_to_root = py_file.relative_to(root)
+        except ValueError:
             continue
-        if any(s in py_file.parts for s in skip):
+
+        rel_parts = rel_to_root.parts
+        if any(part.startswith("_") for part in rel_parts):
             continue
+        if any(s in rel_parts for s in skip):
+            continue
+
+        if routes_dir in py_file.parents:
+            found_route_files += 1
 
         try:
             rel = py_file.relative_to(Path.cwd()).with_suffix("")
@@ -70,6 +96,39 @@ def _auto_discover(root_dir: str = "src"):
                 Log.debug(f"Loaded: {module_name}")
         except Exception as e:
             Log.error(f"Failed to load {py_file}: {e}")
+            _record_broken_import(py_file, e)
+
+    # User-friendly hint: routes folder has Python files but the router is
+    # still empty. They almost certainly forgot the @get/@post decorator.
+    if found_route_files > 0:
+        try:
+            from tina4_python.core.router import Router
+            if not Router.get_routes():
+                Log.warning(
+                    f"Auto-discover found {found_route_files} .py file(s) in "
+                    f"{routes_dir} but no routes registered. Did you forget "
+                    f"@get / @post / @put / @delete on your handler?"
+                )
+        except Exception:
+            pass
+
+
+def _record_broken_import(py_file: Path, error: Exception) -> None:
+    """Write a .broken sentinel so /health and the dev dashboard surface
+    auto-discover failures instead of burying them in the console."""
+    try:
+        broken_dir = Path("data/.broken")
+        broken_dir.mkdir(parents=True, exist_ok=True)
+        import json
+        slug = str(py_file).replace("/", "_").replace("\\", "_")
+        (broken_dir / f"discover_{slug}.broken").write_text(json.dumps({
+            "type": "auto_discover_failure",
+            "file": str(py_file),
+            "error": f"{type(error).__name__}: {error}",
+        }))
+    except Exception:
+        # If even the .broken write fails we already logged the original error.
+        pass
 
 
 def _ensure_folders():

@@ -408,7 +408,7 @@ Set `TINA4_DEBUG=true` in `.env` to enable development features:
 - **CSS hot-reload** — SCSS/CSS changes refresh stylesheets without full page reload
 - **SCSS auto-compile** — `.scss` files in `src/scss/` are compiled to `src/public/css/` on save
 - **Error overlay** — Runtime errors display a rich, syntax-highlighted overlay in the browser
-- **Hot-patching** — Python code changes are live-patched via jurigged (no server restart)
+- **Route re-discovery** — `POST /__dev/api/reload` re-runs auto-discover, so new files in `src/routes/`, `src/orm/`, or `src/app/` register without a server restart. Existing modules are NOT re-imported — for code changes inside an already-loaded file, restart the server.
 
 DevReload connects via WebSocket at `/__dev_reload`. No configuration needed.
 
