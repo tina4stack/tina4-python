@@ -413,6 +413,12 @@ def get_api_handlers() -> dict:
         "/__dev/api/websockets/disconnect": ("POST", _api_ws_disconnect),
         "/__dev/api/system": ("GET", _api_system),
         "/__dev/api/chat": ("POST", _api_chat),
+        # Thread CRUD — exact match handles GET (list) + POST (create);
+        # the "/*" key is the prefix-fallback for /threads/{id}[/messages]
+        # which the dev_admin dispatcher routes to _api_threads_sub.
+        # "*" method = handler switches on request.method itself.
+        "/__dev/api/threads":   ("*", _api_threads),
+        "/__dev/api/threads/*": ("*", _api_threads_sub),
         # Transparent pass-through proxy to the qwen ollama endpoint —
         # accepts the ollama-native `{model, messages, stream, options}`
         # body and forwards to TINA4_AI_URL unchanged. The SPA uses this
@@ -1237,22 +1243,29 @@ async def _proxy_to_supervisor(request, response, downstream_path: str):
         elif isinstance(body, str) and body:
             data = body.encode()
 
+    import asyncio
+
+    req = urllib.request.Request(
+        target,
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"},
+    )
+    # /execute and /chat run the multi-agent loop — supervisor +
+    # planner + coder, each a multi-second LLM call. Other
+    # supervise/* calls are metadata-only and return fast, so a
+    # generous shared timeout for the heavy ones is cheaper than
+    # branching on every endpoint.
+    timeout = 600 if downstream_path in ("/execute", "/chat") else 30
+
+    # Open the upstream connection in a thread — urlopen is blocking.
+    # We DON'T read the body here; that's done below either in one shot
+    # (JSON path) or chunk-by-chunk (SSE path) so progress events reach
+    # the SPA live instead of after the whole 30-second supervisor run.
     try:
-        req = urllib.request.Request(
-            target,
-            data=data,
-            method=method,
-            headers={"Content-Type": "application/json"},
+        upstream = await asyncio.to_thread(
+            urllib.request.urlopen, req, None, timeout
         )
-        # /execute and /chat run the multi-agent loop — supervisor +
-        # planner + coder, each a multi-second LLM call. Other
-        # supervise/* calls are metadata-only and return fast, so a
-        # generous shared timeout for the heavy ones is cheaper than
-        # branching on every endpoint.
-        timeout = 600 if downstream_path in ("/execute", "/chat") else 30
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read()
-            upstream_ct = r.headers.get("Content-Type", "") or ""
     except urllib.error.HTTPError as e:
         err_body = e.read().decode() if e.fp else str(e)
         try:
@@ -1266,11 +1279,30 @@ async def _proxy_to_supervisor(request, response, downstream_path: str):
             "hint": "Run `tina4 serve` (starts the agent server) or set TINA4_SUPERVISOR_URL",
         }, 503)
 
-    # SSE / event-stream: forward the body verbatim with the correct
-    # Content-Type so the SPA's `body.getReader()` can parse agent
-    # progress events (/execute).
+    upstream_ct = upstream.headers.get("Content-Type", "") or ""
+
+    # SSE / event-stream: stream chunks through as they arrive. Without
+    # this the SPA sees nothing until the supervisor's entire multi-agent
+    # run completes (30s+), then a wall of events at once — looks like
+    # "Connection failed". urlopen.read(n) is blocking, so each read goes
+    # through asyncio.to_thread to keep the event loop responsive.
     if "text/event-stream" in upstream_ct.lower():
-        return response(raw, 200, "text/event-stream")
+        async def _relay():
+            try:
+                while True:
+                    chunk = await asyncio.to_thread(upstream.read, 4096)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                upstream.close()
+        return response.stream(_relay(), "text/event-stream")
+
+    # JSON / other: drain the body and return as before.
+    try:
+        raw = await asyncio.to_thread(upstream.read)
+    finally:
+        upstream.close()
     try:
         return response(json.loads(raw))
     except Exception:
@@ -1390,6 +1422,34 @@ async def _api_ai_proxy(request, response):
     except Exception:
         # Non-JSON body (shouldn't happen from ollama) — best-effort text.
         return response(body.decode("utf-8", errors="replace"))
+
+
+async def _api_threads(request, response):
+    """Proxy /__dev/api/threads → Rust agent /threads (GET list, POST create).
+
+    Method-multiplexed handler — the dev_admin dispatcher registered this
+    under the "*" method wildcard so one entry point serves both list and
+    create. Anything other than GET/POST gets a 405.
+    """
+    method = (getattr(request, "method", "GET") or "GET").upper()
+    if method not in ("GET", "POST"):
+        return response({"error": "method not allowed"}, 405)
+    return await _proxy_to_supervisor(request, response, "/threads")
+
+
+async def _api_threads_sub(request, response):
+    """Proxy /__dev/api/threads/{id}[/messages] → Rust agent.
+
+    Catches everything beneath /__dev/api/threads/ via the dispatcher's
+    "/*" prefix match. We strip the dev-admin prefix and forward the
+    remaining path verbatim so /__dev/api/threads/abc/messages becomes
+    /threads/abc/messages on the agent side.
+    """
+    path = getattr(request, "path", "") or ""
+    suffix = path[len("/__dev/api"):]  # leaves "/threads/abc[/messages]"
+    if not suffix.startswith("/threads/"):
+        return response({"error": "not found"}, 404)
+    return await _proxy_to_supervisor(request, response, suffix)
 
 
 async def _api_chat(request, response):

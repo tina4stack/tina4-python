@@ -994,7 +994,26 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
     else:
         handlers = get_api_handlers()
         handler_info = handlers.get(request.path)
-        if handler_info and request.method == handler_info[0]:
+        if not handler_info:
+            # Fallback: longest-prefix wildcard match. Routes registered
+            # with a trailing "/*" (e.g. "/__dev/api/threads/*") catch
+            # everything under that namespace — used for parameterised
+            # resources like /threads/{id} that don't fit exact-match.
+            best_prefix = ""
+            for key, info in handlers.items():
+                if key.endswith("/*"):
+                    prefix = key[:-1]  # keep the trailing slash
+                    if request.path.startswith(prefix) and len(prefix) > len(best_prefix):
+                        best_prefix = prefix
+                        handler_info = info
+        # Allow "*" as a method wildcard for handlers that switch on
+        # request.method themselves (REST resources with GET+POST+PATCH
+        # on the same path).
+        method_ok = (
+            handler_info is not None
+            and (handler_info[0] == "*" or request.method == handler_info[0])
+        )
+        if method_ok:
             try:
                 def _resp(data, code=200, content_type=None):
                     # content_type overrides the auto-detected MIME —
@@ -1014,6 +1033,11 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
                         response.status(code).json(data)
                     return data
                 _resp.render = response.render
+                # Expose .stream() so handlers can return an SSE/chunked
+                # response — used by the dev_admin supervisor proxy to
+                # forward the agent server's text/event-stream live
+                # (instead of buffering the whole multi-agent run).
+                _resp.stream = response.stream
                 import inspect
                 _tsig = inspect.signature(handler_info[1])
                 _tpcount = len(_tsig.parameters)

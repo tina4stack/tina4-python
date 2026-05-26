@@ -284,7 +284,9 @@ class TestGetAPIHandlers:
     def test_all_handlers_callable(self):
         handlers = get_api_handlers()
         for path, (method, handler) in handlers.items():
-            assert method in ("GET", "POST")
+            # "*" is the any-method wildcard for REST resources where one
+            # handler covers GET/POST/PATCH (e.g. /__dev/api/threads).
+            assert method in ("GET", "POST", "*")
             assert callable(handler)
 
     def test_post_handlers(self):
@@ -310,9 +312,10 @@ class TestGetAPIHandlers:
         #          supervise/* proxies + /execute) + 5 (docs/search,
         #          docs/class, docs/method, docs/index,
         #          docs/.well-known.json — Live API RAG endpoints
-        #          per plan/v3/22-LIVE-API-RAG.md) = 72.
+        #          per plan/v3/22-LIVE-API-RAG.md) + 2 (/threads list
+        #          and /threads/* prefix for the thread sidebar) = 74.
         handlers = get_api_handlers()
-        assert len(handlers) == 72
+        assert len(handlers) == 74
 
     def test_tables_handler_registered(self):
         handlers = get_api_handlers()
