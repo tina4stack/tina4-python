@@ -139,7 +139,7 @@ All Tina4 apps use a `.env` file. Keys are identical across Python, PHP, Ruby, a
 
 ```env
 # Database
-DATABASE_URL=sqlite:///data/store.db
+TINA4_DATABASE_URL=sqlite:///data/store.db
 
 # Security
 SECRET=tina4-store-demo-secret-change-me
@@ -1521,7 +1521,7 @@ across all four frameworks — copy them directly.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `sqlite:///data/store.db` | Database connection string |
+| `TINA4_DATABASE_URL` | `sqlite:///data/store.db` | Database connection string |
 | `SECRET` | — | JWT signing secret (required) |
 | `TINA4_DEBUG` | `false` | Enable debug mode, error overlay, DevAdmin |
 | `TINA4_DEBUG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |

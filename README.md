@@ -176,7 +176,7 @@ Visit `http://localhost:7146/api/hello` -- routes are auto-discovered, no import
 Edit `.env`:
 
 ```bash
-DATABASE_URL=sqlite:///data/app.db
+TINA4_DATABASE_URL=sqlite:///data/app.db
 ```
 
 Create and run a migration:
@@ -663,7 +663,7 @@ Frond.clear_cache()
 
 ```bash
 SECRET=your-jwt-secret
-DATABASE_URL=sqlite:///data/app.db
+TINA4_DATABASE_URL=sqlite:///data/app.db
 TINA4_DEBUG=true                     # Enable dev toolbar, error overlay
 TINA4_LOG_LEVEL=ALL                  # ALL, DEBUG, INFO, WARNING, ERROR
 TINA4_LOCALE=en                      # en, fr, af, zh, ja, es

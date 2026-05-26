@@ -98,7 +98,7 @@ v3 uses standard URL format: `driver://host:port/database`.
 
 | v2 | v3 |
 |----|-----|
-| `DATABASE_PATH` | `DATABASE_URL` |
+| `DATABASE_PATH` | `TINA4_DATABASE_URL` |
 | `DATABASE_USERNAME` | `DATABASE_USERNAME` (unchanged) |
 | `DATABASE_PASSWORD` | `DATABASE_PASSWORD` (unchanged) |
 
@@ -108,7 +108,7 @@ v3 uses standard URL format: `driver://host:port/database`.
 # v2 — reads DATABASE_PATH
 db = Database(os.environ.get("DATABASE_PATH"))
 
-# v3 — reads DATABASE_URL automatically
+# v3 — reads TINA4_DATABASE_URL automatically
 db = Database()
 ```
 
@@ -333,7 +333,7 @@ queue.push({"action": "process"})
 |----|-----|-------|
 | `TINA4_DEBUG_LEVEL` | `TINA4_DEBUG` + `TINA4_LOG_LEVEL` | Split into two vars |
 | `TINA4_AUTO_COMMIT` | `TINA4_AUTOCOMMIT` | No underscore between AUTO and COMMIT |
-| `DATABASE_PATH` | `DATABASE_URL` | URL format, not colon-separated |
+| `DATABASE_PATH` | `TINA4_DATABASE_URL` | URL format, not colon-separated |
 | `SECRET` | `SECRET` | Unchanged |
 | `API_KEY` | `API_KEY` | Unchanged |
 | `TINA4_TOKEN_LIMIT` | `TINA4_TOKEN_EXPIRES_IN` | Renamed, value in minutes |
@@ -448,7 +448,7 @@ These did not exist in v2:
 
 3. **Update all imports.** Use the import table above. Search your project for `from tina4_python.Router`, `from tina4_python.Database`, `from tina4_python.ORM`, `from tina4_python.Template`, etc. Replace with the v3 paths.
 
-4. **Fix database connection strings.** Change `driver:host/port:schema` to `driver://host:port/database`. Update `DATABASE_PATH` to `DATABASE_URL` in `.env`.
+4. **Fix database connection strings.** Change `driver:host/port:schema` to `driver://host:port/database`. Update `DATABASE_PATH` to `TINA4_DATABASE_URL` in `.env`.
 
 5. **Update ORM binding.** Replace `orm(db)` with `orm_bind(db)`. Update field imports from `tina4_python.FieldTypes` to `tina4_python.orm`.
 
@@ -458,7 +458,7 @@ These did not exist in v2:
 
 8. **Migrate Queue code.** Remove `Config` objects. Set `TINA4_QUEUE_BACKEND` in `.env`. Replace `produce()` with `push()`. Replace `messages()` with `poll()`.
 
-9. **Update environment variables.** Replace `TINA4_DEBUG_LEVEL` with `TINA4_DEBUG=true` and `TINA4_LOG_LEVEL=ALL`. Replace `TINA4_AUTO_COMMIT` with `TINA4_AUTOCOMMIT`. Replace `DATABASE_PATH` with `DATABASE_URL`.
+9. **Update environment variables.** Replace `TINA4_DEBUG_LEVEL` with `TINA4_DEBUG=true` and `TINA4_LOG_LEVEL=ALL`. Replace `TINA4_AUTO_COMMIT` with `TINA4_AUTOCOMMIT`. Replace `DATABASE_PATH` with `TINA4_DATABASE_URL`.
 
 10. **Replace Debug with Log.** Change `Debug.info()`, `Debug.error()` to `Log.info()`, `Log.error()`. Import from `tina4_python.debug`.
 

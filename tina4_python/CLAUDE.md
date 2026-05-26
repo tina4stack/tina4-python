@@ -287,7 +287,7 @@ Queue(topic="tasks").push({"action": "send_email"})
     - Other methods: `.to_json()`, `.to_array()`, `.to_csv()`, `.to_paginate()`
 4. **fetch_one()**: Returns a plain dict (or None), NOT a DatabaseResult
 5. **Dict access**: All query results use dict access `row["column"]` not attribute access `row.column`
-6. **Connection strings**: v3 uses standard URL format: `driver://host:port/database` with separate `username` and `password` parameters. Example: `Database("firebird://localhost:3050//path/to/db", "SYSDBA", "masterkey")`. Environment variable: `DATABASE_URL`.
+6. **Connection strings**: v3 uses standard URL format: `driver://host:port/database` with separate `username` and `password` parameters. Example: `Database("firebird://localhost:3050//path/to/db", "SYSDBA", "masterkey")`. Environment variable: `TINA4_DATABASE_URL`.
 7. **Running the app**: `uv run python app.py <port> <name>` — port and name are CLI args handled by tina4_python
 8. **SCSS**: Files in `src/scss/` are auto-compiled to `src/public/css/` on startup
 12. **Background tasks**: Use `background(fn, interval)` from `tina4_python.core.server` — never use `threading.Thread` for periodic work. The `background()` function runs tasks cooperatively in the asyncio event loop with proper shutdown handling.
@@ -741,7 +741,7 @@ db = Database("postgresql://localhost:5432/mydb", "user", "password")     # Post
 db = Database("mysql://localhost:3306/mydb", "user", "password")          # MySQL
 db = Database("firebird://localhost:3050//path/to/db", "SYSDBA", "masterkey")  # Firebird
 db = Database("mssql://localhost:1433/mydb", "sa", "password")            # MSSQL
-db = Database()                                                           # Uses DATABASE_URL env var
+db = Database()                                                           # Uses TINA4_DATABASE_URL env var
 ```
 
 ### MongoDB support
@@ -1565,9 +1565,9 @@ TINA4_API_KEY=your-api-key        # Static bearer token for API auth (API_KEY fa
 TINA4_TOKEN_LIMIT=60              # Token lifetime in minutes (default: 60)
 
 # Database
-DATABASE_URL=sqlite:///app.db     # Connection URL (driver://host:port/database)
-DATABASE_USERNAME=                 # DB username (for PostgreSQL, MySQL, etc.)
-DATABASE_PASSWORD=                 # DB password
+TINA4_DATABASE_URL=sqlite:///app.db     # Connection URL (driver://host:port/database)
+TINA4_DATABASE_USERNAME=                 # DB username (for PostgreSQL, MySQL, etc.)
+TINA4_DATABASE_PASSWORD=                 # DB password
 
 # Framework
 TINA4_DEBUG=true                  # Enable dev mode (toolbar, live reload, error overlay)

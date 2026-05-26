@@ -258,7 +258,7 @@ def _console(args=None):
     from tina4_python.api import Api
     from tina4_python.core.events import on, emit
 
-    # Try to connect database from DATABASE_URL
+    # Try to connect database from TINA4_DATABASE_URL
     db = None
     db_url = os.environ.get("TINA4_DATABASE_URL")
     if db_url:
@@ -345,15 +345,17 @@ def _init(args):
             encoding="utf-8",
         )
 
-    # Create .env
+    # Create .env — every framework env var is TINA4_-prefixed since v3.12.
+    # The boot guard refuses to start with bare DATABASE_URL / SECRET set,
+    # so a fresh project MUST get the prefixed names.
     env_file = target / ".env"
     if not env_file.exists():
         env_file.write_text(
             "# Tina4 Configuration\n"
             "TINA4_DEBUG=true\n"
             "TINA4_LOG_LEVEL=ALL\n"
-            "DATABASE_URL=sqlite:///data/app.db\n"
-            'SECRET=change-me-in-production\n',
+            "TINA4_DATABASE_URL=sqlite:///data/app.db\n"
+            'TINA4_SECRET=change-me-in-production\n',
             encoding="utf-8",
         )
 
