@@ -419,6 +419,15 @@ def get_api_handlers() -> dict:
         # "*" method = handler switches on request.method itself.
         "/__dev/api/threads":   ("*", _api_threads),
         "/__dev/api/threads/*": ("*", _api_threads_sub),
+        # ── Customer feedback widget (Tier 1: intake-only) ──
+        # /__feedback/widget.js — bundle served at top-level so HTML
+        # pages can embed without a /__dev path (the widget is for
+        # whitelisted END USERS of the app, not developers).
+        # /__feedback/api/turn — one conversational turn; routes
+        # whitelist + rate-limit + sender-stamping then forwards
+        # to the Rust agent /feedback/intake.
+        "/__feedback/widget.js": ("GET",  _api_feedback_widget_js),
+        "/__feedback/api/turn":  ("POST", _api_feedback_turn),
         # Transparent pass-through proxy to the qwen ollama endpoint —
         # accepts the ollama-native `{model, messages, stream, options}`
         # body and forwards to TINA4_AI_URL unchanged. The SPA uses this
@@ -1422,6 +1431,218 @@ async def _api_ai_proxy(request, response):
     except Exception:
         # Non-JSON body (shouldn't happen from ollama) — best-effort text.
         return response(body.decode("utf-8", errors="replace"))
+
+
+# ── Customer feedback widget — server-side plumbing ─────────────────
+#
+# Tier 1 (intake-only): customer text never reaches a file-write code
+# path. Flow:
+#   1. Framework middleware injects <script src="/__feedback/widget.js">
+#      into HTML responses for whitelisted users.
+#   2. Widget POSTs to /__feedback/api/turn for each conversational turn.
+#   3. This handler verifies whitelist + rate-limit, stamps the user
+#      identity server-side (client cannot fake `sender`), then forwards
+#      to the Rust agent's /feedback/intake (which runs the "intake"
+#      agent — no tools, JSON-only output).
+#   4. Finalised tickets land in .tina4/chat/threads.json with
+#      kind:"feedback". Developer sees them in the dev admin sidebar.
+
+_FEEDBACK_RATE_LIMIT: dict[str, list[float]] = {}
+_FEEDBACK_RATE_WINDOW = 3600   # 1 hour
+_FEEDBACK_RATE_MAX = 5         # submissions/turns per user per hour
+
+
+def _feedback_enabled() -> bool:
+    """Hard master switch.
+
+    Both gates required for the widget to render or the API to accept
+    submissions:
+      - TINA4_ENABLE_FEEDBACK=true (explicit opt-in — off by default)
+      - TINA4_FEEDBACK_WHITELIST=... (non-empty list of users)
+
+    Splitting the toggle from the whitelist lets the developer leave
+    the whitelist intact while pausing the feature in production for
+    a release (set TINA4_ENABLE_FEEDBACK=false → widget vanishes
+    everywhere; whitelist comes back online with one env flip).
+    """
+    return os.environ.get("TINA4_ENABLE_FEEDBACK", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _feedback_whitelist() -> list[str]:
+    """Comma-separated emails / user IDs in env. Empty = no one allowed."""
+    if not _feedback_enabled():
+        return []  # master switch off — short-circuits everywhere
+    raw = os.environ.get("TINA4_FEEDBACK_WHITELIST", "").strip()
+    if not raw:
+        return []
+    return [e.strip().lower() for e in raw.split(",") if e.strip()]
+
+
+def _feedback_identify_user(request) -> str | None:
+    """Best-effort user identity from auth headers.
+
+    Priority:
+      1. JWT/Bearer token via Auth.authenticate_request — pulls
+         email/sub/user_id claim.
+      2. TINA4_FEEDBACK_DEV_USER env var override (LOCAL DEV ONLY —
+         lets the framework owner test the widget without a full
+         auth setup in the test project).
+    """
+    try:
+        from tina4_python.auth import Auth
+        payload = Auth.authenticate_request(request.headers)
+        if payload and isinstance(payload, dict):
+            for key in ("email", "sub", "user_id"):
+                v = payload.get(key)
+                if v:
+                    return str(v).strip().lower()
+    except Exception:
+        pass
+    dev_user = os.environ.get("TINA4_FEEDBACK_DEV_USER", "").strip()
+    if dev_user:
+        return dev_user.lower()
+    return None
+
+
+def _feedback_is_whitelisted(request) -> tuple[bool, str | None]:
+    """Returns (allowed, identity). Both halves must be true to act."""
+    wl = _feedback_whitelist()
+    if not wl:
+        return False, None  # feature off entirely
+    user = _feedback_identify_user(request)
+    if not user:
+        return False, None
+    return user in wl, user
+
+
+def _feedback_rate_limit_ok(user: str) -> bool:
+    """5 turns/hour per user. Prunes old timestamps lazily."""
+    now = time.time()
+    hits = [t for t in _FEEDBACK_RATE_LIMIT.get(user, [])
+            if now - t < _FEEDBACK_RATE_WINDOW]
+    if len(hits) >= _FEEDBACK_RATE_MAX:
+        _FEEDBACK_RATE_LIMIT[user] = hits
+        return False
+    hits.append(now)
+    _FEEDBACK_RATE_LIMIT[user] = hits
+    return True
+
+
+def inject_feedback_widget(request, html: bytes) -> bytes:
+    """Insert the widget <script> into HTML responses for whitelisted users.
+
+    Called from server.py right before the body is sent. No-op if:
+      - The request is for a /__dev or /__feedback path (developer
+        dashboard / widget assets — never inject the customer widget
+        on developer pages; the dev admin has its OWN chat trigger).
+      - TINA4_ENABLE_FEEDBACK + TINA4_FEEDBACK_WHITELIST not both set
+      - Requesting user isn't in the whitelist
+      - Response doesn't have a closing </body> tag (fragment, JSON, etc.)
+    Idempotent: a second call won't double-inject (looks for marker).
+    """
+    if not html:
+        return html
+    # The customer feedback widget is for END USERS of the shipped app —
+    # injecting on developer-only paths creates a confusing "two bubbles"
+    # UX where the dev chat trigger + customer feedback bubble sit on
+    # top of each other. Hard exclusion at the framework layer.
+    path = getattr(request, "path", "") or ""
+    if path.startswith("/__dev") or path.startswith("/__feedback"):
+        return html
+    allowed, _user = _feedback_is_whitelisted(request)
+    if not allowed:
+        return html
+    marker = b'data-tina4-feedback'
+    if marker in html:
+        return html  # already injected upstream
+    snippet = b'<script src="/__feedback/widget.js" data-tina4-feedback></script>'
+    lower = html.rfind(b'</body>')
+    if lower < 0:
+        return html
+    return html[:lower] + snippet + html[lower:]
+
+
+async def _api_feedback_turn(request, response):
+    """Proxy a single conversational turn to the Rust agent /feedback/intake.
+
+    Stamps `sender` server-side from the verified identity — client
+    cannot inject who they are. Rate-limited per user.
+    """
+    allowed, user = _feedback_is_whitelisted(request)
+    if not allowed:
+        return response({"error": "not authorised for feedback"}, 403)
+    if not _feedback_rate_limit_ok(user):
+        return response({
+            "error": "rate limit exceeded",
+            "hint": f"max {_FEEDBACK_RATE_MAX} turns per hour",
+        }, 429)
+
+    body = getattr(request, "body", None)
+    if not isinstance(body, dict):
+        return response({"error": "expected JSON body"}, 400)
+
+    forward_body = dict(body)
+    forward_body["sender"] = user  # server-stamped identity
+
+    import asyncio
+    import urllib.request, urllib.error
+    base = _supervisor_base_url()
+    payload = json.dumps(forward_body).encode()
+
+    def _do_request():
+        req = urllib.request.Request(
+            f"{base}/feedback/intake",
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        return urllib.request.urlopen(req, timeout=60)
+
+    try:
+        upstream = await asyncio.to_thread(_do_request)
+        raw = await asyncio.to_thread(upstream.read)
+        upstream.close()
+    except urllib.error.HTTPError as e:
+        err = e.read().decode() if e.fp else str(e)
+        try:
+            return response(json.loads(err), e.code)
+        except Exception:
+            return response({"error": err[:300]}, e.code)
+    except Exception as e:
+        return response({
+            "error": "agent unreachable",
+            "detail": str(e),
+        }, 502)
+
+    try:
+        return response(json.loads(raw))
+    except Exception:
+        return response(raw.decode("utf-8", errors="replace"))
+
+
+async def _api_feedback_widget_js(request, response):
+    """Serve the widget bundle.
+
+    Lives at tina4_python/public/__feedback/widget.js — built from the
+    tina4-feedback-widget source. Until that's wired we return a tiny
+    stub so the route is reachable; the real bundle ships in Task 24.
+
+    Cache-Control: no-cache, must-revalidate so browsers re-check the
+    bundle on every load. Without this an old cached bundle (e.g. one
+    that pre-dates the path-block guard against rendering on /__dev/)
+    can persist for days and keep painting the bubble on the dev admin
+    even after the server-side script-tag injection is fixed.
+    """
+    from pathlib import Path
+    js_path = Path(__file__).parent.parent / "public" / "__feedback" / "widget.js"
+    body = js_path.read_bytes() if js_path.exists() else b"console.warn('tina4-feedback-widget bundle not built yet');"
+    # Force the browser to revalidate the bundle every load — see docstring.
+    if hasattr(response, "header"):
+        response.header("cache-control", "no-cache, must-revalidate")
+        response.header("pragma", "no-cache")
+    return response(body, 200, "application/javascript")
 
 
 async def _api_threads(request, response):

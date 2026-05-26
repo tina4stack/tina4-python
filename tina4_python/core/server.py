@@ -991,6 +991,12 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Tina4 Dev Admin</title></head>
 <body><div id="app" data-framework="python" data-color="#3b82f6"></div>
 <script src="/js/tina4-dev-admin.min.js"></script></body></html>""")
+        # Never cache the dev admin shell — otherwise old HTML can
+        # keep loading stale widget references / outdated bundle URLs
+        # after we ship UX changes, leaving the user staring at
+        # phantoms that no longer exist server-side.
+        response.header("cache-control", "no-store, must-revalidate")
+        response.header("pragma", "no-cache")
     else:
         handlers = get_api_handlers()
         handler_info = handlers.get(request.path)
@@ -1038,6 +1044,9 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
                 # forward the agent server's text/event-stream live
                 # (instead of buffering the whole multi-agent run).
                 _resp.stream = response.stream
+                # Expose .header() so handlers can set custom headers
+                # (e.g. Cache-Control on the feedback widget bundle).
+                _resp.header = response.header
                 import inspect
                 _tsig = inspect.signature(handler_info[1])
                 _tpcount = len(_tsig.parameters)
@@ -1389,12 +1398,17 @@ async def handle(request: Request) -> Response:
         canonical = request.path.rstrip("/") or "/"
         return response.status(301).header("location", canonical)
 
-    # Dev admin — also catches /ai/api/chat (SPA's ollama proxy) and the
+    # Dev admin — also catches /ai/api/chat (SPA's ollama proxy), the
     # bare /ai /vision /embed /image /rag service-health probes that
-    # drive the "SERVICES ●●●●●" dots in the dev-admin UI.
+    # drive the "SERVICES ●●●●●" dots in the dev-admin UI, and the
+    # /__feedback/* routes used by the customer feedback widget. The
+    # feedback paths live OUTSIDE /__dev because the widget is for
+    # whitelisted END USERS of the shipped app — they shouldn't see
+    # any /__dev URL in their network tab.
     _dev_extra_paths = {"/ai/api/chat", "/ai", "/vision", "/embed", "/image", "/rag"}
     if _is_dev and (
         request.path.startswith("/__dev")
+        or request.path.startswith("/__feedback")
         or request.path in _dev_extra_paths
     ):
         return await _handle_dev_admin(request, response)
@@ -1525,6 +1539,22 @@ async def app(scope: dict, receive, send):
 
         await send({"type": "http.response.body", "body": b"", "more_body": False})
         return
+
+    # Customer feedback widget injection — adds <script src="/__feedback/widget.js">
+    # to HTML responses for whitelisted users. No-op if the feature is
+    # off (TINA4_FEEDBACK_WHITELIST empty) or the user isn't whitelisted
+    # or the body isn't HTML. Done BEFORE ETag/header build so the
+    # injected bytes are included in the ETag hash + Content-Length.
+    try:
+        if (
+            response.content
+            and isinstance(response.content, (bytes, bytearray))
+            and "text/html" in (response.content_type or "").lower()
+        ):
+            from tina4_python.dev_admin import inject_feedback_widget
+            response.content = inject_feedback_widget(request, bytes(response.content))
+    except Exception:
+        pass  # Injection is best-effort — never break the response.
 
     # ETag check — 304 Not Modified
     if_none_match = request.headers.get("if-none-match", "")

@@ -313,9 +313,11 @@ class TestGetAPIHandlers:
         #          docs/class, docs/method, docs/index,
         #          docs/.well-known.json — Live API RAG endpoints
         #          per plan/v3/22-LIVE-API-RAG.md) + 2 (/threads list
-        #          and /threads/* prefix for the thread sidebar) = 74.
+        #          and /threads/* prefix for the thread sidebar) + 2
+        #          (/__feedback/widget.js bundle + /__feedback/api/turn
+        #          customer-feedback intake) = 76.
         handlers = get_api_handlers()
-        assert len(handlers) == 74
+        assert len(handlers) == 76
 
     def test_tables_handler_registered(self):
         handlers = get_api_handlers()
