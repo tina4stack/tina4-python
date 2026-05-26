@@ -1168,20 +1168,32 @@ async def _api_service_rag(request, response):
 def _supervisor_base_url() -> str:
     """Return the URL of the co-located rust agent server, if any.
 
-    When ``tina4 serve`` is running it spawns a rust agent server on
-    127.0.0.1:<port+1000> (e.g. 9202 for Python/7202). We probe the
-    standard offset first, fall back to TINA4_SUPERVISOR_URL for
-    custom deployments.
+    Resolution order (first match wins):
+
+      1. `TINA4_SUPERVISOR_URL` — full URL for non-localhost deployments.
+      2. `TINA4_AGENT_PORT` — explicit port override.
+      3. `PORT + 2000` — auto-derived. `tina4 serve` exports the
+         framework's PORT into the child process AND spawns the agent
+         on `port + 2000` (main.rs::handle_serve). Reading PORT here
+         keeps both sides aligned automatically: Python on 7146 →
+         agent on 9146, Node on 7148 → agent on 9148, etc.
+      4. Hardcoded 9145 — matches `tina4 agent` standalone's default
+         (main.rs::handle_agent), for users running the agent without
+         going through `tina4 serve`.
     """
     explicit = os.environ.get("TINA4_SUPERVISOR_URL", "").rstrip("/")
     if explicit:
         return explicit
-    # Conventional port: framework port + 2000 (matches rust CLI default)
-    try:
-        port = int(os.environ.get("TINA4_PORT", "7202"))
-    except ValueError:
-        port = 7202
-    return f"http://127.0.0.1:{port + 2000}"
+
+    agent_port_str = os.environ.get("TINA4_AGENT_PORT", "").strip()
+    if agent_port_str.isdigit():
+        return f"http://127.0.0.1:{int(agent_port_str)}"
+
+    framework_port_str = os.environ.get("PORT", "").strip()
+    if framework_port_str.isdigit():
+        return f"http://127.0.0.1:{int(framework_port_str) + 2000}"
+
+    return "http://127.0.0.1:9145"
 
 
 async def _proxy_to_supervisor(request, response, downstream_path: str):
@@ -1232,11 +1244,12 @@ async def _proxy_to_supervisor(request, response, downstream_path: str):
             method=method,
             headers={"Content-Type": "application/json"},
         )
-        # /execute runs the agent (qwen + multi-step tool calls) — can
-        # take several minutes on large plans. Other supervise/* calls
-        # are metadata-only and return fast, so a generous shared timeout
-        # is cheaper than branching.
-        timeout = 600 if downstream_path == "/execute" else 30
+        # /execute and /chat run the multi-agent loop — supervisor +
+        # planner + coder, each a multi-second LLM call. Other
+        # supervise/* calls are metadata-only and return fast, so a
+        # generous shared timeout for the heavy ones is cheaper than
+        # branching on every endpoint.
+        timeout = 600 if downstream_path in ("/execute", "/chat") else 30
         with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read()
             upstream_ct = r.headers.get("Content-Type", "") or ""
@@ -1380,120 +1393,25 @@ async def _api_ai_proxy(request, response):
 
 
 async def _api_chat(request, response):
-    """Tina4 dev-admin chat — qwen coding LLM + tina4-rag context.
+    """Proxy dev-admin chat to the Rust agent server's /chat endpoint.
 
-    Pipeline, on every request:
+    The SPA (Chat.ts) POSTs `{message, settings, files?}` and expects an
+    SSE stream of `event: status / message / done` chunks. The Rust agent
+    runs the supervisor → planner → coder loop, calls the configured LLM
+    (Anthropic / OpenAI / Tina4 Cloud — driven by `ChatSettings` from
+    `.tina4/chat/settings.json` or the ANTHROPIC_API_KEY env-var
+    defaults), and streams progress back.
 
-    1. POST {TINA4_RAG_URL}/v1/search with the user's message → pulls
-       the top-K chunks from the tina4-book corpus (routing, ORM,
-       Frond, etc.). Skipped when TINA4_RAG_URL="" or the call fails
-       (RAG enriches, it doesn't block).
-    2. POST {TINA4_AI_URL}/api/chat with an ollama-style payload. The
-       system prompt embeds the RAG snippets so qwen answers with
-       first-party framework docs instead of training-data guesses.
+    Earlier versions of this endpoint called qwen on the Tina4 Cloud
+    directly and returned a single JSON blob, which broke the SPA's SSE
+    reader and bypassed every configured model setting. If you want the
+    bare qwen path it's still reachable at /ai/api/chat.
 
-    Environment variables (defaults point at the shared tina4 stack):
-
-        TINA4_AI_URL   = http://andrevanzuydam.com:11437/api/chat
-        TINA4_AI_MODEL = qwen2.5-coder:14b
-        TINA4_RAG_URL  = http://andrevanzuydam.com:11438
-        TINA4_RAG_TOPK = 4
-
-    Response shape: {reply, source, model, rag_hits}. `source` is
-    "tina4" on success, "error" on failure (with a human-readable
-    `reply` explaining what broke). No Anthropic / OpenAI fallback —
-    the Tina4 stack is the single source of truth.
+    When `tina4 agent` isn't running, _proxy_to_supervisor returns 503
+    with a helpful hint so the SPA can show a real error instead of
+    silently hanging.
     """
-    import urllib.request
-    import urllib.error
-
-    body = request.body if hasattr(request, "body") and request.body else {}
-    message = (body.get("message") or "").strip()
-    if not message:
-        return response({"error": "message required"}, 400)
-
-    ai_url = os.environ.get("TINA4_AI_URL", "http://andrevanzuydam.com:11437/api/chat")
-    ai_model = os.environ.get("TINA4_AI_MODEL", "qwen2.5-coder:14b")
-    rag_url = os.environ.get("TINA4_RAG_URL", "http://andrevanzuydam.com:11438")
-    rag_topk = int(os.environ.get("TINA4_RAG_TOPK", "4"))
-
-    # 1. RAG — best-effort context lookup.
-    rag_hits: list = []
-    rag_context = ""
-    if rag_url:
-        try:
-            rag_req = urllib.request.Request(
-                rag_url.rstrip("/") + "/v1/search",
-                data=json.dumps({"query": message, "top_k": rag_topk}).encode(),
-                headers={"Content-Type": "application/json"},
-            )
-            with urllib.request.urlopen(rag_req, timeout=10) as r:
-                rag_result = json.loads(r.read())
-                rag_hits = rag_result.get("hits", []) or []
-        except Exception:
-            rag_hits = []  # enrichment, not a blocker
-        if rag_hits:
-            parts = []
-            for h in rag_hits:
-                meta = h.get("metadata") or {}
-                title = meta.get("title") or meta.get("source") or "tina4-book"
-                parts.append(f"### {title}\n{h.get('text', '').strip()}")
-            rag_context = "\n\n---\n\n".join(parts)
-
-    system_prompt = (
-        "You are Tina4, the coding assistant embedded in the Tina4 "
-        "framework dev admin. Answer using the framework documentation "
-        "snippets below when relevant. Be concise and practical; prefer "
-        "code examples to prose."
-    )
-    if rag_context:
-        system_prompt += (
-            "\n\n--- tina4-book context ---\n"
-            + rag_context
-            + "\n--- end context ---"
-        )
-
-    # 2. qwen coder via ollama /api/chat.
-    try:
-        ai_req = urllib.request.Request(
-            ai_url,
-            data=json.dumps({
-                "model": ai_model,
-                "stream": False,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": message},
-                ],
-            }).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(ai_req, timeout=90) as r:
-            result = json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode() if e.fp else str(e)
-        return response({
-            "reply": f"AI backend error {e.code}: {err_body[:200]}",
-            "source": "error",
-            "model": ai_model,
-            "rag_hits": len(rag_hits),
-        }, 502)
-    except Exception as e:
-        return response({
-            "reply": f"AI backend unreachable: {e}",
-            "source": "error",
-            "model": ai_model,
-            "rag_hits": len(rag_hits),
-        }, 502)
-
-    reply = (result.get("message") or {}).get("content") \
-        or result.get("response") \
-        or "No response"
-    return response({
-        "reply": reply,
-        "source": "tina4",
-        "model": ai_model,
-        "rag_hits": len(rag_hits),
-    })
+    return await _proxy_to_supervisor(request, response, "/chat")
 
 
 async def _api_tool(request, response):
