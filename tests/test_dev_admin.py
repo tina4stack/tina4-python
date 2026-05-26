@@ -453,20 +453,28 @@ class TestAPIHandlers:
         assert "error" in result
 
     @pytest.mark.asyncio
-    async def test_chat_backend_unreachable_returns_error_source(self, mock_req, mock_resp, monkeypatch):
-        """When the qwen/RAG stack is unreachable, /chat returns source=error
-        with a clear message. There is no local / fallback provider — Tina4 is
-        the only supported backend (Anthropic/OpenAI branches were removed)."""
-        # Point at an unroutable address so urlopen fails fast.
-        monkeypatch.setenv("TINA4_AI_URL", "http://127.0.0.1:1/api/chat")
-        monkeypatch.setenv("TINA4_RAG_URL", "")
+    async def test_chat_supervisor_unreachable_returns_503(self, mock_req, mock_resp, monkeypatch):
+        """When the Rust agent isn't running, /chat returns the standard
+        ``supervisor unavailable`` 503 shape — same as every other
+        supervise/* endpoint — instead of the legacy qwen-direct error.
+
+        Rationale: /chat was rewired to proxy through the Rust agent so
+        the supervisor → planner → coder loop runs against the
+        configured LLM (Anthropic / OpenAI / Tina4 Cloud via
+        ChatSettings). The old qwen-direct path bypassed every model
+        setting and broke the SPA's SSE reader; it's still reachable
+        at /ai/api/chat for users who want it.
+        """
+        # Point the proxy at an unroutable address so urlopen fails fast.
+        monkeypatch.setenv("TINA4_SUPERVISOR_URL", "http://127.0.0.1:1")
         from tina4_python.dev_admin import _api_chat
         mock_req.body = {"message": "ping"}
         result = await _api_chat(mock_req, mock_resp)
-        assert result.get("source") == "error"
-        assert "reply" in result
-        assert result.get("model") == "qwen2.5-coder:14b"
-        assert result.get("rag_hits") == 0
+        assert result.get("error") == "supervisor unavailable"
+        assert "hint" in result
+        # The hint mentions the recovery action so the SPA can show
+        # something actionable instead of an empty error.
+        assert "tina4 serve" in result["hint"] or "tina4 agent" in result["hint"] or "TINA4_SUPERVISOR_URL" in result["hint"]
 
     @pytest.mark.asyncio
     async def test_websockets_handler(self, mock_req, mock_resp):

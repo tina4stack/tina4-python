@@ -9,11 +9,64 @@ Security:
     - File operations sandboxed to project directory
     - database_execute available on localhost only
     - TINA4_MCP_REMOTE=true to enable on remote servers (opt-in)
+
+Defensive writes:
+    `file_write` and `file_patch` back up the prior content to
+    `.tina4/backups/<flat-path>.<ts>.bak` before overwriting, refuse
+    suspicious truncations (>200B file shrinking to <30% of its size),
+    and log every attempt to `.tina4/agent.log`. The agent's "applying a
+    small patch went and messed up my whole file" scenario is the
+    canonical symptom this guards against.
 """
 import os
 import json
 import re
+import datetime
 from pathlib import Path
+
+
+def _agent_log(project_root: Path, category: str, message: str) -> None:
+    """Append a structured line to `.tina4/agent.log` AND echo to stderr.
+
+    Mirrors the Rust `agent_log` helper so a single log file captures
+    every agent action regardless of which side of the stack performed
+    it. Cheap — never blocks the caller on I/O failure.
+    """
+    try:
+        log_dir = project_root / ".tina4"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "agent.log"
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"{ts} [{category}] {message}\n")
+    except Exception:
+        pass  # logging must never fail the actual call
+    import sys
+    print(f"  [agent {category}] {message}", file=sys.stderr)
+
+
+def _agent_backup(project_root: Path, target: Path) -> str | None:
+    """Copy `target` into `.tina4/backups/` with a timestamped name.
+
+    Returns the relative backup path on success, None on failure.
+    """
+    try:
+        if not target.is_file():
+            return None
+        backup_dir = project_root / ".tina4" / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            rel = target.relative_to(project_root)
+        except ValueError:
+            rel = Path(target.name)
+        safe = str(rel).replace("/", "__").replace("\\", "__")
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
+        backup_path = backup_dir / f"{safe}.{ts}.bak"
+        backup_path.write_bytes(target.read_bytes())
+        return f".tina4/backups/{backup_path.name}"
+    except Exception as e:
+        _agent_log(project_root, "write.backup_failed", f"{target}: {e}")
+        return None
 
 
 def register_dev_tools(server):
@@ -163,19 +216,67 @@ def register_dev_tools(server):
 
     def file_write(path: str, content: str) -> dict:
         """Write or update a project file with FULL file content.
-        Warning: overwrites entirely — use file_patch for partial edits."""
+        Warning: overwrites entirely — use file_patch for partial edits.
+
+        Safety mechanisms before writing:
+          1. **Backup** — if the file exists, copy its prior content to
+             `.tina4/backups/<flat-path>.<ts>.bak`.
+          2. **Truncation guard** — refuse to overwrite a >200B file
+             with content under 30% of its size (almost always an LLM
+             truncation). Returns `{"error": ...}` with the original
+             file untouched.
+          3. **Audit log** — every attempt lands in `.tina4/agent.log`
+             with old/new size + line counts.
+        """
         p = _safe_path(path)
-        existed = p.exists()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content, encoding="utf-8")
-        rel = str(p.relative_to(project_root))
+        old_bytes = p.read_bytes() if p.is_file() else b""
+        old_size = len(old_bytes)
+        old_lines = old_bytes.count(b"\n")
+        new_bytes = content.encode()
+        new_size = len(new_bytes)
+        new_lines = new_bytes.count(b"\n")
+        rel = str(p.relative_to(project_root)) if p.is_absolute() else path
+
+        # Truncation guard — refuse suspicious shrinkage on non-trivial files.
+        if old_size > 200 and (new_size * 100) < (old_size * 30):
+            msg = (
+                f"REFUSED {rel} (would shrink {old_size} → {new_size} bytes / "
+                f"{old_lines} → {new_lines} lines, looks truncated)"
+            )
+            _agent_log(project_root, "write.refused", msg)
+            return {"error": msg, "refused": True, "old_bytes": old_size, "new_bytes": new_size}
+
+        # Backup before overwrite.
+        backup_rel = _agent_backup(project_root, p) if old_size > 0 else None
+        existed = old_size > 0
+
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content, encoding="utf-8")
+        except Exception as e:
+            _agent_log(project_root, "write.failed", f"{rel}: {e}")
+            raise
+
         _record_plan_action("patched" if existed else "created", rel)
-        return {"written": rel, "bytes": len(content.encode())}
+        _agent_log(project_root, "write.ok", (
+            f"{rel} ({old_size}B/{old_lines}L → {new_size}B/{new_lines}L, "
+            f"backup: {backup_rel or '(no prior file)'})"
+        ))
+        result = {"written": rel, "bytes": new_size}
+        if backup_rel:
+            result["backup"] = backup_rel
+        return result
 
     def file_patch(path: str, old_string: str, new_string: str, count: int = 1) -> dict:
         """Targeted edit — replace `old_string` with `new_string` in a project file.
         `old_string` must appear exactly `count` times (default 1) or the edit is
-        rejected. Prefer this over file_write for small changes."""
+        rejected. Prefer this over file_write for small changes.
+
+        Same defensive layer as `file_write`: backup before write + audit
+        log. The truncation guard isn't needed here because the replace
+        operation can't shrink the file by more than the length of
+        `old_string` — it's bounded by definition.
+        """
         p = _safe_path(path)
         if not p.exists() or not p.is_file():
             return {"error": f"File not found: {path}"}
@@ -189,14 +290,33 @@ def register_dev_tools(server):
                 "Expand old_string to make it unique, or set count explicitly.",
             }
         updated = original.replace(old_string, new_string, count)
-        p.write_text(updated, encoding="utf-8")
         rel = str(p.relative_to(project_root))
+
+        # Backup before overwrite — same path as file_write so recovery
+        # is uniform regardless of which tool touched the file.
+        backup_rel = _agent_backup(project_root, p)
+
+        try:
+            p.write_text(updated, encoding="utf-8")
+        except Exception as e:
+            _agent_log(project_root, "patch.failed", f"{rel}: {e}")
+            raise
+
         _record_plan_action("patched", rel)
-        return {
+        old_size = len(original.encode())
+        new_size = len(updated.encode())
+        _agent_log(project_root, "patch.ok", (
+            f"{rel} (replaced {count}× old_string, {old_size}B → {new_size}B, "
+            f"backup: {backup_rel or '(none)'})"
+        ))
+        result = {
             "patched": rel,
             "replacements": count,
-            "bytes": len(updated.encode()),
+            "bytes": new_size,
         }
+        if backup_rel:
+            result["backup"] = backup_rel
+        return result
 
     def file_list(path: str = ".") -> list:
         """List files in a directory. Path is relative to project root."""
