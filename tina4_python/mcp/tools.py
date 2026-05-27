@@ -156,9 +156,49 @@ def register_dev_tools(server):
                 return f"path segment {seg!r} contains disallowed characters — stick to [A-Za-z0-9._-]"
         return None
 
+    def _normalize_coder_path(rel_path: str) -> str:
+        """Rewrite bare top-level Tina4-conventional directories into
+        their `src/<dir>/` canonical form. The framework's auto-discovery
+        only scans `src/`, so a file at `templates/foo.twig` is dead
+        weight — the framework never loads it. The coder agent drifts
+        off the convention under "fix it" load, so we catch the slip
+        here and log it.
+
+        Mirrors normalize_coder_path() in the Rust agent — keep them
+        in sync if the rules ever change.
+
+        Returns the normalized path, or the original if no rewrite
+        applied. Logs the rewrite to .tina4/agent.log so the user
+        (and the supervisor on the next turn) can see what landed
+        where vs what the coder asked for.
+        """
+        # Already canonical, or living at project root by design.
+        passthrough_prefixes = ("src/", "migrations/", "plan/", "tests/",
+                                "test/", ".tina4/")
+        passthrough_files = {"app.py", "app.ts", "app.rb", "index.php",
+                             "composer.json", "package.json", "Gemfile",
+                             "pyproject.toml", "requirements.txt",
+                             ".env", ".env.example"}
+        if any(rel_path.startswith(p) for p in passthrough_prefixes):
+            return rel_path
+        if rel_path in passthrough_files:
+            return rel_path
+        # Bare top-level Tina4-conventional dirs → src/<dir>/
+        for d in ("routes", "orm", "templates", "seeds", "controllers",
+                  "models", "middleware"):
+            if rel_path.startswith(f"{d}/"):
+                rewritten = f"src/{rel_path}"
+                _agent_log(project_root, "write.path_normalized",
+                           f"{rel_path} → {rewritten}")
+                return rewritten
+        return rel_path
+
     def _safe_path(rel_path: str) -> Path:
         """Resolve a path and ensure it's within the project directory
-        AND looks like a real filesystem path (not prose)."""
+        AND looks like a real filesystem path (not prose). Callers
+        should run `_normalize_coder_path` FIRST so the prose check
+        sees the final path; otherwise rel_path inside the caller's
+        log lines won't match where the file actually lands."""
         err = _looks_like_prose(rel_path)
         if err:
             raise ValueError(f"Invalid path {rel_path!r}: {err}")
@@ -284,6 +324,11 @@ def register_dev_tools(server):
           3. **Audit log** — every attempt lands in `.tina4/agent.log`
              with old/new size + line counts.
         """
+        # Coder-path normalization — rewrite bare top-level Tina4
+        # directories (templates/, routes/, orm/, ...) into their src/
+        # canonical form before we resolve. See _normalize_coder_path
+        # for the full reasoning + rule list.
+        path = _normalize_coder_path(path)
         p = _safe_path(path)
         old_bytes = p.read_bytes() if p.is_file() else b""
         old_size = len(old_bytes)
@@ -341,6 +386,7 @@ def register_dev_tools(server):
         operation can't shrink the file by more than the length of
         `old_string` — it's bounded by definition.
         """
+        path = _normalize_coder_path(path)
         p = _safe_path(path)
         if not p.exists() or not p.is_file():
             return {"error": f"File not found: {path}"}
