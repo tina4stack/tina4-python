@@ -45,6 +45,62 @@ def _agent_log(project_root: Path, category: str, message: str) -> None:
     print(f"  [agent {category}] {message}", file=sys.stderr)
 
 
+def _verify_python_import(project_root: Path, rel_path: str) -> str | None:
+    """Try importing a freshly-written Python module to catch hallucinated
+    framework APIs (NameError, ImportError, AttributeError) BEFORE the
+    next request hits the broken handler.
+
+    Returns None on success, or the captured error string on failure.
+    Only checks files under src/ that end in .py (skip __init__.py
+    and tests — they have their own loading patterns). Uses the
+    project's .venv/bin/python3 with cwd=project_root so the import
+    sees the same module layout as the running server would.
+
+    Why this matters: the AI coder repeatedly invents framework APIs
+    that don't exist (`from tina4_python.orm import db`, `model.Model`,
+    `template()` without import, etc). Each broken write becomes a
+    500 error the user only discovers by hitting the URL. Running
+    `python3 -c "import foo"` right after write catches it inline and
+    surfaces the real Python error in the file_write response — the
+    LLM sees the error on its next turn and can retry with context.
+    """
+    if not rel_path.endswith(".py"):
+        return None
+    if not rel_path.startswith("src/"):
+        return None
+    name = Path(rel_path).name
+    if name in ("__init__.py", "conftest.py") or name.startswith("test_"):
+        return None
+    # Convert "src/routes/foo.py" → "src.routes.foo"
+    module = rel_path[:-3].replace("/", ".")
+    venv_py = project_root / ".venv" / "bin" / "python3"
+    if not venv_py.exists():
+        return None  # no venv → can't verify reliably; skip silently
+    import subprocess
+    try:
+        proc = subprocess.run(
+            [str(venv_py), "-c", f"import {module}"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return f"verification subprocess failed: {e}"
+    if proc.returncode == 0:
+        return None
+    # Pull the LAST meaningful traceback line — that's where the
+    # actual error is (e.g. "ImportError: cannot import name 'db'").
+    err = (proc.stderr or "").strip().splitlines()
+    if not err:
+        return f"import failed (exit {proc.returncode}, no stderr)"
+    # Find the final "ErrorType: message" line.
+    for line in reversed(err):
+        if ":" in line and not line.startswith(" ") and not line.startswith("\t"):
+            return line.strip()
+    return err[-1].strip()
+
+
 def _agent_backup(project_root: Path, target: Path) -> str | None:
     """Copy `target` into `.tina4/backups/` with a timestamped name.
 
@@ -265,6 +321,14 @@ def register_dev_tools(server):
         result = {"written": rel, "bytes": new_size}
         if backup_rel:
             result["backup"] = backup_rel
+        # Post-write import verification — catches hallucinated
+        # framework APIs (NameError / ImportError / AttributeError)
+        # at write time, surfacing the error in the response so the
+        # LLM sees it on its next turn and can fix the file.
+        import_err = _verify_python_import(project_root, rel)
+        if import_err:
+            result["import_error"] = import_err
+            _agent_log(project_root, "write.import_failed", f"{rel}: {import_err}")
         return result
 
     def file_patch(path: str, old_string: str, new_string: str, count: int = 1) -> dict:
@@ -316,6 +380,11 @@ def register_dev_tools(server):
         }
         if backup_rel:
             result["backup"] = backup_rel
+        # Same post-write verification as file_write (see comment there).
+        import_err = _verify_python_import(project_root, rel)
+        if import_err:
+            result["import_error"] = import_err
+            _agent_log(project_root, "patch.import_failed", f"{rel}: {import_err}")
         return result
 
     def file_list(path: str = ".") -> list:

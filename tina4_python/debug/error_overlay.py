@@ -79,9 +79,31 @@ def _format_source_block(filename: str, lineno: int) -> str:
     )
 
 
-def _format_frame(frame: traceback.FrameSummary) -> str:
-    """Render one stack frame."""
+def _format_frame(frame: traceback.FrameSummary, captured_at: float = 0.0) -> str:
+    """Render one stack frame.
+
+    When the file was modified AFTER `captured_at`, append a
+    "(file modified since)" badge so a stale browser-cached overlay
+    can't lie about what the source looks like now. The AI coder
+    often rewrites files in place between page loads, leaving the
+    overlay's source view showing different code than what raised
+    the error.
+    """
     source = _format_source_block(frame.filename, frame.lineno) if frame.filename and frame.lineno else ""
+    stale_badge = ""
+    if captured_at and frame.filename:
+        try:
+            mtime = os.path.getmtime(frame.filename)
+            if mtime > captured_at + 0.5:  # 0.5s margin for fs noise
+                from datetime import datetime, timezone
+                mtime_iso = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%H:%M:%S")
+                stale_badge = (
+                    f' <span style="background:{_PEACH};color:{_BG};padding:1px 8px;'
+                    f'border-radius:3px;font-size:11px;font-weight:700;margin-left:6px;">'
+                    f'FILE MODIFIED @ {mtime_iso} — source may not match what failed</span>'
+                )
+        except OSError:
+            pass
     return (
         f'<div style="margin-bottom:16px;">'
         f'<div style="margin-bottom:4px;">'
@@ -90,6 +112,7 @@ def _format_frame(frame: traceback.FrameSummary) -> str:
         f'<span style="color:{_YELLOW};">{frame.lineno}</span>'
         f'<span style="color:{_SUBTEXT};"> in </span>'
         f'<span style="color:{_GREEN};">{_escape(frame.name)}</span>'
+        f"{stale_badge}"
         f"</div>"
         f"{source}"
         f"</div>"
@@ -131,14 +154,23 @@ def render_error_overlay(exception: BaseException, request: Any = None) -> str:
     Returns:
         A complete HTML page string.
     """
+    import time as _time
+    captured_at = _time.time()
+    captured_iso = _time.strftime("%H:%M:%S UTC", _time.gmtime(captured_at))
+
     exc_type = type(exception).__qualname__
     exc_msg = str(exception)
     tb = traceback.extract_tb(exception.__traceback__)
 
     # ── Stack trace ──
+    # Each frame compares its source file's mtime to captured_at and
+    # flags itself if the file has been modified since — protects
+    # against the "browser cached an old overlay, then the AI rewrote
+    # the file" confusion where displayed source no longer matches
+    # what actually raised the error.
     frames_html = ""
     for frame in reversed(tb):
-        frames_html += _format_frame(frame)
+        frames_html += _format_frame(frame, captured_at=captured_at)
 
     # ── Request info ──
     request_pairs: list[tuple[str, str]] = []
@@ -192,6 +224,7 @@ body{{background:{_BG};color:{_TEXT};font-family:-apple-system,BlinkMacSystemFon
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
       <span style="background:{_RED};color:{_BG};padding:4px 12px;border-radius:4px;font-weight:700;font-size:13px;text-transform:uppercase;">Error</span>
       <span style="color:{_SUBTEXT};font-size:14px;">Tina4 Debug Overlay</span>
+      <span style="color:{_SUBTEXT};font-size:12px;margin-left:auto;font-family:'SF Mono',Menlo,monospace;">captured {captured_iso}</span>
     </div>
     <h1 style="color:{_RED};font-size:28px;font-weight:700;margin-bottom:8px;">{_escape(exc_type)}</h1>
     <p style="color:{_TEXT};font-size:18px;font-family:'SF Mono','Fira Code','Consolas',monospace;background:{_SURFACE};padding:12px 16px;border-radius:6px;border-left:4px solid {_RED};">{_escape(exc_msg)}</p>

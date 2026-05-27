@@ -144,21 +144,48 @@ def _render(plan: dict) -> str:
 
 
 def list_plans() -> list:
-    """All plan files at the root of plan/ (excludes done/)."""
+    """All plan files — merged from `plan/` (user-curated) and
+    `.tina4/plans/` (where the Rust supervisor's planner writes).
+
+    Two directories exist because of a historic split: the framework
+    treats `plan/` as the canonical project location, but the Rust
+    agent's planner writes to `.tina4/plans/` (alongside other
+    AI-state artefacts like chat history). Until those are unified
+    we read both so plans created either way are discoverable. Dedup
+    by filename when a plan exists in both.
+    """
+    from pathlib import Path
     d = _plan_dir()
     current = current_name() or ""
+    # Both directories — order matters for dedup (user-curated first).
+    dirs = [d]
+    rust_plans = _project_root() / ".tina4" / "plans"
+    if rust_plans.is_dir():
+        dirs.append(rust_plans)
+
+    seen: set[str] = set()
     out: list = []
-    for p in sorted(d.glob("*.md")):
-        parsed = _parse(p.read_text(encoding="utf-8", errors="replace"))
-        total = len(parsed["steps"])
-        done = sum(1 for s in parsed["steps"] if s["done"])
-        out.append({
-            "name": p.name,
-            "title": parsed["title"] or p.stem,
-            "steps_total": total,
-            "steps_done": done,
-            "is_current": p.name == current,
-        })
+    for plan_dir in dirs:
+        for p in sorted(plan_dir.glob("*.md")):
+            if p.name in seen:
+                continue  # plan/ wins over .tina4/plans/ on name clash
+            seen.add(p.name)
+            parsed = _parse(p.read_text(encoding="utf-8", errors="replace"))
+            total = len(parsed["steps"])
+            done = sum(1 for s in parsed["steps"] if s["done"])
+            out.append({
+                "name": p.name,
+                "title": parsed["title"] or p.stem,
+                "steps_total": total,
+                "steps_done": done,
+                "is_current": p.name == current,
+                # Relative path from project root — lets the SPA open
+                # the right file in the editor regardless of which dir
+                # the plan came from.
+                "path": str(p.relative_to(_project_root())),
+            })
+    # Newest first by name (filenames start with unix timestamps).
+    out.sort(key=lambda x: x["name"], reverse=True)
     return out
 
 
