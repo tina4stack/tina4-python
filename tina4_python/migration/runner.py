@@ -75,83 +75,204 @@ def _execute_python_migration(db, filepath: Path, direction: str) -> None:
     getattr(instance, direction)(db)
 
 
-def _ensure_tracking_table(db):
+def _create_v3_table(db) -> None:
+    """Create the v3 tina4_migration table from scratch."""
+    if _is_firebird(db):
+        # Firebird: no AUTOINCREMENT, no TEXT type, use generator for IDs
+        try:
+            db.execute("CREATE GENERATOR GEN_TINA4_MIGRATION_ID")
+            db.commit()
+        except Exception:
+            pass  # Generator may already exist
+        db.execute("""
+            CREATE TABLE tina4_migration (
+                id INTEGER NOT NULL PRIMARY KEY,
+                migration_id VARCHAR(500) NOT NULL UNIQUE,
+                description VARCHAR(500),
+                batch INTEGER DEFAULT 1 NOT NULL,
+                executed_at VARCHAR(50) NOT NULL,
+                passed INTEGER DEFAULT 1 NOT NULL
+            )
+        """)
+    else:
+        db.execute("""
+            CREATE TABLE tina4_migration (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                migration_id TEXT NOT NULL UNIQUE,
+                description TEXT,
+                batch INTEGER NOT NULL DEFAULT 1,
+                executed_at TEXT NOT NULL,
+                passed INTEGER NOT NULL DEFAULT 1
+            )
+        """)
+    db.commit()
+
+
+def _column_names(db) -> set[str]:
+    """Return the lowercased set of column names on tina4_migration."""
+    try:
+        return {
+            (c.get("name") or "").lower()
+            for c in db.get_columns("tina4_migration")
+        }
+    except Exception:
+        return set()
+
+
+def _build_stem_map(migration_folder: str | None) -> list[str]:
+    """Scan the migrations folder and return a list of file stems.
+
+    Used by the v2→v3 backfill to match a v2 row's `description` to the
+    actual file on disk, so the resulting `migration_id` matches what
+    `migrate()` will compare against next.
+    """
+    if not migration_folder:
+        return []
+    folder = Path(migration_folder)
+    if not folder.is_dir():
+        return []
+    stems: list[str] = []
+    for pattern in ("*.sql", "*.py"):
+        for f in folder.glob(pattern):
+            if f.name.endswith(".down.sql"):
+                continue
+            stems.append(f.stem)
+    return stems
+
+
+def _resolve_migration_id(description: str, stems: list[str]) -> str:
+    """Find the file stem that corresponds to a v2 description, or fall back.
+
+    Match strategy, in order:
+      1. Exact stem match.
+      2. A stem ending in "_" + description (e.g. "000001_create_users"
+         resolves a v2 description of "create_users").
+      3. A stem containing description as a substring.
+      4. Keep the description verbatim. The row still appears in
+         getAppliedMigrations() but migrate() may re-run if a real file
+         exists with a different name.
+    """
+    if description in stems:
+        return description
+    for stem in stems:
+        if stem.endswith("_" + description):
+            return stem
+    for stem in stems:
+        if description in stem:
+            return stem
+    return description
+
+
+def _upgrade_v2_to_v3(db, migration_folder: str | None) -> None:
+    """In-place upgrade of a Python-v2 tina4_migration table to v3.
+
+    1. ALTER TABLE ADD the v3 columns (migration_id, batch, executed_at)
+       alongside the existing v2 columns. v2 columns stay in place so a
+       manual rollback path remains open; they are simply ignored from
+       now on.
+    2. Backfill every v2 row's migration_id by matching `description`
+       against the on-disk file stems. Falls back to the description
+       verbatim when no file matches. All legacy rows get batch=1 and
+       executed_at='legacy'.
+    """
+    logger.warning(
+        "Detected legacy v2 tina4_migration schema — performing in-place upgrade to v3"
+    )
+
+    cols = _column_names(db)
+
+    if "migration_id" not in cols:
+        col_type = "VARCHAR(500)" if _is_firebird(db) else "TEXT"
+        try:
+            db.execute(f"ALTER TABLE tina4_migration ADD migration_id {col_type}")
+            db.commit()
+        except Exception as e:
+            logger.debug(f"v2→v3 upgrade: ALTER ADD migration_id skipped: {e}")
+
+    if "batch" not in cols:
+        try:
+            db.execute("ALTER TABLE tina4_migration ADD batch INTEGER DEFAULT 1")
+            db.commit()
+        except Exception as e:
+            logger.debug(f"v2→v3 upgrade: ALTER ADD batch skipped: {e}")
+
+    if "executed_at" not in cols:
+        try:
+            col_type = "VARCHAR(50)" if _is_firebird(db) else "TEXT"
+            db.execute(
+                f"ALTER TABLE tina4_migration ADD executed_at {col_type} DEFAULT 'legacy'"
+            )
+            db.commit()
+        except Exception as e:
+            logger.debug(f"v2→v3 upgrade: ALTER ADD executed_at skipped: {e}")
+
+    # Backfill — best-effort match descriptions to files on disk
+    stems = _build_stem_map(migration_folder)
+
+    try:
+        rows = db.fetch(
+            "SELECT description, passed FROM tina4_migration WHERE migration_id IS NULL",
+            limit=100000,
+        ).records
+    except Exception as e:
+        logger.error(f"v2→v3 upgrade: failed to read legacy rows: {e}")
+        return
+
+    backfilled = 0
+    failed_in_v2 = 0
+
+    for row in rows:
+        desc = (row.get("description") or "").strip()
+        if not desc:
+            continue
+
+        migration_id = _resolve_migration_id(desc, stems)
+
+        try:
+            db.execute(
+                "UPDATE tina4_migration SET migration_id = ?, batch = 1 "
+                "WHERE description = ? AND migration_id IS NULL",
+                [migration_id, desc],
+            )
+            db.commit()
+            backfilled += 1
+            if int(row.get("passed") or 0) == 0:
+                failed_in_v2 += 1
+        except Exception as e:
+            logger.error(f"v2→v3 upgrade: failed to backfill {desc!r}: {e}")
+
+    note = (
+        f" ({failed_in_v2} were marked passed=0 in v2 — review manually)"
+        if failed_in_v2
+        else ""
+    )
+    logger.info(
+        f"v2→v3 tina4_migration upgrade complete: {backfilled} rows backfilled{note}"
+    )
+
+
+def _ensure_tracking_table(db, migration_folder: str | None = None):
     """Create or upgrade the migration tracking table.
 
     Handles v2→v3 upgrade: v2 tables have `description` but no `migration_id`.
-    When detected, adds the missing column and backfills from `description`.
+    When detected, adds the missing v3 columns and backfills `migration_id`
+    by matching `description` against the on-disk file stems so subsequent
+    `migrate()` calls do not re-apply already-applied migrations.
+
+    See tests/test_issue_115_v2_upgrade.py for the contract.
     """
     if not db.table_exists("tina4_migration"):
-        if _is_firebird(db):
-            # Firebird: no AUTOINCREMENT, no TEXT type, use generator for IDs
-            try:
-                db.execute("CREATE GENERATOR GEN_TINA4_MIGRATION_ID")
-                db.commit()
-            except Exception:
-                pass  # Generator may already exist
-            db.execute("""
-                CREATE TABLE tina4_migration (
-                    id INTEGER NOT NULL PRIMARY KEY,
-                    migration_id VARCHAR(500) NOT NULL UNIQUE,
-                    description VARCHAR(500),
-                    batch INTEGER DEFAULT 1 NOT NULL,
-                    executed_at VARCHAR(50) NOT NULL,
-                    passed INTEGER DEFAULT 1 NOT NULL
-                )
-            """)
-        else:
-            db.execute("""
-                CREATE TABLE tina4_migration (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    migration_id TEXT NOT NULL UNIQUE,
-                    description TEXT,
-                    batch INTEGER NOT NULL DEFAULT 1,
-                    executed_at TEXT NOT NULL,
-                    passed INTEGER NOT NULL DEFAULT 1
-                )
-            """)
-        db.commit()
+        _create_v3_table(db)
         return
 
-    # Check if this is a v2 table (has description but no migration_id column)
-    try:
-        db.fetch_one("SELECT migration_id FROM tina4_migration WHERE 1=0")
-    except Exception:
-        # migration_id column doesn't exist — v2 schema, upgrade it
-        try:
-            col_type = "VARCHAR(500)" if _is_firebird(db) else "TEXT"
-            db.execute(f"ALTER TABLE tina4_migration ADD migration_id {col_type}")
-            db.commit()
-        except Exception:
-            pass  # Column may already exist on some engines
-
-        # Backfill migration_id from description (v2 used description as the identifier)
-        try:
-            db.execute("UPDATE tina4_migration SET migration_id = description WHERE migration_id IS NULL")
-            db.commit()
-        except Exception:
-            pass
-
-        # Add batch column if missing (v2 didn't have it)
-        try:
-            db.fetch_one("SELECT batch FROM tina4_migration WHERE 1=0")
-        except Exception:
-            try:
-                db.execute("ALTER TABLE tina4_migration ADD batch INTEGER DEFAULT 1")
-                db.commit()
-            except Exception:
-                pass
-
-        # Add executed_at column if missing
-        try:
-            db.fetch_one("SELECT executed_at FROM tina4_migration WHERE 1=0")
-        except Exception:
-            try:
-                col_type = "VARCHAR(50)" if _is_firebird(db) else "TEXT"
-                db.execute(f"ALTER TABLE tina4_migration ADD executed_at {col_type} DEFAULT ''")
-                db.commit()
-            except Exception:
-                pass
+    cols = _column_names(db)
+    has_v3_shape = (
+        "migration_id" in cols
+        and "batch" in cols
+        and "executed_at" in cols
+    )
+    if not has_v3_shape:
+        _upgrade_v2_to_v3(db, migration_folder)
 
 
 def _get_executed(db) -> set[str]:
@@ -290,7 +411,7 @@ def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
     Returns list of executed migration filenames.
     Use Migration class for the public API.
     """
-    _ensure_tracking_table(db)
+    _ensure_tracking_table(db, migration_folder)
 
     folder = Path(migration_folder)
     if not folder.is_dir():
@@ -364,7 +485,7 @@ def _rollback(db, migration_folder: str = "migrations", delimiter: str = ";") ->
     Returns list of rolled-back migration filenames.
     Use Migration class for the public API.
     """
-    _ensure_tracking_table(db)
+    _ensure_tracking_table(db, migration_folder)
 
     # Get last batch
     row = db.fetch_one("SELECT MAX(batch) as max_batch FROM tina4_migration WHERE passed = 1")
@@ -499,6 +620,10 @@ class Migration:
         self._db = db
         self._dir = migrations_dir
         self._delim = delimiter
+        # Eagerly create or upgrade the tracking table. Matches PHP/Ruby/Node
+        # parity and triggers the v2→v3 auto-upgrade on construction so a
+        # newly-instantiated Migration immediately reflects v3 shape.
+        _ensure_tracking_table(self._db, self._dir)
 
     def migrate(self) -> list[str]:
         """Run all pending migrations. Returns list of applied filenames."""
@@ -549,7 +674,7 @@ class Migration:
             batch: Batch number this migration belongs to.
             passed: 1 if the migration succeeded (default), 0 if it failed.
         """
-        _ensure_tracking_table(self._db)
+        _ensure_tracking_table(self._db, self._dir)
         now = datetime.now(timezone.utc).isoformat()
         desc = re.sub(r"^\d+_", "", name, count=1).replace("_", " ")
         if _is_firebird(self._db):
@@ -584,7 +709,7 @@ def _status(db, migration_folder: str = "migrations") -> dict:
     a dict with 'migration_id', 'description', and (for completed)
     'executed_at' and 'batch'.
     """
-    _ensure_tracking_table(db)
+    _ensure_tracking_table(db, migration_folder)
 
     folder = Path(migration_folder)
     if not folder.is_dir():
