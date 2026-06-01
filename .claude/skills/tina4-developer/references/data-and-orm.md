@@ -392,7 +392,7 @@ firebird://user:password@localhost:3050/mydb
 
 ```python
 # Python
-from tina4 import Database
+from tina4_python import Database
 db = Database.from_env()  # reads TINA4_DATABASE_URL
 ```
 ```php
@@ -426,7 +426,7 @@ tina4 seed                           # Runs all seeds
 
 Quick seeding with fake data:
 ```python
-from tina4 import FakeData, seed_orm
+from tina4_python import FakeData, seed_orm
 
 fake = FakeData()
 fake.name()     # "Alice Johnson"

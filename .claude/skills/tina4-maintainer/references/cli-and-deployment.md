@@ -86,11 +86,11 @@ Request ID auto-injected into all log entries for tracing.
 ### Key Variables
 ```env
 SECRET=your-jwt-secret
-DATABASE_NAME=sqlite3:data/app.db
+TINA4_DATABASE_URL=sqlite3:data/app.db
 TINA4_DEBUG=true
 TINA4_DEBUG_LEVEL=DEBUG
-TINA4_LANGUAGE=en
-TINA4_SESSION_HANDLER=file
+TINA4_LOCALE=en
+TINA4_SESSION_BACKEND=file
 SWAGGER_TITLE=My API
 API_KEY=optional-key
 ```

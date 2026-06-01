@@ -420,7 +420,7 @@ request.session.set("user_id", 42)
 user_id = request.session.get("user_id")
 ```
 
-Backends: file (default), Redis, Valkey, MongoDB, database. Set via `TINA4_SESSION_HANDLER` in `.env`.
+Backends: file (default), Redis, Valkey, MongoDB, database. Set via `TINA4_SESSION_BACKEND` in `.env`.
 
 ### Queues
 
@@ -667,7 +667,7 @@ TINA4_DATABASE_URL=sqlite:///data/app.db
 TINA4_DEBUG=true                     # Enable dev toolbar, error overlay
 TINA4_LOG_LEVEL=ALL                  # ALL, DEBUG, INFO, WARNING, ERROR
 TINA4_LOCALE=en                      # en, fr, af, zh, ja, es
-TINA4_SESSION_HANDLER=SessionFileHandler
+TINA4_SESSION_BACKEND=SessionFileHandler
 SWAGGER_TITLE=My API
 ```
 

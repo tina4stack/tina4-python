@@ -283,11 +283,11 @@ All Tina4 apps use a `.env` file. The keys are identical across all four languag
 
 ```env
 SECRET=your-jwt-secret-here
-DATABASE_NAME=sqlite3:data/app.db
+TINA4_DATABASE_URL=sqlite3:data/app.db
 TINA4_DEBUG=true
 TINA4_DEBUG_LEVEL=DEBUG
-TINA4_LANGUAGE=en
-TINA4_SESSION_HANDLER=file
+TINA4_LOCALE=en
+TINA4_SESSION_BACKEND=file
 SWAGGER_TITLE=My API
 ```
 

@@ -298,7 +298,7 @@ session.cookie_header(name="tina4_session") -> str  # Set-Cookie header value
 session.gc()                                # Garbage collection
 ```
 
-Backends: file (default), redis, valkey, mongodb, database. Set via `TINA4_SESSION_HANDLER` env var.
+Backends: file (default), redis, valkey, mongodb, database. Set via `TINA4_SESSION_BACKEND` env var.
 
 ### Request extras
 
@@ -538,7 +538,7 @@ async def products(request, response):
     return response(expensive_query())
 
 # Per-route TTL override via @cached decorator
-@cached(True, max_age=120)
+@cached(max_age=120)
 @get("/api/slow")
 async def slow(request, response):
     return response(very_slow_query())

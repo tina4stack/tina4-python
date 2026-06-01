@@ -498,7 +498,7 @@ TINA4_TOKEN_LIMIT is used to set the session time, default 60 minutes
 
 ### Session Backends
 
-Set `TINA4_SESSION_HANDLER` to choose a backend:
+Set `TINA4_SESSION_BACKEND` to choose a backend:
 
 | Handler | Backend | Required package |
 |---------|---------|-----------------|
@@ -510,7 +510,7 @@ Set `TINA4_SESSION_HANDLER` to choose a backend:
 #### MongoDB session env vars
 
 ```bash
-TINA4_SESSION_HANDLER=SessionMongoHandler
+TINA4_SESSION_BACKEND=SessionMongoHandler
 TINA4_SESSION_MONGO_HOST=localhost        # default
 TINA4_SESSION_MONGO_PORT=27017            # default
 TINA4_SESSION_MONGO_URI=                  # full URI (overrides host/port)
@@ -1411,7 +1411,7 @@ async def products(request, response):
     return response(expensive_query())
 
 # Per-route TTL override via @cached decorator
-@cached(True, max_age=120)
+@cached(max_age=120)
 @get("/api/slow")
 async def slow(request, response):
     return response(very_slow_query())
@@ -1578,7 +1578,7 @@ TINA4_OVERRIDE_CLIENT=false       # Set to true to allow running without tina4 C
 HOST_NAME=localhost:7145
 
 # Sessions
-TINA4_SESSION_HANDLER=SessionFileHandler  # SessionFileHandler, SessionRedisHandler, SessionValkeyHandler, SessionMongoHandler
+TINA4_SESSION_BACKEND=SessionFileHandler  # SessionFileHandler, SessionRedisHandler, SessionValkeyHandler, SessionMongoHandler
 TINA4_SESSION_SAMESITE=Lax               # SameSite attribute for session cookies (default: Lax)
 
 # Swagger/OpenAPI

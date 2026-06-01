@@ -113,7 +113,7 @@ Every Tina4 feature, where it's used, and why.
 | 18 | **REST API** | Product/order CRUD | Mobile app + third-party integration | `src/routes/api/products.py` |
 | 19 | **Swagger** | API documentation | Auto-generated OpenAPI docs | `@description`, `@tags` decorators |
 | 20 | **Auto-CRUD** | Admin product/category mgmt | Zero-code CRUD endpoints | `app.py` → `AutoCrud.register()` |
-| 21 | **Caching** | Product catalog pages | Fast page loads for hot data | `@cached(True, max_age=120)` |
+| 21 | **Caching** | Product catalog pages | Fast page loads for hot data | `@cached(max_age=120)` |
 | 22 | **GraphQL** | Flexible product queries | Filter by category, price, stock | `src/routes/api/graphql.py` |
 | 23 | **WSDL/SOAP** | B2B order placement | Legacy POS/supplier integration | `src/routes/api/wsdl.py` |
 | 24 | **WebSocket** | Order status tracking | Real-time "Preparing→Shipped→Delivered" | `src/routes/api/ws.py` |
@@ -147,10 +147,10 @@ TINA4_DEBUG=true
 TINA4_DEBUG_LEVEL=DEBUG
 
 # i18n
-TINA4_LANGUAGE=en
+TINA4_LOCALE=en
 
 # Sessions
-TINA4_SESSION_HANDLER=file
+TINA4_SESSION_BACKEND=file
 
 # Swagger
 SWAGGER_TITLE=Tina4 Store API
@@ -448,7 +448,7 @@ Every page extends a master layout. Tina4CSS and tina4-js are built-in — no CD
 from tina4_python.core.router import get, cached
 from src.orm.product import Product
 
-@cached(True, max_age=120)
+@cached(max_age=120)
 @get("/products")
 async def product_list(request, response):
     page = int(request.query.get("page", 1))
@@ -710,7 +710,7 @@ from tina4_python.swagger import description, tags, example
 from src.orm.product import Product
 
 @noauth()
-@cached(True, max_age=120)
+@cached(max_age=120)
 @description("List all active products with pagination")
 @tags("Products")
 @example({"records": [{"id": 1, "name": "Widget", "price": 29.99}], "total": 50})
@@ -1525,8 +1525,8 @@ across all four frameworks — copy them directly.
 | `SECRET` | — | JWT signing secret (required) |
 | `TINA4_DEBUG` | `false` | Enable debug mode, error overlay, DevAdmin |
 | `TINA4_DEBUG_LEVEL` | `INFO` | Log level (DEBUG, INFO, WARNING, ERROR) |
-| `TINA4_LANGUAGE` | `en` | Default locale |
-| `TINA4_SESSION_HANDLER` | `file` | Session backend (file, redis, database) |
+| `TINA4_LOCALE` | `en` | Default locale |
+| `TINA4_SESSION_BACKEND` | `file` | Session backend (file, redis, database) |
 | `SWAGGER_TITLE` | — | Swagger UI title |
 | `SWAGGER_DESCRIPTION` | — | Swagger UI description |
 | `TINA4_MAIL_HOST` | — | SMTP host |

@@ -6,7 +6,7 @@ Drop a file in `src/routes/` and it's auto-discovered. No registration needed.
 
 ### Python
 ```python
-from tina4 import get, post, put, delete
+from tina4_python import get, post, put, delete
 
 @get("/hello")
 async def hello(request, response):
@@ -124,7 +124,7 @@ Apply authentication, logging, or other cross-cutting concerns:
 
 ### Python
 ```python
-from tina4 import middleware
+from tina4_python import middleware
 
 class AuthCheck:
     @staticmethod
