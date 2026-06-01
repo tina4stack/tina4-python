@@ -105,9 +105,14 @@ class Api:
         """HTTP DELETE request."""
         return self._request("DELETE", self._url(path), body)
 
-    def send_request(self, method: str, path: str = "", body=None,
+    def send(self, method: str, path: str = "", body=None,
              content_type: str = "application/json") -> dict:
-        """Generic request method."""
+        """Generic request method — pick HTTP verb at call time.
+
+        Renamed from ``send_request`` in 3.13.0 for parity with the
+        documentation and conciseness (``api.send("PATCH", ...)`` reads
+        cleaner than ``api.send_request("PATCH", ...)``).
+        """
         return self._request(method.upper(), self._url(path), body, content_type)
 
     def _url(self, path: str) -> str:

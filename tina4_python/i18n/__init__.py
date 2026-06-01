@@ -4,7 +4,7 @@ Simple key-based translations loaded from JSON files.
 
     from tina4_python.i18n import I18n
 
-    i18n = I18n(locale_dir="src/locales", default_locale="en")
+    i18n = I18n(locale="en", path="src/locales")
     _ = i18n.t
     _("greeting")  # "Hello" or "Bonjour" depending on locale
 """
@@ -20,11 +20,14 @@ class I18n:
     Format: {"key": "translated value", "nested.key": "value"}
     """
 
-    def __init__(self, locale_dir: str = None, default_locale: str = None):
+    def __init__(self, locale: str = None, path: str = None,
+                 # Legacy kwargs (3.12.x) — accepted but the docs use the
+                 # shorter names. Renamed in 3.13.0 per the parity audit.
+                 locale_dir: str = None, default_locale: str = None):
         self._locale_dir = Path(
-            locale_dir or os.environ.get("TINA4_LOCALE_DIR", "src/locales")
+            path or locale_dir or os.environ.get("TINA4_LOCALE_DIR", "src/locales")
         )
-        self._default_locale = default_locale or os.environ.get(
+        self._default_locale = locale or default_locale or os.environ.get(
             "TINA4_LOCALE", "en"
         )
         self._current_locale = self._default_locale

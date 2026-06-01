@@ -399,9 +399,9 @@ def _init(args):
         )
 
     # AI context
-    from tina4_python.ai import install_all
+    from tina4_python.ai import install_context
     if "--ai" in args:
-        created = install_all(str(target))
+        created = install_context(str(target))
         if created:
             print("\nAI context installed for all supported tools:")
             for f in created:
@@ -602,10 +602,10 @@ def _build(args):
 
 def _ai(args):
     """Install AI coding assistant context files."""
-    from tina4_python.ai import show_menu, install_selected, install_all
+    from tina4_python.ai import show_menu, install_selected, install_context
 
     if args and args[0].lower() == "all":
-        install_all(".")
+        install_context(".")
     else:
         selection = show_menu(".")
         if selection:

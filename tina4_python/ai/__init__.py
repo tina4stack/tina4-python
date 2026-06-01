@@ -1,9 +1,14 @@
-# Tina4 AI — Install AI coding assistant context files.
+# Tina4 AI — Detect and install AI coding assistant context files.
 """
-Simple menu-driven installer for AI tool context files.
-The user picks which tools they use, we install the appropriate files.
+Detect which AI tools are present in a project and install Tina4-aware
+context files so any assistant understands the framework.
 
-    from tina4_python.ai import show_menu, install_selected
+    from tina4_python.ai import detect_ai, install_context, status_report
+
+    tools = detect_ai(".")          # → [{"name": "claude-code", "installed": True, ...}, ...]
+    install_context(".")             # install for all known tools
+    install_context(".", tools=["claude-code", "cursor"])
+    print(status_report("."))        # human-readable summary
 """
 import os
 import shutil
@@ -27,6 +32,47 @@ AI_TOOLS = [
 def is_installed(root: str, tool: dict) -> bool:
     """Check if a tool's context file already exists."""
     return (Path(root).resolve() / tool["context_file"]).exists()
+
+
+# ── Detection API (docs-friendly names) ────────────────────────────────────
+
+
+def detect_ai(root: str = ".") -> list[dict]:
+    """Detect which AI coding tools are installed in ``root``.
+
+    Returns a list of tool dicts, one per known AI tool, with an
+    ``installed`` boolean added. The list mirrors ``AI_TOOLS`` order.
+
+        from tina4_python.ai import detect_ai
+        tools = detect_ai(".")
+        installed = [t for t in tools if t["installed"]]
+    """
+    return [{**t, "installed": is_installed(root, t)} for t in AI_TOOLS]
+
+
+def detect_ai_names(root: str = ".") -> list[str]:
+    """Return only the names of detected (installed) AI tools.
+
+        names = detect_ai_names(".")   # → ["claude-code", "cursor"]
+    """
+    return [t["name"] for t in AI_TOOLS if is_installed(root, t)]
+
+
+def status_report(root: str = ".") -> str:
+    """Human-readable summary of AI-tool installation state in ``root``.
+
+    Returns a multi-line string suitable for printing — lists each tool
+    along with installed/not-installed and the path of the context file.
+    """
+    root = str(Path(root).resolve())
+    lines = [f"AI tool status — {root}", ""]
+    for tool in AI_TOOLS:
+        marker = "✓ installed" if is_installed(root, tool) else "  not present"
+        lines.append(f"  {marker}  {tool['description']:<24s} → {tool['context_file']}")
+    installed_count = sum(1 for t in AI_TOOLS if is_installed(root, t))
+    lines.append("")
+    lines.append(f"  {installed_count}/{len(AI_TOOLS)} tools have Tina4 context.")
+    return "\n".join(lines)
 
 
 def show_menu(root: str = ".") -> str:
@@ -89,9 +135,30 @@ def install_selected(root: str, selection: str) -> list[str]:
     return created
 
 
-def install_all(root: str = ".") -> list[str]:
-    """Install context for all AI tools (non-interactive)."""
-    return install_selected(root, "all")
+def install_context(root: str = ".", tools: "list[str] | None" = None) -> list[str]:
+    """Install Tina4 context files for AI tools (non-interactive).
+
+    Args:
+        root: Project root directory.
+        tools: Optional list of tool names. When omitted, installs for all
+               known AI tools.
+
+    Returns a list of relative paths to the files that were created.
+
+        install_context(".")                          # all tools
+        install_context(".", tools=["claude-code"])   # just one
+    """
+    if tools is None:
+        selection = "all"
+    else:
+        # Translate names → indices for install_selected's CSV input
+        index_map = {t["name"]: str(i + 1) for i, t in enumerate(AI_TOOLS)}
+        try:
+            selection = ",".join(index_map[name] for name in tools)
+        except KeyError as e:
+            known = ", ".join(t["name"] for t in AI_TOOLS)
+            raise ValueError(f"Unknown AI tool: {e!s}. Known: {known}") from e
+    return install_selected(root, selection)
 
 
 def _install_for_tool(root: Path, tool: dict, context: str) -> list[str]:

@@ -5,7 +5,7 @@ from tina4_python.ai import (
     AI_TOOLS,
     is_installed,
     install_selected,
-    install_all,
+    install_context,
     generate_context,
 )
 
@@ -70,7 +70,7 @@ class TestInstallSelected:
         assert (tmp_path / "CLAUDE.md").exists()
         assert (tmp_path / ".cursorules").exists()
 
-    def test_install_all_selection(self, tmp_path):
+    def test_install_context_selection(self, tmp_path):
         install_selected(str(tmp_path), "all")
         assert (tmp_path / "CLAUDE.md").exists()
         assert (tmp_path / ".cursorules").exists()
@@ -105,7 +105,7 @@ class TestInstallSelected:
 
 class TestInstallAll:
     def test_installs_all_context_files(self, tmp_path):
-        install_all(str(tmp_path))
+        install_context(str(tmp_path))
         assert (tmp_path / "CLAUDE.md").exists()
         assert (tmp_path / ".cursorules").exists()
         assert (tmp_path / ".windsurfrules").exists()
@@ -115,12 +115,12 @@ class TestInstallAll:
         assert (tmp_path / ".github" / "copilot-instructions.md").exists()
 
     def test_returns_list(self, tmp_path):
-        result = install_all(str(tmp_path))
+        result = install_context(str(tmp_path))
         assert isinstance(result, list)
         assert len(result) >= len(AI_TOOLS)
 
     def test_creates_subdirectories(self, tmp_path):
-        install_all(str(tmp_path))
+        install_context(str(tmp_path))
         assert (tmp_path / ".claude").exists()
         assert (tmp_path / ".github").exists()
 

@@ -62,8 +62,14 @@ class Auth:
         """
         self.secret = secret or os.environ.get("TINA4_SECRET", "tina4-default-secret")
         self.algorithm = algorithm
+        # JWT expiry env var:
+        # - TINA4_TOKEN_EXPIRES_IN (preferred — matches docs and the
+        #   form-token expiry env var used by Frond)
+        # - TINA4_TOKEN_LIMIT (legacy — accepted for backward compat)
+        # Constructor arg wins over both env vars.
         self.expires_in = expires_in or int(
-            os.environ.get("TINA4_TOKEN_LIMIT", "60")
+            os.environ.get("TINA4_TOKEN_EXPIRES_IN")
+            or os.environ.get("TINA4_TOKEN_LIMIT", "60")
         )
 
     # ── JWT ────────────────────────────────────────────────────────

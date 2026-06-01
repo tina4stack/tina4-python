@@ -215,7 +215,7 @@ class Queue:
             self.topic = old_topic
             self._backend = _resolve_backend(old_topic, None, self.max_retries)
 
-    def consume(self, topic: str = None, id: str = None, poll_interval: float = 1.0,
+    def consume(self, topic: str = None, job_id: str = None, poll_interval: float = 1.0,
                 iterations: int = 0, batch_size: int = 1):
         """Consume jobs from a topic using a long-running generator.
 
@@ -237,13 +237,15 @@ class Queue:
                 process(job)
 
             # Consume a specific job by ID (single yield, no polling):
-            for job in queue.consume("emails", id="abc-123"):
+            for job in queue.consume("emails", job_id="abc-123"):
                 process(job)
                 job.complete()
 
         Args:
             topic: Topic/queue name (defaults to constructor topic)
-            id: Optional job ID — only yield this specific job
+            job_id: Optional job ID — only yield this specific job. Renamed from
+                ``id`` in 3.13.0 to stop shadowing the ``id`` builtin and to
+                match the documented kwarg name.
             poll_interval: Seconds to sleep when queue is empty (default 1.0)
             iterations: Max number of jobs to consume (0 = unlimited, default 0)
         """
@@ -251,9 +253,9 @@ class Queue:
 
         topic = topic or self.topic
 
-        if id is not None:
+        if job_id is not None:
             # Consume a specific job by ID — single yield, no polling
-            job = self.pop_by_id(id)
+            job = self.pop_by_id(job_id)
             if job is not None:
                 yield job
             return

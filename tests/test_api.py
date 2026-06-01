@@ -123,7 +123,8 @@ class TestMethodSignatures:
 
     def test_send_method_exists(self):
         api = Api()
-        assert callable(api.send_request)
+        # Renamed from send_request → send in 3.13.0
+        assert callable(api.send)
 
 
 class TestRequestConstruction:
@@ -230,7 +231,7 @@ class TestRequestConstruction:
         mock_urlopen.return_value = mock_resp
 
         api = Api("https://api.example.com")
-        api.send_request("OPTIONS", "/resource")
+        api.send("OPTIONS", "/resource")
 
         req = mock_urlopen.call_args[0][0]
         assert req.get_method() == "OPTIONS"
