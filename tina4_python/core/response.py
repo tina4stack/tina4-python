@@ -87,17 +87,25 @@ class Response:
         self._is_streaming: bool = False
         self._stream_source = None
 
-    def __call__(self, data=None, status_code: int = 200, content_type: str = None) -> "Response":
+    def __call__(self, data=None, status_code: int = 200, content_type: str = None,
+                 headers: dict | None = None) -> "Response":
         """Smart callable — auto-detects content type from data.
 
         Usage:
-            return response({"key": "value"})              # JSON
-            return response({"ok": True}, HTTP_CREATED)     # JSON with status
-            return response("<h1>Hello</h1>")               # HTML
-            return response("plain text", HTTP_OK)          # Plain text
-            return response(data, HTTP_OK, APPLICATION_JSON)  # Explicit
+            return response({"key": "value"})                       # JSON
+            return response({"ok": True}, HTTP_CREATED)              # JSON with status
+            return response("<h1>Hello</h1>")                        # HTML
+            return response("plain text", HTTP_OK)                   # Plain text
+            return response(data, HTTP_OK, APPLICATION_JSON)         # Explicit
+            return response(data, headers={"X-Tenant": "acme"})      # One-shot headers
         """
         self.status_code = status_code
+
+        # Optional one-shot headers — equivalent to chaining .header(k, v)
+        # for each entry, but lets call sites stay on a single expression.
+        if headers:
+            for k, v in headers.items():
+                self._headers.append((k, v))
 
         if content_type:
             # Explicit content type provided
@@ -149,15 +157,48 @@ class Response:
         """Add a response header (chainable). Alias for header()."""
         return self.header(name, value)
 
-    def cookie(self, name: str, value: str, path: str = "/",
-               max_age: int = 3600, http_only: bool = True,
-               secure: bool = False, same_site: str = "Lax") -> "Response":
-        """Set a cookie (chainable)."""
-        parts = [f"{name}={value}", f"Path={path}", f"Max-Age={max_age}",
-                 f"SameSite={same_site}"]
-        if http_only:
+    def cookie(self, name: str, value: str, options=None, *,
+               path: str = None, max_age: int = None, http_only: bool = None,
+               secure: bool = None, same_site: str = None) -> "Response":
+        """Set a cookie (chainable). Two equivalent forms:
+
+            # Kwarg form (original)
+            response.cookie("session", token, max_age=3600, http_only=True)
+
+            # Dict-options form (when config comes from a settings object)
+            COOKIE_OPTS = {"max_age": 3600, "http_only": True, "secure": True}
+            response.cookie("session", token, COOKIE_OPTS)
+
+        When ``options`` is a dict, its values become the defaults; any
+        explicit kwarg passed afterwards overrides individual entries.
+        """
+        # Defaults
+        _path = "/"
+        _max_age = 3600
+        _http_only = True
+        _secure = False
+        _same_site = "Lax"
+
+        # Dict-options form
+        if isinstance(options, dict):
+            _path      = options.get("path", _path)
+            _max_age   = options.get("max_age", _max_age)
+            _http_only = options.get("http_only", _http_only)
+            _secure    = options.get("secure", _secure)
+            _same_site = options.get("same_site", _same_site)
+
+        # Explicit kwargs win over dict
+        if path      is not None: _path = path
+        if max_age   is not None: _max_age = max_age
+        if http_only is not None: _http_only = http_only
+        if secure    is not None: _secure = secure
+        if same_site is not None: _same_site = same_site
+
+        parts = [f"{name}={value}", f"Path={_path}", f"Max-Age={_max_age}",
+                 f"SameSite={_same_site}"]
+        if _http_only:
             parts.append("HttpOnly")
-        if secure:
+        if _secure:
             parts.append("Secure")
         self._cookies.append("; ".join(parts))
         return self
@@ -252,19 +293,28 @@ class Response:
             )
         return self
 
-    def render(self, template: str, data: dict = None) -> "Response":
+    def render(self, template: str, data: dict = None, status_code: int = None) -> "Response":
         """Render a Frond/Twig template with data.
 
         Uses the global Frond engine (registered via set_frond()) so that
         custom filters and globals are available in all templates.
         Falls back to framework templates if not found in user dir.
+
+        The optional ``status_code`` lets error-page handlers render the
+        page and set the response status in one call::
+
+            return response.render("errors/404.twig", {}, 404)
+            return response.render("errors/500.twig", {"err": str(e)}, 500)
         """
         engine = get_frond()
 
         # Try user templates first (the global engine's directory)
         try:
             html = engine.render(template, data or {})
-            return self.html(html)
+            rendered = self.html(html)
+            if status_code is not None:
+                rendered.status_code = status_code
+            return rendered
         except FileNotFoundError:
             pass
         except Exception as e:
@@ -275,7 +325,10 @@ class Response:
         if fw_engine is not None:
             try:
                 html = fw_engine.render(template, data or {})
-                return self.html(html)
+                rendered = self.html(html)
+                if status_code is not None:
+                    rendered.status_code = status_code
+                return rendered
             except FileNotFoundError:
                 pass
             except Exception as e:

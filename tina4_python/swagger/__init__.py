@@ -21,18 +21,46 @@ import functools
 # ── Decorators ─────────────────────────────────────────────────
 # These attach metadata to route handlers for Swagger generation.
 
-def description(text: str):
-    """Add a description to a route handler."""
+def description(text: str = "", detail: str = "", params: dict | None = None,
+                query: dict | None = None):
+    """Add a description, optional detail body, and parameter docs to a route.
+
+    Backward-compatible: ``@description("Short summary")`` still works.
+
+    The expanded form lets docs attach richer metadata in one decorator
+    instead of stacking three:
+
+        @description(
+            "Create a new user",
+            detail="Validates email + password strength before insert.",
+            params={"id": "URL path — user id"},
+            query={"include_inactive": "bool — include soft-deleted"},
+        )
+    """
     def decorator(fn):
         fn._swagger_description = text
+        if detail:
+            fn._swagger_detail = detail
+        if params:
+            fn._swagger_params = params
+        if query:
+            fn._swagger_query = query
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             return fn(*args, **kwargs)
         wrapper._swagger_description = text
+        if detail:
+            wrapper._swagger_detail = detail
+        if params:
+            wrapper._swagger_params = params
+        if query:
+            wrapper._swagger_query = query
         # Copy other swagger attrs
         for attr in ("_swagger_tags", "_swagger_example", "_swagger_example_response",
-                      "_swagger_params", "_swagger_summary", "_swagger_deprecated"):
-            if hasattr(fn, attr):
+                      "_swagger_params", "_swagger_query", "_swagger_detail",
+                      "_swagger_summary", "_swagger_deprecated"):
+            if hasattr(fn, attr) and not hasattr(wrapper, attr):
                 setattr(wrapper, attr, getattr(fn, attr))
         return wrapper
     return decorator
@@ -54,8 +82,16 @@ def summary(text: str):
     return decorator
 
 
-def tags(tag_list: list[str]):
-    """Add tags to a route handler."""
+def tags(tag_list):
+    """Add tags to a route handler.
+
+    Accepts a list of strings ``@tags(["users", "admin"])`` OR a single
+    string ``@tags("users")`` for the common one-tag case.
+    """
+    # Single-string form — docs and many existing call sites use this
+    if isinstance(tag_list, str):
+        tag_list = [tag_list]
+
     def decorator(fn):
         fn._swagger_tags = tag_list
         @functools.wraps(fn)
@@ -63,7 +99,8 @@ def tags(tag_list: list[str]):
             return fn(*args, **kwargs)
         wrapper._swagger_tags = tag_list
         for attr in ("_swagger_description", "_swagger_example", "_swagger_example_response",
-                      "_swagger_params", "_swagger_summary", "_swagger_deprecated"):
+                      "_swagger_params", "_swagger_query", "_swagger_detail",
+                      "_swagger_summary", "_swagger_deprecated"):
             if hasattr(fn, attr):
                 setattr(wrapper, attr, getattr(fn, attr))
         return wrapper
@@ -86,17 +123,43 @@ def example(data: dict | list):
     return decorator
 
 
-def example_response(data: dict | list):
-    """Add a response body example."""
+def example_response(status_or_data, data=None):
+    """Add a response body example.
+
+    Two forms, both accepted:
+
+        @example_response({"id": 1, "name": "Alice"})         # status defaults to 200
+        @example_response(201, {"id": 1, "name": "Alice"})    # explicit status
+
+    When two args are passed, the first is the HTTP status code. Per-status
+    examples are stored in ``_swagger_example_responses`` (dict keyed by
+    status) so multiple ``@example_response(...)`` decorators on the same
+    handler accumulate.
+    """
+    # Two-arg form: (status_code, data)
+    if data is not None:
+        status_code = int(status_or_data)
+        body = data
+    else:
+        status_code = 200
+        body = status_or_data
+
     def decorator(fn):
-        fn._swagger_example_response = data
+        # Multi-status accumulator. Keep the legacy single-example attr
+        # in sync (last-write-wins) for back-compat with older swagger renderers.
+        responses = getattr(fn, "_swagger_example_responses", {}) or {}
+        responses[status_code] = body
+        fn._swagger_example_responses = responses
+        fn._swagger_example_response = body
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             return fn(*args, **kwargs)
-        wrapper._swagger_example_response = data
+        wrapper._swagger_example_responses = responses
+        wrapper._swagger_example_response = body
         for attr in ("_swagger_description", "_swagger_tags", "_swagger_example",
-                      "_swagger_params", "_swagger_summary", "_swagger_deprecated"):
-            if hasattr(fn, attr):
+                      "_swagger_params", "_swagger_query", "_swagger_detail",
+                      "_swagger_summary", "_swagger_deprecated"):
+            if hasattr(fn, attr) and not hasattr(wrapper, attr):
                 setattr(wrapper, attr, getattr(fn, attr))
         return wrapper
     return decorator

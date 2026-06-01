@@ -440,22 +440,38 @@ class ORM(metaclass=ORMMeta):
         return cls.select_one(sql, [pk_value], include=include)
 
     @classmethod
-    def find(cls, filter: dict = None, limit: int = 100, offset: int = 0, order_by: str = None, include: list[str] = None) -> list[Self]:
-        """Find records by filter dict.
+    def find(cls, filter=None, limit: int = 100, offset: int = 0, order_by: str = None, include: list[str] = None):
+        """Find record(s) by primary key, filter dict, or all.
+
+        Overloaded on the first argument:
+
+        * ``int | str`` — primary-key lookup, returns a single instance
+          (or ``None``). Equivalent to ``find_by_id(pk)``.
+        * ``dict`` — filter as before, returns ``list[Self]``.
+        * omitted — returns ``list[Self]`` of all records (subject to
+          ``limit`` / ``offset`` / ``order_by``).
 
         Usage:
+            User.find(1)                           → User | None  (PK lookup)
             User.find({"name": "Alice"})           → [User, ...]
             User.find({"age": 18}, limit=10)       → [User, ...]
             User.find(order_by="name ASC")          → [User, ...]
             User.find()                             → all records
 
         Args:
-            filter: Dict of {column: value} pairs (AND-ed together).
-            limit: Max records to return.
-            offset: Starting offset.
+            filter: ``int``/``str`` primary-key value OR dict of
+                {column: value} pairs (AND-ed) OR ``None``.
+            limit: Max records to return (filter/all variants only).
+            offset: Starting offset (filter/all variants only).
             order_by: ORDER BY clause (e.g. "name ASC").
             include: Relationship names to eager-load.
         """
+        # PK lookup — int/str routes to find_by_id. Active Record convention
+        # (Django Model.objects.get(pk=1), SQLAlchemy session.get(M, 1),
+        # Ruby Model.find(1)). Docs have always promised this; we deliver.
+        if isinstance(filter, (int, str)) and not isinstance(filter, bool):
+            return cls.find_by_id(filter, include=include)
+
         db = cls._get_db()
         table = cls._get_table()
         conditions = []

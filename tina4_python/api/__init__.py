@@ -20,13 +20,50 @@ class Api:
     """HTTP client using urllib — zero external dependencies."""
 
     def __init__(self, base_url: str = "", auth_header: str = "",
-                 ignore_ssl: bool = False, timeout: int = 30):
+                 ignore_ssl: bool = False, timeout: int = 30,
+                 bearer_token: str | None = None,
+                 username: str | None = None,
+                 password: str | None = None,
+                 headers: dict[str, str] | None = None,
+                 verify_ssl: bool | None = None):
+        """HTTP client.
+
+        Constructor accepts ergonomic kwargs the documentation has long
+        described — every modern Python HTTP library (requests, httpx)
+        accepts these directly rather than requiring post-construction
+        setter calls.
+
+            api = Api("https://api.example.com", bearer_token="sk-...")
+            api = Api("https://api.example.com", username="u", password="p")
+            api = Api("https://api.example.com", headers={"X-Tenant": "acme"})
+            api = Api("https://self-signed.local", verify_ssl=False)
+
+        The setter-based API (``set_bearer_token``, ``set_basic_auth``,
+        ``add_headers``) continues to work; pick whichever reads better.
+
+        ``verify_ssl`` is the docs-friendly inverse of ``ignore_ssl`` —
+        ``verify_ssl=False`` is equivalent to ``ignore_ssl=True``. If
+        both are supplied, ``ignore_ssl`` wins (legacy precedence).
+        """
         self.base_url = base_url.rstrip("/")
         self.auth_header = auth_header
         self.timeout = timeout
         self._headers: dict[str, str] = {}
         self._ssl_context = None
-        if ignore_ssl:
+
+        # ── kwarg sugar ────────────────────────────────────────────────
+        # Bearer token wins over basic auth if both are passed.
+        if bearer_token is not None:
+            self.set_bearer_token(bearer_token)
+        elif username is not None and password is not None:
+            self.set_basic_auth(username, password)
+
+        if headers:
+            self._headers.update(headers)
+
+        # ignore_ssl is the existing flag; verify_ssl=False is the same thing
+        # expressed positively. Honour ignore_ssl when both are set.
+        if ignore_ssl or (verify_ssl is False):
             self._ssl_context = ssl.create_default_context()
             self._ssl_context.check_hostname = False
             self._ssl_context.verify_mode = ssl.CERT_NONE

@@ -503,11 +503,95 @@ def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
 
 # Decorator functions — the public API
 
+def _resolve_string_middleware(name: str):
+    """Resolve a string-form middleware spec to a class.
+
+    Forms:
+        "ResponseCache"        → tina4_python.cache.ResponseCache
+        "ResponseCache:300"    → ResponseCache configured with max_age=300
+        "RateLimit:10:60"      → RateLimit configured with limit=10, window=60
+
+    Looks up the class in the registry of known middleware names. Unknown
+    names raise ``ValueError`` so typos surface at decoration time instead
+    of silently swallowing the middleware.
+    """
+    head, _, tail = name.partition(":")
+    args = [int(a) if a.isdigit() else a for a in tail.split(":")] if tail else []
+
+    # Lazy import to avoid circular deps
+    from tina4_python.cache import ResponseCache
+    from tina4_python.core.middleware import RateLimiter, CorsMiddleware
+
+    registry = {
+        "ResponseCache": ResponseCache,
+        "RateLimit":     RateLimiter,
+        "RateLimiter":   RateLimiter,
+        "Cors":          CorsMiddleware,
+        "CORS":          CorsMiddleware,
+    }
+    cls = registry.get(head)
+    if cls is None:
+        raise ValueError(
+            f"Unknown middleware {head!r}. Known: {sorted(registry)}. "
+            f"For custom middleware, pass the class directly to @middleware(MyMW)."
+        )
+    if args:
+        # Parameterised form — try to instantiate with the args. Falls back
+        # to returning the class with no args if the constructor disagrees.
+        try:
+            return cls(*args)
+        except TypeError:
+            return cls
+    return cls
+
+
+def _normalise_middleware_list(items):
+    """Convert a mixed list of classes / strings / instances to classes/instances."""
+    out = []
+    for item in items:
+        if isinstance(item, str):
+            out.append(_resolve_string_middleware(item))
+        else:
+            out.append(item)
+    return out
+
+
 def _register_route(method: str, path: str, fn, **options):
-    """Common registration logic that preserves handler attributes on the returned ref."""
+    """Common registration logic that preserves handler attributes on the returned ref.
+
+    Accepts the docs-friendly kwargs:
+
+      * ``description`` — short Swagger summary; same as stacking @description("...")
+      * ``middleware``  — list of middleware (classes / instances / string specs)
+
+    String-form middleware (e.g. ``"ResponseCache:300"``) is parsed into the
+    matching class so callers don't need an import.
+    """
+    # description= shortcut — fold into Swagger metadata
+    descr = options.pop("description", None)
+    if descr:
+        fn._swagger_description = descr
+
+    # middleware= shortcut — accept inline list of mixed types
+    inline_mw = options.pop("middleware", None)
+    if inline_mw:
+        normalised = _normalise_middleware_list(inline_mw)
+        fn._middleware = list(getattr(fn, "_middleware", [])) + normalised
+
     ref = Router.add(method, path, fn, **options)
     # Propagate handler attributes to the wrapper so stacked decorators still work
     fn._route_ref = ref
+
+    # If we folded in middleware via the kwarg, also push it into the route
+    # dict so the dispatcher picks it up (mirrors what @middleware does).
+    if inline_mw and hasattr(fn, "_route_ref"):
+        existing = ref._route.get("middleware", [])
+        ref._route["middleware"] = fn._middleware + existing
+        # Custom middleware means developer handles auth — disable built-in
+        # gate unless @secured() was explicitly set.
+        if not getattr(fn, "_secured", False) and ref._route.get("auth_required"):
+            ref._route["auth_required"] = False
+
     return fn
 
 
