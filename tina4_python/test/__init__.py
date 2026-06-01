@@ -97,8 +97,48 @@ class Test(unittest.TestCase):
 # ``tina4 test`` CLI both render with the trailing message.
 
 
+# ── Argument-shape helper ───────────────────────────────────────────────
+#
+# Every assertion below accepts a UNIFORM (actual, expected, message)
+# signature so the API reads the same regardless of which assertion you
+# pick. For binary assertions (assert_true, assert_false, assert_none,
+# assert_not_none) the ``expected`` slot is redundant — it states the
+# obvious — but spelling it out keeps the call shape consistent with
+# assert_equal / assert_not_equal where it carries real information.
+#
+# Two-argument legacy calls (value, message) are still accepted because
+# the chapter's examples shipped that way for years. The helper detects
+# the form by argument type:
+#     assert_false(condition, "message")           → 2-arg legacy form
+#     assert_false(condition, False, "message")    → 3-arg uniform form
+# When the second positional arg is a string AND no third arg was given,
+# we treat it as the message.
+
+_SENTINEL = object()
+
+
+def _split_expected_message(
+    expected_or_message: Any, message: str, default_expected: Any
+) -> tuple[Any, str]:
+    """Split a 2-arg vs 3-arg call into (expected, message)."""
+    if message:
+        # Caller passed all three positional args — honour them as-given.
+        return expected_or_message, message
+    if expected_or_message is _SENTINEL:
+        # Caller passed only the first positional — no message, no expected.
+        return default_expected, ""
+    if isinstance(expected_or_message, str):
+        # Two-arg legacy form: the second arg is the message.
+        return default_expected, expected_or_message
+    # Two-arg uniform form: second arg is the expected value, no message.
+    return expected_or_message, ""
+
+
 def assert_equal(actual: Any, expected: Any, message: str = "") -> None:
-    """Assert two values are equal."""
+    """Assert ``actual == expected``.
+
+    Signature: ``assert_equal(actual, expected, message="")``
+    """
     if actual != expected:
         raise AssertionError(
             message or f"Expected {expected!r}, got {actual!r}"
@@ -106,39 +146,81 @@ def assert_equal(actual: Any, expected: Any, message: str = "") -> None:
 
 
 def assert_not_equal(actual: Any, expected: Any, message: str = "") -> None:
-    """Assert two values are not equal."""
+    """Assert ``actual != expected``.
+
+    Signature: ``assert_not_equal(actual, expected, message="")``
+    """
     if actual == expected:
         raise AssertionError(
             message or f"Expected {actual!r} != {expected!r}, but they are equal"
         )
 
 
-def assert_true(condition: Any, message: str = "") -> None:
-    """Assert the value is truthy."""
-    if not condition:
-        raise AssertionError(message or f"Expected truthy, got {condition!r}")
+def assert_true(actual: Any, expected: Any = _SENTINEL, message: str = "") -> None:
+    """Assert ``actual`` is truthy.
+
+    Signature: ``assert_true(actual, expected=True, message="")``
+
+    The ``expected`` slot is there for parity with ``assert_equal`` — pass
+    ``True`` to spell it out, or omit it and pass the message directly.
+    Both forms work::
+
+        assert_true(x, "should be truthy")              # legacy
+        assert_true(x, True, "should be truthy")        # uniform
+    """
+    expected, message = _split_expected_message(expected, message, True)
+    if not actual:
+        raise AssertionError(
+            message or f"Expected truthy ({expected!r}), got {actual!r}"
+        )
 
 
-def assert_false(condition: Any, message: str = "") -> None:
-    """Assert the value is falsy."""
-    if condition:
-        raise AssertionError(message or f"Expected falsy, got {condition!r}")
+def assert_false(actual: Any, expected: Any = _SENTINEL, message: str = "") -> None:
+    """Assert ``actual`` is falsy.
+
+    Signature: ``assert_false(actual, expected=False, message="")``
+
+    The ``expected`` slot is there for parity with ``assert_equal`` — pass
+    ``False`` to spell it out, or omit it and pass the message directly.
+    Both forms work::
+
+        assert_false(x, "should be falsy")              # legacy
+        assert_false(x, False, "should be falsy")       # uniform
+    """
+    expected, message = _split_expected_message(expected, message, False)
+    if actual:
+        raise AssertionError(
+            message or f"Expected falsy ({expected!r}), got {actual!r}"
+        )
 
 
-def assert_none(value: Any, message: str = "") -> None:
-    """Assert the value is ``None``."""
+def assert_none(value: Any, expected: Any = _SENTINEL, message: str = "") -> None:
+    """Assert ``value`` is ``None``.
+
+    Signature: ``assert_none(actual, expected=None, message="")``
+    """
+    expected, message = _split_expected_message(expected, message, None)
     if value is not None:
-        raise AssertionError(message or f"Expected None, got {value!r}")
+        raise AssertionError(
+            message or f"Expected None, got {value!r}"
+        )
 
 
-def assert_not_none(value: Any, message: str = "") -> None:
-    """Assert the value is not ``None``."""
+def assert_not_none(value: Any, expected: Any = _SENTINEL, message: str = "") -> None:
+    """Assert ``value`` is not ``None``.
+
+    Signature: ``assert_not_none(actual, expected="not None", message="")``
+    """
+    expected, message = _split_expected_message(expected, message, "not None")
     if value is None:
         raise AssertionError(message or "Expected not None, got None")
 
 
 def assert_in(item: Any, container: Any, message: str = "") -> None:
-    """Assert ``item`` is contained in ``container``."""
+    """Assert ``item`` is contained in ``container``.
+
+    Signature: ``assert_in(item, container, message="")``
+    """
     if item not in container:
         raise AssertionError(
             message or f"Expected {item!r} in {container!r}"
@@ -146,7 +228,10 @@ def assert_in(item: Any, container: Any, message: str = "") -> None:
 
 
 def assert_not_in(item: Any, container: Any, message: str = "") -> None:
-    """Assert ``item`` is not in ``container``."""
+    """Assert ``item`` is not in ``container``.
+
+    Signature: ``assert_not_in(item, container, message="")``
+    """
     if item in container:
         raise AssertionError(
             message or f"Expected {item!r} not in {container!r}"
@@ -154,7 +239,10 @@ def assert_not_in(item: Any, container: Any, message: str = "") -> None:
 
 
 def assert_is_instance(value: Any, expected_type: type, message: str = "") -> None:
-    """Assert ``value`` is an instance of ``expected_type``."""
+    """Assert ``value`` is an instance of ``expected_type``.
+
+    Signature: ``assert_is_instance(value, expected_type, message="")``
+    """
     if not isinstance(value, expected_type):
         raise AssertionError(
             message
@@ -162,22 +250,30 @@ def assert_is_instance(value: Any, expected_type: type, message: str = "") -> No
         )
 
 
-def assert_greater(a: Any, b: Any, message: str = "") -> None:
-    """Assert ``a > b``."""
-    if not (a > b):
-        raise AssertionError(message or f"Expected {a!r} > {b!r}")
+def assert_greater(actual: Any, expected: Any, message: str = "") -> None:
+    """Assert ``actual > expected``.
+
+    Signature: ``assert_greater(actual, expected, message="")``
+    """
+    if not (actual > expected):
+        raise AssertionError(message or f"Expected {actual!r} > {expected!r}")
 
 
-def assert_less(a: Any, b: Any, message: str = "") -> None:
-    """Assert ``a < b``."""
-    if not (a < b):
-        raise AssertionError(message or f"Expected {a!r} < {b!r}")
+def assert_less(actual: Any, expected: Any, message: str = "") -> None:
+    """Assert ``actual < expected``.
+
+    Signature: ``assert_less(actual, expected, message="")``
+    """
+    if not (actual < expected):
+        raise AssertionError(message or f"Expected {actual!r} < {expected!r}")
 
 
 def assert_almost_equal(
     actual: float, expected: float, places: int = 7, message: str = ""
 ) -> None:
-    """Assert two floats are equal to the given number of decimal places.
+    """Assert two floats are equal to ``places`` decimal places.
+
+    Signature: ``assert_almost_equal(actual, expected, places=7, message="")``
 
     Useful for floating-point comparisons where exact equality is unreliable.
     """

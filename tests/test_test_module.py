@@ -89,9 +89,18 @@ class TestAssertTrue:
         with pytest.raises(AssertionError):
             assert_true("")
 
-    def test_uses_custom_message(self):
+    # ── Two-arg legacy form: (value, message) ───────────────────────────
+    def test_legacy_form_uses_custom_message(self):
         with pytest.raises(AssertionError, match="cart not empty"):
             assert_true(False, "cart not empty")
+
+    # ── Three-arg uniform form: (actual, expected, message) ─────────────
+    def test_uniform_form_three_args_passes(self):
+        assert_true(1, True, "should be truthy")
+
+    def test_uniform_form_three_args_fails_with_message(self):
+        with pytest.raises(AssertionError, match="cart should have items"):
+            assert_true(0, True, "cart should have items")
 
 
 class TestAssertFalse:
@@ -104,8 +113,22 @@ class TestAssertFalse:
         with pytest.raises(AssertionError):
             assert_false(True)
 
+    # ── Two-arg legacy form: (value, message) ───────────────────────────
+    def test_legacy_form_uses_custom_message(self):
+        with pytest.raises(AssertionError, match="should be empty"):
+            assert_false(True, "should be empty")
+
+    # ── Three-arg uniform form: (actual, expected, message) ─────────────
+    def test_uniform_form_three_args_passes(self):
+        assert_false(0, False, "should be falsy")
+
+    def test_uniform_form_three_args_fails_with_message(self):
+        with pytest.raises(AssertionError, match="cart should be empty"):
+            assert_false(1, False, "cart should be empty")
+
 
 class TestAssertNoneNotNone:
+    # ── assert_none ─────────────────────────────────────────────────────
     def test_assert_none_passes(self):
         assert_none(None)
 
@@ -113,6 +136,16 @@ class TestAssertNoneNotNone:
         with pytest.raises(AssertionError):
             assert_none(0)
 
+    def test_assert_none_legacy_form_message(self):
+        with pytest.raises(AssertionError, match="should be None"):
+            assert_none(0, "should be None")
+
+    def test_assert_none_uniform_form_three_args(self):
+        assert_none(None, None, "should be None")
+        with pytest.raises(AssertionError, match="should be None"):
+            assert_none(0, None, "should be None")
+
+    # ── assert_not_none ─────────────────────────────────────────────────
     def test_assert_not_none_passes(self):
         assert_not_none(0)
         assert_not_none("")
@@ -121,6 +154,15 @@ class TestAssertNoneNotNone:
     def test_assert_not_none_fails(self):
         with pytest.raises(AssertionError):
             assert_not_none(None)
+
+    def test_assert_not_none_legacy_form_message(self):
+        with pytest.raises(AssertionError, match="must not be None"):
+            assert_not_none(None, "must not be None")
+
+    def test_assert_not_none_uniform_form_three_args(self):
+        assert_not_none(0, "not None", "should not be None")
+        with pytest.raises(AssertionError, match="must not be None"):
+            assert_not_none(None, "not None", "must not be None")
 
 
 class TestAssertInNotIn:
