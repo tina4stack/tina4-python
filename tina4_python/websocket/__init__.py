@@ -142,6 +142,22 @@ class WebSocketConnection:
     def closed(self) -> bool:
         return self._closed
 
+    @property
+    def connection_count(self) -> int:
+        """Total open connections on this connection's manager.
+
+        Convenience so chat-room / presence code can ask the connection
+        directly rather than reaching back to the manager::
+
+            async def on_message(conn, msg):
+                await conn.send(f"There are {conn.connection_count} users here")
+
+        Returns 1 (just this connection) when not attached to a manager.
+        """
+        if self._manager is None:
+            return 1
+        return self._manager.count()
+
     async def send(self, message: str | bytes):
         """Send a text or binary message."""
         if self._closed:

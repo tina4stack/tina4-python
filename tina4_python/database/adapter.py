@@ -34,6 +34,23 @@ class DatabaseResult:
         """Return the total count of records."""
         return self.count
 
+    @property
+    def columns(self) -> list[str]:
+        """Return the column names of the result set.
+
+        Cheap property — derived from the first row's keys. For richer
+        metadata (type, nullable, primary key), call ``column_info()``.
+
+            >>> result = db.fetch("SELECT id, name FROM users LIMIT 1")
+            >>> result.columns
+            ['id', 'name']
+
+        Returns ``[]`` when no rows.
+        """
+        if not self.records:
+            return []
+        return list(self.records[0].keys())
+
     def to_list(self) -> list:
         return self.records
 

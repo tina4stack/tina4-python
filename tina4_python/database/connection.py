@@ -139,6 +139,32 @@ class Database:
     operations to the adapter. This is what the rest of the framework uses.
     """
 
+    @classmethod
+    def get_connection(cls, url: str = None, username: str = "", password: str = "", pool: int = 0, **kwargs) -> "Database":
+        """Open a database connection — convention name matching SQLAlchemy
+        ``engine.connect()`` and Django's ``connections["default"]``.
+
+        Equivalent to ``Database(url, username, password, pool=pool, **kwargs)``
+        but the intent is clearer at call sites: this opens / returns a
+        connection rather than constructing a configuration object.
+
+            db = Database.get_connection()                   # from env
+            db = Database.get_connection("sqlite:///app.db") # explicit URL
+        """
+        return cls(url=url, username=username, password=password, pool=pool, **kwargs)
+
+    @property
+    def pool(self) -> "ConnectionPool | None":
+        """The active connection pool, or ``None`` when running in
+        single-connection mode (``pool=0``).
+
+        Useful for pool introspection and diagnostics::
+
+            if db.pool is not None:
+                print(f"{db.pool.active_count()}/{db.pool.size()} connections in use")
+        """
+        return self._pool
+
     def __init__(self, url: str = None, username: str = "", password: str = "", pool: int = 0, **kwargs):
         self.url = url or os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/tina4.db")
         # Priority: constructor params > env vars > empty
@@ -411,6 +437,23 @@ class Database:
             return result
         adapter = self._get_adapter()
         return adapter.fetch(sql, params, limit, offset)
+
+    def fetch_all(self, sql: str, params: list = None,
+                  limit: int = 100, offset: int = 0) -> list[dict]:
+        """Fetch rows and return the records list directly.
+
+        Symmetric with ``fetch_one``. For the common case where you just
+        want the rows and don't need the ``DatabaseResult`` metadata
+        (count, affected_rows, last_id, sql), this is one less attribute
+        access than ``fetch(...).records``.
+
+            rows = db.fetch_all("SELECT * FROM users WHERE active = ?", [1])
+            for row in rows:
+                print(row["name"])
+
+        Returns ``[]`` (not ``None``) when no rows match.
+        """
+        return self.fetch(sql, params, limit, offset).records
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         if self._cache_enabled:

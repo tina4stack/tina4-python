@@ -207,4 +207,38 @@ class I18n:
         return translations.get(key)
 
 
-__all__ = ["I18n"]
+# ── Module-level shortcut ──────────────────────────────────────────────────
+#
+# GNU gettext convention: ``_("hello")`` everywhere, single import. We hold
+# a process-wide default I18n that lazily configures itself from the same
+# env vars (``TINA4_LOCALE``, ``TINA4_LOCALE_DIR``) the I18n class respects.
+_default: I18n | None = None
+
+
+def _get_default() -> I18n:
+    global _default
+    if _default is None:
+        _default = I18n()
+    return _default
+
+
+def t(key: str, **kwargs) -> str:
+    """Translate ``key`` using the default I18n instance.
+
+    Lazy — the default instance is created on first call and reads its
+    locale/path from environment (``TINA4_LOCALE``, ``TINA4_LOCALE_DIR``).
+    For per-request locale switching, instantiate ``I18n`` directly.
+
+        from tina4_python.i18n import t
+        t("greeting", name="Alice")
+    """
+    return _get_default().t(key, **kwargs)
+
+
+def set_default(i18n: I18n) -> None:
+    """Replace the process-wide default I18n used by ``t()``."""
+    global _default
+    _default = i18n
+
+
+__all__ = ["I18n", "t", "set_default"]

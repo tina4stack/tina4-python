@@ -162,8 +162,23 @@ class Queue:
         """Remove all pending jobs from the queue. Returns count removed."""
         return self._backend.clear()
 
-    def produce(self, topic: str, data: dict, priority: int = 0, delay_seconds: int = 0):
-        """Produce a message onto a topic. Convenience wrapper around push()."""
+    def produce(self, topic: str, data: dict, priority: int = 0,
+                delay_seconds: int = 0, delay_until: datetime | None = None):
+        """Produce a message onto a topic. Convenience wrapper around push().
+
+        Either ``delay_seconds`` (integer offset) or ``delay_until``
+        (absolute ``datetime``) may be passed for scheduled jobs. ``delay_until``
+        takes precedence when both are set — naive datetimes are interpreted
+        as local time; aware datetimes use their tzinfo.
+
+            queue.produce("reports", data, delay_seconds=300)
+            queue.produce("reports", data, delay_until=datetime(2026,6,1,18,0))
+        """
+        if delay_until is not None:
+            now = datetime.now(delay_until.tzinfo) if delay_until.tzinfo else datetime.now()
+            offset = int((delay_until - now).total_seconds())
+            delay_seconds = max(0, offset)
+
         old_topic = self.topic
         self.topic = topic
         self._backend = _resolve_backend(topic, None, self.max_retries)

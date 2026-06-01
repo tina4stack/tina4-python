@@ -2,13 +2,17 @@ class Job:
     """A single queue job."""
 
     def __init__(self, queue, job_id, topic: str, data: dict,
-                 priority: int = 0, attempts: int = 0):
+                 priority: int = 0, attempts: int = 0, error: str | None = None):
         self.queue = queue
         self.id = job_id
         self.topic = topic
         self.payload = data
         self.priority = priority
         self.attempts = attempts
+        # Populated by fail()/reject() — why the job last died. Surfaces
+        # in dead_letters() so consumers can see the failure reason
+        # without trawling logs.
+        self.error: str | None = error
 
     @property
     def data(self):
@@ -43,6 +47,7 @@ class Job:
             "payload": self.payload,
             "priority": self.priority,
             "attempts": self.attempts,
+            "error": self.error,
         }
 
     def to_json(self) -> str:

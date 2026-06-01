@@ -223,6 +223,37 @@ class Session:
     def has(self, key: str) -> bool:
         return key in self._data
 
+    # ── Dict-style access ──────────────────────────────────────────────
+    #
+    # Flask, Django, and FastAPI all let users treat the session like a
+    # dict (``session["key"] = value``, ``"key" in session``). We mirror
+    # that. The four dunders below delegate to the same store as the
+    # explicit set/get/delete/has API.
+
+    def __getitem__(self, key: str):
+        if key not in self._data:
+            raise KeyError(key)
+        return self._data[key]
+
+    def __setitem__(self, key: str, value) -> None:
+        self._data[key] = value
+        self._dirty = True
+
+    def __delitem__(self, key: str) -> None:
+        if key not in self._data:
+            raise KeyError(key)
+        del self._data[key]
+        self._dirty = True
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._data
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
     def all(self) -> dict:
         """Get all session data."""
         return dict(self._data)
