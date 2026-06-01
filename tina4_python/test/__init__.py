@@ -41,19 +41,53 @@ class Test(unittest.TestCase):
     """Base class for Tina4 xUnit-style test suites.
 
     Inherits from ``unittest.TestCase`` so pytest discovers any subclass by
-    inheritance — class names do not need to start with ``Test``. Provides
-    nothing on top of ``TestCase``: use the module-level ``assert_*``
-    functions for assertions (their positional ``message`` argument is
-    cleaner than ``self.assertEqual``'s keyword form).
+    inheritance — class names do not need to start with ``Test``.
 
-    Override ``setUp``/``tearDown`` for per-test fixtures, or ``setUpClass``
-    for once-per-class setup. Standard ``unittest.TestCase`` lifecycle
-    applies.
+    **Lifecycle hooks** — Tina4 prefers snake_case names that match Python
+    style. Override either form; both are called for you::
+
+        class UserTest(Test):
+            def set_up(self):     # snake_case — Tina4 idiom
+                self.user = User.create({...})
+
+            def tear_down(self):  # snake_case — Tina4 idiom
+                self.user.delete()
+
+    The classic ``unittest`` ``setUp`` / ``tearDown`` still works for users
+    coming from ``unittest.TestCase``; you may use either, but do not mix
+    the two on the same class.
     """
 
-    # The pass-through is intentional. Anything we add here ships to every
-    # test class forever; keeping it empty lets users compose freely.
-    pass
+    # ── Lifecycle adapters ──────────────────────────────────────────────
+    #
+    # unittest.TestCase only calls setUp / tearDown (camelCase). Tina4
+    # documents set_up / tear_down (snake_case). Bridge here so the
+    # snake_case methods get called when subclasses override them.
+
+    def setUp(self) -> None:  # noqa: N802 — unittest convention
+        super().setUp()
+        # Only call set_up if a subclass defined it (avoids double-calling
+        # if the user uses unittest-style setUp instead).
+        if type(self).set_up is not Test.set_up:
+            self.set_up()
+
+    def tearDown(self) -> None:  # noqa: N802 — unittest convention
+        if type(self).tear_down is not Test.tear_down:
+            self.tear_down()
+        super().tearDown()
+
+    def set_up(self) -> None:
+        """Snake-case lifecycle hook — runs before each test method.
+
+        Default no-op. Override to set up per-test fixtures.
+        """
+
+    def tear_down(self) -> None:
+        """Snake-case lifecycle hook — runs after each test method,
+        regardless of pass or fail.
+
+        Default no-op. Override to clean up per-test state.
+        """
 
 
 # ── Assertions ──────────────────────────────────────────────────────────
@@ -155,38 +189,66 @@ def assert_almost_equal(
 
 
 def assert_raises(
-    exception_class: type,
-    callable_or_none: Callable | None = None,
-    *args: Any,
-    **kwargs: Any,
+    callable_or_exception: Callable | type,
+    exception_class: type | None = None,
+    message: str = "",
 ):
-    """Assert ``exception_class`` is raised.
+    """Assert that a callable raises a specific exception.
 
-    Two forms — context manager and callable::
+    Three forms, all supported::
 
-        # Context manager
+        # 1. Docs form — callable first, exception second, optional message
+        assert_raises(lambda: int("not a number"), ValueError, "must raise")
+
+        # 2. Context manager — useful when the body is more than one line
         with assert_raises(ValueError):
-            int("not a number")
+            value = parse(input)
+            process(value)
 
-        # Callable form
-        assert_raises(ValueError, int, "not a number")
+        # 3. unittest.TestCase compatibility — exception first form
+        assert_raises(ValueError, lambda: int("not a number"))
 
     Raises ``AssertionError`` if no exception is raised, or if a different
     exception type is raised.
     """
-    if callable_or_none is None:
-        return _RaisesContext(exception_class)
+    # Form 2: context manager — caller passed just the exception class
+    if exception_class is None:
+        if not isinstance(callable_or_exception, type) or not issubclass(
+            callable_or_exception, BaseException
+        ):
+            raise TypeError(
+                "assert_raises with one argument requires an exception class"
+            )
+        return _RaisesContext(callable_or_exception)
+
+    # Determine which argument is the callable and which is the exception
+    # by type — supports docs form AND unittest order without ambiguity.
+    if isinstance(callable_or_exception, type) and issubclass(
+        callable_or_exception, BaseException
+    ):
+        # Form 3: assert_raises(ExceptionType, callable)
+        exc_type = callable_or_exception
+        fn = exception_class
+    else:
+        # Form 1: assert_raises(callable, ExceptionType, message)
+        fn = callable_or_exception
+        exc_type = exception_class
+
+    if not callable(fn):
+        raise TypeError("assert_raises requires a callable")
 
     try:
-        callable_or_none(*args, **kwargs)
-    except exception_class:
+        fn()
+    except exc_type:
         return
     except Exception as e:
         raise AssertionError(
-            f"Expected {exception_class.__name__}, got {type(e).__name__}: {e}"
+            message
+            or f"Expected {exc_type.__name__}, got {type(e).__name__}: {e}"
         )
     raise AssertionError(
-        f"Expected {exception_class.__name__} to be raised, but nothing was"
+        message
+        or f"Expected {exc_type.__name__} to be raised, but nothing was"
     )
 
 

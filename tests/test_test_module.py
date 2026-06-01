@@ -174,16 +174,36 @@ class TestAssertAlmostEqual:
 
 
 class TestAssertRaises:
-    def test_callable_form_passes(self):
-        assert_raises(ValueError, int, "not a number")
+    """Three forms of assert_raises — all must work."""
 
-    def test_callable_form_fails_when_no_exception(self):
+    # ── Form 1: docs form — callable first ──────────────────────────────
+
+    def test_docs_form_passes(self):
+        # Docs example, verbatim:
+        assert_raises(
+            lambda: int("not-a-number"),
+            ValueError,
+            "Should raise ValueError",
+        )
+
+    def test_docs_form_fails_when_no_exception(self):
+        with pytest.raises(AssertionError, match="expected raise"):
+            assert_raises(lambda: int("42"), ValueError, "expected raise")
+
+    def test_docs_form_fails_when_no_exception_no_message(self):
         with pytest.raises(AssertionError, match="ValueError"):
-            assert_raises(ValueError, int, "42")
+            assert_raises(lambda: int("42"), ValueError)
 
-    def test_callable_form_fails_on_wrong_exception(self):
-        with pytest.raises(AssertionError, match="ValueError, got TypeError"):
-            assert_raises(ValueError, int, None)  # raises TypeError
+    def test_docs_form_fails_on_wrong_exception(self):
+        with pytest.raises(AssertionError, match="wrong exc"):
+            # int(None) raises TypeError, not ValueError
+            assert_raises(lambda: int(None), ValueError, "wrong exc")
+
+    def test_docs_form_uses_message(self):
+        with pytest.raises(AssertionError, match="my custom msg"):
+            assert_raises(lambda: int("42"), ValueError, "my custom msg")
+
+    # ── Form 2: context manager ─────────────────────────────────────────
 
     def test_context_manager_form_passes(self):
         with assert_raises(ValueError):
@@ -199,6 +219,17 @@ class TestAssertRaises:
             with assert_raises(ValueError):
                 int("42")
 
+    # ── Form 3: unittest order — exception first ────────────────────────
+
+    def test_unittest_order_passes(self):
+        # For users coming from unittest.TestCase or the inline @tests
+        # decorator (which uses exception-first ordering)
+        assert_raises(ValueError, lambda: int("not a number"))
+
+    def test_unittest_order_fails_when_no_exception(self):
+        with pytest.raises(AssertionError):
+            assert_raises(ValueError, lambda: int("42"))
+
 
 # ── Class discovery ─────────────────────────────────────────────────────
 
@@ -213,3 +244,73 @@ class NotPrefixedWithTest(Test):
 
     def test_discovery_works_for_arbitrary_class_names(self):
         assert_equal(1, 1)
+
+
+# ── Lifecycle: snake_case set_up / tear_down ────────────────────────────
+
+
+class _LifecycleSpy:
+    """Mutable record of which hooks fired in what order — class-scoped so
+    every test method appends. Reset at the end of each suite."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+
+_spy = _LifecycleSpy()
+
+
+class LifecycleSnakeCase(Test):
+    """The docs teach snake_case lifecycle methods. They MUST fire."""
+
+    def set_up(self):
+        _spy.events.append("set_up")
+        self.value = 42
+
+    def tear_down(self):
+        _spy.events.append("tear_down")
+
+    def test_first(self):
+        _spy.events.append("test_first")
+        assert_equal(self.value, 42, "set_up should populate self.value")
+
+    def test_second(self):
+        _spy.events.append("test_second")
+        assert_equal(self.value, 42, "set_up runs before every test")
+
+
+class TestLifecycleHookContract:
+    """Verify the spy captured the expected snake_case sequence."""
+
+    def test_snake_case_lifecycle_fires_in_order(self):
+        # The two LifecycleSnakeCase tests should each fire set_up → test → tear_down.
+        # Pytest doesn't guarantee order between them but each pair must be tight.
+        events = list(_spy.events)
+        # Each test contributes 3 events. We expect exactly 6 total.
+        # (Pytest may run this assertion after either order of test_first/test_second.)
+        assert events.count("set_up") == 2, f"set_up should fire twice, got {events!r}"
+        assert events.count("tear_down") == 2, f"tear_down should fire twice, got {events!r}"
+        assert events.count("test_first") == 1
+        assert events.count("test_second") == 1
+        # Each test bracket must be set_up → test_* → tear_down (no interleaving)
+        for i in range(0, len(events), 3):
+            assert events[i] == "set_up", events
+            assert events[i + 1].startswith("test_"), events
+            assert events[i + 2] == "tear_down", events
+
+
+class LifecycleCamelCase(Test):
+    """Users coming from unittest can still use camelCase. Snake-case
+    hooks must NOT also fire (no double-call) if the subclass uses
+    unittest-style names directly."""
+
+    _camel_calls = 0
+
+    def setUp(self):
+        super().setUp()
+        type(self)._camel_calls += 1
+
+    def test_camel_setup_fires(self):
+        # If snake_case were also called, this would double-count.
+        # We just check that setUp ran at least once for this test.
+        assert_true(type(self)._camel_calls > 0, "setUp should have been called")
