@@ -476,6 +476,18 @@ class GraphQL:
                                    (default: "/graphql"). Read by .endpoint.
     """
 
+    # ── Class-level resolver registry ──────────────────────────────────
+    # Resolvers registered via @GraphQL.resolve("Type", "field") accumulate
+    # here BEFORE any GraphQL instance is created. When __init__ runs, the
+    # instance's schema copies them in. This is what makes the documented
+    # decorator-based pattern work at app-startup time — modules that
+    # ``@GraphQL.resolve(...)`` at import-time register before the GraphQL
+    # singleton is even constructed.
+    #
+    # Structure: {(type_name, field_name): resolver_fn}
+    # type_name is "Query", "Mutation", or any object type name.
+    _class_resolvers: dict = {}
+
     def __init__(self):
         self.schema = Schema()
         # Default endpoint URL — env-overridable so deployments can mount
@@ -488,6 +500,85 @@ class GraphQL:
         self.auto_schema: bool = str(
             os.environ.get("TINA4_GRAPHQL_AUTO_SCHEMA", "true")
         ).strip().lower() in ("true", "1", "yes", "on")
+        # Drain any resolvers registered via the class-level @resolve
+        # decorator BEFORE this instance was constructed. The decorator
+        # writes to _class_resolvers; here we attach them to the live schema.
+        for (type_name, field_name), resolver in GraphQL._class_resolvers.items():
+            self._attach_resolver(type_name, field_name, resolver)
+
+    def _attach_resolver(self, type_name: str, field_name: str, resolver: callable):
+        """Wire a single resolver into the live schema.
+
+        For "Query" / "Mutation" type names, the resolver lands in the
+        matching dict on the Schema. For object-type field resolvers
+        (chained sub-field resolution) we stash them on the Schema in
+        a parallel dict so the executor can pick them up.
+        """
+        if type_name == "Query":
+            existing = self.schema.queries.get(field_name, {})
+            existing["resolve"] = resolver
+            existing.setdefault("args", {})
+            existing.setdefault("type", "String")
+            self.schema.queries[field_name] = existing
+        elif type_name == "Mutation":
+            existing = self.schema.mutations.get(field_name, {})
+            existing["resolve"] = resolver
+            existing.setdefault("args", {})
+            existing.setdefault("type", "String")
+            self.schema.mutations[field_name] = existing
+        else:
+            # Field resolver on an object type — stash on the schema for
+            # the executor to consult during sub-field resolution.
+            if not hasattr(self.schema, "field_resolvers"):
+                self.schema.field_resolvers = {}
+            self.schema.field_resolvers[(type_name, field_name)] = resolver
+
+    @classmethod
+    def resolve(cls, type_name: str, field_name: str):
+        """Decorator: register a resolver for a GraphQL type/field.
+
+        The standard FastAPI/Strawberry/Ariadne pattern — register
+        resolvers next to their function definitions, without dict
+        plumbing::
+
+            @GraphQL.resolve("Query", "products")
+            def list_products(root, args, ctx):
+                return Product.find()
+
+            @GraphQL.resolve("Mutation", "createProduct")
+            def create_product(root, args, ctx):
+                p = Product(args["input"]).save()
+                return p.to_dict()
+
+            @GraphQL.resolve("Product", "reviews")
+            def product_reviews(product, args, ctx):
+                return Review.find({"product_id": product["id"]})
+
+        Resolvers registered at import time accumulate in a class-level
+        registry so the GraphQL singleton picks them up when constructed.
+        Decorators applied after the singleton exists are wired in
+        immediately if there is a global default instance (set via
+        ``set_default(gql)``); otherwise they stay pending in the registry
+        until the next ``GraphQL()`` instantiation.
+        """
+        def decorator(fn):
+            cls._class_resolvers[(type_name, field_name)] = fn
+            # If a default instance is active, attach immediately so
+            # post-startup registrations take effect without re-instantiation
+            default = getattr(cls, "_default_instance", None)
+            if default is not None:
+                default._attach_resolver(type_name, field_name, fn)
+            return fn
+        return decorator
+
+    @classmethod
+    def set_default(cls, instance: "GraphQL") -> None:
+        """Designate ``instance`` as the default singleton.
+
+        Used so post-startup @resolve calls can wire into the live schema
+        without callers needing to thread the GraphQL instance around.
+        """
+        cls._default_instance = instance
 
     def auto_register(self, *orm_classes) -> int:
         """Wire each ORM class into the schema via from_orm().

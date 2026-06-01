@@ -89,6 +89,48 @@ class Test(unittest.TestCase):
         Default no-op. Override to clean up per-test state.
         """
 
+    # ── HTTP test client mixin ──────────────────────────────────────────
+    #
+    # Chapter 18 has always shown integration tests like:
+    #
+    #     class UserApiTest(Test):
+    #         def test_health(self):
+    #             resp = self.get("/health")
+    #             assert_equal(resp.status, 200)
+    #
+    # The HTTP client lives in ``tina4_python.test_client.TestClient``.
+    # We mix it onto the Test class lazily via per-instance ``_client``
+    # so test classes get the documented surface without users having to
+    # construct a separate client themselves.
+
+    @property
+    def _client(self):
+        # Lazy import to avoid pulling Router at module-load time
+        from tina4_python.test_client import TestClient
+        if not hasattr(self, "_test_client_instance"):
+            self._test_client_instance = TestClient()
+        return self._test_client_instance
+
+    def get(self, path: str, *, headers: dict | None = None):
+        """HTTP GET against the registered routes. Returns ``TestResponse``."""
+        return self._client.get(path, headers=headers)
+
+    def post(self, path: str, *, json=None, body=None, headers: dict | None = None):
+        """HTTP POST against the registered routes. Returns ``TestResponse``."""
+        return self._client.post(path, json=json, body=body, headers=headers)
+
+    def put(self, path: str, *, json=None, body=None, headers: dict | None = None):
+        """HTTP PUT against the registered routes. Returns ``TestResponse``."""
+        return self._client.put(path, json=json, body=body, headers=headers)
+
+    def patch(self, path: str, *, json=None, body=None, headers: dict | None = None):
+        """HTTP PATCH against the registered routes. Returns ``TestResponse``."""
+        return self._client.patch(path, json=json, body=body, headers=headers)
+
+    def delete(self, path: str, *, headers: dict | None = None):
+        """HTTP DELETE against the registered routes. Returns ``TestResponse``."""
+        return self._client.delete(path, headers=headers)
+
 
 # ── Assertions ──────────────────────────────────────────────────────────
 #

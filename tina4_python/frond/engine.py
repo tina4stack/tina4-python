@@ -1234,6 +1234,34 @@ def set_form_token_session_id(session_id: str) -> None:
 # ── Frond Engine ────────────────────────────────────────────────
 
 
+# ── ClassOrInstance method descriptor ──────────────────────────────────────
+#
+# Frond.add_filter / Frond.add_global / Frond.add_test must work BOTH as
+# a classmethod (``Frond.add_filter("money", fn)`` — the documented form,
+# convenient at app-startup before any instance exists) AND as an instance
+# method (``engine.add_filter("money", fn)`` — the existing form, which
+# also updates the live instance's local registry).
+#
+# A plain @classmethod loses the live-instance update; a plain instance
+# method blocks the class-level call. This descriptor wraps a function so
+# it receives BOTH ``cls`` and ``instance`` (instance is None when called
+# on the class) — the function can update class state always and instance
+# state when applicable.
+
+class _ClassOrInstanceMethod:
+    def __init__(self, func):
+        self.func = func
+        self.__doc__ = func.__doc__
+        self.__name__ = func.__name__
+
+    def __get__(self, instance, owner):
+        def wrapper(*args, **kwargs):
+            return self.func(owner, instance, *args, **kwargs)
+        wrapper.__doc__ = self.__doc__
+        wrapper.__name__ = self.__name__
+        return wrapper
+
+
 class Frond:
     """Twig-like template engine with sandboxing and fragment caching."""
 
@@ -1335,32 +1363,42 @@ class Frond:
         self._allowed_vars = None
         return self
 
-    def add_filter(self, name: str, fn):
+    @_ClassOrInstanceMethod
+    def add_filter(cls, instance, name: str, fn):
         """Register a custom filter.
 
-        Persisted at class level so new instances created by hot-reload
-        inherit it automatically.
+        Callable as a classmethod (``Frond.add_filter("money", fn)``) or
+        as an instance method (``engine.add_filter("money", fn)``). The
+        filter is persisted at class level so new instances created by
+        hot-reload inherit it automatically; when called on an existing
+        instance, that instance's local filter map also receives the
+        addition immediately.
         """
-        self._filters[name] = fn
-        Frond._class_filters[name] = fn
+        cls._class_filters[name] = fn
+        if instance is not None:
+            instance._filters[name] = fn
 
-    def add_global(self, name: str, value):
+    @_ClassOrInstanceMethod
+    def add_global(cls, instance, name: str, value):
         """Register a global variable available in all templates.
 
-        Persisted at class level so new instances created by hot-reload
-        inherit it automatically.
+        Callable as classmethod or instance method. See ``add_filter`` for the
+        dual-call semantics.
         """
-        self._globals[name] = value
-        Frond._class_globals[name] = value
+        cls._class_globals[name] = value
+        if instance is not None:
+            instance._globals[name] = value
 
-    def add_test(self, name: str, fn):
-        """Register a custom test.
+    @_ClassOrInstanceMethod
+    def add_test(cls, instance, name: str, fn):
+        """Register a custom test (``{% if x is positive %}``).
 
-        Persisted at class level so new instances created by hot-reload
-        inherit it automatically.
+        Callable as classmethod or instance method. See ``add_filter`` for the
+        dual-call semantics.
         """
-        self._tests[name] = fn
-        Frond._class_tests[name] = fn
+        cls._class_tests[name] = fn
+        if instance is not None:
+            instance._tests[name] = fn
 
     def render(self, template: str, data: dict = None) -> str:
         """Render a template with data. Uses token caching for performance."""
