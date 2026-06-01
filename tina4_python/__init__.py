@@ -61,3 +61,26 @@ from tina4_python.container import Container  # noqa: E402, F401
 
 # ── Server ──
 from tina4_python.core.server import run, background  # noqa: E402, F401
+
+# ── HTTP Client ──
+from tina4_python.api import Api  # noqa: E402, F401
+
+# ── SOAP / WSDL ──
+from tina4_python.wsdl import WSDL, wsdl_operation  # noqa: E402, F401
+
+# ── GraphQL ──
+from tina4_python.graphql import GraphQL  # noqa: E402, F401
+
+# ── Auto-CRUD scaffolder ──
+from tina4_python.crud import AutoCrud  # noqa: E402, F401
+
+# ── Events (decoupled communication) ──
+from tina4_python.core.events import on, emit, once, off  # noqa: E402, F401
+
+# ── Email (Messenger) ──
+from tina4_python.messenger import Messenger  # noqa: E402, F401
+
+# ── Inline testing (@tests + assertions for inline test cases) ──
+# Class-based xUnit testing lives in tina4_python.test (a separate module).
+# Keep both surfaces re-exported so users can write either style.
+from tina4_python.Testing import tests, assert_equal as assert_equal_inline  # noqa: E402, F401

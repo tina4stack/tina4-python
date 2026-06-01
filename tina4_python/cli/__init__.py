@@ -743,8 +743,14 @@ async def list_{route_path}(request, response):
     page = int(request.params.get("page", 1))
     per_page = int(request.params.get("per_page", 20))
     offset = (page - 1) * per_page
-    results = {model}().select(limit=per_page, offset=offset)
-    return response(results.to_paginate(page=page, per_page=per_page))
+    records, total = {model}.where("1=1", limit=per_page, offset=offset, with_count=True)
+    return response({{
+        "records": [r.to_dict() for r in records],
+        "count": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": max(1, -(-total // per_page)),
+    }})
 
 
 @noauth()

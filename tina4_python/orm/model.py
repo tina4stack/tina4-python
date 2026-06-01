@@ -568,10 +568,21 @@ class ORM(metaclass=ORMMeta):
         return instances
 
     @classmethod
-    def select(cls, sql: str, params: list = None, limit: int = 20, offset: int = 0,
+    def select(cls, sql: str = None, params: list = None, limit: int = 20, offset: int = 0,
                include: list[str] = None) -> list[Self]:
-        """SQL-first query — returns array of ORM objects."""
+        """SQL-first query — returns array of ORM objects.
+
+        When ``sql`` is omitted, defaults to ``SELECT * FROM <table>`` so
+        ``Product.select(limit=20)`` works as the scaffolder's CRUD-list
+        route expects. Same soft-delete filter as ``where()`` is applied
+        when ``cls.soft_delete`` is True.
+        """
         db = cls._get_db()
+        if not sql:
+            table = cls._get_table()
+            sql = f"SELECT * FROM {table}"
+            if cls.soft_delete:
+                sql += " WHERE is_deleted = 0 OR is_deleted IS NULL"
         result = db.fetch(sql, params, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
         if include:
