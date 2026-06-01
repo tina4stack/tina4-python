@@ -141,7 +141,7 @@ class TestFormTokenJWTStructure:
         output = engine.render_string("{{ form_token() }}")
         token = _extract_token_from_html(output)
         auth = Auth(secret="test-secret-key")
-        assert auth.valid_token(token) is True
+        assert auth.valid_token(token) is not None
         payload = auth.get_payload(token)
         assert payload["type"] == "form"
 
@@ -198,7 +198,7 @@ class TestFormTokenDescriptorEdgeCases:
         token = _extract_token_from_html(output)
         # Should validate with the same secret
         auth = Auth(secret="test-secret-key")
-        assert auth.valid_token(token) is True
+        assert auth.valid_token(token) is not None
         # Should NOT validate with a different secret
         wrong_auth = Auth(secret="wrong-secret")
-        assert wrong_auth.valid_token(token) is False
+        assert wrong_auth.valid_token(token) is None

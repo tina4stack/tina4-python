@@ -23,14 +23,14 @@ class TestJWT:
 
     def test_validate_token(self, auth):
         token = auth.get_token({"user_id": 1, "role": "admin"})
-        assert auth.valid_token(token) is True
+        assert auth.valid_token(token) is not None
         payload = auth.get_payload(token)
         assert payload["user_id"] == 1
         assert payload["role"] == "admin"
 
     def test_token_has_iat(self, auth):
         token = auth.get_token({"user_id": 1})
-        assert auth.valid_token(token) is True
+        assert auth.valid_token(token) is not None
         payload = auth.get_payload(token)
         assert "iat" in payload
 
@@ -42,7 +42,7 @@ class TestJWT:
 
     def test_token_no_expiry(self, auth):
         token = auth.get_token({"user_id": 1}, expires_in=0)
-        assert auth.valid_token(token) is True
+        assert auth.valid_token(token) is not None
         payload = auth.get_payload(token)
         assert "exp" not in payload
 
@@ -62,7 +62,7 @@ class TestJWT:
         refreshed = auth.refresh_token(original)
         assert refreshed is not None
         assert refreshed != original
-        assert auth.valid_token(refreshed) is True
+        assert auth.valid_token(refreshed) is not None
         payload = auth.get_payload(refreshed)
         assert payload["user_id"] == 1
         assert payload["role"] == "admin"
@@ -70,18 +70,18 @@ class TestJWT:
 
 class TestJWTNegative:
     def test_invalid_token(self, auth):
-        assert auth.valid_token("not.a.token") is False
+        assert auth.valid_token("not.a.token") is None
 
     def test_tampered_token(self, auth):
         token = auth.get_token({"user_id": 1})
         parts = token.split(".")
         parts[1] = parts[1] + "tampered"
-        assert auth.valid_token(".".join(parts)) is False
+        assert auth.valid_token(".".join(parts)) is None
 
     def test_wrong_secret(self, auth):
         token = auth.get_token({"user_id": 1})
         other = Auth(secret="wrong-secret")
-        assert other.valid_token(token) is False
+        assert other.valid_token(token) is None
 
     def test_expired_token(self):
         auth = Auth(secret="test", expires_in=0)
@@ -92,10 +92,10 @@ class TestJWTNegative:
         payload = _b64url_encode(json.dumps({"user_id": 1, "exp": int(time.time()) - 10}).encode())
         sig = auth._sign(f"{header}.{payload}")
         expired = f"{header}.{payload}.{sig}"
-        assert auth.valid_token(expired) is False
+        assert auth.valid_token(expired) is None
 
     def test_empty_token(self, auth):
-        assert auth.valid_token("") is False
+        assert auth.valid_token("") is None
 
     def test_refresh_invalid_token(self, auth):
         assert auth.refresh_token("bad.token.here") is None
@@ -236,7 +236,7 @@ class TestJWTClaims:
         sig = auth._sign(f"{header}.{payload}")
         expired_token = f"{header}.{payload}.{sig}"
         # valid_token should reject it
-        assert auth.valid_token(expired_token) is False
+        assert auth.valid_token(expired_token) is None
         # get_payload should still return payload
         result = auth.get_payload(expired_token)
         assert result is not None
@@ -258,10 +258,10 @@ class TestJWTClaims:
 
 class TestJWTEdgeCases:
     def test_two_part_token(self, auth):
-        assert auth.valid_token("header.payload") is False
+        assert auth.valid_token("header.payload") is None
 
     def test_four_part_token(self, auth):
-        assert auth.valid_token("a.b.c.d") is False
+        assert auth.valid_token("a.b.c.d") is None
 
     def test_none_payload_handling(self, auth):
         assert auth.get_payload("") is None

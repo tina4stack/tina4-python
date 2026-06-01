@@ -586,8 +586,18 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def where(cls, filter_sql: str, params: list = None, limit: int = 20, offset: int = 0,
-              include: list[str] = None) -> list[Self]:
-        """Query with WHERE clause — returns array of ORM objects."""
+              include: list[str] = None, with_count: bool = False):
+        """Query with WHERE clause — returns array of ORM objects.
+
+        Two return shapes:
+
+        * ``Model.where("active = ?", [1])``               → ``list[Self]``
+        * ``Model.where("active = ?", [1], with_count=True)`` → ``tuple[list[Self], int]``
+
+        The tuple form is for pagination UIs where the total count is
+        needed alongside the page slice — saves a second query. Total
+        count respects the same filter clause but ignores limit/offset.
+        """
         db = cls._get_db()
         table = cls._get_table()
 
@@ -599,6 +609,18 @@ class ORM(metaclass=ORMMeta):
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
+
+        if with_count:
+            count_sql = f"SELECT COUNT(*) AS n FROM {table} WHERE {filter_sql}"
+            if cls.soft_delete:
+                count_sql = (
+                    f"SELECT COUNT(*) AS n FROM {table} "
+                    f"WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
+                )
+            count_row = db.fetch_one(count_sql, params)
+            total = int(count_row["n"]) if count_row else len(instances)
+            return instances, total
+
         return instances
 
     @classmethod

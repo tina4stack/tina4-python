@@ -96,10 +96,11 @@ class TestGetKeyError:
         with pytest.raises(KeyError, match="service not registered"):
             c.get("missing")
 
-    def test_raises_after_reset(self):
+    def test_raises_after_reset_all(self):
+        """reset_all() wipes everything — get() raises KeyError after."""
         c = Container()
         c.register("temp", lambda: 1)
-        c.reset()
+        c.reset_all()
         with pytest.raises(KeyError):
             c.get("temp")
 
@@ -108,20 +109,36 @@ class TestGetKeyError:
 
 
 class TestReset:
-    """Test reset() clears all registrations."""
+    """Test reset() — clears cached singleton instances; keeps factories.
 
-    def test_reset_clears_all(self):
+    The 3.13.0 contract changed: reset() used to wipe everything (factories
+    AND cached singletons). Now reset() only clears the cache so factories
+    re-run on next get(); reset_all() wipes everything.
+    """
+
+    def test_reset_keeps_factories_clears_cache(self):
         c = Container()
         c.register("a", lambda: 1)
         c.singleton("b", lambda: 2)
+        # Prime the singleton cache
+        c.get("b")
         c.reset()
+        # Factories still registered
+        assert c.has("a") is True
+        assert c.has("b") is True
+
+    def test_reset_all_clears_everything(self):
+        c = Container()
+        c.register("a", lambda: 1)
+        c.singleton("b", lambda: 2)
+        c.reset_all()
         assert c.has("a") is False
         assert c.has("b") is False
 
     def test_reset_allows_re_registration(self):
         c = Container()
         c.register("x", lambda: "old")
-        c.reset()
+        c.reset_all()
         c.register("x", lambda: "new")
         assert c.get("x") == "new"
 
@@ -259,14 +276,14 @@ class TestMultipleContainers:
         assert c1.get("name") == "alice"
         assert c2.get("name") == "bob"
 
-    def test_reset_one_does_not_affect_other(self):
+    def test_reset_all_one_does_not_affect_other(self):
         c1 = Container()
         c2 = Container()
 
         c1.register("x", lambda: 1)
         c2.register("x", lambda: 2)
 
-        c1.reset()
+        c1.reset_all()
         assert c1.has("x") is False
         assert c2.has("x") is True
         assert c2.get("x") == 2

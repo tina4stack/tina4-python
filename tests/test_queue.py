@@ -102,9 +102,12 @@ class TestQueue:
         job = q.pop()
         job.fail("err1")
         # Attempts = 1 which equals max_retries = 1 → dead letter
+        # dead_letters() returns list[Job] (was list[dict] in 3.12.x)
         dead = q.dead_letters()
         assert len(dead) == 1
-        assert dead[0]["data"]["task"] == "doomed"
+        from tina4_python.queue.job import Job
+        assert isinstance(dead[0], Job)
+        assert dead[0].payload["task"] == "doomed"
 
     def test_failed(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "failed_queue"))

@@ -227,7 +227,7 @@ class TestAuthJWT:
     def test_create_and_validate_token(self):
         auth = Auth(secret="smoke-secret", expires_in=30)
         token = auth.get_token({"user_id": 1, "role": "admin"})
-        assert auth.valid_token(token) is True
+        assert auth.valid_token(token) is not None
         payload = auth.get_payload(token)
         assert payload["user_id"] == 1
         assert payload["role"] == "admin"
@@ -239,7 +239,7 @@ class TestAuthJWT:
         payload = _b64url_encode(json.dumps({"user_id": 1, "exp": int(time.time()) - 10}).encode())
         sig = auth._sign(f"{header}.{payload}")
         expired = f"{header}.{payload}.{sig}"
-        assert auth.valid_token(expired) is False
+        assert auth.valid_token(expired) is None
 
 
 # ── 9. Middleware ────────────────────────────────────────────────
@@ -860,7 +860,7 @@ class TestAuthAdvanced:
     def test_token_payload_contains_claims(self):
         auth = Auth(secret="test-key", expires_in=60)
         token = auth.get_token({"role": "admin", "org": "acme"})
-        assert auth.valid_token(token) is True
+        assert auth.valid_token(token) is not None
         payload = auth.get_payload(token)
         assert payload["role"] == "admin"
         assert payload["org"] == "acme"
@@ -869,7 +869,7 @@ class TestAuthAdvanced:
         auth1 = Auth(secret="secret-a", expires_in=60)
         auth2 = Auth(secret="secret-b", expires_in=60)
         token = auth1.get_token({"user_id": 1})
-        assert auth2.valid_token(token) is False
+        assert auth2.valid_token(token) is None
 
     def test_token_tampered_payload_rejected(self):
         auth = Auth(secret="secure-key", expires_in=60)
@@ -881,7 +881,7 @@ class TestAuthAdvanced:
         tampered = payload_bytes.replace(b"1", b"9")
         parts[1] = base64.urlsafe_b64encode(tampered).rstrip(b"=").decode()
         tampered_token = ".".join(parts)
-        assert auth.valid_token(tampered_token) is False
+        assert auth.valid_token(tampered_token) is None
 
 
 # ── 29. Response Advanced ────────────────────────────────────────

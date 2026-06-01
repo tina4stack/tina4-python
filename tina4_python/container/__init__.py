@@ -27,7 +27,8 @@ class Container:
       subsequent calls return the memoised instance.
     - ``get(name)``                — resolve a dependency by name.
     - ``has(name)``                — check if a name is registered.
-    - ``reset()``                  — clear all registrations.
+    - ``reset()``                  — clear cached singletons; keep factories.
+    - ``reset_all()``              — clear both singletons AND factories.
     """
 
     def __init__(self):
@@ -80,6 +81,24 @@ class Container:
             return name in self._factories
 
     def reset(self) -> None:
-        """Clear all registrations."""
+        """Clear cached singleton instances; keep factory registrations.
+
+        Common test-fixture pattern: reset to drop cached state between
+        tests while keeping the DI graph wired. Transient registrations
+        are unaffected (they have no cache to clear).
+
+        For the old behaviour (clear everything including factories) use
+        ``reset_all()``.
+        """
+        with self._lock:
+            for entry in self._factories.values():
+                if entry.get("singleton"):
+                    entry["instance"] = None
+
+    def reset_all(self) -> None:
+        """Clear ALL registrations — both factories and cached singletons.
+
+        Tear-down for end-of-suite / process-shutdown scenarios.
+        """
         with self._lock:
             self._factories.clear()

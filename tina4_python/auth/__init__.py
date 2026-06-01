@@ -98,26 +98,42 @@ class Auth:
         return f"{h}.{p}.{signature}"
 
     @_DualMethod
-    def valid_token(self, token: str) -> bool:
-        """Validate a JWT signature and expiry. Returns True if valid, False otherwise."""
+    def valid_token(self, token: str) -> "dict | None":
+        """Validate a JWT signature + expiry. Returns the decoded payload
+        on success, or ``None`` if invalid / expired / malformed.
+
+        The payload dict is truthy for valid tokens and ``None`` is falsy,
+        so the legacy ``if Auth.valid_token(t):`` boolean-style usage keeps
+        working unchanged. Callers that want the payload can now read it
+        directly instead of a separate ``get_payload(t)`` call::
+
+            payload = Auth.valid_token(token)
+            if payload is None:
+                return response("Unauthorized", 401)
+            user_id = payload["user_id"]
+
+        Matches the convention used by PyJWT, python-jose, and authlib —
+        validity check returns the payload because the validation IS the
+        payload decode. Returning bare True/False discarded that information.
+        """
         try:
             parts = token.split(".")
             if len(parts) != 3:
-                return False
+                return None
 
             h, p, sig = parts
             expected = self._sign(f"{h}.{p}")
             if not hmac.compare_digest(sig, expected):
-                return False
+                return None
 
             payload = json.loads(_b64url_decode(p))
 
             if "exp" in payload and time.time() > payload["exp"]:
-                return False
+                return None
 
-            return True
+            return payload
         except Exception:
-            return False
+            return None
 
     @_DualMethod
     def get_payload(self, token: str) -> dict | None:
@@ -137,9 +153,7 @@ class Auth:
         Args:
             expires_in: Lifetime in minutes (default: self.expires_in).
         """
-        if not self.valid_token(token):
-            return None
-        payload = self.get_payload(token)
+        payload = self.valid_token(token)
         if payload is None:
             return None
         payload.pop("iat", None)
@@ -166,8 +180,11 @@ class Auth:
         return auth.get_token(payload)
 
     @classmethod
-    def valid_token_static(cls, token: str) -> bool:
-        """Validate a JWT without instantiating Auth — reads SECRET from env."""
+    def valid_token_static(cls, token: str) -> "dict | None":
+        """Validate a JWT without instantiating Auth — reads SECRET from env.
+
+        Returns the decoded payload on success, ``None`` on failure.
+        """
         secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
         auth = cls(secret=secret)
         return auth.valid_token(token)
@@ -307,8 +324,13 @@ def get_token(payload: dict, expires_in: int = 60, secret: str = None) -> str:
     return Auth.get_token_static(payload, expires_in=expires_in)
 
 
-def valid_token(token: str) -> bool:
-    """Validate a JWT signature and expiry — reads SECRET from env. Returns True if valid."""
+def valid_token(token: str) -> "dict | None":
+    """Validate a JWT signature and expiry — reads SECRET from env.
+
+    Returns the decoded payload dict on success, ``None`` on failure.
+    The truthy/falsy split keeps legacy ``if valid_token(t):`` code working
+    while letting new code read the payload directly.
+    """
     return Auth.valid_token_static(token)
 
 

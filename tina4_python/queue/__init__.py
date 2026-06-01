@@ -145,9 +145,35 @@ class Queue:
         """Get jobs that failed but are still eligible for retry."""
         return self._backend.failed()
 
-    def dead_letters(self, max_retries: int = None) -> list[dict]:
-        """Get jobs that exceeded max retries."""
-        return self._backend.dead_letters(max_retries=max_retries if max_retries is not None else self.max_retries)
+    def dead_letters(self, max_retries: int = None) -> list[Job]:
+        """Get jobs that exceeded max retries.
+
+        Returns ``Job`` objects with the failure reason on ``.error``,
+        not raw dicts — so callers can iterate uniformly with the rest
+        of the queue API (``for job in queue.consume()``).
+
+            for job in queue.dead_letters():
+                logger.error(f"Dead: {job.id} after {job.attempts} attempts: {job.error}")
+                job.retry()  # or just leave it dead
+
+        Backends still return dicts internally; this method wraps each
+        into a Job whose ``.error`` field is populated from the dict's
+        ``error`` key (when present).
+        """
+        max_r = max_retries if max_retries is not None else self.max_retries
+        raw = self._backend.dead_letters(max_retries=max_r)
+        return [
+            Job(
+                queue=self,
+                job_id=d.get("id"),
+                topic=d.get("topic", self.topic),
+                data=d.get("payload") if "payload" in d else d.get("data", {}),
+                priority=d.get("priority", 0),
+                attempts=d.get("attempts", 0),
+                error=d.get("error"),
+            )
+            for d in raw
+        ]
 
     def retry(self, job_id: str = None, delay_seconds: int = 0) -> bool:
         """Retry a failed job by ID, or all dead-letter jobs if no ID given."""
@@ -155,7 +181,8 @@ class Queue:
             dead = self.dead_letters()
             if not dead:
                 return False
-            return any(self._backend.retry_job(j["id"], delay_seconds) for j in dead)
+            # dead is now list[Job] — pull the id off each
+            return any(self._backend.retry_job(j.id, delay_seconds) for j in dead)
         return self._backend.retry_job(job_id, delay_seconds)
 
     def clear(self) -> int:
