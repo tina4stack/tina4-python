@@ -178,6 +178,72 @@ class ServiceContext:
 
 
 # ---------------------------------------------------------------------------
+# Service base class (3.13.1) — class-based pattern with run/stop/should_stop
+# ---------------------------------------------------------------------------
+
+
+class Service:
+    """Base class for class-based background services managed by ServiceRunner.
+
+    Cross-framework parity with PHP ``Tina4\\Service``, Ruby ``Tina4::Service``
+    and Node ``Tina4Service``. Subclasses implement ``run()`` (the work
+    loop); the base provides ``stop()`` and ``should_stop()`` helpers
+    backed by an internal flag.
+
+        class EmailQueueWorker(Service):
+            def run(self):
+                while not self.should_stop():
+                    job = queue.pop()
+                    if job is None:
+                        time.sleep(1); continue
+                    process(job)
+                    job.complete()
+
+        runner = ServiceRunner()
+        runner.register_service("emails", EmailQueueWorker())
+        runner.start()
+
+    Function-style services without state can still register directly via
+    ``runner.register('name', callable, interval=N)``. The two patterns
+    coexist.
+    """
+
+    def __init__(self):
+        self._running = True
+
+    def run(self) -> None:
+        """Main work loop — subclasses MUST override."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__}.run() must be implemented by the subclass"
+        )
+
+    def stop(self) -> None:
+        """Signal this service to stop. Override for custom shutdown behaviour
+        but always call ``super().stop()`` so the internal flag gets set —
+        ``should_stop()`` reads from it.
+        """
+        self._running = False
+
+    def should_stop(self) -> bool:
+        """Returns True once ``stop()`` has been called. Use inside ``run()``
+        loops as the exit condition::
+
+            def run(self):
+                while not self.should_stop():
+                    # do work
+        """
+        return not self._running
+
+    def __call__(self, *args, **kwargs):
+        """Make the Service instance callable so it can be passed directly
+        to ``ServiceRunner.register('name', service_instance, daemon=True)``.
+        Cleanly dispatches to ``run()`` while ignoring the runner's
+        ServiceContext argument (Service subclasses manage their own state).
+        """
+        return self.run()
+
+
+# ---------------------------------------------------------------------------
 # ServiceRunner
 # ---------------------------------------------------------------------------
 
@@ -219,6 +285,43 @@ class ServiceRunner:
             "running": False,
             "last_run": None,
             "started_at": None,
+        })
+
+    def register_service(self, name: str, service: "Service", max_retries: int = 3):
+        """Register a class-based service (:class:`Service` instance) by name.
+
+        Wraps the Service's ``run()`` method as the handler callable that
+        ``start()`` invokes. Defaults to ``daemon=True`` because Service
+        subclasses manage their own loop inside ``run()``.
+
+            class EmailWorker(Service):
+                def run(self):
+                    while not self.should_stop():
+                        process_one()
+
+            runner.register_service("emails", EmailWorker())
+            runner.start()
+
+        Cross-framework parity with PHP ``ServiceRunner::registerService``,
+        Ruby ``ServiceRunner.register_service``, Node
+        ``ServiceRunner.registerService``.
+        """
+        if not isinstance(service, Service):
+            raise TypeError(
+                f"service must be a Service instance, got {type(service).__name__}"
+            )
+        self.services.append({
+            "name": name,
+            "handler": service,  # Service instances are callable (see __call__)
+            "interval": 0,
+            "cron": None,
+            "daemon": True,  # Service subclasses manage their own loop
+            "max_retries": max_retries,
+            "retries": 0,
+            "running": False,
+            "last_run": None,
+            "started_at": None,
+            "instance": service,  # keep reference so stop() can route to service.stop()
         })
 
     # -- Lifecycle ----------------------------------------------------------
