@@ -42,6 +42,9 @@ from tina4_python.orm import (  # noqa: E402, F401
     has_many, has_one, belongs_to,  # relationship descriptors
 )
 
+# ── Env (typed env-var helpers) ──
+from tina4_python.env import Env  # noqa: E402, F401
+
 # ── Auth ──
 from tina4_python.auth import Auth  # noqa: E402, F401
 

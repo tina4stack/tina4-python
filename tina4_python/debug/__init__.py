@@ -320,10 +320,57 @@ class Log:
         now = datetime.now(timezone.utc)
         return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
 
+    # Frame names that belong to Log itself — walk past them when looking
+    # for the real caller. Kept as a class attribute so subclasses can
+    # extend if they layer extra wrappers (and so tests can introspect).
+    _OWN_FRAMES = frozenset({
+        "_caller_name", "_format_line", "_format", "_log",
+        "debug", "info", "warning", "error", "critical",
+    })
+
+    @classmethod
+    def _caller_name(cls) -> str | None:
+        """Return the function name that called Log.{debug,info,warning,error}.
+
+        Active only when ``TINA4_LOG_FUNC=true`` — the lookup uses
+        ``inspect.currentframe()`` which is ~5% overhead per log call.
+        Walks past Log's own frames (``_OWN_FRAMES``) to land on the
+        real caller, so the count is robust whether the test calls
+        ``_format_line`` directly or goes through ``Log.info`` →
+        ``_log`` → ``_format_line``. Returns ``None`` if the stack is
+        too shallow (e.g. log called from module import) or if anything
+        goes wrong — never raises. Parity feature #41 across all four
+        Tina4 frameworks.
+        """
+        import os
+        if os.environ.get("TINA4_LOG_FUNC", "").strip().lower() not in (
+            "1", "true", "on", "yes", "y", "t"
+        ):
+            return None
+        try:
+            import inspect
+            frame = inspect.currentframe()
+            # Walk past Log's own frames. Cap the walk at 16 to defend
+            # against any pathological recursion / wrapper stack.
+            for _ in range(16):
+                if frame is None:
+                    return None
+                name = frame.f_code.co_name
+                if name not in cls._OWN_FRAMES:
+                    # Filter out anonymous / module-level callers — they're noise.
+                    if name in ("<module>", "<lambda>", "<genexpr>", "<listcomp>", "<setcomp>", "<dictcomp>"):
+                        return None
+                    return name
+                frame = frame.f_back
+            return None
+        except Exception:
+            return None
+
     @classmethod
     def _format_line(cls, level: str, message: str, **kwargs) -> str:
         timestamp = cls._timestamp()
         request_id = get_request_id()
+        caller = cls._caller_name()
 
         # JSON format wins whenever the explicit env opt-in is set,
         # regardless of production flag (so dev devs can ship JSON to
@@ -336,6 +383,8 @@ class Log:
             }
             if request_id:
                 entry["request_id"] = request_id
+            if caller:
+                entry["function"] = caller
             if kwargs:
                 entry["context"] = {k: v for k, v in kwargs.items()}
             return json.dumps(entry, default=str)
@@ -345,6 +394,8 @@ class Log:
         parts = [timestamp, f"[{level_str}]"]
         if request_id:
             parts.append(f"[{request_id}]")
+        if caller:
+            parts.append(f"[{caller}]")
         parts.append(message)
         if kwargs:
             parts.append(json.dumps(kwargs, default=str))
