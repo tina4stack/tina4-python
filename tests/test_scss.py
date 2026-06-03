@@ -150,6 +150,49 @@ class TestMath:
         css = compile_string(".box { width: 10px * 2px; }")
         assert "20px" in css
 
+    # ── Mixed-unit arithmetic — regression for tina4-python#42 ──
+    #
+    # Before the fix, the evaluator extracted the unit from the first
+    # operand only and dropped the second's, silently producing wrong CSS:
+    #   100vh - 170px → -70vh (negative, layout-breaking)
+    #   100% - 20px   → 80%
+    # After the fix, mixed-unit expressions are left verbatim so the
+    # browser computes them — that is exactly what calc() is for.
+
+    def test_mixed_units_outside_calc_left_verbatim(self):
+        css = compile_string(".box { max-height: 100vh - 170px; }")
+        # NOT folded to -70vh; the source token must survive.
+        assert "100vh" in css and "170px" in css
+        assert "-70vh" not in css
+
+    def test_mixed_units_percent_px_left_verbatim(self):
+        css = compile_string(".box { width: 100% - 20px; }")
+        assert "100%" in css and "20px" in css
+        assert "80%" not in css
+
+    def test_calc_with_mixed_units_preserved(self):
+        css = compile_string(".box { max-height: calc(100vh - 170px); }")
+        assert "calc(100vh - 170px)" in css
+
+    def test_calc_with_percent_and_px_preserved(self):
+        css = compile_string(".box { width: calc(50% + 10px); }")
+        assert "calc(50% + 10px)" in css
+
+    def test_same_unit_still_folds(self):
+        # Regression guard — the fix must NOT break valid arithmetic.
+        css = compile_string(".box { width: 10px + 5px; padding: 1rem + 2rem; }")
+        assert "15px" in css
+        assert "3rem" in css
+
+    def test_unitless_multiplication_still_folds(self):
+        # 2 * 5px is valid CSS-style arithmetic and should fold.
+        css = compile_string(".box { width: 2 * 5px; }")
+        assert "10px" in css
+
+    def test_unitless_division_still_folds(self):
+        css = compile_string(".box { width: 10px / 2; }")
+        assert "5px" in css
+
 
 # ── Color Function Tests ──────────────────────────────────────
 

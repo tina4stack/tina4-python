@@ -249,40 +249,78 @@ def _resolve_extends(scss: str, placeholders: dict) -> str:
 
 
 def _eval_math(scss: str) -> str:
-    """Evaluate simple math in property values (e.g., 10px + 5px)."""
+    """Evaluate simple math in property values (e.g., 10px + 5px).
+
+    Mixed-unit arithmetic is left verbatim — that is exactly what CSS calc()
+    is for, and folding it silently produces invalid output (see #42). Math
+    inside calc(...) is preserved untouched on the same principle: the author
+    asked the browser to compute it.
+
+    Rules for folding:
+      * Both operands unitless                  → fold
+      * Same unit on both operands              → fold, keep unit
+      * One operand unitless for * or /         → fold, keep the other unit
+      * Anything else (mixed units on +/-, etc) → leave verbatim
+    """
+    # Step 1 — mask calc(...) ranges so the math regex cannot eat into them.
+    # CSS calc() is the contract for mixed-unit arithmetic; the browser does it.
+    placeholders: list[str] = []
+
+    def _mask(m):
+        placeholders.append(m.group(0))
+        return f"\x00CALC{len(placeholders) - 1}\x00"
+
+    masked = re.sub(r'calc\([^()]*\)', _mask, scss)
+
+    # Step 2 — run the math fold on what remains.
     def _calc(m):
         full = m.group(0)
         try:
-            # Extract numbers and operator
-            num1 = float(re.search(r'[\d.]+', m.group(1)).group())
-            num2 = float(re.search(r'[\d.]+', m.group(3)).group())
-            op = m.group(2).strip()
-            # Extract unit from first operand
-            unit_match = re.search(r'[a-z%]+', m.group(1))
-            unit = unit_match.group() if unit_match else ""
-
-            if op == "+":
-                result = num1 + num2
-            elif op == "-":
-                result = num1 - num2
-            elif op == "*":
-                result = num1 * num2
-            elif op == "/":
-                result = num1 / num2 if num2 != 0 else 0
-            else:
-                return full
-
-            # Format result
-            if result == int(result):
-                return f"{int(result)}{unit}"
-            return f"{result:.2f}{unit}"
+            num1 = float(m.group(1))
+            unit1 = m.group(2) or ""
+            op = m.group(3)
+            num2 = float(m.group(4))
+            unit2 = m.group(5) or ""
         except (ValueError, AttributeError):
             return full
 
-    return re.sub(
-        r'([\d.]+[a-z%]*)\s*([+\-*/])\s*([\d.]+[a-z%]*)',
-        _calc, scss
+        # Decide result unit; bail (leave verbatim) if units are incompatible.
+        if unit1 == unit2:
+            unit = unit1
+        elif op in ("*", "/") and not unit1:
+            unit = unit2
+        elif op in ("*", "/") and not unit2:
+            unit = unit1
+        else:
+            return full
+
+        if op == "+":
+            result = num1 + num2
+        elif op == "-":
+            result = num1 - num2
+        elif op == "*":
+            result = num1 * num2
+        elif op == "/":
+            if num2 == 0:
+                return full
+            result = num1 / num2
+        else:
+            return full
+
+        if result == int(result):
+            return f"{int(result)}{unit}"
+        return f"{result:.2f}{unit}"
+
+    folded = re.sub(
+        r'([\d.]+)([a-z%]*)\s*([+\-*/])\s*([\d.]+)([a-z%]*)',
+        _calc, masked
     )
+
+    # Step 3 — restore the calc() ranges verbatim.
+    def _unmask(m):
+        return placeholders[int(m.group(1))]
+
+    return re.sub(r'\x00CALC(\d+)\x00', _unmask, folded)
 
 
 def _resolve_color_functions(scss: str, variables: dict) -> str:
