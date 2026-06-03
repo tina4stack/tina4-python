@@ -725,8 +725,9 @@ class Database:
     def from_env(env_key: str = "TINA4_DATABASE_URL", pool: int = 0) -> "Database | None":
         """Construct a Database instance from environment variables.
 
-        Reads the connection URL from the named env var (default DATABASE_URL),
-        and DATABASE_USERNAME / DATABASE_PASSWORD for credentials.
+        Reads the connection URL from the named env var (default
+        TINA4_DATABASE_URL), and TINA4_DATABASE_USERNAME /
+        TINA4_DATABASE_PASSWORD for credentials.
 
         Args:
             env_key: Environment variable name holding the connection URL.

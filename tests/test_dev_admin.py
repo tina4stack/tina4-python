@@ -618,6 +618,56 @@ class TestAPIHandlers:
         assert "password" in result
 
     @pytest.mark.asyncio
+    async def test_connections_save_preserves_tina4_prefix(
+        self, mock_req, mock_resp, tmp_path, monkeypatch
+    ):
+        """Regression for tina4-python#45 — _api_connections_save must write
+        TINA4_DATABASE_URL=..., not the legacy bare DATABASE_URL=...
+
+        The previous code stripped the prefix when rewriting an existing line,
+        which silently broke the next restart because the boot guard rejects
+        the bare key since v3.12.
+        """
+        from tina4_python.dev_admin import _api_connections_save
+
+        # Run the test inside an isolated cwd so we don't clobber the real .env
+        monkeypatch.chdir(tmp_path)
+        env_path = tmp_path / ".env"
+        env_path.write_text(
+            "# top-level comment\n"
+            "TINA4_DATABASE_URL=sqlite:///old.db\n"
+            "TINA4_DATABASE_USERNAME=alice\n"
+            "TINA4_DATABASE_PASSWORD=secret\n"
+            "OTHER_VAR=keep-me\n"
+        )
+
+        mock_req.body = {
+            "url": "sqlite:///new.db",
+            "username": "bob",
+            "password": "fresh",
+        }
+        await _api_connections_save(mock_req, mock_resp)
+
+        written = env_path.read_text()
+
+        # The three DB keys must keep the TINA4_ prefix.
+        assert "TINA4_DATABASE_URL=sqlite:///new.db" in written
+        assert "TINA4_DATABASE_USERNAME=bob" in written
+        assert "TINA4_DATABASE_PASSWORD=fresh" in written
+
+        # The legacy bare names must NOT appear as standalone keys —
+        # they would be rejected by the boot guard.
+        assert "\nDATABASE_URL=" not in written
+        assert "\nDATABASE_USERNAME=" not in written
+        assert "\nDATABASE_PASSWORD=" not in written
+        # Guard against the file starting with the legacy bare key too.
+        assert not written.startswith("DATABASE_URL=")
+
+        # Unrelated keys + comments survive untouched.
+        assert "# top-level comment" in written
+        assert "OTHER_VAR=keep-me" in written
+
+    @pytest.mark.asyncio
     async def test_version_check_handler(self, mock_req, mock_resp):
         from tina4_python.dev_admin import _api_version_check
         result = await _api_version_check(mock_req, mock_resp)

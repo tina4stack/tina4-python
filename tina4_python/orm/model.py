@@ -278,7 +278,7 @@ class ORM(metaclass=ORMMeta):
             return cls._db  # Direct Database instance
 
         if _database is None:
-            # Try auto-discovery from DATABASE_URL
+            # Try auto-discovery from TINA4_DATABASE_URL
             import os
             url = os.environ.get("TINA4_DATABASE_URL")
             if url:
@@ -289,7 +289,7 @@ class ORM(metaclass=ORMMeta):
                 orm_bind(db)
                 return db
             raise RuntimeError(
-                "No database bound. Call orm_bind(db) or set DATABASE_URL in .env"
+                "No database bound. Call orm_bind(db) or set TINA4_DATABASE_URL in .env"
             )
         return _database
 

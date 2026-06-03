@@ -215,6 +215,52 @@ class TestDatabaseURL:
         with pytest.raises(ValueError, match="Unknown database driver"):
             Database("fakedb://localhost/test")
 
+    def test_from_env_default_key_is_tina4_prefixed(self, monkeypatch, tmp_path):
+        """Regression for tina4-python#45 — `Database.from_env()` must default to
+        the TINA4_DATABASE_URL env var, not the legacy bare DATABASE_URL.
+        The boot guard since v3.12 rejects the bare form."""
+        # Clear both so we know exactly what's being read.
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("TINA4_DATABASE_URL", raising=False)
+
+        # Bare DATABASE_URL alone must NOT satisfy the lookup.
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'wrong.db'}")
+        assert Database.from_env() is None, \
+            "from_env() must not fall back to the legacy DATABASE_URL key"
+
+        # TINA4_DATABASE_URL DOES satisfy the lookup.
+        monkeypatch.setenv("TINA4_DATABASE_URL", f"sqlite:///{tmp_path / 'right.db'}")
+        db = Database.from_env()
+        assert db is not None
+        db.close()
+
+
+class TestOrmAutoBindError:
+    """Regression for tina4-python#45 — the ORM's "no database bound" error
+    must point users at TINA4_DATABASE_URL, not the legacy bare DATABASE_URL.
+    The legacy name is rejected by the boot guard since v3.12, so the old
+    message led users to set a key that was guaranteed to fail."""
+
+    def test_no_database_error_mentions_tina4_database_url(self, monkeypatch):
+        from tina4_python.orm import ORM, orm_bind, IntegerField
+
+        # Wipe global ORM binding and TINA4_DATABASE_URL so auto-discovery fails.
+        orm_bind(None)
+        monkeypatch.delenv("TINA4_DATABASE_URL", raising=False)
+
+        class _NoBindModel(ORM):
+            id = IntegerField(primary_key=True, auto_increment=True)
+
+        with pytest.raises(RuntimeError) as excinfo:
+            _NoBindModel._get_db()
+
+        msg = str(excinfo.value)
+        assert "TINA4_DATABASE_URL" in msg, \
+            f"Error must mention TINA4_DATABASE_URL, got: {msg!r}"
+        # And must not point users at the legacy bare key.
+        assert "or set DATABASE_URL" not in msg, \
+            f"Error must not point at bare DATABASE_URL, got: {msg!r}"
+
 
 class TestSQLiteConnectionPath:
     """``sqlite:///X`` must resolve relative to the project root (cwd),

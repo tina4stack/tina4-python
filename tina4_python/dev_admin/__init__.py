@@ -1743,7 +1743,7 @@ def _tina4_robot_fallback(message: str) -> str:
     elif "orm" in msg or "model" in msg:
         return "Define ORM models in src/orm/ — one class per file. Use IntegerField, StringField, etc. Call model.save(), model.load(), model.select(). Don't forget to create a migration for the table."
     elif "database" in msg or "db" in msg:
-        return "Set DATABASE_URL in .env. Supports sqlite, postgres, mysql, firebird, mssql, mongodb. Use db.fetch(), db.insert(), db.update(), db.delete()."
+        return "Set TINA4_DATABASE_URL in .env. Supports sqlite, postgres, mysql, firebird, mssql, mongodb. Use db.fetch(), db.insert(), db.update(), db.delete()."
     elif "queue" in msg:
         return "Use Queue(topic='name') with queue.produce() to enqueue, queue.consume() to process. Supports litequeue, RabbitMQ, Kafka, MongoDB backends."
     elif "template" in msg or "twig" in msg:
@@ -1848,14 +1848,18 @@ async def _api_connections_save(request, response):
                 new_lines.append(line)
                 continue
             key = stripped.split("=", 1)[0].strip()
+            # Preserve the TINA4_ prefix when rewriting — the boot guard
+            # rejects bare DATABASE_URL / DATABASE_USERNAME / DATABASE_PASSWORD
+            # since v3.12, so stripping the prefix here would break the next
+            # restart. Bug filed as tina4-python#45.
             if key == "TINA4_DATABASE_URL":
-                new_lines.append(f"DATABASE_URL={url}")
+                new_lines.append(f"TINA4_DATABASE_URL={url}")
                 keys_found["TINA4_DATABASE_URL"] = True
             elif key == "TINA4_DATABASE_USERNAME":
-                new_lines.append(f"DATABASE_USERNAME={username}")
+                new_lines.append(f"TINA4_DATABASE_USERNAME={username}")
                 keys_found["TINA4_DATABASE_USERNAME"] = True
             elif key == "TINA4_DATABASE_PASSWORD":
-                new_lines.append(f"DATABASE_PASSWORD={password}")
+                new_lines.append(f"TINA4_DATABASE_PASSWORD={password}")
                 keys_found["TINA4_DATABASE_PASSWORD"] = True
             else:
                 new_lines.append(line)
