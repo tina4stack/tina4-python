@@ -1151,10 +1151,40 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
     return False
 
 
+def _is_function_middleware(mw) -> bool:
+    """A function-style middleware is a non-class callable that takes 3+ args.
+
+    Class-based middleware uses ``before_*`` / ``after_*`` method-name
+    dispatch. Function-based middleware uses Express/FastAPI-style
+    ``async def mw(request, response, next_handler)`` with a continuation
+    callable that invokes the next layer (or the route handler).
+    Documented in chapter 10 for 8+ examples; before tina4-book#141
+    PY-10-01 the framework silently ignored the function bodies.
+    """
+    import inspect
+    if isinstance(mw, type):
+        return False  # Class — class-based before_*/after_* dispatch
+    if not callable(mw):
+        return False
+    try:
+        sig = inspect.signature(mw)
+        # The third (or later) parameter is the next_handler continuation.
+        return len(sig.parameters) >= 3
+    except (TypeError, ValueError):
+        return False
+
+
 def _run_before_middleware(request: Request, response: Response, route: dict) -> tuple[Request, Response, bool]:
-    """Run before_* middleware methods. Returns (request, response, skip_handler)."""
+    """Run class-based before_* middleware methods. Returns (request, response, skip_handler).
+
+    Function-style ``async def mw(req, resp, next_handler)`` middleware is
+    skipped here — it's handled by ``_invoke_handler_with_middleware``
+    which wraps the route handler with each function's continuation.
+    """
     skip = False
     for _mw_cls in route.get("middleware", []):
+        if _is_function_middleware(_mw_cls):
+            continue  # Handled by the continuation wrapper instead
         _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
         for _attr_name in dir(_mw_inst):
             if _attr_name.startswith("before_"):
@@ -1172,8 +1202,15 @@ def _run_before_middleware(request: Request, response: Response, route: dict) ->
 
 
 def _run_after_middleware(request: Request, response: Response, route: dict) -> tuple[Request, Response]:
-    """Run after_* middleware methods."""
+    """Run class-based after_* middleware methods.
+
+    Function-style middleware that wraps the handler (with next_handler)
+    handles its own "after" code on the return path — no separate pass
+    needed for it here.
+    """
     for _mw_cls in route.get("middleware", []):
+        if _is_function_middleware(_mw_cls):
+            continue
         _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
         for _attr_name in dir(_mw_inst):
             if _attr_name.startswith("after_"):
@@ -1183,6 +1220,53 @@ def _run_after_middleware(request: Request, response: Response, route: dict) -> 
                     if _mw_result is not None:
                         request, response = _mw_result
     return request, response
+
+
+def _make_mw_continuation(mw, inner_next):
+    """Build a `next_handler` continuation for a function-style middleware.
+
+    Captures `mw` and the next layer (`inner_next`) in a closure. When
+    invoked, calls `mw(req, resp, next_handler=inner_next)`. The
+    middleware is responsible for awaiting `inner_next(req, resp)` if it
+    wants the chain to continue — otherwise it short-circuits.
+    """
+    async def wrapper(req, resp):
+        return await mw(req, resp, inner_next)
+    return wrapper
+
+
+async def _invoke_handler_with_middleware(request: Request, response: Response, route: dict, params: dict) -> Response:
+    """Invoke the route handler, wrapping with any function-style middleware.
+
+    Function-style middleware (``async def mw(req, resp, next_handler)``)
+    forms a Russian-doll continuation chain — the first declared
+    middleware is the outermost layer; it calls ``next_handler`` to
+    descend, and the route handler is the innermost. Class-based
+    middleware is dispatched separately by ``_run_before_middleware`` /
+    ``_run_after_middleware`` and does not go through this wrapper.
+    """
+    fn_middlewares = [
+        mw for mw in route.get("middleware", [])
+        if _is_function_middleware(mw)
+    ]
+
+    if not fn_middlewares:
+        return await _invoke_handler(request, response, route, params)
+
+    # Build the chain from the inside out: innermost wraps the handler
+    # first, then each outer layer wraps that. The result is a callable
+    # `next_handler` that, when invoked, runs the whole chain.
+    async def call_route_handler(req, resp):
+        return await _invoke_handler(req, resp, route, params)
+
+    next_handler = call_route_handler
+    for mw in reversed(fn_middlewares):
+        next_handler = _make_mw_continuation(mw, next_handler)
+
+    result = await next_handler(request, response)
+    if isinstance(result, Response):
+        return result
+    return response
 
 
 async def _invoke_handler(request: Request, response: Response, route: dict, params: dict) -> Response:
@@ -1430,7 +1514,7 @@ async def handle(request: Request) -> Response:
             if not skip:
                 request, response, skip = _run_before_middleware(request, response, route)
             if not skip:
-                response = await _invoke_handler(request, response, route, params)
+                response = await _invoke_handler_with_middleware(request, response, route, params)
             request, response = _run_after_middleware(request, response, route)
         except Exception as e:
             response = _handle_route_error(e, request, response, request_id, _is_dev)

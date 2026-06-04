@@ -15,6 +15,57 @@ class PayloadTooLarge(Exception):
     pass
 
 
+class CaseInsensitiveDict(dict):
+    """Dict subclass for HTTP headers — string keys are case-insensitive.
+
+    HTTP header field-names are case-insensitive per RFC 7230 §3.2.
+    With this class, ``request.headers["Content-Type"]``,
+    ``request.headers.get("content-type")``, and
+    ``request.headers.get("CONTENT-TYPE")`` all return the same value.
+
+    Keys are stored lowercase internally. Cross-framework parity:
+    same behaviour now ships in tina4-php (Tina4\\Request),
+    tina4-ruby (Tina4::Request), tina4-nodejs (Tina4Request) so the
+    chapter 10 documented examples (``headers.get("Content-Type")``)
+    finally do what they read like. tina4-book#141 PY-10-03.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        if args or kwargs:
+            self.update(dict(*args, **kwargs))
+
+    @staticmethod
+    def _norm(key):
+        return key.lower() if isinstance(key, str) else key
+
+    def __setitem__(self, key, value):
+        super().__setitem__(self._norm(key), value)
+
+    def __getitem__(self, key):
+        return super().__getitem__(self._norm(key))
+
+    def __contains__(self, key):
+        return super().__contains__(self._norm(key))
+
+    def __delitem__(self, key):
+        super().__delitem__(self._norm(key))
+
+    def get(self, key, default=None):
+        return super().get(self._norm(key), default)
+
+    def setdefault(self, key, default=None):
+        return super().setdefault(self._norm(key), default)
+
+    def pop(self, key, *args):
+        return super().pop(self._norm(key), *args)
+
+    def update(self, *args, **kwargs):
+        # Route through __setitem__ so every key gets normalised.
+        for k, v in dict(*args, **kwargs).items():
+            self[k] = v
+
+
 class Request:
     """Parsed HTTP request — everything a route handler needs."""
 
@@ -31,7 +82,7 @@ class Request:
         self.query_string: str = ""
         self.params: dict = {}          # Query string + route params merged
         self.query: dict = {}           # Query string params only (separate from route params)
-        self.headers: dict = {}         # Lowercase header keys
+        self.headers: dict = CaseInsensitiveDict()  # Case-insensitive HTTP headers
         self.body: dict | str | None = None  # Parsed body
         self.raw_body: bytes = b""
         self.cookies: dict = {}

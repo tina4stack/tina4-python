@@ -687,7 +687,14 @@ def secured():
 # ── Middleware Decorator ───────────────────────────────────────
 
 def middleware(*middleware_classes):
-    """Attach middleware classes to a route handler."""
+    """Attach middleware classes or functions to a route handler.
+
+    Middleware is purely additive — it does NOT change the route's auth
+    requirement. POST/PUT/PATCH/DELETE routes stay Bearer-token-gated by
+    default. Use ``@noauth()`` to open a write route, ``@secured()`` to
+    lock a read route. This rule is the same across all four Tina4
+    frameworks (tina4-book#141, PY-10-02).
+    """
     def decorator(fn):
         fn._middleware = list(middleware_classes)
         # If route was already registered (decorator applied after @get/@post),
@@ -695,11 +702,9 @@ def middleware(*middleware_classes):
         if hasattr(fn, "_route_ref"):
             existing = fn._route_ref._route.get("middleware", [])
             fn._route_ref._route["middleware"] = list(middleware_classes) + existing
-            # Custom middleware means developer handles auth — disable built-in
-            # gate unless @secured() was explicitly set.
-            route = fn._route_ref._route
-            if not hasattr(fn, "_secured") and route.get("auth_required"):
-                route["auth_required"] = False
+            # Intentionally does NOT touch route["auth_required"]. Prior
+            # behaviour silently flipped it to False, creating an undocumented
+            # auth bypass for any write route that added custom middleware.
         return fn
     return decorator
 
