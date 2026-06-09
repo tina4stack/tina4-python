@@ -59,8 +59,10 @@ class MongoConnector:
             self._pymongo = pymongo
         except ImportError:
             raise ImportError(
-                "pymongo is required for the MongoDB queue backend. "
-                "Install it with: pip install pymongo"
+                "pymongo is required for the MongoDB queue backend. Install one of:\n"
+                "    uv add tina4-python[mongo]    # extra for projects using uv\n"
+                "    pip install pymongo           # bare driver\n"
+                "    uv add tina4-python[all-db]   # all five database drivers"
             )
 
     # ── Public Interface ─────────────────────────────────────────

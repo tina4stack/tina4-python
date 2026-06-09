@@ -19,6 +19,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
         super().__init__()
         self._conn = None
         self._in_transaction: bool = False
+        self.last_error: str | None = None
 
     @staticmethod
     def _safe_execute(cursor, sql: str, params=None):
@@ -36,11 +37,75 @@ class PostgreSQLAdapter(DatabaseAdapter):
         Pass ``None`` (or omit the second arg) and psycopg2 skips the
         substitution pass entirely — literal ``%`` flows through
         untouched. So we route empty/None params through that path.
+
+        Kept static for direct unit-test access (a number of
+        regression tests in test_postgres_percent_substitution.py call
+        it with a fake cursor). For the error-aware variant that adds
+        logging + auto-rollback (issue #46), use the instance method
+        :meth:`_exec_with_handling`.
         """
         if params:
             cursor.execute(sql, params)
         else:
             cursor.execute(sql)
+
+    def _exec_with_handling(self, cursor, sql: str, params=None):
+        """Run a query through :meth:`_safe_execute` and surface failures.
+
+        Issue #46: psycopg2 keeps the connection in an
+        ``InFailedSqlTransaction`` state after any failed query — every
+        subsequent statement returns the cascade message ``current
+        transaction is aborted, commands ignored until end of transaction
+        block``, *far* from the actual cause. Without framework-side
+        logging, the original SQL + error never reach the user.
+
+        On failure this method:
+
+        1. Logs the original error via ``Log.error`` with SQL+params context
+        2. Stores it on ``self.last_error``
+        3. Auto-rollbacks when NOT inside an explicit transaction (so the
+           next caller gets a clean connection)
+        4. Re-raises so callers still see the failure
+
+        Inside an explicit transaction we do NOT rollback — the user owns
+        that transaction (could be running a SAVEPOINT/retry pattern). We
+        still log + store ``last_error`` so they can diagnose.
+        """
+        try:
+            self._safe_execute(cursor, sql, params)
+        except Exception as e:
+            self._on_query_error(e, sql, params)
+            raise
+
+    def _on_query_error(self, exc: Exception, sql: str, params=None):
+        """Handle a failed query: log, store, auto-rollback if implicit."""
+        # Lazy import — avoid circular import at module load and let the
+        # framework boot without Log if something exotic is happening.
+        try:
+            from tina4_python.debug import Log
+            preview = sql.strip().splitlines()[0][:200] if sql else "<no sql>"
+            Log.error(
+                f"PostgreSQL query failed: {exc.__class__.__name__}: {exc}",
+                sql=preview,
+                params=params,
+            )
+        except Exception:
+            pass
+
+        self.last_error = str(exc)
+
+        # If the query failed *outside* an explicit transaction block,
+        # rollback the implicit one so the connection becomes usable
+        # again. Without this, every subsequent query on this connection
+        # cascades into ``InFailedSqlTransaction`` until something else
+        # calls rollback. With it, the next caller sees a clean conn
+        # and the actual error from this call propagates as the cause.
+        if not self._in_transaction and self._conn is not None:
+            try:
+                self._conn.rollback()
+            except Exception:
+                # Don't mask the original error if rollback itself fails.
+                pass
 
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to PostgreSQL.
@@ -53,8 +118,10 @@ class PostgreSQLAdapter(DatabaseAdapter):
             import psycopg2.extras
         except ImportError:
             raise ImportError(
-                "psycopg2 is required for PostgreSQL connections. "
-                "Install: pip install psycopg2-binary"
+                "psycopg2 is required for PostgreSQL connections. Install one of:\n"
+                "    uv add tina4-python[postgres]   # extra for projects using uv\n"
+                "    pip install psycopg2-binary    # bare driver\n"
+                "    uv add tina4-python[all-db]    # all five database drivers"
             )
 
         parsed = urlparse(connection_string)
@@ -85,7 +152,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
         )
 
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        self._safe_execute(cursor, sql, params)
+        self._exec_with_handling(cursor, sql, params)
 
         records = []
         last_id = None
@@ -151,10 +218,12 @@ class PostgreSQLAdapter(DatabaseAdapter):
         except Exception:
             total = 0
 
-        # Apply pagination
+        # Apply pagination — the real query, so use the error-handling
+        # wrapper. The count probe above is best-effort and stays on
+        # _safe_execute (a failed probe shouldn't taint last_error).
         paginated_sql = f"{sql} LIMIT %s OFFSET %s"
         paginated_params = (params or []) + [limit, offset]
-        self._safe_execute(cursor, paginated_sql, paginated_params)
+        self._exec_with_handling(cursor, paginated_sql, paginated_params)
         rows = [self._decode_blobs(dict(row)) for row in cursor.fetchall()]
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
@@ -164,7 +233,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
 
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        self._safe_execute(cursor, sql, params)
+        self._exec_with_handling(cursor, sql, params)
         row = cursor.fetchone()
         return self._decode_blobs(dict(row)) if row else None
 

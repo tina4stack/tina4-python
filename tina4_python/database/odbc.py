@@ -31,7 +31,10 @@ class ODBCAdapter(DatabaseAdapter):
             import pyodbc
         except ImportError:
             raise ImportError(
-                "pyodbc is required for ODBC connections. Install: pip install pyodbc"
+                "pyodbc is required for ODBC connections. Install one of:\n"
+                "    uv add tina4-python[odbc]    # extra for projects using uv\n"
+                "    pip install pyodbc           # bare driver\n"
+                "    uv add tina4-python[all-db]  # all five database drivers"
             )
 
         # Strip URL prefix if present

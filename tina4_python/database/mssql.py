@@ -29,8 +29,10 @@ class MSSQLAdapter(DatabaseAdapter):
             import pymssql
         except ImportError:
             raise ImportError(
-                "pymssql is required for MSSQL connections. "
-                "Install: pip install pymssql"
+                "pymssql is required for MSSQL connections. Install one of:\n"
+                "    uv add tina4-python[mssql]    # extra for projects using uv\n"
+                "    pip install pymssql           # bare driver\n"
+                "    uv add tina4-python[all-db]   # all five database drivers"
             )
 
         parsed = urlparse(connection_string)

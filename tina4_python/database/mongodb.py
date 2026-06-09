@@ -348,8 +348,10 @@ class MongoDBAdapter(DatabaseAdapter):
             import pymongo
         except ImportError:
             raise ImportError(
-                "pymongo is required for MongoDB connections. "
-                "Install: pip install pymongo"
+                "pymongo is required for MongoDB connections. Install one of:\n"
+                "    uv add tina4-python[mongo]    # extra for projects using uv\n"
+                "    pip install pymongo           # bare driver\n"
+                "    uv add tina4-python[all-db]   # all five database drivers"
             )
 
         # Normalise the scheme so MongoClient accepts it

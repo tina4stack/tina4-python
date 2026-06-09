@@ -116,8 +116,10 @@ class FirebirdAdapter(DatabaseAdapter):
         """
         if _driver is None:
             raise ImportError(
-                "A Firebird driver is required. "
-                "Install: pip install firebird-driver  (or pip install fdb for legacy)"
+                "A Firebird driver is required. Install one of:\n"
+                "    uv add tina4-python[firebird]    # extra for projects using uv\n"
+                "    pip install firebird-driver      # bare driver (or 'fdb' for legacy)\n"
+                "    uv add tina4-python[all-db]      # all five database drivers"
             )
 
         parsed = urlparse(connection_string)

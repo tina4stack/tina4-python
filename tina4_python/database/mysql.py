@@ -29,8 +29,10 @@ class MySQLAdapter(DatabaseAdapter):
             import mysql.connector
         except ImportError:
             raise ImportError(
-                "mysql-connector-python is required for MySQL connections. "
-                "Install: pip install mysql-connector-python"
+                "mysql-connector-python is required for MySQL connections. Install one of:\n"
+                "    uv add tina4-python[mysql]            # extra for projects using uv\n"
+                "    pip install mysql-connector-python    # bare driver\n"
+                "    uv add tina4-python[all-db]           # all five database drivers"
             )
 
         parsed = urlparse(connection_string)
