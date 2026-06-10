@@ -126,3 +126,86 @@ class TestPostgresErrorVisibility:
         except Exception:
             pass
         db._in_transaction = False
+
+
+# ── v3.13.8: heal pre-existing aborted-txn state ────────────────────
+
+
+class TestPoisonedConnectionIsHealed:
+    """Issue #46 follow-on (v3.13.8): Schalk on the 24rent team upgraded
+    to v3.13.7 and still hit ``InFailedSqlTransaction`` on the FIRST
+    query of a function. v3.13.6's auto-rollback only fires *on* a
+    failure the wrapper catches — it doesn't heal a connection that
+    arrived poisoned from boot-time work, a prior request, or an
+    explicit-transaction failure that never got rolled back.
+
+    v3.13.8 adds a pre-flight ``_heal_aborted_txn()`` step inside
+    :meth:`PostgreSQLAdapter._exec_with_handling` and :meth:`fetch`
+    that checks the psycopg2 ``transaction_status`` and rolls back if
+    the connection is in ``TRANSACTION_STATUS_INERROR``."""
+
+    def _poison(self, db):
+        """Simulate the Schalk scenario: run a bad query via *raw*
+        cursor.execute (bypassing our wrapper) and DON'T rollback.
+        Connection is now in TRANSACTION_STATUS_INERROR — every
+        subsequent execute would normally cascade."""
+        cursor = db._conn.cursor()
+        try:
+            cursor.execute("SELECT * FROM table_that_does_not_exist_v3138")
+        except Exception:
+            pass
+        import psycopg2.extensions as _ext
+        assert db._conn.info.transaction_status == _ext.TRANSACTION_STATUS_INERROR, \
+            "test setup: connection should be in aborted state after raw bad query"
+
+    def test_fetch_heals_poisoned_connection(self, db):
+        """A `db.fetch` arriving on a poisoned connection should NOT
+        cascade. The heal step rolls back first; the real query runs
+        clean."""
+        self._poison(db)
+
+        result = db.fetch("SELECT 1 AS one")
+
+        assert result.records, "fetch returned no records — heal didn't run"
+        assert result.records[0]["one"] == 1
+        # last_error should NOT contain the cascade message — that means
+        # heal worked and the query never hit InFailedSqlTransaction.
+        if db.last_error:
+            assert "current transaction is aborted" not in db.last_error.lower(), \
+                f"cascade message leaked into last_error: {db.last_error!r}"
+
+    def test_execute_heals_poisoned_connection(self, db):
+        """Same contract for ``db.execute`` — _exec_with_handling's
+        pre-flight heal covers this path."""
+        self._poison(db)
+
+        # Should NOT raise InFailedSqlTransaction.
+        db.execute("SELECT 1")
+        # And the connection should be back in idle state.
+        import psycopg2.extensions as _ext
+        assert db._conn.info.transaction_status in (
+            _ext.TRANSACTION_STATUS_IDLE,
+            _ext.TRANSACTION_STATUS_INTRANS,
+        ), "connection should not be in aborted state after heal"
+
+    def test_explicit_transaction_skips_heal(self, db):
+        """Inside an explicit transaction, the heal must defer to the
+        user — same rule as the failure-time auto-rollback. A
+        SAVEPOINT/retry caller can't have the framework yanking them
+        out of their txn behind their back."""
+        self._poison(db)
+        db._in_transaction = True
+
+        # Inside an explicit txn the heal is a no-op, so the next query
+        # should cascade with InFailedSqlTransaction.
+        with pytest.raises(Exception) as excinfo:
+            db.execute("SELECT 1")
+        assert "current transaction is aborted" in str(excinfo.value).lower(), \
+            "explicit-txn caller must see the cascade so they can SAVEPOINT/rollback themselves"
+
+        # Clean up so the fixture teardown doesn't choke.
+        try:
+            db._conn.rollback()
+        except Exception:
+            pass
+        db._in_transaction = False

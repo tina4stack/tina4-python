@@ -49,6 +49,60 @@ class PostgreSQLAdapter(DatabaseAdapter):
         else:
             cursor.execute(sql)
 
+    def _heal_aborted_txn(self):
+        """Issue #46 follow-on (v3.13.8): pre-flight rollback if the
+        connection arrived in an aborted-transaction state.
+
+        v3.13.6 added auto-rollback inside :meth:`_on_query_error` — that
+        clears the abort *on* a failure the wrapper catches. But the
+        connection can still arrive poisoned from elsewhere:
+
+        - A boot-time query that failed before request handling started
+          (migration probe, ORM ``information_schema`` lookup, etc.)
+        - A failure inside an explicit transaction where the user owned
+          the rollback but never issued one
+        - A direct ``cursor.execute`` call in another adapter method
+          (e.g. the ``SELECT lastval()`` SAVEPOINT probe) that managed to
+          leave the txn dirty
+
+        In all those cases the *next* query — even one routed through
+        our wrapper — hits ``InFailedSqlTransaction`` immediately, and
+        the cascade message buries whatever the original cause was.
+
+        Healing fix: before executing, ask psycopg2 whether the
+        connection is in ``TRANSACTION_STATUS_INERROR`` and rollback if
+        so. Only when NOT inside an explicit transaction — explicit txns
+        stay under the caller's control.
+
+        Reported by Schalk (24rent) against v3.13.7.
+        """
+        if self._in_transaction or self._conn is None:
+            return
+        try:
+            import psycopg2.extensions as _ext
+            status = self._conn.info.transaction_status
+        except Exception:
+            return
+        if status != _ext.TRANSACTION_STATUS_INERROR:
+            return
+        try:
+            self._conn.rollback()
+        except Exception:
+            # If even the heal-rollback fails, fall through — the next
+            # cursor.execute will raise with the real psycopg2 error and
+            # _on_query_error will pick it up. Better than masking.
+            return
+        try:
+            from tina4_python.debug import Log
+            Log.warning(
+                "PostgreSQL connection arrived in aborted-transaction "
+                "state — issued pre-flight ROLLBACK so the next query "
+                "starts clean. Look back in the log for the original "
+                "PostgreSQL query failed entry."
+            )
+        except Exception:
+            pass
+
     def _exec_with_handling(self, cursor, sql: str, params=None):
         """Run a query through :meth:`_safe_execute` and surface failures.
 
@@ -59,18 +113,23 @@ class PostgreSQLAdapter(DatabaseAdapter):
         block``, *far* from the actual cause. Without framework-side
         logging, the original SQL + error never reach the user.
 
-        On failure this method:
+        This method:
 
-        1. Logs the original error via ``Log.error`` with SQL+params context
-        2. Stores it on ``self.last_error``
-        3. Auto-rollbacks when NOT inside an explicit transaction (so the
-           next caller gets a clean connection)
+        0. (v3.13.8) Pre-flight heal — if the connection arrived in an
+           aborted-transaction state from anywhere outside this wrapper,
+           rollback first so this query starts on a clean txn.
+        1. Logs failures via ``Log.error`` with SQL+params context
+        2. Stores them on ``self.last_error``
+        3. Auto-rollbacks on failure when NOT inside an explicit
+           transaction (so the next caller gets a clean connection)
         4. Re-raises so callers still see the failure
 
-        Inside an explicit transaction we do NOT rollback — the user owns
-        that transaction (could be running a SAVEPOINT/retry pattern). We
-        still log + store ``last_error`` so they can diagnose.
+        Inside an explicit transaction we do NOT auto-rollback — the
+        user owns that transaction (could be running a SAVEPOINT/retry
+        pattern). We still log + store ``last_error`` so they can
+        diagnose, and the heal step also defers to explicit txns.
         """
+        self._heal_aborted_txn()
         try:
             self._safe_execute(cursor, sql, params)
         except Exception as e:
@@ -208,6 +267,12 @@ class PostgreSQLAdapter(DatabaseAdapter):
 
         sql = self._translate_sql(sql)
 
+        # v3.13.8: heal first so the COUNT probe below doesn't open on a
+        # poisoned connection — the probe uses raw _safe_execute (it's
+        # allowed to fail without polluting last_error) so it bypasses
+        # _exec_with_handling's heal step.
+        self._heal_aborted_txn()
+
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
         # Count total rows
@@ -217,6 +282,14 @@ class PostgreSQLAdapter(DatabaseAdapter):
             total = cursor.fetchone()["cnt"]
         except Exception:
             total = 0
+            # If the probe failed because the connection arrived (or
+            # became) aborted, roll back so the real pagination query
+            # below sees a clean txn. Without this we'd cascade.
+            if not self._in_transaction and self._conn is not None:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
 
         # Apply pagination — the real query, so use the error-handling
         # wrapper. The count probe above is best-effort and stays on
