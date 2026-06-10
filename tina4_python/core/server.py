@@ -1307,9 +1307,38 @@ def _handle_route_error(
     error: Exception, request: Request, response: Response,
     request_id: str, is_dev: bool,
 ) -> Response:
-    """Format an error response for a failed route handler."""
+    """Format an error response for a failed route handler.
+
+    Two contracts (v3.13.7):
+
+    1. Fire ``tina4.request.error`` before rendering, so observers
+       (centralised logging, APM, Sentry) see the failure even though
+       the framework caught it. Payload is a single dict ``{exception,
+       request}`` — the canonical shape mirrored by PHP/Ruby/Node.
+       Listener exceptions are swallowed so a broken listener can't
+       break the 500 page.
+
+    2. In non-debug mode, never put the stack trace in the response
+       body (CWE-209). The trace is still available via ``Log.error``
+       above and the dev-admin ``BrokenTracker`` in dev mode. The
+       framework's own 500.twig now guards the trace block with
+       ``{% if error_message %}``.
+    """
     Log.error(f"Route error: {error}", path=request.path)
     _write_broken(request, error)
+
+    try:
+        from tina4_python.core.events import emit as _emit
+        _emit("tina4.request.error", {"exception": error, "request": request})
+    except Exception as listener_err:
+        try:
+            Log.warning(
+                f"Listener for tina4.request.error raised: "
+                f"{type(listener_err).__name__}: {listener_err}"
+            )
+        except Exception:
+            pass
+
     if is_dev:
         try:
             import traceback as _tb
@@ -1324,9 +1353,9 @@ def _handle_route_error(
         overlay_html = render_error_overlay(error, request)
         response.status(500).html(overlay_html)
     else:
-        import traceback
-        tb = traceback.format_exc()
-        html = _render_error_page(500, request.path, request_id, tb)
+        # Production: NO traceback in the body. The trace is logged via
+        # Log.error above; clients only see the generic page + request_id.
+        html = _render_error_page(500, request.path, request_id, "")
         if html:
             response.status(500).html(html)
         else:
