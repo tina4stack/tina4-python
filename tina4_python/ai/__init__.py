@@ -161,6 +161,136 @@ def install_context(root: str = ".", tools: "list[str] | None" = None) -> list[s
     return install_selected(root, selection)
 
 
+# ── v3.13.9: non-destructive context-file writer ───────────────────────────
+#
+# Pre-v3.13.9 the installer wrote a full developer guide to CLAUDE.md
+# (and the other context files) on every run, clobbering whatever the
+# user had put there. Now it writes only a marker-bracketed Tina4 skill
+# block — pointing the assistant at .claude/skills/tina4-*/SKILL.md —
+# and leaves the rest of the file alone.
+
+
+def _markers_for(context_file: str) -> "tuple[str, str]":
+    """Return ``(start_marker, end_marker)`` for a context file.
+
+    Markdown files get HTML comment markers (invisible when rendered).
+    Rule files (.cursorules, .windsurfrules, .clinerules) use ``#``
+    line comments which most rule loaders treat as comments.
+    """
+    if context_file.lower().endswith(".md"):
+        return ("<!-- tina4-skills:start -->", "<!-- tina4-skills:end -->")
+    return ("# tina4-skills:start", "# tina4-skills:end")
+
+
+def _skill_block(context_file: str) -> str:
+    """Return the marker-bracketed Tina4 skill registration block."""
+    start, end = _markers_for(context_file)
+    if context_file.lower().endswith(".md"):
+        body = (
+            "## Tina4 Skills\n\n"
+            "When working on this Tina4 project, these skills give the "
+            "assistant project-aware behaviour:\n\n"
+            "- **tina4-developer** — Read `.claude/skills/tina4-developer/SKILL.md` before building features.\n"
+            "- **tina4-js** — Read `.claude/skills/tina4-js/SKILL.md` for frontend work.\n"
+            "- **tina4-maintainer** — Read `.claude/skills/tina4-maintainer/SKILL.md` for framework-level changes.\n\n"
+            "See https://tina4.com for full docs."
+        )
+    else:
+        body = (
+            "Tina4 Skills — read these files before working on this project:\n"
+            "  .claude/skills/tina4-developer/SKILL.md   (feature development)\n"
+            "  .claude/skills/tina4-js/SKILL.md          (frontend / tina4-js)\n"
+            "  .claude/skills/tina4-maintainer/SKILL.md  (framework-level changes)\n"
+            "Docs: https://tina4.com"
+        )
+    return f"{start}\n{body}\n{end}"
+
+
+def _has_markers(existing: str, start: str, end: str) -> bool:
+    """True iff both start and end markers appear in order."""
+    s_idx = existing.find(start)
+    if s_idx == -1:
+        return False
+    return existing.find(end, s_idx + len(start)) != -1
+
+
+def _replace_marker_block(existing: str, block: str, start: str, end: str) -> str:
+    """Replace the bracketed block in ``existing`` with ``block``."""
+    s_idx = existing.find(start)
+    if s_idx == -1:
+        return existing.rstrip() + "\n\n" + block + "\n"
+    e_idx = existing.find(end, s_idx + len(start))
+    if e_idx == -1:
+        return existing.rstrip() + "\n\n" + block + "\n"
+    before = existing[:s_idx].rstrip()
+    after = existing[e_idx + len(end):].lstrip("\n")
+    glue_before = "\n\n" if before else ""
+    glue_after = "\n" + after if after else "\n"
+    return f"{before}{glue_before}{block}{glue_after}"
+
+
+# Headers the pre-v3.13.9 installer wrote at the top of CLAUDE.md.
+# Detecting these lets us migrate cleanly off the old clobber install.
+_OLD_FRAMEWORK_HEADERS = (
+    "# Tina4 Python",
+    "# Tina4 PHP",
+    "# Tina4 Ruby",
+    "# CLAUDE.md — AI Developer Guide for tina4-nodejs",
+    "# CLAUDE.md - AI Developer Guide for tina4-nodejs",
+)
+
+
+def _looks_like_old_framework_install(existing: str) -> bool:
+    """True if the file starts with a header the pre-v3.13.9 installer
+    wrote. Used to migrate one-time off the old clobber-style install."""
+    head = existing.lstrip()[:400]
+    return any(head.startswith(m) for m in _OLD_FRAMEWORK_HEADERS)
+
+
+def _write_or_merge(context_path: "Path", context_file: str, framework_guide: str) -> str:
+    """Write the context file non-destructively. Returns a human-readable
+    action verb for the caller's log line.
+
+    Four branches:
+      1. Doesn't exist  → write framework guide + skill block
+      2. Has markers    → refresh just the skill block (idempotent)
+      3. Old header     → migrate: replace old dump with new guide + block
+      4. User content   → append the skill block, preserve everything else
+    """
+    block = _skill_block(context_file)
+    start, end = _markers_for(context_file)
+
+    if not context_path.exists():
+        context_path.write_text(
+            framework_guide.rstrip() + "\n\n" + block + "\n",
+            encoding="utf-8",
+        )
+        return "Installed"
+
+    existing = context_path.read_text(encoding="utf-8")
+    if _has_markers(existing, start, end):
+        new_content = _replace_marker_block(existing, block, start, end)
+        context_path.write_text(new_content, encoding="utf-8")
+        return "Refreshed skill block in"
+
+    if _looks_like_old_framework_install(existing):
+        head = existing.lstrip()
+        preamble = existing[: len(existing) - len(head)]
+        new_content = (
+            (preamble.rstrip() + "\n\n" if preamble.strip() else "")
+            + framework_guide.rstrip()
+            + "\n\n"
+            + block
+            + "\n"
+        )
+        context_path.write_text(new_content, encoding="utf-8")
+        return "Migrated (replaced old framework dump in)"
+
+    new_content = existing.rstrip() + "\n\n" + block + "\n"
+    context_path.write_text(new_content, encoding="utf-8")
+    return "Appended skill block to"
+
+
 def _install_for_tool(root: Path, tool: dict, context: str) -> list[str]:
     """Install context file for a single tool."""
     created = []
@@ -171,9 +301,8 @@ def _install_for_tool(root: Path, tool: dict, context: str) -> list[str]:
         (root / tool["config_dir"]).mkdir(parents=True, exist_ok=True)
     context_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Always overwrite — user chose to install
-    context_path.write_text(context, encoding="utf-8")
-    action = "Updated" if context_path.exists() else "Installed"
+    # v3.13.9: non-destructive write — see _write_or_merge below.
+    action = _write_or_merge(context_path, tool["context_file"], context)
     rel = str(context_path.relative_to(root))
     created.append(rel)
     try:
