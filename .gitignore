@@ -44,6 +44,11 @@ test_queue*.db
 /publish.sh
 /src/scss/
 /broken
+# Framework runtime artefacts — BrokenTracker writes import-time and
+# route-time failure dumps here. They're transient (timestamped per
+# error) and contain stack traces, never source-of-truth content.
+/data/broken/
+/data/.broken/
 __pycache__/
 .DS_Store
 .coverage

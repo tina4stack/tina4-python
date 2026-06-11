@@ -25,7 +25,14 @@ AI_TOOLS = [
     {"name": "aider", "description": "Aider", "context_file": "CONVENTIONS.md", "config_dir": None},
     {"name": "cline", "description": "Cline", "context_file": ".clinerules", "config_dir": None},
     {"name": "codex", "description": "OpenAI Codex", "context_file": "AGENTS.md", "config_dir": None},
-    {"name": "antigravity", "description": "Google Antigravity", "context_file": ".antigravity/context.md", "config_dir": ".antigravity"},
+    # Google Antigravity is intentionally NOT listed as a separate tool.
+    # Per Antigravity docs (v1.20.3+, March 2026), it reads AGENTS.md
+    # from the repo root — the same cross-tool standard Codex pioneered
+    # and Cursor / Claude Code already adopt. The Codex entry above
+    # already writes our Tina4 skill block there, so Antigravity picks
+    # up the same content with zero extra installer work. If you also
+    # want Antigravity-specific tuning, write to .agents/rules/tina4.md
+    # by hand — see https://antigravity.google/docs/rules-workflows.
 ]
 
 

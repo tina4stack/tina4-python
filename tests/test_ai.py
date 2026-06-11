@@ -16,8 +16,11 @@ class TestAITools:
         assert len(AI_TOOLS) > 0
 
     def test_tools_count_matches_known_set(self):
-        # Bumped to 8 in 3.11.13: added Google Antigravity (tina4-book#75)
-        assert len(AI_TOOLS) == 8
+        # 3.11.13 added Google Antigravity → 8 tools.
+        # 3.13.10 removed it again: Antigravity v1.20.3+ reads AGENTS.md
+        # (the cross-tool standard already covered by the Codex entry).
+        # See tina4-book release notes for v3.13.10.
+        assert len(AI_TOOLS) == 7
 
     def test_tools_have_required_keys(self):
         for tool in AI_TOOLS:
@@ -34,7 +37,18 @@ class TestAITools:
         assert "aider" in names
         assert "cline" in names
         assert "codex" in names
-        assert "antigravity" in names  # Google Antigravity
+
+    def test_antigravity_is_handled_via_codex_entry(self):
+        """v3.13.10: Antigravity is intentionally NOT a separate entry —
+        it reads AGENTS.md (the Codex / cross-tool standard), and that
+        file is already written by the codex entry. Don't reintroduce a
+        dedicated antigravity entry without checking the docs."""
+        names = [t["name"] for t in AI_TOOLS]
+        assert "antigravity" not in names
+        codex = next(t for t in AI_TOOLS if t["name"] == "codex")
+        assert codex["context_file"] == "AGENTS.md", (
+            "Codex must keep writing AGENTS.md — Antigravity depends on it."
+        )
 
 
 class TestIsInstalled:
