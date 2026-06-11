@@ -51,12 +51,36 @@ class Field:
         self.choices = choices
         self.validator = validator  # Custom callable(value) → raises ValueError
 
+    # ── v3.13.11 (issue #50): callable-default resolution ──────────────
+    #
+    # Pre-v3.13.11 a callable default (e.g. ``DateTimeField(default=lambda:
+    # datetime.now())``) reached the driver verbatim and blew up with
+    # ``can't adapt type 'function'``. Now we evaluate the callable at the
+    # point of use, so every instance gets a freshly computed value (per-row
+    # timestamps actually differ). Types are excluded — ``default=int`` is
+    # almost never intended to mean "call int()".
+    def _resolve_default(self):
+        d = self.default
+        if callable(d) and not isinstance(d, type):
+            return d()
+        return d
+
     def validate(self, value):
         """Validate and coerce value to the field type."""
         if value is None:
             if self.required and self.default is None:
                 raise ValueError(f"Field '{self.name}' is required")
-            return self.default
+            return self._resolve_default()
+
+        # v3.13.11 (issue #50): if the user stored a callable as the field
+        # value (e.g. ``default=lambda: datetime.now()`` reached us without
+        # being resolved on instance init), evaluate it now so the driver
+        # gets a real value, not the function object. Types are excluded —
+        # ``default=int`` is almost never intended to mean "call int()".
+        if callable(value) and not isinstance(value, type):
+            value = value()
+            if value is None:
+                return None
 
         # Type coercion.
         #

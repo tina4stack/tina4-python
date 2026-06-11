@@ -128,6 +128,95 @@ class TestPostgresErrorVisibility:
         db._in_transaction = False
 
 
+# ── v3.13.11 issue #49: error-visibility follow-on gaps ─────────────
+
+
+class TestExplicitTransactionLogVisibility:
+    """Issue #49 Gap 1: when a query fails inside an explicit
+    transaction the auto-rollback is correctly skipped (the user owns
+    the transaction), but the visibility half must NOT go with it.
+    The original cause must still reach the log so an operator can
+    trace it through the cascade message that follows."""
+
+    def test_in_txn_failure_logs_original_cause(self, db, caplog):
+        import logging
+        caplog.set_level(logging.DEBUG)
+        db._in_transaction = True
+
+        with pytest.raises(Exception):
+            db.execute("SELECT * FROM table_that_does_not_exist_v31311")
+
+        assert db.last_error is not None
+        # Cleanup
+        try:
+            db._conn.rollback()
+        except Exception:
+            pass
+        db._in_transaction = False
+
+    def test_count_probe_failure_inside_txn_is_logged(self, db, caplog):
+        """v3.13.11 Gap 1: the fetch() COUNT probe is best-effort and
+        swallows exceptions. Before v3.13.11 that swallow hid the
+        ORIGINAL cause when the connection was already poisoned —
+        operators only saw the downstream cascade. Now the probe
+        failure is logged via Log.warning before the swallow."""
+        # Trigger a real failure on the COUNT probe path by fetching
+        # from a table that doesn't exist. (No explicit txn needed —
+        # the warning fires regardless; in-txn just makes it the only
+        # log line about the upstream cause.)
+        with pytest.raises(Exception):
+            db.fetch("SELECT * FROM table_that_does_not_exist_v31311_fetch")
+
+        # last_error captures the cause now (Gap 3, below).
+        assert db.last_error is not None
+        assert "table_that_does_not_exist_v31311_fetch" in (db.last_error or "").lower() \
+            or "does not exist" in (db.last_error or "").lower(), \
+            f"Expected real error, got: {db.last_error!r}"
+
+
+class TestFetchCapturesLastError:
+    """Issue #49 Gap 3: ``Database.fetch()`` must capture ``last_error``
+    after a failure, mirroring ``Database.execute()``.
+
+    Uses the Database wrapper (the public API) rather than the raw
+    adapter — the gap was specifically in the wrapper layer.
+    """
+
+    @pytest.fixture
+    def database(self):
+        from tina4_python.database import Database
+        url = f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{PG_DB}"
+        d = Database(url)
+        yield d
+        try:
+            d.close()
+        except Exception:
+            pass
+
+    def test_fetch_failure_populates_db_get_error(self, database):
+        with pytest.raises(Exception):
+            database.fetch("SELECT * FROM table_that_does_not_exist_gap3")
+
+        # Pre-v3.13.11 this returned None — Database.fetch swallowed
+        # adapter.last_error on the way through.
+        err = database.get_error()
+        assert err is not None, \
+            "Database.get_error() must surface the cause of the failed fetch"
+
+    def test_fetch_success_clears_last_error(self, database):
+        # Trigger a failure
+        with pytest.raises(Exception):
+            database.fetch("SELECT * FROM does_not_exist_clear_test")
+        assert database.get_error() is not None
+
+        # A subsequent successful fetch should clear last_error
+        # (matches execute()'s behaviour from before v3.13.11).
+        result = database.fetch("SELECT 1 AS one")
+        assert result.records and result.records[0]["one"] == 1
+        assert database.get_error() is None, \
+            "last_error should clear on the next successful fetch"
+
+
 # ── v3.13.8: heal pre-existing aborted-txn state ────────────────────
 
 

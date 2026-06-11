@@ -177,9 +177,14 @@ class ORM(metaclass=ORMMeta):
         # Initialize relationship cache
         self._rel_cache = {}
 
-        # Set defaults from field definitions
+        # Set defaults from field definitions.
+        # v3.13.11 (issue #50): callable defaults are evaluated *per
+        # instance* so per-row timestamps (e.g. ``default=lambda:
+        # datetime.now()``) actually differ. Pre-v3.13.11 the function
+        # object reached the driver verbatim and blew up with
+        # ``can't adapt type 'function'``.
         for name, field in self._fields.items():
-            setattr(self, name, field.default)
+            setattr(self, name, field._resolve_default())
 
         # Accept JSON string or dict
         if isinstance(data, str):
@@ -304,10 +309,22 @@ class ORM(metaclass=ORMMeta):
     # ── CRUD ────────────────────────────────────────────────────
 
     def save(self) -> Self | bool:
-        """Insert or update. Returns self on success, False on failure."""
+        """Insert or update. Returns self on success, False on failure.
+
+        v3.13.11 (issue #50): for non-auto-increment primary keys (e.g.
+        user-supplied string IDs like ``"GC-100"``), the decision between
+        INSERT and UPDATE is made on whether the row *exists*, not on
+        whether the PK is set. Pre-v3.13.11 a natural-key save() always
+        chose UPDATE — matched zero rows — and silently returned success
+        without inserting anything.
+
+        Auto-increment behaviour is unchanged: ``pk_value is None`` means
+        "new row, let the engine assign an ID" and we still INSERT.
+        """
         db = self._get_db()
         pk = self._get_pk()
         pk_value = getattr(self, pk, None)
+        pk_field = self._fields[pk]
         table = self._get_table()
         pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
@@ -316,22 +333,52 @@ class ORM(metaclass=ORMMeta):
             if field.auto_increment and pk_value is None:
                 continue  # Skip auto-increment on insert
             value = getattr(self, name)
+            # v3.13.11 (issue #50): resolve callable values at write time
+            # too, in case the user set ``self.created_at = lambda: ...``
+            # directly. Defensive — Field.validate() already handles this
+            # for the normal __init__ + _populate paths.
+            if callable(value) and not isinstance(value, type):
+                value = value()
             if value is not None or not field.auto_increment:
                 # Use field_mapping for the column name, fall back to field.column
                 db_col = self.field_mapping.get(name, field.column)
                 data[db_col] = value
 
+        # v3.13.11 (issue #50): pick INSERT vs UPDATE on row existence
+        # for non-auto-increment PKs. Auto-increment keeps the legacy
+        # behaviour (PK is None → INSERT, PK is set → UPDATE).
+        is_update = False
+        if pk_value is not None:
+            if pk_field.auto_increment:
+                is_update = True
+            else:
+                # Natural-key model — check if the row already exists.
+                # type(self).exists() handles soft-delete + scope filters
+                # the same way the rest of the ORM does.
+                try:
+                    is_update = type(self).exists(pk_value)
+                except Exception:
+                    # If we can't tell (e.g. table doesn't exist yet),
+                    # fall back to INSERT — the user will see the real
+                    # error from the driver instead of a silent no-op.
+                    is_update = False
+
         db.start_transaction()
         try:
-            if pk_value is not None:
+            if is_update:
                 update_data = {k: v for k, v in data.items() if k != pk_db_col}
                 if update_data:
                     db.update(table, update_data, f"{pk_db_col} = ?", [pk_value])
             else:
                 db.insert(table, data)
-                last_id = db.get_last_id()
-                if last_id and pk in self._fields:
-                    setattr(self, pk, last_id)
+                # Only adopt the engine-assigned ID for auto-increment PKs.
+                # Natural-key PKs were already set by the caller; don't
+                # overwrite them with the driver's last_id (which on PG
+                # may be a sequence value that doesn't apply here).
+                if pk_field.auto_increment:
+                    last_id = db.get_last_id()
+                    if last_id and pk in self._fields:
+                        setattr(self, pk, last_id)
             db.commit()
         except Exception:
             db.rollback()
@@ -673,9 +720,20 @@ class ORM(metaclass=ORMMeta):
             StringField  → VARCHAR(255)
             TextField    → TEXT
             NumericField/FloatField → REAL
-            BooleanField → INTEGER
+            BooleanField → engine-aware (see below)
             DateTimeField → DATETIME
             BlobField    → BLOB
+
+        v3.13.11 BooleanField mapping (engine-aware):
+            SQLite    → INTEGER    (no native bool — historic convention)
+            PostgreSQL → BOOLEAN   (native type; psycopg2 binds Python
+                                    ``bool`` as BOOLEAN, so INTEGER columns
+                                    caused ``operator does not exist:
+                                    boolean = integer``)
+            MySQL     → BOOLEAN    (synonym for TINYINT(1))
+            MSSQL     → BIT        (the SQL Server bool type)
+            Firebird  → INTEGER    (driver round-trip is uneven; integer
+                                    is the safer choice on Firebird)
 
         Auto-increment primary keys use engine-appropriate syntax.
         Returns True on success.
@@ -684,6 +742,21 @@ class ORM(metaclass=ORMMeta):
 
         db = cls._get_db()
         table = cls._get_table()
+        engine = (db.get_database_type() or "").lower()
+
+        # v3.13.11: BooleanField now uses each engine's native type
+        # where it's reliable. SQLite and Firebird stay on INTEGER —
+        # SQLite has no native bool, and Firebird's driver round-trip
+        # for native BOOLEAN is uneven across versions.
+        if engine == "postgres":
+            bool_sql = "BOOLEAN"
+        elif engine == "mysql":
+            bool_sql = "BOOLEAN"  # MySQL alias for TINYINT(1)
+        elif engine == "mssql":
+            bool_sql = "BIT"
+        else:
+            # sqlite, firebird, odbc, anything else
+            bool_sql = "INTEGER"
 
         # Don't recreate if table already exists
         if db.table_exists(table):
@@ -706,7 +779,7 @@ class ORM(metaclass=ORMMeta):
             elif kind in ("NumericField", "FloatField"):
                 sql_type = "REAL"
             elif kind == "BooleanField":
-                sql_type = "INTEGER"
+                sql_type = bool_sql
             elif kind == "DateTimeField":
                 sql_type = "DATETIME"
             elif kind == "BlobField":
@@ -719,7 +792,7 @@ class ORM(metaclass=ORMMeta):
                 elif ft == float:
                     sql_type = "REAL"
                 elif ft == bool:
-                    sql_type = "INTEGER"
+                    sql_type = bool_sql
                 elif ft == bytes:
                     sql_type = "BLOB"
 

@@ -137,7 +137,16 @@ class PostgreSQLAdapter(DatabaseAdapter):
             raise
 
     def _on_query_error(self, exc: Exception, sql: str, params=None):
-        """Handle a failed query: log, store, auto-rollback if implicit."""
+        """Handle a failed query: log, store, auto-rollback if implicit.
+
+        v3.13.11 (issue #49 Gap 1): inside an explicit transaction the
+        auto-rollback step defers to the user — they may be running a
+        SAVEPOINT/retry pattern. The visibility half stays: the original
+        cause is still logged via ``Log.error``, and an additional
+        ``Log.warning`` makes the context explicit so a tail-the-log
+        operator can spot the upstream cause that's about to be buried
+        by a downstream ``InFailedSqlTransaction`` cascade.
+        """
         # Lazy import — avoid circular import at module load and let the
         # framework boot without Log if something exotic is happening.
         try:
@@ -148,6 +157,15 @@ class PostgreSQLAdapter(DatabaseAdapter):
                 sql=preview,
                 params=params,
             )
+            # v3.13.11: extra in-txn marker so the original cause is
+            # easy to spot above the cascade line.
+            if self._in_transaction:
+                Log.warning(
+                    "Above failure occurred inside an explicit transaction — "
+                    "auto-rollback skipped (caller owns the transaction). "
+                    "Subsequent queries on this connection will cascade with "
+                    "'current transaction is aborted' until rollback() is called."
+                )
         except Exception:
             pass
 
@@ -165,6 +183,29 @@ class PostgreSQLAdapter(DatabaseAdapter):
             except Exception:
                 # Don't mask the original error if rollback itself fails.
                 pass
+
+    def _log_silent_probe_failure(self, exc: Exception, sql: str, params=None):
+        """v3.13.11 (issue #49 Gap 1): log a probe-query failure as a
+        warning WITHOUT touching ``last_error`` or rolling back.
+
+        Used by the COUNT probe in :meth:`fetch` which is best-effort —
+        it's allowed to fail without surfacing to the caller — but inside
+        an explicit transaction the connection is now poisoned, the
+        paginated query that follows will cascade, and the real cause
+        used to be lost entirely. This logs it so an operator scrolling
+        back through the log can spot the upstream cause.
+        """
+        try:
+            from tina4_python.debug import Log
+            preview = sql.strip().splitlines()[0][:200] if sql else "<no sql>"
+            Log.warning(
+                f"PostgreSQL probe query failed (original cause, before "
+                f"any cascade): {exc.__class__.__name__}: {exc}",
+                sql=preview,
+                params=params,
+            )
+        except Exception:
+            pass
 
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to PostgreSQL.
@@ -280,8 +321,15 @@ class PostgreSQLAdapter(DatabaseAdapter):
         try:
             self._safe_execute(cursor, count_sql, params)
             total = cursor.fetchone()["cnt"]
-        except Exception:
+        except Exception as e:
             total = 0
+            # v3.13.11 (issue #49 Gap 1): log the probe failure as a
+            # warning so the original cause appears in the log even
+            # though the probe itself swallows. Without this line, a
+            # failure inside an explicit transaction is invisible —
+            # the cascade message from the paginated query below is
+            # all the operator sees.
+            self._log_silent_probe_failure(e, count_sql, params)
             # If the probe failed because the connection arrived (or
             # became) aborted, roll back so the real pagination query
             # below sees a clean txn. Without this we'd cascade.

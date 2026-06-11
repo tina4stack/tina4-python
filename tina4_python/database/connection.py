@@ -421,7 +421,14 @@ class Database:
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
-        """Fetch rows with pagination."""
+        """Fetch rows with pagination.
+
+        v3.13.11 (issue #49 Gap 3): mirror :meth:`execute` and capture
+        ``last_error`` here too — pre-v3.13.11 a failed ``fetch`` left
+        ``db.get_error()`` returning ``None`` even though the adapter
+        had stored the failure on its own ``last_error``. Callers had
+        no way to read the cause via the public API.
+        """
         if self._cache_enabled:
             key = self._cache_key(sql + f":L{limit}:S{offset}", params)
             cached = self._cache_get(key)
@@ -430,13 +437,24 @@ class Database:
                     self._cache_hits += 1
                 return cached
             adapter = self._get_adapter()
-            result = adapter.fetch(sql, params, limit, offset)
+            try:
+                result = adapter.fetch(sql, params, limit, offset)
+                self.last_error = None
+            except Exception:
+                self.last_error = getattr(adapter, "last_error", None) or self.last_error
+                raise
             self._cache_set(key, result)
             with self._cache_lock:
                 self._cache_misses += 1
             return result
         adapter = self._get_adapter()
-        return adapter.fetch(sql, params, limit, offset)
+        try:
+            result = adapter.fetch(sql, params, limit, offset)
+            self.last_error = None
+            return result
+        except Exception:
+            self.last_error = getattr(adapter, "last_error", None) or self.last_error
+            raise
 
     def fetch_all(self, sql: str, params: list = None,
                   limit: int = 100, offset: int = 0) -> list[dict]:

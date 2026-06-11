@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.13.10 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.11 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
