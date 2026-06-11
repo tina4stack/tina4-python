@@ -105,6 +105,8 @@ class MSSQLAdapter(DatabaseAdapter):
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
+        # v3.13.12: strip trailing `;` — see DatabaseAdapter helper.
+        sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(as_dict=True)
 
@@ -130,6 +132,7 @@ class MSSQLAdapter(DatabaseAdapter):
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
+        sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(as_dict=True)
         cursor.execute(sql, tuple(params) if params else ())

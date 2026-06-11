@@ -306,6 +306,10 @@ class PostgreSQLAdapter(DatabaseAdapter):
               limit: int = 100, offset: int = 0) -> DatabaseResult:
         import psycopg2.extras
 
+        # v3.13.12: strip trailing `;` before the framework wraps with
+        # COUNT(*) and appends LIMIT/OFFSET — otherwise a user-supplied
+        # `"SELECT * FROM users;"` produces invalid wrapped SQL.
+        sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql)
 
         # v3.13.8: heal first so the COUNT probe below doesn't open on a
@@ -352,6 +356,8 @@ class PostgreSQLAdapter(DatabaseAdapter):
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         import psycopg2.extras
 
+        # v3.13.12: see fetch() — trailing semicolons break the wrappers.
+        sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         self._exec_with_handling(cursor, sql, params)

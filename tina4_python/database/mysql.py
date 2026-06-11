@@ -94,6 +94,9 @@ class MySQLAdapter(DatabaseAdapter):
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
+        # v3.13.12: strip trailing `;` before wrapping with COUNT(*)
+        # and appending LIMIT/OFFSET — see DatabaseAdapter helper.
+        sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(dictionary=True)
 
@@ -114,6 +117,7 @@ class MySQLAdapter(DatabaseAdapter):
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
+        sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(dictionary=True)
         cursor.execute(sql, params or [])

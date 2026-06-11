@@ -283,6 +283,9 @@ class FirebirdAdapter(DatabaseAdapter):
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
+        # v3.13.12: strip trailing `;` — Firebird wraps with COUNT(*)
+        # and appends ROWS pagination; a trailing semicolon breaks both.
+        sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor()
 
@@ -310,6 +313,7 @@ class FirebirdAdapter(DatabaseAdapter):
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
+        sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor()
         cursor = self._safe_cursor_execute(cursor, sql, params)

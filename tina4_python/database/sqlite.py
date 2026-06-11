@@ -108,6 +108,8 @@ class SQLiteAdapter(DatabaseAdapter):
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
+        # v3.13.12: strip trailing `;` before wrapping — see DatabaseAdapter.
+        sql = self._strip_trailing_semicolons(sql)
         # Count total rows (without LIMIT/OFFSET)
         count_sql = f"SELECT COUNT(*) as cnt FROM ({sql})"
         try:
@@ -128,6 +130,7 @@ class SQLiteAdapter(DatabaseAdapter):
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
+        sql = self._strip_trailing_semicolons(sql)
         cursor = self._conn.execute(sql, params or [])
         row = cursor.fetchone()
         return dict(row) if row else None

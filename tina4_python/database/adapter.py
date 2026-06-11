@@ -349,6 +349,32 @@ class DatabaseAdapter:
             last_id=last_id,
         )
 
+    @staticmethod
+    def _strip_trailing_semicolons(sql: str) -> str:
+        """v3.13.12: normalize user-supplied SQL by stripping trailing
+        semicolons and whitespace.
+
+        ``fetch()`` and ``fetch_one()`` wrap the user's SQL — fetch()
+        builds a ``SELECT COUNT(*) FROM ({sql}) AS _count_subquery``
+        for the pagination probe and appends ``LIMIT/OFFSET`` to the
+        real query. A trailing ``;`` in the user's SQL breaks both:
+
+            user input:  "SELECT * FROM users;"
+            wrapped:     "SELECT COUNT(*) FROM (SELECT * FROM users;) ..."   ← syntax error
+            paginated:   "SELECT * FROM users; LIMIT 100 OFFSET 0"           ← invalid
+
+        Stripping trailing semicolons before any wrapping is the
+        single-line defence. Internal semicolons (between meaningful
+        SQL statements) are left alone — the driver will reject those
+        if multi-statement isn't supported on the engine.
+        """
+        if not sql:
+            return sql
+        stripped = sql.rstrip()
+        while stripped.endswith(";"):
+            stripped = stripped[:-1].rstrip()
+        return stripped
+
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
         """Execute a read query and return multiple rows."""
