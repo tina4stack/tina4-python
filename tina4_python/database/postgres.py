@@ -346,8 +346,14 @@ class PostgreSQLAdapter(DatabaseAdapter):
         # Apply pagination — the real query, so use the error-handling
         # wrapper. The count probe above is best-effort and stays on
         # _safe_execute (a failed probe shouldn't taint last_error).
-        paginated_sql = f"{sql} LIMIT %s OFFSET %s"
-        paginated_params = (params or []) + [limit, offset]
+        # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
+        # default — give me ALL rows, not a silent first-100 slice).
+        if limit is None or limit <= 0:
+            paginated_sql = sql
+            paginated_params = params or []
+        else:
+            paginated_sql = f"{sql} LIMIT %s OFFSET %s"
+            paginated_params = (params or []) + [limit, offset]
         self._exec_with_handling(cursor, paginated_sql, paginated_params)
         rows = [self._decode_blobs(dict(row)) for row in cursor.fetchall()]
 

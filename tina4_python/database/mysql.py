@@ -108,9 +108,14 @@ class MySQLAdapter(DatabaseAdapter):
         except Exception:
             total = 0
 
-        # Apply pagination
-        paginated_sql = f"{sql} LIMIT %s OFFSET %s"
-        paginated_params = (params or []) + [limit, offset]
+        # Apply pagination — v3.13.12: limit <= 0 means "no pagination"
+        # (fetch_all's default — give me ALL rows).
+        if limit is None or limit <= 0:
+            paginated_sql = sql
+            paginated_params = params or []
+        else:
+            paginated_sql = f"{sql} LIMIT %s OFFSET %s"
+            paginated_params = (params or []) + [limit, offset]
         cursor.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
 

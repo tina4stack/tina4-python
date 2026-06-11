@@ -121,3 +121,72 @@ class TestFetchSurvivesTrailingSemicolon:
         assert result.count == 5, (
             f"COUNT probe wrap must survive trailing ';' (got count={result.count})"
         )
+
+
+# ── fetch_all semantics: return ALL rows by default ─────────────────
+
+
+@pytest.fixture
+def big_db():
+    """A SQLite with 150 rows — bigger than the legacy ``limit=100``
+    silent truncation default so we can prove fetch_all returns all
+    150 rows now."""
+    fd, path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    database = Database(f"sqlite:///{path}")
+    database.execute(
+        "CREATE TABLE rows (id INTEGER PRIMARY KEY AUTOINCREMENT, n INTEGER)"
+    )
+    for i in range(150):
+        database.execute("INSERT INTO rows (n) VALUES (?)", [i])
+    database.commit()
+    yield database
+    try:
+        database.close()
+    except Exception:
+        pass
+    os.unlink(path)
+
+
+class TestFetchAllReturnsAllRows:
+    """Pre-v3.13.12 ``fetch_all`` defaulted to ``limit=100`` and silently
+    truncated. v3.13.12 makes ``fetch_all`` actually fetch all rows — its
+    name promises that, so the behaviour now matches."""
+
+    def test_fetch_all_returns_all_rows_by_default(self, big_db):
+        rows = big_db.fetch_all("SELECT * FROM rows ORDER BY n")
+        assert len(rows) == 150, (
+            f"fetch_all must return ALL rows by default (got {len(rows)}). "
+            "Pre-v3.13.12 silently truncated to 100."
+        )
+
+    def test_fetch_all_with_explicit_limit_still_caps(self, big_db):
+        """Opt-in cap still works."""
+        rows = big_db.fetch_all("SELECT * FROM rows ORDER BY n", limit=10)
+        assert len(rows) == 10
+
+    def test_fetch_all_with_explicit_limit_and_offset(self, big_db):
+        rows = big_db.fetch_all("SELECT * FROM rows ORDER BY n", limit=5, offset=20)
+        assert len(rows) == 5
+        assert rows[0]["n"] == 20
+        assert rows[4]["n"] == 24
+
+    def test_fetch_default_still_paginates_to_100(self, big_db):
+        """fetch() (the metadata-returning sibling) keeps its 100-row
+        default — pagination is its job, count is its metadata. Only
+        fetch_all changed."""
+        result = big_db.fetch("SELECT * FROM rows ORDER BY n")
+        assert len(result.records) == 100
+        assert result.count == 150  # total still reflects the whole set
+
+    def test_fetch_with_limit_zero_also_returns_all(self, big_db):
+        """The underlying mechanism — ``limit=0`` on fetch() — also
+        returns all rows. fetch_all delegates here."""
+        result = big_db.fetch("SELECT * FROM rows ORDER BY n", limit=0)
+        assert len(result.records) == 150
+
+    def test_fetch_all_preserves_trailing_semicolon_strip(self, big_db):
+        """The two v3.13.12 changes compose — fetch_all with a trailing
+        semicolon still returns all 150 rows."""
+        rows = big_db.fetch_all("SELECT * FROM rows ORDER BY n;")
+        assert len(rows) == 150

@@ -457,8 +457,8 @@ class Database:
             raise
 
     def fetch_all(self, sql: str, params: list = None,
-                  limit: int = 100, offset: int = 0) -> list[dict]:
-        """Fetch rows and return the records list directly.
+                  limit: int = 0, offset: int = 0) -> list[dict]:
+        """Fetch ALL rows and return the records list directly.
 
         Symmetric with ``fetch_one``. For the common case where you just
         want the rows and don't need the ``DatabaseResult`` metadata
@@ -468,6 +468,10 @@ class Database:
             rows = db.fetch_all("SELECT * FROM users WHERE active = ?", [1])
             for row in rows:
                 print(row["name"])
+
+        v3.13.12: default ``limit`` is **0** (no truncation) — the method
+        name says ``fetch_all``, so it returns all matching rows. Pre-v3.13.12
+        silently truncated to 100. Pass an explicit ``limit=N`` to cap.
 
         Returns ``[]`` (not ``None``) when no rows match.
         """

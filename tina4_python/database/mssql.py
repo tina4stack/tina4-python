@@ -118,14 +118,19 @@ class MSSQLAdapter(DatabaseAdapter):
         except Exception:
             total = 0
 
-        # Apply pagination — MSSQL uses OFFSET/FETCH
-        # This requires an ORDER BY; if none exists, add a default
-        if not re.search(r"\bORDER\s+BY\b", sql, re.IGNORECASE):
-            paginated_sql = f"{sql} ORDER BY (SELECT NULL) OFFSET %s ROWS FETCH NEXT %s ROWS ONLY"
+        # Apply pagination — MSSQL uses OFFSET/FETCH.
+        # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
+        # default — give me ALL rows).
+        if limit is None or limit <= 0:
+            paginated_sql = sql
+            paginated_params = tuple(params or [])
         else:
-            paginated_sql = f"{sql} OFFSET %s ROWS FETCH NEXT %s ROWS ONLY"
-
-        paginated_params = tuple(params or []) + (offset, limit)
+            # OFFSET/FETCH requires an ORDER BY; if none exists, add a default
+            if not re.search(r"\bORDER\s+BY\b", sql, re.IGNORECASE):
+                paginated_sql = f"{sql} ORDER BY (SELECT NULL) OFFSET %s ROWS FETCH NEXT %s ROWS ONLY"
+            else:
+                paginated_sql = f"{sql} OFFSET %s ROWS FETCH NEXT %s ROWS ONLY"
+            paginated_params = tuple(params or []) + (offset, limit)
         cursor.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
 

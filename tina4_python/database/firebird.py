@@ -300,10 +300,15 @@ class FirebirdAdapter(DatabaseAdapter):
             # paginated query below regardless of whether count succeeded.
             cursor = self._conn.cursor()
 
-        # Apply Firebird pagination — ROWS start TO end
-        start = offset + 1
-        end = offset + limit
-        paginated_sql = f"{sql} ROWS {start} TO {end}"
+        # Apply Firebird pagination — ROWS start TO end.
+        # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
+        # default — give me ALL rows).
+        if limit is None or limit <= 0:
+            paginated_sql = sql
+        else:
+            start = offset + 1
+            end = offset + limit
+            paginated_sql = f"{sql} ROWS {start} TO {end}"
         cursor = self._safe_cursor_execute(cursor, paginated_sql, params)
 
         desc = cursor.description

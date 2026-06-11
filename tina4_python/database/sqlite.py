@@ -117,8 +117,12 @@ class SQLiteAdapter(DatabaseAdapter):
         except Exception:
             total = 0
 
-        # Apply pagination — skip if SQL already has LIMIT
-        if "LIMIT" in sql.upper().split("--")[0]:
+        # Apply pagination — skip if SQL already has LIMIT, or if
+        # limit <= 0 (v3.13.12: fetch_all's "give me all rows" path).
+        if limit is None or limit <= 0:
+            paginated_sql = sql
+            paginated_params = params or []
+        elif "LIMIT" in sql.upper().split("--")[0]:
             paginated_sql = sql
             paginated_params = params or []
         else:
