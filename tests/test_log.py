@@ -184,6 +184,51 @@ class TestLogOutput:
         assert "warn test" in content
 
 
+class TestStdoutInProduction:
+    """v3.13.14 — logs MUST reach stdout in production so `docker logs`
+    and k8s (which read PID 1 stdout) see them. Pre-v3.13.14 production
+    suppressed stdout entirely, writing only to a file inside the
+    ephemeral container — operators 'weren't getting logs'."""
+
+    def test_production_logs_go_to_stdout(self, tmp_path, capsys):
+        Log.configure(log_dir=str(tmp_path), level="info", production=True)
+        Log.info("hello from prod")
+        out = capsys.readouterr().out
+        assert "hello from prod" in out, (
+            "production must write logs to stdout (docker logs reads stdout)"
+        )
+
+    def test_production_stdout_is_json(self, tmp_path, capsys):
+        Log.configure(log_dir=str(tmp_path), level="info", production=True)
+        Log.error("boom", code=500)
+        out = capsys.readouterr().out.strip().splitlines()[-1]
+        data = json.loads(out)  # must be parseable JSON, no ANSI color codes
+        assert data["message"] == "boom"
+        assert data["level"] == "ERROR"
+        assert "\x1b[" not in out, "production stdout must not contain ANSI colour codes"
+
+    def test_production_respects_level_on_stdout(self, tmp_path, capsys):
+        Log.configure(log_dir=str(tmp_path), level="info", production=True)
+        Log.debug("debug noise")
+        out = capsys.readouterr().out
+        assert "debug noise" not in out, "debug suppressed at info level on stdout"
+
+    def test_dev_stdout_is_human_readable_with_colour(self, tmp_path, capsys):
+        Log.configure(log_dir=str(tmp_path), level="info", production=False)
+        Log.info("dev line")
+        out = capsys.readouterr().out
+        assert "dev line" in out
+        assert "\x1b[" in out, "dev stdout keeps ANSI colour"
+
+    def test_stdout_disabled_when_output_is_file(self, tmp_path, capsys, monkeypatch):
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "file")
+        Log.configure(log_dir=str(tmp_path), level="info", production=True)
+        Log.info("file only")
+        out = capsys.readouterr().out
+        assert "file only" not in out, "TINA4_LOG_OUTPUT=file must keep stdout silent"
+        assert "file only" in (tmp_path / "tina4.log").read_text()
+
+
 class TestRequestId:
 
     def test_set_and_get_request_id(self):

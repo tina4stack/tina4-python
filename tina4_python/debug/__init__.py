@@ -412,10 +412,18 @@ class Log:
         # File always gets ALL levels (no filtering for file output)
         line = cls._format_line(level, message, **kwargs)
 
-        # Console output respects TINA4_LOG_LEVEL and the stdout toggle
-        if cls._stdout_enabled and not cls._is_production and cls._should_log(level):
-            color = cls.COLORS.get(level, "")
-            print(f"{color}{line}{cls.RESET}")
+        # Console output respects TINA4_LOG_LEVEL and the stdout toggle.
+        # v3.13.14: stdout is NOT suppressed in production — containers
+        # treat stdout as the canonical log sink (docker logs / k8s read
+        # PID 1 stdout), and the pre-v3.13.14 `not _is_production` gate
+        # meant deployed containers got nothing. Production still emits
+        # JSON (see _format_line / _is_production), just on stdout now.
+        # flush=True so logs appear immediately on a non-TTY pipe rather
+        # than sitting in Python's block buffer until the process exits.
+        if cls._stdout_enabled and cls._should_log(level):
+            color = "" if cls._is_production else cls.COLORS.get(level, "")
+            reset = "" if cls._is_production else cls.RESET
+            print(f"{color}{line}{reset}", flush=True)
 
         # Always write ALL levels to the main file (raw log, no filtering)
         if cls._writer:

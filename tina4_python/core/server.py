@@ -2081,7 +2081,12 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
     # Init logger
     is_production = os.environ.get("TINA4_ENV", "development") == "production"
-    log_level = os.environ.get("TINA4_LOG_LEVEL", "error" if not is_production else "error")
+    # v3.13.14: default level is INFO (was ERROR). ERROR-by-default meant a
+    # deployed app that logged at info/debug appeared silent — operators
+    # "weren't getting logs". INFO shows request/startup/warn/error without
+    # debug noise, and matches PHP/Ruby/Node defaults. Override per-deploy
+    # with TINA4_LOG_LEVEL.
+    log_level = os.environ.get("TINA4_LOG_LEVEL", "info")
     Log.configure(level=log_level, production=is_production)
 
     # Install a top-level exception hook so uncaught exceptions bubbling
