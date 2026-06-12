@@ -2,7 +2,7 @@
 import os
 import time
 import pytest
-from tina4_python.core.middleware import CorsMiddleware, RateLimiter
+from tina4_python.core.middleware import CorsMiddleware, RateLimiter, RequestLoggerMiddleware
 
 
 class MockRequest:
@@ -218,3 +218,73 @@ class TestRateLimiterNegative:
         time.sleep(1.1)
         allowed, _ = limiter.check("10.0.0.7")
         assert allowed is True
+
+
+# ── Request logging (v3.13.14) ───────────────────────────────────
+# The dev server printed the startup banner then went silent because
+# requests were never logged to stdout: the global dev-server path had
+# no per-request log line, and RequestLoggerMiddleware used an
+# unconfigured stdlib logger whose info() is dropped. Both now route
+# through the Tina4 Log → stdout.
+
+class MockReqLog:
+    def __init__(self, method="GET", path="/api/x"):
+        self.method = method
+        self.url = path
+        self.path = path
+
+
+class TestRequestLoggerMiddleware:
+    def test_after_log_emits_via_tina4_log(self, capsys):
+        from tina4_python.debug import Log
+        Log.configure(level="info", production=False)
+        req = MockReqLog("GET", "/api/widgets")
+        resp = MockResponse()
+        resp.status_code = 200
+        RequestLoggerMiddleware.before_log(req, resp)
+        RequestLoggerMiddleware.after_log(req, resp)
+        out = capsys.readouterr().out
+        assert "GET /api/widgets -> 200" in out, (
+            "request log must reach stdout via Tina4 Log (was a silent stdlib logger)"
+        )
+
+    def test_after_log_includes_elapsed_ms(self, capsys):
+        from tina4_python.debug import Log
+        Log.configure(level="info", production=False)
+        req = MockReqLog("POST", "/api/orders")
+        resp = MockResponse()
+        resp.status_code = 201
+        RequestLoggerMiddleware.before_log(req, resp)
+        RequestLoggerMiddleware.after_log(req, resp)
+        out = capsys.readouterr().out
+        assert "POST /api/orders -> 201" in out
+        assert "ms)" in out
+
+
+class TestRequestLoggingEnabled:
+    """The TINA4_LOG_REQUESTS gate: explicit true/false wins; unset
+    follows dev mode."""
+
+    def setup_method(self):
+        os.environ.pop("TINA4_LOG_REQUESTS", None)
+
+    def teardown_method(self):
+        os.environ.pop("TINA4_LOG_REQUESTS", None)
+
+    def test_unset_follows_dev_true(self):
+        from tina4_python.core.server import _request_logging_enabled
+        assert _request_logging_enabled(is_dev=True) is True
+
+    def test_unset_follows_dev_false(self):
+        from tina4_python.core.server import _request_logging_enabled
+        assert _request_logging_enabled(is_dev=False) is False
+
+    def test_explicit_true_overrides_prod(self):
+        from tina4_python.core.server import _request_logging_enabled
+        os.environ["TINA4_LOG_REQUESTS"] = "true"
+        assert _request_logging_enabled(is_dev=False) is True
+
+    def test_explicit_false_overrides_dev(self):
+        from tina4_python.core.server import _request_logging_enabled
+        os.environ["TINA4_LOG_REQUESTS"] = "false"
+        assert _request_logging_enabled(is_dev=True) is False

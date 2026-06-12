@@ -361,9 +361,15 @@ class RequestLoggerMiddleware:
     """Request logger — stamps start time before the handler and logs elapsed time after.
 
     Mirrors the PHP, Ruby and Node.js RequestLogger classes.
+
+    v3.13.14: routes through the Tina4 ``Log`` class (was stdlib
+    ``logging.getLogger``, whose ``info()`` is silently dropped by an
+    unconfigured root logger — so these lines never reached stdout).
+    The dev server also logs every request globally (see
+    ``server._finalize_response``); this middleware remains for callers
+    that want per-route request logging.
     """
 
-    _logger = logging.getLogger("tina4.request")
     _start_times: dict = {}
     _lock = threading.Lock()
 
@@ -385,7 +391,6 @@ class RequestLoggerMiddleware:
         method = getattr(request, "method", "?")
         path = getattr(request, "url", None) or getattr(request, "path", "/")
         status = getattr(response, "status_code", None) or getattr(response, "status", 0)
-        RequestLoggerMiddleware._logger.info(
-            "[RequestLogger] %s %s -> %s (%sms)", method, path, status, elapsed_ms
-        )
+        from tina4_python.debug import Log
+        Log.info(f"{method} {path} -> {status} ({elapsed_ms}ms)")
         return request, response

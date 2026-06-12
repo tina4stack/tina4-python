@@ -1404,6 +1404,21 @@ def _handle_no_route(request: Request, response: Response, request_id: str) -> R
     return response
 
 
+def _request_logging_enabled(is_dev: bool) -> bool:
+    """Whether to emit a per-request log line (v3.13.14).
+
+    ``TINA4_LOG_REQUESTS`` is the explicit control (true/false). When unset,
+    request logging follows dev mode: on under ``TINA4_DEBUG``, off in
+    production (so prod doesn't pay the per-request logging cost unless the
+    operator opts in). Same contract across all four frameworks.
+    """
+    from tina4_python.dotenv import is_truthy
+    val = os.environ.get("TINA4_LOG_REQUESTS")
+    if val is not None and val != "":
+        return is_truthy(val)
+    return is_dev
+
+
 def _finalize_response(
     request: Request, response: Response, route: dict | None,
     request_id: str, is_dev: bool, req_start: float,
@@ -1440,6 +1455,22 @@ def _finalize_response(
                 request.method, request.path, response.status_code, duration,
                 body_size=len(response.content) if response.content else 0,
                 ip=request.ip,
+            )
+        except Exception:
+            pass
+
+    # Request log line (v3.13.14). The dev dashboard's RequestInspector above
+    # only feeds the /__dev UI — it never reached stdout, so `tina4 serve`
+    # printed the startup banner then went silent even as requests flowed.
+    # Emit a per-request line through the Tina4 Log so it lands on stdout
+    # (docker logs / k8s) like every other log. On by default in dev; opt-in
+    # in production via TINA4_LOG_REQUESTS to avoid per-request overhead.
+    if _request_logging_enabled(is_dev):
+        try:
+            import time as _time
+            elapsed_ms = round((_time.perf_counter() - req_start) * 1000, 3)
+            Log.info(
+                f"{request.method} {request.path} -> {response.status_code} ({elapsed_ms}ms)"
             )
         except Exception:
             pass
