@@ -174,10 +174,16 @@ class MySQLAdapter(DatabaseAdapter):
         self._in_transaction = False
 
     def table_exists(self, name: str) -> bool:
+        # v3.13.14 (#48): honour a database-qualified name ("otherdb.table").
+        # In MySQL "schema" == database; default to the connected database.
+        # Pre-fix this matched the whole dotted string as a flat TABLE_NAME
+        # under DATABASE() only, so a cross-database qualified name was never
+        # found and create_table()/migrations misfired.
+        schema, tbl = self._split_schema(name)
         row = self.fetch_one(
             "SELECT TABLE_NAME FROM information_schema.TABLES "
-            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
-            [name],
+            "WHERE TABLE_SCHEMA = COALESCE(%s, DATABASE()) AND TABLE_NAME = %s",
+            [schema, tbl],
         )
         return row is not None
 

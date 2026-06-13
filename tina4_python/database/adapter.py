@@ -375,6 +375,27 @@ class DatabaseAdapter:
             stripped = stripped[:-1].rstrip()
         return stripped
 
+    @staticmethod
+    def _split_schema(name: str) -> tuple[str | None, str]:
+        """Split a possibly-qualified table name into (schema, table).
+
+        v3.13.14 (#48): a model whose ``table_name`` is qualified —
+        PostgreSQL ``gift_cards.gift_card``, MSSQL ``dbo.widget``,
+        MySQL ``otherdb.table``, SQLite ``attached.table`` — lives in
+        that schema/catalog, not the default. Each adapter's
+        ``table_exists`` / ``get_columns`` use this to query the right
+        namespace instead of matching the whole dotted string as one
+        flat table name. Returns ``(None, name)`` for a bare name so
+        callers default to the engine's current namespace. Splits on the
+        first dot; quoted identifiers with embedded dots aren't supported
+        (they weren't before either). Firebird has no schemas, so its
+        adapter ignores this.
+        """
+        if "." in name:
+            schema, _, table = name.partition(".")
+            return schema, table
+        return None, name
+
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
         """Execute a read query and return multiple rows."""

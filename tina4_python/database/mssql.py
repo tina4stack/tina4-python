@@ -190,10 +190,17 @@ class MSSQLAdapter(DatabaseAdapter):
         self._in_transaction = False
 
     def table_exists(self, name: str) -> bool:
+        # v3.13.14 (#48): honour a schema-qualified name ("dbo.widget",
+        # "sales.orders"). Schemas are everyday in SQL Server; pre-fix this
+        # had no schema filter and matched the whole dotted string as a flat
+        # TABLE_NAME, so any qualified table_name was invisible. A bare name
+        # still matches in any schema (unchanged behaviour).
+        schema, tbl = self._split_schema(name)
         row = self.fetch_one(
             "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES "
-            "WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME = %s",
-            [name],
+            "WHERE TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME = %s "
+            "AND (%s IS NULL OR TABLE_SCHEMA = %s)",
+            [tbl, schema, schema],
         )
         return row is not None
 
@@ -206,6 +213,9 @@ class MSSQLAdapter(DatabaseAdapter):
         return [r["TABLE_NAME"] for r in result.records]
 
     def get_columns(self, table: str) -> list[dict]:
+        # v3.13.14 (#48): honour a schema-qualified name; a bare name matches
+        # in any schema (unchanged).
+        schema, tbl = self._split_schema(table)
         sql = """
             SELECT c.COLUMN_NAME, c.DATA_TYPE, c.IS_NULLABLE, c.COLUMN_DEFAULT,
                    CASE WHEN pk.COLUMN_NAME IS NOT NULL THEN 1 ELSE 0 END AS is_primary
@@ -215,12 +225,13 @@ class MSSQLAdapter(DatabaseAdapter):
                 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku
                   ON tc.CONSTRAINT_NAME = ku.CONSTRAINT_NAME
-                WHERE tc.TABLE_NAME = %s AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
+                WHERE tc.TABLE_NAME = %s AND (%s IS NULL OR tc.TABLE_SCHEMA = %s)
+                  AND tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
             ) pk ON c.COLUMN_NAME = pk.COLUMN_NAME
-            WHERE c.TABLE_NAME = %s
+            WHERE c.TABLE_NAME = %s AND (%s IS NULL OR c.TABLE_SCHEMA = %s)
             ORDER BY c.ORDINAL_POSITION
         """
-        result = self.fetch(sql, [table, table], limit=10000)
+        result = self.fetch(sql, [tbl, schema, schema, tbl, schema, schema], limit=10000)
         return [
             {
                 "name": r["COLUMN_NAME"],

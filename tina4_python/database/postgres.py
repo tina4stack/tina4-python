@@ -423,20 +423,40 @@ class PostgreSQLAdapter(DatabaseAdapter):
         self._in_transaction = False
 
     def table_exists(self, name: str) -> bool:
-        row = self.fetch_one(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = %s",
-            [name],
-        )
-        return row is not None
+        # v3.13.x (#48): support schema-qualified names ("schema.table") and the
+        # connection search_path. to_regclass() resolves a (possibly qualified)
+        # relation name to its OID using the SAME rules Postgres applies to a
+        # FROM clause, returning NULL when absent. Pre-fix this hardcoded
+        # schemaname='public' AND matched the whole dotted string as a flat
+        # tablename, so a table in a non-public schema was invisible —
+        # table_exists() always returned False, so create_table()/migrations
+        # misfired and ORM introspection saw nothing.
+        row = self.fetch_one("SELECT to_regclass(%s) AS oid", [name])
+        return bool(row and row.get("oid") is not None)
 
     def get_tables(self) -> list[str]:
+        # v3.13.x (#48): list tables from every user schema, not just public.
+        # public tables stay bare ("users"); tables in other schemas are
+        # returned schema-qualified ("gift_cards.gift_card") so the names round
+        # -trip back through table_exists()/get_columns().
         result = self.fetch(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename",
+            """
+            SELECT schemaname, tablename FROM pg_tables
+            WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+            ORDER BY schemaname, tablename
+            """,
             limit=10000,
         )
-        return [r["tablename"] for r in result.records]
+        return [
+            r["tablename"] if r["schemaname"] == "public"
+            else f"{r['schemaname']}.{r['tablename']}"
+            for r in result.records
+        ]
 
     def get_columns(self, table: str) -> list[dict]:
+        # v3.13.x (#48): honour a schema-qualified name; default to public.
+        schema, tbl = self._split_schema(table)
+        schema = schema or "public"
         sql = """
             SELECT c.column_name, c.data_type, c.is_nullable, c.column_default,
                    CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END AS is_primary
@@ -446,12 +466,12 @@ class PostgreSQLAdapter(DatabaseAdapter):
                 FROM information_schema.table_constraints tc
                 JOIN information_schema.key_column_usage ku
                   ON tc.constraint_name = ku.constraint_name
-                WHERE tc.table_name = %s AND tc.constraint_type = 'PRIMARY KEY'
+                WHERE tc.table_name = %s AND tc.table_schema = %s AND tc.constraint_type = 'PRIMARY KEY'
             ) pk ON c.column_name = pk.column_name
-            WHERE c.table_name = %s AND c.table_schema = 'public'
+            WHERE c.table_name = %s AND c.table_schema = %s
             ORDER BY c.ordinal_position
         """
-        result = self.fetch(sql, [table, table], limit=10000)
+        result = self.fetch(sql, [tbl, schema, tbl, schema], limit=10000)
         return [
             {
                 "name": r["column_name"],

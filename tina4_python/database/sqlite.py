@@ -179,9 +179,16 @@ class SQLiteAdapter(DatabaseAdapter):
         self._in_transaction = False
 
     def table_exists(self, name: str) -> bool:
+        # v3.13.14 (#48): honour an attached-database prefix ("attached.table").
+        # SQLite's "schema" is an ATTACH alias; each has its own sqlite_master.
+        # Bare names use the main database (unchanged). The alias must be a
+        # plain identifier (it's developer-supplied, but guard against the dot
+        # being part of an odd name).
+        schema, tbl = self._split_schema(name)
+        master = f"{schema}.sqlite_master" if schema and schema.isidentifier() else "sqlite_master"
         row = self.fetch_one(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            [name]
+            f"SELECT name FROM {master} WHERE type='table' AND name=?",
+            [tbl if (schema and schema.isidentifier()) else name]
         )
         return row is not None
 
@@ -193,7 +200,13 @@ class SQLiteAdapter(DatabaseAdapter):
         return [r["name"] for r in result.records]
 
     def get_columns(self, table: str) -> list[dict]:
-        cursor = self._conn.execute(f"PRAGMA table_info({table})")
+        # v3.13.14 (#48): honour an attached-database prefix via
+        # `PRAGMA <schema>.table_info(<table>)`.
+        schema, tbl = self._split_schema(table)
+        if schema and schema.isidentifier() and tbl.isidentifier():
+            cursor = self._conn.execute(f"PRAGMA {schema}.table_info({tbl})")
+        else:
+            cursor = self._conn.execute(f"PRAGMA table_info({table})")
         return [
             {
                 "name": row["name"],
