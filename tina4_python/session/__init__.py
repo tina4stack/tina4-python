@@ -163,7 +163,7 @@ class Session:
 
     def __init__(self, handler: SessionHandler = None, ttl: int = None):
         self._handler = handler or self._resolve_handler()
-        self._ttl = ttl or int(os.environ.get("TINA4_SESSION_TTL", "1800"))  # 30 min
+        self._ttl = ttl or int(os.environ.get("TINA4_SESSION_TTL", "3600"))  # 60 min
         self._session_id: str | None = None
         self._data: dict = {}
         self._dirty: bool = False
