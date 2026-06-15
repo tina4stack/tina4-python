@@ -1563,6 +1563,15 @@ async def handle(request: Request) -> Response:
         if swagger_resp is not None:
             return swagger_resp
 
+    # Reset the request-scoped query cache so identical SELECTs are deduped
+    # within this request but never served across requests (zero cross-request
+    # staleness). No-op when TINA4_DB_CACHE=true (persistent mode) or disabled.
+    try:
+        from tina4_python.database.connection import Database as _Db
+        _Db.reset_request_caches()
+    except Exception:
+        pass
+
     # Route matching and dispatch
     route, params = Router.match(request.method, request.path)
 

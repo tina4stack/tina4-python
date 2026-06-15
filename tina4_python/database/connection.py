@@ -13,6 +13,7 @@ import hashlib
 import os
 import threading
 import time
+import weakref
 from urllib.parse import urlparse
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
 
@@ -139,6 +140,10 @@ class Database:
     operations to the adapter. This is what the rest of the framework uses.
     """
 
+    #: Live Database instances, so the request dispatcher can reset the
+    #: request-scoped query cache on every connection at the start of a request.
+    _instances: "weakref.WeakSet[Database]" = weakref.WeakSet()
+
     @classmethod
     def get_connection(cls, url: str = None, username: str = "", password: str = "", pool: int = 0, **kwargs) -> "Database":
         """Open a database connection — convention name matching SQLAlchemy
@@ -205,14 +210,27 @@ class Database:
         # pool can't rotate mid-transaction and silently break atomicity.
         self._tx_local = threading.local()
 
-        # Query cache — off by default, opt-in via TINA4_DB_CACHE=true
+        # Query cache. One store, two layers:
+        #   • request-scoped (DEFAULT ON) — dedupes identical SELECTs to protect
+        #     the DB from rapid repeat reads. Cleared at the start of every HTTP
+        #     request (so it never serves data across requests) and on any write,
+        #     with a short safety TTL for non-request contexts (scripts/workers).
+        #     Off-switch: TINA4_QUERY_CACHE=false.
+        #   • persistent (opt-in, TINA4_DB_CACHE=true) — cross-request TTL cache
+        #     that is NOT cleared per request; entries expire by TINA4_DB_CACHE_TTL.
         from tina4_python.dotenv import is_truthy
-        self._cache_enabled: bool = is_truthy(os.environ.get("TINA4_DB_CACHE", "false"))
-        self._cache_ttl: int = int(os.environ.get("TINA4_DB_CACHE_TTL", "30"))
+        self._cache_persistent: bool = is_truthy(os.environ.get("TINA4_DB_CACHE", "false"))
+        self._cache_request_scoped: bool = is_truthy(os.environ.get("TINA4_QUERY_CACHE", "true"))
+        self._cache_enabled: bool = self._cache_persistent or self._cache_request_scoped
+        if self._cache_persistent:
+            self._cache_ttl: int = int(os.environ.get("TINA4_DB_CACHE_TTL", "30"))
+        else:
+            self._cache_ttl = int(os.environ.get("TINA4_QUERY_CACHE_TTL", "5"))
         self._query_cache: dict[str, tuple[float, object]] = {}  # key -> (expires_at, result)
         self._cache_hits: int = 0
         self._cache_misses: int = 0
         self._cache_lock = threading.Lock()
+        Database._instances.add(self)
 
     def _create_adapter(self) -> DatabaseAdapter:
         """Select adapter based on URL scheme."""
@@ -326,11 +344,37 @@ class Database:
         with self._cache_lock:
             self._query_cache.clear()
 
+    def cache_new_request(self):
+        """Clear the request-scoped query cache at the start of an HTTP request.
+
+        No-op in persistent mode (TINA4_DB_CACHE=true) so cross-request entries
+        survive up to their TTL. Cumulative hit/miss counters are preserved.
+        """
+        if self._cache_request_scoped and not self._cache_persistent:
+            with self._cache_lock:
+                self._query_cache.clear()
+
+    @classmethod
+    def reset_request_caches(cls):
+        """Clear the request-scoped query cache on every live Database instance.
+
+        The request dispatcher calls this at the start of each HTTP request so
+        request-scoped caching never serves rows across requests (zero
+        cross-request staleness). Persistent-mode connections are left alone.
+        """
+        for inst in list(cls._instances):
+            try:
+                inst.cache_new_request()
+            except Exception:
+                pass
+
     def cache_stats(self) -> dict:
         """Return query cache statistics."""
         with self._cache_lock:
             return {
                 "enabled": self._cache_enabled,
+                "mode": ("persistent" if self._cache_persistent
+                         else "request" if self._cache_request_scoped else "off"),
                 "hits": self._cache_hits,
                 "misses": self._cache_misses,
                 "size": len(self._query_cache),
