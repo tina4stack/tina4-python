@@ -24,10 +24,10 @@ from tina4_python.orm.fields import (
     IntField, StrField, BoolField,  # short aliases
     has_many, has_one, belongs_to,  # relationship descriptors
 )
-from tina4_python.orm.model import ORM, orm_bind
+from tina4_python.orm.model import ORM, bind_database
 
 __all__ = [
-    "ORM", "orm_bind",
+    "ORM", "bind_database",
     "Field",
     # Verbose (preferred)
     "IntegerField", "StringField", "BooleanField", "FloatField",

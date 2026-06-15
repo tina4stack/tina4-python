@@ -242,10 +242,10 @@ class TestOrmAutoBindError:
     message led users to set a key that was guaranteed to fail."""
 
     def test_no_database_error_mentions_tina4_database_url(self, monkeypatch):
-        from tina4_python.orm import ORM, orm_bind, IntegerField
+        from tina4_python.orm import ORM, bind_database, IntegerField
 
         # Wipe global ORM binding and TINA4_DATABASE_URL so auto-discovery fails.
-        orm_bind(None)
+        bind_database(None)
         monkeypatch.delenv("TINA4_DATABASE_URL", raising=False)
 
         class _NoBindModel(ORM):

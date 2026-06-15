@@ -1,7 +1,7 @@
 # Tests for tina4_python.orm
 import pytest
 from tina4_python.database import Database
-from tina4_python.orm import ORM, orm_bind, Field, IntField, StrField, BoolField
+from tina4_python.orm import ORM, bind_database, Field, IntField, StrField, BoolField
 from tina4_python.orm import has_many, has_one, belongs_to
 from tina4_python.orm.model import snake_to_camel, camel_to_snake
 
@@ -66,7 +66,7 @@ def db(tmp_path):
     d.execute("CREATE TABLE comments (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT, post_id INTEGER)")
     d.execute("CREATE TABLE profiles (id INTEGER PRIMARY KEY AUTOINCREMENT, bio TEXT, user_id INTEGER)")
     d.commit()
-    orm_bind(d)
+    bind_database(d)
     yield d
     d.close()
 

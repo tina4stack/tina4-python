@@ -128,13 +128,13 @@ Rules:
 ```python
 # app.py
 from tina4_python.core import run
-from tina4_python.orm import orm_bind
+from tina4_python.orm import bind_database
 from tina4_python.frond import Frond
 from tina4_python.database import Database
 
 # 1. Database & ORM
 db = Database("sqlite:///app.db")
-orm_bind(db)
+bind_database(db)
 
 # 2. Custom Twig filters
 Frond.add_filter("money", lambda v: f"{float(v or 0):,.2f}")
@@ -328,7 +328,7 @@ tina4_python/               # Core framework package (v3.0.0)
 │   ├── connection.py       # Database class (URL-based connection)
 │   ├── adapter.py          # DatabaseAdapter, DatabaseResult, SQLTranslator
 │   ├── sqlite.py, postgres.py, mysql.py, mssql.py, firebird.py, odbc.py
-├── orm/                    # Active Record ORM (ORM, Field, orm_bind)
+├── orm/                    # Active Record ORM (ORM, Field, bind_database)
 │   ├── model.py            # ORM base class
 │   └── fields.py           # IntegerField, StringField, etc.
 ├── frond/                  # Template engine (Frond — Jinja2/Twig-compatible)
@@ -823,10 +823,10 @@ class User(ORM):
 
 Initialize in `app.py`:
 ```python
-from tina4_python.orm import orm_bind
+from tina4_python.orm import bind_database
 from tina4_python.database import Database
 
-orm_bind(Database("sqlite:///app.db"))  # Assigns DB to all ORM subclasses
+bind_database(Database("sqlite:///app.db"))  # Assigns DB to all ORM subclasses
 ```
 
 ### ORM operations

@@ -1,7 +1,7 @@
 # Tests for features added/changed in 3.10.99
 import pytest
 from tina4_python.database import Database
-from tina4_python.orm import ORM, orm_bind, Field
+from tina4_python.orm import ORM, bind_database, Field
 from tina4_python.frond import Frond
 
 
@@ -32,7 +32,7 @@ def db(tmp_path):
         "title TEXT)"
     )
     d.commit()
-    orm_bind(d)
+    bind_database(d)
     yield d
     d.close()
 

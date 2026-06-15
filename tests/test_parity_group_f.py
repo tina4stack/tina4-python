@@ -62,10 +62,10 @@ class TestTopLevelReexports:
 
 def _make_thing_model():
     from tina4_python.database import Database
-    from tina4_python.orm import ORM, IntegerField, StringField, orm_bind
+    from tina4_python.orm import ORM, IntegerField, StringField, bind_database
 
     db = Database("sqlite:///:memory:")
-    orm_bind(db)
+    bind_database(db)
 
     class Thing(ORM):
         id = IntegerField(primary_key=True, auto_increment=True)

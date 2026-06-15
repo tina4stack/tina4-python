@@ -56,10 +56,10 @@ class TestApiKwargs:
 def _make_user_model():
     """Build a fresh User ORM model with in-memory SQLite."""
     from tina4_python.database import Database
-    from tina4_python.orm import ORM, IntegerField, StringField, orm_bind
+    from tina4_python.orm import ORM, IntegerField, StringField, bind_database
 
     db = Database("sqlite:///:memory:")
-    orm_bind(db)
+    bind_database(db)
 
     class TestUser(ORM):
         id = IntegerField(primary_key=True, auto_increment=True)

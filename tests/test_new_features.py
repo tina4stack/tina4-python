@@ -6,7 +6,7 @@ ODBC adapter, template sandboxing, fragment caching, event system.
 import pytest
 import time
 from tina4_python.database import Database
-from tina4_python.orm import ORM, Field, IntField, StrField, orm_bind
+from tina4_python.orm import ORM, Field, IntField, StrField, bind_database
 from tina4_python.orm.fields import FloatField
 from tina4_python.orm.model import _databases, _query_cache
 from tina4_python.core.cache import Cache
@@ -21,7 +21,7 @@ def db(tmp_path):
     d = Database(f"sqlite:///{tmp_path / 'main.db'}")
     d.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, email TEXT, age INTEGER, role TEXT)")
     d.commit()
-    orm_bind(d)
+    bind_database(d)
     yield d
     d.close()
 
@@ -31,7 +31,7 @@ def db2(tmp_path):
     d = Database(f"sqlite:///{tmp_path / 'audit.db'}")
     d.execute("CREATE TABLE audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, action TEXT, user_id INTEGER)")
     d.commit()
-    orm_bind(d, name="audit")
+    bind_database(d, name="audit")
     yield d
     d.close()
 

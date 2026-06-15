@@ -1,6 +1,6 @@
 """Test that auto_crud = True on an ORM model auto-registers CRUD routes."""
 import pytest
-from tina4_python.orm.model import ORM, orm_bind
+from tina4_python.orm.model import ORM, bind_database
 from tina4_python.orm.fields import IntegerField, StringField
 from tina4_python.crud import AutoCrud
 from tina4_python.database import Database

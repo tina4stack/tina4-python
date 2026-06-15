@@ -22,7 +22,7 @@ from tina4_python.orm import (
     DateTimeField,
     IntegerField,
     StringField,
-    orm_bind,
+    bind_database,
 )
 
 
@@ -121,7 +121,7 @@ class TestNaturalKeyInsert:
     zero rows."""
 
     def _setup(self, db, *, with_seed=False):
-        orm_bind(db)
+        bind_database(db)
 
         class GiftCard(ORM):
             gift_card_number = StringField(primary_key=True, max_length=50)
@@ -170,7 +170,7 @@ class TestNaturalKeyInsert:
         """Regression guard: the natural-key fix must not affect
         auto-increment models. PK is None → INSERT, PK assigned by
         engine, second save with that PK → UPDATE."""
-        orm_bind(db)
+        bind_database(db)
 
         class User(ORM):
             id = IntegerField(primary_key=True, auto_increment=True)
@@ -204,7 +204,7 @@ class TestBooleanFieldDDL:
     care what column type strings look like, so the SQL still runs)."""
 
     def test_sqlite_keeps_integer(self, db):
-        orm_bind(db)
+        bind_database(db)
 
         class Flagged(ORM):
             id = IntegerField(primary_key=True, auto_increment=True)
@@ -235,7 +235,7 @@ class TestBooleanFieldDDL:
     )
     def test_engine_dispatch(self, db, engine, expected, monkeypatch):
         """create_table must pick the right SQL type per engine."""
-        orm_bind(db)
+        bind_database(db)
 
         class Flagged(ORM):
             id = IntegerField(primary_key=True, auto_increment=True)

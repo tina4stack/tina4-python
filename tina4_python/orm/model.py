@@ -17,13 +17,13 @@ from tina4_python.core.cache import Cache
 # Module-level query cache — shared across all ORM models
 _query_cache = Cache(default_ttl=0, max_size=500)
 
-# Global database reference — set via orm_bind()
+# Global database reference — set via bind_database()
 _database = None
 # Named database connections registry
 _databases: dict[str, object] = {}
 
 
-def orm_bind(db, name: str = None):
+def bind_database(db, name: str = None):
     """Bind a Database instance to ORM models.
 
     Args:
@@ -32,11 +32,11 @@ def orm_bind(db, name: str = None):
               If None, sets the global default used by all models without _db.
 
     Usage:
-        orm_bind(db_main)                    # default for all models
-        orm_bind(db_audit, name="audit")     # named connection
+        bind_database(db_main)                    # default for all models
+        bind_database(db_audit, name="audit")     # named connection
 
         # Decorator style — class is returned unchanged:
-        @orm_bind(db)
+        @bind_database(db)
         class User(ORM):
             ...
 
@@ -49,7 +49,7 @@ def orm_bind(db, name: str = None):
     else:
         _databases[name] = db
 
-    # Return a pass-through decorator so @orm_bind(db) syntax works.
+    # Return a pass-through decorator so @bind_database(db) syntax works.
     # Without this the decorator would set the class to None.
     def _decorator(cls):
         return cls
@@ -279,7 +279,7 @@ class ORM(metaclass=ORMMeta):
         Resolution order:
         1. cls._db as a Database instance (direct assignment)
         2. cls._db as a string name → look up in _databases registry
-        3. Global _database (set via orm_bind(db))
+        3. Global _database (set via bind_database(db))
         """
         if cls._db is not None:
             if isinstance(cls._db, str):
@@ -287,7 +287,7 @@ class ORM(metaclass=ORMMeta):
                 if db is None:
                     raise RuntimeError(
                         f"Named database '{cls._db}' not found. "
-                        f"Call orm_bind(db, name='{cls._db}') first."
+                        f"Call bind_database(db, name='{cls._db}') first."
                     )
                 return db
             return cls._db  # Direct Database instance
@@ -301,10 +301,10 @@ class ORM(metaclass=ORMMeta):
                 username = os.environ.get("TINA4_DATABASE_USERNAME", "")
                 password = os.environ.get("TINA4_DATABASE_PASSWORD", "")
                 db = Database(url, username, password)
-                orm_bind(db)
+                bind_database(db)
                 return db
             raise RuntimeError(
-                "No database bound. Call orm_bind(db) or set TINA4_DATABASE_URL in .env"
+                "No database bound. Call bind_database(db) or set TINA4_DATABASE_URL in .env"
             )
         return _database
 
@@ -900,7 +900,7 @@ class ORM(metaclass=ORMMeta):
         Resolution order matches _get_db():
         1. cls._db as a Database instance
         2. cls._db as a named string → registry lookup
-        3. Global default set via orm_bind()
+        3. Global default set via bind_database()
         """
         return cls._get_db()
 

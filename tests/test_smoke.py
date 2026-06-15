@@ -13,7 +13,7 @@ from tina4_python.core.router import Router, get, post
 from tina4_python.core.response import Response
 from tina4_python.core.middleware import CorsMiddleware
 from tina4_python.database import Database, DatabaseResult
-from tina4_python.orm import ORM, orm_bind, Field
+from tina4_python.orm import ORM, bind_database, Field
 from tina4_python.frond import Frond
 from tina4_python.session import Session, FileSessionHandler
 from tina4_python.auth import Auth
@@ -117,7 +117,7 @@ class TestRouteDiscovery:
 
 class TestORM:
     def test_save_load_delete(self, db):
-        orm_bind(db)
+        bind_database(db)
         item = Item({"name": "Widget", "price": 9.99})
         item.save()
         db.commit()
@@ -300,7 +300,7 @@ class TestGraphQL:
         assert result["data"]["createWidget"]["name"] == "Gear"
 
     def test_from_orm(self, db):
-        orm_bind(db)
+        bind_database(db)
         gql = GraphQL()
         gql.schema.from_orm(Item)
         schema = gql.introspect()
@@ -383,7 +383,7 @@ class TestMigrations:
 
 class TestAutoCRUD:
     def test_register_generates_crud_routes(self, db):
-        orm_bind(db)
+        bind_database(db)
         generated = AutoCrud.register(Item)
         paths = [r["path"] for r in generated]
         assert "/api/items" in paths
@@ -723,7 +723,7 @@ class TestRouterAdvanced:
 
 class TestORMAdvanced:
     def test_orm_update(self, db):
-        orm_bind(db)
+        bind_database(db)
         item = Item({"name": "Original", "price": 5.0})
         item.save()
         db.commit()
@@ -738,11 +738,11 @@ class TestORMAdvanced:
         assert found.price == 10.0
 
     def test_orm_find_nonexistent(self, db):
-        orm_bind(db)
+        bind_database(db)
         assert Item.find_by_id(99999) is None
 
     def test_orm_to_dict(self, db):
-        orm_bind(db)
+        bind_database(db)
         item = Item({"name": "DictTest", "price": 3.0})
         item.save()
         db.commit()

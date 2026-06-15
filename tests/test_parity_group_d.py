@@ -191,10 +191,10 @@ class TestQueueDeadLettersReturnsJobs:
 
 def _make_product_model():
     from tina4_python.database import Database
-    from tina4_python.orm import ORM, IntegerField, StringField, NumericField, orm_bind
+    from tina4_python.orm import ORM, IntegerField, StringField, NumericField, bind_database
 
     db = Database("sqlite:///:memory:")
-    orm_bind(db)
+    bind_database(db)
 
     class Product(ORM):
         id = IntegerField(primary_key=True, auto_increment=True)

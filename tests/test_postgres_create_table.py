@@ -29,7 +29,7 @@ import socket
 import pytest
 
 from tina4_python.database import Database
-from tina4_python.orm import orm_bind, ORM
+from tina4_python.orm import bind_database, ORM
 from tina4_python.orm.fields import IntegerField, StringField, BooleanField, DateTimeField
 
 PG_HOST = os.environ.get("TINA4_TEST_PG_HOST", "localhost")
@@ -62,7 +62,7 @@ def db():
     conn = Database(f"postgresql://{PG_HOST}:{PG_PORT}/{PG_DB}", PG_USER, PG_PASS)
     conn.execute("DROP TABLE IF EXISTS createtablewidget")
     conn.commit()
-    orm_bind(conn)
+    bind_database(conn)
     yield conn
     conn.execute("DROP TABLE IF EXISTS createtablewidget")
     conn.commit()

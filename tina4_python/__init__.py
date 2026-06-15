@@ -34,7 +34,7 @@ from tina4_python.database import Database  # noqa: E402, F401
 
 # ── ORM ──
 from tina4_python.orm import (  # noqa: E402, F401
-    ORM, orm_bind, Field,
+    ORM, bind_database, Field,
     IntegerField, StringField, BooleanField, FloatField,
     DateTimeField, TextField, BlobField, NumericField,
     ForeignKeyField,
