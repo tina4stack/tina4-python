@@ -9,6 +9,19 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports: ['6380:6379']
+      memcached:
+        image: memcached:alpine
+        ports: ['11211:11211']
+      mongo:
+        image: mongo:7
+        ports: ['27017:27017']
     steps:
       - uses: actions/checkout@v4
 
@@ -16,8 +29,13 @@ jobs:
         with:
           python-version: '3.12'
 
+      # Password-protected Redis for the credential tests (GHA services can't
+      # pass --requirepass, so run it as a plain container on 6381).
+      - name: Start auth Redis
+        run: docker run -d --name tina4-cache-redis-auth -p 6381:6379 redis:7-alpine redis-server --requirepass s3cret
+
       - name: Install dependencies
-        run: pip install uv && uv sync
+        run: pip install uv && uv sync && uv pip install pymongo
 
       - name: Run tests
         run: uv run pytest tests/ -v

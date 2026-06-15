@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.13.23 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.24 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -576,8 +576,14 @@ clear_cache()
 ```
 
 Environment variables:
+- `TINA4_CACHE_BACKEND` — backend for the response/KV cache. One of `memory` (default), `file`, `redis`, `valkey`, `memcached`, `mongodb`, `database`.
+- `TINA4_CACHE_URL` — connection string for `redis`/`valkey`/`memcached`/`mongodb`, OR a SQL URL for `database` (falls back to `TINA4_DATABASE_URL`).
+- `TINA4_CACHE_USERNAME` / `TINA4_CACHE_PASSWORD` — credentials (mirrors `TINA4_DATABASE_USERNAME`/`_PASSWORD`); may also be embedded in `TINA4_CACHE_URL` (`redis://user:pass@host`, `redis://:pass@host`, `mongodb://user:pass@host`). memcached is unauthenticated.
 - `TINA4_CACHE_TTL` — default TTL in seconds (default: 60)
 - `TINA4_CACHE_MAX_ENTRIES` — max cached entries (default: 1000)
+- `TINA4_CACHE_DIR` — directory for the `file` backend (default: `data/cache`)
+
+**Graceful fallback**: if a configured backend's driver is missing or the service/credentials are unreachable or wrong, the cache logs a warning and falls back to the **file** backend — a real persistent cache, never a silent no-op.
 
 ### DI Container — Lightweight dependency injection
 
@@ -727,10 +733,10 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - CLI scaffolding: `tina4python generate model/route/migration/middleware`
 - Production server auto-detection: `tina4python serve --production` (auto-installs uvicorn)
 - Frond pre-compilation for 2.8x template render improvement (clear_cache method)
-- DB query caching: request-scoped auto cache **on by default** (`TINA4_AUTO_CACHING=true`, TTL `TINA4_AUTO_CACHING_TTL=5`) dedupes identical reads within a request and flushes on any write; persistent cross-request cache is opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`); `cache_stats()` (reports `mode`: request/persistent/off), `cache_clear()`
+- DB query caching: request-scoped auto cache **on by default** (`TINA4_AUTO_CACHING=true`, TTL `TINA4_AUTO_CACHING_TTL=5`) dedupes identical reads within a request and flushes on any write; persistent cross-request cache is opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`). The persistent DB cache routes through the same unified backend set via `TINA4_DB_CACHE_BACKEND` (memory/file/redis/valkey/memcached/mongodb/database) + `TINA4_DB_CACHE_URL`, so multiple instances share one cache with global write-invalidation. `cache_stats()` reports `mode` (request/persistent/off) and `backend`, `cache_clear()`
 - ORM relationships: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)
 - Queue backends: file (default), RabbitMQ, Kafka, MongoDB — configured via env vars
-- Cache backends: memory (default), Redis, file — configured via env vars
+- Cache backends: unified set across response/KV and persistent DB cache — `memory` (default), `file`, `redis`, `valkey`, `memcached`, `mongodb`, `database` — selected via `TINA4_CACHE_BACKEND` (+ `TINA4_CACHE_URL`/credentials); falls back to the file backend if a backend is unreachable
 - Session backends: file, Redis, Valkey, MongoDB, database
 - QueryBuilder with NoSQL/MongoDB support (`to_mongo()`)
 - WebSocket backplane (Redis pub/sub) for horizontal scaling
@@ -741,8 +747,8 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
 - SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools (24 tools) auto-start on `TINA4_DEBUG=true` + localhost. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. Localhost-only by default; `TINA4_MCP_REMOTE=true` for remote
-- Tests: 2,866 passing (121 modules)
-- Version: 3.13.23
+- Tests: 2,899 passing (121 modules)
+- Version: 3.13.24
 
 ## Links
 

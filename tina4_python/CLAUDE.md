@@ -1457,9 +1457,16 @@ clear_cache()                  # flush all entries and reset stats
 ### Environment variables
 
 ```bash
+TINA4_CACHE_BACKEND=memory      # memory (default) | file | redis | valkey | memcached | mongodb | database
+TINA4_CACHE_URL=                # connection for redis/valkey/memcached/mongodb, OR a SQL URL for database (falls back to TINA4_DATABASE_URL)
+TINA4_CACHE_USERNAME=           # credentials (mirrors TINA4_DATABASE_USERNAME); may also be embedded in TINA4_CACHE_URL
+TINA4_CACHE_PASSWORD=           # e.g. redis://user:pass@host, redis://:pass@host, mongodb://user:pass@host. memcached is unauthenticated
 TINA4_CACHE_TTL=60              # Default TTL in seconds (default: 60)
 TINA4_CACHE_MAX_ENTRIES=1000    # Max cached entries (default: 1000)
+TINA4_CACHE_DIR=data/cache      # Directory for the file backend (default: data/cache)
 ```
+
+The response/KV cache supports seven backends, selected by `TINA4_CACHE_BACKEND`. **Graceful fallback**: if a configured backend's driver is missing or the service/credentials are unreachable or wrong, the cache logs a warning and falls back to the **file** backend — a real persistent cache, never a silent no-op.
 
 ## DI Container — Dependency Injection
 
@@ -1836,13 +1843,13 @@ async def dashboard(request, response):
 ## v3 Features Summary
 
 - **55 built-in features**, zero third-party dependencies
-- **2,866 tests** passing across all modules
+- **2,899 tests** passing across all modules
 - **Production server auto-detect**: `tina4python serve --production` auto-installs uvicorn
 - **`tina4python generate`**: model, route, migration, middleware scaffolding
-- **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), DB query caching — request-scoped auto cache **on by default** (`TINA4_AUTO_CACHING=true`, TTL `TINA4_AUTO_CACHING_TTL=5`s) dedupes identical reads within a request and flushes on writes; persistent cross-request cache opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`s); `cache_stats()` reports `mode` (request/persistent/off), `cache_clear()`
+- **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), DB query caching — request-scoped auto cache **on by default** (`TINA4_AUTO_CACHING=true`, TTL `TINA4_AUTO_CACHING_TTL=5`s) dedupes identical reads within a request and flushes on writes; persistent cross-request cache opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`s) routed through the unified backend set via `TINA4_DB_CACHE_BACKEND` (memory/file/redis/valkey/memcached/mongodb/database) + `TINA4_DB_CACHE_URL` so instances share one cache with global write-invalidation; `cache_stats()` reports `mode` (request/persistent/off) and `backend`, `cache_clear()`
 - **Sessions**: 4 backends (file, Redis/Valkey, MongoDB, database)
 - **Queue**: file/RabbitMQ/Kafka/MongoDB backends, configured via env vars
-- **Cache**: memory/Redis/file backends
+- **Cache**: unified backend set — memory (default), file, redis, valkey, memcached, mongodb, database — via `TINA4_CACHE_BACKEND` (+ `TINA4_CACHE_URL`/credentials); file-backend fallback if a backend is unreachable
 - **Messenger**: .env driven SMTP/IMAP
 - **ORM relationships**: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)
 - **Frond pre-compilation**: 2.8x template render improvement, `Frond.clear_cache()`
