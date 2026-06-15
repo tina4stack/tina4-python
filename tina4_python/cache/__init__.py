@@ -614,7 +614,10 @@ class _DatabaseBackend(_CacheBackend):
         self._misses = 0
         self._db = None
         self._available = False
-        url = (url or os.environ.get("TINA4_CACHE_DB_URL")
+        # The database backend reads TINA4_CACHE_URL (interpreted as a SQL URL),
+        # falling back to the app's own TINA4_DATABASE_URL — cache in the DB you
+        # already run, no extra connection var needed.
+        url = (url or os.environ.get("TINA4_CACHE_URL")
                or os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/tina4.db"))
         # The cache's own DB connection must not itself cache (no recursion).
         prev_auto = os.environ.get("TINA4_AUTO_CACHING")
@@ -715,8 +718,7 @@ def _create_backend(
         url = url or os.environ.get("TINA4_CACHE_URL", "mongodb://localhost:27017")
         be = _MongoBackend(url=url, max_entries=max_entries)
     elif backend in ("database", "db"):
-        be = _DatabaseBackend(
-            url=url or os.environ.get("TINA4_CACHE_DB_URL"), max_entries=max_entries)
+        be = _DatabaseBackend(url=url, max_entries=max_entries)
     elif backend == "file":
         cache_dir = cache_dir or os.environ.get("TINA4_CACHE_DIR", "data/cache")
         return _FileBackend(cache_dir=cache_dir, max_entries=max_entries)
