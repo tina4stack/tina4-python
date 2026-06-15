@@ -191,6 +191,16 @@ class ORM(metaclass=ORMMeta):
             import json
             data = json.loads(data)
 
+        # A single model is one record — reject a list/array with a clear
+        # message instead of a cryptic "'list' object has no attribute 'items'".
+        if data is not None and not isinstance(data, dict):
+            raise TypeError(
+                f"{type(self).__name__}() expects a dict, a JSON object string, or "
+                f"keyword args for one record — got {type(data).__name__}. To build "
+                f"many records, map over the list: "
+                f"[{type(self).__name__}(row) for row in rows]."
+            )
+
         # Populate from dict or kwargs
         if data:
             self._populate(data)
