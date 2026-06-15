@@ -70,6 +70,34 @@ def set_frond(engine):
     _global_frond = engine
 
 
+def _to_jsonable(data):
+    """Normalise domain objects into JSON-serialisable structures.
+
+    Lets a route hand domain objects straight to ``response(...)`` /
+    ``response.json(...)`` without calling ``.to_dict()``/``.to_json()`` by hand:
+
+        return response(user)            # ORM model       -> dict
+        return response(User.all())      # list[ORM]        -> list[dict]
+        return response(db.fetch(sql))   # DatabaseResult   -> list[dict]
+
+    Plain ``dict`` / ``str`` / ``bytes`` / ``None`` pass through unchanged, so
+    existing handlers behave exactly as before.
+    """
+    if data is None or isinstance(data, (dict, str, bytes)):
+        return data
+    # Query result (DatabaseResult): exposes both a ``records`` list and a
+    # ``to_array`` method — the pair distinguishes it from a plain {"records": …} dict.
+    if isinstance(getattr(data, "records", None), list) and callable(getattr(data, "to_array", None)):
+        return data.records
+    # ORM model: duck-typed on a callable ``to_dict``.
+    if callable(getattr(data, "to_dict", None)):
+        return data.to_dict()
+    # Collections: normalise each element (list of models -> list of dicts).
+    if isinstance(data, (list, tuple)):
+        return [_to_jsonable(item) for item in data]
+    return data
+
+
 class Response:
     """HTTP response builder with compression and ETag support."""
 
@@ -106,6 +134,10 @@ class Response:
         if headers:
             for k, v in headers.items():
                 self._headers.append((k, v))
+
+        # Normalise ORM models / collections / query results so handlers can
+        # `return response(model)` without serialising by hand.
+        data = _to_jsonable(data)
 
         if content_type:
             # Explicit content type provided
@@ -232,7 +264,7 @@ class Response:
         if status_code:
             self.status_code = status_code
         self.content_type = "application/json"
-        self.content = json.dumps(data, default=str, separators=(",", ":")).encode()
+        self.content = json.dumps(_to_jsonable(data), default=str, separators=(",", ":")).encode()
         return self
 
     def html(self, content: str, status_code: int = None) -> "Response":
