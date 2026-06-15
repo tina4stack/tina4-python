@@ -54,6 +54,18 @@ class TestLocalBackends:
     def test_unknown_falls_back_to_memory(self):
         assert _create_backend(backend="bogus").name() == "memory"
 
+    def test_unavailable_backend_falls_back_to_file(self, tmp_path):
+        # A configured backend whose service is unreachable degrades to the
+        # file backend (a real working cache), not a silent no-op.
+        os.environ["TINA4_CACHE_DIR"] = str(tmp_path)
+        try:
+            b = _create_backend(backend="redis", url="redis://localhost:6399")  # dead port
+            assert b.name() == "file"
+            b.set("k", {"v": 1}, 60)
+            assert b.get("k") == {"v": 1}
+        finally:
+            os.environ.pop("TINA4_CACHE_DIR", None)
+
 
 @pytest.mark.skipif(not _reachable("localhost", 6379), reason="redis not running")
 def test_redis_backend():

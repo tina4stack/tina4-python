@@ -66,6 +66,12 @@ class _CacheBackend:
     def name(self) -> str:
         raise NotImplementedError
 
+    def is_available(self) -> bool:
+        """Whether this backend is actually usable (driver present + service
+        reachable). Local backends are always available; network/driver backends
+        override this so the factory can fall back to the file backend."""
+        return True
+
 
 # ── Memory backend ─────────────────────────────────────────────────
 
@@ -168,9 +174,23 @@ class _RedisBackend(_CacheBackend):
                 decode_responses=True, socket_timeout=5,
             )
             self._client.ping()
+            self._available = True
         except Exception:
             self._client = None
             self._use_raw = True
+            # No client — usable only if the server answers over a raw socket.
+            self._available = self._probe()
+
+    def _probe(self) -> bool:
+        try:
+            s = socket.create_connection((self._host, self._port), timeout=1)
+            s.close()
+            return True
+        except OSError:
+            return False
+
+    def is_available(self) -> bool:
+        return self._available
 
     def _resp_command(self, *args) -> str | None:
         """Send a command using raw RESP protocol over TCP."""
@@ -415,6 +435,10 @@ class _MemcachedBackend(_CacheBackend):
         self._prefix = "tina4:cache:"
         self._hits = 0
         self._misses = 0
+        self._available = self._command(b"version\r\n", b"\r\n").startswith(b"VERSION")
+
+    def is_available(self) -> bool:
+        return self._available
 
     def _mc_key(self, key: str) -> str:
         # Hash to a safe, bounded key (memcached keys: no spaces/control, <=250 chars)
@@ -509,6 +533,9 @@ class _MongoBackend(_CacheBackend):
         except Exception:
             self._coll = None
 
+    def is_available(self) -> bool:
+        return self._coll is not None
+
     def get(self, key: str):
         if self._coll is None:
             self._misses += 1
@@ -585,6 +612,8 @@ class _DatabaseBackend(_CacheBackend):
         self._max_entries = max_entries
         self._hits = 0
         self._misses = 0
+        self._db = None
+        self._available = False
         url = (url or os.environ.get("TINA4_CACHE_DB_URL")
                or os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/tina4.db"))
         # The cache's own DB connection must not itself cache (no recursion).
@@ -594,16 +623,22 @@ class _DatabaseBackend(_CacheBackend):
         os.environ["TINA4_DB_CACHE"] = "false"
         try:
             self._db = Database(url)
+            self._db.execute(
+                "CREATE TABLE IF NOT EXISTS tina4_cache "
+                "(cache_key VARCHAR(255) PRIMARY KEY, value TEXT, expires_at DOUBLE PRECISION)"
+            )
+            self._available = True
+        except Exception:
+            self._available = False
         finally:
             for k, v in (("TINA4_AUTO_CACHING", prev_auto), ("TINA4_DB_CACHE", prev_db)):
                 if v is None:
                     os.environ.pop(k, None)
                 else:
                     os.environ[k] = v
-        self._db.execute(
-            "CREATE TABLE IF NOT EXISTS tina4_cache "
-            "(cache_key VARCHAR(255) PRIMARY KEY, value TEXT, expires_at DOUBLE PRECISION)"
-        )
+
+    def is_available(self) -> bool:
+        return self._available
 
     def get(self, key: str):
         row = self._db.fetch_one(
@@ -669,24 +704,40 @@ def _create_backend(
     backend = backend.lower().strip()
     if backend == "redis":
         url = url or os.environ.get("TINA4_CACHE_URL", "redis://localhost:6379")
-        return _RedisBackend(url=url, max_entries=max_entries)
+        be = _RedisBackend(url=url, max_entries=max_entries)
     elif backend == "valkey":
         url = url or os.environ.get("TINA4_CACHE_URL", "valkey://localhost:6379")
-        return _ValkeyBackend(url=url, max_entries=max_entries)
+        be = _ValkeyBackend(url=url, max_entries=max_entries)
     elif backend in ("memcached", "memcache"):
         url = url or os.environ.get("TINA4_CACHE_URL", "memcached://localhost:11211")
-        return _MemcachedBackend(url=url, max_entries=max_entries)
+        be = _MemcachedBackend(url=url, max_entries=max_entries)
     elif backend in ("mongodb", "mongo"):
         url = url or os.environ.get("TINA4_CACHE_URL", "mongodb://localhost:27017")
-        return _MongoBackend(url=url, max_entries=max_entries)
+        be = _MongoBackend(url=url, max_entries=max_entries)
     elif backend in ("database", "db"):
-        return _DatabaseBackend(
+        be = _DatabaseBackend(
             url=url or os.environ.get("TINA4_CACHE_DB_URL"), max_entries=max_entries)
     elif backend == "file":
         cache_dir = cache_dir or os.environ.get("TINA4_CACHE_DIR", "data/cache")
         return _FileBackend(cache_dir=cache_dir, max_entries=max_entries)
     else:
         return _MemoryBackend(max_entries=max_entries)
+
+    # Graceful degradation: if the configured backend's driver is missing or the
+    # service is unreachable, fall back to the file backend (persistent, zero-dep,
+    # always available) rather than silently degrading to a no-op cache.
+    if not be.is_available():
+        try:
+            from tina4_python.debug import Log
+            Log.warning(
+                f"Cache backend '{backend}' is unavailable "
+                f"(driver missing or service unreachable) — falling back to 'file'."
+            )
+        except Exception:
+            pass
+        cache_dir = cache_dir or os.environ.get("TINA4_CACHE_DIR", "data/cache")
+        return _FileBackend(cache_dir=cache_dir, max_entries=max_entries)
+    return be
 
 
 # ── Cache entry (for response cache) ──────────────────────────────
