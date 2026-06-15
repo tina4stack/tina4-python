@@ -215,17 +215,17 @@ class Database:
         #     the DB from rapid repeat reads. Cleared at the start of every HTTP
         #     request (so it never serves data across requests) and on any write,
         #     with a short safety TTL for non-request contexts (scripts/workers).
-        #     Off-switch: TINA4_QUERY_CACHE=false.
+        #     Off-switch: TINA4_AUTO_CACHING=false.
         #   • persistent (opt-in, TINA4_DB_CACHE=true) — cross-request TTL cache
         #     that is NOT cleared per request; entries expire by TINA4_DB_CACHE_TTL.
         from tina4_python.dotenv import is_truthy
         self._cache_persistent: bool = is_truthy(os.environ.get("TINA4_DB_CACHE", "false"))
-        self._cache_request_scoped: bool = is_truthy(os.environ.get("TINA4_QUERY_CACHE", "true"))
+        self._cache_request_scoped: bool = is_truthy(os.environ.get("TINA4_AUTO_CACHING", "true"))
         self._cache_enabled: bool = self._cache_persistent or self._cache_request_scoped
         if self._cache_persistent:
             self._cache_ttl: int = int(os.environ.get("TINA4_DB_CACHE_TTL", "30"))
         else:
-            self._cache_ttl = int(os.environ.get("TINA4_QUERY_CACHE_TTL", "5"))
+            self._cache_ttl = int(os.environ.get("TINA4_AUTO_CACHING_TTL", "5"))
         self._query_cache: dict[str, tuple[float, object]] = {}  # key -> (expires_at, result)
         self._cache_hits: int = 0
         self._cache_misses: int = 0

@@ -2,7 +2,7 @@
 identical reads. See tina4_python/database/connection.py.
 
 Layers:
-  • request-scoped (DEFAULT ON, off-switch TINA4_QUERY_CACHE=false) — dedupes
+  • request-scoped (DEFAULT ON, off-switch TINA4_AUTO_CACHING=false) — dedupes
     identical SELECTs, cleared per request + on writes, short safety TTL.
   • persistent (opt-in TINA4_DB_CACHE=true) — cross-request TTL cache, NOT
     cleared per request.
@@ -22,7 +22,7 @@ def _make_db(tmp_path):
 class TestRequestScopedDefault:
     def test_on_by_default(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_QUERY_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
         db = _make_db(tmp_path)
         stats = db.cache_stats()
         assert stats["enabled"] is True
@@ -30,7 +30,7 @@ class TestRequestScopedDefault:
 
     def test_identical_fetches_dedupe(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_QUERY_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")   # miss -> populates
         db.fetch("SELECT * FROM t")   # hit
@@ -40,7 +40,7 @@ class TestRequestScopedDefault:
 
     def test_write_invalidates(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_QUERY_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")
         assert db.cache_stats()["size"] == 1
@@ -49,7 +49,7 @@ class TestRequestScopedDefault:
 
     def test_insert_helper_invalidates(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_QUERY_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")
         assert db.cache_stats()["size"] == 1
@@ -60,7 +60,7 @@ class TestRequestScopedDefault:
 class TestRequestBoundary:
     def test_reset_clears_request_cache(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_QUERY_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")
         assert db.cache_stats()["size"] == 1
@@ -70,7 +70,7 @@ class TestRequestBoundary:
 
     def test_reset_preserves_counters(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_QUERY_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")
         db.fetch("SELECT * FROM t")  # one hit
@@ -83,7 +83,7 @@ class TestRequestBoundary:
 class TestOffSwitch:
     def test_query_cache_false_disables(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.setenv("TINA4_QUERY_CACHE", "false")
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "false")
         db = _make_db(tmp_path)
         stats = db.cache_stats()
         assert stats["enabled"] is False
@@ -97,7 +97,7 @@ class TestOffSwitch:
 class TestPersistentMode:
     def test_db_cache_true_is_persistent(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TINA4_DB_CACHE", "true")
-        monkeypatch.delenv("TINA4_QUERY_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
         db = _make_db(tmp_path)
         stats = db.cache_stats()
         assert stats["enabled"] is True
@@ -106,7 +106,7 @@ class TestPersistentMode:
 
     def test_persistent_survives_request_reset(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TINA4_DB_CACHE", "true")
-        monkeypatch.delenv("TINA4_QUERY_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")
         assert db.cache_stats()["size"] == 1
