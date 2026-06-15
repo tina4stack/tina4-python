@@ -27,6 +27,16 @@ class DatabaseResult:
     def __len__(self):
         return self.count
 
+    def __getitem__(self, index):
+        """Index / slice access into the result rows.
+
+        v3.13.16: ``result[0]`` (and slicing) are documented (book ch5 §4
+        "Index Access") but used to raise ``TypeError: 'DatabaseResult'
+        object is not subscriptable``. Delegate to the materialised rows so
+        index and slice access behave like a list.
+        """
+        return self.records[index]
+
     def __bool__(self):
         return self.error is None
 

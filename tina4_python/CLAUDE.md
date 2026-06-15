@@ -282,8 +282,9 @@ Queue(topic="tasks").push({"action": "send_email"})
     - **Macro imports**: `{% from "macros/forms.twig" import field_group %}` — macros do NOT inherit parent context, pass variables explicitly
 4. **DatabaseResult**: `dba.fetch()` returns a `DatabaseResult` object, NOT a plain list
     - Use `.records` to get list of dicts: `result.records`
-    - Use `.count` for row count (no `len()` support)
+    - Use `.count` for total row count; `len(result)` also works
     - Iteration works: `for row in result` or `list(result)`
+    - Index/slice access works: `result[0]`, `result[1:3]`
     - Other methods: `.to_json()`, `.to_array()`, `.to_csv()`, `.to_paginate()`
 4. **fetch_one()**: Returns a plain dict (or None), NOT a DatabaseResult
 5. **Dict access**: All query results use dict access `row["column"]` not attribute access `row.column`

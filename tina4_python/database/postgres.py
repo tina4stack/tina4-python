@@ -535,7 +535,12 @@ class PostgreSQLAdapter(DatabaseAdapter):
         """
         sql = SQLTranslator.placeholder_style(sql, "%s")
         sql = SQLTranslator.auto_increment_syntax(sql, "postgresql")
-        sql = SQLTranslator.boolean_to_int(sql)
+        # v3.13.16: do NOT run boolean_to_int on PostgreSQL — PG has a native
+        # BOOLEAN type, so TRUE/FALSE are valid literals and 1/0 are NOT
+        # interchangeable with them. Converting (e.g. `DEFAULT FALSE` -> `DEFAULT 0`,
+        # or `WHERE active = TRUE` -> `= 1`) raises "column is of type boolean but
+        # expression is of type integer" / "operator does not exist: boolean = integer".
+        # boolean_to_int stays for INTEGER/BIT-backed engines (SQLite, Firebird, MSSQL).
         return sql
 
     def _supports_returning(self) -> bool:

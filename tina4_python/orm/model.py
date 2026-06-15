@@ -748,7 +748,10 @@ class ORM(metaclass=ORMMeta):
         # where it's reliable. SQLite and Firebird stay on INTEGER —
         # SQLite has no native bool, and Firebird's driver round-trip
         # for native BOOLEAN is uneven across versions.
-        if engine == "postgres":
+        # v3.13.16: db.get_database_type() returns "postgresql" (with the -ql),
+        # so the old `== "postgres"` check never matched and BooleanField got
+        # INTEGER on PG — which then can't accept a Python bool on insert.
+        if engine in ("postgres", "postgresql"):
             bool_sql = "BOOLEAN"
         elif engine == "mysql":
             bool_sql = "BOOLEAN"  # MySQL alias for TINYINT(1)
@@ -757,6 +760,16 @@ class ORM(metaclass=ORMMeta):
         else:
             # sqlite, firebird, odbc, anything else
             bool_sql = "INTEGER"
+
+        # v3.13.16: DateTimeField was emitted as "DATETIME" unconditionally,
+        # but PostgreSQL and Firebird have no DATETIME type — CREATE TABLE blew
+        # up with `type "datetime" does not exist`. Emit each engine's real
+        # timestamp type. (MySQL/MSSQL/SQLite keep DATETIME: it's valid there,
+        # and on MySQL it avoids TIMESTAMP's auto-update + 2038 surprises.)
+        if engine in ("postgres", "postgresql", "firebird"):
+            datetime_sql = "TIMESTAMP"
+        else:
+            datetime_sql = "DATETIME"
 
         # Don't recreate if table already exists
         if db.table_exists(table):
@@ -781,7 +794,7 @@ class ORM(metaclass=ORMMeta):
             elif kind == "BooleanField":
                 sql_type = bool_sql
             elif kind == "DateTimeField":
-                sql_type = "DATETIME"
+                sql_type = datetime_sql
             elif kind == "BlobField":
                 sql_type = "BLOB"
             else:
@@ -809,7 +822,14 @@ class ORM(metaclass=ORMMeta):
                 if isinstance(default_val, str):
                     parts.append(f"DEFAULT '{default_val}'")
                 elif isinstance(default_val, bool):
-                    parts.append(f"DEFAULT {1 if default_val else 0}")
+                    # v3.13.16: a native BOOLEAN column (PG/MySQL) needs
+                    # TRUE/FALSE; INTEGER- and BIT-backed bools (SQLite,
+                    # Firebird, MSSQL) need 1/0. `DEFAULT 0` on a PG BOOLEAN
+                    # raises "default expression is of type integer".
+                    if bool_sql == "BOOLEAN":
+                        parts.append(f"DEFAULT {'TRUE' if default_val else 'FALSE'}")
+                    else:
+                        parts.append(f"DEFAULT {1 if default_val else 0}")
                 else:
                     parts.append(f"DEFAULT {default_val}")
 
@@ -821,8 +841,16 @@ class ORM(metaclass=ORMMeta):
         engine = db.get_database_type()
         sql = SQLTranslator.auto_increment_syntax(sql, engine)
 
-        db.execute(sql)
+        # v3.13.16: don't claim success when the DDL failed. db.execute()
+        # swallows the driver error into get_error() and returns False, so a
+        # bad type (or any DDL error) used to leave create_table() returning
+        # True while no table was actually created — a silent, misleading pass.
+        ok = db.execute(sql)
         db.commit()
+        if ok is False:
+            from tina4_python.debug import Log
+            Log.error(f"create_table failed for {table}: {db.get_error()}", sql=sql)
+            return False
         return True
 
     # ── Cached Queries ────────────────────────────────────────
