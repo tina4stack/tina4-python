@@ -479,6 +479,9 @@ request.session     # Session object — use .get(key) and .set(key, value)
 
 ```python
 return response({"data": []})              # JSON (auto-detected from dict/list)
+return response(User.find(1))              # ORM model -> JSON object
+return response(User.all())                # list of models -> JSON array
+return response(db.fetch("SELECT * FROM users"))  # DatabaseResult -> JSON array
 return response("<h1>Hello</h1>")          # HTML
 return response("Not found", 404)          # With status code
 return response.redirect("/login")         # Redirect
@@ -486,6 +489,8 @@ return response.render("page.twig", data)  # Render Twig template
 return response.file("doc.pdf")            # Serve a file
 return response.stream(generator)          # SSE/streaming response (text/event-stream)
 ```
+
+`response()` auto-serializes a domain object — an ORM model, a list of models, or a `DatabaseResult` — to JSON with no manual `to_dict()` / `to_json()`. A single model becomes a JSON object; a list of models or a `DatabaseResult` becomes a JSON array. Dicts, lists and strings behave exactly as before (purely additive).
 
 Add custom headers before returning:
 ```python
@@ -821,19 +826,37 @@ class User(ORM):
     email = StringField()
 ```
 
-Initialize in `app.py`:
+**Binding the database:**
+
+- **`.env` default (no call needed)** — models auto-bind to `TINA4_DATABASE_URL` when it is set, so most apps need no binding call at all.
+- **`bind_database(db)`** — override the default explicitly; assigns the connection to all ORM subclasses that don't select a named one.
+- **`bind_database(db, name="analytics")` + `_db = "analytics"`** — register a named/secondary connection and point a model at it. A missing named connection raises a clear error.
+
 ```python
 from tina4_python.orm import bind_database
 from tina4_python.database import Database
 
+# Most apps: nothing to do — the .env default (TINA4_DATABASE_URL) is auto-bound.
+
+# Override the default explicitly:
 bind_database(Database("sqlite:///app.db"))  # Assigns DB to all ORM subclasses
+
+# Register a NAMED connection and point a model at it:
+bind_database(Database("postgres://…/analytics", "u", "p"), name="analytics")
+
+class Visit(ORM):
+    _db = "analytics"   # this model uses the analytics connection
 ```
 
 ### ORM operations
 
+The constructor accepts a dict, a JSON object string, or keyword args. Passing a list/array raises a clear `TypeError` (map over the list to build many records).
+
 ```python
 # Create
-user = User({"name": "Alice", "email": "alice@example.com"})
+user = User({"name": "Alice", "email": "alice@example.com"})    # dict
+user = User('{"name": "Alice", "email": "alice@example.com"}')  # JSON object string
+user = User(name="Alice", email="alice@example.com")            # keyword args
 user.save()
 
 # Load — alias for select_one (class method, returns instance or None)
@@ -1813,7 +1836,7 @@ async def dashboard(request, response):
 ## v3 Features Summary
 
 - **55 built-in features**, zero third-party dependencies
-- **2,299 tests** passing across all modules
+- **2,852 tests** passing across all modules
 - **Production server auto-detect**: `tina4python serve --production` auto-installs uvicorn
 - **`tina4python generate`**: model, route, migration, middleware scaffolding
 - **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), query caching (`TINA4_DB_CACHE=true`, `cache_stats()`, `cache_clear()`)

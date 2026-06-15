@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.13.16 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.19 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -86,7 +86,7 @@ tina4_python/          # Core framework package
     connection.py      # Database class (URL-based connection)
     adapter.py         # DatabaseAdapter, DatabaseResult, SQLTranslator
     sqlite.py, postgres.py, mysql.py, mssql.py, firebird.py, odbc.py
-  orm/                 # Active Record ORM (ORM, Field, orm_bind)
+  orm/                 # Active Record ORM (ORM, Field, bind_database)
     model.py           # ORM base class
     fields.py          # IntegerField, StringField, etc.
   frond/               # Template engine (Frond — replaces Template)
@@ -185,17 +185,20 @@ db.pool -> ConnectionPool | None  # Access connection pool (None if pooling disa
 ### ORM — Active Record base class
 
 ```python
-from tina4_python.orm import ORM, orm_bind, Field, IntegerField, StringField, ForeignKeyField
+from tina4_python.orm import ORM, bind_database, Field, IntegerField, StringField, ForeignKeyField
 
 class MyModel(ORM):
     id = IntegerField(primary_key=True, auto_increment=True)
     name = StringField()
+    # _db = "analytics"   # optional: bind this model to a named connection
     # ForeignKeyField(to=Other) auto-wires belongs_to on this class
     # AND has_many on the referenced class (default key: ClassName.lower() + "s")
     # author_id = ForeignKeyField(to=Author, related_name="posts")
 
 # Instance methods
-model = MyModel(data: dict = None, **kwargs)
+model = MyModel(data: dict | str = None, **kwargs)  # dict, JSON object string, or kwargs
+# MyModel('{"id": 1, "name": "Alice"}')  -> parsed JSON object into one record
+# Passing a list/array raises a clear TypeError (map over the list for many records)
 model.save() -> self | False          # Returns self on success (fluent), False on failure
 model.delete() -> None                # Soft-delete if enabled, else hard delete
 model.force_delete() -> None          # Hard delete (bypasses soft-delete)
@@ -229,7 +232,21 @@ MyModel.query() -> QueryBuilder
 MyModel.scope(name, filter_sql, params=None)  # Registers a reusable named method on the class
 MyModel.cached(sql, params=None, ttl=60, limit=20, offset=0) -> list[MyModel]
 
-orm_bind(dba: Database) -> None
+bind_database(db: Database, name: str = None) -> None
+```
+
+**Database binding:**
+
+- **`.env` default (no call needed)** — models auto-bind to `TINA4_DATABASE_URL` when set, so most apps need no binding call at all.
+- **`bind_database(db)`** — override the default explicitly with a `Database` instance (assigns it to all ORM subclasses that don't pick a named connection).
+- **`bind_database(db, name="analytics")` + `_db = "analytics"`** — register a named/secondary connection, then point a model at it by setting `_db = "analytics"` on the class. A missing named connection raises a clear error.
+
+```python
+bind_database(Database("sqlite:///app.db"))                          # override default
+bind_database(Database("postgres://…/analytics", "u", "p"), name="analytics")  # named
+
+class Visit(ORM):
+    _db = "analytics"   # this model uses the analytics connection
 ```
 
 Soft-delete: Set `soft_delete = True` on the model class. Uses `is_deleted` column (INTEGER, 0/1). `delete()` sets deleted_at, `force_delete()` removes the row, `restore()` clears deleted_at.
@@ -307,6 +324,14 @@ request.query -> dict      # Query string params only (separate from route param
 request.cookies -> dict    # Parsed from Cookie header
 request.content_type -> str
 response.stream(generator, content_type="text/event-stream")  # SSE/streaming response
+```
+
+**`response()` auto-serializes domain objects.** Return an ORM model, a list of models, or a `DatabaseResult` straight from a route — no manual `to_dict()` / `to_json()` needed. A single model becomes a JSON object; a list of models or a `DatabaseResult` becomes a JSON array. Plain dicts, lists and strings behave exactly as before (purely additive).
+
+```python
+return response(User.find(1))     # single model -> JSON object
+return response(User.all())       # list of models -> JSON array
+return response(db.fetch("SELECT * FROM users"))  # DatabaseResult -> JSON array
 ```
 
 ### QueryBuilder — Fluent query construction
@@ -674,7 +699,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Routes via `tina4_python.core.router` (get, post, put, delete, noauth, secured, cached, template)
 - Server via `tina4_python.core.server` (run, resolve_config)
 - Database via `tina4_python.database` (URL-based: sqlite:///, postgresql://, mysql://, etc.)
-- ORM via `tina4_python.orm` (ORM, Field, orm_bind)
+- ORM via `tina4_python.orm` (ORM, Field, bind_database)
 - Template engine via `tina4_python.frond` (Frond — Jinja2/Twig-compatible, replaces Template)
 - JWT auth via `tina4_python.auth` (zero-dep HMAC-SHA256, password hashing via PBKDF2)
 - Queue via `tina4_python.queue` (database-backed, zero deps)
@@ -716,8 +741,8 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
 - SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools (24 tools) auto-start on `TINA4_DEBUG=true` + localhost. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. Localhost-only by default; `TINA4_MCP_REMOTE=true` for remote
-- Tests: 2,840 passing (121 modules)
-- Version: 3.13.16
+- Tests: 2,852 passing (121 modules)
+- Version: 3.13.19
 
 ## Links
 
