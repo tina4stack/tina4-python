@@ -141,9 +141,11 @@ class _RedisBackend(_CacheBackend):
     """Redis / Valkey backend. Uses the ``redis`` package if available,
     otherwise falls back to raw RESP protocol over TCP."""
 
-    def __init__(self, url: str = "redis://localhost:6379", max_entries: int = 1000):
+    def __init__(self, url: str = "redis://localhost:6379", max_entries: int = 1000,
+                 name: str = "redis"):
         self._url = url
         self._max_entries = max_entries
+        self._name = name
         self._hits = 0
         self._misses = 0
         self._prefix = "tina4:cache:"
@@ -280,11 +282,11 @@ class _RedisBackend(_CacheBackend):
             "hits": self._hits,
             "misses": self._misses,
             "size": size,
-            "backend": "redis",
+            "backend": self._name,
         }
 
     def name(self) -> str:
-        return "redis"
+        return self._name
 
 
 # ── File backend ───────────────────────────────────────────────────
@@ -386,6 +388,268 @@ class _FileBackend(_CacheBackend):
         return "file"
 
 
+# ── Valkey backend (Redis-protocol compatible) ─────────────────────
+
+
+class _ValkeyBackend(_RedisBackend):
+    """Valkey backend. Valkey speaks the Redis wire protocol, so it reuses the
+    Redis client / raw-RESP transport and only reports a different name."""
+
+    def __init__(self, url: str = "valkey://localhost:6379", max_entries: int = 1000):
+        super().__init__(url=url.replace("valkey://", "redis://"),
+                         max_entries=max_entries, name="valkey")
+
+
+# ── Memcached backend (zero-dependency text protocol) ──────────────
+
+
+class _MemcachedBackend(_CacheBackend):
+    """Memcached backend using the zero-dependency text protocol over TCP."""
+
+    def __init__(self, url: str = "memcached://localhost:11211", max_entries: int = 1000):
+        cleaned = url.replace("memcached://", "").replace("memcache://", "")
+        parts = cleaned.split("/")[0].split(":")
+        self._host = parts[0] or "localhost"
+        self._port = int(parts[1]) if len(parts) > 1 and parts[1] else 11211
+        self._max_entries = max_entries
+        self._prefix = "tina4:cache:"
+        self._hits = 0
+        self._misses = 0
+
+    def _mc_key(self, key: str) -> str:
+        # Hash to a safe, bounded key (memcached keys: no spaces/control, <=250 chars)
+        return self._prefix + hashlib.sha256(key.encode()).hexdigest()
+
+    def _command(self, payload: bytes, terminator: bytes) -> bytes:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            sock.connect((self._host, self._port))
+            sock.sendall(payload)
+            buf = b""
+            while terminator not in buf:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+            sock.close()
+            return buf
+        except Exception:
+            return b""
+
+    def get(self, key: str):
+        resp = self._command(f"get {self._mc_key(key)}\r\n".encode(), b"END\r\n")
+        if resp.startswith(b"VALUE"):
+            try:
+                header, rest = resp.split(b"\r\n", 1)
+                nbytes = int(header.split()[3])
+                self._hits += 1
+                return json.loads(rest[:nbytes].decode())
+            except Exception:
+                pass
+        self._misses += 1
+        return None
+
+    def set(self, key: str, value, ttl: int):
+        data = json.dumps(value, default=str).encode()
+        exptime = ttl if ttl > 0 else 0
+        payload = f"set {self._mc_key(key)} 0 {exptime} {len(data)}\r\n".encode() + data + b"\r\n"
+        self._command(payload, b"\r\n")
+
+    def delete(self, key: str) -> bool:
+        resp = self._command(f"delete {self._mc_key(key)}\r\n".encode(), b"\r\n")
+        return resp.startswith(b"DELETED")
+
+    def clear(self):
+        self._hits = 0
+        self._misses = 0
+        self._command(b"flush_all\r\n", b"\r\n")
+
+    def stats(self) -> dict:
+        size = 0
+        resp = self._command(b"stats\r\n", b"END\r\n")
+        for line in resp.split(b"\r\n"):
+            if line.startswith(b"STAT curr_items "):
+                try:
+                    size = int(line.split()[2])
+                except (ValueError, IndexError):
+                    pass
+        return {"hits": self._hits, "misses": self._misses, "size": size, "backend": "memcached"}
+
+    def name(self) -> str:
+        return "memcached"
+
+
+# ── MongoDB backend (TTL collection) ───────────────────────────────
+
+
+class _MongoBackend(_CacheBackend):
+    """MongoDB backend backed by a TTL collection. Requires ``pymongo``.
+
+    Reuses the same connection style as the Mongo session handler; the cache
+    lives in collection ``tina4_cache`` with a TTL index on ``expires_at``."""
+
+    def __init__(self, url: str = "mongodb://localhost:27017", max_entries: int = 1000):
+        self._max_entries = max_entries
+        self._hits = 0
+        self._misses = 0
+        self._coll = None
+        try:
+            import pymongo
+            client = pymongo.MongoClient(url, serverSelectionTimeoutMS=5000)
+            try:
+                db = client.get_default_database()
+            except Exception:
+                db = None
+            if db is None:
+                db = client["tina4_cache"]
+            self._coll = db["tina4_cache"]
+            self._coll.create_index("expires_at", expireAfterSeconds=0)
+            client.admin.command("ping")
+        except Exception:
+            self._coll = None
+
+    def get(self, key: str):
+        if self._coll is None:
+            self._misses += 1
+            return None
+        try:
+            from datetime import datetime, timezone
+            doc = self._coll.find_one({"_id": key})
+            if not doc:
+                self._misses += 1
+                return None
+            exp = doc.get("expires_at")
+            if exp is not None and exp.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
+                self._coll.delete_one({"_id": key})
+                self._misses += 1
+                return None
+            self._hits += 1
+            return json.loads(doc["value"])
+        except Exception:
+            self._misses += 1
+            return None
+
+    def set(self, key: str, value, ttl: int):
+        if self._coll is None:
+            return
+        try:
+            from datetime import datetime, timedelta, timezone
+            doc = {"_id": key, "value": json.dumps(value, default=str)}
+            if ttl > 0:
+                doc["expires_at"] = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+            self._coll.replace_one({"_id": key}, doc, upsert=True)
+        except Exception:
+            pass
+
+    def delete(self, key: str) -> bool:
+        if self._coll is None:
+            return False
+        try:
+            return self._coll.delete_one({"_id": key}).deleted_count > 0
+        except Exception:
+            return False
+
+    def clear(self):
+        self._hits = 0
+        self._misses = 0
+        if self._coll is not None:
+            try:
+                self._coll.delete_many({})
+            except Exception:
+                pass
+
+    def stats(self) -> dict:
+        size = 0
+        if self._coll is not None:
+            try:
+                size = self._coll.count_documents({})
+            except Exception:
+                pass
+        return {"hits": self._hits, "misses": self._misses, "size": size, "backend": "mongodb"}
+
+    def name(self) -> str:
+        return "mongodb"
+
+
+# ── Database backend (cache table in any Tina4-supported DB) ───────
+
+
+class _DatabaseBackend(_CacheBackend):
+    """Database backend — stores entries in a ``tina4_cache`` table in any
+    Tina4-supported database. Zero extra infrastructure; reuses the Database
+    layer. Its own connection has query caching disabled to avoid recursion."""
+
+    def __init__(self, url: str | None = None, max_entries: int = 1000):
+        from tina4_python.database.connection import Database
+        self._max_entries = max_entries
+        self._hits = 0
+        self._misses = 0
+        url = (url or os.environ.get("TINA4_CACHE_DB_URL")
+               or os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/tina4.db"))
+        # The cache's own DB connection must not itself cache (no recursion).
+        prev_auto = os.environ.get("TINA4_AUTO_CACHING")
+        prev_db = os.environ.get("TINA4_DB_CACHE")
+        os.environ["TINA4_AUTO_CACHING"] = "false"
+        os.environ["TINA4_DB_CACHE"] = "false"
+        try:
+            self._db = Database(url)
+        finally:
+            for k, v in (("TINA4_AUTO_CACHING", prev_auto), ("TINA4_DB_CACHE", prev_db)):
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self._db.execute(
+            "CREATE TABLE IF NOT EXISTS tina4_cache "
+            "(cache_key VARCHAR(255) PRIMARY KEY, value TEXT, expires_at DOUBLE PRECISION)"
+        )
+
+    def get(self, key: str):
+        row = self._db.fetch_one(
+            "SELECT value, expires_at FROM tina4_cache WHERE cache_key = ?", [key])
+        if not row:
+            self._misses += 1
+            return None
+        exp = row.get("expires_at")
+        if exp and float(exp) > 0 and time.time() > float(exp):
+            self._db.execute("DELETE FROM tina4_cache WHERE cache_key = ?", [key])
+            self._misses += 1
+            return None
+        self._hits += 1
+        try:
+            return json.loads(row["value"])
+        except (json.JSONDecodeError, TypeError):
+            return row["value"]
+
+    def set(self, key: str, value, ttl: int):
+        exp = (time.time() + ttl) if ttl > 0 else 0
+        serialized = json.dumps(value, default=str)
+        self._db.execute("DELETE FROM tina4_cache WHERE cache_key = ?", [key])
+        self._db.execute(
+            "INSERT INTO tina4_cache (cache_key, value, expires_at) VALUES (?, ?, ?)",
+            [key, serialized, exp])
+
+    def delete(self, key: str) -> bool:
+        existed = self._db.fetch_one(
+            "SELECT 1 AS x FROM tina4_cache WHERE cache_key = ?", [key]) is not None
+        self._db.execute("DELETE FROM tina4_cache WHERE cache_key = ?", [key])
+        return existed
+
+    def clear(self):
+        self._hits = 0
+        self._misses = 0
+        self._db.execute("DELETE FROM tina4_cache")
+
+    def stats(self) -> dict:
+        row = self._db.fetch_one("SELECT COUNT(*) AS c FROM tina4_cache")
+        size = int(row["c"]) if row and row.get("c") is not None else 0
+        return {"hits": self._hits, "misses": self._misses, "size": size, "backend": "database"}
+
+    def name(self) -> str:
+        return "database"
+
+
 # ── Backend factory ────────────────────────────────────────────────
 
 
@@ -395,7 +659,10 @@ def _create_backend(
     max_entries: int | None = None,
     cache_dir: str | None = None,
 ) -> _CacheBackend:
-    """Create a cache backend from explicit params or env vars."""
+    """Create a cache backend from explicit params or env vars.
+
+    Backends: memory (default), file, redis, valkey, memcached, mongodb, database.
+    """
     backend = backend or os.environ.get("TINA4_CACHE_BACKEND", "memory")
     max_entries = max_entries or int(os.environ.get("TINA4_CACHE_MAX_ENTRIES", "1000"))
 
@@ -403,6 +670,18 @@ def _create_backend(
     if backend == "redis":
         url = url or os.environ.get("TINA4_CACHE_URL", "redis://localhost:6379")
         return _RedisBackend(url=url, max_entries=max_entries)
+    elif backend == "valkey":
+        url = url or os.environ.get("TINA4_CACHE_URL", "valkey://localhost:6379")
+        return _ValkeyBackend(url=url, max_entries=max_entries)
+    elif backend in ("memcached", "memcache"):
+        url = url or os.environ.get("TINA4_CACHE_URL", "memcached://localhost:11211")
+        return _MemcachedBackend(url=url, max_entries=max_entries)
+    elif backend in ("mongodb", "mongo"):
+        url = url or os.environ.get("TINA4_CACHE_URL", "mongodb://localhost:27017")
+        return _MongoBackend(url=url, max_entries=max_entries)
+    elif backend in ("database", "db"):
+        return _DatabaseBackend(
+            url=url or os.environ.get("TINA4_CACHE_DB_URL"), max_entries=max_entries)
     elif backend == "file":
         cache_dir = cache_dir or os.environ.get("TINA4_CACHE_DIR", "data/cache")
         return _FileBackend(cache_dir=cache_dir, max_entries=max_entries)
