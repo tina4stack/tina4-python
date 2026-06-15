@@ -9,7 +9,7 @@ import socket
 
 import pytest
 
-from tina4_python.cache import _create_backend
+from tina4_python.cache import _create_backend, _RedisBackend
 
 
 def _reachable(host: str, port: int) -> bool:
@@ -65,6 +65,35 @@ class TestLocalBackends:
             assert b.get("k") == {"v": 1}
         finally:
             os.environ.pop("TINA4_CACHE_DIR", None)
+
+
+class TestCredentials:
+    """Credentials come from the URL (user:pass@) or TINA4_CACHE_USERNAME /
+    TINA4_CACHE_PASSWORD — parity with TINA4_DATABASE_USERNAME / _PASSWORD.
+    Parsing is verified without a live server (it happens in __init__)."""
+
+    def test_url_credentials_parsed(self):
+        b = _RedisBackend(url="redis://alice:s3cret@127.0.0.1:6399")
+        assert b._username == "alice"
+        assert b._password == "s3cret"
+        assert b._host == "127.0.0.1" and b._port == 6399
+
+    def test_password_only_url(self):
+        b = _RedisBackend(url="redis://:justpass@127.0.0.1:6399")
+        assert b._username is None
+        assert b._password == "justpass"
+
+    def test_env_credentials(self, monkeypatch):
+        monkeypatch.setenv("TINA4_CACHE_USERNAME", "bob")
+        monkeypatch.setenv("TINA4_CACHE_PASSWORD", "pw")
+        b = _RedisBackend(url="redis://127.0.0.1:6399")
+        assert b._username == "bob" and b._password == "pw"
+
+    def test_no_credentials(self, monkeypatch):
+        monkeypatch.delenv("TINA4_CACHE_USERNAME", raising=False)
+        monkeypatch.delenv("TINA4_CACHE_PASSWORD", raising=False)
+        b = _RedisBackend(url="redis://127.0.0.1:6399")
+        assert b._username is None and b._password is None
 
 
 @pytest.mark.skipif(not _reachable("localhost", 6379), reason="redis not running")

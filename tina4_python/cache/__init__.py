@@ -158,35 +158,43 @@ class _RedisBackend(_CacheBackend):
         self._client = None
         self._use_raw = False
 
-        # Parse URL
-        cleaned = url.replace("redis://", "")
-        parts = cleaned.split(":")
-        self._host = parts[0] or "localhost"
-        self._port = int(parts[1].split("/")[0]) if len(parts) > 1 else 6379
-        db_part = cleaned.split("/")
-        self._db = int(db_part[1]) if len(db_part) > 1 and db_part[1] else 0
+        # Parse URL: scheme://[user[:password]@]host[:port][/db]. Credentials may
+        # also be supplied via TINA4_CACHE_USERNAME / TINA4_CACHE_PASSWORD
+        # (mirrors TINA4_DATABASE_USERNAME / TINA4_DATABASE_PASSWORD).
+        from urllib.parse import urlparse, unquote
+        parsed = urlparse(url if "://" in url else "redis://" + url)
+        self._host = parsed.hostname or "localhost"
+        self._port = parsed.port or 6379
+        db_path = (parsed.path or "").lstrip("/")
+        self._db = int(db_path) if db_path.isdigit() else 0
+        self._username = (unquote(parsed.username) if parsed.username
+                          else os.environ.get("TINA4_CACHE_USERNAME", "")) or None
+        self._password = (unquote(parsed.password) if parsed.password
+                          else os.environ.get("TINA4_CACHE_PASSWORD", "")) or None
 
         # Try the redis package first
         try:
             import redis as redis_pkg
-            self._client = redis_pkg.Redis(
-                host=self._host, port=self._port, db=self._db,
-                decode_responses=True, socket_timeout=5,
-            )
+            kwargs = dict(host=self._host, port=self._port, db=self._db,
+                          decode_responses=True, socket_timeout=5)
+            if self._password:
+                kwargs["password"] = self._password
+            if self._username:
+                kwargs["username"] = self._username
+            self._client = redis_pkg.Redis(**kwargs)
             self._client.ping()
             self._available = True
         except Exception:
             self._client = None
             self._use_raw = True
-            # No client — usable only if the server answers over a raw socket.
+            # No client — usable only if the server answers (and authenticates).
             self._available = self._probe()
 
     def _probe(self) -> bool:
+        # Real AUTH+PING handshake so wrong credentials also fall back to file.
         try:
-            s = socket.create_connection((self._host, self._port), timeout=1)
-            s.close()
-            return True
-        except OSError:
+            return self._resp_command("PING") == "PONG"
+        except Exception:
             return False
 
     def is_available(self) -> bool:
@@ -203,6 +211,16 @@ class _RedisBackend(_CacheBackend):
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
             sock.connect((self._host, self._port))
+            if self._password:
+                if self._username:
+                    auth = (f"*3\r\n$4\r\nAUTH\r\n${len(self._username)}\r\n{self._username}\r\n"
+                            f"${len(self._password)}\r\n{self._password}\r\n")
+                else:
+                    auth = f"*2\r\n$4\r\nAUTH\r\n${len(self._password)}\r\n{self._password}\r\n"
+                sock.sendall(auth.encode())
+                if not sock.recv(1024).startswith(b"+"):
+                    sock.close()
+                    return None
             if self._db != 0:
                 select_cmd = f"*2\r\n$6\r\nSELECT\r\n${len(str(self._db))}\r\n{self._db}\r\n"
                 sock.sendall(select_cmd.encode())
@@ -520,7 +538,16 @@ class _MongoBackend(_CacheBackend):
         self._coll = None
         try:
             import pymongo
-            client = pymongo.MongoClient(url, serverSelectionTimeoutMS=5000)
+            mongo_kwargs = {"serverSelectionTimeoutMS": 5000}
+            # Credentials from env when not embedded in the URL (parity with DB layer).
+            if "@" not in url:
+                mu = os.environ.get("TINA4_CACHE_USERNAME")
+                mp = os.environ.get("TINA4_CACHE_PASSWORD")
+                if mu:
+                    mongo_kwargs["username"] = mu
+                if mp:
+                    mongo_kwargs["password"] = mp
+            client = pymongo.MongoClient(url, **mongo_kwargs)
             try:
                 db = client.get_default_database()
             except Exception:
