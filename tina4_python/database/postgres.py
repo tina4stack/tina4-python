@@ -207,6 +207,35 @@ class PostgreSQLAdapter(DatabaseAdapter):
         except Exception:
             pass
 
+    def _end_read_txn(self):
+        """v3.13.15 (issue #51): close the implicit transaction a read
+        opens, so the connection doesn't leak as ``idle in transaction``.
+
+        psycopg2 runs with ``autocommit = False`` (the framework's safe
+        default — writes must be committed explicitly). A bare ``SELECT``
+        therefore opens a transaction too, and with nothing to commit it
+        sits ``idle in transaction`` for the life of the connection,
+        holding a pool slot and any locks it touched. Short-lived boot
+        connections (the migration runner's ``MAX(batch)`` lookup) leak
+        one each, eventually exhausting ``max_connections`` — at which
+        point module autodiscovery fails mid-boot and every route 404s
+        while ``/health-check`` still passes ("ready but broken").
+
+        A read has nothing to persist, so a ROLLBACK is the safe close.
+        Inside an explicit ``start_transaction()`` the caller owns the
+        transaction, so we defer (mirrors the heal / error-path guards).
+        Writes go through :meth:`execute`, which is deliberately left
+        untouched — with autocommit off they must be committed explicitly,
+        so auto-closing them here would silently drop data.
+        """
+        if self._in_transaction or self._conn is None:
+            return
+        try:
+            self._conn.rollback()
+        except Exception:
+            # Never let bookkeeping mask the rows we already fetched.
+            pass
+
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to PostgreSQL.
 
@@ -357,6 +386,10 @@ class PostgreSQLAdapter(DatabaseAdapter):
         self._exec_with_handling(cursor, paginated_sql, paginated_params)
         rows = [self._decode_blobs(dict(row)) for row in cursor.fetchall()]
 
+        # v3.13.15 (#51): rows are materialised above — close the implicit
+        # read transaction so the connection doesn't sit idle-in-transaction.
+        self._end_read_txn()
+
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
@@ -368,7 +401,13 @@ class PostgreSQLAdapter(DatabaseAdapter):
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         self._exec_with_handling(cursor, sql, params)
         row = cursor.fetchone()
-        return self._decode_blobs(dict(row)) if row else None
+        result = self._decode_blobs(dict(row)) if row else None
+        # v3.13.15 (#51): close the implicit read transaction so the
+        # connection doesn't sit 'idle in transaction' (psycopg2 autocommit
+        # is off). This is the path the migration runner's MAX(batch)
+        # lookup leaked through.
+        self._end_read_txn()
+        return result
 
     @staticmethod
     def _decode_blobs(row: dict) -> dict:
