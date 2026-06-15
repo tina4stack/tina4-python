@@ -7,9 +7,20 @@ Layers:
   • persistent (opt-in TINA4_DB_CACHE=true) — cross-request TTL cache, NOT
     cleared per request.
 """
+import socket
+
 import pytest
 
 from tina4_python.database.connection import Database
+
+
+def _reachable(host: str, port: int) -> bool:
+    try:
+        s = socket.create_connection((host, port), timeout=1)
+        s.close()
+        return True
+    except OSError:
+        return False
 
 
 def _make_db(tmp_path):
@@ -112,3 +123,39 @@ class TestPersistentMode:
         assert db.cache_stats()["size"] == 1
         Database.reset_request_caches()  # no-op in persistent mode
         assert db.cache_stats()["size"] == 1
+
+
+class TestPersistentBackend:
+    """Persistent mode (TINA4_DB_CACHE=true) routes through the unified
+    CacheBackend (TINA4_DB_CACHE_BACKEND); the cached DatabaseResult is
+    serialized and reconstructed so shared backends work across instances."""
+
+    def test_memory_backend_reconstructs_result(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_DB_CACHE", "true")
+        monkeypatch.setenv("TINA4_DB_CACHE_BACKEND", "memory")
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        db = _make_db(tmp_path)
+        db.fetch("SELECT * FROM t ORDER BY id")
+        r = db.fetch("SELECT * FROM t ORDER BY id")  # hit → reconstructed
+        from tina4_python.database.adapter import DatabaseResult
+        assert isinstance(r, DatabaseResult)
+        assert r.count == 2 and [row["n"] for row in r] == ["a", "b"]
+        assert db.cache_stats()["mode"] == "persistent"
+        assert db.cache_stats()["hits"] >= 1
+
+    @pytest.mark.skipif(not _reachable("localhost", 6379), reason="redis not running")
+    def test_redis_backend_shared_across_instances(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_DB_CACHE", "true")
+        monkeypatch.setenv("TINA4_DB_CACHE_BACKEND", "redis")
+        monkeypatch.setenv("TINA4_DB_CACHE_URL", "redis://localhost:6379")
+        path = "sqlite://" + str(tmp_path / "shared.db")
+        db1 = Database(path)
+        db1.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, n TEXT)")
+        db1.execute("INSERT INTO t (n) VALUES ('x'), ('y')")
+        db1._cache_invalidate()
+        db1.fetch("SELECT * FROM t ORDER BY id")     # populate shared redis
+        db2 = Database(path)                          # separate instance, same redis
+        r = db2.fetch("SELECT * FROM t ORDER BY id")  # cross-instance hit (no query)
+        assert db2.cache_stats()["hits"] >= 1 and db2.cache_stats()["misses"] == 0
+        assert [row["n"] for row in r] == ["x", "y"]
+        assert db2.cache_stats()["backend"] == "redis"

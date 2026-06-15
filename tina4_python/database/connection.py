@@ -230,7 +230,39 @@ class Database:
         self._cache_hits: int = 0
         self._cache_misses: int = 0
         self._cache_lock = threading.Lock()
+        # Persistent mode uses the unified CacheBackend (memory/file/redis/valkey/
+        # mongodb/database via TINA4_DB_CACHE_BACKEND) so multiple instances can
+        # share one cache with global write-invalidation. Request-scoped mode keeps
+        # the in-process dict above (ephemeral, fastest, never serialized).
+        self._cache_backend = None
+        if self._cache_persistent:
+            try:
+                from tina4_python.cache import _create_backend
+                self._cache_backend = _create_backend(
+                    backend=os.environ.get("TINA4_DB_CACHE_BACKEND", "memory"),
+                    url=os.environ.get("TINA4_DB_CACHE_URL"),
+                )
+            except Exception:
+                self._cache_backend = None  # fall back to the in-process dict
         Database._instances.add(self)
+
+    @staticmethod
+    def _serialize_result(result) -> dict:
+        """Flatten a DatabaseResult to a JSON-friendly dict for shared backends."""
+        return {
+            "records": result.records, "count": result.count,
+            "limit": result.limit, "offset": result.offset,
+            "affected_rows": result.affected_rows, "last_id": result.last_id,
+        }
+
+    @staticmethod
+    def _deserialize_result(data: dict) -> DatabaseResult:
+        """Reconstruct a DatabaseResult from a backend-cached dict."""
+        return DatabaseResult(
+            records=data.get("records", []), count=data.get("count", 0),
+            limit=data.get("limit", 0), offset=data.get("offset", 0),
+            affected_rows=data.get("affected_rows", 0), last_id=data.get("last_id"),
+        )
 
     def _create_adapter(self) -> DatabaseAdapter:
         """Select adapter based on URL scheme."""
@@ -324,6 +356,11 @@ class Database:
 
     def _cache_get(self, key: str):
         """Return cached result or None if miss/expired."""
+        # Persistent mode → shared CacheBackend (serialized DatabaseResult).
+        if self._cache_backend is not None:
+            raw = self._cache_backend.get(key)
+            return self._deserialize_result(raw) if isinstance(raw, dict) else None
+        # Request-scoped mode → in-process dict (stores the object directly).
         with self._cache_lock:
             entry = self._query_cache.get(key)
             if entry is None:
@@ -336,11 +373,17 @@ class Database:
 
     def _cache_set(self, key: str, result):
         """Store a result in the cache with TTL."""
+        if self._cache_backend is not None:
+            self._cache_backend.set(key, self._serialize_result(result), self._cache_ttl)
+            return
         with self._cache_lock:
             self._query_cache[key] = (time.monotonic() + self._cache_ttl, result)
 
     def _cache_invalidate(self):
         """Clear the entire query cache (called on writes)."""
+        if self._cache_backend is not None:
+            self._cache_backend.clear()
+            return
         with self._cache_lock:
             self._query_cache.clear()
 
@@ -370,6 +413,17 @@ class Database:
 
     def cache_stats(self) -> dict:
         """Return query cache statistics."""
+        if self._cache_backend is not None:
+            bs = self._cache_backend.stats()
+            return {
+                "enabled": True,
+                "mode": "persistent",
+                "hits": self._cache_hits,
+                "misses": self._cache_misses,
+                "size": bs.get("size", 0),
+                "ttl": self._cache_ttl,
+                "backend": bs.get("backend", self._cache_backend.name()),
+            }
         with self._cache_lock:
             return {
                 "enabled": self._cache_enabled,
@@ -379,6 +433,7 @@ class Database:
                 "misses": self._cache_misses,
                 "size": len(self._query_cache),
                 "ttl": self._cache_ttl,
+                "backend": "memory",
             }
 
     def cache_clear(self):
