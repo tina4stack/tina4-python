@@ -356,7 +356,7 @@ tina4_python/               # Core framework package (v3.0.0)
 ├── dotenv/                 # .env file loader
 ├── cli/                    # CLI commands
 ├── HtmlElement.py          # Programmatic HTML builder (HTMLElement, add_html_helpers)
-├── Testing.py              # Inline testing framework (tests, assert_equal, run_all_tests)
+├── Testing.py              # Inline testing framework (tests, assert_equal, run_all)
 ├── templates/              # Built-in framework templates (Twig)
 ├── public/                 # Built-in static assets
 └── scss/                   # Built-in SCSS
@@ -853,17 +853,17 @@ user.save()
 user.delete()
 
 # Query
-result = User().select(filter="name = ?", params=["Alice"], limit=10)
+result = User().select(sql="name = ?", params=["Alice"], limit=10)
 
 # Convert to dict
 user.to_dict()
 
-# NoSQL support: to_mongo() generates MongoDB query documents from the same fluent API
-result.to_mongo()
+# NoSQL support: to_mongo() lives on QueryBuilder and generates MongoDB query documents from the same fluent API
+User.query().where("name = ?", ["Alice"]).to_mongo()
 ```
 
 ### Available field types
-`IntegerField`, `StringField`, `TextField`, `DateTimeField`, `NumericField`, `BlobField`, `JSONBField`, `ForeignKeyField`
+`IntegerField`, `StringField`, `TextField`, `DateTimeField`, `NumericField`, `BlobField`, `BooleanField`, `FloatField`, `ForeignKeyField`
 
 Import from `tina4_python` or `tina4_python.orm.fields`.
 
@@ -1187,7 +1187,8 @@ from tina4_python.graphql import GraphQL
 gql = GraphQL()
 gql.schema.from_orm(User)
 gql.schema.from_orm(Product)
-gql.register_route("/graphql")  # POST = queries, GET = GraphiQL IDE
+# The engine serves HTTP at gql.endpoint (default "/graphql", set via TINA4_GRAPHQL_ENDPOINT).
+# To wire it manually, call gql.execute_json(...) from a @post route.
 ```
 
 `from_orm()` creates: type, single query (`user(id: ID)`), list query (`users(limit, offset)`), create/update/delete mutations.
@@ -1196,16 +1197,18 @@ gql.register_route("/graphql")  # POST = queries, GET = GraphiQL IDE
 
 ```python
 gql.schema.add_type("Widget", {"id": "ID", "name": "String", "price": "Float"})
-gql.schema.add_query("widget", {
-    "type": "Widget",
-    "args": {"id": "ID"},
-    "resolve": lambda root, args, ctx: {"id": args["id"], "name": "Cog", "price": 5.0},
-})
-gql.schema.add_mutation("deleteWidget", {
-    "type": "Boolean",
-    "args": {"id": "ID!"},
-    "resolve": lambda root, args, ctx: True,
-})
+gql.schema.add_query(
+    "widget",
+    args={"id": "ID"},
+    return_type="Widget",
+    resolver=lambda root, args, ctx: {"id": args["id"], "name": "Cog", "price": 5.0},
+)
+gql.schema.add_mutation(
+    "deleteWidget",
+    args={"id": "ID!"},
+    return_type="Boolean",
+    resolver=lambda root, args, ctx: True,
+)
 ```
 
 ### Programmatic usage (no HTTP)
@@ -1322,8 +1325,8 @@ uv run tina4python test                     # Discovers @tests in src/**/*.py
 
 Or programmatically:
 ```python
-from tina4_python.Testing import run_all_tests
-run_all_tests(quiet=False, failfast=False)
+from tina4_python.Testing import run_all
+run_all(quiet=False, failfast=False)
 ```
 
 ## Events — Decoupled Communication
@@ -1374,7 +1377,7 @@ clear()                      # remove all listeners for all events
 Detect AI coding tools in a project and install Tina4-aware context files so any assistant understands the framework.
 
 ```python
-from tina4_python.ai import detect_ai, detect_ai_names, install_context, install_all, status_report
+from tina4_python.ai import detect_ai, detect_ai_names, install_context, install_selected, status_report
 
 # Detect which AI tools are present
 tools = detect_ai(".")
@@ -1383,12 +1386,15 @@ tools = detect_ai(".")
 # Just the names of detected tools
 names = detect_ai_names(".")   # ["claude-code", "cursor"]
 
-# Install context files for detected tools
-created = install_context(".", tools=None, force=False)
+# Install context for ALL known AI tools (tools=None default)
+created = install_context(".")
 # ["CLAUDE.md", ".cursorules"]
 
-# Install context for ALL known AI tools (not just detected)
-created = install_all(".", force=False)
+# Install context for specific tools only
+created = install_context(".", tools=["claude-code", "cursor"])
+
+# Or select by CSV/"all" string
+created = install_selected(".", "all")
 
 # Human-readable status report
 print(status_report("."))
@@ -1511,7 +1517,7 @@ HTMLElement("img", {"src": "/logo.png"})  # <img src="/logo.png">
 Attach test assertions directly to functions with the `@tests` decorator. Tests are registered globally and run via CLI or programmatically.
 
 ```python
-from tina4_python.Testing import tests, assert_equal, assert_raises, assert_true, assert_false, run_all_tests
+from tina4_python.Testing import tests, assert_equal, assert_raises, assert_true, assert_false, run_all
 
 @tests(
     assert_equal((5, 3), 8),           # add(5, 3) == 8
@@ -1534,7 +1540,7 @@ uv run tina4python test                  # Discovers @tests in src/**/*.py
 
 ```python
 # Programmatic execution
-results = run_all_tests(quiet=False, failfast=False)
+results = run_all(quiet=False, failfast=False)
 # {"passed": 5, "failed": 0, "errors": 0, "details": [...]}
 ```
 
@@ -1769,7 +1775,7 @@ async def invite(request, response):
 queue = Queue(topic="emails")
 for job in queue.consume("emails"):
     email = job.data
-    html = Template.render(f"emails/{email['template']}.twig", email["data"])
+    html = Frond().render(f"emails/{email['template']}.twig", email["data"])
     # ... send via SMTP
     job.complete()
 ```

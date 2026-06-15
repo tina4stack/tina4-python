@@ -144,7 +144,7 @@ from tina4_python.core.router import get, post, put, patch, delete, any_method, 
 # Wildcard routes: @get("/api/files/*")  — * matches all remaining path segments
 @noauth()                        # Make write route public
 @secured()                       # Protect a GET route
-@cached(is_cached: bool, max_age: int = 60)
+@cached(max_age: int = 60)
 @middleware(middleware_class, specific_methods: list | None = None)
 @template(twig_file: str)        # Auto-render dict return through Frond template
 ```
@@ -306,7 +306,7 @@ Backends: file (default), redis, valkey, mongodb, database. Set via `TINA4_SESSI
 request.query -> dict      # Query string params only (separate from route params)
 request.cookies -> dict    # Parsed from Cookie header
 request.content_type -> str
-response.stream(generator, content_type="text/event-stream", status=200)  # SSE/streaming response
+response.stream(generator, content_type="text/event-stream")  # SSE/streaming response
 ```
 
 ### QueryBuilder — Fluent query construction
@@ -352,8 +352,9 @@ NoSQL support: `to_mongo()` generates MongoDB query documents from the same flue
 ```python
 from tina4_python.frond import Frond
 
-Frond.render(template_or_file_name: str, data: dict = None) -> str
-Frond.render_string(source: str, data: dict = None) -> str
+engine = Frond()
+engine.render(template_or_file_name: str, data: dict = None) -> str
+engine.render_string(source: str, data: dict = None) -> str
 Frond.add_filter(name: str, func: callable)
 Frond.add_global(name: str, value: any)
 Frond.add_test(name: str, func: callable)
@@ -514,9 +515,8 @@ tools = detect_ai()
 # [{"name": "claude-code", "description": "Claude Code (Anthropic CLI)", "installed": True}, ...]
 
 # Install context files for all detected tools
-created_files = install_context()       # auto-detect
+created_files = install_context()       # all known tools (default)
 created_files = install_context(tools=["claude-code", "cursor"])  # specific tools
-created_files = install_context(force=True)  # overwrite existing
 
 # Human-readable detection report
 print(status_report())
@@ -653,8 +653,8 @@ def add(a, b=None):
     return a + b
 
 # Run all decorated tests
-from tina4_python.Testing import run_all_tests
-results = run_all_tests(quiet=False, failfast=False)
+from tina4_python.Testing import run_all
+results = run_all(quiet=False, failfast=False)
 # {"passed": 3, "failed": 0, "errors": 0, "details": [...]}
 ```
 
