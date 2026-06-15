@@ -119,3 +119,24 @@ def test_mongodb_backend():
     pytest.importorskip("pymongo")
     b = _create_backend(backend="mongodb", url="mongodb://localhost:27017/tina4_cache")
     _roundtrip(b, "mongodb")
+
+
+# Password-protected Redis from the docker harness (redis-auth, port 6381).
+@pytest.mark.skipif(not _reachable("localhost", 6381), reason="auth redis not running")
+def test_redis_auth_roundtrip():
+    # Real authenticated round-trip — must connect (not fall back to file).
+    b = _create_backend(backend="redis", url="redis://:s3cret@localhost:6381")
+    assert b.name() == "redis"
+    _roundtrip(b, "redis")
+
+
+@pytest.mark.skipif(not _reachable("localhost", 6381), reason="auth redis not running")
+def test_redis_wrong_password_falls_back_to_file(tmp_path):
+    os.environ["TINA4_CACHE_DIR"] = str(tmp_path)
+    try:
+        b = _create_backend(backend="redis", url="redis://:wrongpass@localhost:6381")
+        assert b.name() == "file"  # bad auth → graceful fallback, not a no-op
+        b.set("k", {"v": 1}, 60)
+        assert b.get("k") == {"v": 1}
+    finally:
+        os.environ.pop("TINA4_CACHE_DIR", None)
