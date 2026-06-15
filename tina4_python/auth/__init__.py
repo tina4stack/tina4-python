@@ -29,7 +29,7 @@ import functools
 class _DualMethod:
     """Descriptor that makes a method callable on both the class and an instance.
 
-    - ``Auth.get_token(payload)``  — creates a temporary Auth() using env SECRET
+    - ``Auth.get_token(payload)``  — creates a temporary Auth() using env TINA4_SECRET
     - ``auth.get_token(payload)``  — uses the instance's own secret / settings
     """
 
@@ -42,11 +42,33 @@ class _DualMethod:
             # Called on the class: Auth.get_token(payload, ...)
             @functools.wraps(self._func)
             def _class_call(*args, **kwargs):
-                inst = cls()          # Auth() reads SECRET from env
+                inst = cls()          # Auth() reads TINA4_SECRET from env
                 return self._func(inst, *args, **kwargs)
             return _class_call
         # Called on an instance: auth_instance.get_token(payload, ...)
         return functools.partial(self._func, obj)
+
+
+def _resolve_secret(secret: str = None) -> str:
+    """Resolve the JWT signing secret.
+
+    Reads ``TINA4_SECRET`` from the environment. When neither an explicit
+    secret nor ``TINA4_SECRET`` is set, warns loudly and returns a blank
+    secret — parity with the PHP/Node frameworks. Tina4 never silently signs
+    with a guessable built-in default, which would make tokens forgeable.
+    """
+    if secret:
+        return secret
+    env_secret = os.environ.get("TINA4_SECRET", "")
+    if not env_secret:
+        try:
+            from tina4_python.debug import Log
+            Log.warning("Auth: TINA4_SECRET not set in .env — using blank secret (insecure)")
+        except Exception:
+            import sys
+            print("Auth: TINA4_SECRET not set in .env — using blank secret (insecure)", file=sys.stderr)
+        return ""
+    return env_secret
 
 
 class Auth:
@@ -56,11 +78,11 @@ class Auth:
                  expires_in: int = None):
         """
         Args:
-            secret:     Signing secret (falls back to SECRET env var).
+            secret:     Signing secret (falls back to the TINA4_SECRET env var).
             algorithm:  JWT algorithm (default HS256).
             expires_in: Token lifetime in seconds (default 3600).
         """
-        self.secret = secret or os.environ.get("TINA4_SECRET", "tina4-default-secret")
+        self.secret = secret if secret is not None else _resolve_secret()
         self.algorithm = algorithm
         # JWT expiry env var:
         # - TINA4_TOKEN_EXPIRES_IN (preferred — matches docs and the
@@ -80,7 +102,7 @@ class Auth:
 
         Args:
             expires_in: Lifetime in minutes (default: self.expires_in).
-            secret:     Override signing secret (default: self.secret / SECRET env var).
+            secret:     Override signing secret (default: self.secret / TINA4_SECRET env var).
 
         Returns: header.payload.signature
         """
@@ -176,36 +198,36 @@ class Auth:
 
     # get_token and valid_token are the primary names
 
-    # ── Class-level convenience methods (read SECRET from env) ────
+    # ── Class-level convenience methods (read TINA4_SECRET from env) ────
 
     @classmethod
     def get_token_static(cls, payload: dict, expires_in: int = 60) -> str:
-        """Create a JWT without instantiating Auth — reads SECRET from env."""
-        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
+        """Create a JWT without instantiating Auth — reads TINA4_SECRET from env."""
+        secret = _resolve_secret()
         auth = cls(secret=secret, expires_in=expires_in)
         return auth.get_token(payload)
 
     @classmethod
     def valid_token_static(cls, token: str) -> "dict | None":
-        """Validate a JWT without instantiating Auth — reads SECRET from env.
+        """Validate a JWT without instantiating Auth — reads TINA4_SECRET from env.
 
         Returns the decoded payload on success, ``None`` on failure.
         """
-        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
+        secret = _resolve_secret()
         auth = cls(secret=secret)
         return auth.valid_token(token)
 
     @classmethod
     def get_payload_static(cls, token: str) -> dict | None:
         """Decode payload (no validation) without instantiating Auth."""
-        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
+        secret = _resolve_secret()
         auth = cls(secret=secret)
         return auth.get_payload(token)
 
     @classmethod
     def refresh_token_static(cls, token: str, expires_in: int = 60) -> str | None:
-        """Refresh a JWT without instantiating Auth — reads SECRET from env."""
-        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
+        """Refresh a JWT without instantiating Auth — reads TINA4_SECRET from env."""
+        secret = _resolve_secret()
         auth = cls(secret=secret, expires_in=expires_in)
         return auth.refresh_token(token)
 
@@ -213,10 +235,10 @@ class Auth:
     def authenticate_request_static(cls, headers: dict) -> dict | None:
         """Extract and validate auth from request headers without instantiating Auth.
 
-        Reads SECRET from env. Checks: Bearer JWT, Bearer API key, Basic auth.
+        Reads TINA4_SECRET from env. Checks: Bearer JWT, Bearer API key, Basic auth.
         Returns payload dict on success, None on failure.
         """
-        secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
+        secret = _resolve_secret()
         auth = cls(secret=secret)
         return auth.authenticate_request(headers)
 
@@ -281,7 +303,7 @@ class Auth:
         """Extract and validate auth from request headers.
 
         Args:
-            secret:    Override signing secret (default: self.secret / SECRET env var).
+            secret:    Override signing secret (default: self.secret / TINA4_SECRET env var).
             algorithm: JWT algorithm override (default: "HS256").
 
         Checks: Bearer JWT, Bearer API key, Basic auth.
@@ -324,14 +346,14 @@ def _b64url_decode(s: str) -> bytes:
 # ── Module-level convenience functions (use static methods) ────
 
 def get_token(payload: dict, expires_in: int = 60, secret: str = None) -> str:
-    """Create a JWT — reads SECRET from env. Shortcut for Auth.get_token_static()."""
+    """Create a JWT — reads TINA4_SECRET from env. Shortcut for Auth.get_token_static()."""
     if secret is not None:
         return Auth(secret=secret).get_token(payload, expires_in=expires_in)
     return Auth.get_token_static(payload, expires_in=expires_in)
 
 
 def valid_token(token: str) -> "dict | None":
-    """Validate a JWT signature and expiry — reads SECRET from env.
+    """Validate a JWT signature and expiry — reads TINA4_SECRET from env.
 
     Returns the decoded payload dict on success, ``None`` on failure.
     The truthy/falsy split keeps legacy ``if valid_token(t):`` code working
@@ -346,12 +368,12 @@ def get_payload(token: str) -> dict | None:
 
 
 def refresh_token(token: str, expires_in: int = 60) -> str | None:
-    """Refresh a JWT — reads SECRET from env. Shortcut for Auth.refresh_token_static()."""
+    """Refresh a JWT — reads TINA4_SECRET from env. Shortcut for Auth.refresh_token_static()."""
     return Auth.refresh_token_static(token, expires_in=expires_in)
 
 
 def authenticate_request(headers: dict, secret: str = None, algorithm: str = "HS256") -> dict | None:
-    """Validate auth from request headers — reads SECRET from env."""
+    """Validate auth from request headers — reads TINA4_SECRET from env."""
     if secret is not None:
         return Auth(secret=secret).authenticate_request(headers, algorithm=algorithm)
     return Auth.authenticate_request_static(headers)

@@ -1590,7 +1590,7 @@ Key `.env` settings:
 
 ```bash
 # Authentication
-SECRET=your-jwt-secret            # JWT signing (default uses insecure placeholder)
+TINA4_SECRET=your-jwt-secret      # JWT signing (warns + uses a blank, insecure secret if unset)
 TINA4_API_KEY=your-api-key        # Static bearer token for API auth (API_KEY fallback supported)
 TINA4_TOKEN_LIMIT=60              # Token lifetime in minutes (default: 60)
 

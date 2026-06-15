@@ -200,10 +200,10 @@ class TestAuthConfig:
             del os.environ["TINA4_TOKEN_EXPIRES_IN"]
 
     def test_default_secret(self):
-        # When no env var and no kwarg, uses default
+        # No env var & no kwarg -> blank secret (warns); never a guessable default
         os.environ.pop("TINA4_SECRET", None)
         auth = Auth()
-        assert auth.secret == "tina4-default-secret"
+        assert auth.secret == ""
 
     def test_default_expires_in(self):
         os.environ.pop("TINA4_TOKEN_EXPIRES_IN", None)

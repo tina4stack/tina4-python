@@ -15,7 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
 
-from tina4_python.auth import Auth as _FrondAuth
+from tina4_python.auth import Auth as _FrondAuth, _resolve_secret
 
 
 class SafeString(str):
@@ -1173,7 +1173,7 @@ def _generate_form_jwt(descriptor: str = "", session_id: str = "") -> str:
     if sid:
         payload["session_id"] = sid
 
-    secret = os.environ.get("TINA4_SECRET", "tina4-default-secret")
+    secret = _resolve_secret()
     ttl = int(os.environ.get("TINA4_TOKEN_EXPIRES_IN", "60"))
     auth = _FrondAuth(secret=secret, expires_in=ttl)
     return auth.get_token(payload)
