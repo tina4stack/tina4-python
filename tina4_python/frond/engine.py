@@ -989,9 +989,26 @@ def _coerce_arg(s: str):
     return s
 
 
+class _Ref:
+    """A filter argument that was an UNQUOTED bareword — i.e. a variable
+    reference (or dotted/bracket path), not a literal. Resolved against the
+    render context at apply-time so e.g. `{{ '%.2f' | format(price) }}` binds
+    `price` to its value. Quoted literals (`default('fb')`) are kept as plain
+    strings and never resolved."""
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: str):
+        self.name = name
+
+
 def _parse_args(raw: str) -> list:
-    """Parse filter arguments, respecting quoted strings, braces, and backslash escapes."""
-    args = []
+    """Parse filter arguments, respecting quoted strings, braces, and backslash escapes.
+
+    Quoted args become literal strings; numbers/bools/null/JSON are coerced to
+    their Python types; an unquoted bareword becomes a `_Ref` (a variable
+    reference resolved against the context when the filter runs)."""
+    tokens = []
     current = ""
     in_quote = None
     depth = 0
@@ -1006,15 +1023,27 @@ def _parse_args(raw: str) -> list:
         elif ch in (")", "}", "]") and not in_quote:
             depth -= 1
         elif ch == "," and not in_quote and depth == 0:
-            args.append(_strip_outer_quotes(current.strip()))
+            tokens.append(current.strip())
             current = ""
             continue
         current += ch
 
     if current.strip():
-        args.append(_strip_outer_quotes(current.strip()))
+        tokens.append(current.strip())
 
-    return [_coerce_arg(a) for a in args]
+    out = []
+    for tok in tokens:
+        if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in ('"', "'"):
+            out.append(_strip_outer_quotes(tok))  # quoted literal → string
+        else:
+            coerced = _coerce_arg(tok)
+            # A bareword that stayed a string is a variable/expression
+            # reference (e.g. `n`, `user.age`) — resolve it at apply-time.
+            if isinstance(coerced, str) and tok:
+                out.append(_Ref(tok))
+            else:
+                out.append(coerced)
+    return out
 
 
 def _strip_outer_quotes(s: str) -> str:
@@ -1071,16 +1100,16 @@ _BUILTIN_FILTERS = {
     "default": lambda v, *a: v if v is not None and v != "" else (a[0] if a else ""),
     "raw": lambda v, *a: v,  # Mark as safe (no escaping)
     "safe": lambda v, *a: v,
-    "escape": lambda v, *a: html.escape(str(v)),
-    "e": lambda v, *a: html.escape(str(v)),
+    "escape": lambda v, *a: SafeString(html.escape(str(v))),
+    "e": lambda v, *a: SafeString(html.escape(str(v))),
     "striptags": lambda v, *a: _STRIPTAGS_RE.sub("", str(v)),
-    "nl2br": lambda v, *a: str(v).replace("\n", "<br>\n"),
+    "nl2br": lambda v, *a: SafeString(html.escape(str(v)).replace("\n", "<br />\n")),
     "abs": lambda v, *a: abs(v) if isinstance(v, (int, float)) else v,
-    "round": lambda v, *a: round(float(v), int(a[0]) if a else 0),
+    "round": lambda v, *a: round(float(v), int(a[0])) if a else int(round(float(v))),
     "int": lambda v, *a: int(v) if v else 0,
     "float": lambda v, *a: float(v) if v else 0.0,
     "string": lambda v, *a: str(v),
-    "json_encode": lambda v, *a: json.dumps(v),
+    "json_encode": lambda v, *a: json.dumps(v, separators=(",", ":")),
     "to_json": lambda v, *a: SafeString(json.dumps(v, default=str, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")),
     "tojson": lambda v, *a: SafeString(json.dumps(v, default=str, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")),
     "js_escape": lambda v, *a: SafeString(str(v).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")),
@@ -1633,6 +1662,21 @@ class Frond:
 
     def _render_tokens(self, tokens: list, context: dict) -> str:
         """Render a list of tokens to string."""
+        # Whitespace control pre-pass: every {{- / -}} and {%- / -%} marker
+        # trims its neighbouring TEXT token. Doing this up-front over the whole
+        # token list (not per-handler) means the markers on closing tags
+        # (endif/endfor) and the body boundaries are honoured too — a block tag
+        # consumes its own end tag during dispatch, so the inline pass below
+        # never sees it. Idempotent, so recursion into block bodies is safe.
+        for _idx in range(len(tokens)):
+            _tt, _raw = tokens[_idx]
+            if _tt in (VAR, BLOCK):
+                _, _sb, _sa = _strip_tag(_raw)
+                if _sb and _idx > 0 and tokens[_idx - 1][0] == TEXT:
+                    tokens[_idx - 1] = (TEXT, tokens[_idx - 1][1].rstrip())
+                if _sa and _idx + 1 < len(tokens) and tokens[_idx + 1][0] == TEXT:
+                    tokens[_idx + 1] = (TEXT, tokens[_idx + 1][1].lstrip())
+
         output = []
         i = 0
 
@@ -1835,6 +1879,13 @@ class Frond:
                 is_safe = True
                 continue
 
+            # Resolve any unquoted-bareword args against the context (a quoted
+            # literal stays a plain string). Lets `{{ '%.2f' | format(n) }}`
+            # bind `n` to its value instead of the literal text "n".
+            if args and any(isinstance(a, _Ref) for a in args):
+                args = [_eval_expr(a.name, context) if isinstance(a, _Ref) else a
+                        for a in args]
+
             # Sandbox: check filter access
             if self._sandbox and self._allowed_filters is not None:
                 if fname not in self._allowed_filters:
@@ -1885,7 +1936,7 @@ class Frond:
                     value = int(value) if value else 0
                     continue
                 if fname in ("e", "escape"):
-                    value = html.escape(str(value))
+                    value = SafeString(html.escape(str(value)))
                     continue
 
             fn = self._filters.get(fname)

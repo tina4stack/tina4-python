@@ -136,7 +136,9 @@ class TestFilters:
         assert engine.render_string("{{ v|truncate(20) }}", {"v": "Hello"}) == "Hello"
 
     def test_nl2br(self, engine):
-        assert "<br>" in engine.render_string("{{ v|nl2br|raw }}", {"v": "a\nb"})
+        # Twig/PHP parity: nl2br escapes content, inserts <br />, and is safe
+        # (no re-escaping). Matches PHP nl2br(htmlspecialchars(...)).
+        assert engine.render_string("{{ v|nl2br }}", {"v": "a\nb"}) == "a<br />\nb"
 
     def test_striptags(self, engine):
         assert engine.render_string("{{ v|striptags }}", {"v": "<b>bold</b>"}) == "bold"
@@ -251,7 +253,8 @@ class TestFilters:
         assert engine.render_string("{{ v|round(2) }}", {"v": 3.14159}) == "3.14"
 
     def test_round_no_decimals(self, engine):
-        assert engine.render_string("{{ v|round }}", {"v": 3.7}) == "4.0"
+        # Twig/PHP parity: round at precision 0 renders as an integer "4", not "4.0"
+        assert engine.render_string("{{ v|round }}", {"v": 3.7}) == "4"
 
     def test_number_format(self, engine):
         assert engine.render_string("{{ v|number_format(2) }}", {"v": 1234.5}) == "1,234.50"
@@ -1564,3 +1567,30 @@ class TestFilterPropertyChainPHP113:
             '{{ stamp|replace(".", "-") }}', {"stamp": "2026.05.05"}
         )
         assert out == "2026-05-05"
+
+
+class TestTwigParityFixes:
+    """Regression guards for the cross-engine Frond parity fixes (Twig/Jinja
+    target). Each case previously diverged from PHP/Node before the audit."""
+
+    def _r(self, src, data=None):
+        from tina4_python.frond import Frond
+        return Frond().render_string(src, data or {})
+
+    def test_escape_single_not_double(self):
+        assert self._r("{{ h | e }}", {"h": "<b>x</b>"}) == "&lt;b&gt;x&lt;/b&gt;"
+
+    def test_format_resolves_variable_arg(self):
+        assert self._r("{{ '%.2f' | format(n) }}", {"n": 3.14159}) == "3.14"
+
+    def test_json_encode_compact(self):
+        assert self._r("{{ items | json_encode }}", {"items": [1, 2, 3]}) == "[1,2,3]"
+
+    def test_round_renders_integer(self):
+        assert self._r("{{ v | round }}", {"v": 3.7}) == "4"
+
+    def test_whitespace_control_trims(self):
+        assert self._r("x {%- if x -%}  y  {%- endif -%} z", {"x": True}) == "xyz"
+
+    def test_concat_two_literals(self):
+        assert self._r("{{ 'a' ~ 'b' }}") == "ab"
