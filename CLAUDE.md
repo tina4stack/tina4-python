@@ -258,7 +258,6 @@ Multipart file uploads are available via `request.files` (dict keyed by field na
 ```python
 # request.files["avatar"] =>
 {
-    "fieldName": "avatar",
     "filename": "photo.png",
     "type": "image/png",
     "content": b"...",       # raw bytes — NOT base64

@@ -492,10 +492,9 @@ return response.stream(generator)          # SSE/streaming response (text/event-
 
 `response()` auto-serializes a domain object — an ORM model, a list of models, or a `DatabaseResult` — to JSON with no manual `to_dict()` / `to_json()`. A single model becomes a JSON object; a list of models or a `DatabaseResult` becomes a JSON array. Dicts, lists and strings behave exactly as before (purely additive).
 
-Add custom headers before returning:
+Add custom headers by calling `add_header` on the `response` object in your handler:
 ```python
-from tina4_python.core.response import Response
-Response.add_header("X-Custom", "value")
+response.add_header("X-Custom", "value")
 ```
 
 ## Sessions
@@ -1042,8 +1041,7 @@ class AuthMiddleware:
     @staticmethod
     def after_headers(request, response):
         """Add custom headers to every response."""
-        from tina4_python.core.response import Response
-        Response.add_header("X-Powered-By", "Tina4")
+        response.add_header("X-Powered-By", "Tina4")
         return request, response
 
 @middleware(AuthMiddleware)
