@@ -139,6 +139,62 @@ def _safe_signature(obj) -> str:
             return "(...)"
 
 
+# Leading parameter names that are receivers, never passed by callers — dropped
+# from public signatures (covers self/cls and the (cls, instance) pair used by
+# dual class/instance descriptors).
+_RECEIVER_PARAMS = {"self", "cls", "mcs", "metacls", "instance", "owner"}
+
+
+def _render_signature(func, display_name: str) -> str:
+    """Public signature for `display_name`, dropping leading receiver params."""
+    try:
+        sig = inspect.signature(func)
+    except (TypeError, ValueError):
+        return f"{display_name}(...)"
+    params = list(sig.parameters.values())
+    while params and params[0].name in _RECEIVER_PARAMS and params[0].kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.POSITIONAL_ONLY,
+    ):
+        params = params[1:]
+    try:
+        sig = sig.replace(parameters=params)
+    except (TypeError, ValueError):
+        pass
+    return f"{display_name}{sig}"
+
+
+def _unwrap_callable(raw, owner, mname: str):
+    """Resolve a raw class-dict value to (func, is_static, is_class).
+
+    `func` is the function to introspect for signature/doc/source, or `None`
+    for a non-callable class attribute (which the caller skips). Handles plain
+    functions, @staticmethod/@classmethod, properties, and custom descriptors
+    such as Frond's dual class/instance method (whose wrapper's __qualname__
+    would otherwise hide it from the owner check)."""
+    if isinstance(raw, staticmethod):
+        return raw.__func__, True, False
+    if isinstance(raw, classmethod):
+        return raw.__func__, False, True
+    if isinstance(raw, property):
+        return (raw.fget, False, False) if raw.fget else (None, False, False)
+    if inspect.isfunction(raw):
+        return raw, False, False
+    # Custom descriptor — prefer the function it wraps.
+    for attr in ("func", "__func__", "__wrapped__"):
+        f = getattr(raw, attr, None)
+        if inspect.isfunction(f):
+            return f, False, False
+    # Descriptor that only yields a callable through __get__ (last resort).
+    try:
+        bound = getattr(owner, mname)
+        if inspect.isfunction(bound) or inspect.ismethod(bound):
+            return bound, False, False
+    except Exception:
+        pass
+    return None, False, False
+
+
 def _is_private_name(name: str) -> bool:
     """Dunder stays hidden always. Single-underscore is private (opt-in)."""
     if name.startswith("__") and name.endswith("__"):
@@ -226,32 +282,16 @@ def _reflect_framework(version: str) -> list[_Entity]:
                 source="framework",
             ))
 
-            # Methods — both regular functions and @classmethod/@staticmethod wrappers.
-            for mname, mobj in inspect.getmembers(obj):
+            # Methods defined DIRECTLY on this class (inherited ones are skipped).
+            # Membership in obj.__dict__ is the reliable owner test — comparing
+            # __qualname__ breaks for methods built by custom descriptors (e.g.
+            # Frond's dual class/instance methods), which would silently vanish.
+            for mname, raw in list(obj.__dict__.items()):
                 if _is_private_name(mname):
                     continue
-                is_static = False
-                is_class = False
-                # Pick real callable
-                raw = obj.__dict__.get(mname, None)
-                if isinstance(raw, staticmethod):
-                    is_static = True
-                    func = raw.__func__
-                elif isinstance(raw, classmethod):
-                    is_class = True
-                    func = raw.__func__
-                elif inspect.isfunction(mobj) or inspect.ismethod(mobj):
-                    func = mobj
-                else:
-                    continue
-
-                # Only include methods actually defined on this class (not inherited).
-                if func.__qualname__.split(".")[0] != obj.__qualname__.split(".")[-1]:
-                    # Heuristic: compare the first qualname segment to class name.
-                    # If the method's __qualname__ doesn't start with this class, skip.
-                    owner = func.__qualname__.rsplit(".", 1)[0]
-                    if owner != obj.__qualname__:
-                        continue
+                func, is_static, is_class = _unwrap_callable(raw, obj, mname)
+                if func is None:
+                    continue   # non-callable class attribute
 
                 try:
                     mfile = inspect.getsourcefile(func) or src_file
@@ -262,7 +302,7 @@ def _reflect_framework(version: str) -> list[_Entity]:
 
                 mdoc = inspect.getdoc(func) or ""
                 msummary = _summary_from_doc(mdoc)
-                sig = _safe_signature(func)
+                sig = _render_signature(func, mname)
 
                 out.append(_Entity(
                     fqn=f"{fqn_class}.{mname}",
@@ -478,6 +518,24 @@ def _score(entity: _Entity, tokens: list[str], raw_query: str) -> float:
     for tok in tokens:
         if tok in name_lower:
             score += 0.5
+    # Class-qualified queries ("Frond.add_test", "ORM save"): score the owning
+    # class so the qualifier actually steers ranking instead of being dead weight.
+    parent_lower = (entity.parent_class or "").lower()
+    rq = raw_query.strip().lower()
+    if parent_lower:
+        # Exact "Class.method" intent — the strongest signal we have.
+        if rq == f"{parent_lower}.{name_lower}":
+            score += 6.0
+        for tok in tokens:
+            if tok == parent_lower:
+                score += 2.5
+            elif parent_lower.startswith(tok):
+                score += 1.0
+    # Any token that is a whole segment of the fqn (module / class / name).
+    fqn_segs = set(re.split(r"[.\s]+", entity.fqn.lower()))
+    for tok in tokens:
+        if tok in fqn_segs:
+            score += 1.0
     if entity.source == "user":
         score *= 1.2
     return score
@@ -587,14 +645,40 @@ class Docs:
         scored.sort(key=lambda p: (-p[1], p[0].fqn))
         return [e.as_hit(s) for (e, s) in scored[:k]]
 
+    def _resolve_class(self, given: str) -> _Entity | None:
+        """Resolve a class by exact FQN, public import path, or bare name.
+
+        Callers naturally use the documented import path (`tina4_python.database
+        .Database`) or a bare name (`Database`), but the index stores the deep
+        defining-module FQN (`tina4_python.database.connection.Database`). Match
+        exactly first, then by class name, disambiguating by requiring the given
+        dotted segments to appear in the stored FQN (framework + shortest wins)."""
+        classes = [
+            e for e in (self._framework + self._user) if e.kind == "class"
+        ]
+        for e in classes:                      # 1. exact
+            if e.fqn == given:
+                return e
+        gsegs = [s for s in given.split(".") if s]
+        gname = gsegs[-1] if gsegs else given
+        cands = [e for e in classes if e.fqn.split(".")[-1] == gname]
+        if len(cands) == 1:
+            return cands[0]
+        if cands:                              # 2. disambiguate by segment subset
+            subset = [
+                e for e in cands
+                if all(s in e.fqn.split(".") for s in gsegs)
+            ]
+            pool = subset or cands
+            pool.sort(key=lambda e: (e.source != "framework", len(e.fqn), e.fqn))
+            return pool[0]
+        return None
+
     def class_spec(self, fqn: str) -> dict[str, Any] | None:
         """Full reflection of a class — `None` if not found."""
         self._ensure_index()
         all_entities = self._framework + self._user
-        klass = next(
-            (e for e in all_entities if e.kind == "class" and e.fqn == fqn),
-            None,
-        )
+        klass = self._resolve_class(fqn)
         if klass is None:
             return None
         methods = [
@@ -610,7 +694,7 @@ class Docs:
                 "source": m.source,
             }
             for m in all_entities
-            if m.kind == "method" and m.class_fqn == fqn
+            if m.kind == "method" and m.class_fqn == klass.fqn
         ]
         return {
             "fqn": klass.fqn,
@@ -629,8 +713,10 @@ class Docs:
         self, class_fqn: str, method_name: str,
     ) -> dict[str, Any] | None:
         self._ensure_index()
+        klass = self._resolve_class(class_fqn)
+        resolved = klass.fqn if klass else class_fqn
         for e in self._framework + self._user:
-            if e.kind == "method" and e.class_fqn == class_fqn and e.name == method_name:
+            if e.kind == "method" and e.class_fqn == resolved and e.name == method_name:
                 return {
                     "fqn": e.fqn,
                     "name": e.name,

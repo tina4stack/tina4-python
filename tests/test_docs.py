@@ -297,3 +297,65 @@ def test_no_vendor_third_party_in_results(docs: Docs) -> None:
         assert "site-packages" not in file_path, (
             "site-packages paths leaked into default search"
         )
+
+
+# ── 17 ─────────────────────────────────────────────────────────────
+
+
+def test_descriptor_defined_methods_are_indexed(docs: Docs) -> None:
+    """Frond's add_filter/add_global/add_test use a custom dual class/instance
+    descriptor. They must still be reflected (the old __qualname__ owner check
+    dropped them), with receiver params (self/cls/instance) stripped."""
+    frond = "tina4_python.frond.engine.Frond"
+    for name in ("add_filter", "add_global", "add_test"):
+        spec = docs.method_spec(frond, name)
+        assert spec is not None, f"Frond.{name} must be indexed"
+        sig = spec["signature"]
+        assert sig.startswith(f"{name}("), f"signature should lead with the name: {sig}"
+        assert "self" not in sig and "cls" not in sig and "instance" not in sig, (
+            f"receiver params must be stripped from the public signature: {sig}"
+        )
+
+
+# ── 18 ─────────────────────────────────────────────────────────────
+
+
+def test_class_qualified_search_ranks_the_owning_method(docs: Docs) -> None:
+    """A 'Class.method' / 'Class method' query must rank that class's method
+    first — the class qualifier has to steer ranking, not be dead weight."""
+    for query in ("Frond.add_test", "Frond add_test"):
+        hits = docs.search(query, k=3)
+        assert hits, f"no hits for {query!r}"
+        assert hits[0]["fqn"] == "tina4_python.frond.engine.Frond.add_test", (
+            f"{query!r} should rank Frond.add_test #1; got {[h['fqn'] for h in hits]}"
+        )
+
+
+# ── 19 ─────────────────────────────────────────────────────────────
+
+
+def test_lookup_resolves_public_import_path(docs: Docs) -> None:
+    """The documented import path (tina4_python.database.Database) resolves even
+    though the index stores the deep defining-module FQN (…connection.Database)."""
+    deep = "tina4_python.database.connection.Database"
+    public = "tina4_python.database.Database"
+    assert docs.class_spec(deep) is not None, "precondition: deep FQN resolves"
+    assert docs.class_spec(public) is not None, "public import path must resolve"
+    assert docs.method_spec(public, "execute") is not None, (
+        "method_spec must resolve via the public import path"
+    )
+    # Both paths point at the same class.
+    assert docs.class_spec(public)["fqn"] == docs.class_spec(deep)["fqn"]
+
+
+# ── 20 ─────────────────────────────────────────────────────────────
+
+
+def test_lookup_resolves_bare_class_name(docs: Docs) -> None:
+    """A bare class name (Database) resolves to the one matching class."""
+    spec = docs.class_spec("Database")
+    assert spec is not None, "bare class name must resolve"
+    assert spec["fqn"].endswith(".Database")
+    assert docs.method_spec("Database", "execute") is not None
+    # A truly unknown name still returns None (no false positives).
+    assert docs.class_spec("DefinitelyNotAClass") is None
