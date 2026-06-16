@@ -6,11 +6,11 @@ from tina4_python.database import Database, DatabaseResult
 
 @pytest.fixture
 def db(tmp_path):
-    """Fresh SQLite database for each test — autocommit OFF (default)."""
+    """Fresh SQLite database for each test — autocommit ON (default)."""
     db_path = tmp_path / "test.db"
     d = Database(f"sqlite:///{db_path}")
     d.execute("CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT, active INTEGER DEFAULT 1)")
-    d.commit()  # Explicit commit — no autocommit by default
+    d.commit()  # redundant under autocommit-on, kept for clarity
     yield d
     d.close()
 
@@ -56,7 +56,7 @@ class TestDatabaseResult:
 
 
 class TestSQLiteAdapter:
-    """Positive tests for SQLite database operations (autocommit OFF)."""
+    """Positive tests for SQLite database operations (autocommit ON — default)."""
 
     def test_insert_and_fetch_one(self, db):
         db.insert("users", {"name": "Alice", "email": "alice@test.com"})
@@ -140,17 +140,16 @@ class TestSQLiteAdapter:
     def test_database_type(self, db):
         assert db.get_database_type() == "sqlite"
 
-    def test_no_autocommit_by_default(self, db):
-        """Without autocommit, uncommitted writes are lost on close."""
-        assert db.autocommit is False
-        db.insert("users", {"name": "Uncommitted"})
-        # Don't commit — data should be visible in same connection...
-        row = db.fetch_one("SELECT * FROM users WHERE name = ?", ["Uncommitted"])
-        assert row is not None  # visible in same transaction
-        # ...but the point is: no silent auto-commit happened
+    def test_autocommit_on_by_default(self, db):
+        """A standalone write auto-commits — no explicit commit() needed."""
+        assert db.autocommit is True
+        db.insert("users", {"name": "Standalone"})
+        # No explicit commit — the standalone write committed on its own.
+        row = db.fetch_one("SELECT * FROM users WHERE name = ?", ["Standalone"])
+        assert row is not None
 
     def test_explicit_commit_persists(self, db):
-        """Explicit commit() makes data durable."""
+        """Explicit commit() still works (and is harmless under autocommit)."""
         db.insert("users", {"name": "Persisted"})
         db.commit()
         row = db.fetch_one("SELECT * FROM users WHERE name = ?", ["Persisted"])
@@ -176,6 +175,17 @@ class TestAutocommitEnabled:
             db_path = tmp_path / "env_test.db"
             d = Database(f"sqlite:///{db_path}")
             assert d.autocommit is True
+            d.close()
+        finally:
+            del os.environ["TINA4_AUTOCOMMIT"]
+
+    def test_autocommit_off_via_env(self, tmp_path):
+        """TINA4_AUTOCOMMIT=false opts into strict manual-commit mode."""
+        os.environ["TINA4_AUTOCOMMIT"] = "false"
+        try:
+            db_path = tmp_path / "strict_test.db"
+            d = Database(f"sqlite:///{db_path}")
+            assert d.autocommit is False
             d.close()
         finally:
             del os.environ["TINA4_AUTOCOMMIT"]
@@ -439,3 +449,24 @@ class TestPoolTransactionAtomicity:
         n = d.fetch_one("SELECT count(*) AS n FROM t")["n"]
         d.close()
         assert n == 0, f"pool=0 broke after the pin fix: {n} rows leaked"
+
+    def test_standalone_write_visible_across_pool(self, pooled_db):
+        """A standalone write (no explicit transaction) auto-commits on its own
+        connection and is visible from the next round-robin connection.
+
+        Before the autocommit-on default, a standalone INSERT landed on adapter
+        A uncommitted, then the follow-up SELECT round-robin'd to adapter B and
+        saw nothing. Now the write commits before returning, so any pooled
+        connection sees it.
+        """
+        # No start_transaction() — these are standalone writes.
+        pooled_db.execute("INSERT INTO t (id, val) VALUES (100, 'p')")
+        pooled_db.execute("INSERT INTO t (id, val) VALUES (200, 'q')")
+
+        # Read several times so we land on different round-robin connections;
+        # every one must see both committed rows.
+        for _ in range(8):
+            n = pooled_db.fetch_one("SELECT count(*) AS n FROM t")["n"]
+            assert n == 2, (
+                f"standalone writes not visible across pool — saw {n} of 2 rows"
+            )

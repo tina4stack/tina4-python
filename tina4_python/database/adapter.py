@@ -308,14 +308,18 @@ class DatabaseAdapter:
     Every method raises NotImplementedError — drivers must implement all of them.
     The interface is deliberately minimal: 13 methods cover everything.
 
-    Autocommit is OFF by default. Set TINA4_AUTOCOMMIT=true in .env to enable.
-    Without autocommit, you must call commit() explicitly after write operations.
+    Autocommit is ON by default: a standalone write (execute/insert/update/delete
+    made outside an explicit transaction) commits on its own connection before
+    returning. Inside start_transaction()/commit()/rollback() the commit is
+    deferred — the per-statement commit branches are gated on `not self._in_transaction`
+    so explicit transactions stay atomic. Set TINA4_AUTOCOMMIT=false in .env for
+    strict manual mode (every write needs an explicit commit()).
     """
 
     def __init__(self):
         import os
         self._autocommit = os.environ.get(
-            "TINA4_AUTOCOMMIT", "false"
+            "TINA4_AUTOCOMMIT", "true"
         ).lower() in ("true", "1", "yes")
 
     @property

@@ -53,7 +53,7 @@ def db():
     adapter.connect(
         f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{PG_DB}"
     )
-    adapter.autocommit = False  # match production default
+    adapter.autocommit = False  # strict mode: exercise error cascade within an implicit txn (#46)
     yield adapter
     try:
         adapter._conn.rollback()

@@ -1,19 +1,21 @@
 """Regression test for issue #51 — PostgreSQL idle-in-transaction leak.
 
-psycopg2 runs with ``autocommit = False`` (the framework's safe default —
-writes must be committed explicitly). A bare ``SELECT`` therefore opens a
-transaction too; before v3.13.15 ``fetch()`` / ``fetch_one()`` never closed
-it, so the connection sat ``idle in transaction`` for its whole life,
-holding a pool slot and any locks it touched. Short-lived boot connections
-(the migration runner's ``MAX(batch)`` lookup) leaked one each until
-``max_connections`` was exhausted — then autodiscovery failed mid-boot and
-every route 404'd while ``/health-check`` still passed ("ready but broken").
+The psycopg2 *connection* runs with ``connection.autocommit = False`` so the
+framework owns every commit boundary (explicit transactions stay atomic). A
+bare ``SELECT`` therefore opens a transaction too; before v3.13.15
+``fetch()`` / ``fetch_one()`` never closed it, so the connection sat
+``idle in transaction`` for its whole life, holding a pool slot and any locks
+it touched. Short-lived boot connections (the migration runner's
+``MAX(batch)`` lookup) leaked one each until ``max_connections`` was
+exhausted — then autodiscovery failed mid-boot and every route 404'd while
+``/health-check`` still passed ("ready but broken").
 
 The fix: after a successful non-transactional read, roll back the implicit
 transaction (a SELECT has nothing to persist). Inside an explicit
 ``start_transaction()`` the caller owns it, so we defer. Writes go through
-``execute()`` and are deliberately left untouched — with autocommit off they
-must be committed explicitly.
+``execute()``, which commits a standalone write per-statement (autocommit is
+on by default outside an explicit transaction) — this read-side rollback only
+touches the implicit transaction left by a bare SELECT.
 
 These tests need no live PostgreSQL. The ``_end_read_txn`` checks run with no
 psycopg2 at all; the ``fetch`` wiring checks use a fake connection and stub
