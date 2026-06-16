@@ -851,6 +851,13 @@ def _eval_test(value_expr: str, test_name: str, args: str, context: dict, eval_f
         "boolean": lambda v: isinstance(v, bool),
     }
 
+    # Merge in custom tests registered via add_test(). They live on the Frond
+    # instance, reachable through the bound eval_fn (eval_fn.__self__._tests).
+    # Custom registrations override built-ins, matching PHP/Ruby/Node.
+    custom = getattr(getattr(eval_fn, "__self__", None), "_tests", None)
+    if custom:
+        tests = {**tests, **custom}
+
     # 'divisible by(n)'
     if test_name == "divisible":
         m = _DIVISIBLE_BY_RE.match(args)

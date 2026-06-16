@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.13.27 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.28 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -747,8 +747,8 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
 - SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools (24 tools) auto-start on `TINA4_DEBUG=true` + localhost. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. Localhost-only by default; `TINA4_MCP_REMOTE=true` for remote
-- Tests: 2,900 passing (122 modules)
-- Version: 3.13.27
+- Tests: 2,901 passing (122 modules)
+- Version: 3.13.28
 
 ## Links
 

@@ -1594,3 +1594,12 @@ class TestTwigParityFixes:
 
     def test_concat_two_literals(self):
         assert self._r("{{ 'a' ~ 'b' }}") == "ab"
+
+    def test_custom_test_is_applied(self):
+        # add_test() registrations must be honoured by `is <name>` (parity with
+        # PHP/Ruby/Node). Built-in tests previously shadowed the custom registry.
+        from tina4_python.frond import Frond
+        f = Frond()
+        f.add_test("positive", lambda x: x > 0)
+        assert f.render_string("{% if 5 is positive %}y{% else %}n{% endif %}", {}) == "y"
+        assert f.render_string("{% if v is positive %}y{% else %}n{% endif %}", {"v": -3}) == "n"
