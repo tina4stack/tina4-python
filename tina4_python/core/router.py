@@ -171,11 +171,12 @@ class Router:
         - ``event`` is ``"open"``, ``"message"``, or ``"close"``
         - ``data`` is the message payload (str for message, None for open/close)
         """
-        pattern, param_names = _compile_pattern(path)
+        pattern, param_names, param_types = _compile_pattern(path)
         route = {
             "path": path,
             "pattern": pattern,
             "param_names": param_names,
+            "param_types": param_types,
             "handler": handler,
         }
         _ws_routes.append(route)
@@ -188,8 +189,9 @@ class Router:
             m = route["pattern"].match(path)
             if m:
                 params = {}
+                _types = route.get("param_types", {})
                 for i, name in enumerate(route["param_names"]):
-                    params[name] = m.group(i + 1)
+                    params[name] = _cast_param(m.group(i + 1), _types.get(name))
                 return route, params
         return None, {}
 
@@ -303,7 +305,7 @@ class Router:
         combined_mw = list(cls._group_middleware) + list(handler_mw) + route_mw
         effective_middleware = combined_mw or []
 
-        pattern, param_names = _compile_pattern(path)
+        pattern, param_names, param_types = _compile_pattern(path)
 
         # Auth default: GET=public, writes=secured (unless custom middleware handles auth)
         m = method.upper()
@@ -329,6 +331,7 @@ class Router:
             "path": path,
             "pattern": pattern,
             "param_names": param_names,
+            "param_types": param_types,
             "handler": handler,
             "middleware": effective_middleware,
             "auth_required": auth_required,
@@ -359,8 +362,9 @@ class Router:
             m = route["pattern"].match(path)
             if m:
                 params = {}
+                _types = route.get("param_types", {})
                 for i, name in enumerate(route["param_names"]):
-                    params[name] = m.group(i + 1)
+                    params[name] = _cast_param(m.group(i + 1), _types.get(name))
                 return route, params
 
         # Second pass: HEAD auto-fallback to GET when no HEAD route registered
@@ -371,8 +375,9 @@ class Router:
                 m = route["pattern"].match(path)
                 if m:
                     params = {}
+                    _types = route.get("param_types", {})
                     for i, name in enumerate(route["param_names"]):
-                        params[name] = m.group(i + 1)
+                        params[name] = _cast_param(m.group(i + 1), _types.get(name))
                     return route, params
 
         return None, {}
@@ -454,8 +459,36 @@ _TYPE_PATTERNS = {
     ".*":       ".+",
 }
 
+# Type names whose captured value is coerced from str to a Python scalar before
+# it reaches the handler. Mirrors Ruby's ``cast_param`` (lib/tina4/router.rb):
+# ``int``/``integer`` → ``int``, ``float``/``number`` → ``float``. Every other
+# type (string, alpha, alnum, slug, uuid, path) and untyped params stay ``str``.
+_TYPE_CASTS = {
+    "int":     int,
+    "integer": int,
+    "float":   float,
+    "number":  float,
+}
 
-def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
+
+def _cast_param(value: str, type_hint: str | None):
+    """Coerce a captured route param to its declared Python type.
+
+    The URL regex already guarantees the segment matches the type's pattern
+    (e.g. ``{id:int}`` only matches digits), so the cast normally can't fail.
+    We still guard it: a coercion failure must never crash routing — fall back
+    to the raw string, exactly as Ruby leaves unknown types untouched.
+    """
+    caster = _TYPE_CASTS.get(type_hint)
+    if caster is None:
+        return value
+    try:
+        return caster(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _compile_pattern(path: str) -> tuple[re.Pattern, list[str], dict[str, str]]:
     """Convert a route path to a regex pattern.
 
     Supports:
@@ -468,9 +501,16 @@ def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
         /api/files/{p:path}       → greedy (matches remaining path)
         /api/docs/*               → bare-wildcard catch-all (key "*")
 
+    Returns ``(pattern, param_names, param_types)`` where ``param_types`` maps
+    each declared name to its type hint (``"int"``, ``"float"``, …). Untyped
+    params and the ``*`` wildcard are absent from the map. The map drives
+    coercion in :meth:`Router.match` so typed params arrive at the handler as
+    Python scalars (mirrors Ruby's ``cast_param``).
+
     Unknown type names raise ``ValueError`` at route registration time.
     """
     param_names = []
+    param_types: dict[str, str] = {}
     regex_parts = []
 
     segments = path.strip("/").split("/")
@@ -490,6 +530,7 @@ def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
                         f"Valid types: {', '.join(sorted(k for k in _TYPE_PATTERNS if k != '.*'))}."
                     )
                 regex_parts.append("(" + _TYPE_PATTERNS[type_hint] + ")")
+                param_types[name] = type_hint
             else:
                 name = inner
                 regex_parts.append("([^/]+)")
@@ -498,7 +539,7 @@ def _compile_pattern(path: str) -> tuple[re.Pattern, list[str]]:
             regex_parts.append(re.escape(segment))
 
     pattern_str = "^/" + "/".join(regex_parts) + "/?$"
-    return re.compile(pattern_str), param_names
+    return re.compile(pattern_str), param_names, param_types
 
 
 # Decorator functions — the public API

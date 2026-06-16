@@ -13,38 +13,38 @@ def clear_routes():
 class TestPatternCompilation:
 
     def test_exact_match(self):
-        pattern, params = _compile_pattern("/api/users")
+        pattern, params, _ = _compile_pattern("/api/users")
         assert pattern.match("/api/users")
         assert pattern.match("/api/users/")
         assert params == []
 
     def test_single_param(self):
-        pattern, params = _compile_pattern("/api/users/{id}")
+        pattern, params, _ = _compile_pattern("/api/users/{id}")
         m = pattern.match("/api/users/42")
         assert m and m.group(1) == "42"
         assert params == ["id"]
 
     def test_multiple_params(self):
-        pattern, params = _compile_pattern("/api/posts/{post_id}/comments/{comment_id}")
+        pattern, params, _ = _compile_pattern("/api/posts/{post_id}/comments/{comment_id}")
         m = pattern.match("/api/posts/5/comments/12")
         assert m and m.group(1) == "5" and m.group(2) == "12"
 
     def test_int_param(self):
-        pattern, _ = _compile_pattern("/api/users/{id:int}")
+        pattern, _, _ = _compile_pattern("/api/users/{id:int}")
         assert pattern.match("/api/users/42")
         assert not pattern.match("/api/users/abc")
 
     def test_path_param(self):
-        pattern, _ = _compile_pattern("/files/{path:path}")
+        pattern, _, _ = _compile_pattern("/files/{path:path}")
         m = pattern.match("/files/docs/readme.md")
         assert m and m.group(1) == "docs/readme.md"
 
     def test_no_match_different_path(self):
-        pattern, _ = _compile_pattern("/api/users")
+        pattern, _, _ = _compile_pattern("/api/users")
         assert not pattern.match("/api/products")
 
     def test_no_match_extra_segments(self):
-        pattern, _ = _compile_pattern("/api/users")
+        pattern, _, _ = _compile_pattern("/api/users")
         assert not pattern.match("/api/users/extra")
 
 
@@ -163,75 +163,75 @@ class TestAnyMethod:
 class TestPatternEdgeCases:
 
     def test_float_param(self):
-        pattern, params = _compile_pattern("/api/price/{amount:float}")
+        pattern, params, _ = _compile_pattern("/api/price/{amount:float}")
         m = pattern.match("/api/price/19.99")
         assert m and m.group(1) == "19.99"
         assert params == ["amount"]
 
     def test_float_param_rejects_alpha(self):
-        pattern, _ = _compile_pattern("/api/price/{amount:float}")
+        pattern, _, _ = _compile_pattern("/api/price/{amount:float}")
         assert not pattern.match("/api/price/abc")
 
     def test_trailing_slash_optional(self):
-        pattern, _ = _compile_pattern("/api/test")
+        pattern, _, _ = _compile_pattern("/api/test")
         assert pattern.match("/api/test")
         assert pattern.match("/api/test/")
 
     def test_root_path(self):
-        pattern, _ = _compile_pattern("/")
+        pattern, _, _ = _compile_pattern("/")
         assert pattern.match("/")
 
     def test_uuid_param_matches_valid_uuid(self):
-        pattern, params = _compile_pattern("/api/{id:uuid}")
+        pattern, params, _ = _compile_pattern("/api/{id:uuid}")
         m = pattern.match("/api/550e8400-e29b-41d4-a716-446655440000")
         assert m is not None
         assert params == ["id"]
 
     def test_uuid_param_rejects_non_uuid(self):
-        pattern, _ = _compile_pattern("/api/{id:uuid}")
+        pattern, _, _ = _compile_pattern("/api/{id:uuid}")
         assert pattern.match("/api/not-a-uuid") is None
         assert pattern.match("/api/123") is None
 
     def test_alpha_param_matches_letters_only(self):
-        pattern, params = _compile_pattern("/api/{name:alpha}")
+        pattern, params, _ = _compile_pattern("/api/{name:alpha}")
         assert pattern.match("/api/alice") is not None
         assert pattern.match("/api/Alice") is not None
         assert params == ["name"]
 
     def test_alpha_param_rejects_digits(self):
         # fixes tina4-book#125 — developer expectation: :alpha = letters only
-        pattern, _ = _compile_pattern("/api/{name:alpha}")
+        pattern, _, _ = _compile_pattern("/api/{name:alpha}")
         assert pattern.match("/api/alice123") is None
         assert pattern.match("/api/123") is None
         assert pattern.match("/api/alice-bob") is None  # hyphen rejected
 
     def test_alnum_param_matches_letters_and_digits(self):
-        pattern, _ = _compile_pattern("/api/{code:alnum}")
+        pattern, _, _ = _compile_pattern("/api/{code:alnum}")
         assert pattern.match("/api/abc123") is not None
         assert pattern.match("/api/ABC") is not None
         assert pattern.match("/api/123") is not None
 
     def test_alnum_param_rejects_punctuation(self):
-        pattern, _ = _compile_pattern("/api/{code:alnum}")
+        pattern, _, _ = _compile_pattern("/api/{code:alnum}")
         assert pattern.match("/api/abc-123") is None
         assert pattern.match("/api/abc.123") is None
 
     def test_slug_param_matches_urlsafe_slug(self):
-        pattern, _ = _compile_pattern("/posts/{slug:slug}")
+        pattern, _, _ = _compile_pattern("/posts/{slug:slug}")
         assert pattern.match("/posts/hello-world") is not None
         assert pattern.match("/posts/post-123") is not None
         assert pattern.match("/posts/a") is not None
 
     def test_slug_param_rejects_uppercase_and_underscore(self):
-        pattern, _ = _compile_pattern("/posts/{slug:slug}")
+        pattern, _, _ = _compile_pattern("/posts/{slug:slug}")
         assert pattern.match("/posts/Hello-World") is None   # uppercase rejected
         assert pattern.match("/posts/hello_world") is None   # underscore rejected
         assert pattern.match("/posts/hello world") is None   # space rejected
 
     def test_explicit_string_type_matches_default(self):
         """``{name:string}`` should behave identically to ``{name}``."""
-        explicit, _ = _compile_pattern("/users/{name:string}")
-        implicit, _ = _compile_pattern("/users/{name}")
+        explicit, _, _ = _compile_pattern("/users/{name:string}")
+        implicit, _, _ = _compile_pattern("/users/{name}")
         assert explicit.match("/users/alice") is not None
         assert implicit.match("/users/alice") is not None
         assert explicit.match("/users/alice").groups() == implicit.match("/users/alice").groups()
@@ -246,6 +246,91 @@ class TestPatternEdgeCases:
             _compile_pattern("/api/{name:word}")
         with pytest.raises(ValueError, match="Unknown param type"):
             _compile_pattern("/api/{name:str}")  # the one from #125
+
+
+class TestTypedParamCoercion:
+    """Typed path params arrive coerced to Python scalars (parity with Ruby
+    ``cast_param`` in lib/tina4/router.rb). ``{id:int}`` → ``int``,
+    ``{price:float}`` → ``float``; every other type and untyped ``{id}`` stay
+    ``str``. URL matching is unchanged — coercion happens after the regex,
+    when ``Router.match`` builds the params dict, so BOTH ``request.param``
+    and the positional handler arg are typed."""
+
+    def test_int_param_is_coerced_to_int(self):
+        @get("/coerce/items/{id:int}")
+        async def handler(req, res): pass
+        route, params = Router.match("GET", "/coerce/items/42")
+        assert route is not None
+        assert params["id"] == 42
+        assert isinstance(params["id"], int)
+
+    def test_integer_alias_is_coerced_to_int(self):
+        @get("/coerce/users/{uid:integer}")
+        async def handler(req, res): pass
+        _, params = Router.match("GET", "/coerce/users/7")
+        assert params["uid"] == 7
+        assert isinstance(params["uid"], int)
+
+    def test_float_param_is_coerced_to_float(self):
+        @get("/coerce/price/{price:float}")
+        async def handler(req, res): pass
+        route, params = Router.match("GET", "/coerce/price/19.99")
+        assert route is not None
+        assert params["price"] == 19.99
+        assert isinstance(params["price"], float)
+
+    def test_number_alias_is_coerced_to_float(self):
+        @get("/coerce/amount/{amt:number}")
+        async def handler(req, res): pass
+        _, params = Router.match("GET", "/coerce/amount/3.5")
+        assert params["amt"] == 3.5
+        assert isinstance(params["amt"], float)
+
+    def test_untyped_param_stays_str(self):
+        @get("/coerce/raw/{id}")
+        async def handler(req, res): pass
+        _, params = Router.match("GET", "/coerce/raw/42")
+        assert params["id"] == "42"
+        assert isinstance(params["id"], str)
+
+    def test_non_castable_types_stay_str(self):
+        # slug/alpha/alnum/uuid/path are never coerced — they stay strings
+        @get("/coerce/posts/{slug:slug}")
+        async def handler(req, res): pass
+        _, params = Router.match("GET", "/coerce/posts/hello-world")
+        assert params["slug"] == "hello-world"
+        assert isinstance(params["slug"], str)
+
+    def test_non_numeric_path_still_404s(self):
+        # URL-matching behaviour is unchanged: {id:int} still only matches
+        # digits, so a non-numeric segment yields no route (404 at dispatch).
+        @get("/coerce/strict/{id:int}")
+        async def handler(req, res): pass
+        route, params = Router.match("GET", "/coerce/strict/abc")
+        assert route is None
+        assert params == {}
+
+    def test_mixed_typed_and_untyped_in_one_route(self):
+        @get("/coerce/{category}/{id:int}/{price:float}")
+        async def handler(req, res): pass
+        _, params = Router.match("GET", "/coerce/widgets/42/9.5")
+        assert params["category"] == "widgets" and isinstance(params["category"], str)
+        assert params["id"] == 42 and isinstance(params["id"], int)
+        assert params["price"] == 9.5 and isinstance(params["price"], float)
+
+    def test_request_param_sees_coerced_value(self):
+        # The coerced value flows through to request.param() too — Router.match
+        # feeds request._route_params, which param() reads.
+        from tina4_python.core.request import Request
+
+        @get("/coerce/req/{id:int}")
+        async def handler(req, res): pass
+        _, params = Router.match("GET", "/coerce/req/99")
+        req = Request()
+        req._route_params = params
+        req.merge_route_params()
+        assert req.param("id") == 99
+        assert isinstance(req.param("id"), int)
 
 
 class TestAuthDecorators:

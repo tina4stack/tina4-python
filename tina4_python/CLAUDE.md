@@ -529,7 +529,7 @@ TINA4_SESSION_SAMESITE=Lax               # SameSite attribute for session cookie
 
 ### Authentication & Security
 - Use `Auth.hash_password()` from `tina4_python.auth` to hash passwords — never use hashlib directly.
-- Use `Auth.check_password(hash, password)` from `tina4_python.auth` to verify passwords.
+- Use `Auth.check_password(password, hash)` from `tina4_python.auth` to verify passwords.
 
 ## Templates (Twig)
 

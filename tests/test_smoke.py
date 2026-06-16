@@ -109,7 +109,9 @@ class TestRouteDiscovery:
 
         route, params = Router.match("GET", "/smoke/items/42")
         assert route is not None
-        assert params["id"] == "42"
+        # {id:int} is coerced to a Python int (parity with Ruby cast_param)
+        assert params["id"] == 42
+        assert isinstance(params["id"], int)
 
 
 # ── 3. ORM ──────────────────────────────────────────────────────
@@ -639,7 +641,9 @@ class TestRouterAdvanced:
 
         route, params = Router.match("GET", "/smoke/price/19.99")
         assert route is not None
-        assert params["price"] == "19.99"
+        # {price:float} is coerced to a Python float (parity with Ruby cast_param)
+        assert params["price"] == 19.99
+        assert isinstance(params["price"], float)
 
     def test_greedy_path_param(self):
         @get("/smoke/files/{filepath:path}")
@@ -657,8 +661,11 @@ class TestRouterAdvanced:
 
         route, params = Router.match("GET", "/smoke/widgets/42")
         assert route is not None
+        # Untyped {category} stays a str; typed {id:int} is coerced to int
         assert params["category"] == "widgets"
-        assert params["id"] == "42"
+        assert isinstance(params["category"], str)
+        assert params["id"] == 42
+        assert isinstance(params["id"], int)
 
     def test_router_all_returns_registered_routes(self):
         @get("/smoke/listed")
