@@ -125,6 +125,89 @@ class TestPersistentMode:
         assert db.cache_stats()["size"] == 1
 
 
+class TestNoCacheBypass:
+    """Per-query ``no_cache=True`` bypasses the DB query cache entirely —
+    no lookup, no store — and runs straight against the DB. Works in both
+    cache modes. The canonical API mirrored by PHP/Ruby/Node.
+
+    Proof that the DB is really re-hit: we mutate the table via the raw
+    adapter (``db.adapter.execute``), which does NOT go through
+    ``Database.execute`` and therefore does NOT invalidate the cache. A
+    normal read then keeps returning the stale cached value while a
+    ``no_cache=True`` read sees the new value.
+    """
+
+    def test_no_cache_skips_cached_value_request_mode(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        db = _make_db(tmp_path)
+        # Normal read caches the current rows.
+        first = db.fetch_all("SELECT n FROM t ORDER BY id")
+        assert [r["n"] for r in first] == ["a", "b"]
+        # Mutate behind the cache's back (raw adapter — no invalidation).
+        db.adapter.execute("UPDATE t SET n = 'Z' WHERE n = 'a'")
+        # Normal read still returns the STALE cached value (proves cache active).
+        cached = db.fetch_all("SELECT n FROM t ORDER BY id")
+        assert [r["n"] for r in cached] == ["a", "b"]
+        # no_cache=True bypasses the cache and hits the DB → sees the new value.
+        fresh = db.fetch_all("SELECT n FROM t ORDER BY id", no_cache=True)
+        assert [r["n"] for r in fresh] == ["Z", "b"]
+
+    def test_no_cache_read_does_not_populate_cache(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        db = _make_db(tmp_path)
+        # A no_cache read must NOT store anything.
+        db.fetch("SELECT * FROM t", no_cache=True)
+        assert db.cache_stats()["size"] == 0
+        # And it doesn't count as a normal miss/hit either.
+        assert db.cache_stats()["hits"] == 0
+        # A subsequent normal read is a fresh miss that DOES populate.
+        db.fetch("SELECT * FROM t")
+        assert db.cache_stats()["size"] == 1
+
+    def test_fetch_one_no_cache_bypasses(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        db = _make_db(tmp_path)
+        row = db.fetch_one("SELECT n FROM t WHERE id = 1")  # caches 'a'
+        assert row["n"] == "a"
+        db.adapter.execute("UPDATE t SET n = 'Z' WHERE id = 1")
+        assert db.fetch_one("SELECT n FROM t WHERE id = 1")["n"] == "a"  # stale cached
+        assert db.fetch_one("SELECT n FROM t WHERE id = 1", no_cache=True)["n"] == "Z"
+
+    def test_no_cache_bypasses_persistent_mode(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_DB_CACHE", "true")
+        monkeypatch.setenv("TINA4_DB_CACHE_BACKEND", "memory")
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        db = _make_db(tmp_path)
+        # Use fetch_all consistently so populate + reads share one cache key
+        # (the key encodes limit/offset, and fetch_all defaults limit=0 vs
+        # fetch's limit=100).
+        first = db.fetch_all("SELECT n FROM t ORDER BY id")  # populate persistent cache
+        assert [r["n"] for r in first] == ["a", "b"]
+        assert db.cache_stats()["size"] == 1
+        db.adapter.execute("UPDATE t SET n = 'Z' WHERE id = 1")
+        # Persistent cache still serves the stale rows on a normal read.
+        cached = db.fetch_all("SELECT n FROM t ORDER BY id")
+        assert [r["n"] for r in cached] == ["a", "b"]
+        # no_cache=True bypasses persistent cache too.
+        fresh = db.fetch_all("SELECT n FROM t ORDER BY id", no_cache=True)
+        assert [r["n"] for r in fresh] == ["Z", "b"]
+        # And the no_cache read added nothing new to the persistent store.
+        assert db.cache_stats()["size"] == 1
+
+    def test_normal_cached_path_still_works(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        db = _make_db(tmp_path)
+        db.fetch("SELECT * FROM t")   # miss -> populates
+        db.fetch("SELECT * FROM t")   # hit
+        stats = db.cache_stats()
+        assert stats["hits"] >= 1
+        assert stats["size"] == 1
+
+
 class TestPersistentBackend:
     """Persistent mode (TINA4_DB_CACHE=true) routes through the unified
     CacheBackend (TINA4_DB_CACHE_BACKEND); the cached DatabaseResult is

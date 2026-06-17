@@ -880,7 +880,10 @@ class ResponseCache:
                 self._hits += 1
                 # Move to end (most recently used)
                 self._store.move_to_end(cache_key)
-                return request, response(entry.body, entry.status_code)
+                remaining = max(0, int(round(entry.expires_at - time.monotonic())))
+                hit_response = response(entry.body, entry.status_code)
+                self._set_cache_headers(hit_response, "HIT", remaining)
+                return request, hit_response
 
             self._misses += 1
 
@@ -930,6 +933,11 @@ class ResponseCache:
             self._store[cache_key] = entry
             self._store.move_to_end(cache_key)
 
+        # The handler ran for this request → MISS. Advertise the TTL the
+        # entry was just stored with so clients can see how long the next
+        # HIT will live.
+        self._set_cache_headers(response, "MISS", cache_ttl)
+
         return request, response
 
     # ── Public API ───────────────────────────────────────────────
@@ -964,6 +972,31 @@ class ResponseCache:
         self._backend.clear()
 
     # ── Internal helpers ─────────────────────────────────────────
+
+    @staticmethod
+    def _set_cache_headers(response, status: str, ttl: int) -> None:
+        """Set ``X-Cache`` / ``X-Cache-TTL`` on the outgoing response.
+
+        ``status`` is ``"HIT"`` (served from cache) or ``"MISS"`` (handler
+        ran). ``ttl`` is the entry's remaining seconds on a HIT, or the
+        configured TTL on a MISS. We deliberately do NOT emit
+        ``Cache-Control`` — browser-cache directives are the app's call.
+
+        Works with the framework ``Response`` (``add_header``) and with any
+        object exposing a ``headers`` dict, so middleware stubs and other
+        response shapes keep working.
+        """
+        if response is None:
+            return
+        headers = {"X-Cache": status, "X-Cache-TTL": str(int(ttl))}
+        setter = getattr(response, "add_header", None) or getattr(response, "header", None)
+        if callable(setter):
+            for name, value in headers.items():
+                setter(name, value)
+            return
+        existing = getattr(response, "headers", None)
+        if isinstance(existing, dict):
+            existing.update(headers)
 
     @staticmethod
     def _get_route_ttl(request) -> int | None:

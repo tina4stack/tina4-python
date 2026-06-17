@@ -519,7 +519,7 @@ class Database:
         return adapter.execute_many(sql, params_list)
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 100, offset: int = 0) -> DatabaseResult:
+              limit: int = 100, offset: int = 0, no_cache: bool = False) -> DatabaseResult:
         """Fetch rows with pagination.
 
         v3.13.11 (issue #49 Gap 3): mirror :meth:`execute` and capture
@@ -527,25 +527,32 @@ class Database:
         ``db.get_error()`` returning ``None`` even though the adapter
         had stored the failure on its own ``last_error``. Callers had
         no way to read the cause via the public API.
+
+        ``no_cache=True`` bypasses the query cache for this one call — no
+        lookup and no store — and runs the query straight against the DB.
+        Works in either cache mode (request-scoped auto-cache or persistent
+        DB cache). The default (``False``) preserves today's behaviour.
         """
-        if self._cache_enabled:
+        if self._cache_enabled and not no_cache:
             key = self._cache_key(sql + f":L{limit}:S{offset}", params)
             cached = self._cache_get(key)
             if cached is not None:
                 with self._cache_lock:
                     self._cache_hits += 1
                 return cached
-            adapter = self._get_adapter()
-            try:
-                result = adapter.fetch(sql, params, limit, offset)
-                self.last_error = None
-            except Exception:
-                self.last_error = getattr(adapter, "last_error", None) or self.last_error
-                raise
+            result = self._fetch_direct(sql, params, limit, offset)
             self._cache_set(key, result)
             with self._cache_lock:
                 self._cache_misses += 1
             return result
+        return self._fetch_direct(sql, params, limit, offset)
+
+    def _fetch_direct(self, sql: str, params: list, limit: int, offset: int) -> DatabaseResult:
+        """Run a fetch straight against the adapter — no cache lookup or store.
+
+        Shared by the cached and ``no_cache`` paths so error capture stays
+        identical regardless of caching.
+        """
         adapter = self._get_adapter()
         try:
             result = adapter.fetch(sql, params, limit, offset)
@@ -556,7 +563,7 @@ class Database:
             raise
 
     def fetch_all(self, sql: str, params: list = None,
-                  limit: int = 0, offset: int = 0) -> list[dict]:
+                  limit: int = 0, offset: int = 0, no_cache: bool = False) -> list[dict]:
         """Fetch ALL rows and return the records list directly.
 
         Symmetric with ``fetch_one``. For the common case where you just
@@ -572,26 +579,32 @@ class Database:
         name says ``fetch_all``, so it returns all matching rows. Pre-v3.13.12
         silently truncated to 100. Pass an explicit ``limit=N`` to cap.
 
-        Returns ``[]`` (not ``None``) when no rows match.
+        ``no_cache=True`` bypasses the query cache for this one call (see
+        :meth:`fetch`). Returns ``[]`` (not ``None``) when no rows match.
         """
-        return self.fetch(sql, params, limit, offset).records
+        return self.fetch(sql, params, limit, offset, no_cache=no_cache).records
 
-    def fetch_one(self, sql: str, params: list = None) -> dict | None:
-        if self._cache_enabled:
+    def fetch_one(self, sql: str, params: list = None, no_cache: bool = False) -> dict | None:
+        """Fetch a single row as a dict, or ``None`` when no row matches.
+
+        ``no_cache=True`` bypasses the query cache for this one call — no
+        lookup and no store — and runs the query straight against the DB
+        (see :meth:`fetch`). The default (``False``) preserves today's
+        behaviour.
+        """
+        if self._cache_enabled and not no_cache:
             key = self._cache_key(sql + ":ONE", params)
             cached = self._cache_get(key)
             if cached is not None:
                 with self._cache_lock:
                     self._cache_hits += 1
                 return cached
-            adapter = self._get_adapter()
-            result = adapter.fetch_one(sql, params)
+            result = self._get_adapter().fetch_one(sql, params)
             self._cache_set(key, result)
             with self._cache_lock:
                 self._cache_misses += 1
             return result
-        adapter = self._get_adapter()
-        return adapter.fetch_one(sql, params)
+        return self._get_adapter().fetch_one(sql, params)
 
     def insert(self, table: str, data: dict | list) -> DatabaseResult:
         if self._cache_enabled:

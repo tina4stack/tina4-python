@@ -25,13 +25,22 @@ class MockRequest:
 
 
 class MockResponse:
-    """Callable response stub that records what was returned."""
+    """Callable response stub that records what was returned.
+
+    Carries a ``headers`` dict and an ``add_header`` method so it mirrors the
+    real framework ``Response`` closely enough to assert on ``X-Cache``.
+    """
 
     def __init__(self, body="", status_code=200, content_type="application/json"):
         self.body = body
         self.status_code = status_code
         self.content_type = content_type
+        self.headers = {}
         self._called_with = None
+
+    def add_header(self, name, value):
+        self.headers[name] = value
+        return self
 
     def __call__(self, body=None, status_code=None):
         """Simulate response(body, status_code) call."""
@@ -326,6 +335,89 @@ class TestCacheHit:
         # On miss, the original response is returned unchanged
         assert returned_resp is resp
         assert hasattr(req, "_cache_key")
+
+
+# ── X-Cache headers ───────────────────────────────────────────────
+
+
+class TestXCacheHeaders:
+    """ResponseCache advertises X-Cache: MISS/HIT and X-Cache-TTL."""
+
+    def test_miss_then_hit_headers(self):
+        cache = ResponseCache(ttl=60)
+
+        # First request — handler runs → MISS.
+        req = MockRequest(method="GET", url="/api/x")
+        resp = MockResponse()
+        cache.before_cache(req, resp)
+        resp_out = MockResponse(body='{"v": 1}', status_code=200)
+        _, after = cache.after_cache(req, resp_out)
+        assert after.headers["X-Cache"] == "MISS"
+        assert after.headers["X-Cache-TTL"] == "60"
+
+        # Second request — served from cache → HIT.
+        req2 = MockRequest(method="GET", url="/api/x")
+        resp2 = MockResponse()
+        _, hit = cache.before_cache(req2, resp2)
+        assert hit.body == '{"v": 1}'
+        assert hit.headers["X-Cache"] == "HIT"
+        # Remaining TTL present and within (0, 60].
+        assert "X-Cache-TTL" in hit.headers
+        assert 0 < int(hit.headers["X-Cache-TTL"]) <= 60
+
+    def test_no_cache_control_header_emitted(self):
+        """We must NOT set Cache-Control — that's the app's call."""
+        cache = ResponseCache(ttl=60)
+        req = MockRequest(method="GET", url="/api/nocc")
+        resp = MockResponse()
+        cache.before_cache(req, resp)
+        resp_out = MockResponse(body="x", status_code=200)
+        _, after = cache.after_cache(req, resp_out)
+        assert "Cache-Control" not in after.headers
+
+    def test_route_ttl_reflected_in_header(self):
+        cache = ResponseCache(ttl=300)
+        req = MockRequest(method="GET", url="/api/rt", route_meta={"cache_max_age": 42})
+        resp = MockResponse()
+        cache.before_cache(req, resp)
+        resp_out = MockResponse(body="x", status_code=200)
+        _, after = cache.after_cache(req, resp_out)
+        assert after.headers["X-Cache"] == "MISS"
+        assert after.headers["X-Cache-TTL"] == "42"
+
+    def test_uncached_status_gets_no_headers(self):
+        """A 404 isn't stored, so no X-Cache header is added in after_cache."""
+        cache = ResponseCache(ttl=60)
+        req = MockRequest(method="GET", url="/api/404")
+        resp = MockResponse()
+        cache.before_cache(req, resp)
+        resp_out = MockResponse(body="missing", status_code=404)
+        _, after = cache.after_cache(req, resp_out)
+        assert "X-Cache" not in after.headers
+
+    def test_headers_on_real_framework_response(self):
+        """End-to-end against the real Response: headers land in build_headers()."""
+        from tina4_python.core.response import Response
+
+        cache = ResponseCache(ttl=60)
+
+        # MISS — handler produced a real Response.
+        req = MockRequest(method="GET", url="/api/real")
+        cache.before_cache(req, Response())
+        handler_resp = Response()(  # call to populate body/content
+            {"hello": "world"}, 200
+        )
+        _, after = cache.after_cache(req, handler_resp)
+        miss_headers = dict(after.build_headers())
+        assert miss_headers[b"X-Cache"] == b"MISS"
+        assert miss_headers[b"X-Cache-TTL"] == b"60"
+
+        # HIT — before_cache returns a fresh Response carrying the headers.
+        req2 = MockRequest(method="GET", url="/api/real")
+        _, hit = cache.before_cache(req2, Response())
+        hit_headers = dict(hit.build_headers())
+        assert hit_headers[b"X-Cache"] == b"HIT"
+        assert b"X-Cache-TTL" in hit_headers
 
 
 # ── after_cache stores response ──────────────────────────────────
