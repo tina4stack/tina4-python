@@ -1979,6 +1979,25 @@ async def _api_reload(request, response):
     except Exception as e:
         Log.error(f"Re-discover on reload failed: {e}")
 
+    # WebSocket-primary reload: push an instant message to every browser
+    # connected on /__dev_reload. The toolbar client (and the dev-admin
+    # dashboard) act on this immediately — the mtime poll above is only a
+    # fallback for when the socket is down. CSS changes swap stylesheets;
+    # everything else triggers a full page reload. We normalise the wire
+    # `type` to "css"/"reload" so both clients react (the dashboard only
+    # listens for reload/change/css), but the HTTP response still echoes the
+    # caller's original type. Wrapped so a broadcast failure (or zero
+    # clients) never 500s the reload endpoint.
+    ws_type = "css" if reload_type == "css" else "reload"
+    try:
+        from tina4_python.core.server import _ws_manager
+        await _ws_manager.broadcast(
+            json.dumps({"type": ws_type, "file": _reload_file[0], "mtime": _reload_mtime[0]}),
+            path="/__dev_reload",
+        )
+    except Exception as e:
+        Log.error(f"Dev-reload WebSocket broadcast failed: {e}")
+
     return response({"ok": True, "type": reload_type})
 
 
@@ -2150,16 +2169,22 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
 </script>
 <script>
 {'(function(){})();' if no_reload else f"""(function(){{
-    var _t4_mtime=0,_t4_css_exts=['.css','.scss'],_t4_debounce=null;
+    // WebSocket-primary dev reloader. The running server re-imports changed
+    // src/ modules in-process and pushes a {{type,file,mtime}} message over
+    // /__dev_reload — no respawn, instant refresh. The mtime poll below is a
+    // FALLBACK only, started when the socket is down and stopped on connect.
+    var _t4_css_exts=['.css','.scss'],_t4_debounce=null;
     var _t4_interval=parseInt('{poll_interval_ms}')||3000;
+    var _t4_ws=null,_t4_poll_timer=null,_t4_mtime=null;
     function _t4_apply(d){{
-        var f=d.file||'';
-        var isCss=_t4_css_exts.some(function(e){{return f.endsWith(e)}});
+        d=d||{{}};
+        var f=d.file||'',t=d.type||'';
+        var isCss=t==='css'||_t4_css_exts.some(function(e){{return f.endsWith(e)}});
         if(isCss){{
             var links=document.querySelectorAll('link[rel="stylesheet"]');
             links.forEach(function(l){{
                 var href=l.getAttribute('href');
-                if(href){{l.setAttribute('href',href.split('?')[0]+'?_t4='+d.mtime)}}
+                if(href){{l.setAttribute('href',href.split('?')[0]+'?_t4='+(d.mtime||Date.now()))}}
             }});
         }}else{{
             location.reload();
@@ -2167,15 +2192,39 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     }}
     function _t4_poll(){{
         fetch('/__dev/api/mtime').then(function(r){{return r.json()}}).then(function(d){{
-            if(!_t4_mtime){{_t4_mtime=d.mtime;return;}}
-            if(d.mtime>_t4_mtime){{
+            if(_t4_mtime===null){{_t4_mtime=d.mtime;return;}}
+            if(d.mtime!==_t4_mtime){{
                 _t4_mtime=d.mtime;
                 if(_t4_debounce)clearTimeout(_t4_debounce);
                 _t4_debounce=setTimeout(function(){{_t4_apply(d);}},500);
             }}
         }}).catch(function(){{}});
     }}
-    setInterval(_t4_poll,_t4_interval);
+    function _t4_startPoll(){{
+        if(_t4_poll_timer)return;
+        _t4_mtime=null;
+        _t4_poll_timer=setInterval(_t4_poll,_t4_interval);
+    }}
+    function _t4_stopPoll(){{
+        if(_t4_poll_timer){{clearInterval(_t4_poll_timer);_t4_poll_timer=null;}}
+    }}
+    function _t4_connect(){{
+        var url=(location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/__dev_reload';
+        try{{_t4_ws=new WebSocket(url);}}catch(_){{_t4_startPoll();return;}}
+        _t4_ws.addEventListener('open',function(){{_t4_stopPoll();}});
+        _t4_ws.addEventListener('message',function(ev){{
+            var d=null;
+            try{{d=typeof ev.data==='string'?JSON.parse(ev.data):null;}}catch(_){{}}
+            if(!d)return;
+            if(d.type==='reload'||d.type==='change'||d.type==='css'){{
+                if(_t4_debounce)clearTimeout(_t4_debounce);
+                _t4_debounce=setTimeout(function(){{_t4_apply(d);}},150);
+            }}
+        }});
+        _t4_ws.addEventListener('close',function(){{_t4_ws=null;_t4_startPoll();setTimeout(_t4_connect,2000);}});
+        _t4_ws.addEventListener('error',function(){{try{{_t4_ws&&_t4_ws.close();}}catch(_){{}}}});
+    }}
+    _t4_connect();
 }})();"""}
 function tina4VersionModal(){{
     var m=document.getElementById('tina4-ver-modal');

@@ -48,12 +48,30 @@ def background(callback, interval: float = 1.0):
     _background_tasks.append({"callback": callback, "interval": interval})
 
 
+# module_name → source-file mtime at the last (re)import. Drives the
+# changed-file detection in ``_auto_discover``: a file whose mtime is newer
+# than the recorded value is re-executed in place, so editing an existing
+# route hot-reloads on /__dev/api/reload without a server restart. Files we
+# have never imported are absent from the map.
+_discovered_mtimes: dict[str, float] = {}
+
+
 def _auto_discover(root_dir: str = "src"):
     """Auto-import all .py files in ``root_dir`` to trigger route decorators.
 
-    Idempotent and re-runnable: skips modules already in ``sys.modules`` so
-    re-discovery on /__dev/api/reload is cheap. New files added after server
-    boot get picked up on the next reload signal.
+    Idempotent and re-runnable so re-discovery on /__dev/api/reload is cheap:
+
+    * **New** module (not in ``sys.modules``) → import it, record its mtime.
+    * **Changed** module (in ``sys.modules`` and its source mtime is newer than
+      the recorded value) → re-execute it (``del sys.modules`` + re-import) so
+      edits to an existing route take effect. The Router replaces same-(method,
+      path) registrations, so the re-imported handler wins instead of being
+      shadowed by the stale one.
+    * **Unchanged** module → skipped (keeps the re-runnable property cheap).
+
+    Only modules discovered under ``root_dir`` are ever re-imported — framework
+    (``tina4_python.*``) and third-party modules are never deleted/re-imported,
+    which would be catastrophic for shared singletons and class identity.
 
     Import failures are recorded to ``data/.broken/`` so /health surfaces them
     instead of swallowing them into a console line nobody reads.
@@ -61,6 +79,14 @@ def _auto_discover(root_dir: str = "src"):
     root = Path(root_dir).resolve()
     if not root.is_dir():
         return
+
+    # The package prefix every discovered module shares (e.g. "src"). The
+    # del+reimport path is gated on this so we can never evict a framework or
+    # third-party module from sys.modules even if a name somehow collides.
+    try:
+        root_pkg = root.relative_to(Path.cwd()).parts[0]
+    except (ValueError, IndexError):
+        root_pkg = root.name
 
     # Folders to skip — non-Python sub-trees inside src/.
     skip = {"public", "templates", "scss", "locales", "icons"}
@@ -91,9 +117,32 @@ def _auto_discover(root_dir: str = "src"):
         try:
             rel = py_file.relative_to(Path.cwd()).with_suffix("")
             module_name = ".".join(rel.parts)
+            try:
+                current_mtime = py_file.stat().st_mtime
+            except OSError:
+                current_mtime = 0.0
+
             if module_name not in sys.modules:
+                # New module — import and remember its mtime.
                 importlib.import_module(module_name)
+                _discovered_mtimes[module_name] = current_mtime
                 Log.debug(f"Loaded: {module_name}")
+            elif current_mtime > _discovered_mtimes.get(module_name, 0.0):
+                # Changed module — re-execute so edits to an existing route
+                # take effect in-process. Scope guard: only ever evict a module
+                # that lives under our discovery package. Deleting a
+                # tina4_python.* / third-party module would break shared
+                # singletons and class identity — never do that here.
+                if module_name == root_pkg or module_name.startswith(root_pkg + "."):
+                    del sys.modules[module_name]
+                    importlib.import_module(module_name)
+                    _discovered_mtimes[module_name] = current_mtime
+                    Log.info(f"Reloaded changed module: {module_name}")
+                else:
+                    # Out-of-scope module changed — record mtime so we don't
+                    # keep re-evaluating it, but do not re-import it.
+                    _discovered_mtimes[module_name] = current_mtime
+            # Unchanged module → skip (keeps re-discovery cheap/idempotent).
         except Exception as e:
             Log.error(f"Failed to load {py_file}: {e}")
             _record_broken_import(py_file, e)
@@ -632,6 +681,30 @@ function deployGallery(name, tryUrl) {{
 from tina4_python.websocket import WebSocketConnection, WebSocketManager
 
 _ws_manager = WebSocketManager()
+
+
+async def _dev_reload_ws(connection, event, data):
+    """WebSocket handler for the dev-reload channel (/__dev_reload).
+
+    Connections are kept open and held by ``_ws_manager`` on the
+    ``/__dev_reload`` path so ``POST /__dev/api/reload`` can broadcast an
+    instant reload to every browser. The framework never pushes anything from
+    the client side — incoming frames are ignored; the open socket is the
+    whole point. This restores the documented WebSocket-primary DevReload
+    design (the dashboard SPA and the injected dev-toolbar both connect here).
+    """
+    return
+
+
+_dev_reload_ws_registered = [False]
+
+
+def _register_dev_reload_ws() -> None:
+    """Register the /__dev_reload WebSocket route once (debug mode only)."""
+    if _dev_reload_ws_registered[0]:
+        return
+    Router.websocket("/__dev_reload", _dev_reload_ws)
+    _dev_reload_ws_registered[0] = True
 
 
 async def _handle_asgi_websocket(scope: dict, receive, send):
@@ -2183,8 +2256,12 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     is_debug = is_truthy(os.environ.get("TINA4_DEBUG", ""))
 
     # File watching is handled by the Rust CLI (tina4 serve). The framework
-    # only needs to receive POST /__dev/api/reload and update the mtime counter
-    # so the browser's polling fallback triggers a refresh. No internal watcher.
+    # only needs to receive POST /__dev/api/reload, re-import the changed
+    # module in-process, and push an instant reload over the /__dev_reload
+    # WebSocket. The mtime counter at /__dev/api/mtime is the polling
+    # fallback for when that socket is down. No internal watcher.
+    if is_debug:
+        _register_dev_reload_ws()
 
     prod = None
     if not is_debug:

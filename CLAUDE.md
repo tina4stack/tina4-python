@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.13.35 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.36 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -51,7 +51,7 @@ When using Firebird as the database engine:
 
 Set `TINA4_DEBUG=true` in `.env` to enable:
 
-- **Live-reload** — Browser auto-refreshes when `.py`, `.twig`, `.html`, `.js` files change
+- **Live-reload** — Browser auto-refreshes when `.py`, `.twig`, `.html`, `.js` files change. For `.py` files, the change is also re-imported in-process: new files register and **changed existing files hot-reload their handlers live** (mtime-tracked, `src/` only), so the refreshed page serves fresh code without a server restart
 - **CSS hot-reload** — SCSS/CSS changes refresh stylesheets without full page reload
 - **SCSS auto-compile** — `.scss` files in `src/scss/` compiled to `src/public/css/` on save
 - **Error overlay** — Runtime errors display a rich, syntax-highlighted overlay in the browser
@@ -62,7 +62,7 @@ The `tina4` Rust CLI is the sole file watcher for the Tina4 stack — there is n
 
 1. Rust CLI (`tina4 serve`) watches `src/`, `migrations/`, `.env`. Noise is filtered (Access/Metadata events, `__pycache__`, `.git`, `node_modules`, `logs`, `.log`/`.db*`/`.swp`/`.pyc` files) and a real mtime check defeats overlayfs spurious events.
 2. On a real change, the CLI POSTs `/__dev/api/reload` to the running framework.
-3. The framework bumps its in-memory reload counter and (a) broadcasts `{type: 'reload'}` over WebSocket at `/__dev_reload`, and (b) exposes the counter at `GET /__dev/api/mtime` for the polling fallback.
+3. The framework re-runs auto-discover (registers new `src/` files and re-imports changed ones in-process — `src/` modules only, framework modules never), bumps its in-memory reload counter, then (a) broadcasts `{type: 'reload'}` over WebSocket at `/__dev_reload`, and (b) exposes the counter at `GET /__dev/api/mtime` for the polling fallback.
 4. The browser's dev toolbar JS listens on the WS (primary) and polls `/__dev/api/mtime` every 3s (fallback). On a change it reloads the page, or swaps the stylesheet if the change was CSS.
 
 No configuration needed. If you're running without the Rust CLI (e.g. Docker), set `TINA4_OVERRIDE_CLIENT=true` — in that mode there is no automatic reload.

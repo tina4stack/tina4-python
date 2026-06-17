@@ -10,10 +10,9 @@ These cover the gotchas that bit real users:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
-import shutil
-import tempfile
 import textwrap
 from pathlib import Path
 
@@ -27,6 +26,9 @@ from tina4_python.core.router import Router
 def _reset_routes() -> None:
     """Routes live in a module-level list; clear it so tests don't bleed."""
     _router._routes.clear()
+    # The mtime map is module-level state on the server too — wipe it so a
+    # leftover key from a prior test can't mask a "changed" file in this one.
+    _server._discovered_mtimes.clear()
 
 
 @pytest.fixture
@@ -157,6 +159,153 @@ def test_zero_routes_warning_when_routes_folder_has_undecorated_files(project, c
     captured = capsys.readouterr()
     combined = (captured.out + captured.err).lower()
     assert "no routes registered" in combined or "no routes" in combined
+
+
+def _bump_mtime(path: Path, seconds: float = 2.0) -> None:
+    """Push a file's mtime forward so the change is visible even when the
+    filesystem's mtime resolution is coarse (HFS+ is 1s; some CI tmpfs is
+    worse). Re-writing the body in the same second can leave mtime unchanged,
+    which would make the reload silently no-op — so we set it explicitly."""
+    future = path.stat().st_mtime + seconds
+    os.utime(path, (future, future))
+
+
+async def _call_handler(route) -> str:
+    """Invoke a discovered route handler with throwaway request/response stubs
+    and return whatever value it passed to ``response(...)``. Handlers in these
+    tests do ``return response("V1")`` so the captured arg is the version
+    string we assert on — this is how we prove the LIVE handler changed, not
+    just that some route exists."""
+    captured = {}
+
+    class _Resp:
+        def __call__(self, body, *a, **k):
+            captured["body"] = body
+            return body
+
+    await route["handler"](object(), _Resp())
+    return captured.get("body")
+
+
+def test_changed_route_file_is_reimported_on_rediscover(project):
+    """The core hot-reload contract: editing an EXISTING route file and
+    re-running discovery makes the Router resolve to the NEW handler, not the
+    stale in-memory one. This is the bug behind 'live-reload serves stale
+    bytes' — discovery used to skip anything already in sys.modules."""
+    path = _write_route(project, "ver", """
+        from tina4_python.core.router import get
+        @get("/ver")
+        async def ver(request, response):
+            return response("V1")
+    """)
+
+    _server._auto_discover("src")
+    route, _ = Router.match("GET", "/ver")
+    assert route is not None
+    assert asyncio.run(_call_handler(route)) == "V1"
+
+    # Edit the same file to return V2, with a strictly newer mtime.
+    path.write_text(textwrap.dedent("""
+        from tina4_python.core.router import get
+        @get("/ver")
+        async def ver(request, response):
+            return response("V2")
+    """))
+    _bump_mtime(path)
+
+    _server._auto_discover("src")
+
+    # Still exactly one route for /ver — the replace semantics collapsed the
+    # re-registration onto the existing slot instead of appending a duplicate.
+    assert sum(1 for r in Router.get_routes() if r["path"] == "/ver") == 1
+    route2, _ = Router.match("GET", "/ver")
+    assert asyncio.run(_call_handler(route2)) == "V2"
+
+
+def test_unchanged_file_is_not_reimported_on_second_pass(project):
+    """An unchanged file must NOT be re-executed on a second discovery pass —
+    that keeps reload cheap and preserves module-level side effects. We prove
+    it with a side-effect counter incremented at import time: it must stay 1
+    across two passes when the file hasn't changed."""
+    import builtins
+    # A counter that survives re-import only if the module body re-runs.
+    builtins._tina4_import_counter = 0
+    _write_route(project, "once", """
+        import builtins
+        builtins._tina4_import_counter += 1
+        from tina4_python.core.router import get
+        @get("/once")
+        async def once(request, response):
+            return response("ok")
+    """)
+
+    _server._auto_discover("src")
+    assert builtins._tina4_import_counter == 1
+    mtime_after_first = _server._discovered_mtimes["src.routes.once"]
+
+    # Second pass, file untouched — body must not re-run.
+    _server._auto_discover("src")
+    assert builtins._tina4_import_counter == 1
+    assert _server._discovered_mtimes["src.routes.once"] == mtime_after_first
+    del builtins._tina4_import_counter
+
+
+def test_framework_modules_are_never_reimported(project):
+    """Scope guard: even if a tina4_python.* module's source mtime looks newer
+    than what we recorded, discovery must never del+reimport it. We seed the
+    mtime map with a framework module at mtime 0 (so 'now' looks newer) and
+    assert its sys.modules identity is unchanged after a discovery pass."""
+    import tina4_python.core.router as _r
+    sentinel = sys.modules["tina4_python.core.router"]
+    _server._discovered_mtimes["tina4_python.core.router"] = 0.0
+
+    _write_route(project, "guard", """
+        from tina4_python.core.router import get
+        @get("/guard")
+        async def guard(request, response):
+            return response("ok")
+    """)
+    _server._auto_discover("src")
+
+    # The framework module object is the very same instance — never evicted.
+    assert sys.modules["tina4_python.core.router"] is sentinel
+    assert _r is sentinel
+
+
+def test_changed_route_served_through_api_reload_endpoint(project):
+    """End-to-end: POST /__dev/api/reload triggers re-discovery, and a changed
+    existing route is then served by its NEW handler. This exercises the exact
+    path the Rust CLI hits on every file save."""
+    from tina4_python.dev_admin import _api_reload
+
+    path = _write_route(project, "e2e", """
+        from tina4_python.core.router import get
+        @get("/e2e")
+        async def e2e(request, response):
+            return response("V1")
+    """)
+    _server._auto_discover("src")
+    assert asyncio.run(_call_handler(Router.match("GET", "/e2e")[0])) == "V1"
+
+    path.write_text(textwrap.dedent("""
+        from tina4_python.core.router import get
+        @get("/e2e")
+        async def e2e(request, response):
+            return response("V2")
+    """))
+    _bump_mtime(path)
+
+    # Drive the real reload endpoint with a minimal request/response pair.
+    class _Req:
+        body = {"type": "reload", "file": "src/routes/e2e.py"}
+
+    class _Resp:
+        def __call__(self, body, *a, **k):
+            return body
+
+    asyncio.run(_api_reload(_Req(), _Resp()))
+
+    assert asyncio.run(_call_handler(Router.match("GET", "/e2e")[0])) == "V2"
 
 
 def test_import_failure_writes_a_broken_sentinel(project):

@@ -340,6 +340,20 @@ class Router:
             "swagger_meta": swagger_meta or options.get("swagger_meta", {}),
             "template": template or options.get("template"),
         }
+        # Replace semantics: re-registering the same (method, path) overwrites
+        # the existing entry in place rather than appending a second one.
+        # This is what makes dev hot-reload work — when a changed module is
+        # re-imported, its @get("/x") decorator runs again with a fresh handler,
+        # and ``match()`` returns the FIRST match, so a stale leftover would
+        # otherwise shadow the new handler forever. Overwriting keeps the
+        # registry free of duplicates and ensures the latest handler wins.
+        # Distinct (method, path) pairs are untouched — only an exact dup
+        # collapses onto the prior slot, preserving its position/order.
+        for i, existing in enumerate(_routes):
+            if existing["method"] == m and existing["path"] == path:
+                _routes[i] = route
+                Log.debug(f"Route replaced: {m} {path} (auth={'required' if auth_required else 'public'})")
+                return RouteRef(route)
         _routes.append(route)
         Log.debug(f"Route registered: {m} {path} (auth={'required' if auth_required else 'public'})")
         return RouteRef(route)

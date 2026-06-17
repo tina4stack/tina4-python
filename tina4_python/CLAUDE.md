@@ -409,9 +409,18 @@ Set `TINA4_DEBUG=true` in `.env` to enable development features:
 - **CSS hot-reload** — SCSS/CSS changes refresh stylesheets without full page reload
 - **SCSS auto-compile** — `.scss` files in `src/scss/` are compiled to `src/public/css/` on save
 - **Error overlay** — Runtime errors display a rich, syntax-highlighted overlay in the browser
-- **Route re-discovery** — `POST /__dev/api/reload` re-runs auto-discover, so new files in `src/routes/`, `src/orm/`, or `src/app/` register without a server restart. Existing modules are NOT re-imported — for code changes inside an already-loaded file, restart the server.
+- **Route re-discovery & hot-reload** — `POST /__dev/api/reload` re-runs auto-discover. New files in `src/routes/`, `src/orm/`, or `src/app/` register without a server restart, AND changed `.py` files under `src/` are re-imported in-process (mtime-tracked) so editing an existing route hot-reloads its handler live — no restart needed. The Router replaces a re-registered `(method, path)` in place, so the fresh handler wins instead of being shadowed by the stale one. Only `src/` modules are ever re-imported; framework (`tina4_python.*`) modules are never touched. Honest caveat: a symbol imported BY NAME into another *unchanged* module (e.g. `from src.orm.User import User` inside a route file that itself didn't change) or an ORM class identity captured across modules may still need a restart — the edited file re-executes, but a different module that grabbed the old reference earlier keeps it until it too re-imports.
 
-DevReload connects via WebSocket at `/__dev_reload`. No configuration needed.
+### How DevReload works (WebSocket-primary)
+
+DevReload is **WebSocket-primary** — the reload is instant, not polled:
+
+1. The `tina4` Rust CLI watches `src/`, `migrations/`, `.env` and, on a real change, POSTs `/__dev/api/reload` to the **running** server. The CLI does **not** restart the worker process.
+2. The server re-runs auto-discover — registering new `src/` files and re-importing changed ones **in-process** (mtime-tracked, `src/` only; framework modules never), so the worker keeps the same PID — then bumps its reload counter.
+3. The server **broadcasts** a JSON message `{type, file, mtime}` to every browser connected on the `/__dev_reload` WebSocket (`type` is `"css"` for stylesheet changes, else `"reload"`). The dev-toolbar client and the dev-admin dashboard both connect here and act on it instantly: CSS changes swap `<link rel=stylesheet>` hrefs with a cache-bust query; everything else does a full `location.reload()`.
+4. **Poll is fallback only.** The injected toolbar client stops polling the moment the socket connects, and only restarts the `/__dev/api/mtime` poll (every 3 s) when the socket drops — reconnecting after ~2 s. In normal operation there is no polling.
+
+The `/__dev_reload` WebSocket route is registered automatically when `TINA4_DEBUG=true`. No configuration needed. Running without the Rust CLI (e.g. Docker, `TINA4_OVERRIDE_CLIENT=true`) means no automatic reload.
 
 ## Routing
 
