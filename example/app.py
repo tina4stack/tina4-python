@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tina4_python.core import run
 from tina4_python.core.server import background
 from tina4_python.database import Database
-from tina4_python.orm import orm_bind
+from tina4_python.orm import bind_database
 from tina4_python.migration import Migration
 from tina4_python.container import Container
 from tina4_python.queue import Queue
@@ -53,7 +53,7 @@ frond.add_global("t", _t)
 
 # ── Database Setup ─────────────────────────────────────────────
 db = container.get("db")
-orm_bind(db)
+bind_database(db)
 Migration(db).migrate()
 
 # ── Auto-CRUD for admin REST endpoints ─────���───────────────────
