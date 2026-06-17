@@ -42,6 +42,8 @@ cd my-app && tina4 serve
 
 Open http://localhost:7146 — your app is running.
 
+> **Two CLIs:** `tina4` is the cross-language Rust CLI — it scaffolds projects, runs the dev server, and watches files. `tina4python` is the Python package's own CLI for project tasks (`migrate`, `seed`, `generate`, `test`). This guide uses `tina4` to scaffold and run, and `tina4python` for those tasks.
+
 <details>
 <summary><strong>Without the Tina4 CLI (Docker / CI only)</strong></summary>
 
@@ -130,7 +132,7 @@ pip install tina4-python[dev-reload]  # Hot-patching via jurigged
 ### 1. Create a project
 
 ```bash
-tina4python init my-app
+tina4 init python my-app
 cd my-app
 ```
 
@@ -662,13 +664,13 @@ Frond.clear_cache()
 ## Environment
 
 ```bash
-SECRET=your-jwt-secret
+TINA4_SECRET=your-jwt-secret
 TINA4_DATABASE_URL=sqlite:///data/app.db
 TINA4_DEBUG=true                     # Enable dev toolbar, error overlay
 TINA4_LOG_LEVEL=ALL                  # ALL, DEBUG, INFO, WARNING, ERROR
 TINA4_LOCALE=en                      # en, fr, af, zh, ja, es
-TINA4_SESSION_BACKEND=SessionFileHandler
-SWAGGER_TITLE=My API
+TINA4_SESSION_BACKEND=file           # file (default), redis, valkey, mongodb, database
+TINA4_SWAGGER_TITLE=My API
 ```
 
 ## AI Tool Integration
