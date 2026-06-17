@@ -307,17 +307,28 @@ class TestGetAPIHandlers:
         # lands so review catches silent growth.
         #
         # Current: 41 base + 13 (file I/O × 6, deps × 2, git × 1,
-        #          mcp × 2, scaffold × 2) + 7 (ollama proxy alias,
-        #          5 service-health probes, thoughts stub) + 6 (5
+        #          mcp REST shim × 2, scaffold × 2) + 7 (ollama proxy
+        #          alias, 5 service-health probes, thoughts stub) + 6 (5
         #          supervise/* proxies + /execute) + 5 (docs/search,
         #          docs/class, docs/method, docs/index,
         #          docs/.well-known.json — Live API RAG endpoints
         #          per plan/v3/22-LIVE-API-RAG.md) + 2 (/threads list
         #          and /threads/* prefix for the thread sidebar) + 2
         #          (/__feedback/widget.js bundle + /__feedback/api/turn
-        #          customer-feedback intake) = 76.
+        #          customer-feedback intake) + 3 (MCP JSON-RPC endpoint:
+        #          /__dev/mcp, /__dev/mcp/message, /__dev/mcp/sse) = 79.
         handlers = get_api_handlers()
-        assert len(handlers) == 76
+        assert len(handlers) == 79
+
+    def test_mcp_jsonrpc_endpoint_registered(self):
+        # The JSON-RPC + SSE surface real MCP clients speak — must be
+        # mounted so /__dev/mcp is actually reachable as an MCP server.
+        handlers = get_api_handlers()
+        assert handlers["/__dev/mcp"] [0] == "POST"
+        assert handlers["/__dev/mcp/message"][0] == "POST"
+        assert handlers["/__dev/mcp/sse"][0] == "GET"
+        for path in ("/__dev/mcp", "/__dev/mcp/message", "/__dev/mcp/sse"):
+            assert callable(handlers[path][1])
 
     def test_tables_handler_registered(self):
         handlers = get_api_handlers()

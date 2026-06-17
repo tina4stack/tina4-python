@@ -485,6 +485,12 @@ def get_api_handlers() -> dict:
         # @mcp_tool decorator appear in both immediately.
         "/__dev/api/mcp/tools": ("GET", _api_mcp_tools),
         "/__dev/api/mcp/call": ("POST", _api_mcp_call),
+        # JSON-RPC + SSE surface for real MCP clients (Claude Desktop/Code).
+        # Same registry as the REST shim above; this is what makes /__dev/mcp
+        # actually reachable as an MCP server (previously defined but unmounted).
+        "/__dev/mcp": ("POST", _api_mcp_rpc),
+        "/__dev/mcp/message": ("POST", _api_mcp_rpc),
+        "/__dev/mcp/sse": ("GET", _api_mcp_sse),
         # ── Scaffold REST shim ──
         # Wraps the tina4python CLI's `generate <kind> <name>` so the
         # + Route / + Model / + Migration / + Middleware buttons work
@@ -2859,6 +2865,46 @@ async def _api_mcp_call(request, response):
         return response({"ok": False, "name": name, "error": f"argument error: {exc}"}, 400)
     except Exception as exc:
         return response({"ok": False, "name": name, "error": str(exc)}, 500)
+
+
+# ─── MCP JSON-RPC + SSE endpoint ───────────────────────────────────
+#
+# The protocol surface real MCP clients (Claude Desktop/Code) speak —
+# JSON-RPC 2.0 over the HTTP+SSE transport. Mounted on the running dev
+# server so each `tina4 serve`d project exposes its OWN endpoint, giving
+# an AI agent live access scoped to that project. Shares the same
+# `_default_server` tool registry as the REST shim above, so every
+# @mcp_tool shows up on both surfaces.
+
+async def _api_mcp_rpc(request, response):
+    """POST — the JSON-RPC endpoint. Mounted at /__dev/mcp and
+    /__dev/mcp/message. Forwards to the default MCP server's
+    handle_message() and returns the JSON-RPC response; notifications
+    (no id) yield an empty 204.
+    """
+    import json as _json
+    from tina4_python.mcp import _get_default_server, is_enabled
+    if not is_enabled():
+        return response({"error": "MCP disabled"}, 404)
+    server = _get_default_server()
+    body = request.body
+    raw = body if isinstance(body, (dict, str)) else str(body)
+    result = server.handle_message(raw)
+    if not result:
+        return response("", 204)
+    return response(_json.loads(result))
+
+
+async def _api_mcp_sse(request, response):
+    """GET — SSE handshake. Emits the `endpoint` event telling the client
+    where to POST JSON-RPC messages, per the MCP HTTP+SSE transport.
+    """
+    from tina4_python.mcp import is_enabled
+    if not is_enabled():
+        return response({"error": "MCP disabled"}, 404)
+    base = request.path.rsplit("/sse", 1)[0]
+    sse = f"event: endpoint\ndata: {base}/message\n\n"
+    return response(sse, 200, "text/event-stream")
 
 
 # ─── Scaffold REST shim ────────────────────────────────────────────

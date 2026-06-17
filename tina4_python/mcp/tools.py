@@ -259,7 +259,7 @@ def register_dev_tools(server):
         """List all registered routes with methods and paths."""
         from tina4_python.core.router import Router
         routes = []
-        for route in Router._routes:
+        for route in Router.get_routes():
             routes.append({
                 "method": route.get("method", ""),
                 "path": route.get("path", ""),

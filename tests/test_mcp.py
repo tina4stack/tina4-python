@@ -298,3 +298,125 @@ class TestSecurity:
             assert "error" in resp, f"Expected error response, got: {resp}"
         finally:
             os.chdir(old_cwd)
+
+
+class TestDevToolCoverage:
+    """The live-access surface: exercise the registered dev tools so an AI
+    agent calling them over MCP gets real, well-formed results."""
+
+    def _server(self):
+        from tina4_python.mcp import McpServer
+        from tina4_python.mcp.tools import register_dev_tools
+        server = McpServer("/test-tools", name="Tool Coverage")
+        register_dev_tools(server)
+        return server
+
+    def _call(self, server, name, arguments=None):
+        return json.loads(server.handle_message({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments or {}},
+        }))
+
+    def test_expected_tools_registered(self):
+        server = self._server()
+        listed = json.loads(server.handle_message({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {},
+        }))
+        names = {t["name"] for t in listed["result"]["tools"]}
+        # The core live-access surface an agent relies on.
+        for expected in (
+            "database_query", "database_execute", "database_tables", "database_columns",
+            "file_read", "file_write", "file_list",
+            "route_list", "migration_status", "plan_list", "plan_create",
+            "log_tail", "docs_list", "project_overview",
+        ):
+            assert expected in names, f"missing tool: {expected}"
+
+    def test_each_tool_has_object_schema(self):
+        server = self._server()
+        listed = json.loads(server.handle_message({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {},
+        }))
+        assert len(listed["result"]["tools"]) >= 20
+        for tool in listed["result"]["tools"]:
+            assert tool["name"]
+            assert "description" in tool
+            assert tool["inputSchema"]["type"] == "object"
+
+    def test_safe_readonly_tools_execute(self):
+        # Each returns MCP-shaped {content:[{type:text,...}]} with no
+        # protocol-level error — proves the tool runs end to end.
+        server = self._server()
+        for name, args in [
+            ("route_list", {}),
+            ("file_list", {"path": "."}),
+            ("plan_list", {}),
+            ("log_tail", {}),
+            ("docs_list", {}),
+        ]:
+            resp = self._call(server, name, args)
+            assert "result" in resp, f"{name} errored: {resp.get('error')}"
+            content = resp["result"]["content"]
+            assert content and content[0]["type"] == "text"
+
+    def test_file_read_returns_real_content(self):
+        server = self._server()
+        resp = self._call(server, "file_read", {"path": "pyproject.toml"})
+        assert "result" in resp, f"file_read errored: {resp.get('error')}"
+        assert "tina4" in resp["result"]["content"][0]["text"].lower()
+
+    def test_unknown_tool_errors(self):
+        server = self._server()
+        resp = self._call(server, "does_not_exist", {})
+        assert "error" in resp
+
+
+class TestMcpEndpointMounted:
+    """The dev-server endpoint that makes /__dev/mcp reachable as an MCP
+    server (the mount fix). Drives the dev_admin handlers directly."""
+
+    def _resp(self):
+        captured = []
+        def resp(data, code=200, content_type=None):
+            captured.append((data, code, content_type))
+            return data
+        resp.captured = captured
+        return resp
+
+    def _req(self, body=None, path="/__dev/mcp/message"):
+        return type("Req", (), {"body": body or {}, "path": path, "params": {}})()
+
+    async def test_initialize_round_trip(self, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        from tina4_python.dev_admin import _api_mcp_rpc
+        req = self._req({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+        result = await _api_mcp_rpc(req, self._resp())
+        assert result["result"]["serverInfo"]["name"]
+        assert result["result"]["protocolVersion"]
+
+    async def test_tools_list_round_trip(self, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        from tina4_python.dev_admin import _api_mcp_rpc
+        req = self._req({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
+        result = await _api_mcp_rpc(req, self._resp())
+        assert len(result["result"]["tools"]) > 5
+
+    async def test_sse_handshake(self, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        from tina4_python.dev_admin import _api_mcp_sse
+        resp = self._resp()
+        await _api_mcp_sse(self._req(path="/__dev/mcp/sse"), resp)
+        data, code, content_type = resp.captured[-1]
+        assert code == 200
+        assert content_type == "text/event-stream"
+        assert "event: endpoint" in data
+        assert "/__dev/mcp/message" in data
+
+    async def test_disabled_returns_404(self, monkeypatch):
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        monkeypatch.setenv("TINA4_MCP", "false")
+        from tina4_python.dev_admin import _api_mcp_rpc
+        resp = self._resp()
+        await _api_mcp_rpc(self._req({"jsonrpc": "2.0", "id": 1, "method": "ping"}), resp)
+        _, code, _ = resp.captured[-1]
+        assert code == 404
