@@ -34,13 +34,13 @@ from tina4_python.queue.kafka_backend import KafkaBackend
 from tina4_python.queue.mongo_backend import MongoBackend
 
 
-def _resolve_backend(topic: str, backend: str | None, max_retries: int):
+def _resolve_backend(topic: str, backend: str | None, max_retries: int, retry_backoff: int = 0):
     """Resolve which backend adapter to use."""
     chosen = backend or os.environ.get("TINA4_QUEUE_BACKEND", "file")
     chosen = chosen.lower().strip()
 
     if chosen in ("file", "default", "lite"):
-        return LiteBackend(topic, max_retries)
+        return LiteBackend(topic, max_retries, retry_backoff)
     elif chosen == "rabbitmq":
         return RabbitMQBackend(topic, max_retries)
     elif chosen == "kafka":
@@ -63,10 +63,13 @@ class Queue:
     """
 
     def __init__(self, topic: str = "default", max_retries: int = 3,
-                 backend: str | None = None):
+                 backend: str | None = None, retry_backoff: int = 0):
         self.topic = topic
         self.max_retries = max_retries
-        self._backend = _resolve_backend(topic, backend, max_retries)
+        # Seconds to wait before a failed job is re-attempted (file backend).
+        # Default 0 = retry on the very next pop()/consume() iteration.
+        self.retry_backoff = retry_backoff
+        self._backend = _resolve_backend(topic, backend, max_retries, retry_backoff)
 
     def push(self, data: dict, priority: int = 0, delay_seconds: int = 0):
         """Add a job to the queue. Returns job ID."""
@@ -208,12 +211,12 @@ class Queue:
 
         old_topic = self.topic
         self.topic = topic
-        self._backend = _resolve_backend(topic, None, self.max_retries)
+        self._backend = _resolve_backend(topic, None, self.max_retries, self.retry_backoff)
         try:
             return self.push(data, priority, delay_seconds)
         finally:
             self.topic = old_topic
-            self._backend = _resolve_backend(old_topic, None, self.max_retries)
+            self._backend = _resolve_backend(old_topic, None, self.max_retries, self.retry_backoff)
 
     def consume(self, topic: str = None, job_id: str = None, poll_interval: float = 1.0,
                 iterations: int = 0, batch_size: int = 1):
@@ -309,6 +312,7 @@ class Queue:
                             data=job_data["data"],
                             priority=job_data.get("priority", 0),
                             attempts=job_data.get("attempts", 0),
+                            error=job_data.get("error"),
                         )
                 except (json.JSONDecodeError, FileNotFoundError):
                     continue

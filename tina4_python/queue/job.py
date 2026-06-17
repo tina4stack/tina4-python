@@ -20,11 +20,20 @@ class Job:
         return self.payload
 
     def complete(self):
-        """Mark job as completed."""
+        """Mark job as completed. Terminal — the job is done and removed."""
         self.queue._backend.complete(self)
 
     def fail(self, error: str = ""):
-        """Mark job as failed. Will be retried if attempts < max_retries."""
+        """Record a failed attempt.
+
+        Increments ``attempts``. If the job still has retries left
+        (``attempts < max_retries``) it is automatically re-enqueued to the
+        pending queue, so the next ``pop()``/``consume()`` picks it up again
+        (after the queue's ``retry_backoff`` delay, if any). Once it has been
+        attempted ``max_retries`` times it is moved to the dead-letter store,
+        where ``queue.dead_letters()`` returns it. No manual ``retry_failed()``
+        is required.
+        """
         self.queue._backend.fail(self, error)
 
     def reject(self, reason: str = ""):

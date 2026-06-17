@@ -23,18 +23,50 @@ class TestQueue:
         assert queue.pop() is None
 
     def test_fifo_order(self, queue):
+        # Equal priority (default 0) → oldest-first, so insertion order holds.
         queue.push({"order": 1})
         queue.push({"order": 2})
         assert queue.pop().data["order"] == 1
         assert queue.pop().data["order"] == 2
 
     def test_priority(self, queue):
+        # Higher priority pops first even though it was pushed later.
         queue.push({"task": "low"}, priority=0)
         queue.push({"task": "high"}, priority=10)
-        # File backend pops in file order (FIFO), priority is stored but
-        # not used for ordering in the simple file backend
+        assert queue.pop().data["task"] == "high"
+        assert queue.pop().data["task"] == "low"
+
+    def test_priority_beats_older_lower_priority_job(self, queue):
+        # A higher-priority job pops before a lower-priority OLDER job.
+        queue.push({"task": "old_low"}, priority=1)
+        queue.push({"task": "mid"}, priority=5)
+        queue.push({"task": "new_high"}, priority=10)
+        order = [queue.pop().data["task"], queue.pop().data["task"], queue.pop().data["task"]]
+        assert order == ["new_high", "mid", "old_low"]
+
+    def test_priority_tie_broken_oldest_first(self, queue):
+        # Same priority → oldest (earliest created_at) first.
+        queue.push({"n": 1}, priority=5)
+        queue.push({"n": 2}, priority=5)
+        queue.push({"n": 3}, priority=5)
+        assert [queue.pop().data["n"], queue.pop().data["n"], queue.pop().data["n"]] == [1, 2, 3]
+
+    def test_priority_pop_batch_orders_by_priority(self, queue):
+        queue.push({"t": "low"}, priority=0)
+        queue.push({"t": "high"}, priority=10)
+        queue.push({"t": "mid"}, priority=5)
+        jobs = queue.pop_batch(3)
+        assert [j.data["t"] for j in jobs] == ["high", "mid", "low"]
+
+    def test_delayed_high_priority_skipped_until_available(self, queue):
+        # A delayed high-priority job must not jump ahead while still delayed;
+        # an available lower-priority job pops first.
+        queue.push({"t": "delayed_high"}, priority=100, delay_seconds=3600)
+        queue.push({"t": "available_low"}, priority=0)
         job = queue.pop()
-        assert job is not None
+        assert job.data["t"] == "available_low"
+        # The delayed job is still not available
+        assert queue.pop() is None
 
     def test_size(self, queue):
         assert queue.size() == 0
@@ -55,18 +87,21 @@ class TestQueue:
         # File adapter deletes on pop, complete is a no-op
         assert queue.size("pending") == 0
 
-    def test_fail(self, queue):
+    def test_fail_requeues_while_retries_remain(self, queue):
+        # Default max_retries=3: a single failure (attempts=1 < 3) is
+        # automatically re-enqueued to pending — NOT moved to dead-letter.
         queue.push({"task": "broken"})
         job = queue.pop()
         job.fail("something went wrong")
-        # Failed job goes to {topic}/failed/ directory
+        # Not dead yet: failed/ directory stays empty
         failed_dir = os.path.join(os.environ["TINA4_QUEUE_PATH"], "test", "failed")
         failed_files = [f for f in os.listdir(failed_dir) if f.endswith(".queue-data")]
-        assert len(failed_files) == 1
-        with open(os.path.join(failed_dir, failed_files[0])) as f:
-            data = json.load(f)
-        assert data["error"] == "something went wrong"
-        assert data["attempts"] == 1
+        assert len(failed_files) == 0
+        # The job is back in the pending queue with attempts incremented
+        assert queue.size("pending") == 1
+        requeued = queue.pop()
+        assert requeued.attempts == 1
+        assert requeued.error == "something went wrong"
 
     def test_retry(self, queue):
         queue.push({"task": "retry_me"})
@@ -86,13 +121,46 @@ class TestQueue:
         queue.push({"task": "later"}, delay_seconds=3600)
         assert queue.pop() is None  # Not available yet
 
-    def test_retry_failed(self, queue):
-        queue.push({"task": "fail_me"})
-        job = queue.pop()
-        job.fail("error")
-        count = queue.retry_failed()
+    def test_fail_then_consume_retries_then_dead_letters(self, tmp_path, monkeypatch):
+        # A job that fails on every attempt is retried exactly max_retries
+        # times via a plain consume loop, then lands in dead_letters — with
+        # NO manual retry_failed() call.
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "auto_dl"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="auto", max_retries=3)
+        q.push({"task": "always_fails"})
+
+        attempts = 0
+        for job in q.consume("auto", poll_interval=0):
+            attempts += 1
+            job.fail(f"boom {attempts}")
+
+        assert attempts == 3  # executed max_retries times total
+        assert q.size("pending") == 0
+        dead = q.dead_letters()
+        assert len(dead) == 1
+        assert dead[0].attempts == 3
+        assert dead[0].payload["task"] == "always_fails"
+
+    def test_retry_failed_revives_dead_letter_under_raised_limit(self, tmp_path, monkeypatch):
+        # retry_failed() re-queues dead-letter jobs that are under the limit.
+        # With the original max_retries they have exhausted retries, so a
+        # raised limit is needed to give them another chance.
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "revive"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="revive", max_retries=1)
+        q.push({"task": "fail_me"})
+        job = q.pop()
+        job.fail("error")  # attempts=1 >= max_retries=1 → dead-lettered
+        assert len(q.dead_letters()) == 1
+        assert q.size("pending") == 0
+
+        # At the original limit, nothing is revived
+        assert q.retry_failed() == 0
+        # Raise the limit → the dead-letter is re-queued to pending
+        count = q.retry_failed(max_retries=5)
         assert count == 1
-        assert queue.size("pending") == 1
+        assert q.size("pending") == 1
 
     def test_dead_letters(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "dead_queue"))
@@ -126,12 +194,15 @@ class TestQueue:
     def test_retry_by_id(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "retry_id_queue"))
         monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
-        q = Queue(topic="rtopic", max_retries=3)
+        # max_retries=1 so a single failure dead-letters the job, making it
+        # addressable by id for an explicit retry.
+        q = Queue(topic="rtopic", max_retries=1)
         q.push({"task": "retry_me"})
         job = q.pop()
-        job.fail("oops")
+        job.fail("oops")  # attempts=1 >= 1 → dead-lettered
         job_id = job.id
-        # Retry by ID
+        assert len(q.dead_letters()) == 1
+        # Explicit retry by ID revives the dead-letter into pending
         assert q.retry(job_id) is True
         assert q.size("pending") == 1
         # Non-existent ID returns False
@@ -223,13 +294,14 @@ class TestBackendSwitching:
         assert q.size("pending") == 0
 
     def test_job_fail_via_adapter(self, tmp_path, monkeypatch):
-        """Job.fail() delegates through the backend adapter."""
+        """Job.fail() delegates through the backend adapter — once retries are
+        exhausted (max_retries=1) the job is written to the dead-letter dir."""
         monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "fail_queue"))
         monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
-        q = Queue(topic="adapter_fail")
+        q = Queue(topic="adapter_fail", max_retries=1)
         q.push({"task": "break"})
         job = q.pop()
-        job.fail("oops")
+        job.fail("oops")  # attempts=1 >= max_retries=1 → dead-letter
         failed_dir = os.path.join(str(tmp_path / "fail_queue"), "adapter_fail", "failed")
         failed_files = [f for f in os.listdir(failed_dir) if f.endswith(".queue-data")]
         assert len(failed_files) == 1
@@ -247,28 +319,34 @@ class TestBackendSwitching:
         assert retried.attempts == 1
 
     def test_full_lifecycle(self, tmp_path, monkeypatch):
-        """Full push/pop/complete/fail/retry lifecycle."""
+        """Full push/pop/complete/fail lifecycle.
+
+        fail() auto-requeues while retries remain, so the failed job is back
+        in pending without any manual retry_failed() call.
+        """
         monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "lifecycle_queue"))
         monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
-        q = Queue(topic="lifecycle")
+        q = Queue(topic="lifecycle", max_retries=3)
 
         # Push
         q.push({"step": 1})
         q.push({"step": 2})
         assert q.size() == 2
 
-        # Pop and complete
+        # Pop and complete (terminal)
         job1 = q.pop()
         job1.complete()
-
-        # Pop and fail
-        job2 = q.pop()
-        job2.fail("error")
-
-        # Retry failed
-        count = q.retry_failed()
-        assert count == 1
         assert q.size("pending") == 1
+
+        # Pop and fail — auto re-enqueued (attempts=1 < 3)
+        job2 = q.pop()
+        assert q.size("pending") == 0
+        job2.fail("error")
+        assert q.size("pending") == 1
+
+        # The requeued job carries the incremented attempt count
+        requeued = q.pop()
+        assert requeued.attempts == 1
 
 
 class TestProduceConsume:
@@ -309,14 +387,21 @@ class TestProduceConsume:
         # The other two are still pending
         assert q.size("pending") == 2
 
-    def test_reject_with_reason(self, queue):
-        """reject(reason) marks job as failed with the reason."""
-        queue.push({"task": "bad_data"})
-        job = queue.pop()
+    def test_reject_with_reason(self, tmp_path, monkeypatch):
+        """reject(reason) is an alias for fail(): with retries exhausted
+        (max_retries=1) the job is dead-lettered carrying the reason."""
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "reject_queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="reject_test", max_retries=1)
+        q.push({"task": "bad_data"})
+        job = q.pop()
         job.reject("Invalid email address")
-        failed_dir = os.path.join(os.environ["TINA4_QUEUE_PATH"], "test", "failed")
+        failed_dir = os.path.join(str(tmp_path / "reject_queue"), "reject_test", "failed")
         failed_files = [f for f in os.listdir(failed_dir) if f.endswith(".queue-data")]
         assert len(failed_files) == 1
+        dead = q.dead_letters()
+        assert len(dead) == 1
+        assert dead[0].error == "Invalid email address"
 
     def test_email_failure_scenario(self, tmp_path, monkeypatch):
         """Simulate: queue email, SMTP fails, job gets failed with reason."""
@@ -337,31 +422,30 @@ class TestProduceConsume:
         assert len(failed_files) == 1
 
     def test_email_retry_then_dead_letter(self, tmp_path, monkeypatch):
-        """Simulate: email fails 3 times, exceeds max_retries, becomes dead letter."""
+        """Email fails on every attempt → retried automatically up to
+        max_retries, then dead-lettered. No manual retry_failed() needed."""
         monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "retry_queue"))
         monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
         q = Queue(topic="emails", max_retries=2)
         q.push({"to": "user@example.com", "subject": "Welcome"})
 
-        # Attempt 1: fail
+        # Attempt 1: fail → auto re-enqueued (attempts=1 < 2)
         job = q.pop()
         job.fail("SMTP timeout attempt 1")
-
-        # Retry
-        q.retry_failed()
         assert q.size("pending") == 1
+        assert len(q.dead_letters()) == 0
 
-        # Attempt 2: fail again — now at 2 attempts = max_retries
+        # Attempt 2: fail again → attempts=2 == max_retries → dead-lettered
         job = q.pop()
+        assert job.attempts == 1  # carries prior failure count
         job.fail("SMTP timeout attempt 2")
 
-        # retry_failed should NOT re-queue because attempts >= max_retries
-        requeued = q.retry_failed()
-        assert requeued == 0
-
-        # Verify it's a dead letter
+        # Nothing left pending; the job is now a dead letter
+        assert q.size("pending") == 0
         dead = q.dead_letters()
         assert len(dead) == 1
+        assert dead[0].attempts == 2
+        assert dead[0].error == "SMTP timeout attempt 2"
 
     def test_consume_complete_happy_path(self, tmp_path, monkeypatch):
         """Simulate: queue email, send succeeds, job completed."""
@@ -374,6 +458,81 @@ class TestProduceConsume:
             job.complete()
 
         assert q.size("pending") == 0
+
+
+class TestAutoRetryDeadLetter:
+    """The documented promise: a consume loop that calls job.fail() on error
+    retries up to max_retries, then dead-letters — with no manual
+    retry_failed()."""
+
+    def test_persistent_failure_retried_exactly_max_retries_then_dead_letter(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "auto"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="work", max_retries=3)
+        q.push({"job": "doomed"})
+
+        executions = 0
+        # poll_interval=0 → single-pass drain that also re-drains re-enqueued
+        # jobs, so the whole retry sequence runs in one for-loop.
+        for job in q.consume("work", poll_interval=0):
+            executions += 1
+            try:
+                raise RuntimeError("always fails")
+            except RuntimeError as exc:
+                job.fail(str(exc))
+
+        # Executed exactly max_retries times total, then stopped (dead-lettered)
+        assert executions == 3
+        assert q.size("pending") == 0
+        dead = q.dead_letters()
+        assert len(dead) == 1
+        assert dead[0].attempts == 3
+        assert dead[0].payload["job"] == "doomed"
+        assert dead[0].error == "always fails"
+
+    def test_success_on_second_attempt_is_not_dead_lettered(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "flaky"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="flaky", max_retries=3)
+        q.push({"job": "flaky"})
+
+        executions = 0
+        for job in q.consume("flaky", poll_interval=0):
+            executions += 1
+            if executions == 1:
+                job.fail("transient error")   # re-enqueued
+            else:
+                job.complete()                 # succeeds on 2nd attempt
+                break
+
+        assert executions == 2
+        assert q.size("pending") == 0
+        assert len(q.dead_letters()) == 0
+
+    def test_no_manual_retry_failed_needed(self, tmp_path, monkeypatch):
+        # Prove retry_failed() is never called and the job still dead-letters.
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "nomanual"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="nomanual", max_retries=2)
+        q.push({"job": "x"})
+        for job in q.consume("nomanual", poll_interval=0):
+            job.fail("boom")
+        assert len(q.dead_letters()) == 1
+
+    def test_retry_backoff_delays_reattempt(self, tmp_path, monkeypatch):
+        # With a backoff, a failed job is re-enqueued but not immediately
+        # available, so an immediate pop() returns None.
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "backoff"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        q = Queue(topic="backoff", max_retries=3, retry_backoff=3600)
+        q.push({"job": "slow_retry"})
+        job = q.pop()
+        job.fail("needs backoff")
+        # Re-enqueued (still pending) but delayed → not yet poppable
+        assert q.size("pending") == 1
+        assert q.pop() is None
 
 
 # --- batch tests ---
