@@ -280,6 +280,15 @@ When helping a developer build with Tina4, always follow these:
    - The reactive **tina4-js** frontend is the exception, not the rule — use it only for a decoupled SPA (see "Two Ways to Build"); for normal server-rendered apps, Tina4CSS + frond.js is the path.
 
 
+7. **Render a template with `response.render(name, data)` — there is NO `template()` function.**
+   This is the #1 hallucination: AI writes `response.html(template("login.twig"))` and gets
+   `NameError: name 'template' is not defined` at request time. `template` is not a callable —
+   it's the `@template` route DECORATOR. To render a page, use:
+   ```python
+   return response.render("login.twig", {"title": "Login"})   # renders + responds
+   ```
+   Need the rendered HTML as a string? `from tina4_python.frond import Frond; Frond.render("login.twig", data)`.
+
 ### @noauth Is a Last Resort — Not a Default
 
 `@noauth()` makes a write route (POST/PUT/PATCH/DELETE) publicly accessible with NO authentication.
