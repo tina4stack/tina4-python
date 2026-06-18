@@ -335,6 +335,115 @@ def full_analysis(root: str = "src") -> dict:
     return result
 
 
+# ── Top Offenders (CLI + dashboard) ───────────────────────────
+
+# Severity ranking for sorting (higher = more severe).
+_SEVERITY_RANK = {"error": 2, "warn": 1, "info": 0}
+
+
+def offenders(root: str = "src", top: int = 20) -> dict:
+    """Rank the worst code-quality issues into a single "top offenders" list.
+
+    Reuses ``full_analysis()`` (does NOT re-analyze). Each offender is a dict:
+        {"file", "line", "kind", "severity", "score", "detail"}
+
+    Rules (one offender per matching condition):
+      - function complexity > 10  → kind "complexity"
+            severity "error" if >20 else "warn"; score = complexity
+      - file loc > 500            → kind "large_file" (warn); score = loc/100
+      - file functions > 20       → kind "too_many_functions" (warn); score = functions/4
+      - file maintainability < 40 → kind "low_maintainability"
+            severity "error" if <20 else "warn"; score = (50 - mi)
+      - file has_tests is False   → kind "untested" (info); score = loc/100
+
+    Sorted by (severity rank, score) DESCENDING and truncated to ``top``.
+
+    Returns ``{"offenders": [...], "summary": {...}}`` where summary carries the
+    headline numbers the CLI prints (files_analyzed, total_functions,
+    avg_complexity, avg_maintainability, scan_mode, scan_root, and the total
+    offender count before truncation).
+    """
+    analysis = full_analysis(root)
+    if "error" in analysis:
+        return {"offenders": [], "summary": {"error": analysis["error"]}}
+
+    items: list[dict] = []
+
+    # Function-level: cyclomatic complexity.
+    for fn in analysis.get("most_complex_functions", []):
+        cc = fn["complexity"]
+        if cc > 10:
+            items.append({
+                "file": fn["file"],
+                "line": fn["line"],
+                "kind": "complexity",
+                "severity": "error" if cc > 20 else "warn",
+                "score": float(cc),
+                "detail": f"{fn['name']} — cyclomatic complexity {cc}",
+            })
+
+    # File-level rules.
+    for fm in analysis.get("file_metrics", []):
+        path = fm["path"]
+        loc = fm["loc"]
+        funcs = fm["functions"]
+        mi = fm["maintainability"]
+
+        if loc > 500:
+            items.append({
+                "file": path,
+                "line": 1,
+                "kind": "large_file",
+                "severity": "warn",
+                "score": loc / 100,
+                "detail": f"{loc} LOC (max 500)",
+            })
+
+        if funcs > 20:
+            items.append({
+                "file": path,
+                "line": 1,
+                "kind": "too_many_functions",
+                "severity": "warn",
+                "score": funcs / 4,
+                "detail": f"{funcs} functions (max 20)",
+            })
+
+        if mi < 40:
+            items.append({
+                "file": path,
+                "line": 1,
+                "kind": "low_maintainability",
+                "severity": "error" if mi < 20 else "warn",
+                "score": 50 - mi,
+                "detail": f"maintainability index {mi} (min 40)",
+            })
+
+        if fm["has_tests"] is False:
+            items.append({
+                "file": path,
+                "line": 1,
+                "kind": "untested",
+                "severity": "info",
+                "score": loc / 100,
+                "detail": "no referencing test",
+            })
+
+    items.sort(key=lambda o: (_SEVERITY_RANK[o["severity"]], o["score"]), reverse=True)
+
+    summary = {
+        "files_analyzed": analysis["files_analyzed"],
+        "total_functions": analysis["total_functions"],
+        "avg_complexity": analysis["avg_complexity"],
+        "avg_maintainability": analysis["avg_maintainability"],
+        "scan_mode": analysis["scan_mode"],
+        "scan_root": analysis["scan_root"],
+        "total_offenders": len(items),
+    }
+
+    return {"offenders": items[:top], "summary": summary}
+
+
 def file_detail(file_path: str) -> dict:
     """Detailed metrics for a single file."""
     p = Path(file_path)
