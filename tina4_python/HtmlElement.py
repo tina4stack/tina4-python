@@ -17,6 +17,25 @@ Usage:
 import html as _html
 
 
+class Raw(str):
+    """Marker for trusted, pre-sanitised HTML that must render UNESCAPED.
+
+    String/scalar children of an HTMLElement are HTML-escaped by default to
+    prevent stored/reflected XSS. Wrap a value in Raw() to opt out of escaping
+    when (and only when) you have already sanitised it yourself.
+
+        HTMLElement("div")("<b>x</b>")        # &lt;b&gt;x&lt;/b&gt;  (escaped)
+        HTMLElement("div")(Raw("<b>x</b>"))   # <b>x</b>              (raw)
+
+    Alias: SafeString.
+    """
+    pass
+
+
+# Alias — some callers/frameworks prefer the SafeString name (matches Frond).
+SafeString = Raw
+
+
 class HTMLElement:
     """A single HTML element that renders itself and its children to a string."""
 
@@ -65,8 +84,13 @@ class HTMLElement:
 
         for child in self.children:
             if isinstance(child, HTMLElement):
+                # Nested elements render themselves (already escape their own children)
+                parts.append(str(child))
+            elif isinstance(child, Raw):
+                # Explicitly trusted markup — emit unescaped
                 parts.append(str(child))
             else:
+                # Plain string/scalar child — escape to defeat XSS
                 parts.append(_html.escape(str(child), quote=True))
 
         parts.append(f"</{self.tag}>")

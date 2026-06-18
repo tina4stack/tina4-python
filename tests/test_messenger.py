@@ -314,8 +314,10 @@ class TestIMAPRead:
 
     @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
     def test_read_not_found(self, mock_imap_cls):
+        # A non-existent UID on a real server returns OK with empty data —
+        # that is "no such message", not a protocol error, so read() -> {}.
         mock_conn = MagicMock()
-        mock_conn.fetch.return_value = ("NO", [None])
+        mock_conn.fetch.return_value = ("OK", [None])
         mock_imap_cls.return_value = mock_conn
 
         m = Messenger(imap_host="imap.test.com", username="user", password="pass")

@@ -43,8 +43,10 @@ Supported:
 """
 import os
 import re
+import ssl
 import json
 import time
+import socket
 import smtplib
 import imaplib
 import mimetypes
@@ -63,6 +65,38 @@ class MessengerError(Exception):
     pass
 
 
+class MessengerConnectionError(MessengerError):
+    """Raised when an IMAP read fails to connect, authenticate, or speak the
+    protocol. Distinct from a successful fetch that simply has no messages —
+    that still returns an empty result, NOT an error.
+    """
+    pass
+
+
+# Errors that mean "we could not talk to the mail server", as opposed to
+# "we talked fine and the mailbox is empty". These must fail loud, never be
+# silently swallowed into an empty result.
+_IMAP_CONNECTION_ERRORS = (
+    imaplib.IMAP4.error,   # protocol / auth errors (covers .abort, .readonly)
+    OSError,               # socket errors, connection refused/reset, DNS, timeout
+    ssl.SSLError,          # TLS handshake / cert failures
+    socket.timeout,        # explicit read/connect timeout
+    EOFError,              # server hung up mid-conversation
+)
+
+
+def _imap_fail(method: str, exc: Exception) -> "MessengerConnectionError":
+    """Log an IMAP connection/protocol failure and return the error to raise.
+
+    A genuinely empty mailbox is NOT an error and never reaches here.
+    """
+    from tina4_python.debug import Log
+    Log.error(f"Messenger IMAP {method}() failed: {exc.__class__.__name__}: {exc}")
+    if isinstance(exc, MessengerError):
+        return exc
+    return MessengerConnectionError(f"IMAP {method} failed: {exc}")
+
+
 class Messenger:
     """SMTP email client using Python stdlib."""
 
@@ -72,18 +106,13 @@ class Messenger:
                  encryption: str = None, use_tls: bool = None,
                  imap_host: str = None, imap_port: int = None):
         # SMTP (send) — priority: constructor > .env > sensible default
-        self.host = host or os.environ.get("TINA4_MAIL_HOST",
-                          os.environ.get("TINA4_MAIL_HOST", "localhost"))
-        self.port = port or int(os.environ.get("TINA4_MAIL_PORT",
-                                os.environ.get("TINA4_MAIL_PORT", "587")))
-        self.username = username or os.environ.get("TINA4_MAIL_USERNAME",
-                                   os.environ.get("TINA4_MAIL_USERNAME", ""))
-        self.password = password or os.environ.get("TINA4_MAIL_PASSWORD",
-                                   os.environ.get("TINA4_MAIL_PASSWORD", ""))
-        self.from_address = from_address or os.environ.get("TINA4_MAIL_FROM",
-                                            os.environ.get("TINA4_MAIL_FROM", self.username or "noreply@localhost"))
-        self.from_name = from_name or os.environ.get("TINA4_MAIL_FROM_NAME",
-                                      os.environ.get("TINA4_MAIL_FROM_NAME", ""))
+        self.host = host or os.environ.get("TINA4_MAIL_HOST", "localhost")
+        self.port = port or int(os.environ.get("TINA4_MAIL_PORT", "587"))
+        self.username = username or os.environ.get("TINA4_MAIL_USERNAME", "")
+        self.password = password or os.environ.get("TINA4_MAIL_PASSWORD", "")
+        self.from_address = from_address or os.environ.get(
+            "TINA4_MAIL_FROM", self.username or "noreply@localhost")
+        self.from_name = from_name or os.environ.get("TINA4_MAIL_FROM_NAME", "")
 
         # Encryption: constructor > .env > backward-compat use_tls > default "tls"
         resolved_encryption = encryption or os.environ.get("TINA4_MAIL_ENCRYPTION", None)
@@ -99,10 +128,8 @@ class Messenger:
         self._default_headers: dict[str, str] = {}
 
         # IMAP (read)
-        self.imap_host = imap_host or os.environ.get("TINA4_MAIL_IMAP_HOST",
-                                      os.environ.get("TINA4_MAIL_IMAP_HOST", ""))
-        self.imap_port = imap_port or int(os.environ.get("TINA4_MAIL_IMAP_PORT",
-                                          os.environ.get("TINA4_MAIL_IMAP_PORT", "993")))
+        self.imap_host = imap_host or os.environ.get("TINA4_MAIL_IMAP_HOST", "")
+        self.imap_port = imap_port or int(os.environ.get("TINA4_MAIL_IMAP_PORT", "993"))
         # IMAP encryption — independent of SMTP encryption above. Lets ops
         # connect to e.g. an SMTP relay over starttls while reading mail
         # over implicit TLS. Cross-framework parity v3.12.4.
@@ -311,12 +338,21 @@ class Messenger:
         """Fetch latest messages from a folder.
 
         Returns list of dicts: {uid, subject, from, to, date, snippet, seen}
+
+        Raises MessengerConnectionError on a connection/auth/protocol failure.
+        A successful fetch from an empty folder returns [] (that is NOT an error).
         """
-        conn = self._imap_connect()
+        try:
+            conn = self._imap_connect()
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("inbox", exc) from exc
         try:
             conn.select(folder, readonly=True)
             status, data = conn.search(None, "ALL")
-            if status != "OK" or not data[0]:
+            if status != "OK":
+                raise MessengerConnectionError(
+                    f"IMAP search returned {status} for folder {folder!r}")
+            if not data[0]:
                 return []
 
             uids = data[0].split()
@@ -328,6 +364,8 @@ class Messenger:
             for uid in selected:
                 messages.append(self._fetch_header(conn, uid))
             return messages
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("inbox", exc) from exc
         finally:
             try:
                 conn.close()
@@ -336,14 +374,26 @@ class Messenger:
                 pass
 
     def unread(self, folder: str = "INBOX") -> int:
-        """Return count of unseen messages."""
-        conn = self._imap_connect()
+        """Return count of unseen messages.
+
+        Raises MessengerConnectionError on a connection/protocol failure.
+        A successful query with no unseen messages returns 0 (not an error).
+        """
+        try:
+            conn = self._imap_connect()
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("unread", exc) from exc
         try:
             conn.select(folder, readonly=True)
             status, data = conn.search(None, "UNSEEN")
-            if status != "OK" or not data[0]:
+            if status != "OK":
+                raise MessengerConnectionError(
+                    f"IMAP search returned {status} for folder {folder!r}")
+            if not data[0]:
                 return 0
             return len(data[0].split())
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("unread", exc) from exc
         finally:
             try:
                 conn.close()
@@ -356,14 +406,23 @@ class Messenger:
         """Read a single message by UID.
 
         Returns: {uid, subject, from, to, cc, date, body_text, body_html, attachments, headers}
+
+        Raises MessengerConnectionError on a connection/protocol failure.
+        A successful fetch for a non-existent UID returns {} (not an error).
         """
         if isinstance(uid, str):
             uid = uid.encode()
-        conn = self._imap_connect()
+        try:
+            conn = self._imap_connect()
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("read", exc) from exc
         try:
             conn.select(folder, readonly=not mark_read)
             status, data = conn.fetch(uid, "(RFC822)")
-            if status != "OK" or not data or not data[0]:
+            if status != "OK":
+                raise MessengerConnectionError(
+                    f"IMAP fetch returned {status} for uid {uid!r}")
+            if not data or not data[0]:
                 return {}
 
             raw = data[0][1] if isinstance(data[0], tuple) else data[0]
@@ -373,6 +432,8 @@ class Messenger:
                 conn.store(uid, "+FLAGS", "\\Seen")
 
             return self._parse_message(uid, msg)
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("read", exc) from exc
         finally:
             try:
                 conn.close()
@@ -392,8 +453,14 @@ class Messenger:
             before: Date string "DD-Mon-YYYY"
             unseen_only: Only unseen messages
             limit: Max results
+
+        Raises MessengerConnectionError on a connection/protocol failure.
+        A successful search with no matches returns [] (not an error).
         """
-        conn = self._imap_connect()
+        try:
+            conn = self._imap_connect()
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("search", exc) from exc
         try:
             conn.select(folder, readonly=True)
 
@@ -411,7 +478,10 @@ class Messenger:
 
             search_str = " ".join(criteria) if criteria else "ALL"
             status, data = conn.search(None, search_str)
-            if status != "OK" or not data[0]:
+            if status != "OK":
+                raise MessengerConnectionError(
+                    f"IMAP search returned {status} for folder {folder!r}")
+            if not data[0]:
                 return []
 
             uids = list(reversed(data[0].split()))[:limit]
@@ -419,6 +489,8 @@ class Messenger:
             for uid in uids:
                 messages.append(self._fetch_header(conn, uid))
             return messages
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("search", exc) from exc
         finally:
             try:
                 conn.close()
@@ -451,12 +523,19 @@ class Messenger:
                 pass
 
     def folders(self) -> list[str]:
-        """List all mailbox folders."""
-        conn = self._imap_connect()
+        """List all mailbox folders.
+
+        Raises MessengerConnectionError on a connection/protocol failure.
+        """
+        try:
+            conn = self._imap_connect()
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("folders", exc) from exc
         try:
             status, data = conn.list()
             if status != "OK":
-                return []
+                raise MessengerConnectionError(
+                    f"IMAP list returned {status}")
             result = []
             for item in data:
                 if isinstance(item, bytes):
@@ -469,6 +548,8 @@ class Messenger:
                         if parts:
                             result.append(parts[-1].strip('"'))
             return result
+        except _IMAP_CONNECTION_ERRORS as exc:
+            raise _imap_fail("folders", exc) from exc
         finally:
             try:
                 conn.logout()
@@ -789,7 +870,7 @@ class DevMailbox:
                 "id": msg_id,
                 "type": "inbox",
                 "from": f"{sender_name} <{sender_email}>",
-                "to": [os.environ.get("TINA4_MAIL_FROM", os.environ.get("TINA4_MAIL_FROM", "dev@localhost"))],
+                "to": [os.environ.get("TINA4_MAIL_FROM", "dev@localhost")],
                 "cc": [],
                 "bcc": [],
                 "reply_to": sender_email,
@@ -857,4 +938,10 @@ def create_messenger(**kwargs) -> Messenger:
     return messenger
 
 
-__all__ = ["Messenger", "MessengerError", "DevMailbox", "create_messenger"]
+__all__ = [
+    "Messenger",
+    "MessengerError",
+    "MessengerConnectionError",
+    "DevMailbox",
+    "create_messenger",
+]
