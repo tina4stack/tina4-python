@@ -47,6 +47,28 @@ def compute_accept_key(key: str) -> str:
     return base64.b64encode(digest).decode()
 
 
+def origin_allowed(headers: dict) -> bool:
+    """Return True if the request's ``Origin`` is permitted to upgrade.
+
+    Controlled by ``TINA4_WS_ALLOWED_ORIGINS`` (comma-separated list of exact
+    origins, e.g. ``https://app.example.com,https://admin.example.com``).
+
+    Empty/unset = allow ALL origins (current behaviour, no breakage). When set,
+    only requests whose ``Origin`` header exactly matches a listed value are
+    allowed; a missing ``Origin`` header is rejected once the allow-list is
+    active. Header lookup is case-insensitive on the key."""
+    raw = os.environ.get("TINA4_WS_ALLOWED_ORIGINS", "").strip()
+    if not raw:
+        return True  # No allow-list configured — permit everything.
+    allowed = {o.strip() for o in raw.split(",") if o.strip()}
+    if not allowed:
+        return True
+    # Headers may arrive with either exact or lowercased keys depending on the
+    # upgrade path; check both.
+    origin = headers.get("origin") or headers.get("Origin")
+    return origin in allowed
+
+
 def _parse_http_headers(data: bytes) -> dict:
     """Parse HTTP upgrade request headers."""
     lines = data.decode("utf-8", errors="replace").split("\r\n")
@@ -123,6 +145,9 @@ class WebSocketConnection:
         self.headers = headers or {}
         self.params = params or {}
         self.connected_at = time.time()
+        # Updated on every inbound frame; the idle reaper closes connections
+        # that have been silent longer than TINA4_WS_IDLE_TIMEOUT (opt-in).
+        self._last_activity = time.time()
         self._closed = False
         self._on_message: Callable | None = None
         self._on_close: Callable | None = None
@@ -320,6 +345,7 @@ class WebSocketConnection:
         try:
             while not self._closed:
                 fin, opcode, payload = await _read_frame(self.reader, max_size)
+                self._last_activity = time.time()  # mark activity for idle reaper
                 await self._handle_frame(fin, opcode, payload)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
@@ -338,6 +364,15 @@ class WebSocketManager:
         self._connections: dict[str, WebSocketConnection] = {}
         self._paths: dict[str, set[str]] = {}
         self._rooms: dict[str, set[str]] = {}  # room_name → set of connection IDs
+        # ── Backplane (multi-instance scaling) ──────────────────────
+        # Lazily wired on first broadcast (see _ensure_backplane). Each
+        # instance owns a stable id so it can ignore its own echoes coming
+        # back over the shared pub/sub channel (the origin guard).
+        self._backplane = None
+        self._backplane_loop = None
+        self._backplane_started = False
+        self._instance_id = uuid.uuid4().hex[:16]
+        self._backplane_channel = "tina4:ws"
 
     def add(self, ws: WebSocketConnection):
         """Register a connection."""
@@ -372,24 +407,178 @@ class WebSocketManager:
     def count_by_path(self, path: str) -> int:
         return len(self._paths.get(path, set()))
 
-    async def broadcast(self, message: str | bytes, exclude: str = None, path: str = None):
-        """Send message to all connections, optionally filtered by path."""
-        targets = self.get_by_path(path) if path else list(self._connections.values())
-        for ws in targets:
-            if exclude and ws.id == exclude:
-                continue
+    async def _safe_send(self, ws: WebSocketConnection, message: str | bytes) -> bool:
+        """Send to ONE connection without letting a single dead client abort a
+        broadcast loop. Returns True if delivered, False if the connection looks
+        dead (the caller then prunes it). A failed send is logged, never silent."""
+        try:
             await ws.send(message)
+            return not ws._closed
+        except Exception as exc:  # broken pipe, write error, etc.
+            from tina4_python.debug import Log
+            Log.warning(f"WebSocket send to {ws.id} failed, pruning: {exc}")
+            return False
+
+    # ── Backplane (multi-instance scaling) ──────────────────────
+    #
+    # When TINA4_WS_BACKPLANE is configured, every broadcast is ALSO published
+    # to a shared pub/sub channel so sibling server instances can relay it to
+    # their own local connections. The flow is:
+    #
+    #     instance A: broadcast() → deliver locally → _publish() → channel
+    #                                                                  │
+    #     instance B: backplane bg-thread → _on_backplane_message() ──┘
+    #                   │ (origin guard drops A's own echoes by src id)
+    #                   └→ run_coroutine_threadsafe(_relay_local, loop)
+    #                        → deliver to B's LOCAL connections only (no re-publish)
+    #
+    # The backplane callback runs in a *background thread* owned by the
+    # backplane (Redis pubsub thread / NATS loop thread), so it must hop back
+    # onto the server's asyncio event loop before touching connections — hence
+    # the captured _backplane_loop + run_coroutine_threadsafe bridge.
+
+    def _ensure_backplane(self):
+        """Lazily wire the configured backplane. Idempotent and best-effort —
+        a failure here logs and leaves the manager in local-only mode; it must
+        NEVER crash a broadcast."""
+        if self._backplane_started:
+            return
+        # Set immediately so we only ever attempt the wiring once, even if it
+        # fails (no retry storm on every broadcast).
+        self._backplane_started = True
+        from tina4_python.debug import Log
+        try:
+            from tina4_python.websocket.backplane import create_backplane
+            backplane = create_backplane()
+            if backplane is None:
+                return  # No backplane configured — stay local-only.
+            self._backplane = backplane
+            try:
+                self._backplane_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._backplane_loop = None
+            self._backplane.subscribe(self._backplane_channel, self._on_backplane_message)
+            Log.info(
+                f"WebSocket backplane active (instance {self._instance_id}, "
+                f"channel '{self._backplane_channel}')"
+            )
+        except Exception as exc:
+            self._backplane = None
+            Log.error(f"WebSocket backplane wiring failed, continuing local-only: {exc}")
+
+    def _on_backplane_message(self, raw):
+        """Receive a raw envelope from the backplane. Runs in the backplane's
+        BACKGROUND THREAD — must hop onto the event loop to touch connections."""
+        try:
+            env = json.loads(raw)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(env, dict):
+            return
+        # Origin guard: ignore our own broadcasts echoed back over the channel.
+        # We already delivered them locally; relaying again would double-send.
+        if env.get("src") == self._instance_id:
+            return
+        if self._backplane_loop is not None:
+            asyncio.run_coroutine_threadsafe(self._relay_local(env), self._backplane_loop)
+
+    @staticmethod
+    def _decode_envelope_message(env: dict):
+        """Reconstruct the original str/bytes WS message from a backplane
+        envelope. JSON can't carry bytes, so str → {"text": ...} and
+        bytes → {"b64": base64(...)}."""
+        if "text" in env:
+            return env["text"]
+        if "b64" in env:
+            return base64.b64decode(env["b64"])
+        return None
+
+    async def _relay_local(self, env: dict):
+        """Deliver a remote-originated envelope to LOCAL connections only.
+
+        NEVER re-publishes (that would loop the message around the cluster).
+        Dispatches by ``kind``: room / path / all."""
+        message = self._decode_envelope_message(env)
+        if message is None:
+            return
+        kind = env.get("kind")
+        exclude = env.get("exclude")
+        if kind == "room":
+            room = env.get("room")
+            targets = self.get_room_connections(room) if room else []
+        elif kind == "path":
+            path = env.get("path")
+            targets = self.get_by_path(path) if path else []
+        else:  # "all" (and anything unknown) → every local connection
+            targets = list(self._connections.values())
+        dead = [ws for ws in targets
+                if not (exclude and ws.id == exclude)
+                and not await self._safe_send(ws, message)]
+        for ws in dead:
+            self.remove(ws)
+
+    def _publish(self, kind: str, message: str | bytes, room: str = None,
+                 path: str = None, exclude: str = None):
+        """Publish a broadcast to the shared channel for sibling instances.
+
+        No-op when no backplane is configured. Best-effort — a publish failure
+        logs and is swallowed so the local broadcast that already happened is
+        never undone by a flaky message bus."""
+        if not self._backplane:
+            return
+        from tina4_python.debug import Log
+        envelope = {
+            "src": self._instance_id,
+            "kind": kind,
+            "exclude": exclude,
+            "room": room,
+            "path": path,
+        }
+        # JSON can't carry bytes — encode str as text, bytes as base64.
+        if isinstance(message, (bytes, bytearray)):
+            envelope["b64"] = base64.b64encode(bytes(message)).decode()
+        else:
+            envelope["text"] = message
+        try:
+            self._backplane.publish(self._backplane_channel, json.dumps(envelope))
+        except Exception as exc:
+            Log.warning(f"WebSocket backplane publish failed: {exc}")
+
+    async def broadcast(self, message: str | bytes, exclude: str = None, path: str = None):
+        """Send message to all connections, optionally filtered by path.
+
+        One dead/slow connection never aborts delivery to the rest — failed
+        sends are logged and the dead connection is pruned afterwards. When a
+        backplane is configured the message is also published to sibling
+        instances."""
+        self._ensure_backplane()
+        targets = self.get_by_path(path) if path else list(self._connections.values())
+        dead = [ws for ws in targets
+                if not (exclude and ws.id == exclude)
+                and not await self._safe_send(ws, message)]
+        for ws in dead:
+            self.remove(ws)
+        self._publish("path" if path else "all", message, path=path, exclude=exclude)
 
     async def broadcast_all(self, message: str | bytes):
-        """Send message to ALL connections."""
-        for ws in list(self._connections.values()):
-            await ws.send(message)
+        """Send message to ALL connections (resilient to dead clients).
+
+        Also fans out to sibling instances over the backplane when configured."""
+        self._ensure_backplane()
+        dead = [ws for ws in list(self._connections.values())
+                if not await self._safe_send(ws, message)]
+        for ws in dead:
+            self.remove(ws)
+        self._publish("all", message)
 
     async def send_to(self, client_id: str, message: str | bytes):
-        """Send a message to a specific client by ID."""
+        """Send a message to a specific client by ID.
+
+        Local-only: a connection lives on exactly one instance, so there is
+        nothing to fan out over the backplane."""
         ws = self._connections.get(client_id)
-        if ws:
-            await ws.send(message)
+        if ws and not await self._safe_send(ws, message):
+            self.remove(ws)
 
     async def close(self, client_id: str, code: int = 1000, reason: str = ""):
         """Close a specific client connection by ID."""
@@ -411,6 +600,26 @@ class WebSocketManager:
         for ws in targets:
             await ws.close()
             self.remove(ws)
+
+    async def reap_idle(self, timeout: float) -> int:
+        """Close connections whose last inbound frame is older than *timeout*
+        seconds. Returns the number reaped. ``timeout <= 0`` is a no-op (the
+        reaper is opt-in via TINA4_WS_IDLE_TIMEOUT). Connections without a
+        ``_last_activity`` attribute (e.g. some ASGI wrappers) are skipped."""
+        if timeout <= 0:
+            return 0
+        now = time.time()
+        stale = [
+            ws for ws in list(self._connections.values())
+            if (now - getattr(ws, "_last_activity", now)) > timeout
+        ]
+        for ws in stale:
+            await ws.close(CLOSE_GOING_AWAY, "idle timeout")
+            self.remove(ws)
+        if stale:
+            from tina4_python.debug import Log
+            Log.info(f"WebSocket idle reaper closed {len(stale)} connection(s)")
+        return len(stale)
 
     # ── Rooms ──────────────────────────────────────────────────
 
@@ -445,11 +654,17 @@ class WebSocketManager:
 
     async def broadcast_to_room(self, room_name: str, message: str | bytes,
                                  exclude: str = None) -> None:
-        """Send message to all connections in a room."""
-        for ws in self.get_room_connections(room_name):
-            if exclude and ws.id == exclude:
-                continue
-            await ws.send(message)
+        """Send message to all connections in a room (resilient to dead clients).
+
+        Also fans out to sibling instances over the backplane when configured —
+        a room can span instances, so each one delivers to its own members."""
+        self._ensure_backplane()
+        dead = [ws for ws in self.get_room_connections(room_name)
+                if not (exclude and ws.id == exclude)
+                and not await self._safe_send(ws, message)]
+        for ws in dead:
+            self.remove(ws)
+        self._publish("room", message, room=room_name, exclude=exclude)
 
 
 class WebSocketServer:
@@ -461,6 +676,7 @@ class WebSocketServer:
         self.manager = WebSocketManager()
         self._handlers: dict[str, dict[str, Callable]] = {}
         self._server: asyncio.AbstractServer | None = None
+        self._reaper_task: asyncio.Task | None = None
 
     def route(self, path: str, handler: Callable | None = None):
         """Register a WebSocket handler for a path.
@@ -566,6 +782,14 @@ class WebSocketServer:
             writer.close()
             return
 
+        # Origin allow-list (opt-in via TINA4_WS_ALLOWED_ORIGINS). Unset = allow
+        # all, so this never breaks an existing deployment.
+        if not origin_allowed(headers):
+            writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            return
+
         max_conns = int(os.environ.get("TINA4_WS_MAX_CONNECTIONS", 10000))
         if self.manager.count() >= max_conns:
             writer.write(b"HTTP/1.1 503 Service Unavailable\r\n\r\n")
@@ -620,14 +844,54 @@ class WebSocketServer:
                     pass
 
     async def start(self):
-        """Start the WebSocket server."""
+        """Start the WebSocket server (and the idle reaper if configured)."""
         self._server = await asyncio.start_server(
             self.handle_connection, self.host, self.port
         )
+        self._start_idle_reaper()
         return self._server
 
+    def _start_idle_reaper(self):
+        """Spin up the idle-connection reaper task when TINA4_WS_IDLE_TIMEOUT is
+        a positive number of seconds. Opt-in and non-breaking — unset/0 means no
+        reaper task is created at all (current behaviour)."""
+        try:
+            timeout = float(os.environ.get("TINA4_WS_IDLE_TIMEOUT", "0") or "0")
+        except (TypeError, ValueError):
+            timeout = 0.0
+        if timeout <= 0 or self._reaper_task is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        # Sweep at a fraction of the timeout (min 1s) so an idle conn is closed
+        # within roughly one timeout window of going silent.
+        interval = max(1.0, timeout / 2.0)
+        self._reaper_task = loop.create_task(self._idle_reaper_loop(timeout, interval))
+
+    async def _idle_reaper_loop(self, timeout: float, interval: float):
+        """Periodically reap idle connections until cancelled."""
+        from tina4_python.debug import Log
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    await self.manager.reap_idle(timeout)
+                except Exception as exc:  # never let a sweep kill the loop
+                    Log.error(f"WebSocket idle reaper sweep failed: {exc}")
+        except asyncio.CancelledError:
+            raise
+
     async def stop(self):
-        """Stop the server and disconnect all clients."""
+        """Stop the server, cancel the reaper, and disconnect all clients."""
+        if self._reaper_task is not None:
+            self._reaper_task.cancel()
+            try:
+                await self._reaper_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._reaper_task = None
         await self.manager.disconnect_all()
         if self._server:
             self._server.close()
@@ -645,7 +909,7 @@ class WebSocketServer:
 
 __all__ = [
     "WebSocketServer", "WebSocketConnection", "WebSocketManager",
-    "compute_accept_key", "build_frame",
+    "compute_accept_key", "build_frame", "origin_allowed",
     "OP_TEXT", "OP_BINARY", "OP_CLOSE", "OP_PING", "OP_PONG",
-    "CLOSE_NORMAL", "CLOSE_PROTOCOL_ERROR", "CLOSE_TOO_LARGE",
+    "CLOSE_NORMAL", "CLOSE_GOING_AWAY", "CLOSE_PROTOCOL_ERROR", "CLOSE_TOO_LARGE",
 ]

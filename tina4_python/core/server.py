@@ -717,6 +717,16 @@ async def _handle_asgi_websocket(scope: dict, receive, send):
         await send({"type": "websocket.close", "code": 4004})
         return
 
+    # Origin allow-list (opt-in via TINA4_WS_ALLOWED_ORIGINS). Unset = allow all
+    # so existing deployments are unaffected. Shared with the standalone server
+    # via websocket.origin_allowed().
+    from tina4_python.websocket import origin_allowed
+    _ws_headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+    if not origin_allowed(_ws_headers):
+        # 1008 = policy violation (per ASGI/RFC 6455 close codes)
+        await send({"type": "websocket.close", "code": 1008})
+        return
+
     # Accept the connection
     msg = await receive()
     if msg["type"] != "websocket.connect":
@@ -889,11 +899,18 @@ async def _handle_dev_websocket(reader, writer, headers, path):
         writer.close()
         return
 
-    from tina4_python.websocket import compute_accept_key
+    from tina4_python.websocket import compute_accept_key, origin_allowed
 
     ws_key = headers.get("sec-websocket-key")
     if not ws_key:
         writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+        await writer.drain()
+        writer.close()
+        return
+
+    # Origin allow-list (opt-in via TINA4_WS_ALLOWED_ORIGINS). Unset = allow all.
+    if not origin_allowed(headers):
+        writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
         await writer.drain()
         writer.close()
         return
@@ -1803,19 +1820,35 @@ async def app(scope: dict, receive, send):
 
         import asyncio
         source = response._stream_source
-        if hasattr(source, "__aiter__"):
-            # Async generator
-            async for chunk in source:
-                if isinstance(chunk, str):
-                    chunk = chunk.encode()
-                await send({"type": "http.response.body", "body": chunk, "more_body": True})
-        elif hasattr(source, "__iter__"):
-            # Sync iterable
-            for chunk in source:
-                if isinstance(chunk, str):
-                    chunk = chunk.encode()
-                await send({"type": "http.response.body", "body": chunk, "more_body": True})
-                await asyncio.sleep(0)  # yield control
+        try:
+            if hasattr(source, "__aiter__"):
+                # Async generator
+                async for chunk in source:
+                    if isinstance(chunk, str):
+                        chunk = chunk.encode()
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+            elif hasattr(source, "__iter__"):
+                # Sync iterable
+                for chunk in source:
+                    if isinstance(chunk, str):
+                        chunk = chunk.encode()
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                    await asyncio.sleep(0)  # yield control
+        except asyncio.CancelledError:
+            # Client disconnected mid-stream. Close the source if it supports it
+            # (best-effort) then re-raise — cancellation must never be swallowed.
+            aclose = getattr(source, "aclose", None)
+            if aclose is not None:
+                try:
+                    await aclose()
+                except Exception:
+                    pass
+            raise
+        except Exception as exc:
+            # The generator itself raised mid-stream. Log and stop cleanly —
+            # fall through to the final empty-body send rather than crashing
+            # the worker.
+            Log.error(f"SSE/stream source error: {exc}")
 
         await send({"type": "http.response.body", "body": b"", "more_body": False})
         return
