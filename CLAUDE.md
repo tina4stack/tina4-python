@@ -710,7 +710,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Template engine via `tina4_python.frond` (Frond — Jinja2/Twig-compatible, replaces Template)
 - JWT auth via `tina4_python.auth` (zero-dep HMAC-SHA256, password hashing via PBKDF2)
 - Queue via `tina4_python.queue` (database-backed, zero deps)
-- WebSocket via `tina4_python.websocket` (RFC 6455, asyncio-based). WebSocket backplane for scaling broadcast across instances via Redis or NATS pub/sub. Configured via `TINA4_WS_BACKPLANE` (`redis` or `nats`) and `TINA4_WS_BACKPLANE_URL` env vars. Rooms API: `ws.join_room(name)`, `ws.leave_room(name)`, `ws.rooms`, `ws.broadcast_to_room(name, msg)`, `mgr.room_count(name)`, `mgr.get_room_connections(name)`, `mgr.broadcast_to_room(name, msg, exclude=None)`
+- WebSocket via `tina4_python.websocket` (RFC 6455, asyncio-based). WebSocket backplane for scaling broadcast across instances via Redis or NATS pub/sub — **wired for real**: each `broadcast`/`broadcast_all`/`broadcast_to_room` delivers to LOCAL connections first (resilient — a dead/slow client is logged + pruned, never aborting the rest), then publishes an envelope `{src,kind,exclude,room,path,+text|b64}` to the shared channel `tina4:ws`; a sibling instance's backplane listener relays it to its own LOCAL connections only (origin guard drops the instance's own echo by `src`; the relay never re-publishes — no cluster loop). Lazily started on first broadcast (best-effort — a backplane failure logs + degrades to local-only, never crashes a broadcast). Configured via `TINA4_WS_BACKPLANE` (`redis` or `nats`) and `TINA4_WS_BACKPLANE_URL`. **Security**: origin allow-list via `TINA4_WS_ALLOWED_ORIGINS` (comma-separated; empty/unset = allow all — non-breaking; set = reject mismatched/missing Origin 403 on every upgrade path). **Idle reaper**: `TINA4_WS_IDLE_TIMEOUT` (seconds; 0/unset = disabled) closes connections idle past the timeout. (Per-route WS auth is a deliberate follow-up — the origin allow-list is the shipped control.) Rooms API: `ws.join_room(name)`, `ws.leave_room(name)`, `ws.rooms`, `ws.broadcast_to_room(name, msg)`, `mgr.room_count(name)`, `mgr.get_room_connections(name)`, `mgr.broadcast_to_room(name, msg, exclude=None)`. SSE/`response.stream()` hardened: a client disconnect cancels the generator cleanly and a generator error mid-stream is logged + ends cleanly (worker never crashes).
 - API client via `tina4_python.api` (urllib-based, zero deps)
 - Swagger via `tina4_python.swagger` (OpenAPI 3.0.3 generator)
 - GraphQL via `tina4_python.graphql` (recursive-descent parser, ORM auto-generation)
@@ -740,7 +740,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Cache backends: unified set across response/KV and persistent DB cache — `memory` (default), `file`, `redis`, `valkey`, `memcached`, `mongodb`, `database` — selected via `TINA4_CACHE_BACKEND` (+ `TINA4_CACHE_URL`/credentials); falls back to the file backend if a backend is unreachable
 - Session backends: file, Redis, Valkey, MongoDB, database
 - QueryBuilder with NoSQL/MongoDB support (`to_mongo()`)
-- WebSocket backplane (Redis pub/sub) for horizontal scaling
+- WebSocket backplane (Redis/NATS pub/sub) for horizontal scaling — wired into the live broadcast path with origin-guard + local-first delivery (see the WebSocket bullet); WS origin allow-list + idle reaper
 - SameSite=Lax default on session cookies (`TINA4_SESSION_SAMESITE`)
 - `tina4 deploy docker` generates Dockerfile and .dockerignore
 - Gallery: 7 interactive examples with Try It deploy at `/__dev/`
