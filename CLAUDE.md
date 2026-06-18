@@ -316,6 +316,8 @@ session.gc()                                # Garbage collection
 
 Backends: file (default), redis, valkey, mongodb, database. Set via `TINA4_SESSION_BACKEND` env var.
 
+**Backend-failure policy (all 4 frameworks): log-loud + degrade.** If a backend (Redis/Valkey/Mongo/DB) becomes unreachable mid-request, the session layer logs an error and degrades rather than crashing the whole app or losing data silently: a read failure yields an empty session (the request still serves), and `save()` returns `False` (best-effort, dirty flag retained for retry) — both are logged via `Log.error`. A genuinely empty session (no data yet) is NOT an error and is never logged. Set `TINA4_SESSION_STRICT=true` to re-raise instead (the same escape hatch as the `strict` flag on events/seeding) when a failed persist should surface loudly. Call `session.regenerate()` right after a successful login or privilege change to defeat session fixation.
+
 ### Request extras
 
 ```python

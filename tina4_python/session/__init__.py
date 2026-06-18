@@ -167,6 +167,17 @@ class Session:
         self._session_id: str | None = None
         self._data: dict = {}
         self._dirty: bool = False
+        # Backend-failure policy (parity across all 4 frameworks): a backend
+        # that becomes unreachable mid-request must NEVER take the whole app
+        # down with it, and must NEVER fail silently. The default is
+        # "log-loud + degrade" — a read failure logs an error and yields an
+        # empty session, a write failure logs and is best-effort. Set
+        # TINA4_SESSION_STRICT=true to re-raise instead (matches the `strict`
+        # escape hatch used by events/seeding) when you'd rather a failed
+        # persist surface loudly than be tolerated.
+        self._strict: bool = str(
+            os.environ.get("TINA4_SESSION_STRICT", "false")
+        ).strip().lower() in ("true", "1", "yes", "on")
 
     @staticmethod
     def _resolve_handler() -> SessionHandler:
@@ -196,10 +207,56 @@ class Session:
         """Return the current session ID string."""
         return self._session_id
 
+    # ── Backend-failure policy: log-loud + degrade ─────────────────────
+    #
+    # The handlers themselves stay honest — they raise when the backend
+    # (Redis/Valkey/Mongo/DB) is unreachable. The Session layer is the single
+    # place that decides the resilience policy so every backend behaves the
+    # same: a transient outage logs and degrades rather than 500-ing every
+    # request (cascade outage) or vanishing silently. A genuinely empty result
+    # (no such session yet) is NOT an error — the handler returns {} without
+    # raising, so it never hits these logs.
+
+    def _log_backend_error(self, op: str, exc: Exception) -> None:
+        from tina4_python.debug import Log
+        Log.error(
+            f"Session backend {op} failed "
+            f"({type(self._handler).__name__}): {exc}"
+        )
+
+    def _safe_read(self, session_id: str) -> dict:
+        try:
+            return self._handler.read(session_id)
+        except Exception as exc:
+            self._log_backend_error("read", exc)
+            if self._strict:
+                raise
+            return {}
+
+    def _safe_write(self, session_id: str, data: dict, ttl: int) -> bool:
+        try:
+            self._handler.write(session_id, data, ttl)
+            return True
+        except Exception as exc:
+            self._log_backend_error("write", exc)
+            if self._strict:
+                raise
+            return False
+
+    def _safe_destroy(self, session_id: str) -> bool:
+        try:
+            self._handler.destroy(session_id)
+            return True
+        except Exception as exc:
+            self._log_backend_error("destroy", exc)
+            if self._strict:
+                raise
+            return False
+
     def start(self, session_id: str = None) -> str:
         """Start or resume a session. Returns the session ID."""
         self._session_id = session_id or secrets.token_urlsafe(32)
-        self._data = self._handler.read(self._session_id)
+        self._data = self._safe_read(self._session_id)
         self._dirty = False
         return self._session_id
 
@@ -264,24 +321,37 @@ class Session:
         self._dirty = True
 
     def save(self):
-        """Persist session data to the backend."""
+        """Persist session data to the backend.
+
+        Returns True on a successful persist, False if the backend was
+        unreachable (logged). The dirty flag is only cleared on success so a
+        later save() retries once the backend recovers.
+        """
         if self._session_id and self._dirty:
-            self._handler.write(self._session_id, self._data, self._ttl)
-            self._dirty = False
+            if self._safe_write(self._session_id, self._data, self._ttl):
+                self._dirty = False
+                return True
+            return False
+        return True
 
     def destroy(self):
         """Destroy the session entirely."""
         if self._session_id:
-            self._handler.destroy(self._session_id)
+            self._safe_destroy(self._session_id)
             self._data.clear()
             self._session_id = None
             self._dirty = False
 
     def regenerate(self) -> str:
-        """Regenerate session ID (prevents fixation attacks)."""
+        """Regenerate session ID (prevents fixation attacks).
+
+        Call this right after a successful login or any privilege change to
+        defeat session fixation — the pre-auth ID is discarded and the data
+        carried onto a fresh, unguessable ID.
+        """
         old_id = self._session_id
         if old_id:
-            self._handler.destroy(old_id)
+            self._safe_destroy(old_id)
         self._session_id = secrets.token_urlsafe(32)
         self._dirty = True
         self.save()
@@ -335,8 +405,13 @@ class Session:
         return "; ".join(parts)
 
     def gc(self):
-        """Run garbage collection on the backend."""
-        self._handler.gc(self._ttl)
+        """Run garbage collection on the backend (best-effort)."""
+        try:
+            self._handler.gc(self._ttl)
+        except Exception as exc:
+            self._log_backend_error("gc", exc)
+            if self._strict:
+                raise
 
 
 __all__ = [
