@@ -950,7 +950,7 @@ async def _api_seed_table(request, response):
     """Seed fake data into a database table from the admin UI."""
     try:
         from tina4_python.database import Database
-        from tina4_python.seeder import FakeData
+        from tina4_python.seeder import FakeData, seed_table
 
         body = request.body if hasattr(request, "body") and request.body else {}
         table = body.get("table", "")
@@ -961,6 +961,16 @@ async def _api_seed_table(request, response):
         if count > 1000:
             count = 1000
 
+        # Reproducibility (P3): accept an optional seed; drop the old hard-coded 42.
+        seed_val = body.get("seed")
+        if seed_val is not None:
+            try:
+                seed_val = int(seed_val)
+            except (TypeError, ValueError):
+                seed_val = None
+        clear = bool(body.get("clear", False))
+        strict = bool(body.get("strict", False))
+
         db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
 
@@ -970,64 +980,74 @@ async def _api_seed_table(request, response):
             db.close()
             return response({"error": f"Table '{table}' not found or has no columns"}, 404)
 
-        fake = FakeData(seed=42)
-        inserted = 0
+        fake = FakeData(seed=seed_val)
 
-        for _ in range(count):
-            row = {}
-            for col in columns:
-                name = col.get("name", col.get("column_name", ""))
-                col_type = col.get("type", col.get("data_type", "")).upper()
-                is_pk = col.get("primary_key", col.get("pk", False))
+        def _gen_for_column(col):
+            """Pick a FakeData generator for one column from its name + type."""
+            name = col.get("name", col.get("column_name", ""))
+            col_type = col.get("type", col.get("data_type", "")).upper()
+            name_lower = name.lower()
+            if "email" in name_lower:
+                return fake.email
+            if "name" in name_lower and "user" in name_lower:
+                return fake.name
+            if "first" in name_lower and "name" in name_lower:
+                return fake.first_name
+            if "last" in name_lower and "name" in name_lower:
+                return fake.last_name
+            if "name" in name_lower:
+                return fake.name
+            if "phone" in name_lower or "tel" in name_lower:
+                return fake.phone
+            if "url" in name_lower or "link" in name_lower:
+                return fake.url
+            if "address" in name_lower:
+                return fake.address
+            if "date" in name_lower or "time" in name_lower or "created" in name_lower:
+                return fake.datetime_iso
+            if "desc" in name_lower or "body" in name_lower or "content" in name_lower:
+                return fake.paragraph
+            if "title" in name_lower or "subject" in name_lower:
+                return fake.sentence
+            if "active" in name_lower or "enabled" in name_lower or "done" in name_lower:
+                return fake.boolean
+            if "INT" in col_type or "SERIAL" in col_type:
+                return lambda: fake.integer(1, 10000)
+            if any(t in col_type for t in ("REAL", "FLOAT", "DOUBLE", "NUMERIC", "DECIMAL")):
+                return lambda: fake.decimal(0, 1000)
+            if "BOOL" in col_type:
+                return fake.boolean
+            return fake.sentence
 
-                # Skip auto-increment PKs
-                if is_pk and ("AUTO" in col_type or "SERIAL" in col_type or
-                              name.lower() == "id"):
-                    continue
+        # Build a field_map skipping auto-increment / id PKs, then delegate to
+        # seed_table so this endpoint shares the exact same visible-but-resilient
+        # per-row error handling (P1/P4b) — no unhandled row failure crashes it.
+        field_map = {}
+        for col in columns:
+            name = col.get("name", col.get("column_name", ""))
+            col_type = col.get("type", col.get("data_type", "")).upper()
+            is_pk = col.get("primary_key", col.get("pk", False))
+            if is_pk and ("AUTO" in col_type or "SERIAL" in col_type or name.lower() == "id"):
+                continue
+            field_map[name] = _gen_for_column(col)
 
-                # Generate fake data based on column name and type
-                name_lower = name.lower()
-                if "email" in name_lower:
-                    row[name] = fake.email()
-                elif "name" in name_lower and "user" in name_lower:
-                    row[name] = fake.name()
-                elif "first" in name_lower and "name" in name_lower:
-                    row[name] = fake.first_name()
-                elif "last" in name_lower and "name" in name_lower:
-                    row[name] = fake.last_name()
-                elif "name" in name_lower:
-                    row[name] = fake.name()
-                elif "phone" in name_lower or "tel" in name_lower:
-                    row[name] = fake.phone()
-                elif "url" in name_lower or "link" in name_lower:
-                    row[name] = fake.url()
-                elif "address" in name_lower:
-                    row[name] = fake.address()
-                elif "date" in name_lower or "time" in name_lower or "created" in name_lower:
-                    row[name] = fake.datetime_iso()
-                elif "desc" in name_lower or "body" in name_lower or "content" in name_lower:
-                    row[name] = fake.paragraph()
-                elif "title" in name_lower or "subject" in name_lower:
-                    row[name] = fake.sentence()
-                elif "active" in name_lower or "enabled" in name_lower or "done" in name_lower:
-                    row[name] = fake.boolean()
-                elif "INT" in col_type or "SERIAL" in col_type:
-                    row[name] = fake.integer(1, 10000)
-                elif "REAL" in col_type or "FLOAT" in col_type or "DOUBLE" in col_type or "NUMERIC" in col_type or "DECIMAL" in col_type:
-                    row[name] = fake.decimal(0, 1000)
-                elif "BOOL" in col_type:
-                    row[name] = fake.boolean()
-                else:
-                    row[name] = fake.sentence()
+        try:
+            summary = seed_table(db, table, count, field_map=field_map,
+                                 clear=clear, strict=strict)
+        finally:
+            db.close()
 
-            if row:
-                db.insert(table, row)
-                inserted += 1
-
-        db.commit()
-        db.close()
-        MessageLog.log("seed", f"Seeded {inserted} rows into '{table}'", {"table": table, "count": inserted})
-        return response({"seeded": inserted, "table": table})
+        MessageLog.log(
+            "seed",
+            f"Seeded {summary.seeded} rows into '{table}' ({summary.failed} failed)",
+            {"table": table, "seeded": summary.seeded, "failed": summary.failed},
+        )
+        return response({
+            "seeded": summary.seeded,
+            "failed": summary.failed,
+            "errors": summary.errors,
+            "table": table,
+        })
     except Exception as e:
         return response({"error": str(e)}, 500)
 

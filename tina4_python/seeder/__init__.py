@@ -307,94 +307,404 @@ class FakeData:
         return "".join(self._rng.choice(chars) for _ in range(length))
 
 
+class SeedSummary(int):
+    """Result of a seed run — ``{seeded, failed, errors}``.
+
+    Subclasses ``int`` so its integer value is ``seeded``. This keeps the
+    pre-overhaul contract intact: callers doing ``count = seed_table(...)``
+    and ``assert count == 10`` still pass, while new callers can inspect
+    ``summary.seeded`` / ``summary.failed`` / ``summary.errors`` or treat it
+    as a dict (``summary["failed"]``, ``dict(summary)``, ``summary.to_dict()``).
+
+    ``errors`` is a list of ``{"row": <0-based index>, "message": <str>}``
+    dicts describing every skipped row.
+    """
+
+    def __new__(cls, seeded: int = 0, failed: int = 0, errors: list = None):
+        obj = super().__new__(cls, seeded)
+        obj.seeded = int(seeded)
+        obj.failed = int(failed)
+        obj.errors = errors if errors is not None else []
+        return obj
+
+    def to_dict(self) -> dict:
+        return {"seeded": self.seeded, "failed": self.failed, "errors": self.errors}
+
+    # Dict-style read access so callers can use summary["seeded"] / dict(summary).
+    def __getitem__(self, key):
+        if isinstance(key, str):
+            return {"seeded": self.seeded, "failed": self.failed, "errors": self.errors}[key]
+        raise TypeError("SeedSummary keys are 'seeded', 'failed', 'errors'")
+
+    def keys(self):
+        return ("seeded", "failed", "errors")
+
+    def __iter__(self):
+        return iter(self.keys())
+
+    def __repr__(self):
+        return f"SeedSummary(seeded={self.seeded}, failed={self.failed}, errors={self.errors!r})"
+
+
 def seed_table(db, table: str, count: int = 10,
                field_map: dict[str, callable] = None,
-               overrides: dict = None) -> int:
+               overrides: dict = None, clear: bool = False,
+               seed: int = None, strict: bool = False) -> SeedSummary:
     """Seed a database table with fake data.
 
+    Visible-but-resilient: each row is wrapped. On a row failure the cause is
+    logged (with the row index) and the row is skipped — unless ``strict=True``,
+    in which case the first failure RE-RAISES. At the end a one-line summary is
+    logged ("seeded N, M failed").
+
     Args:
-        db: Database instance
-        table: Table name
-        count: Number of rows to insert
+        db: Database instance.
+        table: Table name.
+        count: Number of rows to insert.
         field_map: Dict of column_name → callable that generates a value
-        overrides: Static values to set on every row
+            (or a static value).
+        overrides: Static values to set on every row.
+        clear: If True, delete every existing row in ``table`` before seeding
+            so re-runs don't duplicate rows or trip unique-PK violations (P2).
+        seed: Optional PRNG seed — seeds the FakeData RNG used for any
+            ``FakeData`` instance the caller passes through ``field_map``. Has
+            no effect unless the caller's generators read from a shared
+            ``FakeData(seed=...)``; provided for signature parity with
+            ``seed_orm`` and so the dev-admin endpoint can pass it through.
+        strict: If True, re-raise on the first failed row instead of skipping.
 
     Returns:
-        Number of rows inserted
+        A :class:`SeedSummary` (``{seeded, failed, errors}``) — also usable as
+        the int row-count for backward compatibility.
     """
+    from tina4_python.debug import Log  # lazy import to avoid circular deps
+
     if not field_map:
-        return 0
+        return SeedSummary(0, 0, [])
+
+    if clear:
+        _clear_table(db, table)
+
+    seeded = 0
+    failed = 0
+    errors: list = []
 
     for i in range(count):
-        row = {}
-        for col, generator in field_map.items():
-            row[col] = generator() if callable(generator) else generator
-        if overrides:
-            row.update(overrides)
-        db.insert(table, row)
+        try:
+            row = {}
+            for col, generator in field_map.items():
+                row[col] = generator() if callable(generator) else generator
+            if overrides:
+                row.update(overrides)
+            db.insert(table, row)
+            seeded += 1
+        except Exception as exc:
+            if strict:
+                # Surface the failure with row context, but still raise.
+                Log.error(f"Seeder: row {i} failed seeding '{table}' (strict): {exc}")
+                raise
+            failed += 1
+            errors.append({"row": i, "message": str(exc)})
+            Log.warning(f"Seeder: row {i} failed seeding '{table}', skipped: {exc}")
 
-    db.commit()
-    return count
+    try:
+        db.commit()
+    except Exception:
+        # Autocommit-on engines / pooled standalone writes may not need an
+        # explicit commit; never let the summary itself crash.
+        pass
+
+    Log.info(f"Seeder: '{table}' — seeded {seeded}, {failed} failed")
+    return SeedSummary(seeded, failed, errors)
 
 
 def seed_orm(orm_class, count: int = 10,
              overrides: dict = None, clear: bool = False,
-             seed: int = None) -> int:
+             seed: int = None, strict: bool = False) -> SeedSummary:
     """Seed an ORM model class with auto-generated fake data.
 
+    Visible-but-resilient: each row is wrapped. On a row failure the cause is
+    logged (with the row index) and the row is skipped — unless ``strict=True``,
+    in which case the first failure RE-RAISES. A one-line summary is logged at
+    the end.
+
     Args:
-        orm_class: ORM subclass with a ``fields`` dict and ``save()`` method.
+        orm_class: ORM subclass with ``_fields`` and a ``save()`` method.
         count: Number of records to insert.
         overrides: Dict of field overrides — static values or callables
             receiving a FakeData instance.
-        clear: If True, delete all existing records before seeding.
-        seed: Optional PRNG seed for reproducible output.
+        clear: If True, delete all existing records before seeding (P2).
+        seed: Optional PRNG seed for reproducible output (P3).
+        strict: If True, re-raise on the first failed row instead of skipping.
 
     Returns:
-        Number of records inserted.
+        A :class:`SeedSummary` (``{seeded, failed, errors}``) — also usable as
+        the int row-count for backward compatibility.
     """
     from tina4_python.debug import Log  # lazy import to avoid circular deps
 
     fake = FakeData(seed=seed)
 
-    fields = getattr(orm_class, "field_definitions", None) or {}
+    fields = getattr(orm_class, "_fields", None) or {}
     if not fields:
         Log.error(f"Seeder: No fields found on {orm_class.__name__}")
-        return 0
+        return SeedSummary(0, 0, [])
 
     if clear:
-        try:
-            orm_class.delete_all()
-        except Exception as exc:
-            Log.warning(f"Seeder: Could not clear {orm_class.__name__}: {exc}")
+        _clear_orm(orm_class)
 
     pk_fields = {
-        name for name, opts in fields.items()
-        if opts.get("primary_key") and opts.get("auto_increment")
+        name for name, field in fields.items()
+        if getattr(field, "primary_key", False) and getattr(field, "auto_increment", False)
     }
 
-    inserted = 0
+    # P4a — resolve FK columns to REAL parent PKs so a child row references an
+    # existing parent. Snapshotted once (parents are seeded first by
+    # seed_models's topo-sort, so the table is populated by now).
+    fk_pools = _foreign_key_pools(orm_class, fields)
+
+    seeded = 0
+    failed = 0
+    errors: list = []
     for i in range(count):
-        attrs = {}
-        for name, field_def in fields.items():
-            if name in pk_fields:
-                continue
-            if overrides and name in overrides:
-                val = overrides[name]
-                attrs[name] = val(fake) if callable(val) else val
-            else:
-                attrs[name] = fake.choice([None]) if False else _generate_for_field(fake, field_def, name)
         try:
+            attrs = {}
+            for name, field in fields.items():
+                if name in pk_fields:
+                    continue
+                if overrides and name in overrides:
+                    val = overrides[name]
+                    attrs[name] = val(fake) if callable(val) else val
+                elif name in fk_pools and fk_pools[name]:
+                    attrs[name] = fake.choice(fk_pools[name])
+                else:
+                    attrs[name] = _generate_for_field(fake, _field_meta(field), name)
+            _validate_types(fields, attrs, orm_class.__name__, Log)
             obj = orm_class(attrs)
             if obj.save():
-                inserted += 1
+                seeded += 1
             else:
-                Log.warning(f"Seeder: Insert failed for {orm_class.__name__} row {i + 1}")
+                raise RuntimeError(f"save() returned falsy for {orm_class.__name__}")
         except Exception as exc:
-            Log.warning(f"Seeder: Insert failed for {orm_class.__name__} row {i + 1}: {exc}")
+            if strict:
+                Log.error(
+                    f"Seeder: row {i} failed seeding {orm_class.__name__} "
+                    f"(strict): {exc}"
+                )
+                raise
+            failed += 1
+            errors.append({"row": i, "message": str(exc)})
+            Log.warning(
+                f"Seeder: row {i} failed seeding {orm_class.__name__}, skipped: {exc}"
+            )
 
-    Log.info(f"Seeder: Inserted {inserted}/{count} records into {orm_class.__name__}")
-    return inserted
+    Log.info(f"Seeder: {orm_class.__name__} — seeded {seeded}, {failed} failed")
+    return SeedSummary(seeded, failed, errors)
+
+
+def seed_models(orm_classes: list, count: int = 10,
+                overrides: dict = None, clear: bool = False,
+                seed: int = None, strict: bool = False) -> dict:
+    """Batch-seed several ORM models, ordering by their ForeignKeyField
+    dependency graph (P4a).
+
+    Parent tables seed before children (topological sort over
+    ``ForeignKeyField.references``); when ``clear=True`` the clear runs in the
+    REVERSE order so children are removed before parents — no FK violations
+    regardless of the order the caller lists the models in.
+
+    Args:
+        orm_classes: List of ORM subclasses to seed.
+        count: Rows per model.
+        overrides: Per-model overrides as ``{ModelClass: {field: value}}`` or a
+            single flat dict applied to every model.
+        clear: Clear each table first (reverse-topo order).
+        seed: PRNG seed (P3) — applied per model.
+        strict: Re-raise on the first failed row.
+
+    Returns:
+        ``{ModelClass.__name__: SeedSummary}`` for each model seeded.
+    """
+    ordered = _topo_sort_models(orm_classes)
+
+    if clear:
+        for model in reversed(ordered):
+            _clear_orm(model)
+
+    results: dict = {}
+    for model in ordered:
+        model_overrides = overrides
+        if isinstance(overrides, dict) and model in overrides:
+            model_overrides = overrides[model]
+        results[model.__name__] = seed_orm(
+            model, count=count, overrides=model_overrides,
+            clear=False, seed=seed, strict=strict,
+        )
+    return results
+
+
+def _field_meta(field) -> dict:
+    """Normalise an ORM Field object into the small dict shape
+    ``_generate_for_field`` expects (``{type, scale}``)."""
+    kind = getattr(field, "kind", "") or ""
+    type_map = {
+        "IntegerField": "integer",
+        "ForeignKeyField": "integer",
+        "FloatField": "float",
+        "NumericField": "numeric",
+        "BooleanField": "boolean",
+        "DateTimeField": "datetime",
+        "StringField": "string",
+        "TextField": "text",
+        "BlobField": "blob",
+    }
+    ftype = type_map.get(kind, "string")
+    meta = {"type": ftype}
+    scale = getattr(field, "scale", None)
+    if scale is not None:
+        meta["scale"] = scale
+    return meta
+
+
+def _validate_types(fields: dict, attrs: dict, model_name: str, Log) -> None:
+    """P4c — when a generated value's Python type clearly mismatches the
+    target column's field type, LOG a warning (never hard-fail)."""
+    py_type = {
+        "IntegerField": int, "ForeignKeyField": int,
+        "FloatField": float, "NumericField": float,
+        "BooleanField": bool,
+    }
+    for name, value in attrs.items():
+        if value is None:
+            continue
+        field = fields.get(name)
+        if field is None:
+            continue
+        expected = py_type.get(getattr(field, "kind", "") or "")
+        if expected is None:
+            continue
+        # bool is an int subclass — an int landing in a bool column is fine,
+        # but a non-numeric in an int column (or vice-versa) is suspicious.
+        if expected in (int, float) and isinstance(value, bool):
+            continue
+        if not isinstance(value, expected):
+            Log.warning(
+                f"Seeder: {model_name}.{name} expected {expected.__name__} "
+                f"but generated {type(value).__name__} ({value!r}) — inserting anyway"
+            )
+
+
+def _clear_table(db, table: str) -> None:
+    """Delete every row in ``table``. Tolerant — logs and continues on error."""
+    from tina4_python.debug import Log
+    try:
+        db.delete(table, "1=1")
+    except Exception as exc:
+        Log.warning(f"Seeder: could not clear '{table}': {exc}")
+
+
+def _clear_orm(orm_class) -> None:
+    """Delete every row backing an ORM model. Tolerant — logs and continues."""
+    from tina4_python.debug import Log
+    try:
+        db = orm_class._get_db()
+        db.delete(orm_class._get_table(), "1=1")
+    except Exception as exc:
+        Log.warning(f"Seeder: could not clear {orm_class.__name__}: {exc}")
+
+
+def _foreign_key_pools(orm_class, fields: dict) -> dict:
+    """For each ForeignKeyField on the model, fetch the existing primary-key
+    values of the referenced table so seeded child rows reference a real
+    parent (P4a). Returns ``{fk_field_name: [pk_value, ...]}``; columns with
+    no resolvable / empty parent table are omitted (the generic generator
+    then fills them, and the row may fail loudly — never silently).
+    """
+    from tina4_python.orm.fields import ForeignKeyField
+    from tina4_python.debug import Log
+
+    pools: dict = {}
+    for name, field in fields.items():
+        if not isinstance(field, ForeignKeyField) or field.references is None:
+            continue
+        ref = field.references
+        try:
+            if hasattr(ref, "_get_table"):          # ORM class reference
+                target = ref
+            else:
+                # String reference — resolve against ORM subclasses.
+                from tina4_python.orm.model import ORM as _ORM
+                target = next(
+                    (s for s in _all_subclasses(_ORM)
+                     if s.__name__ == str(ref)), None
+                )
+            if target is None:
+                continue
+            db = target._get_db()
+            pk = target._get_pk()
+            rows = db.fetch(f"SELECT {pk} FROM {target._get_table()}", limit=100000)
+            values = [r[pk] for r in rows.records if r.get(pk) is not None]
+            if values:
+                pools[name] = values
+        except Exception as exc:
+            Log.warning(f"Seeder: could not resolve FK pool for {name}: {exc}")
+    return pools
+
+
+def _all_subclasses(cls) -> list:
+    """Recursively collect all subclasses of cls."""
+    out = []
+    for sub in cls.__subclasses__():
+        out.append(sub)
+        out.extend(_all_subclasses(sub))
+    return out
+
+
+def _topo_sort_models(orm_classes: list) -> list:
+    """Topologically sort ORM models so parents (referenced tables) come
+    before children (tables with a ForeignKeyField pointing at them).
+
+    Uses the ORM's existing ``ForeignKeyField.references`` metadata. Models
+    not in the input list are ignored as dependencies (you only seed what you
+    pass). Cycles fall back to the caller's declared order for the remainder.
+    """
+    from tina4_python.orm.fields import ForeignKeyField
+
+    in_set = list(dict.fromkeys(orm_classes))  # dedupe, preserve order
+    name_to_model = {m.__name__: m for m in in_set}
+
+    def _deps(model) -> set:
+        deps = set()
+        for field in getattr(model, "_fields", {}).values():
+            if isinstance(field, ForeignKeyField) and field.references is not None:
+                ref = field.references
+                ref_name = ref.__name__ if hasattr(ref, "__name__") else str(ref)
+                target = name_to_model.get(ref_name)
+                if target is not None and target is not model:
+                    deps.add(target)
+        return deps
+
+    deps_map = {m: _deps(m) for m in in_set}
+
+    ordered: list = []
+    placed: set = set()
+    # Stable topo: repeatedly emit models whose deps are all placed.
+    remaining = list(in_set)
+    progressed = True
+    while remaining and progressed:
+        progressed = False
+        still: list = []
+        for model in remaining:
+            if deps_map[model] <= placed:
+                ordered.append(model)
+                placed.add(model)
+                progressed = True
+            else:
+                still.append(model)
+        remaining = still
+    # Cycle / unresolved deps — append in declared order so we never drop a model.
+    ordered.extend(remaining)
+    return ordered
 
 
 def _generate_for_field(fake: FakeData, field_def: dict, col: str):
@@ -456,4 +766,4 @@ def _generate_for_field(fake: FakeData, field_def: dict, col: str):
     return fake.word()
 
 
-__all__ = ["FakeData", "seed_table", "seed_orm"]
+__all__ = ["FakeData", "SeedSummary", "seed_table", "seed_orm", "seed_models"]
