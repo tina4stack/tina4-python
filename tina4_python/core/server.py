@@ -2158,9 +2158,12 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # Users can bypass this by adding TINA4_OVERRIDE_CLIENT=true to .env
     is_managed = "--managed" in sys.argv
     if not is_managed and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
-        # Load .env early so TINA4_OVERRIDE_CLIENT can be read
+        # Load .env early so TINA4_OVERRIDE_CLIENT can be read.
+        # .env.local OVERRIDES .env (gitignored "local overrides" pattern) so
+        # a previously-generated dev secret is picked up.
         from tina4_python.dotenv import load_env
         load_env()
+        load_env(".env.local", override=True)
         if os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
             print()
             print("=" * 60)
@@ -2188,9 +2191,20 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
 
-    # Load .env first so env vars are available for logger init
+    # Load .env first so env vars are available for logger init.
+    # Then load .env.local as an OVERRIDE (standard "local overrides,
+    # gitignored" pattern) so a previously-generated dev secret is picked up.
     from tina4_python.dotenv import load_env
     load_env()
+    load_env(".env.local", override=True)
+
+    # Fail-safe dev secret: if TINA4_SECRET is blank AND we are in dev (not CI,
+    # not prod), mint a per-machine random secret, persist it to .env.local
+    # (gitignored), and set it in the process env for this run. In CI/prod this
+    # emits an actionable warning instead. Runs after env load, before auth is
+    # used. Never crashes boot — file-write failures fall back to in-memory.
+    from tina4_python.auth import ensure_dev_secret
+    ensure_dev_secret()
 
     # Init logger
     is_production = os.environ.get("TINA4_ENV", "development") == "production"

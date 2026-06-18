@@ -6,6 +6,8 @@
 /src/templates/index.twig
 /secrets/
 /.env
+/.env.local
+.env.local
 /public/css/test.css
 /sessions/
 /tests/secrets/domain.cert

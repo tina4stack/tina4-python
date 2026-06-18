@@ -851,15 +851,17 @@ class ORM(metaclass=ORMMeta):
         engine = db.get_database_type()
         sql = SQLTranslator.auto_increment_syntax(sql, engine)
 
-        # v3.13.16: don't claim success when the DDL failed. db.execute()
-        # swallows the driver error into get_error() and returns False, so a
-        # bad type (or any DDL error) used to leave create_table() returning
-        # True while no table was actually created — a silent, misleading pass.
-        ok = db.execute(sql)
-        db.commit()
-        if ok is False:
+        # Don't claim success when the DDL failed. execute() now RAISES on a
+        # bad type / any DDL error (it used to swallow it into get_error() and
+        # return False). Keep create_table()'s bool contract by catching the
+        # error and returning False with the cause logged, rather than letting
+        # it propagate out of create_table().
+        try:
+            db.execute(sql)
+            db.commit()
+        except Exception as e:
             from tina4_python.debug import Log
-            Log.error(f"create_table failed for {table}: {db.get_error()}", sql=sql)
+            Log.error(f"create_table failed for {table}: {db.get_error() or e}", sql=sql)
             return False
         return True
 

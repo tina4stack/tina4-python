@@ -161,7 +161,7 @@ db = Database(url: str, username="", password="")
 
 db.fetch(sql, params=None, limit=10, offset=0) -> DatabaseResult  # records, count, limit, offset
 db.fetch_one(sql, params=None) -> dict | None
-db.execute(sql, params=None) -> bool | DatabaseResult  # bool for writes, DatabaseResult for RETURNING/CALL/EXEC
+db.execute(sql, params=None) -> True | DatabaseResult  # True for writes, DatabaseResult for RETURNING/CALL/EXEC; RAISES on SQL error (never returns False — cause on get_error()). Wrap in try/except, don't test the return.
 db.execute_many(sql, params=None) -> DatabaseResult
 db.insert(table_name, data: dict | list) -> DatabaseResult
 db.update(table_name, data: dict) -> DatabaseResult
@@ -732,7 +732,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - CLI scaffolding: `tina4python generate model/route/migration/middleware`
 - Production server auto-detection: `tina4python serve --production` (auto-installs uvicorn)
 - Frond pre-compilation for 2.8x template render improvement (clear_cache method)
-- DB query caching: request-scoped auto cache **on by default** (`TINA4_AUTO_CACHING=true`, TTL `TINA4_AUTO_CACHING_TTL=5`) dedupes identical reads within a request and flushes on any write; persistent cross-request cache is opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`). The persistent DB cache routes through the same unified backend set via `TINA4_DB_CACHE_BACKEND` (memory/file/redis/valkey/memcached/mongodb/database) + `TINA4_DB_CACHE_URL`, so multiple instances share one cache with global write-invalidation. `cache_stats()` reports `mode` (request/persistent/off) and `backend`, `cache_clear()`
+- DB query caching: request-scoped auto cache **off by default — opt-in via `TINA4_AUTO_CACHING=true`** (TTL `TINA4_AUTO_CACHING_TTL=5`) dedupes identical reads within a request and flushes on any write. It ships OFF because a request-scoped cache can hand back pre-write state in a read-after-write (e.g. `SELECT MAX(id)` right before an `INSERT` in the same request → duplicate keys / stale grids); turn it on per-app for read-heavy endpoints. Persistent cross-request cache is also opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`). The persistent DB cache routes through the same unified backend set via `TINA4_DB_CACHE_BACKEND` (memory/file/redis/valkey/memcached/mongodb/database) + `TINA4_DB_CACHE_URL`, so multiple instances share one cache with global write-invalidation. `cache_stats()` reports `mode` (request/persistent/off) and `backend`, `cache_clear()`
 - ORM relationships: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)
 - Queue backends: file (default), RabbitMQ, Kafka, MongoDB — configured via env vars
 - Cache backends: unified set across response/KV and persistent DB cache — `memory` (default), `file`, `redis`, `valkey`, `memcached`, `mongodb`, `database` — selected via `TINA4_CACHE_BACKEND` (+ `TINA4_CACHE_URL`/credentials); falls back to the file backend if a backend is unreachable

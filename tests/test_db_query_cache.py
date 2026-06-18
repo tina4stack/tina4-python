@@ -1,9 +1,12 @@
-"""Request-scoped DB query cache (default-on) — protects the DB from rapid
-identical reads. See tina4_python/database/connection.py.
+"""DB query cache — protects the DB from rapid identical reads.
+See tina4_python/database/connection.py.
 
-Layers:
-  • request-scoped (DEFAULT ON, off-switch TINA4_AUTO_CACHING=false) — dedupes
-    identical SELECTs, cleared per request + on writes, short safety TTL.
+Layers — BOTH opt-in:
+  • request-scoped (DEFAULT OFF, opt-in via TINA4_AUTO_CACHING=true) — dedupes
+    identical SELECTs, cleared per request + on writes, short safety TTL. Ships
+    OFF because handing back pre-write state in a read-after-write (e.g.
+    SELECT MAX(id) right before an INSERT in the same request) is a correctness
+    footgun as a default; read-heavy endpoints opt in deliberately.
   • persistent (opt-in TINA4_DB_CACHE=true) — cross-request TTL cache, NOT
     cleared per request.
 """
@@ -31,17 +34,21 @@ def _make_db(tmp_path):
 
 
 class TestRequestScopedDefault:
-    def test_on_by_default(self, tmp_path, monkeypatch):
+    def test_off_by_default(self, tmp_path, monkeypatch):
+        # With neither cache env var set, the request-scoped cache is now OFF.
+        # It defaults OFF because a read-after-write within one request could
+        # otherwise hand back stale, pre-write state (a correctness footgun).
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
         monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
         db = _make_db(tmp_path)
         stats = db.cache_stats()
-        assert stats["enabled"] is True
-        assert stats["mode"] == "request"
+        assert stats["enabled"] is False
+        assert stats["mode"] == "off"
 
     def test_identical_fetches_dedupe(self, tmp_path, monkeypatch):
+        # Opt in to the request-scoped cache to test the feature behaviour.
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "true")
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")   # miss -> populates
         db.fetch("SELECT * FROM t")   # hit
@@ -51,7 +58,7 @@ class TestRequestScopedDefault:
 
     def test_write_invalidates(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "true")
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")
         assert db.cache_stats()["size"] == 1
@@ -60,7 +67,7 @@ class TestRequestScopedDefault:
 
     def test_insert_helper_invalidates(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "true")
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")
         assert db.cache_stats()["size"] == 1
@@ -71,7 +78,7 @@ class TestRequestScopedDefault:
 class TestRequestBoundary:
     def test_reset_clears_request_cache(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "true")
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")
         assert db.cache_stats()["size"] == 1
@@ -81,7 +88,7 @@ class TestRequestBoundary:
 
     def test_reset_preserves_counters(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "true")
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")
         db.fetch("SELECT * FROM t")  # one hit
@@ -139,7 +146,7 @@ class TestNoCacheBypass:
 
     def test_no_cache_skips_cached_value_request_mode(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "true")
         db = _make_db(tmp_path)
         # Normal read caches the current rows.
         first = db.fetch_all("SELECT n FROM t ORDER BY id")
@@ -155,7 +162,7 @@ class TestNoCacheBypass:
 
     def test_no_cache_read_does_not_populate_cache(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "true")
         db = _make_db(tmp_path)
         # A no_cache read must NOT store anything.
         db.fetch("SELECT * FROM t", no_cache=True)
@@ -168,7 +175,7 @@ class TestNoCacheBypass:
 
     def test_fetch_one_no_cache_bypasses(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "true")
         db = _make_db(tmp_path)
         row = db.fetch_one("SELECT n FROM t WHERE id = 1")  # caches 'a'
         assert row["n"] == "a"
@@ -199,7 +206,7 @@ class TestNoCacheBypass:
 
     def test_normal_cached_path_still_works(self, tmp_path, monkeypatch):
         monkeypatch.delenv("TINA4_DB_CACHE", raising=False)
-        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        monkeypatch.setenv("TINA4_AUTO_CACHING", "true")
         db = _make_db(tmp_path)
         db.fetch("SELECT * FROM t")   # miss -> populates
         db.fetch("SELECT * FROM t")   # hit

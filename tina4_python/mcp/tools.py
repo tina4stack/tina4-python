@@ -233,8 +233,12 @@ def register_dev_tools(server):
         if db is None:
             return {"error": "No database connection"}
         param_list = json.loads(params) if isinstance(params, str) else params
-        result = db.execute(sql, param_list)
-        db.commit()
+        try:
+            result = db.execute(sql, param_list)
+            db.commit()
+        except Exception as e:
+            # execute() raises on SQL error — return a clean MCP error payload.
+            return {"error": str(e)}
         return {"success": True, "affected_rows": result.count if hasattr(result, "count") else 0}
 
     def database_tables() -> list:

@@ -1604,7 +1604,7 @@ Key `.env` settings:
 
 ```bash
 # Authentication
-TINA4_SECRET=your-jwt-secret      # JWT signing (warns + uses a blank, insecure secret if unset)
+TINA4_SECRET=your-jwt-secret      # JWT signing. In DEV (TINA4_DEBUG truthy, not CI/prod) a blank value auto-generates a per-machine secret saved to gitignored .env.local; in CI/prod a blank value warns actionably (set it with `openssl rand -hex 32`)
 TINA4_API_KEY=your-api-key        # Static bearer token for API auth (API_KEY fallback supported)
 TINA4_TOKEN_LIMIT=60              # Token lifetime in minutes (default: 60)
 
@@ -1853,7 +1853,7 @@ async def dashboard(request, response):
 - **2,899 tests** passing across all modules
 - **Production server auto-detect**: `tina4python serve --production` auto-installs uvicorn
 - **`tina4python generate`**: model, route, migration, middleware scaffolding
-- **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), DB query caching — request-scoped auto cache **on by default** (`TINA4_AUTO_CACHING=true`, TTL `TINA4_AUTO_CACHING_TTL=5`s) dedupes identical reads within a request and flushes on writes; persistent cross-request cache opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`s) routed through the unified backend set via `TINA4_DB_CACHE_BACKEND` (memory/file/redis/valkey/memcached/mongodb/database) + `TINA4_DB_CACHE_URL` so instances share one cache with global write-invalidation; `cache_stats()` reports `mode` (request/persistent/off) and `backend`, `cache_clear()`
+- **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), DB query caching — request-scoped auto cache **off by default — opt-in via `TINA4_AUTO_CACHING=true`** (TTL `TINA4_AUTO_CACHING_TTL=5`s) dedupes identical reads within a request and flushes on writes; it ships OFF because a request-scoped cache can return pre-write state in a read-after-write (`SELECT MAX(id)` before an `INSERT` → duplicate keys), so opt in per read-heavy endpoint. Persistent cross-request cache also opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`s) routed through the unified backend set via `TINA4_DB_CACHE_BACKEND` (memory/file/redis/valkey/memcached/mongodb/database) + `TINA4_DB_CACHE_URL` so instances share one cache with global write-invalidation; `cache_stats()` reports `mode` (request/persistent/off) and `backend`, `cache_clear()`
 - **Sessions**: 4 backends (file, Redis/Valkey, MongoDB, database)
 - **Queue**: file/RabbitMQ/Kafka/MongoDB backends, configured via env vars
 - **Cache**: unified backend set — memory (default), file, redis, valkey, memcached, mongodb, database — via `TINA4_CACHE_BACKEND` (+ `TINA4_CACHE_URL`/credentials); file-backend fallback if a backend is unreachable

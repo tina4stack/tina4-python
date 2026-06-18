@@ -363,7 +363,7 @@ def _init(args):
     gitignore = target / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(
-            ".env\n__pycache__/\n*.pyc\n.venv/\ndata/\nlogs/\n"
+            ".env\n.env.local\n__pycache__/\n*.pyc\n.venv/\ndata/\nlogs/\n"
             "sessions/\nsecrets/\n*.db\n",
             encoding="utf-8",
         )

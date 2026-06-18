@@ -210,17 +210,21 @@ class Database:
         # pool can't rotate mid-transaction and silently break atomicity.
         self._tx_local = threading.local()
 
-        # Query cache. One store, two layers:
-        #   • request-scoped (DEFAULT ON) — dedupes identical SELECTs to protect
-        #     the DB from rapid repeat reads. Cleared at the start of every HTTP
-        #     request (so it never serves data across requests) and on any write,
-        #     with a short safety TTL for non-request contexts (scripts/workers).
-        #     Off-switch: TINA4_AUTO_CACHING=false.
+        # Query cache. One store, two layers — BOTH opt-in:
+        #   • request-scoped (DEFAULT OFF — opt-in via TINA4_AUTO_CACHING=true) —
+        #     dedupes identical SELECTs within a request. It ships OFF because a
+        #     cache that can hand back pre-write state in a read-after-write —
+        #     classically `SELECT MAX(id)` (or a generator read) right before an
+        #     INSERT in the same request — is a correctness footgun as a default
+        #     (duplicate keys, stale grids). _cache_invalidate() on writes helps
+        #     but every new query shape has to remember to play along, so we make
+        #     it a deliberate per-app choice. When ON it clears at the start of
+        #     every HTTP request and on any write, with a short safety TTL.
         #   • persistent (opt-in, TINA4_DB_CACHE=true) — cross-request TTL cache
         #     that is NOT cleared per request; entries expire by TINA4_DB_CACHE_TTL.
         from tina4_python.dotenv import is_truthy
         self._cache_persistent: bool = is_truthy(os.environ.get("TINA4_DB_CACHE", "false"))
-        self._cache_request_scoped: bool = is_truthy(os.environ.get("TINA4_AUTO_CACHING", "true"))
+        self._cache_request_scoped: bool = is_truthy(os.environ.get("TINA4_AUTO_CACHING", "false"))
         self._cache_enabled: bool = self._cache_persistent or self._cache_request_scoped
         if self._cache_persistent:
             self._cache_ttl: int = int(os.environ.get("TINA4_DB_CACHE_TTL", "30"))
@@ -487,12 +491,19 @@ class Database:
         return self._last_id
 
     def execute(self, sql: str, params: list = None):
-        """Execute a write statement. Returns True/False for simple writes.
+        """Execute a write statement. Returns True for simple writes.
 
         If the SQL contains RETURNING, CALL, EXEC, or stored procedure calls,
         returns a DatabaseResult with the result set instead.
 
-        On failure, returns False and stores the error in last_error.
+        On failure, **raises** the underlying database error (and stores the
+        message on ``last_error`` for :meth:`get_error`). It does NOT return
+        ``False`` — pre-3.13.x it swallowed the driver exception and returned
+        ``False``, which silently turned an unchecked ``INSERT``/``UPDATE``/
+        ``DELETE`` into a phantom success while the write never landed. execute()
+        now fails loud, mirroring :meth:`fetch`, so the caller's ``try/except``
+        (or the dev error overlay) sees the real cause. Wrap writes you expect to
+        fail in ``try/except`` instead of testing the return value.
         """
         if self._cache_enabled:
             self._cache_invalidate()
@@ -509,8 +520,11 @@ class Database:
                 return result
             return True
         except Exception as e:
+            # Fail LOUD. Capture the cause on last_error for get_error(), then
+            # re-raise — same contract as fetch()/_fetch_direct(). Returning
+            # False here (the old behaviour) silently dropped failed writes.
             self.last_error = str(e)
-            return False
+            raise
 
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
         if self._cache_enabled:

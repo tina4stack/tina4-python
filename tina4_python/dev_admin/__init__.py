@@ -831,9 +831,7 @@ async def _api_query(request, response):
         db.start_transaction()
         try:
             for stmt in statements:
-                result = db.execute(stmt)
-                if result is False:
-                    raise RuntimeError(f"Statement failed: {stmt[:80]}")
+                result = db.execute(stmt)  # raises on failure → caught + rolled back below
                 if hasattr(result, "affected_rows"):
                     total_affected += result.affected_rows
             db.commit()

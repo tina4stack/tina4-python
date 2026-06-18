@@ -49,24 +49,145 @@ class _DualMethod:
         return functools.partial(self._func, obj)
 
 
+def _is_ci() -> bool:
+    """True when running under a CI system.
+
+    Honours the de-facto ``CI`` env var that GitHub Actions, GitLab CI,
+    CircleCI, Travis, etc. all set to a truthy value. We never generate or
+    persist a dev secret in CI — a CI run with a blank secret must surface
+    the actionable warning, not silently mint one.
+    """
+    from tina4_python.dotenv import is_truthy
+    return is_truthy(os.environ.get("CI"))
+
+
+def _is_dev() -> bool:
+    """True when the framework is in development mode (TINA4_DEBUG truthy)."""
+    from tina4_python.dotenv import is_truthy
+    return is_truthy(os.environ.get("TINA4_DEBUG"))
+
+
+def _is_production() -> bool:
+    """True when running in production (TINA4_ENV=production)."""
+    return os.environ.get("TINA4_ENV", "development") == "production"
+
+
+# Actionable message shown when TINA4_SECRET is blank in CI/prod — tells the
+# operator exactly what to set and how. Kept as a constant so the bootstrap
+# and the lazy resolver emit the identical guidance.
+_BLANK_SECRET_WARNING = (
+    "Auth: TINA4_SECRET is not set — JWT signing is insecure. "
+    "Set TINA4_SECRET to a random value (e.g. `openssl rand -hex 32`) "
+    "in your environment or .env before serving traffic."
+)
+
+
+def ensure_dev_secret(cwd: str = None) -> str | None:
+    """Generate a per-machine development JWT secret once, at server boot.
+
+    Fail-safe default for local dev: a blank ``TINA4_SECRET`` used to log a
+    loud warning on every boot even though the developer was never told what
+    to set. Instead, in DEV (and only in dev), we mint a cryptographically
+    random secret, persist it to a gitignored ``.env.local`` so it survives
+    restarts, and set it in the process env for this run.
+
+    Generation happens ONLY when ALL of these hold:
+      * ``TINA4_SECRET`` is currently blank, AND
+      * we are in DEV (``TINA4_DEBUG`` truthy), AND
+      * we are NOT in CI (``CI`` env var not truthy), AND
+      * we are NOT in production (``TINA4_ENV`` != "production").
+
+    SECURITY: never generate or persist a secret in CI or production, and
+    only ever write to ``.env.local`` (gitignored) — never ``.env``. The
+    signing secret must never become a guessable built-in default.
+
+    In CI/prod with a blank secret, this emits the actionable warning instead
+    of generating anything.
+
+    Args:
+        cwd: Directory in which to create/append ``.env.local`` (defaults to
+            the current working directory). Used by tests to point at a temp
+            dir without chdir'ing the whole process.
+
+    Returns:
+        The generated secret string when one was minted, else ``None``.
+    """
+    if os.environ.get("TINA4_SECRET"):
+        return None  # already configured — nothing to do
+
+    if not _is_dev() or _is_ci() or _is_production():
+        # CI / prod / non-dev with a blank secret: warn actionably, never mint.
+        _warn_blank_secret()
+        return None
+
+    # Dev, not CI, not prod, blank secret → mint a per-machine dev secret.
+    new_secret = secrets.token_hex(32)
+    os.environ["TINA4_SECRET"] = new_secret  # available for THIS run immediately
+
+    from pathlib import Path
+    base = Path(cwd) if cwd else Path.cwd()
+    env_local = base / ".env.local"
+    try:
+        # Append (create if missing). A trailing newline keeps the file
+        # parseable if it already held entries without a final newline.
+        prefix = ""
+        if env_local.exists():
+            existing = env_local.read_text(encoding="utf-8")
+            if existing and not existing.endswith("\n"):
+                prefix = "\n"
+        with env_local.open("a", encoding="utf-8") as fh:
+            fh.write(f"{prefix}TINA4_SECRET={new_secret}\n")
+        _log_info(
+            "Auth: generated a development secret, saved to .env.local (gitignored)"
+        )
+    except Exception as exc:
+        # Never crash boot over a file write — keep the in-memory secret for
+        # this run and warn that it won't persist.
+        _log_warning(
+            "Auth: generated a development secret but could not write "
+            f".env.local ({exc}); using it for this run only"
+        )
+    return new_secret
+
+
+def _log_info(message: str) -> None:
+    try:
+        from tina4_python.debug import Log
+        Log.info(message)
+    except Exception:
+        import sys
+        print(message, file=sys.stderr)
+
+
+def _log_warning(message: str) -> None:
+    try:
+        from tina4_python.debug import Log
+        Log.warning(message)
+    except Exception:
+        import sys
+        print(message, file=sys.stderr)
+
+
+def _warn_blank_secret() -> None:
+    _log_warning(_BLANK_SECRET_WARNING)
+
+
 def _resolve_secret(secret: str = None) -> str:
     """Resolve the JWT signing secret.
 
     Reads ``TINA4_SECRET`` from the environment. When neither an explicit
-    secret nor ``TINA4_SECRET`` is set, warns loudly and returns a blank
-    secret — parity with the PHP/Node frameworks. Tina4 never silently signs
-    with a guessable built-in default, which would make tokens forgeable.
+    secret nor ``TINA4_SECRET`` is set, warns loudly with an actionable
+    message and returns a blank secret — parity with the PHP/Node frameworks.
+    Tina4 never silently signs with a guessable built-in default, which would
+    make tokens forgeable. (In dev, ``ensure_dev_secret()`` runs at boot and
+    mints + persists a secret so this blank path is hit only in CI/prod or
+    when auth is used before boot.)
     """
     if secret:
         return secret
     env_secret = os.environ.get("TINA4_SECRET", "")
     if not env_secret:
-        try:
-            from tina4_python.debug import Log
-            Log.warning("Auth: TINA4_SECRET not set in .env — using blank secret (insecure)")
-        except Exception:
-            import sys
-            print("Auth: TINA4_SECRET not set in .env — using blank secret (insecure)", file=sys.stderr)
+        _warn_blank_secret()
         return ""
     return env_secret
 
@@ -403,4 +524,5 @@ class AuthMiddleware:
 __all__ = [
     "Auth", "AuthMiddleware", "get_token", "valid_token", "get_payload",
     "refresh_token", "authenticate_request", "validate_api_key",
+    "ensure_dev_secret",
 ]

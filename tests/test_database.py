@@ -207,8 +207,11 @@ class TestSQLiteAdapterNegative:
         assert result.records == []
 
     def test_invalid_sql(self, db):
-        result = db.execute("INVALID SQL STATEMENT")
-        assert result is False
+        # execute() fails loud: a bad statement RAISES rather than silently
+        # returning False, while still capturing the cause for get_error().
+        with pytest.raises(Exception):
+            db.execute("INVALID SQL STATEMENT")
+        assert db.get_error() is not None
 
 
 class TestDatabaseURL:
