@@ -6,6 +6,9 @@ Kafka wire protocol over TCP sockets (zero dependencies).
 Environment variables:
     TINA4_KAFKA_BROKERS  — comma-separated broker list (default: localhost:9092)
     TINA4_KAFKA_GROUP_ID — consumer group ID (default: tina4_consumer_group)
+    KAFKA_SECURITY_PROTOCOL — e.g. SSL / SASL_SSL (default: PLAINTEXT)
+    KAFKA_SSL_CA_LOCATION   — CA cert path for TLS brokers/proxies
+    KAFKA_SASL_MECHANISM / KAFKA_SASL_USERNAME / KAFKA_SASL_PASSWORD — optional SASL
 """
 import json
 import os
@@ -147,16 +150,36 @@ class KafkaConnector:
     # ── Confluent-Kafka Implementation ───────────────────────────
 
     def _connect_confluent(self):
-        conf = {"bootstrap.servers": self._brokers, "client.id": self._client_id}
+        security = self._security_config()
+        conf = {"bootstrap.servers": self._brokers, "client.id": self._client_id, **security}
         self._producer = self._confluent.Producer(conf)
 
         consumer_conf = {
             "bootstrap.servers": self._brokers,
+            "client.id": self._client_id,
             "group.id": self._group_id,
             "auto.offset.reset": "earliest",
             "enable.auto.commit": False,
+            **security,
         }
         self._consumer = self._confluent.Consumer(consumer_conf)
+
+    @staticmethod
+    def _security_config() -> dict:
+        """Build SSL/SASL client config from env (for a TLS broker/proxy).
+
+        Honours KAFKA_SECURITY_PROTOCOL (e.g. SSL, SASL_SSL), KAFKA_SSL_CA_LOCATION,
+        and optional SASL (KAFKA_SASL_MECHANISM / KAFKA_SASL_USERNAME /
+        KAFKA_SASL_PASSWORD). Unset keys leave librdkafka defaults (PLAINTEXT).
+        """
+        mapping = {
+            "KAFKA_SECURITY_PROTOCOL": "security.protocol",
+            "KAFKA_SSL_CA_LOCATION": "ssl.ca.location",
+            "KAFKA_SASL_MECHANISM": "sasl.mechanism",
+            "KAFKA_SASL_USERNAME": "sasl.username",
+            "KAFKA_SASL_PASSWORD": "sasl.password",
+        }
+        return {rdk: os.environ[env] for env, rdk in mapping.items() if os.environ.get(env)}
 
     # ── Raw Kafka Wire Protocol Implementation ───────────────────
 
