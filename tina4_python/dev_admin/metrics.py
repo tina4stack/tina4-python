@@ -510,74 +510,89 @@ def _count_halstead(node: ast.AST, stats: dict):
 
 
 def _has_matching_test(rel_path: str) -> bool:
-    """Check if a source file has a matching test file.
+    """Check whether a source file has a test that actually exercises it.
 
-    Three-stage detection:
-    1. Filename matching — test_module.py, module_test.py, module_spec.py
-    2. Path matching — any test file referencing the full import path
-    3. Content matching — any test file mentioning the module or class name
+    PRECISE detection (a bare word-mention is NOT enough — that over-reported
+    badly: `sqlite.py` looked "tested" because some test merely said "sqlite"):
+
+    1. Filename — a dedicated `test_<module>.py` / `<module>_test.py` /
+       `<module>_spec.py` for THIS exact module (NOT the parent directory — one
+       `test_database.py` must not mark every file under `database/` tested).
+    2. Import — a test file that actually IMPORTS this module: its dotted path
+       (`import a.b.sqlite` / `from a.b.sqlite import …`) or
+       `from a.b import sqlite`. A symbol genuinely defined in this file
+       (top-level class/def) referenced by a test also counts.
+
+    Returns True only on a real, file-specific signal — so the "untested"
+    offenders surfaced by `tina4 metrics` and the dashboard "T" badge are
+    trustworthy. (If you wire real coverage data later, prefer it over this.)
     """
     import re
 
     p = Path(rel_path)
-    module = p.stem  # e.g. "sqlite" from "tina4_python/database/sqlite.py"
+    module = p.stem  # "sqlite" from ".../database/sqlite.py"
     if module == "__init__":
-        module = p.parent.name  # use parent dir name
+        module = p.parent.name  # a package: use the package name
 
-    # Build the full dotted import path for deeper matching
-    # e.g. "tina4_python/database/sqlite.py" → "tina4_python.database.sqlite"
+    # Dotted module path: ".../database/sqlite.py" -> "...database.sqlite";
+    # for an __init__.py the package itself: ".../database/__init__.py" -> "...database"
     parts = list(p.with_suffix("").parts)
-    dotted_path = ".".join(parts)  # "tina4_python.database.sqlite"
+    if parts and parts[-1] == "__init__":
+        parts = parts[:-1]
+    dotted_path = ".".join(parts)
+    parent_dotted = ".".join(parts[:-1]) if len(parts) > 1 else ""
 
-    # Also track the parent package name for broader matching
-    # e.g. "database" from "tina4_python/database/sqlite.py"
-    parent_module = p.parent.name if len(p.parts) > 1 else ""
+    # Classes DEFINED in this file (top-level) — a test referencing one of them
+    # genuinely exercises this file. Classes only (PascalCase, distinctive);
+    # module-level function names like get/connect/run are too generic to trust.
+    defined_symbols: set[str] = set()
+    src_file = Path(_last_scan_root) / rel_path if _last_scan_root else p
+    try:
+        src = src_file.read_text(encoding="utf-8", errors="ignore")
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.ClassDef) and not n.name.startswith("_") and len(n.name) > 3:
+                defined_symbols.add(n.name)
+    except (OSError, SyntaxError):
+        pass
 
-    # Search both CWD and the scan root (framework dir when in fallback mode)
+    # Search CWD and (in framework-fallback mode) the repo root that owns tests/.
     search_roots = [Path(".")]
     if _last_scan_root:
         scan_root = Path(_last_scan_root)
-        # Walk up from scan root to find repo root where tests/ lives
         for _ in range(5):
-            if (scan_root / "tests").exists() or (scan_root / "test").exists() or (scan_root / "spec").exists():
+            if any((scan_root / d).exists() for d in ("tests", "test", "spec")):
                 search_roots.append(scan_root)
                 break
-            parent = scan_root.parent
-            if parent == scan_root:
+            if scan_root.parent == scan_root:
                 break
-            scan_root = parent
+            scan_root = scan_root.parent
 
-    # Stage 1: Filename patterns
     test_dirs = [Path("tests"), Path("test"), Path("spec")]
+
+    # Stage 1: a dedicated test FILE named for THIS module (no parent-dir blanket).
     for root in search_roots:
         for td in test_dirs:
             rtd = root / td
-            patterns = [
-                rtd / f"test_{module}.py",
-                rtd / f"test_{module}s.py",
-                rtd / f"{module}_test.py",
-                rtd / f"{module}_spec.py",
-            ]
-            if parent_module and parent_module != module:
-                patterns.extend([
-                    rtd / f"test_{parent_module}.py",
-                    rtd / f"test_{parent_module}s.py",
-                    rtd / f"{parent_module}_test.py",
-                ])
-            if any(tp.exists() for tp in patterns):
+            if any((rtd / name).exists() for name in (
+                f"test_{module}.py", f"test_{module}s.py",
+                f"{module}_test.py", f"{module}_spec.py",
+            )):
                 return True
 
-    # Stage 2+3: Content scan — check if ANY test file references this module
-    search_terms = [
-        re.compile(rf'\b{re.escape(module)}\b', re.IGNORECASE),
-    ]
-    # Add dotted path patterns for import matching
+    # Stage 2: a test that actually IMPORTS this module (precise), or references
+    # a symbol defined in it. NO bare word-of-the-module-name match.
+    patterns = []
     if dotted_path:
-        search_terms.append(re.compile(rf'{re.escape(dotted_path)}'))
-    # Add class name guesses (CamelCase from snake_case module name)
-    class_name = "".join(w.capitalize() for w in module.split("_"))
-    if class_name != module:
-        search_terms.append(re.compile(rf'\b{re.escape(class_name)}\b'))
+        patterns.append(re.compile(rf'\b(?:import|from)\s+{re.escape(dotted_path)}\b'))
+    if parent_dotted:
+        patterns.append(re.compile(
+            rf'\bfrom\s+{re.escape(parent_dotted)}\s+import\b[^\n]*\b{re.escape(module)}\b'))
+    if defined_symbols:
+        sym_alt = "|".join(re.escape(s) for s in defined_symbols)
+        patterns.append(re.compile(rf'\b(?:{sym_alt})\b'))
+
+    if not patterns:
+        return False
 
     for root in search_roots:
         for td in test_dirs:
@@ -587,10 +602,10 @@ def _has_matching_test(rel_path: str) -> bool:
             for test_file in rtd.rglob("*.py"):
                 try:
                     content = test_file.read_text(encoding="utf-8", errors="ignore")
-                    if any(pat.search(content) for pat in search_terms):
-                        return True
                 except OSError:
-                    pass
+                    continue
+                if any(pat.search(content) for pat in patterns):
+                    return True
     return False
 
 
