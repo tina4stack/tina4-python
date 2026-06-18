@@ -1247,28 +1247,69 @@ def _is_function_middleware(mw) -> bool:
         return False
 
 
+def _middleware_method_names(mw_inst, prefix: str) -> list:
+    """Prefixed method names on a middleware instance in DEFINITION order.
+
+    Delegates to ``Middleware._discover_methods`` so the dispatch path and
+    the ``Middleware`` orchestrator share ONE ordering rule: cross-class =
+    registration order (the caller loops ``route["middleware"]`` in order),
+    within-class = source-definition order (never ``dir()`` alphabetical).
+    """
+    from tina4_python.core.middleware import Middleware
+    return Middleware._discover_methods(mw_inst, prefix)
+
+
+def _middleware_500(response: Response, mw_inst, method_name: str, error: Exception) -> Response:
+    """Log a throwing middleware method and produce a deterministic 500.
+
+    A middleware that raises must never crash the worker or leak an
+    unhandled exception. We LOG it (so it's visible, never silent) and
+    return a clean 500 — the same outcome across all four frameworks,
+    whose dispatchers wrap the before/after invocation the same way.
+    """
+    Log.error(
+        f"Middleware {type(mw_inst).__name__}.{method_name} raised "
+        f"{type(error).__name__}: {error}"
+    )
+    return response.status(500).json({
+        "error": "Internal Server Error",
+        "status": 500,
+    })
+
+
 def _run_before_middleware(request: Request, response: Response, route: dict) -> tuple[Request, Response, bool]:
     """Run class-based before_* middleware methods. Returns (request, response, skip_handler).
 
     Function-style ``async def mw(req, resp, next_handler)`` middleware is
     skipped here — it's handled by ``_invoke_handler_with_middleware``
     which wraps the route handler with each function's continuation.
+
+    Ordering (v3.13.38): middleware classes run in REGISTRATION order (the
+    order of ``route["middleware"]``); within a class, ``before_*`` methods
+    run in DEFINITION order, not ``dir()`` alphabetical order.
+
+    Resilience (M2): each method call is wrapped — a method that THROWS is
+    logged and converted to a clean 500, and the handler is skipped. A
+    before_* that sets status >= 400 also short-circuits the handler.
     """
     skip = False
     for _mw_cls in route.get("middleware", []):
         if _is_function_middleware(_mw_cls):
             continue  # Handled by the continuation wrapper instead
         _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
-        for _attr_name in dir(_mw_inst):
-            if _attr_name.startswith("before_"):
-                _mw_method = getattr(_mw_inst, _attr_name)
-                if callable(_mw_method):
-                    _mw_result = _mw_method(request, response)
-                    if _mw_result is not None:
-                        request, response = _mw_result
-                        if response.status_code >= 400:
-                            skip = True
-                            break
+        for _attr_name in _middleware_method_names(_mw_inst, "before_"):
+            _mw_method = getattr(_mw_inst, _attr_name)
+            try:
+                _mw_result = _mw_method(request, response)
+            except Exception as _err:
+                response = _middleware_500(response, _mw_inst, _attr_name, _err)
+                skip = True
+                break
+            if _mw_result is not None:
+                request, response = _mw_result
+            if response.status_code >= 400:
+                skip = True
+                break
         if skip:
             break
     return request, response, skip
@@ -1280,18 +1321,31 @@ def _run_after_middleware(request: Request, response: Response, route: dict) -> 
     Function-style middleware that wraps the handler (with next_handler)
     handles its own "after" code on the return path — no separate pass
     needed for it here.
+
+    Ordering (v3.13.38): same rule as before_* — registration order across
+    classes, definition order within a class.
+
+    4xx short-circuit rule (M2): after_* ALWAYS run, even when a before_*
+    short-circuited with status >= 400 (the handler was skipped). This lets
+    after-middleware add headers / logging on error responses too. All four
+    frameworks follow this same rule.
+
+    Resilience (M2): each after_* call is wrapped — a method that THROWS is
+    logged and converted to a clean 500; remaining after_* still run.
     """
     for _mw_cls in route.get("middleware", []):
         if _is_function_middleware(_mw_cls):
             continue
         _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
-        for _attr_name in dir(_mw_inst):
-            if _attr_name.startswith("after_"):
-                _mw_method = getattr(_mw_inst, _attr_name)
-                if callable(_mw_method):
-                    _mw_result = _mw_method(request, response)
-                    if _mw_result is not None:
-                        request, response = _mw_result
+        for _attr_name in _middleware_method_names(_mw_inst, "after_"):
+            _mw_method = getattr(_mw_inst, _attr_name)
+            try:
+                _mw_result = _mw_method(request, response)
+            except Exception as _err:
+                response = _middleware_500(response, _mw_inst, _attr_name, _err)
+                continue
+            if _mw_result is not None:
+                request, response = _mw_result
     return request, response
 
 

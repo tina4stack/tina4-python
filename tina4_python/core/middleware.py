@@ -30,8 +30,18 @@ class Middleware:
     """Standardized middleware orchestrator.
 
     Registers middleware classes globally and runs their ``before_*`` /
-    ``after_*`` static methods in alphabetical order. Mirrors the PHP,
-    Ruby and Node.js orchestrators.
+    ``after_*`` static methods. Mirrors the PHP, Ruby and Node.js
+    orchestrators.
+
+    Ordering rule (v3.13.38) — deterministic, never alphabetical:
+
+    * Across middleware classes: REGISTRATION order — the order they were
+      attached via ``Middleware.use`` / ``@middleware`` / ``Router.group``.
+    * Within a single class: DEFINITION order — ``before_*`` / ``after_*``
+      methods run in the order they appear in the class body (Python
+      preserves this in ``__dict__``), NOT ``dir()`` alphabetical order.
+
+    ``before_*`` always runs before the route handler, ``after_*`` after.
     """
 
     _global_middleware: list = []
@@ -81,13 +91,27 @@ class Middleware:
 
     @staticmethod
     def _discover_methods(mw_class, prefix: str) -> list:
-        """Return sorted list of public static method names with ``prefix``."""
-        names = [
-            name
-            for name in dir(mw_class)
-            if name.startswith(prefix) and callable(getattr(mw_class, name, None))
-        ]
-        return sorted(names)
+        """Return prefixed method names in DEFINITION order (not alphabetical).
+
+        Walks the MRO from the base classes up to the most-derived so a
+        subclass's own methods run after the methods it inherits, and uses
+        each class's ``__dict__`` (insertion-ordered in Python 3.7+) to
+        preserve the order methods were written in the source. A subclass
+        override keeps the position of its first definition.
+        """
+        seen = set()
+        names = []
+        klass = mw_class if isinstance(mw_class, type) else type(mw_class)
+        for base in reversed(klass.__mro__):
+            for name in base.__dict__:
+                if (
+                    name.startswith(prefix)
+                    and name not in seen
+                    and callable(getattr(mw_class, name, None))
+                ):
+                    seen.add(name)
+                    names.append(name)
+        return names
 
 
 class CorsMiddleware:
