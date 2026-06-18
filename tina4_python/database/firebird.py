@@ -289,7 +289,11 @@ class FirebirdAdapter(DatabaseAdapter):
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor()
 
-        # Count total rows
+        # Count total rows. The COUNT probe is best-effort — a failure here
+        # defaults `total` to 0 — but it must NEVER mask a real failure in the
+        # MAIN query below. On a probe failure we get a fresh cursor and let
+        # the paginated query run through _safe_cursor_execute, which FAILS
+        # LOUD (parity with execute()) instead of looking like "no rows".
         count_sql = f"SELECT COUNT(*) FROM ({sql})"
         try:
             cursor = self._safe_cursor_execute(cursor, count_sql, params)
@@ -309,7 +313,7 @@ class FirebirdAdapter(DatabaseAdapter):
             start = offset + 1
             end = offset + limit
             paginated_sql = f"{sql} ROWS {start} TO {end}"
-        cursor = self._safe_cursor_execute(cursor, paginated_sql, params)
+        cursor = self._safe_cursor_execute(cursor, paginated_sql, params)  # FAILS LOUD
 
         desc = cursor.description
         col_names = [d[0].strip().lower() for d in desc] if desc else []

@@ -110,7 +110,12 @@ class SQLiteAdapter(DatabaseAdapter):
               limit: int = 100, offset: int = 0) -> DatabaseResult:
         # v3.13.12: strip trailing `;` before wrapping — see DatabaseAdapter.
         sql = self._strip_trailing_semicolons(sql)
-        # Count total rows (without LIMIT/OFFSET)
+        # Count total rows (without LIMIT/OFFSET). The COUNT probe is
+        # best-effort — a failure here defaults `total` to 0 — but it must
+        # NEVER mask a real failure in the MAIN query below. The main query
+        # is deliberately NOT wrapped in try/except so its error FAILS LOUD
+        # (parity with execute()). A typo'd query then raises, instead of the
+        # old behaviour where a buried probe error made it look like "no rows".
         count_sql = f"SELECT COUNT(*) as cnt FROM ({sql})"
         try:
             total = self._conn.execute(count_sql, params or []).fetchone()["cnt"]
@@ -128,7 +133,7 @@ class SQLiteAdapter(DatabaseAdapter):
         else:
             paginated_sql = f"{sql} LIMIT ? OFFSET ?"
             paginated_params = (params or []) + [limit, offset]
-        cursor = self._conn.execute(paginated_sql, paginated_params)
+        cursor = self._conn.execute(paginated_sql, paginated_params)  # FAILS LOUD
         rows = [dict(row) for row in cursor.fetchall()]
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)

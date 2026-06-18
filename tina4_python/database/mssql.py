@@ -110,13 +110,24 @@ class MSSQLAdapter(DatabaseAdapter):
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(as_dict=True)
 
-        # Count total rows
+        # Count total rows. The COUNT probe is best-effort — a failure here
+        # defaults `total` to 0 — but it must NEVER mask a real failure in the
+        # MAIN query. We probe on a fresh cursor so a probe failure can't leave
+        # the main cursor half-consumed, and the main query below is
+        # deliberately NOT wrapped so its error FAILS LOUD (parity with
+        # execute()) instead of looking like "no rows".
         count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
+        probe = self._conn.cursor(as_dict=True)
         try:
-            cursor.execute(count_sql, tuple(params) if params else ())
-            total = cursor.fetchone()["cnt"]
+            probe.execute(count_sql, tuple(params) if params else ())
+            total = probe.fetchone()["cnt"]
         except Exception:
             total = 0
+        finally:
+            try:
+                probe.close()
+            except Exception:
+                pass
 
         # Apply pagination — MSSQL uses OFFSET/FETCH.
         # v3.13.12: limit <= 0 means "no pagination" (fetch_all's

@@ -566,14 +566,37 @@ class Database:
 
         Shared by the cached and ``no_cache`` paths so error capture stays
         identical regardless of caching.
+
+        FAIL LOUD: a SQL error in the adapter's ``fetch`` propagates (same
+        contract as :meth:`execute`). The cause is captured on ``last_error``
+        for :meth:`get_error` before the re-raise — preferring the adapter's
+        own message (set in its error path) over the str() of the exception.
         """
         adapter = self._get_adapter()
         try:
             result = adapter.fetch(sql, params, limit, offset)
             self.last_error = None
             return result
-        except Exception:
-            self.last_error = getattr(adapter, "last_error", None) or self.last_error
+        except Exception as e:
+            self.last_error = getattr(adapter, "last_error", None) or str(e) or self.last_error
+            raise
+
+    def _fetch_one_direct(self, sql: str, params: list) -> dict | None:
+        """Run a fetch_one straight against the adapter — no cache lookup/store.
+
+        v3.13.37 (DB-contract A): ``fetch_one`` used to call the adapter
+        directly, so a SQL error raised (good) but ``db.get_error()`` stayed
+        ``None`` — the public API couldn't read the cause. Route every
+        fetch_one through here so it FAILS LOUD *and* populates ``last_error``
+        exactly like :meth:`execute` / :meth:`_fetch_direct`.
+        """
+        adapter = self._get_adapter()
+        try:
+            result = adapter.fetch_one(sql, params)
+            self.last_error = None
+            return result
+        except Exception as e:
+            self.last_error = getattr(adapter, "last_error", None) or str(e) or self.last_error
             raise
 
     def fetch_all(self, sql: str, params: list = None,
@@ -613,12 +636,15 @@ class Database:
                 with self._cache_lock:
                     self._cache_hits += 1
                 return cached
-            result = self._get_adapter().fetch_one(sql, params)
+            # _fetch_one_direct RAISES on a SQL error (and captures last_error),
+            # so a failed read never reaches _cache_set below — we never cache a
+            # null/empty produced by a buried failure.
+            result = self._fetch_one_direct(sql, params)
             self._cache_set(key, result)
             with self._cache_lock:
                 self._cache_misses += 1
             return result
-        return self._get_adapter().fetch_one(sql, params)
+        return self._fetch_one_direct(sql, params)
 
     def insert(self, table: str, data: dict | list) -> DatabaseResult:
         if self._cache_enabled:
@@ -646,22 +672,86 @@ class Database:
     def start_transaction(self):
         """Begin a transaction. Pins the adapter to this thread for the
         whole transaction so executes and the final commit/rollback all
-        run on the same connection."""
+        run on the same connection.
+
+        Nested-begin guard (v3.13.37, DB-contract C): a second
+        ``start_transaction()`` on a thread that already has a pinned adapter
+        is a double-begin — the inner BEGIN silently commits or no-ops on most
+        engines, leaving the connection mid-transaction with the caller none
+        the wiser. We keep a per-thread depth counter and log a clear warning
+        instead of silently re-beginning. The pin is left on the original
+        adapter so commit/rollback still land on the right connection.
+        """
+        pinned = getattr(self._tx_local, "adapter", None)
+        if pinned is not None:
+            depth = getattr(self._tx_local, "depth", 1)
+            try:
+                from tina4_python.debug import Log
+                Log.warning(
+                    "start_transaction() called while a transaction is already "
+                    f"open on this thread (depth would become {depth + 1}). "
+                    "Nested transactions are not supported — the existing "
+                    "transaction stays open on its pinned connection and this "
+                    "nested begin is ignored. Commit or rollback the outer "
+                    "transaction first."
+                )
+            except Exception:
+                pass
+            self._tx_local.depth = depth + 1
+            return
         adapter = self._get_adapter()
         self._tx_local.adapter = adapter
+        self._tx_local.depth = 1
         adapter.start_transaction()
 
     def commit(self):
-        """Commit the current transaction and release the adapter pin."""
+        """Commit the current transaction and release the adapter pin.
+
+        FAIL LOUD (v3.13.37, DB-contract C): if the underlying commit raises,
+        capture ``last_error`` and RE-RAISE — never swallow. On failure the
+        transaction pin is RETAINED so the caller's follow-up ``rollback()``
+        lands on the SAME connection (clearing it would leak a dirty connection
+        back into the pool and route the rollback to a different one). The pin
+        is cleared ONLY on a successful commit.
+        """
         adapter = self._get_adapter()
-        adapter.commit()
+        depth = getattr(self._tx_local, "depth", 0)
+        if depth > 1:
+            # Inner commit of an ignored nested begin — just unwind the depth.
+            self._tx_local.depth = depth - 1
+            return
+        try:
+            adapter.commit()
+            self.last_error = None
+        except Exception as e:
+            # Keep the pin so rollback() reaches this same connection.
+            self.last_error = str(e)
+            raise
+        # Success — release the pin.
         self._tx_local.adapter = None
+        self._tx_local.depth = 0
 
     def rollback(self):
-        """Roll back the current transaction and release the adapter pin."""
+        """Roll back the current transaction and release the adapter pin.
+
+        Rollback is the terminal cleanup of a transaction, so it ALWAYS clears
+        the pin (and the depth counter) — even on a failed commit it routes to
+        the retained pinned connection and cleans it up. If the underlying
+        rollback itself raises, ``last_error`` is captured and the error
+        re-raised, but the pin is still released so a poisoned connection
+        doesn't stay pinned to this thread forever.
+        """
         adapter = self._get_adapter()
-        adapter.rollback()
-        self._tx_local.adapter = None
+        try:
+            adapter.rollback()
+            self.last_error = None
+        except Exception as e:
+            self.last_error = str(e)
+            raise
+        finally:
+            # Terminal cleanup — always release the pin.
+            self._tx_local.adapter = None
+            self._tx_local.depth = 0
 
     def table_exists(self, name: str) -> bool:
         adapter = self._get_adapter()
@@ -714,52 +804,211 @@ class Database:
                 )
             self.commit()
 
-    def _sequence_next(self, seq_name: str, table: str = None, pk_column: str = "id") -> int:
-        """Atomically increment and return the next value from the sequence table.
-
-        If the sequence row doesn't exist yet, seeds it from MAX(pk_column)
-        of the given table (or 0 if the table is empty/missing).
-        """
-        self._ensure_sequence_table()
-
-        # Check if the sequence row exists
-        row = self.fetch_one(
-            "SELECT current_value FROM tina4_sequences WHERE seq_name = ?",
-            [seq_name]
-        )
-
-        if row is None:
-            # Seed from current MAX
-            seed_value = 0
-            if table:
-                try:
-                    max_row = self.fetch_one(
-                        f"SELECT MAX({pk_column}) AS max_id FROM {table}"
-                    )
-                    if max_row and max_row.get("max_id") is not None:
-                        seed_value = int(max_row["max_id"])
-                except Exception:
-                    pass  # Table doesn't exist — start at 0
-
-            self.execute(
-                "INSERT INTO tina4_sequences (seq_name, current_value) VALUES (?, ?)",
-                [seq_name, seed_value]
+    def _sequence_seed_value(self, adapter, table: str, pk_column: str) -> int:
+        """Best-effort MAX(pk) seed for a new sequence row. 0 if table missing/empty."""
+        if not table:
+            return 0
+        try:
+            max_row = adapter.fetch_one(
+                f"SELECT MAX({pk_column}) AS max_id FROM {table}"
             )
-            self.commit()
+            if max_row and max_row.get("max_id") is not None:
+                return int(max_row["max_id"])
+        except Exception:
+            pass  # Table doesn't exist — start at 0
+        return 0
 
-        # Atomic increment + read
-        self.execute(
-            "UPDATE tina4_sequences SET current_value = current_value + 1 "
-            "WHERE seq_name = ?",
-            [seq_name]
+    def _sequence_next(self, seq_name: str, table: str = None, pk_column: str = "id") -> int:
+        """Atomically increment and return the next value from tina4_sequences.
+
+        v3.13.37 (DB-contract B): the old read-increment-read path had a race —
+        two concurrent callers could read the same ``current_value`` and return
+        the same id (duplicate primary keys). This now uses a single atomic
+        increment-and-return per engine, pinned to ONE connection so the two
+        statements (where two are needed) land on the same connection:
+
+          * SQLite >= 3.35:  ``UPDATE ... SET current_value = current_value + 1
+            WHERE seq_name = ? RETURNING current_value`` — one atomic statement.
+            Older SQLite: wrap read+write in an IMMEDIATE write transaction so
+            the increment is serialised under SQLite's write lock.
+          * MySQL:  ``UPDATE ... SET current_value = LAST_INSERT_ID(current_value
+            + 1) ...`` then ``SELECT LAST_INSERT_ID()`` on the SAME connection
+            (LAST_INSERT_ID is per-connection → race-safe).
+          * MSSQL:  ``UPDATE ... SET current_value += 1 OUTPUT
+            inserted.current_value WHERE seq_name = ?`` — one atomic statement.
+
+        Seeding the row is race-safe: an atomic insert-if-absent (ON CONFLICT /
+        INSERT IGNORE / NOT EXISTS) seeded from MAX(pk) runs BEFORE the atomic
+        increment, so there is never a read-then-insert gap. On error we RAISE
+        (never silently fall back to 1).
+        """
+        engine = self.get_database_type()
+
+        # Pin a single adapter for the whole sequence operation so the
+        # seed + increment + read all hit the SAME connection. Inside an
+        # active transaction the adapter is already pinned; otherwise we pin
+        # here and release in the finally so the pool can rotate afterwards.
+        already_pinned = getattr(self._tx_local, "adapter", None) is not None
+        adapter = self._get_adapter()
+        if not already_pinned:
+            self._tx_local.adapter = adapter
+
+        try:
+            if engine == "sqlite":
+                # SQLite does ensure-table + seed + increment all under the
+                # adapter write lock (single shared connection — concurrent
+                # reads/writes on it otherwise raise "API misuse").
+                return self._sequence_next_sqlite(adapter, seq_name, table, pk_column)
+            self._ensure_sequence_table()
+            if engine == "mysql":
+                return self._sequence_next_mysql(adapter, seq_name, table, pk_column)
+            if engine == "mssql":
+                return self._sequence_next_mssql(adapter, seq_name, table, pk_column)
+            # Any other engine routed here (defensive) — generic atomic-ish path.
+            return self._sequence_next_generic(adapter, seq_name, table, pk_column)
+        finally:
+            if not already_pinned:
+                self._tx_local.adapter = None
+
+    def _sequence_next_sqlite(self, adapter, seq_name: str, table: str, pk_column: str) -> int:
+        import sqlite3
+        conn = getattr(adapter, "_conn", None)
+        if conn is None:
+            raise RuntimeError("get_next_id: SQLite adapter has no live connection")
+
+        # The ENTIRE op (ensure-table + seed read + increment) runs under the
+        # adapter's process-wide write lock. In single-connection mode every
+        # thread shares ONE sqlite3.Connection, so any concurrent .execute()
+        # on it — even a read — raises "bad parameter or other API misuse".
+        # Holding _write_lock for the whole op serialises every connection
+        # touch, and on SQLite >= 3.35 the single UPDATE … RETURNING is itself
+        # atomic, so the lock + that one statement are all the atomicity we
+        # need — no duplicate ids under concurrency.
+        with SQLiteAdapter._write_lock:
+            # Ensure the sequence table exists (idempotent) on this connection.
+            exists = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='tina4_sequences'"
+            ).fetchone()
+            if not exists:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS tina4_sequences ("
+                    "seq_name VARCHAR(200) NOT NULL PRIMARY KEY, "
+                    "current_value INTEGER NOT NULL DEFAULT 0)"
+                )
+            seed = self._sequence_seed_value(adapter, table, pk_column)
+            conn.execute(
+                "INSERT OR IGNORE INTO tina4_sequences (seq_name, current_value) "
+                "VALUES (?, ?)",
+                [seq_name, seed],
+            )
+            if sqlite3.sqlite_version_info >= (3, 35, 0):
+                # One atomic increment-and-return.
+                row = conn.execute(
+                    "UPDATE tina4_sequences SET current_value = current_value + 1 "
+                    "WHERE seq_name = ? RETURNING current_value",
+                    [seq_name],
+                ).fetchone()
+            else:
+                # Older SQLite (< 3.35, no RETURNING): increment then read.
+                # Still race-safe because we hold _write_lock across both, so
+                # no other caller can read or write the counter in between.
+                conn.execute(
+                    "UPDATE tina4_sequences SET current_value = current_value + 1 "
+                    "WHERE seq_name = ?",
+                    [seq_name],
+                )
+                row = conn.execute(
+                    "SELECT current_value FROM tina4_sequences WHERE seq_name = ?",
+                    [seq_name],
+                ).fetchone()
+            # autocommit per statement (isolation_level=None) already persists
+            # the increment; commit defensively if a txn is somehow open.
+            if conn.in_transaction:
+                conn.execute("COMMIT")
+        if not row:
+            raise RuntimeError(
+                f"get_next_id: sequence row '{seq_name}' vanished mid-increment"
+            )
+        return int(row["current_value"])
+
+    def _sequence_next_mysql(self, adapter, seq_name: str, table: str, pk_column: str) -> int:
+        # Race-safe seed: INSERT IGNORE is a no-op if the row exists.
+        seed = self._sequence_seed_value(adapter, table, pk_column)
+        adapter.execute(
+            "INSERT IGNORE INTO tina4_sequences (seq_name, current_value) "
+            "VALUES (?, ?)",
+            [seq_name, seed],
         )
         self.commit()
-
-        row = self.fetch_one(
-            "SELECT current_value FROM tina4_sequences WHERE seq_name = ?",
-            [seq_name]
+        # LAST_INSERT_ID(expr) stashes expr in this CONNECTION's session var
+        # and returns it — atomic per-connection, no read-back race.
+        adapter.execute(
+            "UPDATE tina4_sequences "
+            "SET current_value = LAST_INSERT_ID(current_value + 1) "
+            "WHERE seq_name = ?",
+            [seq_name],
         )
-        return int(row["current_value"]) if row else 1
+        self.commit()
+        row = adapter.fetch_one("SELECT LAST_INSERT_ID() AS next_id")
+        if not row:
+            raise RuntimeError(
+                f"get_next_id: LAST_INSERT_ID() returned nothing for '{seq_name}'"
+            )
+        return int(list(row.values())[0])
+
+    def _sequence_next_mssql(self, adapter, seq_name: str, table: str, pk_column: str) -> int:
+        # Race-safe seed: INSERT only when absent (single statement).
+        seed = self._sequence_seed_value(adapter, table, pk_column)
+        adapter.execute(
+            "INSERT INTO tina4_sequences (seq_name, current_value) "
+            "SELECT ?, ? WHERE NOT EXISTS "
+            "(SELECT 1 FROM tina4_sequences WHERE seq_name = ?)",
+            [seq_name, seed, seq_name],
+        )
+        self.commit()
+        # Single atomic statement: increment + return the new value via OUTPUT.
+        result = adapter.execute(
+            "UPDATE tina4_sequences SET current_value = current_value + 1 "
+            "OUTPUT inserted.current_value AS next_id WHERE seq_name = ?",
+            [seq_name],
+        )
+        self.commit()
+        records = getattr(result, "records", None)
+        if records:
+            return int(records[0]["next_id"])
+        raise RuntimeError(
+            f"get_next_id: OUTPUT produced no row for sequence '{seq_name}'"
+        )
+
+    def _sequence_next_generic(self, adapter, seq_name: str, table: str, pk_column: str) -> int:
+        """Fallback atomic-ish path (read-then-insert avoided via best effort).
+
+        Used only for engines not otherwise special-cased. Seeds if absent,
+        then increments and reads on the pinned connection.
+        """
+        seed = self._sequence_seed_value(adapter, table, pk_column)
+        try:
+            adapter.execute(
+                "INSERT INTO tina4_sequences (seq_name, current_value) VALUES (?, ?)",
+                [seq_name, seed],
+            )
+            self.commit()
+        except Exception:
+            # Row likely already exists (PK conflict) — fine, keep going.
+            self.rollback()
+        adapter.execute(
+            "UPDATE tina4_sequences SET current_value = current_value + 1 "
+            "WHERE seq_name = ?",
+            [seq_name],
+        )
+        self.commit()
+        row = adapter.fetch_one(
+            "SELECT current_value FROM tina4_sequences WHERE seq_name = ?",
+            [seq_name],
+        )
+        if not row:
+            raise RuntimeError(f"get_next_id: sequence row '{seq_name}' missing")
+        return int(row["current_value"])
 
     def get_next_id(self, table: str, pk_column: str = "id", generator_name: str = None) -> int:
         """Get the next available ID for a table.

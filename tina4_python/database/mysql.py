@@ -100,13 +100,24 @@ class MySQLAdapter(DatabaseAdapter):
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(dictionary=True)
 
-        # Count total rows
+        # Count total rows. The COUNT probe is best-effort — a failure here
+        # defaults `total` to 0 — but it must NEVER mask a real failure in the
+        # MAIN query. We use a fresh cursor for the probe so a probe failure
+        # can't leave the main cursor in a half-consumed state, and the main
+        # query below is deliberately NOT wrapped so its error FAILS LOUD
+        # (parity with execute()) instead of looking like "no rows".
         count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
+        probe = self._conn.cursor(dictionary=True)
         try:
-            cursor.execute(count_sql, params or [])
-            total = cursor.fetchone()["cnt"]
+            probe.execute(count_sql, params or [])
+            total = probe.fetchone()["cnt"]
         except Exception:
             total = 0
+        finally:
+            try:
+                probe.close()
+            except Exception:
+                pass
 
         # Apply pagination — v3.13.12: limit <= 0 means "no pagination"
         # (fetch_all's default — give me ALL rows).
@@ -116,7 +127,7 @@ class MySQLAdapter(DatabaseAdapter):
         else:
             paginated_sql = f"{sql} LIMIT %s OFFSET %s"
             paginated_params = (params or []) + [limit, offset]
-        cursor.execute(paginated_sql, paginated_params)
+        cursor.execute(paginated_sql, paginated_params)  # FAILS LOUD
         rows = [dict(row) for row in cursor.fetchall()]
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
