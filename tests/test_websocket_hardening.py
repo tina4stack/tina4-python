@@ -232,6 +232,27 @@ class TestBackplaneRelay:
         await mgr.broadcast_all("survive")
         assert conn.sent == ["survive"]
 
+    async def test_backplane_init_failure_degrades_to_local_only(self, monkeypatch):
+        """If wiring the backplane blows up (e.g. Redis unreachable at startup),
+        the manager logs and falls back to LOCAL-only delivery — a broadcast
+        still reaches local connections and never raises. (Distinct from a
+        publish-time failure: this is the _ensure_backplane construction path.)"""
+        def _boom(*a, **k):
+            raise RuntimeError("backplane unreachable at startup")
+        # _ensure_backplane does `from ...backplane import create_backplane`,
+        # so patch it where it is looked up.
+        monkeypatch.setattr(
+            "tina4_python.websocket.backplane.create_backplane", _boom
+        )
+        mgr = WebSocketManager()
+        conn = FakeConnection("c1")
+        mgr.add(conn)
+        # Must NOT raise even though backplane construction throws.
+        await mgr.broadcast("hello")
+        assert mgr._backplane is None          # degraded to local-only
+        assert mgr._backplane_started is True  # attempted exactly once
+        assert conn.sent == ["hello"]          # local delivery still happened
+
 
 # ── Broadcast resilience ──────────────────────────────────────
 
