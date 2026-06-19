@@ -6,9 +6,11 @@ Kafka wire protocol over TCP sockets (zero dependencies).
 Environment variables:
     TINA4_KAFKA_BROKERS  — comma-separated broker list (default: localhost:9092)
     TINA4_KAFKA_GROUP_ID — consumer group ID (default: tina4_consumer_group)
-    KAFKA_SECURITY_PROTOCOL — e.g. SSL / SASL_SSL (default: PLAINTEXT)
-    KAFKA_SSL_CA_LOCATION   — CA cert path for TLS brokers/proxies
-    KAFKA_SASL_MECHANISM / KAFKA_SASL_USERNAME / KAFKA_SASL_PASSWORD — optional SASL
+
+    TLS/SASL (each read as TINA4_KAFKA_<NAME> first, then bare KAFKA_<NAME>):
+    TINA4_KAFKA_SECURITY_PROTOCOL — e.g. SSL / SASL_SSL (default: PLAINTEXT)
+    TINA4_KAFKA_SSL_CA_LOCATION   — CA cert path for TLS brokers/proxies
+    TINA4_KAFKA_SASL_MECHANISM / TINA4_KAFKA_SASL_USERNAME / TINA4_KAFKA_SASL_PASSWORD — optional SASL
 """
 import json
 import os
@@ -168,18 +170,27 @@ class KafkaConnector:
     def _security_config() -> dict:
         """Build SSL/SASL client config from env (for a TLS broker/proxy).
 
-        Honours KAFKA_SECURITY_PROTOCOL (e.g. SSL, SASL_SSL), KAFKA_SSL_CA_LOCATION,
-        and optional SASL (KAFKA_SASL_MECHANISM / KAFKA_SASL_USERNAME /
-        KAFKA_SASL_PASSWORD). Unset keys leave librdkafka defaults (PLAINTEXT).
+        Each setting is read from the Tina4-namespaced env var first
+        (``TINA4_KAFKA_SECURITY_PROTOCOL`` …) and falls back to the bare
+        librdkafka-convention name (``KAFKA_SECURITY_PROTOCOL`` …) that many
+        Kafka deployments already set. Honours security.protocol (e.g. SSL,
+        SASL_SSL), ssl.ca.location, and optional SASL (mechanism / username /
+        password). Unset keys leave librdkafka defaults (PLAINTEXT).
         """
+        # rdkafka key -> env suffix (read as TINA4_KAFKA_<suffix>, then KAFKA_<suffix>)
         mapping = {
-            "KAFKA_SECURITY_PROTOCOL": "security.protocol",
-            "KAFKA_SSL_CA_LOCATION": "ssl.ca.location",
-            "KAFKA_SASL_MECHANISM": "sasl.mechanism",
-            "KAFKA_SASL_USERNAME": "sasl.username",
-            "KAFKA_SASL_PASSWORD": "sasl.password",
+            "security.protocol": "SECURITY_PROTOCOL",
+            "ssl.ca.location": "SSL_CA_LOCATION",
+            "sasl.mechanism": "SASL_MECHANISM",
+            "sasl.username": "SASL_USERNAME",
+            "sasl.password": "SASL_PASSWORD",
         }
-        return {rdk: os.environ[env] for env, rdk in mapping.items() if os.environ.get(env)}
+        config = {}
+        for rdk, suffix in mapping.items():
+            value = os.environ.get(f"TINA4_KAFKA_{suffix}") or os.environ.get(f"KAFKA_{suffix}")
+            if value:
+                config[rdk] = value
+        return config
 
     # ── Raw Kafka Wire Protocol Implementation ───────────────────
 

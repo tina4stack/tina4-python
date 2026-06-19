@@ -584,3 +584,61 @@ class TestImports:
         kafka = KafkaBackend()
         assert rmq is not None
         assert kafka is not None
+
+
+class TestKafkaSecurityConfig:
+    """Lock-in for KafkaConnector._security_config() (PR #52 + TINA4_KAFKA_* alias).
+
+    SSL/SASL settings are read from the Tina4-namespaced env var first, then the
+    bare librdkafka name; unset keys leave librdkafka's PLAINTEXT default.
+    """
+
+    _VARS = [
+        "TINA4_KAFKA_SECURITY_PROTOCOL", "KAFKA_SECURITY_PROTOCOL",
+        "TINA4_KAFKA_SSL_CA_LOCATION", "KAFKA_SSL_CA_LOCATION",
+        "TINA4_KAFKA_SASL_MECHANISM", "KAFKA_SASL_MECHANISM",
+        "TINA4_KAFKA_SASL_USERNAME", "KAFKA_SASL_USERNAME",
+        "TINA4_KAFKA_SASL_PASSWORD", "KAFKA_SASL_PASSWORD",
+    ]
+
+    def _clean(self, monkeypatch):
+        for v in self._VARS:
+            monkeypatch.delenv(v, raising=False)
+
+    def _cfg(self):
+        from tina4_python.queue_backends.kafka_backend import KafkaBackend
+        return KafkaBackend._security_config()
+
+    def test_no_env_is_empty(self, monkeypatch):
+        # NEGATIVE: nothing set -> {} (librdkafka keeps its PLAINTEXT default).
+        self._clean(monkeypatch)
+        assert self._cfg() == {}
+
+    def test_bare_kafka_names(self, monkeypatch):
+        # POSITIVE: the contributor's exact env (bare KAFKA_*) still works.
+        self._clean(monkeypatch)
+        monkeypatch.setenv("KAFKA_SECURITY_PROTOCOL", "SSL")
+        monkeypatch.setenv("KAFKA_SSL_CA_LOCATION", "/etc/ssl/ca.pem")
+        assert self._cfg() == {"security.protocol": "SSL", "ssl.ca.location": "/etc/ssl/ca.pem"}
+
+    def test_tina4_namespaced_names(self, monkeypatch):
+        # POSITIVE: Tina4-namespaced env vars are honoured.
+        self._clean(monkeypatch)
+        monkeypatch.setenv("TINA4_KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
+        assert self._cfg() == {"security.protocol": "SASL_SSL"}
+
+    def test_tina4_takes_precedence_over_bare(self, monkeypatch):
+        # PRECEDENCE: TINA4_KAFKA_* wins when both are set.
+        self._clean(monkeypatch)
+        monkeypatch.setenv("KAFKA_SECURITY_PROTOCOL", "SSL")
+        monkeypatch.setenv("TINA4_KAFKA_SECURITY_PROTOCOL", "SASL_SSL")
+        assert self._cfg()["security.protocol"] == "SASL_SSL"
+
+    def test_sasl_keys_mapped(self, monkeypatch):
+        # POSITIVE: optional SASL creds map to the rdkafka sasl.* keys.
+        self._clean(monkeypatch)
+        monkeypatch.setenv("TINA4_KAFKA_SASL_MECHANISM", "PLAIN")
+        monkeypatch.setenv("KAFKA_SASL_USERNAME", "user")
+        monkeypatch.setenv("KAFKA_SASL_PASSWORD", "secret")
+        cfg = self._cfg()
+        assert cfg == {"sasl.mechanism": "PLAIN", "sasl.username": "user", "sasl.password": "secret"}
