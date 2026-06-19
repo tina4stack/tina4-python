@@ -500,6 +500,15 @@ class GraphQL:
         self.auto_schema: bool = str(
             os.environ.get("TINA4_GRAPHQL_AUTO_SCHEMA", "true")
         ).strip().lower() in ("true", "1", "yes", "on")
+        # Maximum selection-set nesting depth. A deeply nested query (or a
+        # circular fragment) would otherwise recurse without bound — a classic
+        # GraphQL DoS / stack-overflow vector. Counted per selection level AND
+        # per fragment spread, so circular fragments are caught too. The default
+        # (50) is far beyond any legitimate query; set <= 0 to disable the guard.
+        try:
+            self.max_depth: int = int(os.environ.get("TINA4_GRAPHQL_MAX_DEPTH", "50"))
+        except (TypeError, ValueError):
+            self.max_depth = 50
         # Drain any resolvers registered via the class-level @resolve
         # decorator BEFORE this instance was constructed. The decorator
         # writes to _class_resolvers; here we attach them to the live schema.
@@ -628,7 +637,7 @@ class GraphQL:
                 variables[vdef["name"]] = vdef["default"]
 
         data = {}
-        errs = self._resolve_selections_into(op["selections"], resolvers, None, variables, context, fragments, data)
+        errs = self._resolve_selections_into(op["selections"], resolvers, None, variables, context, fragments, data, 1)
         errors.extend(errs)
 
         response = {"data": data}
@@ -642,12 +651,19 @@ class GraphQL:
 
     def _resolve_selections_into(self, selections: list, resolvers: dict, parent: Any,
                                  variables: dict, context: dict, fragments: dict,
-                                 target: dict) -> list:
+                                 target: dict, depth: int = 1) -> list:
         """Resolve a list of selections and merge results into target dict.
 
         Fragment spreads and inline fragments are merged (not nested).
+
+        ``depth`` is incremented on every recursive entry (field sub-selections,
+        fragment spreads, inline fragments) and checked against ``max_depth`` so
+        an over-deep query or a circular fragment fails with a structured error
+        instead of recursing until the interpreter stack overflows.
         """
         errors = []
+        if self.max_depth > 0 and depth > self.max_depth:
+            return [{"message": f"Query exceeds maximum depth of {self.max_depth}"}]
         for sel in selections:
             if not self._check_directives(sel.get("directives", []), variables, context):
                 continue
@@ -658,19 +674,19 @@ class GraphQL:
                     errors.append({"message": f"Fragment not found: {sel['name']}"})
                     continue
                 errs = self._resolve_selections_into(
-                    frag["selections"], resolvers, parent, variables, context, fragments, target
+                    frag["selections"], resolvers, parent, variables, context, fragments, target, depth + 1
                 )
                 errors.extend(errs)
                 continue
 
             if sel["kind"] == "inline_fragment":
                 errs = self._resolve_selections_into(
-                    sel["selections"], resolvers, parent, variables, context, fragments, target
+                    sel["selections"], resolvers, parent, variables, context, fragments, target, depth + 1
                 )
                 errors.extend(errs)
                 continue
 
-            val, errs = self._resolve_field(sel, resolvers, parent, variables, context, fragments)
+            val, errs = self._resolve_field(sel, resolvers, parent, variables, context, fragments, depth)
             errors.extend(errs)
             key = sel.get("alias") or sel["name"]
             target[key] = val
@@ -678,7 +694,7 @@ class GraphQL:
         return errors
 
     def _resolve_field(self, sel: dict, resolvers: dict, parent: Any,
-                       variables: dict, context: dict, fragments: dict) -> tuple:
+                       variables: dict, context: dict, fragments: dict, depth: int = 1) -> tuple:
         """Resolve a single field selection."""
         errors = []
         name = sel["name"]
@@ -706,7 +722,14 @@ class GraphQL:
                 try:
                     value = resolver(None, args, ctx)
                 except Exception as e:
-                    errors.append({"message": str(e), "path": [name]})
+                    # Log the real cause; only surface the detail to the client
+                    # in debug mode — a resolver exception can carry internal
+                    # state (DB errors, credentials) that must not leak.
+                    from tina4_python.debug import Log
+                    from tina4_python.debug.error_overlay import is_debug_mode
+                    Log.error(f"GraphQL resolver '{name}' failed: {e}")
+                    detail = str(e) if is_debug_mode() else "Internal server error"
+                    errors.append({"message": detail, "path": [name]})
                     return None, errors
 
         if not sel.get("selections"):
@@ -717,7 +740,7 @@ class GraphQL:
             for item in value:
                 obj = {}
                 errs = self._resolve_selections_into(
-                    sel["selections"], {}, item, variables, context, fragments, obj
+                    sel["selections"], {}, item, variables, context, fragments, obj, depth + 1
                 )
                 errors.extend(errs)
                 result.append(obj)
@@ -726,7 +749,7 @@ class GraphQL:
         if value is not None:
             obj = {}
             errs = self._resolve_selections_into(
-                sel["selections"], {}, value, variables, context, fragments, obj
+                sel["selections"], {}, value, variables, context, fragments, obj, depth + 1
             )
             errors.extend(errs)
             return obj, errors

@@ -130,12 +130,65 @@ class TestSOAPHandling:
         assert "faultcode" in result
         assert "Malformed XML" in result
 
-    def test_server_error(self):
+    def test_server_error_masked_in_prod(self, monkeypatch):
+        # Default (non-debug) mode: a resolver exception must NOT leak its
+        # message to the client — it returns a generic Server fault.
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        req = type("R", (), {"body": self._soap_request("Divide", "<a>10</a><b>0</b>"), "url": "/calc", "params": {}})()
+        calc = Calculator(req)
+        result = calc.handle()
+        assert "faultcode" in result
+        assert "<faultcode>Server</faultcode>" in result
+        assert "Internal server error" in result
+        assert "Division by zero" not in result  # detail is logged, not leaked
+
+    def test_server_error_detail_in_debug(self, monkeypatch):
+        # Debug mode: the real cause is surfaced to aid local development.
+        monkeypatch.setenv("TINA4_DEBUG", "true")
         req = type("R", (), {"body": self._soap_request("Divide", "<a>10</a><b>0</b>"), "url": "/calc", "params": {}})()
         calc = Calculator(req)
         result = calc.handle()
         assert "faultcode" in result
         assert "Division by zero" in result
+
+    def test_doctype_rejected(self):
+        # SOAP 1.1 forbids a DTD; rejecting it pre-parse closes the XML
+        # entity-expansion / external-entity attack surface (NEGATIVE).
+        xxe = (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/hostname">]>'
+            '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<soap:Body><Add><a>&xxe;</a><b>3</b></Add></soap:Body></soap:Envelope>'
+        )
+        req = type("R", (), {"body": xxe, "url": "/calc", "params": {}})()
+        calc = Calculator(req)
+        result = calc.handle()
+        assert "<faultcode>Client</faultcode>" in result
+        assert "DOCTYPE" in result
+        assert "AddResponse" not in result  # operation never ran
+
+    def test_billion_laughs_doctype_rejected(self):
+        # An entity-expansion (billion-laughs) payload is a DOCTYPE → rejected
+        # before any parser can expand it (NEGATIVE).
+        bomb = (
+            '<?xml version="1.0"?>'
+            '<!DOCTYPE lolz [<!ENTITY a "AAAAAAAAAA">'
+            '<!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]>'
+            '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<soap:Body><Greet><name>&b;</name></Greet></soap:Body></soap:Envelope>'
+        )
+        req = type("R", (), {"body": bomb, "url": "/calc", "params": {}})()
+        calc = Calculator(req)
+        result = calc.handle()
+        assert "<faultcode>Client</faultcode>" in result
+        assert "DOCTYPE" in result
+
+    def test_valid_request_still_works_after_guard(self):
+        # POSITIVE: a normal (DTD-free) SOAP request is unaffected by the guard.
+        req = type("R", (), {"body": self._soap_request("Add", "<a>7</a><b>2</b>"), "url": "/calc", "params": {}})()
+        calc = Calculator(req)
+        result = calc.handle()
+        assert "<Result>9</Result>" in result
 
     def test_wsdl_on_get(self):
         req = type("R", (), {"url": "/?wsdl", "params": {"wsdl": ""}, "method": "GET"})()

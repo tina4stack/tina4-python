@@ -188,7 +188,21 @@ class TestExecutor:
         assert result["data"]["user"]["name"] == "Alice"
         assert result["data"]["user"]["email"] == "alice@test.com"
 
-    def test_resolver_error(self):
+    def test_resolver_error_masked_in_prod(self, monkeypatch):
+        # Default (non-debug): a resolver exception is logged but the client
+        # gets a generic message — internal detail must not leak.
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        gql = GraphQL()
+        gql.schema.add_query("broken", {}, "String", lambda r, a, c: 1 / 0)
+        result = gql.execute("{ broken }")
+        assert result["errors"]
+        assert result["errors"][0]["message"] == "Internal server error"
+        assert result["errors"][0]["path"] == ["broken"]
+        assert "division by zero" not in result["errors"][0]["message"]
+
+    def test_resolver_error_detail_in_debug(self, monkeypatch):
+        # Debug mode: surface the real cause for local development.
+        monkeypatch.setenv("TINA4_DEBUG", "true")
         gql = GraphQL()
         gql.schema.add_query("broken", {}, "String", lambda r, a, c: 1 / 0)
         result = gql.execute("{ broken }")
@@ -232,3 +246,65 @@ class TestExecutor:
                               lambda r, a, ctx: ctx.get("user", "anon"))
         result = gql.execute("{ whoami }", context={"user": "admin"})
         assert result["data"]["whoami"] == "admin"
+
+
+class TestDepthGuard:
+    """Recursion-depth guard — a deep query or circular fragment must fail
+    with a structured error instead of overflowing the interpreter stack."""
+
+    def _nested_query(self, levels: int) -> str:
+        # Build { a { a { a ... } } } — `a` resolves to a dict that always
+        # contains an `a` key, so it can be selected arbitrarily deep.
+        return "{ " + "a { " * levels + "id" + " }" * levels + " }"
+
+    def _deep_gql(self):
+        gql = GraphQL()
+        # `a` returns a self-referential dict so nested selection always resolves.
+        node = {"id": "x"}
+        node["a"] = node
+        gql.schema.add_query("a", {}, "Node", lambda r, args, c: node)
+        return gql
+
+    def test_over_deep_query_rejected(self):
+        # NEGATIVE: nesting beyond max_depth returns a structured error.
+        gql = self._deep_gql()
+        gql.max_depth = 10
+        result = gql.execute(self._nested_query(40))
+        assert result.get("errors")
+        assert any("maximum depth" in e["message"] for e in result["errors"])
+
+    def test_shallow_query_allowed(self):
+        # POSITIVE: a query within the limit resolves normally.
+        gql = self._deep_gql()
+        gql.max_depth = 50
+        result = gql.execute(self._nested_query(5))
+        assert not result.get("errors")
+        # 5 levels of nested `a`, then `id`.
+        node = result["data"]["a"]["a"]["a"]["a"]["a"]
+        assert node["id"] == "x"
+
+    def test_depth_guard_disabled(self):
+        # max_depth <= 0 disables the guard (escape hatch).
+        gql = self._deep_gql()
+        gql.max_depth = 0
+        result = gql.execute(self._nested_query(30))
+        assert not any("maximum depth" in e.get("message", "")
+                       for e in result.get("errors", []))
+
+    def test_circular_fragment_rejected(self):
+        # NEGATIVE: mutually-recursive fragments are caught by the same guard
+        # (each spread increments depth) rather than recursing forever.
+        gql = self._deep_gql()
+        gql.max_depth = 20
+        query = (
+            "fragment A on Node { id a { ...B } } "
+            "fragment B on Node { id a { ...A } } "
+            "{ a { ...A } }"
+        )
+        result = gql.execute(query)
+        assert any("maximum depth" in e["message"] for e in result.get("errors", []))
+
+    def test_default_max_depth_is_set(self):
+        # The guard is on by default with a generous backstop.
+        gql = GraphQL()
+        assert gql.max_depth == 50

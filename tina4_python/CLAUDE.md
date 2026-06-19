@@ -1165,6 +1165,8 @@ queue.purge("completed")
 
 Tina4 includes zero-config SOAP 1.1 support with automatic WSDL generation.
 
+**Security:** SOAP requests containing a `<!DOCTYPE>` (DTD) are rejected with a `Client` fault before parsing — SOAP 1.1 forbids DTDs, and this closes the XML entity-expansion (billion-laughs) and external-entity (XXE) attack surface. An operation that raises returns a `Server` fault whose `<faultstring>` is the real cause **only** in debug mode (`TINA4_DEBUG`); in production it is a generic "Internal server error" and the real cause is written to the log — so a resolver exception never leaks internal state to a SOAP client.
+
 ```python
 from typing import List, Optional
 from tina4_python.wsdl import WSDL, wsdl_operation
@@ -1249,7 +1251,7 @@ result = gql.execute('{ users(limit: 3) { id name } }', variables={}, context={}
 # {"data": {"users": [...]}}
 ```
 
-Supports: queries, mutations, variables, fragments, aliases, `@skip`/`@include` directives, nested selections, list types, inline fragments. Resolver exceptions are captured as GraphQL errors.
+Supports: queries, mutations, variables, fragments, aliases, `@skip`/`@include` directives, nested selections, list types, inline fragments. Resolver exceptions are captured as GraphQL errors — the message is the real cause only in debug mode (`TINA4_DEBUG`); in production it is a generic "Internal server error" (the real cause is logged) so a resolver exception never leaks internal state. **Depth guard:** selection-set nesting is bounded by `TINA4_GRAPHQL_MAX_DEPTH` (default `50`; set `<= 0` to disable). An over-deep query or a circular fragment fails with a `"Query exceeds maximum depth of N"` error instead of overflowing the stack.
 
 | ORM Field | GraphQL Type |
 |-----------|-------------|

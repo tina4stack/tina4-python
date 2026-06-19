@@ -132,6 +132,13 @@ class WSDL:
         """Parse SOAP XML and invoke the operation."""
         self.on_request(self._request)
 
+        # SOAP 1.1 (§3) forbids a Document Type Declaration in a SOAP message.
+        # Rejecting any DOCTYPE/DTD up front also closes the XML entity-expansion
+        # (billion-laughs) and external-entity (XXE) attack surface for every
+        # XML backend, regardless of parser defaults.
+        if re.search(r"<!DOCTYPE", xml_body, re.IGNORECASE):
+            return self._soap_fault("Client", "DOCTYPE declarations are not allowed in SOAP messages")
+
         try:
             # Parse XML
             root = ET.fromstring(xml_body)
@@ -186,7 +193,14 @@ class WSDL:
             result = method(**params)
             result = self.on_result(result)
         except Exception as e:
-            return self._soap_fault("Server", str(e))
+            # Log the real cause, but only leak the detail to the client in
+            # debug mode — a resolver exception can carry internal state
+            # (DB credentials, file paths) that must not reach a SOAP client.
+            from tina4_python.debug import Log
+            from tina4_python.debug.error_overlay import is_debug_mode
+            Log.error(f"WSDL operation '{op_name}' failed: {e}")
+            detail = str(e) if is_debug_mode() else "Internal server error"
+            return self._soap_fault("Server", detail)
 
         return self._soap_response(op_name, result)
 
