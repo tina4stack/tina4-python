@@ -298,6 +298,26 @@ def _get_next_batch(db) -> int:
     return (row["max_batch"] or 0) + 1 if row else 1
 
 
+# Smart/curly quotes — editors, word processors, docs and chat apps silently
+# convert a straight " to “ ” and a straight ' to ‘ ’ (plus primes ′ ″). Those
+# characters are NOT valid SQL string/identifier delimiters, so a pasted-in
+# migration fails to run ("syntax error near …"). Map them back to straight
+# ASCII quotes. (Real string CONTENTS are unaffected by intent — we only swap
+# the lookalike code points for their ASCII equivalents.)
+_SMART_QUOTES = {
+    "“": '"', "”": '"', "„": '"', "‟": '"', "″": '"',  # “ ” „ ‟ ″
+    "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",  # ‘ ’ ‚ ‛ ′
+}
+_SMART_QUOTE_RE = re.compile("|".join(re.escape(c) for c in _SMART_QUOTES))
+
+
+def _normalize_quotes(sql: str) -> str:
+    """Replace smart/curly quotes with straight ASCII quotes so migration SQL
+    authored or pasted from an editor/doc actually runs (those code points are
+    not valid SQL delimiters)."""
+    return _SMART_QUOTE_RE.sub(lambda m: _SMART_QUOTES[m.group(0)], sql)
+
+
 def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
     """Split SQL into individual statements.
 
@@ -310,6 +330,10 @@ def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
           CREATE TRIGGER foo $$ BEGIN ... END $$;
           CREATE PROCEDURE bar // BEGIN ... END //;
     """
+    # Normalize smart/curly quotes to straight ASCII first, so SQL pasted from
+    # an editor/doc (which converts " → “ ” and ' → ‘ ’) actually runs.
+    sql = _normalize_quotes(sql)
+
     # Extract blocks delimited by $$ or // first, replacing them with placeholders
     blocks: list[str] = []
 

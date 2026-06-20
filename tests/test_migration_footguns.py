@@ -8,6 +8,7 @@ from tina4_python.migration.runner import (
     _split_statements,
     _migration_sort_key,
     _should_skip_create_table,
+    _normalize_quotes,
 )
 
 
@@ -42,6 +43,26 @@ def test_split_still_handles_real_stored_proc_block():
     sql = "CREATE PROCEDURE foo() // BEGIN SELECT 1; SELECT 2; END //;"
     stmts = _split_statements(sql, ";")
     assert any("BEGIN SELECT 1; SELECT 2; END" in s for s in stmts), stmts
+
+
+# ── smart/curly quotes normalized so the SQL runs ───────────────────────
+
+def test_smart_quotes_normalized_before_split():
+    # Smart double quotes around an identifier + smart single quotes around a
+    # value — as an editor/doc would produce. They must become straight ASCII so
+    # the statement actually runs.
+    sql = "CREATE TABLE “users” (name TEXT DEFAULT ‘guest’);"
+    joined = " ".join(_split_statements(sql, ";"))
+    for smart in ("“", "”", "‘", "’", "′", "″"):
+        assert smart not in joined, f"smart quote {smart!r} survived"
+    assert '"users"' in joined
+    assert "'guest'" in joined
+
+
+def test_normalize_quotes_preserves_straight_and_content():
+    # Straight quotes and ordinary apostrophe-free content are untouched.
+    sql = "INSERT INTO t (v) VALUES ('plain');"
+    assert _normalize_quotes(sql) == sql
 
 
 # ── [8] numeric-aware discovery order ───────────────────────────────────
