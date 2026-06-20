@@ -463,3 +463,24 @@ class Log:
         """
         if cls._critical_enabled:
             cls._log("error", message, **kwargs)
+
+    @classmethod
+    def is_enabled(cls, level: str) -> bool:
+        """Return True if a message at ``level`` would pass the configured
+        minimum console level.
+
+        This reflects console (stdout) visibility — the log file always
+        records every level regardless of this threshold. Use it to skip
+        building an expensive log payload that would not be shown::
+
+            if Log.is_enabled("debug"):
+                Log.debug("state", snapshot=expensive_dump())
+
+        ``level`` is case-insensitive. ``"critical"`` additionally requires
+        ``TINA4_LOG_CRITICAL=true`` and is evaluated at error severity (its
+        real mapping).
+        """
+        lvl = (level or "").lower()
+        if lvl == "critical":
+            return cls._critical_enabled and cls._should_log("error")
+        return cls._should_log(lvl)

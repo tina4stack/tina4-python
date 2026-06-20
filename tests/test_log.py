@@ -75,6 +75,44 @@ class TestLogLevels:
             assert Log._should_log(level) is True
 
 
+class TestLogIsEnabled:
+
+    def test_is_enabled_matches_threshold_at_info(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="info")
+        assert Log.is_enabled("debug") is False
+        assert Log.is_enabled("info") is True
+        assert Log.is_enabled("warning") is True
+        assert Log.is_enabled("error") is True
+
+    def test_is_enabled_at_error_level(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="error")
+        assert Log.is_enabled("info") is False
+        assert Log.is_enabled("warning") is False
+        assert Log.is_enabled("error") is True
+
+    def test_is_enabled_is_case_insensitive(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="info")
+        assert Log.is_enabled("INFO") is True
+        assert Log.is_enabled("Debug") is False
+
+    def test_is_enabled_mirrors_should_log(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="warning")
+        for level in ("debug", "info", "warning", "error"):
+            assert Log.is_enabled(level) is Log._should_log(level)
+
+    def test_is_enabled_critical_requires_toggle(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="info")
+        original = Log._critical_enabled
+        try:
+            Log._critical_enabled = False
+            assert Log.is_enabled("critical") is False
+            Log._critical_enabled = True
+            # critical maps to error severity, which passes the info threshold
+            assert Log.is_enabled("critical") is True
+        finally:
+            Log._critical_enabled = original
+
+
 class TestLogFormat:
 
     def test_dev_format_contains_level(self, tmp_path):
