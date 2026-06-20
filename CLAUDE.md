@@ -467,6 +467,15 @@ create_migration("add users table")      # Create new .sql file
 rollback(db)                             # Rollback last batch
 ```
 
+**Auto-run on startup (`TINA4_AUTO_MIGRATE`, default on).** When a `migrations/`
+folder exists, `tina4 serve` applies pending migrations during boot — no manual
+`tina4 migrate` step. It is **non-breaking**: a failed migration is logged
+(`Log.error`) and the service still starts (a bad migration must never take the
+backend down). Set `TINA4_AUTO_MIGRATE=false` to disable (e.g. multi-instance
+production that migrates as a separate deploy step — concurrent first-apply can
+race). The explicit `tina4 migrate` CLI is unaffected and stays **fail-fast**
+(non-zero exit on failure) for CI.
+
 ### Events — Decoupled communication
 
 ```python
