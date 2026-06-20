@@ -92,18 +92,30 @@ def is_enabled() -> bool:
     """Whether the built-in MCP dev tools should be enabled.
 
     Resolution order (highest priority first):
-        1. TINA4_MCP env var — explicit on/off override.
-        2. TINA4_DEBUG=true — implicit on for dev.
+        1. TINA4_MCP env var — explicit on/off override, honoured on ANY host.
+           An explicit `true` is how a sysadmin opts a remote / debug-disabled
+           deployment in (e.g. for a remote AI assistant); an explicit `false`
+           force-disables it everywhere.
+        2. TINA4_DEBUG=true — implicit on for dev, but LOCALHOST-ONLY unless
+           TINA4_MCP_REMOTE=true. The MCP dev tools expose powerful operations
+           (DB query, file read/write, route listing), so they never auto-expose
+           on a non-localhost host without an explicit opt-in.
         3. Otherwise off.
 
     Cross-framework parity v3.12.4: `TINA4_MCP=true` on its own (without
-    TINA4_DEBUG) lets a sysadmin keep the MCP endpoint exposed in a
-    debug-disabled deployment, e.g. for a remote AI assistant.
+    TINA4_DEBUG) keeps the endpoint exposed in a debug-disabled deployment.
+    v3.13.39: the implicit (debug-driven) path is now gated on is_localhost(),
+    with TINA4_MCP_REMOTE=true as the documented escape hatch — previously
+    is_localhost() was dead code and TINA4_MCP_REMOTE was never read, so the
+    documented localhost guard was not actually enforced.
     """
     explicit = os.environ.get("TINA4_MCP")
     if explicit is not None and explicit != "":
         return _is_truthy(explicit)
-    return _is_truthy(os.environ.get("TINA4_DEBUG"))
+    if not _is_truthy(os.environ.get("TINA4_DEBUG")):
+        return False
+    # Dev auto-enable: localhost only, unless explicitly opted into remote.
+    return is_localhost() or _is_truthy(os.environ.get("TINA4_MCP_REMOTE"))
 
 
 def resolve_port(framework_port: int = 7145) -> int:
