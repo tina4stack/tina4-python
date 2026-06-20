@@ -201,6 +201,13 @@ class QueryBuilder:
     def get(self):
         """Execute the query and return the DatabaseResult.
 
+        v3.13.39: with no ``.limit()`` set, get() returns ALL matching rows.
+        It previously applied a silent default ``LIMIT 100`` — a data-loss-
+        on-read footgun where the 101st row vanished without a trace. An
+        explicit ``.limit(n)`` is still honoured; ``to_sql()`` never injects
+        a default LIMIT either. Pass ``limit=0`` to ``db.fetch`` (its "no
+        truncation" sentinel) when no limit was requested.
+
         Returns:
             DatabaseResult from db.fetch().
         """
@@ -211,7 +218,7 @@ class QueryBuilder:
         return self._db.fetch(
             sql,
             all_params or None,
-            self._limit_val if self._limit_val is not None else 100,
+            self._limit_val if self._limit_val is not None else 0,
             self._offset_val if self._offset_val is not None else 0,
         )
 
@@ -373,8 +380,20 @@ class QueryBuilder:
                 return {field: val}, param_index + 1
             return {field: {mongo_op: val}}, param_index + 1
 
-        # Fallback: return condition as-is in $where (raw JS expression)
-        return {"$where": cond}, param_index
+        # v3.13.39: no silent $where fallback. Previously an unparseable
+        # condition was wrapped as ``{'$where': <raw condition string>}`` — a
+        # raw-JS sink that is both injection-shaped (the WHERE string runs as
+        # JavaScript on the server) and silently different semantics from the
+        # SQL the caller wrote. Fail loud instead: name the clause so the
+        # caller fixes it rather than shipping a surprise $where.
+        raise ValueError(
+            f"QueryBuilder.to_mongo(): cannot translate WHERE clause to a "
+            f"MongoDB filter: {cond!r}. Supported forms: '<field> <op> ?' "
+            f"(=, !=, <>, >, >=, <, <=), '<field> LIKE ?', "
+            f"'<field> [NOT] IN (?)', '<field> IS [NOT] NULL'. "
+            f"Rewrite the condition in one of those forms (to_mongo() will "
+            f"not silently emit a raw $where JavaScript expression)."
+        )
 
     @staticmethod
     def _merge_mongo_conditions(conditions: list[dict]) -> dict:

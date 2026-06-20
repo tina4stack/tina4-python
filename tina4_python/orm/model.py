@@ -172,6 +172,12 @@ class ORM(metaclass=ORMMeta):
     auto_crud: bool = False  # Set True to auto-register CRUD routes
     _db: str | object | None = None  # Per-model database override
     _fields: dict[str, Field] = {}
+    # Last save() failure cause (validation message or DB error). None when
+    # the most recent save() succeeded. Mirrors db.get_error() so a caller
+    # that checks ``if not model.save():`` can still recover the real cause
+    # via ``model.get_error()`` / ``model.last_error`` — the failure never
+    # vanishes silently.
+    last_error: str | None = None
 
     def __init__(self, data: dict | str = None, **kwargs):
         # Initialize relationship cache
@@ -321,6 +327,25 @@ class ORM(metaclass=ORMMeta):
     def save(self) -> Self | bool:
         """Insert or update. Returns self on success, False on failure.
 
+        Fails loud, never silent (the same principle ``db.execute()``
+        follows). On *any* failure path save() returns ``False`` — keeping
+        the contract callers rely on (``if not model.save(): ...``) — but it
+        also (a) logs the real cause via ``Log.error`` with model/table
+        context and (b) records the cause on ``self.last_error`` so a caller
+        can recover it after the fact via :meth:`get_error` / ``last_error``.
+        It never raises and never changes the ``self | False`` return shape.
+
+        Two distinct failure paths, both loud:
+
+        * **Validation** (v3.13.39): :meth:`validate` runs FIRST. If it
+          returns errors, save() logs them, records them on ``last_error``,
+          and returns ``False`` WITHOUT touching the database — an invalid
+          model never reaches the driver.
+        * **Database** (v3.13.39): a driver error (NOT NULL, duplicate PK,
+          missing table, …) is rolled back, logged with the underlying cause,
+          recorded on ``last_error`` (mirroring ``db.get_error()``), and
+          returns ``False`` — the cause is no longer swallowed silently.
+
         v3.13.11 (issue #50): for non-auto-increment primary keys (e.g.
         user-supplied string IDs like ``"GC-100"``), the decision between
         INSERT and UPDATE is made on whether the row *exists*, not on
@@ -331,6 +356,19 @@ class ORM(metaclass=ORMMeta):
         Auto-increment behaviour is unchanged: ``pk_value is None`` means
         "new row, let the engine assign an ID" and we still INSERT.
         """
+        from tina4_python.debug import Log
+
+        # ── Change 2: validate() is enforced. An invalid model never
+        # reaches the driver — fail loud (log + last_error), return False. ──
+        errors = self.validate()
+        if errors:
+            self.last_error = "; ".join(errors)
+            Log.error(
+                f"{type(self).__name__}.save() refused: validation failed — "
+                f"{self.last_error}"
+            )
+            return False
+
         db = self._get_db()
         pk = self._get_pk()
         pk_value = getattr(self, pk, None)
@@ -390,10 +428,21 @@ class ORM(metaclass=ORMMeta):
                     if last_id and pk in self._fields:
                         setattr(self, pk, last_id)
             db.commit()
-        except Exception:
+        except Exception as e:
             db.rollback()
+            # ── Change 1: fail loud, never silent. Keep the False return
+            # contract, but capture the REAL cause (prefer db.get_error(),
+            # which db.execute()/insert()/update() populate, falling back to
+            # the exception text) on self.last_error so it survives, and log
+            # it with model/table context. ──
+            self.last_error = db.get_error() or str(e)
+            Log.error(
+                f"{type(self).__name__}.save() failed for table "
+                f"'{table}': {self.last_error}"
+            )
             return False
 
+        self.last_error = None
         self.clear_cache()
         self._rel_cache = {}
         self._persisted = True
@@ -467,15 +516,25 @@ class ORM(metaclass=ORMMeta):
     # ── Finders ─────────────────────────────────────────────────
 
     @classmethod
-    def create(cls, data: dict = None, **kwargs) -> Self:
+    def create(cls, data: dict = None, **kwargs) -> Self | bool:
         """Create a new instance, save it, and return it.
+
+        Returns the saved instance on success. v3.13.39: if the underlying
+        :meth:`save` fails (validation errors or a driver error), create()
+        returns ``False`` — it does NOT hand back a possibly-unsaved
+        instance, so a failed insert can never masquerade as a success. The
+        failure cause is logged and available on the (discarded) instance's
+        ``get_error()`` via the same path save() uses.
 
         Usage:
             user = User.create({"name": "Alice", "email": "alice@example.com"})
             user = User.create(name="Alice", email="alice@example.com")
+            if not User.create(name=None):   # save() failed -> False
+                ...
         """
         instance = cls(data or kwargs)
-        instance.save()
+        if instance.save() is False:
+            return False
         return instance
 
     @classmethod
@@ -1092,6 +1151,17 @@ class ORM(metaclass=ORMMeta):
             except ValueError as e:
                 errors.append(str(e))
         return errors
+
+    def get_error(self) -> str | None:
+        """Return the cause of the most recent failed :meth:`save`, or None.
+
+        Mirrors ``db.get_error()``. After ``save()`` returns ``False`` —
+        whether from validation or a driver error — the real cause is
+        retrievable here (and on ``self.last_error``) so a caller using the
+        ``if not model.save():`` contract can still surface it. Cleared to
+        ``None`` on a successful save.
+        """
+        return self.last_error
 
     # ── Serialization ───────────────────────────────────────────
 
