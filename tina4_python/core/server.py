@@ -2235,6 +2235,53 @@ def _check_legacy_env_vars() -> None:
     sys.exit(2)
 
 
+def _auto_migrate_on_startup(migration_folder: str = "migrations") -> None:
+    """Apply pending DB migrations on startup — NON-BREAKING.
+
+    When a ``migrations/`` folder exists (with at least one ``.sql`` file) and
+    ``TINA4_AUTO_MIGRATE`` is not disabled, pending migrations are applied during
+    boot so the schema is current with no manual ``tina4 migrate`` step. A
+    failure here is logged LOUD and the service STILL starts — a bad migration
+    must never take the backend down. (The explicit ``tina4 migrate`` CLI stays
+    fail-fast so CI still gets a non-zero exit.)
+
+    Disable with ``TINA4_AUTO_MIGRATE=false`` — e.g. multi-instance production
+    that migrates as a separate deploy step (concurrent first-apply can race).
+    """
+    from pathlib import Path
+    from tina4_python.dotenv import is_truthy
+
+    folder = Path(migration_folder)
+    if not folder.is_dir() or not any(folder.glob("*.sql")):
+        return  # no migrations → nothing to do (silent)
+    if not is_truthy(os.environ.get("TINA4_AUTO_MIGRATE", "true")):
+        Log.debug("TINA4_AUTO_MIGRATE is off — skipping startup migrations")
+        return
+
+    try:
+        from tina4_python.database import Database
+        db = Database()  # resolves TINA4_DATABASE_URL (framework default if unset)
+    except Exception as exc:
+        Log.debug(f"Startup migrations skipped (no database configured): {exc}")
+        return
+
+    try:
+        from tina4_python.migration import migrate
+        applied = migrate(db)
+        if applied:
+            Log.info(f"Applied {len(applied)} pending migration(s) on startup")
+    except Exception as exc:
+        Log.error(
+            f"Startup auto-migration failed: {exc} — the service is starting "
+            "anyway. Run `tina4 migrate` to retry."
+        )
+    finally:
+        try:
+            db.close()  # transient migration connection — don't leak it at boot
+        except Exception:
+            pass
+
+
 def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
     """Start the Tina4 dev server.
 
@@ -2366,6 +2413,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     _auto_discover("src")
     route_count = len(Router.get_routes())
     Log.info(f"Discovered {route_count} routes")
+
+    # Apply pending DB migrations on startup (non-breaking — see helper).
+    _auto_migrate_on_startup()
 
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
