@@ -725,7 +725,13 @@ api.set_basic_auth("client_id", "client_secret")
 
 # Disable SSL verification (dev only)
 api = Api("https://self-signed.local", ignore_ssl=True)
+
+# Opt-in automatic retry with exponential backoff (default off: max_retries=0).
+# Retries a transport error or a retryable status (429/5xx); 4xx is never retried.
+api = Api("https://api.example.com", max_retries=3, retry_backoff=0.5)
 ```
+
+**Redirect safety:** the client follows redirects, but the `Authorization` header is **stripped on a cross-origin hop** (different scheme/host/port) — so a bearer token is never leaked to a host you didn't authenticate against. Same-origin redirects keep the header.
 
 ### Return format
 Every request method (`get()`, `post()`, `put()`, `patch()`, `delete()`, `send()`) returns:
