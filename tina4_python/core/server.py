@@ -720,23 +720,36 @@ async def _handle_asgi_websocket(scope: dict, receive, send):
     # Origin allow-list (opt-in via TINA4_WS_ALLOWED_ORIGINS). Unset = allow all
     # so existing deployments are unaffected. Shared with the standalone server
     # via websocket.origin_allowed().
-    from tina4_python.websocket import origin_allowed
+    from tina4_python.websocket import origin_allowed, ws_authorized
     _ws_headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
     if not origin_allowed(_ws_headers):
         # 1008 = policy violation (per ASGI/RFC 6455 close codes)
         await send({"type": "websocket.close", "code": 1008})
         return
 
-    # Accept the connection
+    # Per-route auth: a @secured() WS route requires a valid JWT on the upgrade
+    # (Authorization header, "bearer" subprotocol, or ?token=). Public by default.
+    _ws_subproto = _ws_headers.get("sec-websocket-protocol", "")
+    _ws_payload, _ws_ok = ws_authorized(
+        route, _ws_headers, scope.get("query_string", b"").decode(), _ws_subproto)
+    if not _ws_ok:
+        await send({"type": "websocket.close", "code": 1008})
+        return
+
+    # Accept the connection (echo the bearer subprotocol if the client offered it)
     msg = await receive()
     if msg["type"] != "websocket.connect":
         return
-    await send({"type": "websocket.accept"})
+    _accept = {"type": "websocket.accept"}
+    if any(p.strip().lower() == "bearer" for p in _ws_subproto.split(",")):
+        _accept["subprotocol"] = "bearer"
+    await send(_accept)
 
     handler = route["handler"]
 
     # Create a lightweight connection wrapper for ASGI WebSocket
     conn = _AsgiWebSocketConnection(scope, receive, send, path, params, _ws_manager)
+    conn.auth = _ws_payload
     _ws_manager.add(conn)
 
     # Fire "open" event — this may set conn._on_message / conn._on_close
@@ -794,6 +807,7 @@ class _AsgiWebSocketConnection:
         self.id = str(uuid.uuid4())[:8]
         self.path = path
         self.params = params
+        self.auth = None   # verified JWT payload on a @secured WS route, else None
         self.headers = {
             k.decode(): v.decode()
             for k, v in scope.get("headers", [])
@@ -899,7 +913,7 @@ async def _handle_dev_websocket(reader, writer, headers, path):
         writer.close()
         return
 
-    from tina4_python.websocket import compute_accept_key, origin_allowed
+    from tina4_python.websocket import compute_accept_key, origin_allowed, ws_authorized
 
     ws_key = headers.get("sec-websocket-key")
     if not ws_key:

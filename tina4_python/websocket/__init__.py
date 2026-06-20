@@ -69,6 +69,47 @@ def origin_allowed(headers: dict) -> bool:
     return origin in allowed
 
 
+def ws_token(headers: dict, query_string: str = "", subprotocol: str = "") -> "str | None":
+    """Extract a bearer token from a WS upgrade handshake.
+
+    Order: the ``Authorization: Bearer`` header (set by server/CLI/mobile
+    clients), then the ``Sec-WebSocket-Protocol`` subprotocol in the form
+    ``"bearer, <token>"`` (the only way a *browser* can pass a token, since
+    ``new WebSocket()`` cannot set headers), then a ``?token=`` query param.
+    Returns the token string or ``None``."""
+    auth = headers.get("authorization") or headers.get("Authorization") or ""
+    if auth[:7].lower() == "bearer ":
+        return auth[7:].strip() or None
+    proto = subprotocol or headers.get("sec-websocket-protocol") or headers.get("Sec-WebSocket-Protocol") or ""
+    parts = [p.strip() for p in proto.split(",") if p.strip()]
+    if len(parts) >= 2 and parts[0].lower() == "bearer":
+        return parts[1] or None
+    if query_string:
+        from urllib.parse import parse_qs
+        tok = parse_qs(query_string).get("token", [None])[0]
+        if tok:
+            return tok
+    return None
+
+
+def ws_authorized(route: dict, headers: dict, query_string: str = "", subprotocol: str = "") -> "tuple[dict | None, bool]":
+    """Per-route WebSocket authentication, checked on the upgrade.
+
+    A route is secured when ``route["auth_required"]`` is truthy (set by
+    ``@secured()`` on the WS handler). Public routes (the default) always pass.
+    A secured route needs a valid JWT via the Authorization header, the
+    ``bearer`` subprotocol, or ``?token=``. Returns ``(payload, ok)`` — the
+    verified token payload (or ``None``) and whether the upgrade may proceed."""
+    if not route.get("auth_required"):
+        return None, True
+    from tina4_python.auth import Auth
+    token = ws_token(headers, query_string, subprotocol)
+    if not token:
+        return None, False
+    payload = Auth.valid_token_static(token)
+    return payload, payload is not None
+
+
 def _parse_http_headers(data: bytes) -> dict:
     """Parse HTTP upgrade request headers."""
     lines = data.decode("utf-8", errors="replace").split("\r\n")
@@ -144,6 +185,7 @@ class WebSocketConnection:
         self.path = path
         self.headers = headers or {}
         self.params = params or {}
+        self.auth = None   # verified JWT payload on a @secured WS route, else None
         self.connected_at = time.time()
         # Updated on every inbound frame; the idle reaper closes connections
         # that have been silent longer than TINA4_WS_IDLE_TIMEOUT (opt-in).
