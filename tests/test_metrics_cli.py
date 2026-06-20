@@ -83,6 +83,56 @@ def _write_clean_project(root):
     return src
 
 
+class TestTestDetection:
+    """Regression for the dashboard 'T' badge / 'untested' offender bug: a
+    module imported by a test via its FULL package path (the `src.`/package
+    qualifier tests actually use) was mislabelled untested because detection
+    matched only the scan-root-relative dotted path."""
+
+    def test_full_package_path_import_counts_as_tested(self, in_dir):
+        src = in_dir / "src"
+        src.mkdir(parents=True, exist_ok=True)
+        # No dedicated test_widget.py and no distinctive class — detection MUST
+        # come from the import-path match alone.
+        (src / "widget.py").write_text(
+            "def compute(x):\n    return x + 1\n", encoding="utf-8"
+        )
+        tests = in_dir / "tests"
+        tests.mkdir(parents=True, exist_ok=True)
+        # Test file NOT named for the module; imports via the full `src.` path.
+        (tests / "test_suite.py").write_text(
+            "from src.widget import compute\n\n"
+            "def test_compute():\n    assert compute(1) == 2\n",
+            encoding="utf-8",
+        )
+        result = _m.full_analysis("src")
+        widget = next(f for f in result["file_metrics"] if f["path"].endswith("widget.py"))
+        assert widget["has_tests"] is True, (
+            "a module imported by a test via its full package path must count as tested"
+        )
+
+    def test_short_class_name_reference_counts_as_tested(self, in_dir):
+        """A 3-char PascalCase class (e.g. ORM, Api) referenced by a test is a
+        real signal — the >3-char gate wrongly excluded it. The test imports the
+        class via the package root, so the module path 'orm' never appears and
+        detection depends SOLELY on the ORM class-symbol signal."""
+        src = in_dir / "src"
+        src.mkdir(parents=True, exist_ok=True)
+        (src / "orm.py").write_text(
+            "class ORM:\n    def save(self):\n        return True\n", encoding="utf-8"
+        )
+        (src / "__init__.py").write_text("from src.orm import ORM\n", encoding="utf-8")
+        tests = in_dir / "tests"
+        tests.mkdir(parents=True, exist_ok=True)
+        (tests / "test_models.py").write_text(
+            "from src import ORM\n\ndef test_save():\n    assert ORM().save()\n",
+            encoding="utf-8",
+        )
+        result = _m.full_analysis("src")
+        orm = next(f for f in result["file_metrics"] if f["path"].endswith("orm.py"))
+        assert orm["has_tests"] is True, "a 3-char class referenced by a test is a real signal"
+
+
 # ── offenders() — positive ─────────────────────────────────────────────
 
 class TestOffendersPositive:
