@@ -1623,7 +1623,7 @@ TINA4_DATABASE_PASSWORD=                 # DB password
 
 # Framework
 TINA4_DEBUG=true                  # Enable dev mode (toolbar, live reload, error overlay)
-TINA4_LOG_LEVEL=ERROR             # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR (default: ERROR)
+TINA4_LOG_LEVEL=INFO              # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
 TINA4_LOCALE=en                   # Language for framework messages (en, fr, af, zh, ja, es)
 TINA4_DEFAULT_WEBSERVER=FALSE     # Set to TRUE to use Tina4's built-in webserver instead of ASGI
 TINA4_OVERRIDE_CLIENT=false       # Set to true to allow running without tina4 CLI (e.g. Docker)
@@ -1644,10 +1644,11 @@ SWAGGER_DEV_URL=http://localhost:7145  # Dev server URL for Swagger
 ```
 
 ### Debug levels
-- `ALL` / `DEBUG` — enables DevReload, hot-patching, verbose logging, error overlay
-- `INFO` — standard logging
-- `WARNING` — warnings and errors only
-- `ERROR` — errors only
+- `ALL` / `DEBUG` — most verbose; every level on the console
+- `INFO` — standard logging (default)
+- `WARNING` — warnings, errors, and critical
+- `ERROR` — errors and critical
+- `CRITICAL` — critical only (highest severity; `Log.critical()` always logs)
 
 ## CORS
 
