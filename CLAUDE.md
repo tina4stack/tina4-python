@@ -249,7 +249,7 @@ class Visit(ORM):
     _db = "analytics"   # this model uses the analytics connection
 ```
 
-Soft-delete: Set `soft_delete = True` on the model class. Uses `is_deleted` column (INTEGER, 0/1). `delete()` sets deleted_at, `force_delete()` removes the row, `restore()` clears deleted_at.
+Soft-delete: Set `soft_delete = True` on the model class. Uses the `is_deleted` column (INTEGER, 0/1). `delete()` sets `is_deleted = 1`, `force_delete()` removes the row, `restore()` sets `is_deleted = 0`. (There is no `deleted_at` column — the flag is `is_deleted`.)
 
 ### File Uploads
 

@@ -317,9 +317,13 @@ def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
         blocks.append(m.group(0))
         return f"__BLOCK_{len(blocks) - 1}__"
 
-    # Match $$ ... $$ or // ... // blocks (stored procedures, triggers, etc.)
+    # Match $$ ... $$ or // ... // blocks (stored procedures, triggers, etc.).
+    # The `//` delimiters must NOT be preceded by a colon, so a URL scheme
+    # (`https://…`) or other `://` literal inside a migration is never captured
+    # as an opaque stored-proc block (it would otherwise swallow everything
+    # between two `//` occurrences and skip statement splitting/cleaning).
     processed = re.sub(r"\$\$(.*?)\$\$", _save_block, sql, flags=re.DOTALL)
-    processed = re.sub(r"//(.*?)//", _save_block, processed, flags=re.DOTALL)
+    processed = re.sub(r"(?<!:)//(.*?)(?<!:)//", _save_block, processed, flags=re.DOTALL)
 
     # Remove block comments (but not inside stored proc blocks)
     clean = re.sub(r"/\*.*?\*/", "", processed, flags=re.DOTALL)
@@ -405,6 +409,51 @@ def _should_skip_for_firebird(db, stmt: str) -> str | None:
     return None
 
 
+def _migration_sort_key(name: str):
+    """Numeric-aware sort key for migration filenames so `9_*` sorts before
+    `10_*` (plain lexical sort puts "10" before "9"). Files with a leading
+    numeric/timestamp prefix sort first by that number; the rest sort after,
+    lexically."""
+    m = re.match(r"^(\d+)", name)
+    return (0, int(m.group(1)), name) if m else (1, 0, name)
+
+
+# CREATE TABLE <name> — name may be quoted ("x"), bracketed ([x] MSSQL), or bare.
+_CREATE_TABLE_RE = re.compile(
+    r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
+    r"(?:\"([^\"]+)\"|\[([^\]]+)\]|(\w+))",
+    re.IGNORECASE,
+)
+
+
+def _should_skip_create_table(db, stmt: str) -> str | None:
+    """Make CREATE TABLE idempotent on engines lacking IF NOT EXISTS.
+
+    Firebird and MSSQL do not support `CREATE TABLE IF NOT EXISTS`, so a raw
+    CREATE in a re-run migration raises "object already exists". When the target
+    table already exists on those engines, return a skip reason so the statement
+    is skipped (mirrors the Firebird ALTER-TABLE-ADD idempotency guard).
+    SQLite/MySQL/PostgreSQL support IF NOT EXISTS and are left to the engine.
+    Only a genuine already-exists is skipped — every other error still raises.
+    """
+    try:
+        engine = db.get_database_type()
+    except Exception:
+        return None
+    if engine not in ("firebird", "mssql"):
+        return None
+    m = _CREATE_TABLE_RE.match(stmt)
+    if not m:
+        return None
+    table = m.group(1) or m.group(2) or m.group(3)
+    try:
+        if db.table_exists(table):
+            return f"Table {table} already exists, skipping CREATE TABLE"
+    except Exception:
+        return None
+    return None
+
+
 def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
     """Run all pending migrations (internal implementation).
 
@@ -421,12 +470,24 @@ def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
     batch = _get_next_batch(db)
     ran = []
 
-    # Collect both .sql and .py migration files, sorted by filename prefix
+    # Collect both .sql and .py migration files. Sort by a leading numeric /
+    # timestamp prefix (numeric-aware) so `9_*` applies before `10_*` — a plain
+    # lexical sort misorders unpadded prefixes ("10" < "9"). Files with no numeric
+    # prefix sort after the numbered ones, then lexically.
     migration_files = sorted(
         [f for f in folder.glob("*.sql") if not f.name.endswith(".down.sql")]
         + [f for f in folder.glob("*.py") if not f.name.startswith("__")],
-        key=lambda f: f.name,
+        key=lambda f: _migration_sort_key(f.name),
     )
+    # Warn (once) about filenames without a recognized NNNNNN_/timestamp prefix —
+    # their ordering relative to numbered migrations is undefined, a silent
+    # out-of-order-apply footgun.
+    unprefixed = [f.name for f in migration_files if not re.match(r"^\d+[_-]", f.name)]
+    if unprefixed:
+        logger.warning(
+            "Migration file(s) without a numeric/timestamp prefix may apply out of order: "
+            + ", ".join(unprefixed)
+        )
 
     for mig_file in migration_files:
         migration_id = mig_file.stem  # e.g., "000001_create_users_table"
@@ -443,8 +504,9 @@ def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
                 sql = mig_file.read_text(encoding="utf-8")
                 statements = _split_statements(sql, delimiter)
                 for stmt in statements:
-                    # Firebird lacks IF NOT EXISTS for ALTER TABLE ADD.
-                    skip_reason = _should_skip_for_firebird(db, stmt)
+                    # Idempotency on engines lacking IF NOT EXISTS: Firebird
+                    # ALTER-TABLE-ADD, and CREATE TABLE on Firebird/MSSQL.
+                    skip_reason = _should_skip_for_firebird(db, stmt) or _should_skip_create_table(db, stmt)
                     if skip_reason:
                         logger.info(f"Migration {mig_file.name}: {skip_reason}")
                         continue

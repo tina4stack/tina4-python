@@ -958,11 +958,10 @@ uv run tina4python migrate
 ### How migrations work internally
 
 - SQL files live in `migrations/` folder, named `NNNNNN_description.sql` (6-digit sequence)
-- Files are executed **alphabetically** and split on the `;` delimiter
-- State is tracked in the `tina4_migration` table (auto-created per engine)
-- A migration only runs once — if `passed = 1` in the tracking table, it is skipped
-- Failed migrations (passed = 0) are deleted and retried on the next run
-- On **any** error, the migration rolls back and the process exits with `sys.exit(1)` — fix the error before re-running
+- Files are executed in **numeric-prefix order** (`9_` before `10_`) and split on the `;` delimiter. A file without a numeric/timestamp prefix logs a warning — its order is undefined
+- State is tracked (row-existence) in the `tina4_migration` table (auto-created per engine): a migration runs once — if a row for it exists, it is skipped. (A vestigial `passed` column exists for back-compat; only applied = `passed=1` rows are ever written — failures are never recorded as `passed=0`.)
+- **Each migration FILE is wrapped in its own transaction**: on a failure the file rolls back and `migrate()` **raises** (it does not write `passed=0`, delete anything, or `sys.exit`). Already-applied files stay applied — fix the bad file and re-run. The explicit `tina4 migrate` CLI surfaces the raise as a non-zero exit; startup auto-migration logs it and the service still boots (see TINA4_AUTO_MIGRATE above).
+- **Atomicity caveat:** per-file transactions are truly atomic only on engines with **transactional DDL (PostgreSQL)**. MySQL, Firebird, and SQLite auto-commit DDL, so a multi-statement migration that fails midway on those engines leaves earlier statements applied — keep one logical change per file. CREATE TABLE / ALTER-ADD are made idempotent on Firebird/MSSQL (existence-checked) so a re-run doesn't error.
 
 ### Engine-specific DDL patterns
 
