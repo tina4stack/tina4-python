@@ -6,8 +6,13 @@ from tina4_python.debug import Log, set_request_id, get_request_id, _LogWriter
 
 
 @pytest.fixture(autouse=True)
-def reset_log(tmp_path):
+def reset_log(tmp_path, monkeypatch):
     """Reset Log state between tests."""
+    # Since v3.13.39 the log FILE is written by default only in dev
+    # (TINA4_DEBUG truthy) — prod/containers are stdout-only. Pin dev here so
+    # the existing file-output tests stay deterministic; the prod default
+    # (no file) is covered explicitly by the TestLogDefaultFileOutput tests.
+    monkeypatch.setenv("TINA4_DEBUG", "true")
     Log._initialized = False
     Log._writer = None
     Log._error_writer = None
@@ -193,6 +198,42 @@ class TestLogOutput:
         Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         Log.critical("page the oncall")
         assert "page the oncall" in (tmp_path / "error.log").read_text()
+
+
+class TestLogDefaultFileOutput:
+    # v3.13.39: with TINA4_LOG_OUTPUT unset, the log file is written only in
+    # dev (TINA4_DEBUG). In production / containers the logger is stdout-only —
+    # no logs/tina4.log or error.log to bloat the image layer / disk.
+
+    def test_default_no_file_in_production(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TINA4_LOG_OUTPUT", raising=False)
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        Log.configure(log_dir=str(tmp_path), level="info")
+        Log.error("prod line")
+        assert not (tmp_path / "tina4.log").exists()
+        assert not (tmp_path / "error.log").exists()
+
+    def test_default_writes_file_in_dev(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TINA4_LOG_OUTPUT", raising=False)
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        Log.configure(log_dir=str(tmp_path), level="info")
+        Log.info("dev line")
+        assert "dev line" in (tmp_path / "tina4.log").read_text()
+
+    def test_explicit_both_writes_file_even_in_production(self, tmp_path, monkeypatch):
+        # Explicit TINA4_LOG_OUTPUT always wins, even with TINA4_DEBUG off.
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "both")
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        Log.configure(log_dir=str(tmp_path), level="info")
+        Log.info("explicit both")
+        assert "explicit both" in (tmp_path / "tina4.log").read_text()
+
+    def test_default_still_logs_to_stdout_in_production(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.delenv("TINA4_LOG_OUTPUT", raising=False)
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        Log.configure(log_dir=str(tmp_path), level="info", production=False)
+        Log.info("stdout still on")
+        assert "stdout still on" in capsys.readouterr().out
 
     def test_info_and_debug_do_not_write_to_error_log(self, tmp_path):
         Log.configure(log_dir=str(tmp_path), level="debug", production=True)

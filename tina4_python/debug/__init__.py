@@ -224,14 +224,14 @@ class Log:
             cls._stdout_enabled = True
             cls._file_enabled = True
         else:
-            # "stdout" (default) — but we still keep file output on for
-            # parity with v2 behaviour where logs/tina4.log is always
-            # written. Operators who want stdout-only can flip the new
-            # explicit "stdout-only" by setting TINA4_LOG_FILE="" AND
-            # TINA4_LOG_OUTPUT=stdout — handled below where the file
-            # path resolves to empty.
+            # "stdout" (default): stdout is ALWAYS on. The log FILE is written
+            # only in development (TINA4_DEBUG truthy). In production /
+            # containers a logs/tina4.log + error.log just bloat the writable
+            # layer and disk, and 12-factor wants logs on stdout for the
+            # platform to capture. Explicit TINA4_LOG_OUTPUT=file/both (or an
+            # explicit TINA4_LOG_FILE path) overrides this and writes a file.
             cls._stdout_enabled = True
-            cls._file_enabled = True
+            cls._file_enabled = _is_truthy(os.environ.get("TINA4_DEBUG"))
 
         # ── Format ───────────────────────────────────────────────
         fmt = os.environ.get("TINA4_LOG_FORMAT", "text").lower().strip()

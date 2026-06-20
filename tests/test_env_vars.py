@@ -174,15 +174,30 @@ class TestTrailingSlashRedirect:
 
 class TestLogFile:
     def test_default_no_explicit_file(self, monkeypatch, tmp_path):
-        # When TINA4_LOG_FILE is unset, the legacy logs/tina4.log writer
-        # is used. Configure the dir to a temp path so the test doesn't
-        # touch the real logs/ dir.
+        # In dev (TINA4_DEBUG), with TINA4_LOG_FILE unset, the legacy
+        # logs/tina4.log writer is used. Configure the dir to a temp path
+        # so the test doesn't touch the real logs/ dir.
         monkeypatch.delenv("TINA4_LOG_FILE", raising=False)
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
+        monkeypatch.setenv("TINA4_DEBUG", "true")
         from tina4_python.debug import Log
         Log.configure(log_dir=str(tmp_path))
         Log.info("hello")
         assert (tmp_path / "tina4.log").exists()
+
+    def test_no_file_in_production_by_default(self, monkeypatch, tmp_path):
+        # v3.13.39: outside dev (TINA4_DEBUG off / container), no log file is
+        # written by default — stdout only — so containers don't bloat the
+        # writable layer / disk. Explicit TINA4_LOG_OUTPUT/FILE still wins.
+        monkeypatch.delenv("TINA4_LOG_FILE", raising=False)
+        monkeypatch.delenv("TINA4_LOG_OUTPUT", raising=False)
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
+        from tina4_python.debug import Log
+        Log.configure(log_dir=str(tmp_path))
+        Log.error("boom")
+        assert not (tmp_path / "tina4.log").exists()
+        assert not (tmp_path / "error.log").exists()
 
     def test_custom_file_used(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TINA4_LOG_FILE", "custom.log")
