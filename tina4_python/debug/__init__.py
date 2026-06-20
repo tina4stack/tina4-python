@@ -19,8 +19,6 @@ Environment variables (all optional — defaults match v2 behaviour):
     TINA4_LOG_ROTATE_SIZE   Bytes per file before rotation. Default 10 MB.
                             Set to 0 to disable rotation.
     TINA4_LOG_ROTATE_KEEP   Number of rotated files to keep (default: 5).
-    TINA4_LOG_CRITICAL      When truthy, Log.critical(...) is accepted and
-                            mapped to error level. Default: false.
     TINA4_LOG_MAX_SIZE      [legacy] Megabytes per file. Used only when
                             TINA4_LOG_ROTATE_SIZE is unset (back-compat).
     TINA4_LOG_KEEP          [legacy] Alias for TINA4_LOG_ROTATE_KEEP.
@@ -201,10 +199,7 @@ class Log:
     # _format_mode so it doesn't clash with the legacy _format() method
     # name kept below for backward compatibility.
     _format_mode: str = "text"
-    # Whether Log.critical() is accepted (TINA4_LOG_CRITICAL).
-    _critical_enabled: bool = False
-
-    LEVELS = {"debug": 0, "info": 1, "warning": 2, "error": 3}
+    LEVELS = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
 
     @classmethod
     def configure(cls, log_dir: str = "logs", level: str = "info",
@@ -241,9 +236,6 @@ class Log:
         # ── Format ───────────────────────────────────────────────
         fmt = os.environ.get("TINA4_LOG_FORMAT", "text").lower().strip()
         cls._format_mode = "json" if fmt == "json" else "text"
-
-        # ── Critical level toggle ────────────────────────────────
-        cls._critical_enabled = _is_truthy(os.environ.get("TINA4_LOG_CRITICAL"))
 
         # ── Rotation config ──────────────────────────────────────
         # New-style: TINA4_LOG_ROTATE_SIZE in BYTES (0 = disabled).
@@ -311,6 +303,7 @@ class Log:
         "info": "\033[32m",      # Green
         "warning": "\033[33m",   # Yellow
         "error": "\033[31m",     # Red
+        "critical": "\033[35m",  # Magenta
     }
     RESET = "\033[0m"
 
@@ -454,15 +447,12 @@ class Log:
 
     @classmethod
     def critical(cls, message: str, **kwargs):
-        """Critical-level log — accepted only when TINA4_LOG_CRITICAL=true.
+        """Critical-level log — the highest severity (above error).
 
-        Maps to error so existing log consumers (alerting, error.log)
-        keep working. When the toggle is off the call is a no-op so
-        deployments that have standardised on debug/info/warning/error
-        don't get surprise log lines.
+        Always emitted (like every other level) and written to error.log.
+        Use it for unrecoverable, alert-worthy failures.
         """
-        if cls._critical_enabled:
-            cls._log("error", message, **kwargs)
+        cls._log("critical", message, **kwargs)
 
     @classmethod
     def is_enabled(cls, level: str) -> bool:
@@ -476,11 +466,7 @@ class Log:
             if Log.is_enabled("debug"):
                 Log.debug("state", snapshot=expensive_dump())
 
-        ``level`` is case-insensitive. ``"critical"`` additionally requires
-        ``TINA4_LOG_CRITICAL=true`` and is evaluated at error severity (its
-        real mapping).
+        ``level`` is case-insensitive (``debug`` / ``info`` / ``warning`` /
+        ``error`` / ``critical``).
         """
-        lvl = (level or "").lower()
-        if lvl == "critical":
-            return cls._critical_enabled and cls._should_log("error")
-        return cls._should_log(lvl)
+        return cls._should_log((level or "").lower())

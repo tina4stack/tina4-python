@@ -100,17 +100,12 @@ class TestLogIsEnabled:
         for level in ("debug", "info", "warning", "error"):
             assert Log.is_enabled(level) is Log._should_log(level)
 
-    def test_is_enabled_critical_requires_toggle(self, tmp_path):
+    def test_is_enabled_critical_is_top_level(self, tmp_path):
+        # critical is the highest severity — enabled at every normal threshold
         Log.configure(log_dir=str(tmp_path), level="info")
-        original = Log._critical_enabled
-        try:
-            Log._critical_enabled = False
-            assert Log.is_enabled("critical") is False
-            Log._critical_enabled = True
-            # critical maps to error severity, which passes the info threshold
-            assert Log.is_enabled("critical") is True
-        finally:
-            Log._critical_enabled = original
+        assert Log.is_enabled("critical") is True
+        Log.configure(log_dir=str(tmp_path), level="error")
+        assert Log.is_enabled("critical") is True   # critical(4) >= error(3)
 
 
 class TestLogFormat:
@@ -183,6 +178,21 @@ class TestLogOutput:
         error_file = tmp_path / "error.log"
         assert error_file.exists()
         assert "warn into errors" in error_file.read_text()
+
+    def test_critical_always_logs_at_critical_severity(self, tmp_path):
+        # v3 unify: critical is the highest level — always emitted, no toggle,
+        # and even passes a high console threshold (critical 4 >= error 3).
+        Log.configure(log_dir=str(tmp_path), level="error", production=True)
+        Log.critical("meltdown")
+        content = (tmp_path / "tina4.log").read_text()
+        assert "meltdown" in content
+        assert "critical" in content.lower()   # level label is CRITICAL, not ERROR
+
+    def test_critical_writes_to_error_log(self, tmp_path):
+        # critical (4) >= warning (2), so it lands in error.log too
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
+        Log.critical("page the oncall")
+        assert "page the oncall" in (tmp_path / "error.log").read_text()
 
     def test_info_and_debug_do_not_write_to_error_log(self, tmp_path):
         Log.configure(log_dir=str(tmp_path), level="debug", production=True)

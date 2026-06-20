@@ -248,23 +248,25 @@ class TestLogOutput:
 
 
 class TestLogCritical:
-    def test_critical_noop_by_default(self, monkeypatch, tmp_path, capsys):
+    # v3 unify: critical is the highest severity and ALWAYS emits — the old
+    # TINA4_LOG_CRITICAL opt-in toggle (no-op-by-default) was removed.
+    def test_critical_always_emits(self, monkeypatch, tmp_path, capsys):
         monkeypatch.delenv("TINA4_LOG_CRITICAL", raising=False)
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
         from tina4_python.debug import Log
         Log.configure(log_dir=str(tmp_path), level="info", production=False)
-        Log.critical("should be silent")
+        Log.critical("always logged")
         out = capsys.readouterr().out
-        assert "should be silent" not in out
+        assert "always logged" in out
 
-    def test_critical_emits_when_enabled(self, monkeypatch, tmp_path, capsys):
-        monkeypatch.setenv("TINA4_LOG_CRITICAL", "true")
+    def test_critical_emits_above_error_threshold(self, monkeypatch, tmp_path, capsys):
+        # critical (4) outranks error (3): visible even at level=error
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
         from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="info", production=False)
-        Log.critical("now logged")
+        Log.configure(log_dir=str(tmp_path), level="error", production=False)
+        Log.critical("top severity")
         out = capsys.readouterr().out
-        assert "now logged" in out
+        assert "top severity" in out
 
 
 class TestLogRotation:
