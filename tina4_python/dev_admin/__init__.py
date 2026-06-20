@@ -1185,23 +1185,23 @@ async def _api_system(request, response):
 
 
 async def _api_service_ai(request, response):
-    return response({"service": "ai", "url": os.environ.get("TINA4_AI_URL", "http://andrevanzuydam.com:11437"), "ok": True})
+    return response({"service": "ai", "url": os.environ.get("TINA4_AI_URL", "http://localhost:11437/api/chat"), "ok": True})
 
 
 async def _api_service_vision(request, response):
-    return response({"service": "vision", "url": os.environ.get("TINA4_VISION_URL", "http://andrevanzuydam.com:11434"), "ok": True})
+    return response({"service": "vision", "url": os.environ.get("TINA4_VISION_URL", "http://localhost:11437/api/chat"), "ok": True})
 
 
 async def _api_service_embed(request, response):
-    return response({"service": "embed", "url": os.environ.get("TINA4_EMBED_URL", "http://andrevanzuydam.com:11435"), "ok": True})
+    return response({"service": "embed", "url": os.environ.get("TINA4_EMBED_URL", "http://localhost:11437/api/embeddings"), "ok": True})
 
 
 async def _api_service_image(request, response):
-    return response({"service": "image", "url": os.environ.get("TINA4_IMAGE_URL", "http://andrevanzuydam.com:11436"), "ok": True})
+    return response({"service": "image", "url": os.environ.get("TINA4_IMAGE_URL", "http://localhost:11437/api/generate"), "ok": True})
 
 
 async def _api_service_rag(request, response):
-    return response({"service": "rag", "url": os.environ.get("TINA4_RAG_URL", "http://andrevanzuydam.com:11438"), "ok": True})
+    return response({"service": "rag", "url": os.environ.get("TINA4_RAG_URL", "http://localhost:11438"), "ok": True})
 
 
 def _supervisor_base_url() -> str:
@@ -1434,7 +1434,7 @@ async def _api_ai_proxy(request, response):
     else:
         return response({"error": "empty body"}, 400)
 
-    ai_url = os.environ.get("TINA4_AI_URL", "http://andrevanzuydam.com:11437/api/chat")
+    ai_url = os.environ.get("TINA4_AI_URL", "http://localhost:11437/api/chat")
     try:
         req = urllib.request.Request(
             ai_url,

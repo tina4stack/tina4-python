@@ -138,7 +138,7 @@ class CorsMiddleware:
         )
         self.max_age = os.environ.get("TINA4_CORS_MAX_AGE", "86400")
         self.credentials = os.environ.get(
-            "TINA4_CORS_CREDENTIALS", "true"
+            "TINA4_CORS_CREDENTIALS", "false"
         ).lower() in ("true", "1", "yes")
 
     def allowed_origin(self, request_origin: str) -> str:

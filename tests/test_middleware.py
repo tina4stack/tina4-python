@@ -59,7 +59,9 @@ class TestCorsMiddleware:
             del os.environ["TINA4_CORS_ORIGINS"]
 
     def test_credentials_header_for_specific_origin(self):
+        # Credentials are opt-IN (default false), so must be enabled explicitly.
         os.environ["TINA4_CORS_ORIGINS"] = "https://app.com"
+        os.environ["TINA4_CORS_CREDENTIALS"] = "true"
         try:
             cors = CorsMiddleware()
             req = MockRequest(headers={"origin": "https://app.com"})
@@ -68,6 +70,7 @@ class TestCorsMiddleware:
             assert resp._headers.get("access-control-allow-credentials") == "true"
         finally:
             del os.environ["TINA4_CORS_ORIGINS"]
+            del os.environ["TINA4_CORS_CREDENTIALS"]
 
     def test_preflight_detection(self):
         cors = CorsMiddleware()
