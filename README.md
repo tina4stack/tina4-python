@@ -40,14 +40,14 @@ tina4 init python ./my-app
 cd my-app && tina4 serve
 ```
 
-Open http://localhost:7146 — your app is running.
+Open http://localhost:7146. Your app is running.
 
-> **Two CLIs:** `tina4` is the cross-language Rust CLI — it scaffolds projects, runs the dev server, and watches files. `tina4python` is the Python package's own CLI for project tasks (`migrate`, `seed`, `generate`, `test`). This guide uses `tina4` to scaffold and run, and `tina4python` for those tasks.
+> **Two CLIs:** `tina4` is the cross-language Rust CLI that scaffolds projects, runs the dev server, and watches files. `tina4python` is the Python package's own CLI for project tasks (`migrate`, `seed`, `generate`, `test`). This guide uses `tina4` to scaffold and run, and `tina4python` for those tasks.
 
 <details>
 <summary><strong>Without the Tina4 CLI (Docker / CI only)</strong></summary>
 
-The framework normally refuses to start without the `tina4` Rust CLI (it owns file watching and SCSS compilation). To bypass — e.g. inside a Docker image where you've already built the assets — set `TINA4_OVERRIDE_CLIENT=true` in `.env`:
+The framework normally refuses to start without the `tina4` Rust CLI (it owns file watching and SCSS compilation). To bypass (e.g. inside a Docker image where you've already built the assets), set `TINA4_OVERRIDE_CLIENT=true` in `.env`:
 
 ```bash
 # 1. Create project
@@ -82,12 +82,12 @@ Every feature is built from scratch -- no pip install, no node_modules, no third
 | Category | Features |
 |----------|----------|
 | **Core HTTP** (7) | Router with path params (`{id:int}`, `{p:path}`), Server, Request/Response, Middleware pipeline, Static file serving, CORS |
-| **Database** (6) | SQLite, PostgreSQL, MySQL, MSSQL, Firebird — unified adapter, connection pooling, query cache, transactions, race-safe ID generation, SQL dialect translation |
+| **Database** (6) | SQLite, PostgreSQL, MySQL, MSSQL, Firebird: unified adapter, connection pooling, query cache, transactions, race-safe ID generation, SQL dialect translation |
 | **ORM** (7) | Active Record with typed fields, relationships (`has_one`/`has_many`/`belongs_to`), soft delete, QueryBuilder + MongoDB support, Auto-CRUD generator, migrations with rollback |
 | **Auth & Security** (5) | JWT (HS256/RS256), password hashing (PBKDF2-SHA256), API key validation, rate limiting, CSRF form tokens |
 | **Templating** (3) | Frond engine (Twig/Jinja2-compatible, pre-compiled 2.8x faster), SCSS auto-compilation, built-in CSS (~24 KB) |
 | **API & Integration** (5) | HTTP client (zero-dep), GraphQL with ORM auto-schema + GraphiQL IDE, WSDL/SOAP with auto WSDL, WebSocket (RFC 6455) + Redis backplane, MCP server (24 dev tools) |
-| **Background** (3) | Job queue (File/RabbitMQ/Kafka/MongoDB) with priority, delay, retry, dead letters — service runner — event system (on/emit/once/off) |
+| **Background** (3) | Job queue (File/RabbitMQ/Kafka/MongoDB) with priority, delay, retry, dead letters; service runner; event system (on/emit/once/off) |
 | **Data & Storage** (4) | Session (File/Redis/Valkey/MongoDB/DB), response cache (LRU, TTL), seeder + 50+ fake data generators, messenger (SMTP/IMAP) |
 | **Developer Tools** (7) | Dev dashboard (11 tabs), dev toolbar, error overlay (Catppuccin Mocha), dev mailbox, hot reload + CSS hot-reload, code metrics (complexity, coupling, maintainability), AI context installer (7 tools) |
 | **Utilities** (7) | DI container (transient + singleton), HtmlElement builder, inline testing (`@tests` decorator), i18n (6 languages), Swagger/OpenAPI auto-generation, CLI scaffolding (`generate model/route/migration/middleware`), structured logging |
@@ -659,7 +659,7 @@ Frond.clear_cache()
 
 ### Gallery
 
-7 interactive examples with **Try It** deploy — visit the dev admin at `/__dev/` to explore.
+7 interactive examples with **Try It** deploy. Visit the dev admin at `/__dev/` to explore.
 
 ## Environment
 
@@ -684,7 +684,7 @@ Supported: Claude Code, Cursor, GitHub Copilot, Windsurf, Aider, Cline, OpenAI C
 
 ## Performance
 
-Benchmarked with `wrk` — 5,000 requests, 50 concurrent, median of 3 runs:
+Benchmarked with `wrk`: 5,000 requests, 50 concurrent, median of 3 runs:
 
 | Framework | JSON req/s | Deps | Features |
 |-----------|-----------|------|----------|
@@ -694,7 +694,7 @@ Benchmarked with `wrk` — 5,000 requests, 50 concurrent, median of 3 runs:
 | Bottle | 4,355 | 0 | ~5 |
 | Django | 4,050 | 20+ | ~22 |
 
-Tina4 Python delivers competitive throughput with **zero dependencies and 55 features** — frameworks with higher req/s have a fraction of the functionality and require dozens of third-party packages.
+Tina4 Python delivers competitive throughput with **zero dependencies and 55 features**. Frameworks with higher req/s have a fraction of the functionality and require dozens of third-party packages.
 
 **Across all 4 Tina4 implementations:**
 
@@ -710,7 +710,7 @@ Run benchmarks locally: `python benchmarks/benchmark.py --python`
 
 ## Cross-Framework Parity
 
-Tina4 ships identical features across four languages — same architecture, same conventions, same 55 features:
+Tina4 ships identical features across four languages: same architecture, same conventions, same 55 features:
 
 | | Python | PHP | Ruby | Node.js |
 |---|--------|-----|------|---------|

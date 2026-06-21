@@ -174,15 +174,30 @@ class TestTrailingSlashRedirect:
 
 class TestLogFile:
     def test_default_no_explicit_file(self, monkeypatch, tmp_path):
-        # When TINA4_LOG_FILE is unset, the legacy logs/tina4.log writer
-        # is used. Configure the dir to a temp path so the test doesn't
-        # touch the real logs/ dir.
+        # In dev (TINA4_DEBUG), with TINA4_LOG_FILE unset, the legacy
+        # logs/tina4.log writer is used. Configure the dir to a temp path
+        # so the test doesn't touch the real logs/ dir.
         monkeypatch.delenv("TINA4_LOG_FILE", raising=False)
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
+        monkeypatch.setenv("TINA4_DEBUG", "true")
         from tina4_python.debug import Log
         Log.configure(log_dir=str(tmp_path))
         Log.info("hello")
         assert (tmp_path / "tina4.log").exists()
+
+    def test_no_file_in_production_by_default(self, monkeypatch, tmp_path):
+        # v3.13.39: outside dev (TINA4_DEBUG off / container), no log file is
+        # written by default — stdout only — so containers don't bloat the
+        # writable layer / disk. Explicit TINA4_LOG_OUTPUT/FILE still wins.
+        monkeypatch.delenv("TINA4_LOG_FILE", raising=False)
+        monkeypatch.delenv("TINA4_LOG_OUTPUT", raising=False)
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
+        from tina4_python.debug import Log
+        Log.configure(log_dir=str(tmp_path))
+        Log.error("boom")
+        assert not (tmp_path / "tina4.log").exists()
+        assert not (tmp_path / "error.log").exists()
 
     def test_custom_file_used(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TINA4_LOG_FILE", "custom.log")
@@ -248,23 +263,25 @@ class TestLogOutput:
 
 
 class TestLogCritical:
-    def test_critical_noop_by_default(self, monkeypatch, tmp_path, capsys):
+    # v3 unify: critical is the highest severity and ALWAYS emits — the old
+    # TINA4_LOG_CRITICAL opt-in toggle (no-op-by-default) was removed.
+    def test_critical_always_emits(self, monkeypatch, tmp_path, capsys):
         monkeypatch.delenv("TINA4_LOG_CRITICAL", raising=False)
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
         from tina4_python.debug import Log
         Log.configure(log_dir=str(tmp_path), level="info", production=False)
-        Log.critical("should be silent")
+        Log.critical("always logged")
         out = capsys.readouterr().out
-        assert "should be silent" not in out
+        assert "always logged" in out
 
-    def test_critical_emits_when_enabled(self, monkeypatch, tmp_path, capsys):
-        monkeypatch.setenv("TINA4_LOG_CRITICAL", "true")
+    def test_critical_emits_above_error_threshold(self, monkeypatch, tmp_path, capsys):
+        # critical (4) outranks error (3): visible even at level=error
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
         from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="info", production=False)
-        Log.critical("now logged")
+        Log.configure(log_dir=str(tmp_path), level="error", production=False)
+        Log.critical("top severity")
         out = capsys.readouterr().out
-        assert "now logged" in out
+        assert "top severity" in out
 
 
 class TestLogRotation:

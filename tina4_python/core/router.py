@@ -178,9 +178,18 @@ class Router:
             "param_names": param_names,
             "param_types": param_types,
             "handler": handler,
+            # A WS route is public by default (like GET). @secured() requires a
+            # valid JWT on the upgrade. Read the flag here AND keep a back-ref so
+            # @secured() applied AFTER @websocket() (the other decorator order)
+            # can still flip it — mirrors the HTTP _route_ref pattern.
+            "auth_required": bool(getattr(handler, "_secured", False)),
         }
         _ws_routes.append(route)
-        Log.debug(f"WebSocket route registered: {path}")
+        try:
+            handler._ws_route_ref = route
+        except (AttributeError, TypeError):
+            pass
+        Log.debug(f"WebSocket route registered: {path} (auth={'required' if route['auth_required'] else 'public'})")
 
     @staticmethod
     def match_ws(path: str) -> tuple[dict | None, dict]:
@@ -735,6 +744,9 @@ def secured():
         # update the route dict directly.
         if hasattr(fn, "_route_ref"):
             fn._route_ref._route["auth_required"] = True
+        # Same for a WebSocket route registered by @websocket() below this one.
+        if hasattr(fn, "_ws_route_ref"):
+            fn._ws_route_ref["auth_required"] = True
         return fn
     return decorator
 

@@ -1,0 +1,17 @@
+{
+  "id": "1781724663453_6530",
+  "type": "outbox",
+  "from": "noreply@localhost",
+  "to": [
+    ""
+  ],
+  "cc": [],
+  "bcc": [],
+  "reply_to": "",
+  "subject": "Order #14 Confirmed",
+  "body": "<!DOCTYPE html>\n<html>\n<head>\n    <meta charset=\"UTF-8\">\n</head>\n<body style=\"font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5;\">\n    <div style=\"max-width: 600px; margin: 0 auto; background-color: #ffffff; padding: 30px; border-radius: 4px;\">\n        <h1 style=\"color: #333333; margin-top: 0;\">Order Confirmed</h1>\n        <p style=\"color: #555555;\">Hello Alice Smith,</p>\n        <p style=\"color: #555555;\">Your order has been confirmed and is being processed.</p>\n        <table style=\"width: 100%; border-collapse: collapse; margin: 20px 0;\">\n            <tr>\n                <td style=\"padding: 8px; border-bottom: 1px solid #eeeeee; color: #777777;\">Order #</td>\n                <td style=\"padding: 8px; border-bottom: 1px solid #eeeeee; font-weight: bold;\">#14</td>\n            </tr>\n            <tr>\n                <td style=\"padding: 8px; border-bottom: 1px solid #eeeeee; color: #777777;\">Total</td>\n                <td style=\"padding: 8px; border-bottom: 1px solid #eeeeee; font-weight: bold;\">$580.28</td>\n            </tr>\n        </table>\n        <p style=\"color: #555555;\">Thank you for shopping with us!</p>\n        <hr style=\"border: none; border-top: 1px solid #eeeeee; margin: 20px 0;\">\n        <p style=\"color: #999999; font-size: 12px;\">Powered by Tina4</p>\n    </div>\n</body>\n</html>\n",
+  "html": false,
+  "attachments": [],
+  "date": "2026-06-17T19:31:03.453708+00:00",
+  "read": false
+}

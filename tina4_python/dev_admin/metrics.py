@@ -659,7 +659,7 @@ def _has_matching_test(rel_path: str) -> bool:
     try:
         src = src_file.read_text(encoding="utf-8", errors="ignore")
         for n in ast.walk(ast.parse(src)):
-            if isinstance(n, ast.ClassDef) and not n.name.startswith("_") and len(n.name) > 3:
+            if isinstance(n, ast.ClassDef) and not n.name.startswith("_") and len(n.name) > 2:
                 defined_symbols.add(n.name)
     except (OSError, SyntaxError):
         pass
@@ -690,12 +690,18 @@ def _has_matching_test(rel_path: str) -> bool:
 
     # Stage 2: a test that actually IMPORTS this module (precise), or references
     # a symbol defined in it. NO bare word-of-the-module-name match.
+    # The scan root is the package/`src` dir, so dotted_path is RELATIVE to it
+    # ("core.server"), but tests import via the FULL package path
+    # ("import tina4_python.core.server" / "from src.orm.model import …"). Allow
+    # an optional leading package qualifier `(?:\w+\.)*` so the relative path
+    # matches as a suffix — without it, every file a test imports by its full
+    # module path was mislabelled "untested" (the T badge / offenders bug).
     patterns = []
     if dotted_path:
-        patterns.append(re.compile(rf'\b(?:import|from)\s+{re.escape(dotted_path)}\b'))
+        patterns.append(re.compile(rf'\b(?:import|from)\s+(?:\w+\.)*{re.escape(dotted_path)}\b'))
     if parent_dotted:
         patterns.append(re.compile(
-            rf'\bfrom\s+{re.escape(parent_dotted)}\s+import\b[^\n]*\b{re.escape(module)}\b'))
+            rf'\bfrom\s+(?:\w+\.)*{re.escape(parent_dotted)}\s+import\b[^\n]*\b{re.escape(module)}\b'))
     if defined_symbols:
         sym_alt = "|".join(re.escape(s) for s in defined_symbols)
         patterns.append(re.compile(rf'\b(?:{sym_alt})\b'))

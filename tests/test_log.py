@@ -6,8 +6,13 @@ from tina4_python.debug import Log, set_request_id, get_request_id, _LogWriter
 
 
 @pytest.fixture(autouse=True)
-def reset_log(tmp_path):
+def reset_log(tmp_path, monkeypatch):
     """Reset Log state between tests."""
+    # Since v3.13.39 the log FILE is written by default only in dev
+    # (TINA4_DEBUG truthy) — prod/containers are stdout-only. Pin dev here so
+    # the existing file-output tests stay deterministic; the prod default
+    # (no file) is covered explicitly by the TestLogDefaultFileOutput tests.
+    monkeypatch.setenv("TINA4_DEBUG", "true")
     Log._initialized = False
     Log._writer = None
     Log._error_writer = None
@@ -73,6 +78,39 @@ class TestLogLevels:
         Log.configure(log_dir=str(tmp_path), level="debug")
         for level in ("debug", "info", "warning", "error"):
             assert Log._should_log(level) is True
+
+
+class TestLogIsEnabled:
+
+    def test_is_enabled_matches_threshold_at_info(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="info")
+        assert Log.is_enabled("debug") is False
+        assert Log.is_enabled("info") is True
+        assert Log.is_enabled("warning") is True
+        assert Log.is_enabled("error") is True
+
+    def test_is_enabled_at_error_level(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="error")
+        assert Log.is_enabled("info") is False
+        assert Log.is_enabled("warning") is False
+        assert Log.is_enabled("error") is True
+
+    def test_is_enabled_is_case_insensitive(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="info")
+        assert Log.is_enabled("INFO") is True
+        assert Log.is_enabled("Debug") is False
+
+    def test_is_enabled_mirrors_should_log(self, tmp_path):
+        Log.configure(log_dir=str(tmp_path), level="warning")
+        for level in ("debug", "info", "warning", "error"):
+            assert Log.is_enabled(level) is Log._should_log(level)
+
+    def test_is_enabled_critical_is_top_level(self, tmp_path):
+        # critical is the highest severity — enabled at every normal threshold
+        Log.configure(log_dir=str(tmp_path), level="info")
+        assert Log.is_enabled("critical") is True
+        Log.configure(log_dir=str(tmp_path), level="error")
+        assert Log.is_enabled("critical") is True   # critical(4) >= error(3)
 
 
 class TestLogFormat:
@@ -145,6 +183,57 @@ class TestLogOutput:
         error_file = tmp_path / "error.log"
         assert error_file.exists()
         assert "warn into errors" in error_file.read_text()
+
+    def test_critical_always_logs_at_critical_severity(self, tmp_path):
+        # v3 unify: critical is the highest level — always emitted, no toggle,
+        # and even passes a high console threshold (critical 4 >= error 3).
+        Log.configure(log_dir=str(tmp_path), level="error", production=True)
+        Log.critical("meltdown")
+        content = (tmp_path / "tina4.log").read_text()
+        assert "meltdown" in content
+        assert "critical" in content.lower()   # level label is CRITICAL, not ERROR
+
+    def test_critical_writes_to_error_log(self, tmp_path):
+        # critical (4) >= warning (2), so it lands in error.log too
+        Log.configure(log_dir=str(tmp_path), level="debug", production=True)
+        Log.critical("page the oncall")
+        assert "page the oncall" in (tmp_path / "error.log").read_text()
+
+
+class TestLogDefaultFileOutput:
+    # v3.13.39: with TINA4_LOG_OUTPUT unset, the log file is written only in
+    # dev (TINA4_DEBUG). In production / containers the logger is stdout-only —
+    # no logs/tina4.log or error.log to bloat the image layer / disk.
+
+    def test_default_no_file_in_production(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TINA4_LOG_OUTPUT", raising=False)
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        Log.configure(log_dir=str(tmp_path), level="info")
+        Log.error("prod line")
+        assert not (tmp_path / "tina4.log").exists()
+        assert not (tmp_path / "error.log").exists()
+
+    def test_default_writes_file_in_dev(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TINA4_LOG_OUTPUT", raising=False)
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        Log.configure(log_dir=str(tmp_path), level="info")
+        Log.info("dev line")
+        assert "dev line" in (tmp_path / "tina4.log").read_text()
+
+    def test_explicit_both_writes_file_even_in_production(self, tmp_path, monkeypatch):
+        # Explicit TINA4_LOG_OUTPUT always wins, even with TINA4_DEBUG off.
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "both")
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        Log.configure(log_dir=str(tmp_path), level="info")
+        Log.info("explicit both")
+        assert "explicit both" in (tmp_path / "tina4.log").read_text()
+
+    def test_default_still_logs_to_stdout_in_production(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.delenv("TINA4_LOG_OUTPUT", raising=False)
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        Log.configure(log_dir=str(tmp_path), level="info", production=False)
+        Log.info("stdout still on")
+        assert "stdout still on" in capsys.readouterr().out
 
     def test_info_and_debug_do_not_write_to_error_log(self, tmp_path):
         Log.configure(log_dir=str(tmp_path), level="debug", production=True)

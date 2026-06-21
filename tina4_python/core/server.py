@@ -720,23 +720,36 @@ async def _handle_asgi_websocket(scope: dict, receive, send):
     # Origin allow-list (opt-in via TINA4_WS_ALLOWED_ORIGINS). Unset = allow all
     # so existing deployments are unaffected. Shared with the standalone server
     # via websocket.origin_allowed().
-    from tina4_python.websocket import origin_allowed
+    from tina4_python.websocket import origin_allowed, ws_authorized
     _ws_headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
     if not origin_allowed(_ws_headers):
         # 1008 = policy violation (per ASGI/RFC 6455 close codes)
         await send({"type": "websocket.close", "code": 1008})
         return
 
-    # Accept the connection
+    # Per-route auth: a @secured() WS route requires a valid JWT on the upgrade
+    # (Authorization header, "bearer" subprotocol, or ?token=). Public by default.
+    _ws_subproto = _ws_headers.get("sec-websocket-protocol", "")
+    _ws_payload, _ws_ok = ws_authorized(
+        route, _ws_headers, scope.get("query_string", b"").decode(), _ws_subproto)
+    if not _ws_ok:
+        await send({"type": "websocket.close", "code": 1008})
+        return
+
+    # Accept the connection (echo the bearer subprotocol if the client offered it)
     msg = await receive()
     if msg["type"] != "websocket.connect":
         return
-    await send({"type": "websocket.accept"})
+    _accept = {"type": "websocket.accept"}
+    if any(p.strip().lower() == "bearer" for p in _ws_subproto.split(",")):
+        _accept["subprotocol"] = "bearer"
+    await send(_accept)
 
     handler = route["handler"]
 
     # Create a lightweight connection wrapper for ASGI WebSocket
     conn = _AsgiWebSocketConnection(scope, receive, send, path, params, _ws_manager)
+    conn.auth = _ws_payload
     _ws_manager.add(conn)
 
     # Fire "open" event — this may set conn._on_message / conn._on_close
@@ -794,6 +807,7 @@ class _AsgiWebSocketConnection:
         self.id = str(uuid.uuid4())[:8]
         self.path = path
         self.params = params
+        self.auth = None   # verified JWT payload on a @secured WS route, else None
         self.headers = {
             k.decode(): v.decode()
             for k, v in scope.get("headers", [])
@@ -899,7 +913,7 @@ async def _handle_dev_websocket(reader, writer, headers, path):
         writer.close()
         return
 
-    from tina4_python.websocket import compute_accept_key, origin_allowed
+    from tina4_python.websocket import compute_accept_key, origin_allowed, ws_authorized
 
     ws_key = headers.get("sec-websocket-key")
     if not ws_key:
@@ -2221,6 +2235,53 @@ def _check_legacy_env_vars() -> None:
     sys.exit(2)
 
 
+def _auto_migrate_on_startup(migration_folder: str = "migrations") -> None:
+    """Apply pending DB migrations on startup — NON-BREAKING.
+
+    When a ``migrations/`` folder exists (with at least one ``.sql`` file) and
+    ``TINA4_AUTO_MIGRATE`` is not disabled, pending migrations are applied during
+    boot so the schema is current with no manual ``tina4 migrate`` step. A
+    failure here is logged LOUD and the service STILL starts — a bad migration
+    must never take the backend down. (The explicit ``tina4 migrate`` CLI stays
+    fail-fast so CI still gets a non-zero exit.)
+
+    Disable with ``TINA4_AUTO_MIGRATE=false`` — e.g. multi-instance production
+    that migrates as a separate deploy step (concurrent first-apply can race).
+    """
+    from pathlib import Path
+    from tina4_python.dotenv import is_truthy
+
+    folder = Path(migration_folder)
+    if not folder.is_dir() or not any(folder.glob("*.sql")):
+        return  # no migrations → nothing to do (silent)
+    if not is_truthy(os.environ.get("TINA4_AUTO_MIGRATE", "true")):
+        Log.debug("TINA4_AUTO_MIGRATE is off — skipping startup migrations")
+        return
+
+    try:
+        from tina4_python.database import Database
+        db = Database()  # resolves TINA4_DATABASE_URL (framework default if unset)
+    except Exception as exc:
+        Log.debug(f"Startup migrations skipped (no database configured): {exc}")
+        return
+
+    try:
+        from tina4_python.migration import migrate
+        applied = migrate(db)
+        if applied:
+            Log.info(f"Applied {len(applied)} pending migration(s) on startup")
+    except Exception as exc:
+        Log.error(
+            f"Startup auto-migration failed: {exc} — the service is starting "
+            "anyway. Run `tina4 migrate` to retry."
+        )
+    finally:
+        try:
+            db.close()  # transient migration connection — don't leak it at boot
+        except Exception:
+            pass
+
+
 def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
     """Start the Tina4 dev server.
 
@@ -2352,6 +2413,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     _auto_discover("src")
     route_count = len(Router.get_routes())
     Log.info(f"Discovered {route_count} routes")
+
+    # Apply pending DB migrations on startup (non-breaking — see helper).
+    _auto_migrate_on_startup()
 
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)

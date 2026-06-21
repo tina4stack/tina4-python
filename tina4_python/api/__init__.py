@@ -10,10 +10,55 @@ Make HTTP requests without requests/httpx/aiohttp.
 """
 import json
 import ssl
+import time
 import base64
-from urllib.request import Request, urlopen
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
+from urllib.request import Request, HTTPRedirectHandler, HTTPSHandler, build_opener
 from urllib.error import HTTPError, URLError
+
+
+# Statuses that warrant an automatic retry when ``max_retries`` > 0: rate-limit
+# (429) plus the transient server-side 5xx family. 4xx client errors (401,
+# 404, …) are NOT retried — a repeat won't succeed.
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _same_origin(url_a: str, url_b: str) -> bool:
+    """True when two URLs share scheme + host + (effective) port."""
+    a, b = urlparse(url_a), urlparse(url_b)
+    default = {"http": 80, "https": 443}
+    pa = a.port if a.port is not None else default.get(a.scheme)
+    pb = b.port if b.port is not None else default.get(b.scheme)
+    return (a.scheme, a.hostname, pa) == (b.scheme, b.hostname, pb)
+
+
+class _AuthStripRedirectHandler(HTTPRedirectHandler):
+    """Follow redirects, but drop the Authorization header on a cross-origin hop.
+
+    Plain urllib forwards the Authorization header to ANY redirect target,
+    including a different host — so an ``api.get("/login")`` that 302s to
+    ``https://attacker.example/`` would hand the bearer token to the attacker.
+    Stripping it when the target origin (scheme/host/port) differs matches
+    requests/httpx and closes that leak, while same-origin redirects keep auth.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is not None and not _same_origin(req.full_url, newurl):
+            new_req.headers = {
+                k: v for k, v in new_req.headers.items() if k.lower() != "authorization"
+            }
+            new_req.unredirected_hdrs = {
+                k: v for k, v in getattr(new_req, "unredirected_hdrs", {}).items()
+                if k.lower() != "authorization"
+            }
+        return new_req
+
+
+def _open(req, timeout, opener):
+    """The single network-call indirection point (keeps the call site easy to
+    patch in tests). ``req`` stays the first positional arg on purpose."""
+    return opener.open(req, timeout=timeout)
 
 
 class Api:
@@ -25,7 +70,9 @@ class Api:
                  username: str | None = None,
                  password: str | None = None,
                  headers: dict[str, str] | None = None,
-                 verify_ssl: bool | None = None):
+                 verify_ssl: bool | None = None,
+                 max_retries: int = 0,
+                 retry_backoff: float = 0.5):
         """HTTP client.
 
         Constructor accepts ergonomic kwargs the documentation has long
@@ -44,12 +91,21 @@ class Api:
         ``verify_ssl`` is the docs-friendly inverse of ``ignore_ssl`` —
         ``verify_ssl=False`` is equivalent to ``ignore_ssl=True``. If
         both are supplied, ``ignore_ssl`` wins (legacy precedence).
+
+        ``max_retries`` (default 0 = off) enables automatic retry with
+        exponential backoff (``retry_backoff`` seconds base, doubling each
+        attempt) on a transport error or a retryable status (429/5xx). A
+        retried non-idempotent request (POST/…) may be re-sent — retries are
+        opt-in for that reason.
         """
         self.base_url = base_url.rstrip("/")
         self.auth_header = auth_header
         self.timeout = timeout
+        self.max_retries = max(0, int(max_retries))
+        self.retry_backoff = retry_backoff
         self._headers: dict[str, str] = {}
         self._ssl_context = None
+        self._opener_cache = None
 
         # ── kwarg sugar ────────────────────────────────────────────────
         # Bearer token wins over basic auth if both are passed.
@@ -120,9 +176,17 @@ class Api:
             return path
         return f"{self.base_url}/{path.lstrip('/')}" if path else self.base_url
 
-    def _request(self, method: str, url: str, body=None,
-                 content_type: str = "application/json") -> dict:
-        """Execute HTTP request. Returns standardized result dict."""
+    def _opener(self):
+        """Build (once) an opener that follows redirects but strips the
+        Authorization header on a cross-origin hop, honouring the SSL context."""
+        if self._opener_cache is None:
+            handlers = [_AuthStripRedirectHandler()]
+            if self._ssl_context is not None:
+                handlers.append(HTTPSHandler(context=self._ssl_context))
+            self._opener_cache = build_opener(*handlers)
+        return self._opener_cache
+
+    def _build_request(self, method: str, url: str, body, content_type: str) -> Request:
         headers = dict(self._headers)
         if self.auth_header:
             headers["Authorization"] = self.auth_header
@@ -139,10 +203,32 @@ class Api:
                 data = body
                 headers["Content-Type"] = content_type
 
-        req = Request(url, data=data, headers=headers, method=method)
+        return Request(url, data=data, headers=headers, method=method)
 
+    def _request(self, method: str, url: str, body=None,
+                 content_type: str = "application/json") -> dict:
+        """Execute the request with opt-in retry/backoff. Returns a result dict.
+
+        With ``max_retries`` > 0, a transport failure (``http_code`` None) or a
+        retryable status (429/5xx) is retried up to ``max_retries`` times with
+        exponential backoff; any other outcome (2xx, 4xx, 3xx) returns at once.
+        """
+        req = self._build_request(method, url, body, content_type)
+        attempts = self.max_retries + 1
+        result = None
+        for attempt in range(attempts):
+            result = self._attempt(req)
+            code = result.get("http_code")
+            retryable = code is None or code in _RETRY_STATUSES
+            if not retryable or attempt == attempts - 1:
+                return result
+            time.sleep(self.retry_backoff * (2 ** attempt))
+        return result
+
+    def _attempt(self, req: Request) -> dict:
+        """A single HTTP attempt. Returns the standardized result dict."""
         try:
-            resp = urlopen(req, timeout=self.timeout, context=self._ssl_context)
+            resp = _open(req, self.timeout, self._opener())
             raw = resp.read().decode("utf-8", errors="replace")
             resp_headers = dict(resp.headers)
             try:

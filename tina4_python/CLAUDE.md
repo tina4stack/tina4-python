@@ -725,7 +725,13 @@ api.set_basic_auth("client_id", "client_secret")
 
 # Disable SSL verification (dev only)
 api = Api("https://self-signed.local", ignore_ssl=True)
+
+# Opt-in automatic retry with exponential backoff (default off: max_retries=0).
+# Retries a transport error or a retryable status (429/5xx); 4xx is never retried.
+api = Api("https://api.example.com", max_retries=3, retry_backoff=0.5)
 ```
+
+**Redirect safety:** the client follows redirects, but the `Authorization` header is **stripped on a cross-origin hop** (different scheme/host/port) — so a bearer token is never leaked to a host you didn't authenticate against. Same-origin redirects keep the header.
 
 ### Return format
 Every request method (`get()`, `post()`, `put()`, `patch()`, `delete()`, `send()`) returns:
@@ -952,11 +958,10 @@ uv run tina4python migrate
 ### How migrations work internally
 
 - SQL files live in `migrations/` folder, named `NNNNNN_description.sql` (6-digit sequence)
-- Files are executed **alphabetically** and split on the `;` delimiter
-- State is tracked in the `tina4_migration` table (auto-created per engine)
-- A migration only runs once — if `passed = 1` in the tracking table, it is skipped
-- Failed migrations (passed = 0) are deleted and retried on the next run
-- On **any** error, the migration rolls back and the process exits with `sys.exit(1)` — fix the error before re-running
+- Files are executed in **numeric-prefix order** (`9_` before `10_`) and split on the `;` delimiter. A file without a numeric/timestamp prefix logs a warning — its order is undefined
+- State is tracked (row-existence) in the `tina4_migration` table (auto-created per engine): a migration runs once — if a row for it exists, it is skipped. (A vestigial `passed` column exists for back-compat; only applied = `passed=1` rows are ever written — failures are never recorded as `passed=0`.)
+- **Each migration FILE is wrapped in its own transaction**: on a failure the file rolls back and `migrate()` **raises** (it does not write `passed=0`, delete anything, or `sys.exit`). Already-applied files stay applied — fix the bad file and re-run. The explicit `tina4 migrate` CLI surfaces the raise as a non-zero exit; startup auto-migration logs it and the service still boots (see TINA4_AUTO_MIGRATE above).
+- **Atomicity caveat:** per-file transactions are truly atomic only on engines with **transactional DDL (PostgreSQL)**. MySQL, Firebird, and SQLite auto-commit DDL, so a multi-statement migration that fails midway on those engines leaves earlier statements applied — keep one logical change per file. CREATE TABLE / ALTER-ADD are made idempotent on Firebird/MSSQL (existence-checked) so a re-run doesn't error.
 
 ### Engine-specific DDL patterns
 
@@ -1617,7 +1622,7 @@ TINA4_DATABASE_PASSWORD=                 # DB password
 
 # Framework
 TINA4_DEBUG=true                  # Enable dev mode (toolbar, live reload, error overlay)
-TINA4_LOG_LEVEL=ERROR             # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR (default: ERROR)
+TINA4_LOG_LEVEL=INFO              # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
 TINA4_LOCALE=en                   # Language for framework messages (en, fr, af, zh, ja, es)
 TINA4_DEFAULT_WEBSERVER=FALSE     # Set to TRUE to use Tina4's built-in webserver instead of ASGI
 TINA4_OVERRIDE_CLIENT=false       # Set to true to allow running without tina4 CLI (e.g. Docker)
@@ -1638,10 +1643,11 @@ SWAGGER_DEV_URL=http://localhost:7145  # Dev server URL for Swagger
 ```
 
 ### Debug levels
-- `ALL` / `DEBUG` — enables DevReload, hot-patching, verbose logging, error overlay
-- `INFO` — standard logging
-- `WARNING` — warnings and errors only
-- `ERROR` — errors only
+- `ALL` / `DEBUG` — most verbose; every level on the console
+- `INFO` — standard logging (default)
+- `WARNING` — warnings, errors, and critical
+- `ERROR` — errors and critical
+- `CRITICAL` — critical only (highest severity; `Log.critical()` always logs)
 
 ## CORS
 

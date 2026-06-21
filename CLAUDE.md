@@ -249,7 +249,7 @@ class Visit(ORM):
     _db = "analytics"   # this model uses the analytics connection
 ```
 
-Soft-delete: Set `soft_delete = True` on the model class. Uses `is_deleted` column (INTEGER, 0/1). `delete()` sets deleted_at, `force_delete()` removes the row, `restore()` clears deleted_at.
+Soft-delete: Set `soft_delete = True` on the model class. Uses the `is_deleted` column (INTEGER, 0/1). `delete()` sets `is_deleted = 1`, `force_delete()` removes the row, `restore()` sets `is_deleted = 0`. (There is no `deleted_at` column — the flag is `is_deleted`.)
 
 ### File Uploads
 
@@ -466,6 +466,15 @@ migrate(db)                              # Run all pending migrations
 create_migration("add users table")      # Create new .sql file
 rollback(db)                             # Rollback last batch
 ```
+
+**Auto-run on startup (`TINA4_AUTO_MIGRATE`, default on).** When a `migrations/`
+folder exists, `tina4 serve` applies pending migrations during boot — no manual
+`tina4 migrate` step. It is **non-breaking**: a failed migration is logged
+(`Log.error`) and the service still starts (a bad migration must never take the
+backend down). Set `TINA4_AUTO_MIGRATE=false` to disable (e.g. multi-instance
+production that migrates as a separate deploy step — concurrent first-apply can
+race). The explicit `tina4 migrate` CLI is unaffected and stays **fail-fast**
+(non-zero exit on failure) for CI.
 
 ### Events — Decoupled communication
 

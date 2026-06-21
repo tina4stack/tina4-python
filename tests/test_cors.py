@@ -40,9 +40,10 @@ class TestCorsDefaults:
         cors = CorsMiddleware()
         assert cors.max_age == "86400"
 
-    def test_default_credentials_is_true(self, clean_env):
+    def test_default_credentials_is_false(self, clean_env):
+        # Credentials are opt-IN — default is false (safer). See DECISIONS.txt.
         cors = CorsMiddleware()
-        assert cors.credentials is True
+        assert cors.credentials is False
 
 
 class TestCorsEnvConfig:

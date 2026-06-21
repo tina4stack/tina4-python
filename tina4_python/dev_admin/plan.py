@@ -504,7 +504,7 @@ def flesh(name: str = "", prompt: str = "") -> dict:
         user_parts.append(f"Extra context from caller: {prompt}")
     user_parts.append("Reply with ONLY the JSON array — no explanation, no markdown fences.")
 
-    ai_url = _os.environ.get("TINA4_AI_URL", "http://andrevanzuydam.com:11437/api/chat")
+    ai_url = _os.environ.get("TINA4_AI_URL", "http://localhost:11437/api/chat")
     ai_model = _os.environ.get("TINA4_AI_MODEL", "qwen2.5-coder:14b")
     try:
         req = _urlreq.Request(
