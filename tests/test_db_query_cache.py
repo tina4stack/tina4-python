@@ -27,7 +27,7 @@ def _reachable(host: str, port: int) -> bool:
 
 
 def _make_db(tmp_path):
-    db = Database("sqlite://" + str(tmp_path / "qc.db"))
+    db = Database("sqlite:///" + str(tmp_path / "qc.db"))
     db.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, n TEXT)")
     db.execute("INSERT INTO t (n) VALUES ('a'), ('b')")
     return db
@@ -238,7 +238,7 @@ class TestPersistentBackend:
         monkeypatch.setenv("TINA4_DB_CACHE", "true")
         monkeypatch.setenv("TINA4_DB_CACHE_BACKEND", "redis")
         monkeypatch.setenv("TINA4_DB_CACHE_URL", "redis://localhost:6379")
-        path = "sqlite://" + str(tmp_path / "shared.db")
+        path = "sqlite:///" + str(tmp_path / "shared.db")
         db1 = Database(path)
         db1.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, n TEXT)")
         db1.execute("INSERT INTO t (n) VALUES ('x'), ('y')")

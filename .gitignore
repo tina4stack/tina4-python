@@ -85,3 +85,8 @@ example/store/src/**/__pycache__/
 /data/store.db
 /example/store/
 /example/uv.lock
+
+# macOS $TMPDIR leak guard: tests that mis-resolve an absolute tmp path
+# relative to cwd would create these under the repo. Never commit them.
+/private/
+/var/folders/
