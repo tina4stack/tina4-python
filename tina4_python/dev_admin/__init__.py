@@ -2864,12 +2864,42 @@ async def _api_git_status(request, response):
 # the same registry, so tools registered via the `@mcp_tool` decorator
 # show up on both immediately.
 
+def _mcp_token_ok(request) -> bool:
+    """Timing-safe check of a remote MCP caller's token against
+    TINA4_MCP_TOKEN (falling back to TINA4_API_KEY). Accepts an
+    `Authorization: Bearer <token>` header, `X-MCP-Token`, or `X-Api-Key`."""
+    import os as _os, hmac as _hmac
+    expected = _os.environ.get("TINA4_MCP_TOKEN") or _os.environ.get("TINA4_API_KEY") or ""
+    if not expected:
+        return False
+    headers = getattr(request, "headers", None) or {}
+    auth = headers.get("authorization", "") or ""
+    provided = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+    if not provided:
+        provided = headers.get("x-mcp-token", "") or headers.get("x-api-key", "")
+    if not provided:
+        return False
+    return _hmac.compare_digest(str(provided), str(expected))
+
+
+def _mcp_request_allowed(request) -> bool:
+    """Per-request MCP authorisation gate applied by EVERY MCP surface
+    (JSON-RPC, SSE, and the REST shim). Loopback callers are allowed; a
+    non-loopback (remote) caller needs TINA4_MCP_REMOTE + a valid token.
+    Uses the raw socket peer (request.remote_ip), never X-Forwarded-For."""
+    from tina4_python.mcp import is_request_allowed
+    remote_ip = getattr(request, "remote_ip", "") or ""
+    return is_request_allowed(remote_ip, _mcp_token_ok(request))
+
+
 async def _api_mcp_tools(request, response):
     """GET — return the MCP tool registry as a plain JSON list.
 
     Shape matches what dev-admin's `listMcpTools()` expects:
         {"tools": [{"name": "...", "description": "...", "schema": {...}}, ...]}
     """
+    if not _mcp_request_allowed(request):
+        return response({"tools": [], "error": "MCP forbidden"}, 404)
     try:
         from tina4_python.mcp import _get_default_server
         server = _get_default_server()
@@ -2950,8 +2980,8 @@ async def _api_mcp_rpc(request, response):
     (no id) yield an empty 204.
     """
     import json as _json
-    from tina4_python.mcp import _get_default_server, is_enabled
-    if not is_enabled():
+    from tina4_python.mcp import _get_default_server
+    if not _mcp_request_allowed(request):
         return response({"error": "MCP disabled"}, 404)
     server = _get_default_server()
     body = request.body
@@ -2966,8 +2996,7 @@ async def _api_mcp_sse(request, response):
     """GET — SSE handshake. Emits the `endpoint` event telling the client
     where to POST JSON-RPC messages, per the MCP HTTP+SSE transport.
     """
-    from tina4_python.mcp import is_enabled
-    if not is_enabled():
+    if not _mcp_request_allowed(request):
         return response({"error": "MCP disabled"}, 404)
     base = request.path.rsplit("/sse", 1)[0]
     sse = f"event: endpoint\ndata: {base}/message\n\n"

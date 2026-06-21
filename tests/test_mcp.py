@@ -262,46 +262,44 @@ class TestSecurity:
                 del os.environ["TINA4_HOST_NAME"]
 
     def test_is_enabled_remote_gate(self):
-        """The implicit (debug-driven) MCP gate is localhost-only unless
-        TINA4_MCP_REMOTE opts in; an explicit TINA4_MCP wins on any host."""
-        from tina4_python.mcp import is_enabled
+        """3.13.40 contract: is_enabled() is the CAPABILITY gate only
+        (debug/explicit, host-INDEPENDENT). The localhost-vs-remote decision
+        moved to a per-request call, is_request_allowed(remote_ip), so the
+        configured host name no longer flips the gate — closing the old
+        0.0.0.0-as-localhost hole where a remote caller passed the check."""
+        from tina4_python.mcp import is_enabled, is_request_allowed
         keys = ("TINA4_MCP", "TINA4_DEBUG", "TINA4_MCP_REMOTE", "TINA4_HOST_NAME")
         saved = {k: os.environ.get(k) for k in keys}
         try:
             for k in keys:
                 os.environ.pop(k, None)
 
-            local = "localhost:7145"
-            remote = "myserver.example.com:7145"
-
-            # 1. No debug, no explicit → off (any host).
-            os.environ["TINA4_HOST_NAME"] = remote
+            # 1. No debug, no explicit → capability off (any host).
+            os.environ["TINA4_HOST_NAME"] = "myserver.example.com:7145"
             assert is_enabled() is False
+            assert is_request_allowed("127.0.0.1") is False  # capability off denies all
 
-            # 2. Debug + localhost → on.
+            # 2. Debug → capability ON regardless of configured host; the real
+            #    gate is per-request: loopback allowed, remote denied.
             os.environ["TINA4_DEBUG"] = "true"
-            os.environ["TINA4_HOST_NAME"] = local
             assert is_enabled() is True
+            assert is_request_allowed("127.0.0.1") is True
+            assert is_request_allowed("203.0.113.9") is False
 
-            # 3. Debug + NON-localhost, no opt-in → OFF (the security fix —
-            #    dev tools must not auto-expose on a remote host).
-            os.environ["TINA4_HOST_NAME"] = remote
-            assert is_enabled() is False
-
-            # 4. Debug + non-localhost + TINA4_MCP_REMOTE=true → on (escape hatch).
+            # 3. Remote opt-in alone is NOT enough — a token is also required.
             os.environ["TINA4_MCP_REMOTE"] = "true"
-            assert is_enabled() is True
+            assert is_request_allowed("203.0.113.9", has_valid_token=False) is False
+            assert is_request_allowed("203.0.113.9", has_valid_token=True) is True
             os.environ.pop("TINA4_MCP_REMOTE", None)
 
-            # 5. Explicit TINA4_MCP=true → on even on a remote host, no debug.
+            # 4. Explicit TINA4_MCP=true → capability on even with no debug.
             os.environ.pop("TINA4_DEBUG", None)
             os.environ["TINA4_MCP"] = "true"
             assert is_enabled() is True
 
-            # 6. Explicit TINA4_MCP=false → off even on localhost with debug.
+            # 5. Explicit TINA4_MCP=false → off even with debug.
             os.environ["TINA4_MCP"] = "false"
             os.environ["TINA4_DEBUG"] = "true"
-            os.environ["TINA4_HOST_NAME"] = local
             assert is_enabled() is False
         finally:
             for k, v in saved.items():

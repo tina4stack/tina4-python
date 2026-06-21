@@ -71,7 +71,7 @@ class Request:
 
     __slots__ = (
         "method", "path", "url", "query_string", "params", "query", "headers",
-        "body", "raw_body", "cookies", "files", "ip",
+        "body", "raw_body", "cookies", "files", "ip", "remote_ip",
         "content_type", "session", "_route_params",
     )
 
@@ -88,6 +88,7 @@ class Request:
         self.cookies: dict = {}
         self.files: dict = {}
         self.ip: str = ""
+        self.remote_ip: str = ""        # Raw socket peer (never X-Forwarded-For) — for trust decisions
         self.content_type: str = ""
         self.session = None             # Set by session middleware
         self._route_params: dict = {}   # Dynamic route params ({id}, etc.)
@@ -107,6 +108,10 @@ class Request:
 
         req.content_type = req.headers.get("content-type", "")
         req.ip = _extract_ip(scope, req.headers)
+        # Raw socket peer address — NEVER honours X-Forwarded-For, so it can
+        # be trusted for loopback/remote authorisation (e.g. the MCP guard).
+        _client = scope.get("client")
+        req.remote_ip = _client[0] if _client else ""
 
         # Reconstruct the full absolute URL — scheme://host[:port]/path[?query].
         # Honours x-forwarded-proto and x-forwarded-host so apps behind a proxy

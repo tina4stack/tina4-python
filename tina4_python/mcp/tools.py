@@ -203,7 +203,11 @@ def register_dev_tools(server):
         if err:
             raise ValueError(f"Invalid path {rel_path!r}: {err}")
         resolved = (project_root / rel_path).resolve()
-        if not str(resolved).startswith(str(project_root)):
+        root = project_root.resolve()
+        # Path-COMPONENT containment (is_relative_to), not a string prefix.
+        # str.startswith() would let a sibling dir like /srv/app-secrets pass
+        # the guard for a project_root of /srv/app.
+        if resolved != root and root not in resolved.parents:
             raise ValueError(f"Path escapes project directory: {rel_path}")
         return resolved
 
@@ -217,13 +221,24 @@ def register_dev_tools(server):
     # ── Database Tools ──────────────────────────────────────────
 
     def database_query(sql: str, params: str = "[]") -> dict:
-        """Execute a read-only SQL query (SELECT) and return results."""
+        """Execute a read-only SQL query (SELECT/WITH) and return results.
+
+        Enforces read-only: any non-SELECT statement, or a stacked second
+        statement, is rejected. Use `database_execute` for writes.
+        """
+        import re as _re
         from tina4_python.orm.model import ORM
         db = ORM._get_db() if hasattr(ORM, "_get_db") else None
         if db is None:
             return {"error": "No database connection"}
+        cleaned = _re.sub(r"/\*.*?\*/", " ", sql or "", flags=_re.S)
+        cleaned = _re.sub(r"--[^\n]*", " ", cleaned).strip().rstrip(";").strip()
+        if ";" in cleaned:
+            return {"error": "database_query rejects multiple statements"}
+        if not _re.match(r"(?is)^(select|with)\b", cleaned):
+            return {"error": "database_query only runs read-only SELECT/WITH queries; use database_execute for writes"}
         param_list = json.loads(params) if isinstance(params, str) else params
-        result = db.fetch(sql, param_list)
+        result = db.fetch(cleaned, param_list)
         return {"records": result.to_array(), "count": result.count}
 
     def database_execute(sql: str, params: str = "[]") -> dict:

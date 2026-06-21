@@ -35,7 +35,8 @@ from .protocol import (
 __all__ = [
     "McpServer", "mcp_tool", "mcp_resource",
     "encode_response", "encode_error", "encode_notification", "decode_request",
-    "is_localhost", "is_enabled", "resolve_port", "register",
+    "is_localhost", "is_loopback", "is_enabled", "is_request_allowed",
+    "resolve_port", "register",
 ]
 
 # Type hint → JSON Schema type mapping (reuse Swagger pattern)
@@ -75,7 +76,11 @@ def _schema_from_signature(func) -> dict:
 
 
 def is_localhost() -> bool:
-    """Check if the server is running on localhost."""
+    """Whether the CONFIGURED host name looks local. Informational only —
+    kept for back-compat. This is NOT the security gate: it reads the
+    configured TINA4_HOST_NAME, not the real caller, so it must never be
+    used to authorise a request. Use `is_request_allowed(remote_ip, ...)`
+    with the raw socket peer instead."""
     host = os.environ.get("TINA4_HOST_NAME", "localhost:7145").split(":")[0]
     return host in ("localhost", "127.0.0.1", "0.0.0.0", "::1", "")
 
@@ -88,34 +93,68 @@ def _is_truthy(val) -> bool:
     return str(val or "").strip().lower() in ("true", "1", "yes", "on")
 
 
+def is_loopback(ip: str) -> bool:
+    """True when `ip` is a loopback / local peer address.
+
+    `ip` MUST be the raw socket peer (e.g. request.remote_ip), never a
+    value derived from X-Forwarded-For (which the client controls and can
+    spoof to 127.0.0.1). An empty string means there is no TCP peer
+    (in-process call or the built-in dev server) and is treated as local —
+    a genuine remote TCP client always has a non-empty address.
+
+    NOTE: 0.0.0.0 is a *bind* address, never a *client* address, so it is
+    deliberately NOT loopback here (the old is_localhost() bug treated the
+    0.0.0.0 default bind as "localhost" and so let remote callers through).
+    """
+    if not ip:
+        return True
+    ip = ip.strip().lower()
+    if ip.startswith("::ffff:"):   # IPv4-mapped IPv6
+        ip = ip[7:]
+    return ip in ("::1", "localhost") or ip.startswith("127.")
+
+
 def is_enabled() -> bool:
-    """Whether the built-in MCP dev tools should be enabled.
+    """Whether the built-in MCP dev tools are turned on at all (capability).
 
-    Resolution order (highest priority first):
-        1. TINA4_MCP env var — explicit on/off override, honoured on ANY host.
-           An explicit `true` is how a sysadmin opts a remote / debug-disabled
-           deployment in (e.g. for a remote AI assistant); an explicit `false`
-           force-disables it everywhere.
-        2. TINA4_DEBUG=true — implicit on for dev, but LOCALHOST-ONLY unless
-           TINA4_MCP_REMOTE=true. The MCP dev tools expose powerful operations
-           (DB query, file read/write, route listing), so they never auto-expose
-           on a non-localhost host without an explicit opt-in.
-        3. Otherwise off.
+    This is the transport/mount gate only:
+        1. TINA4_MCP env var — explicit on/off override (any host).
+        2. else TINA4_DEBUG=true — on for development.
+        3. otherwise off.
 
-    Cross-framework parity v3.12.4: `TINA4_MCP=true` on its own (without
-    TINA4_DEBUG) keeps the endpoint exposed in a debug-disabled deployment.
-    v3.13.39: the implicit (debug-driven) path is now gated on is_localhost(),
-    with TINA4_MCP_REMOTE=true as the documented escape hatch — previously
-    is_localhost() was dead code and TINA4_MCP_REMOTE was never read, so the
-    documented localhost guard was not actually enforced.
+    It deliberately does NOT decide localhost-vs-remote — that is a
+    PER-REQUEST decision made by `is_request_allowed()` against the real
+    socket peer, because the MCP tools expose powerful operations (DB
+    query/execute, file read/write) and must never auto-expose to a remote
+    caller. (v3.13.40: previously is_enabled() gated on is_localhost(),
+    which read the configured host name instead of the caller — a remote
+    box bound to 0.0.0.0 with TINA4_DEBUG passed the "localhost" check.)
     """
     explicit = os.environ.get("TINA4_MCP")
     if explicit is not None and explicit != "":
         return _is_truthy(explicit)
-    if not _is_truthy(os.environ.get("TINA4_DEBUG")):
+    return _is_truthy(os.environ.get("TINA4_DEBUG"))
+
+
+def is_request_allowed(remote_ip: str, has_valid_token: bool = False) -> bool:
+    """Per-request authorisation for the MCP endpoint — the real security gate.
+
+    - The capability must be on (`is_enabled()`), else deny.
+    - A loopback caller (`is_loopback(remote_ip)`) is always allowed (the
+      normal local dev / Claude Desktop case).
+    - A non-loopback (remote) caller is allowed ONLY when BOTH
+      `TINA4_MCP_REMOTE` is truthy AND a valid token was supplied
+      (`has_valid_token`). A bare `TINA4_MCP_REMOTE=true` is no longer
+      enough — remote access to file_write / database_execute now requires
+      a token (TINA4_MCP_TOKEN, falling back to TINA4_API_KEY).
+
+    `remote_ip` MUST be the raw socket peer (request.remote_ip).
+    """
+    if not is_enabled():
         return False
-    # Dev auto-enable: localhost only, unless explicitly opted into remote.
-    return is_localhost() or _is_truthy(os.environ.get("TINA4_MCP_REMOTE"))
+    if is_loopback(remote_ip):
+        return True
+    return _is_truthy(os.environ.get("TINA4_MCP_REMOTE")) and bool(has_valid_token)
 
 
 def resolve_port(framework_port: int = 7145) -> int:
