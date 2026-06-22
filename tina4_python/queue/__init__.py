@@ -61,7 +61,7 @@ def _resolve_backend(topic: str, backend: str | None, max_retries: int,
         # Consumer-group offsets manage redelivery — framework timeout N/A.
         return KafkaBackend(topic, max_retries)
     elif chosen in ("mongodb", "mongo"):
-        return MongoBackend(topic, max_retries, visibility_timeout)
+        return MongoBackend(topic, max_retries, visibility_timeout, retry_backoff)
     else:
         raise ValueError(f"Unknown queue backend: {chosen!r}. Use 'file', 'rabbitmq', 'kafka', or 'mongodb'.")
 
@@ -82,9 +82,12 @@ class Queue:
                  visibility_timeout: float | None = None):
         self.topic = topic
         self.max_retries = max_retries
-        # Seconds to wait before a failed job is re-attempted (file backend).
+        # Seconds to wait before a failed job is re-attempted.
         # Default 0 = retry on the very next pop()/consume() iteration.
         self.retry_backoff = retry_backoff
+        # Remember an explicit backend= so retargeting a topic (produce/consume)
+        # does not silently fall back to the TINA4_QUEUE_BACKEND env default.
+        self._backend_choice = backend
         # Reservation/visibility timeout (seconds). A popped job is reserved for
         # this long; if the consumer dies before complete()/fail() the next
         # pop() reclaims it (at-least-once delivery). Falls back to
@@ -95,6 +98,24 @@ class Queue:
         )
         self._backend = _resolve_backend(topic, backend, max_retries, retry_backoff,
                                          self.visibility_timeout)
+
+    def _retarget(self, topic: str) -> None:
+        """Point this queue (and its backend) at ``topic`` in place.
+
+        produce()/consume()/process() call this so a topic argument actually
+        changes which topic is read or written. Without it the argument was
+        accepted but ignored on the read path — pop() always used the
+        construction-time topic, so ``consume("other")`` silently drained the
+        wrong queue. Reuses the explicit backend choice (``_backend_choice``)
+        so an explicit ``backend=`` is preserved across the switch.
+        """
+        if topic == self.topic:
+            return
+        self.topic = topic
+        self._backend = _resolve_backend(
+            topic, self._backend_choice, self.max_retries,
+            self.retry_backoff, self.visibility_timeout,
+        )
 
     def push(self, data: dict, priority: int = 0, delay_seconds: int = 0):
         """Add a job to the queue. Returns job ID."""
@@ -134,6 +155,8 @@ class Queue:
             batch_size: Number of jobs to pass to handler at once (default 1).
                         When > 1, handler receives a list of Jobs.
         """
+        if topic is not None:
+            self._retarget(topic)
         processed = 0
         while max_jobs is None or processed < max_jobs:
             if batch_size > 1:
@@ -235,15 +258,11 @@ class Queue:
             delay_seconds = max(0, offset)
 
         old_topic = self.topic
-        self.topic = topic
-        self._backend = _resolve_backend(topic, None, self.max_retries, self.retry_backoff,
-                                         self.visibility_timeout)
+        self._retarget(topic)
         try:
             return self.push(data, priority, delay_seconds)
         finally:
-            self.topic = old_topic
-            self._backend = _resolve_backend(old_topic, None, self.max_retries, self.retry_backoff,
-                                             self.visibility_timeout)
+            self._retarget(old_topic)
 
     def consume(self, topic: str = None, job_id: str = None, poll_interval: float = 1.0,
                 iterations: int = 0, batch_size: int = 1):
@@ -282,6 +301,10 @@ class Queue:
         import time
 
         topic = topic or self.topic
+        # Honor the topic argument: point the queue (and the backend that
+        # pop()/job.complete()/job.fail() route through) at it. Previously the
+        # argument was ignored and consume() drained the construction-time topic.
+        self._retarget(topic)
 
         if job_id is not None:
             # Consume a specific job by ID — single yield, no polling

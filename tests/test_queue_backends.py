@@ -536,6 +536,42 @@ class TestMongoDBBackendMocked:
         call_args = mock_collection.update_one.call_args[0]
         assert call_args[1]["$set"]["status"] == "failed"
 
+    def test_dequeue_surfaces_live_document_attempts(self):
+        # Bug C regression: the consumer must see the LIVE top-level attempts
+        # (incremented by reclaim/reject), not the push-time snapshot inside
+        # ``data``. Without this, fail()'s attempts>=max_retries check never
+        # tripped and a job could be retried forever instead of dead-lettering.
+        backend, mock_collection = self._make_backend_with_mock()
+        mock_collection.find_one_and_update.return_value = {
+            "_id": "msg-1", "data": {"x": 1, "attempts": 0}, "topic": "emails",
+            "attempts": 2, "priority": 7, "status": "reserved",
+        }
+        result = backend.dequeue("emails")
+        assert result["attempts"] == 2   # live doc-level, not data.attempts (0)
+        assert result["priority"] == 7
+
+    def test_reject_requeue_resets_available_at(self):
+        # Bug B regression: a requeued job must become visible again (available_at
+        # reset to now + reserved_at cleared), not stay stranded at the
+        # reservation expiry that dequeue() pushed into the future.
+        backend, mock_collection = self._make_backend_with_mock()
+        backend._retry_backoff = 0
+        backend.reject("emails", "msg-1", requeue=True)
+        update = mock_collection.update_one.call_args[0][1]
+        assert update["$set"]["status"] == "pending"
+        assert "available_at" in update["$set"]
+        assert update["$set"]["reserved_at"] is None
+        assert update["$inc"]["attempts"] == 1
+
+    def test_reject_requeue_honors_retry_backoff(self):
+        from tina4_python.queue_backends.mongo_backend import _now
+        backend, mock_collection = self._make_backend_with_mock()
+        backend._retry_backoff = 60
+        backend.reject("emails", "msg-1", requeue=True)
+        update = mock_collection.update_one.call_args[0][1]
+        # available_at pushed ~60s into the future by the backoff.
+        assert update["$set"]["available_at"] > _now()
+
     def test_size(self):
         backend, mock_collection = self._make_backend_with_mock()
         mock_collection.count_documents.return_value = 5
@@ -703,3 +739,48 @@ class TestKafkaSecurityConfig:
         monkeypatch.setenv("KAFKA_SASL_PASSWORD", "secret")
         cfg = self._cfg()
         assert cfg == {"sasl.mechanism": "PLAIN", "sasl.username": "user", "sasl.password": "secret"}
+
+
+@pytest.mark.skipif(not _pymongo_available(), reason="pymongo not installed")
+class TestMongoQueueAdapterContract:
+    """The queue adapter (tina4_python.queue.mongo_backend.MongoBackend) must
+    match the LiteBackend method contract. Queue.dead_letters()/retry_failed()
+    pass max_retries as a kwarg — without it the call raised TypeError on
+    MongoDB (Bug D), so dead-letter inspection and retry were unusable there.
+    """
+
+    def _adapter_with_mock(self, max_retries=3):
+        from tina4_python.queue.mongo_backend import MongoBackend as MongoAdapter
+        from unittest.mock import MagicMock
+        adapter = MongoAdapter("emails", max_retries=max_retries)
+        mock_collection = MagicMock()
+        adapter._backend._collection = mock_collection
+        adapter._backend._client = MagicMock()
+        adapter._backend._db = MagicMock()
+        return adapter, mock_collection
+
+    def test_dead_letters_accepts_max_retries_kwarg(self):
+        adapter, mock_collection = self._adapter_with_mock()
+        mock_collection.find.return_value = []
+        assert adapter.dead_letters(max_retries=3) == []   # must not raise TypeError
+
+    def test_retry_failed_accepts_max_retries_and_resets_available_at(self):
+        from unittest.mock import MagicMock
+        adapter, mock_collection = self._adapter_with_mock()
+        mock_collection.update_many.return_value = MagicMock(modified_count=2)
+        assert adapter.retry_failed(max_retries=5) == 2    # must not raise TypeError
+        flt, upd = mock_collection.update_many.call_args[0]
+        assert flt["attempts"] == {"$lt": 5}               # honored the passed limit
+        assert upd["$set"]["status"] == "pending"
+        assert "available_at" in upd["$set"]               # requeued jobs visible again
+
+    def test_queue_dead_letters_does_not_raise_on_mongo(self):
+        # End-to-end via the Queue facade (the path that actually broke).
+        from tina4_python.queue import Queue
+        from unittest.mock import MagicMock
+        q = Queue(topic="emails", backend="mongodb")
+        q._backend._backend._collection = MagicMock()
+        q._backend._backend._collection.find.return_value = []
+        q._backend._backend._client = MagicMock()
+        q._backend._backend._db = MagicMock()
+        assert q.dead_letters() == []                      # was TypeError

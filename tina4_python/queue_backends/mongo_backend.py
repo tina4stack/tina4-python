@@ -56,6 +56,14 @@ class MongoConnector:
             ))
         except (TypeError, ValueError):
             self._visibility_timeout = 300.0
+        # Seconds to delay a requeued (rejected/retried) job before it is
+        # eligible again. Default 0 = available on the very next dequeue, so a
+        # fail()'d job retries immediately (matching the file backend) instead
+        # of waiting out the visibility window.
+        try:
+            self._retry_backoff = float(config.get("retry_backoff", 0))
+        except (TypeError, ValueError):
+            self._retry_backoff = 0.0
 
         self._pymongo = None
         self._client = None
@@ -143,6 +151,13 @@ class MongoConnector:
 
         result = doc.get("data", {})
         result["id"] = doc["_id"]
+        # Surface the LIVE document-level attempts/priority, not the push-time
+        # snapshot stored inside ``data``. reclaim_expired()/reject() increment
+        # the top-level ``attempts``; without this the consumer always saw the
+        # original 0, so fail()'s ``attempts >= max_retries`` check never tripped
+        # and a job could be retried forever instead of dead-lettering.
+        result["attempts"] = doc.get("attempts", result.get("attempts", 0))
+        result["priority"] = doc.get("priority", result.get("priority", 0))
         return result
 
     def reclaim_expired(self, topic: str, max_retries: int) -> int:
@@ -201,9 +216,16 @@ class MongoConnector:
         """Reject a message. Optionally requeue it."""
         self._ensure_connected()
         if requeue:
+            # Reset available_at so the requeued job is visible again right away
+            # (or after retry_backoff). dequeue() pushed available_at out to the
+            # reservation expiry; leaving it there stranded a fail()'d job for the
+            # full visibility window instead of retrying it on the next pop().
+            available = _future(self._retry_backoff) if self._retry_backoff > 0 else _now()
             self._collection.update_one(
                 {"_id": message_id, "topic": topic},
-                {"$set": {"status": "pending"}, "$inc": {"attempts": 1}},
+                {"$set": {"status": "pending", "available_at": available,
+                          "reserved_at": None},
+                 "$inc": {"attempts": 1}},
             )
         else:
             self._collection.update_one(
