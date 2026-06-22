@@ -1657,6 +1657,37 @@ TINA4_SWAGGER_LICENSE=            # SPDX license name (e.g. MIT) for info.licens
 TINA4_SWAGGER_SERVERS=            # comma-separated server URLs for the OpenAPI servers[] block; falls back to SWAGGER_DEV_URL
 TINA4_SWAGGER_UI_CDN=             # base URL for the Swagger UI assets (default jsdelivr); point at a self-hosted mirror for air-gapped use
 SWAGGER_DEV_URL=http://localhost:7145  # single dev-server URL (used when TINA4_SWAGGER_SERVERS is unset)
+TINA4_SWAGGER_OPENAPI=3.0.3       # OpenAPI version: 3.0.3 (default) or 3.1 (-> emits 3.1.0)
+TINA4_SWAGGER_BEARER_FORMAT=JWT   # bearerFormat on the built-in bearerAuth scheme (e.g. opaque for sk_live_ keys)
+TINA4_SWAGGER_API_KEY_NAME=       # if set, emit an apiKeyAuth scheme with this header/query name (e.g. X-Api-Key)
+TINA4_SWAGGER_API_KEY_IN=header   # where the apiKey lives: header (default) | query | cookie
+TINA4_SWAGGER_DEFAULT_SCHEME=bearerAuth  # scheme secured routes use when no @security is set
+TINA4_SWAGGER_INCLUDE=            # comma-separated path prefixes to include (allow-list; only these documented)
+TINA4_SWAGGER_EXCLUDE=            # comma-separated path prefixes to drop (/swagger + /__dev are always excluded)
+```
+
+**Per-route security + reusable schemas (v3.13.42).** Configure named security
+schemes (configurable `bearerFormat`, an optional `apiKey` scheme, or register
+arbitrary schemes incl. `oauth2` with scopes via `Swagger.add_security_scheme(name, def)`),
+then declare them per route with `@security`:
+
+```python
+from tina4_python.swagger import security, request_schema, response_schema, Swagger
+
+@security("oauth2", scopes=["read:users"])   # scopes kept only for oauth2/openIdConnect
+@get("/api/v1/users")
+async def list_users(request, response): ...
+
+@security("public")                          # explicitly public (overrides write-secure-by-default)
+@post("/api/v1/webhook")
+async def webhook(request, response): ...
+
+# Reusable component schemas referenced by $ref (beyond ORM-model auto-schemas):
+Swagger.add_schema("CreateUser", {"type": "object", "properties": {"email": {"type": "string"}}})
+@request_schema("CreateUser")
+@response_schema("User", status=200)
+@post("/api/v1/users")
+async def create_user(request, response): ...
 ```
 
 The spec is OpenAPI 3.0.3. ORM models registered via AutoCrud become reusable
