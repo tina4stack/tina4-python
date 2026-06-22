@@ -17,6 +17,10 @@ Environment variables:
     TINA4_QUEUE_BACKEND   — 'file' (default), 'rabbitmq', 'kafka', or 'mongodb'
     TINA4_QUEUE_URL       — connection URL for rabbitmq/kafka
     TINA4_QUEUE_PATH      — file backend storage path (default: data/queue)
+    TINA4_QUEUE_VISIBILITY_TIMEOUT — seconds a popped job stays reserved before
+                            a dead consumer's job is reclaimed (default 300;
+                            <= 0 disables reclaim). File + MongoDB backends only;
+                            RabbitMQ/Kafka delegate visibility to the broker.
     TINA4_RABBITMQ_HOST   — RabbitMQ host (default: localhost)
     TINA4_KAFKA_BROKERS   — Kafka brokers (default: localhost:9092)
     TINA4_MONGO_HOST      — MongoDB host (default: localhost)
@@ -24,7 +28,6 @@ Environment variables:
 import json
 import os
 import time
-import threading
 from datetime import datetime, timezone
 
 from tina4_python.queue.job import Job
@@ -34,19 +37,31 @@ from tina4_python.queue.kafka_backend import KafkaBackend
 from tina4_python.queue.mongo_backend import MongoBackend
 
 
-def _resolve_backend(topic: str, backend: str | None, max_retries: int, retry_backoff: int = 0):
+def _default_visibility_timeout() -> float:
+    """Reservation/visibility timeout in seconds, from env (default 300 = 5 min)."""
+    try:
+        return float(os.environ.get("TINA4_QUEUE_VISIBILITY_TIMEOUT", "300"))
+    except (TypeError, ValueError):
+        return 300.0
+
+
+def _resolve_backend(topic: str, backend: str | None, max_retries: int,
+                     retry_backoff: int = 0, visibility_timeout: float = 300.0):
     """Resolve which backend adapter to use."""
     chosen = backend or os.environ.get("TINA4_QUEUE_BACKEND", "file")
     chosen = chosen.lower().strip()
 
     if chosen in ("file", "default", "lite"):
-        return LiteBackend(topic, max_retries, retry_backoff)
+        return LiteBackend(topic, max_retries, retry_backoff, visibility_timeout)
     elif chosen == "rabbitmq":
+        # Broker manages visibility/redelivery (unacked messages requeue on
+        # channel close) — the framework timeout is accepted but not used.
         return RabbitMQBackend(topic, max_retries)
     elif chosen == "kafka":
+        # Consumer-group offsets manage redelivery — framework timeout N/A.
         return KafkaBackend(topic, max_retries)
     elif chosen in ("mongodb", "mongo"):
-        return MongoBackend(topic, max_retries)
+        return MongoBackend(topic, max_retries, visibility_timeout)
     else:
         raise ValueError(f"Unknown queue backend: {chosen!r}. Use 'file', 'rabbitmq', 'kafka', or 'mongodb'.")
 
@@ -63,13 +78,23 @@ class Queue:
     """
 
     def __init__(self, topic: str = "default", max_retries: int = 3,
-                 backend: str | None = None, retry_backoff: int = 0):
+                 backend: str | None = None, retry_backoff: int = 0,
+                 visibility_timeout: float | None = None):
         self.topic = topic
         self.max_retries = max_retries
         # Seconds to wait before a failed job is re-attempted (file backend).
         # Default 0 = retry on the very next pop()/consume() iteration.
         self.retry_backoff = retry_backoff
-        self._backend = _resolve_backend(topic, backend, max_retries, retry_backoff)
+        # Reservation/visibility timeout (seconds). A popped job is reserved for
+        # this long; if the consumer dies before complete()/fail() the next
+        # pop() reclaims it (at-least-once delivery). Falls back to
+        # TINA4_QUEUE_VISIBILITY_TIMEOUT, else 300 (5 min). <= 0 disables reclaim.
+        self.visibility_timeout = (
+            visibility_timeout if visibility_timeout is not None
+            else _default_visibility_timeout()
+        )
+        self._backend = _resolve_backend(topic, backend, max_retries, retry_backoff,
+                                         self.visibility_timeout)
 
     def push(self, data: dict, priority: int = 0, delay_seconds: int = 0):
         """Add a job to the queue. Returns job ID."""
@@ -211,12 +236,14 @@ class Queue:
 
         old_topic = self.topic
         self.topic = topic
-        self._backend = _resolve_backend(topic, None, self.max_retries, self.retry_backoff)
+        self._backend = _resolve_backend(topic, None, self.max_retries, self.retry_backoff,
+                                         self.visibility_timeout)
         try:
             return self.push(data, priority, delay_seconds)
         finally:
             self.topic = old_topic
-            self._backend = _resolve_backend(old_topic, None, self.max_retries, self.retry_backoff)
+            self._backend = _resolve_backend(old_topic, None, self.max_retries, self.retry_backoff,
+                                             self.visibility_timeout)
 
     def consume(self, topic: str = None, job_id: str = None, poll_interval: float = 1.0,
                 iterations: int = 0, batch_size: int = 1):
@@ -305,6 +332,9 @@ class Queue:
                     with open(filepath) as f:
                         job_data = json.load(f)
                     if job_data.get("id") == job_id and job_data.get("status") == "pending":
+                        # Reserve (so a dead consumer's job is reclaimable) then
+                        # claim the pending file — mirrors LiteBackend.pop().
+                        self._backend._write_reserved(job_data)
                         os.unlink(filepath)
                         return Job(
                             queue=self, job_id=job_data["id"],

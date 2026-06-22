@@ -23,11 +23,11 @@ def _future(seconds: int) -> str:
 class MongoBackend:
     """Backend adapter wrapping MongoBackend for the unified Queue API."""
 
-    def __init__(self, topic: str, max_retries: int):
+    def __init__(self, topic: str, max_retries: int, visibility_timeout: float = 300.0):
         from tina4_python.queue_backends import MongoConnector as _MongoBackend
 
         url = os.environ.get("TINA4_QUEUE_URL", "")
-        config = {}
+        config = {"visibility_timeout": visibility_timeout}
         if url:
             config["uri"] = url
         self._backend = _MongoBackend(**config)
@@ -39,6 +39,12 @@ class MongoBackend:
         return self._backend.enqueue(self._topic, msg)
 
     def pop(self, queue_ref) -> Job | None:
+        # Reclaim any reservations whose consumer died before acking, then take
+        # the next available message (at-least-once delivery).
+        try:
+            self._backend.reclaim_expired(self._topic, self._max_retries)
+        except AttributeError:
+            pass  # older connector without reclaim support
         result = self._backend.dequeue(self._topic)
         if result is None:
             return None

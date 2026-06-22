@@ -453,6 +453,67 @@ class TestMongoDBBackendMocked:
         assert result["id"] == "msg-1"
         assert result["to"] == "alice@test.com"
 
+    def test_dequeue_advances_available_at_and_records_reserved_at(self):
+        # Regression: the visibility-timeout fix. dequeue must push available_at
+        # into the future (now + visibility_timeout) and stamp reserved_at, so a
+        # reserved message can later be reclaimed if its consumer dies.
+        backend, mock_collection = self._make_backend_with_mock()
+        backend._visibility_timeout = 300.0
+        mock_collection.find_one_and_update.return_value = {
+            "_id": "msg-1", "data": {"x": 1}, "topic": "emails", "status": "reserved",
+        }
+        backend.dequeue("emails")
+        update = mock_collection.find_one_and_update.call_args[0][1]
+        assert update["$set"]["status"] == "reserved"
+        assert "reserved_at" in update["$set"]
+        # available_at is set to a real future timestamp (not left unchanged).
+        assert "available_at" in update["$set"]
+        assert update["$set"]["available_at"] > update["$set"]["reserved_at"]
+
+    def test_reclaim_expired_requeues_under_limit(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        backend._visibility_timeout = 300.0
+        # One expired reservation (attempts after inc = 1, below max 3), then none.
+        mock_collection.find_one_and_update.side_effect = [
+            {"_id": "msg-1", "data": {"x": 1}, "topic": "emails", "attempts": 1},
+            None,
+        ]
+        count = backend.reclaim_expired("emails", max_retries=3)
+        assert count == 1
+        # The reclaim flips reserved -> pending and increments attempts.
+        first_update = mock_collection.find_one_and_update.call_args_list[0][0][1]
+        assert first_update["$set"]["status"] == "pending"
+        assert first_update["$inc"]["attempts"] == 1
+        # Under the limit: not dead-lettered, not deleted.
+        mock_collection.insert_one.assert_not_called()
+        mock_collection.delete_one.assert_not_called()
+
+    def test_reclaim_expired_dead_letters_past_max_retries(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        backend._visibility_timeout = 300.0
+        # The reclaimed doc's attempts (after inc) has hit the limit -> dead-letter.
+        mock_collection.find_one_and_update.side_effect = [
+            {"_id": "msg-1", "data": {"x": 1}, "topic": "emails", "attempts": 3},
+            None,
+        ]
+        count = backend.reclaim_expired("emails", max_retries=3)
+        assert count == 1
+        mock_collection.insert_one.assert_called_once()      # moved to dead-letter
+        dl = mock_collection.insert_one.call_args[0][0]
+        assert dl["topic"] == "emails.dead_letter"
+        mock_collection.delete_one.assert_called_once()      # original removed
+
+    def test_reclaim_disabled_when_timeout_zero(self):
+        backend, mock_collection = self._make_backend_with_mock()
+        backend._visibility_timeout = 0
+        assert backend.reclaim_expired("emails", max_retries=3) == 0
+        mock_collection.find_one_and_update.assert_not_called()
+
+    def test_visibility_timeout_from_env(self, monkeypatch):
+        from tina4_python.queue_backends.mongo_backend import MongoBackend
+        monkeypatch.setenv("TINA4_QUEUE_VISIBILITY_TIMEOUT", "45")
+        assert MongoBackend()._visibility_timeout == 45.0
+
     def test_acknowledge_updates_status(self):
         backend, mock_collection = self._make_backend_with_mock()
         backend.acknowledge("emails", "msg-1")

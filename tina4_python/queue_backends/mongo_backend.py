@@ -25,7 +25,6 @@ Document schema:
         completed_at: str | None,
     }
 """
-import json
 import os
 import uuid
 from datetime import datetime, timezone
@@ -47,6 +46,16 @@ class MongoConnector:
         self._collection_name = config.get(
             "collection", os.environ.get("TINA4_MONGO_COLLECTION", "tina4_queue")
         )
+        # Reservation/visibility timeout (seconds): a dequeued message is held
+        # reserved with available_at = now + timeout; reclaim_expired() returns
+        # it once that passes (consumer died mid-flight). <= 0 disables reclaim.
+        try:
+            self._visibility_timeout = float(config.get(
+                "visibility_timeout",
+                os.environ.get("TINA4_QUEUE_VISIBILITY_TIMEOUT", "300"),
+            ))
+        except (TypeError, ValueError):
+            self._visibility_timeout = 300.0
 
         self._pymongo = None
         self._client = None
@@ -105,7 +114,13 @@ class MongoConnector:
         return msg_id
 
     def dequeue(self, topic: str) -> dict | None:
-        """Atomically claim the next available message. Returns message dict or None."""
+        """Atomically claim the next available message. Returns message dict or None.
+
+        The claim advances ``available_at`` to ``now + visibility_timeout`` and
+        records ``reserved_at`` so reclaim_expired() can return the job if the
+        consumer dies before acknowledge()/reject(). This is the fix for the
+        "reserved forever" bug — previously available_at was left unchanged.
+        """
         self._ensure_connected()
         now = _now()
 
@@ -115,7 +130,11 @@ class MongoConnector:
                 "status": "pending",
                 "available_at": {"$lte": now},
             },
-            {"$set": {"status": "reserved"}},
+            {"$set": {
+                "status": "reserved",
+                "reserved_at": now,
+                "available_at": _future(self._visibility_timeout),
+            }},
             sort=[("priority", self._pymongo.DESCENDING), ("created_at", self._pymongo.ASCENDING)],
             return_document=self._pymongo.ReturnDocument.AFTER,
         )
@@ -125,6 +144,50 @@ class MongoConnector:
         result = doc.get("data", {})
         result["id"] = doc["_id"]
         return result
+
+    def reclaim_expired(self, topic: str, max_retries: int) -> int:
+        """Return reservations whose visibility window expired (at-least-once).
+
+        A message left ``reserved`` with ``available_at <= now`` had a consumer
+        die before acknowledging. Each is atomically flipped back to ``pending``
+        with ``attempts`` incremented (so the next dequeue re-delivers it); once
+        ``attempts >= max_retries`` it is dead-lettered instead. Returns the
+        number reclaimed. Disabled when visibility_timeout <= 0.
+        """
+        if not self._visibility_timeout or self._visibility_timeout <= 0:
+            return 0
+        self._ensure_connected()
+        reclaimed = 0
+        while True:
+            now = _now()
+            doc = self._collection.find_one_and_update(
+                {
+                    "topic": topic,
+                    "status": "reserved",
+                    "available_at": {"$lte": now},
+                },
+                {"$set": {"status": "pending", "available_at": now, "reserved_at": None},
+                 "$inc": {"attempts": 1}},
+                sort=[("available_at", self._pymongo.ASCENDING)],
+                return_document=self._pymongo.ReturnDocument.AFTER,
+            )
+            if doc is None:
+                break
+            reclaimed += 1
+            if doc.get("attempts", 0) >= max_retries:
+                # Out of retries — move it to the dead-letter queue and remove
+                # the original so it is not re-delivered.
+                payload = doc.get("data", {})
+                self.dead_letter(topic, {
+                    "id": doc["_id"],
+                    "payload": payload,
+                    "priority": doc.get("priority", 0),
+                    "attempts": doc.get("attempts", 0),
+                    "error": "reservation timed out — consumer did not "
+                             "acknowledge within the visibility timeout",
+                })
+                self._collection.delete_one({"_id": doc["_id"], "topic": topic})
+        return reclaimed
 
     def acknowledge(self, topic: str, message_id: str):
         """Acknowledge a message as processed."""
@@ -210,6 +273,11 @@ class MongoConnector:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _future(seconds: float) -> str:
+    import time
+    return datetime.fromtimestamp(time.time() + seconds, tz=timezone.utc).isoformat()
 
 # Backwards-compatible alias — external code and tests may use the old name.
 MongoBackend = MongoConnector

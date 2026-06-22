@@ -1,6 +1,7 @@
 # Tests for tina4_python.queue — file-based backend
 import os
 import json
+import time
 import pytest
 from tina4_python.queue import Queue
 
@@ -651,3 +652,107 @@ class TestQueueIsolation:
         second = Queue(topic="jobs")
         assert second.size() == 0
         assert second.pop() is None
+
+
+class TestVisibilityTimeout:
+    """Reservation / visibility timeout contract (file backend).
+
+    Regression lock for the production bug where a consumer that dies before
+    job.complete() left the message stuck forever — never re-delivered, never
+    retried, never dead-lettered. A popped job is now reserved for
+    visibility_timeout seconds; if it is not acked in time the next pop()
+    reclaims it (incrementing attempts) or dead-letters it past max_retries.
+    """
+
+    def test_reserved_job_reclaimed_after_timeout(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        queue = Queue(topic="vt", visibility_timeout=0.05)
+
+        queue.push({"job": "import"})
+        job = queue.pop()                       # consumer A reserves it
+        assert job is not None
+        assert job.attempts == 0
+        assert queue.size("pending") == 0       # claimed out of pending
+        assert queue.size("reserved") == 1      # held as a reservation
+
+        # Consumer A "dies" — never calls complete()/fail(). After the window
+        # expires the next pop() reclaims the abandoned reservation.
+        time.sleep(0.12)
+        reclaimed = queue.pop()
+        assert reclaimed is not None
+        assert reclaimed.data["job"] == "import"
+        assert reclaimed.attempts == 1          # reclaim counted as one attempt
+
+    def test_reserved_job_not_reclaimed_before_timeout(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        queue = Queue(topic="vt", visibility_timeout=30)
+
+        queue.push({"job": "import"})
+        assert queue.pop() is not None          # reserved
+        # The reservation is still valid — a second consumer must NOT get it.
+        assert queue.pop() is None
+        assert queue.size("reserved") == 1
+
+    def test_reclaim_dead_letters_after_max_retries(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        queue = Queue(topic="vt", max_retries=1, visibility_timeout=0.05)
+
+        queue.push({"job": "import"})
+        assert queue.pop() is not None          # reserve (attempts 0)
+        time.sleep(0.12)
+        # Reclaim bumps attempts to 1 (>= max_retries) -> dead-letter, not re-served.
+        assert queue.pop() is None
+        assert queue.size("reserved") == 0
+        dead = queue.dead_letters()
+        assert len(dead) == 1
+        assert dead[0].data["job"] == "import"
+
+    def test_complete_removes_reservation_no_reclaim(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        queue = Queue(topic="vt", visibility_timeout=0.05)
+
+        queue.push({"job": "import"})
+        job = queue.pop()
+        job.complete()                          # acked — reservation cleared
+        assert queue.size("reserved") == 0
+        time.sleep(0.12)
+        assert queue.pop() is None              # nothing to reclaim
+
+    def test_fail_removes_reservation(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        queue = Queue(topic="vt", max_retries=3, visibility_timeout=0.05)
+
+        queue.push({"job": "import"})
+        job = queue.pop()
+        job.fail("boom")                        # acked with failure -> requeued
+        assert queue.size("reserved") == 0      # reservation cleared by fail()
+        # The requeued job is pending again with attempts incremented.
+        retried = queue.pop()
+        assert retried is not None and retried.attempts == 1
+
+    def test_default_visibility_timeout_is_300(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.delenv("TINA4_QUEUE_VISIBILITY_TIMEOUT", raising=False)
+        assert Queue(topic="vt").visibility_timeout == 300.0
+
+    def test_visibility_timeout_env_override(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.setenv("TINA4_QUEUE_VISIBILITY_TIMEOUT", "42")
+        assert Queue(topic="vt").visibility_timeout == 42.0
+
+    def test_zero_visibility_timeout_disables_reclaim(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        queue = Queue(topic="vt", visibility_timeout=0)
+
+        queue.push({"job": "import"})
+        assert queue.pop() is not None
+        time.sleep(0.05)
+        # Reclaim is disabled — the reservation stays put (opt-out / old behaviour).
+        assert queue.pop() is None
+        assert queue.size("reserved") == 1
