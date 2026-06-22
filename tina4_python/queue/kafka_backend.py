@@ -54,16 +54,21 @@ class KafkaBackend:
     def purge(self, status: str = "completed"):
         pass  # Kafka does not support purging
 
-    def retry_failed(self) -> int:
-        jobs = self.failed()
+    def retry_failed(self, max_retries: int = None) -> int:
+        jobs = self.failed(max_retries)
         count = 0
         for job in jobs:
             if self.retry_job(job.get("id", "")):
                 count += 1
         return count
 
-    def failed(self) -> list[dict]:
-        """Consume dead_letter topic, republish, return jobs under max_retries."""
+    def failed(self, max_retries: int = None) -> list[dict]:
+        """Consume dead_letter topic, republish, return jobs under max_retries.
+
+        Accepts max_retries to match the LiteBackend contract — Queue.retry_failed()
+        passes it as a kwarg, so without this signature the call raised TypeError.
+        """
+        mr = max_retries if max_retries is not None else self._max_retries
         dl_topic = f"{self._topic}.dead_letter"
         results = []
         requeue = []
@@ -73,7 +78,7 @@ class KafkaBackend:
                 break
             payload = msg.get("payload", msg)
             attempts = msg.get("attempts", 0)
-            if attempts < self._max_retries:
+            if attempts < mr:
                 results.append({"id": msg.get("id"), "data": payload,
                                  "attempts": attempts, "error": msg.get("error")})
             requeue.append(msg)
@@ -81,8 +86,13 @@ class KafkaBackend:
             self._backend.enqueue(dl_topic, msg)
         return results
 
-    def dead_letters(self) -> list[dict]:
-        """Consume dead_letter topic, republish, return jobs at/over max_retries."""
+    def dead_letters(self, max_retries: int = None) -> list[dict]:
+        """Consume dead_letter topic, republish, return jobs at/over max_retries.
+
+        Accepts max_retries to match the LiteBackend contract — Queue.dead_letters()
+        passes it as a kwarg, so without this signature the call raised TypeError.
+        """
+        mr = max_retries if max_retries is not None else self._max_retries
         dl_topic = f"{self._topic}.dead_letter"
         results = []
         requeue = []
@@ -92,7 +102,7 @@ class KafkaBackend:
                 break
             payload = msg.get("payload", msg)
             attempts = msg.get("attempts", 0)
-            if attempts >= self._max_retries:
+            if attempts >= mr:
                 results.append({"id": msg.get("id"), "data": payload,
                                  "attempts": attempts, "error": msg.get("error")})
             requeue.append(msg)

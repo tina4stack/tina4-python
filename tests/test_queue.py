@@ -756,3 +756,85 @@ class TestVisibilityTimeout:
         # Reclaim is disabled — the reservation stays put (opt-out / old behaviour).
         assert queue.pop() is None
         assert queue.size("reserved") == 1
+
+
+class TestConsumeTopicTargeting:
+    """consume()/process()/produce() must honor an explicit topic argument.
+
+    Regression: consume(topic) used to be ignored on the read path — pop()
+    drained the construction-time topic, so consuming a topic the queue was
+    not constructed with silently yielded nothing. Engine-agnostic (file
+    backend), so it guards every backend.
+    """
+
+    def _q(self, tmp_path, monkeypatch, topic="default"):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "qtt"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        return Queue(topic=topic)
+
+    def test_consume_uses_argument_topic_not_construction_topic(self, tmp_path, monkeypatch):
+        q = self._q(tmp_path, monkeypatch, topic="default")
+        q.push({"where": "default"})              # lands on 'default'
+        q.produce("alerts", {"where": "alerts"})  # lands on 'alerts'
+
+        drained = []
+        for job in q.consume("alerts", poll_interval=0):
+            drained.append(job.data)
+            job.complete()
+        assert drained == [{"where": "alerts"}]   # only alerts, not the default job
+
+        leftover = []
+        for job in q.consume("default", poll_interval=0):
+            leftover.append(job.data)
+            job.complete()
+        assert leftover == [{"where": "default"}]  # the default job was untouched
+
+    def test_consume_with_no_topic_uses_construction_topic(self, tmp_path, monkeypatch):
+        q = self._q(tmp_path, monkeypatch, topic="orders")
+        q.push({"id": 1})
+        drained = [job.data for job in q.consume(poll_interval=0) if job.complete() is None]
+        assert drained == [{"id": 1}]
+
+    def test_process_targets_requested_topic(self, tmp_path, monkeypatch):
+        q = self._q(tmp_path, monkeypatch, topic="default")
+        q.produce("work", {"v": 1})
+        q.produce("work", {"v": 2})
+        seen = []
+
+        def handler(job):
+            seen.append(job.data)
+            job.complete()
+
+        q.process(handler, topic="work")
+        assert [s["v"] for s in seen] == [1, 2]
+
+    def test_topic_isolation_drain_one_leaves_other(self, tmp_path, monkeypatch):
+        q = self._q(tmp_path, monkeypatch, topic="default")
+        for i in range(3):
+            q.produce("orders", {"k": "order", "i": i})
+        for i in range(2):
+            q.produce("emails", {"k": "email", "i": i})
+
+        drained = []
+        for job in q.consume("orders", poll_interval=0):
+            drained.append(job.data)
+            job.complete()
+        assert len(drained) == 3
+        assert all(d["k"] == "order" for d in drained)
+
+        remaining = [job.data for job in q.consume("emails", poll_interval=0) if job.complete() is None]
+        assert len(remaining) == 2
+        assert all(d["k"] == "email" for d in remaining)
+
+    def test_explicit_backend_survives_retarget(self, tmp_path, monkeypatch):
+        # produce()/consume() retargeting must reuse the explicit backend= choice,
+        # not silently fall back to the TINA4_QUEUE_BACKEND env value.
+        from tina4_python.queue.lite_backend import LiteBackend
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "x"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "rabbitmq")   # env says rabbitmq
+        q = Queue(topic="default", backend="file")              # explicit file wins
+        q.produce("t", {"n": 1})                                # retargets to 't' then back
+        assert isinstance(q._backend, LiteBackend)
+        for job in q.consume("t", poll_interval=0):             # retargets to 't'
+            job.complete()
+        assert isinstance(q._backend, LiteBackend)              # still file, never rabbitmq

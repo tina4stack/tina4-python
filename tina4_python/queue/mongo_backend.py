@@ -23,11 +23,12 @@ def _future(seconds: int) -> str:
 class MongoBackend:
     """Backend adapter wrapping MongoBackend for the unified Queue API."""
 
-    def __init__(self, topic: str, max_retries: int, visibility_timeout: float = 300.0):
+    def __init__(self, topic: str, max_retries: int, visibility_timeout: float = 300.0,
+                 retry_backoff: float = 0):
         from tina4_python.queue_backends import MongoConnector as _MongoBackend
 
         url = os.environ.get("TINA4_QUEUE_URL", "")
-        config = {"visibility_timeout": visibility_timeout}
+        config = {"visibility_timeout": visibility_timeout, "retry_backoff": retry_backoff}
         if url:
             config["uri"] = url
         self._backend = _MongoBackend(**config)
@@ -70,12 +71,19 @@ class MongoBackend:
         if status == "pending":
             self._backend.clear(self._topic)
 
-    def retry_failed(self) -> int:
+    def retry_failed(self, max_retries: int = None) -> int:
+        # Accept max_retries to match the LiteBackend contract (Queue passes it
+        # as a kwarg) — without this signature, Queue.retry_failed() raised
+        # TypeError on MongoDB.
+        mr = max_retries if max_retries is not None else self._max_retries
         self._backend._ensure_connected()
         result = self._backend._collection.update_many(
             {"topic": self._topic, "status": "failed",
-             "attempts": {"$lt": self._max_retries}},
-            {"$set": {"status": "pending", "error": None}},
+             "attempts": {"$lt": mr}},
+            # Reset available_at so re-queued failed jobs are visible again
+            # (they were reserved with available_at in the future at dequeue).
+            {"$set": {"status": "pending", "error": None, "available_at": _now(),
+                      "reserved_at": None}},
         )
         return result.modified_count
 
@@ -90,8 +98,13 @@ class MongoBackend:
                  "attempts": d.get("attempts", 0), "error": d.get("error")}
                 for d in docs]
 
-    def dead_letters(self) -> list[dict]:
-        """Query the dead_letter collection in MongoDB."""
+    def dead_letters(self, max_retries: int = None) -> list[dict]:
+        """Query the dead_letter collection in MongoDB.
+
+        Accepts max_retries (unused — dead letters are terminal) to match the
+        LiteBackend contract; Queue.dead_letters() passes it as a kwarg, so
+        without this parameter the call raised TypeError on MongoDB.
+        """
         self._backend._ensure_connected()
         dl_topic = f"{self._topic}.dead_letter"
         docs = self._backend._collection.find({"topic": dl_topic})
