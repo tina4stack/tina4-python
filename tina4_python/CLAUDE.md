@@ -1145,9 +1145,14 @@ for job in queue.consume():
 ```python
 queue = Queue(topic="tasks", max_retries=3)
 
+# Reservation / visibility timeout (seconds): a popped job is reserved this long;
+# if the consumer dies before complete()/fail() the next pop() reclaims it
+# (at-least-once delivery). Default 300; env TINA4_QUEUE_VISIBILITY_TIMEOUT; <= 0 disables.
+queue = Queue(topic="tasks", visibility_timeout=300)
+
 # Check queue size
 queue.size()                    # pending jobs
-queue.size("reserved")          # currently processing
+queue.size("reserved")          # currently reserved (in-flight) jobs
 
 # Retry failed jobs (under max_retries limit)
 queue.retry_failed()
@@ -1158,6 +1163,14 @@ dead = queue.dead_letters()
 # Purge completed jobs
 queue.purge("completed")
 ```
+
+**At-least-once delivery (file + MongoDB backends).** A popped job is held as a
+reservation for `visibility_timeout` seconds. If the consumer crashes, OOMs, or
+is evicted before calling `job.complete()` / `job.fail()`, the next `pop()`
+reclaims the abandoned reservation: it increments `attempts` and re-enqueues the
+job, or dead-letters it once it has hit `max_retries`. A dead consumer therefore
+never strands a job. RabbitMQ and Kafka delegate redelivery to the broker (the
+framework timeout does not apply there).
 
 ### When to use queues
 - Sending emails or SMS

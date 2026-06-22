@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.13.40 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.41 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -464,6 +464,10 @@ api.set_bearer_token(token)
 from tina4_python.queue import Queue
 
 queue = Queue(topic="tasks", max_retries=3)
+# visibility_timeout (seconds): a popped job is reserved this long; if the
+# consumer dies before complete()/fail() the next pop() reclaims it
+# (at-least-once delivery). Default 300; env TINA4_QUEUE_VISIBILITY_TIMEOUT; <= 0 disables.
+queue = Queue(topic="tasks", visibility_timeout=300)
 queue.push(data: dict, priority=0, delay_seconds=0) -> int
 queue.pop() -> Job | None
 queue.size(status="pending") -> int
@@ -768,7 +772,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Frond pre-compilation for 2.8x template render improvement (clear_cache method)
 - DB query caching: request-scoped auto cache **off by default — opt-in via `TINA4_AUTO_CACHING=true`** (TTL `TINA4_AUTO_CACHING_TTL=5`) dedupes identical reads within a request and flushes on any write. It ships OFF because a request-scoped cache can hand back pre-write state in a read-after-write (e.g. `SELECT MAX(id)` right before an `INSERT` in the same request → duplicate keys / stale grids); turn it on per-app for read-heavy endpoints. Persistent cross-request cache is also opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`). The persistent DB cache routes through the same unified backend set via `TINA4_DB_CACHE_BACKEND` (memory/file/redis/valkey/memcached/mongodb/database) + `TINA4_DB_CACHE_URL`, so multiple instances share one cache with global write-invalidation. `cache_stats()` reports `mode` (request/persistent/off) and `backend`, `cache_clear()`
 - ORM relationships: `has_many`, `has_one`, `belongs_to` with eager loading (`include=`)
-- Queue backends: file (default), RabbitMQ, Kafka, MongoDB — configured via env vars
+- Queue backends: file (default), RabbitMQ, Kafka, MongoDB — configured via env vars. **Reservation/visibility timeout** (file + MongoDB): a popped job is reserved for `TINA4_QUEUE_VISIBILITY_TIMEOUT` seconds (default 300; `Queue(visibility_timeout=)`; `<= 0` disables) — if the consumer dies before `complete()`/`fail()`, the next `pop()` reclaims it (incrementing `attempts`, dead-lettering past `max_retries`), so a crashed/evicted consumer never strands a job. RabbitMQ/Kafka delegate redelivery to the broker.
 - Cache backends: unified set across response/KV and persistent DB cache — `memory` (default), `file`, `redis`, `valkey`, `memcached`, `mongodb`, `database` — selected via `TINA4_CACHE_BACKEND` (+ `TINA4_CACHE_URL`/credentials); falls back to the file backend if a backend is unreachable
 - Session backends: file, Redis, Valkey, MongoDB, database
 - QueryBuilder with NoSQL/MongoDB support (`to_mongo()`)
