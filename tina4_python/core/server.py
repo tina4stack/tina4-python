@@ -2244,8 +2244,13 @@ def _check_legacy_env_vars() -> None:
         new = _LEGACY_ENV_VARS[old]
         msg.append(f"    {old:<28}  →  {new}")
     msg.extend(["",
-                "Run `tina4 env --migrate` to rewrite your .env automatically,",
-                "or rename manually. See https://tina4.com/release/3.12.0",
+                "Note: these may come from a .env file loaded by dotenv, not just",
+                "the runtime environment — check your image / build context (a .env",
+                "baked into a Docker image is loaded at startup) as well as k8s/CI env.",
+                "",
+                "FIX: run `tina4 env --migrate` to rewrite your .env automatically",
+                "(it renames every legacy name to its TINA4_ form in place).",
+                "Or rename manually. See https://tina4.com/release/3.12.0",
                 "Set TINA4_ALLOW_LEGACY_ENV=true to bypass during migration.",
                 "─" * 72, ""])
     print("\n".join(msg), file=sys.stderr)
