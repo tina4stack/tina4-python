@@ -244,19 +244,34 @@ class Swagger:
 
     def __init__(self, title: str = None, version: str = None,
                  description: str = "", server_url: str = None,
-                 contact_email: str = None, license_name: str = None):
+                 contact_email: str = None, license_name: str = None,
+                 contact_team: str = None, contact_url: str = None):
         self.title = title or os.environ.get("TINA4_SWAGGER_TITLE", "Tina4 API")
         self.version = version or os.environ.get("TINA4_SWAGGER_VERSION", "1.0.0")
         self.description = description or os.environ.get("TINA4_SWAGGER_DESCRIPTION", "")
         self.server_url = server_url or os.environ.get(
             "SWAGGER_DEV_URL", "http://localhost:7145"
         )
-        # Contact email surfaces in the OpenAPI `info.contact` block. Empty
-        # string suppresses the entry — same convention across frameworks.
+        # Contact block — name/url/email surface in OpenAPI `info.contact`. Empty
+        # values are suppressed. Reads TINA4_SWAGGER_CONTACT_* with the legacy
+        # SWAGGER_CONTACT_* as fallback — parity with PHP/Ruby/Node (the root
+        # CLAUDE.md documented TEAM/URL that the code did not read before).
         self.contact_email = (
             contact_email
             if contact_email is not None
             else os.environ.get("TINA4_SWAGGER_CONTACT_EMAIL", "")
+        )
+        self.contact_team = (
+            contact_team
+            if contact_team is not None
+            else (os.environ.get("TINA4_SWAGGER_CONTACT_TEAM")
+                  or os.environ.get("SWAGGER_CONTACT_TEAM", ""))
+        )
+        self.contact_url = (
+            contact_url
+            if contact_url is not None
+            else (os.environ.get("TINA4_SWAGGER_CONTACT_URL")
+                  or os.environ.get("SWAGGER_CONTACT_URL", ""))
         )
         # License name surfaces in `info.license`. Empty string suppresses.
         self.license_name = (
@@ -288,8 +303,15 @@ class Swagger:
             "version": self.version,
             "description": self.description,
         }
+        contact = {}
+        if self.contact_team:
+            contact["name"] = self.contact_team
+        if self.contact_url:
+            contact["url"] = self.contact_url
         if self.contact_email:
-            info["contact"] = {"email": self.contact_email}
+            contact["email"] = self.contact_email
+        if contact:
+            info["contact"] = contact
         if self.license_name:
             info["license"] = {"name": self.license_name}
 

@@ -1184,12 +1184,18 @@ def _handle_swagger(request: Request, response: Response) -> Response | None:
     if not _swagger_enabled():
         return None
     if request.path in ("/swagger", "/swagger/"):
+        # The UI assets load from a CDN by default (keeps the framework
+        # zero-dependency — no vendored ~1.4MB swagger-ui-dist). Air-gapped
+        # deployments point TINA4_SWAGGER_UI_CDN at a self-hosted mirror.
+        _cdn = os.environ.get(
+            "TINA4_SWAGGER_UI_CDN", "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5"
+        ).rstrip("/")
         swagger_html = (
             '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
             '<title>API Documentation</title>'
-            '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">'
+            f'<link rel="stylesheet" href="{_cdn}/swagger-ui.css">'
             '</head><body><div id="swagger-ui"></div>'
-            '<script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>'
+            f'<script src="{_cdn}/swagger-ui-bundle.js"></script>'
             '<script>SwaggerUIBundle({ url: "/swagger/openapi.json", dom_id: "#swagger-ui" });</script>'
             '</body></html>'
         )

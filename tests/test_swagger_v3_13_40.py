@@ -255,3 +255,41 @@ def test_handle_swagger_gated_on_is_enabled(monkeypatch):
     assert is_enabled() is True
     out = srv._handle_swagger(_FakeReq("/swagger"), Response())
     assert out is not None
+
+
+class TestConfigurableUiCdn:
+    def test_default_cdn(self, monkeypatch):
+        from tina4_python.core import server as srv
+        from tina4_python.core.response import Response
+        monkeypatch.setenv("TINA4_SWAGGER_ENABLED", "true")
+        monkeypatch.delenv("TINA4_SWAGGER_UI_CDN", raising=False)
+        out = srv._handle_swagger(_FakeReq("/swagger"), Response())
+        assert b"swagger-ui-dist@5/swagger-ui.css" in out.content
+
+    def test_custom_cdn_for_airgapped(self, monkeypatch):
+        from tina4_python.core import server as srv
+        from tina4_python.core.response import Response
+        monkeypatch.setenv("TINA4_SWAGGER_ENABLED", "true")
+        monkeypatch.setenv("TINA4_SWAGGER_UI_CDN", "https://mirror.internal/swagger")
+        out = srv._handle_swagger(_FakeReq("/swagger"), Response())
+        assert b"https://mirror.internal/swagger/swagger-ui.css" in out.content
+        assert b"https://mirror.internal/swagger/swagger-ui-bundle.js" in out.content
+
+
+class TestContactBlock:
+    def test_contact_name_url_email(self, monkeypatch):
+        monkeypatch.setenv("TINA4_SWAGGER_CONTACT_TEAM", "Platform Team")
+        monkeypatch.setenv("TINA4_SWAGGER_CONTACT_URL", "https://tina4.com/support")
+        monkeypatch.setenv("TINA4_SWAGGER_CONTACT_EMAIL", "team@tina4.com")
+        contact = Swagger().generate([])["info"]["contact"]
+        assert contact == {
+            "name": "Platform Team",
+            "url": "https://tina4.com/support",
+            "email": "team@tina4.com",
+        }
+
+    def test_legacy_swagger_contact_team_fallback(self, monkeypatch):
+        monkeypatch.delenv("TINA4_SWAGGER_CONTACT_TEAM", raising=False)
+        monkeypatch.setenv("SWAGGER_CONTACT_TEAM", "Legacy Team")
+        contact = Swagger().generate([])["info"]["contact"]
+        assert contact["name"] == "Legacy Team"
