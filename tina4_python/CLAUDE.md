@@ -1633,14 +1633,23 @@ TINA4_SESSION_BACKEND=SessionFileHandler  # SessionFileHandler, SessionRedisHand
 TINA4_SESSION_SAMESITE=Lax               # SameSite attribute for session cookies (default: Lax)
 
 # Swagger/OpenAPI
-SWAGGER_TITLE=Tina4 API           # API title (default: "Tina4 API")
-SWAGGER_VERSION=1.0.0             # API version
-SWAGGER_DESCRIPTION=              # API description
-SWAGGER_CONTACT_TEAM=             # Contact name
-SWAGGER_CONTACT_URL=              # Contact URL
-SWAGGER_CONTACT_EMAIL=            # Contact email
-SWAGGER_DEV_URL=http://localhost:7145  # Dev server URL for Swagger
+TINA4_SWAGGER_ENABLED=            # on/off for /swagger UI + /swagger/openapi.json. Explicit true/false wins; unset falls back to TINA4_DEBUG. Set false to DISABLE swagger in any environment; true to expose it in production
+TINA4_SWAGGER_TITLE=Tina4 API     # API title (default: "Tina4 API")
+TINA4_SWAGGER_VERSION=1.0.0       # API version
+TINA4_SWAGGER_DESCRIPTION=        # API description
+TINA4_SWAGGER_CONTACT_TEAM=       # Contact name (legacy SWAGGER_CONTACT_TEAM still read as fallback)
+TINA4_SWAGGER_CONTACT_URL=        # Contact URL  (legacy SWAGGER_CONTACT_URL  still read as fallback)
+TINA4_SWAGGER_CONTACT_EMAIL=      # Contact email
+TINA4_SWAGGER_LICENSE=            # SPDX license name (e.g. MIT) for info.license
+TINA4_SWAGGER_SERVERS=            # comma-separated server URLs for the OpenAPI servers[] block; falls back to SWAGGER_DEV_URL
+TINA4_SWAGGER_UI_CDN=             # base URL for the Swagger UI assets (default jsdelivr); point at a self-hosted mirror for air-gapped use
+SWAGGER_DEV_URL=http://localhost:7145  # single dev-server URL (used when TINA4_SWAGGER_SERVERS is unset)
 ```
+
+The spec is OpenAPI 3.0.3. ORM models registered via AutoCrud become reusable
+`components.schemas` referenced by `$ref`, and secured routes emit a `bearerAuth`
+security requirement. Set `TINA4_SWAGGER_ENABLED=false` to turn the endpoints off
+anywhere (the production on/off switch, wired for real in 3.13.40).
 
 ### Debug levels
 - `ALL` / `DEBUG` — most verbose; every level on the console
