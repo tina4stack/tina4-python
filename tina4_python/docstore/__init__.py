@@ -12,7 +12,8 @@ JSON1 extension when no MongoDB server is configured.
     orders.update_one({"_id": oid}, {"$set": {"status": "shipped"}})
 
 `get_collection(name)` returns a real pymongo `Collection` when a Mongo URI is
-configured (TINA4_MONGO_URI, else TINA4_SESSION_MONGO_URL), and otherwise a
+configured (TINA4_MONGO_URI, else TINA4_SESSION_MONGO_URI; TINA4_SESSION_MONGO_URL
+is accepted as a legacy alias), and otherwise a
 `SqliteCollection` backed by a local SQLite file. This mirrors the file-based
 fallbacks the queue, cache, and session subsystems already provide: an app that
 talks to Mongo in production runs serverless in local dev with no code change -
@@ -637,9 +638,14 @@ class SqliteDatabase:
 
 
 def _mongo_uri() -> str:
-    """The configured Mongo URI, reusing the app-wide queue/session env vars."""
+    """The configured Mongo URI, reusing the app-wide queue/session env vars.
+
+    TINA4_MONGO_URI is the canonical app-wide name; TINA4_SESSION_MONGO_URI is
+    the session-layer name; TINA4_SESSION_MONGO_URL is a back-compat alias.
+    """
     return (
         os.environ.get("TINA4_MONGO_URI")
+        or os.environ.get("TINA4_SESSION_MONGO_URI")
         or os.environ.get("TINA4_SESSION_MONGO_URL")
         or ""
     ).strip()

@@ -230,3 +230,19 @@ class TestSelection:
         db.get_collection("a").insert_one({"x": 1})
         assert db["a"].count_documents({}) == 1
         assert db.a.count_documents({}) == 1  # attribute access
+
+    def test_session_mongo_uri_and_url_both_resolve(self, monkeypatch):
+        # Parity fix: canonical TINA4_SESSION_MONGO_URI, with TINA4_SESSION_MONGO_URL
+        # accepted as a legacy alias (Python/PHP historically used _URL).
+        from tina4_python.docstore import _mongo_uri
+        for k in ("TINA4_MONGO_URI", "TINA4_SESSION_MONGO_URI", "TINA4_SESSION_MONGO_URL"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("TINA4_SESSION_MONGO_URI", "mongodb://uri-host/db")
+        assert _mongo_uri() == "mongodb://uri-host/db"
+        monkeypatch.delenv("TINA4_SESSION_MONGO_URI")
+        monkeypatch.setenv("TINA4_SESSION_MONGO_URL", "mongodb://url-host/db")
+        assert _mongo_uri() == "mongodb://url-host/db"  # legacy alias still works
+        monkeypatch.setenv("TINA4_SESSION_MONGO_URI", "mongodb://uri-host/db")
+        assert _mongo_uri() == "mongodb://uri-host/db"  # canonical wins over legacy
+        monkeypatch.setenv("TINA4_MONGO_URI", "mongodb://app-host/db")
+        assert _mongo_uri() == "mongodb://app-host/db"  # app-wide wins over both

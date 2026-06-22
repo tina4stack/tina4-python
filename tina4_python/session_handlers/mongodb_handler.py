@@ -4,12 +4,12 @@ MongoDB session handler. Uses `pymongo` if available, falls back to raw
 MongoDB wire protocol (OP_MSG) over TCP sockets (zero dependencies).
 
 Environment variables:
-    TINA4_SESSION_MONGO_URL        — MongoDB URL (default: mongodb://localhost:27017)
+    TINA4_SESSION_MONGO_URI        — MongoDB connection URI (default: mongodb://localhost:27017).
+                                     TINA4_SESSION_MONGO_URL is accepted as a legacy alias.
     TINA4_SESSION_MONGO_DB         — database name (default: tina4)
     TINA4_SESSION_MONGO_COLLECTION — collection name (default: sessions)
     TINA4_SESSION_TTL              — session TTL in seconds (default: 3600)
 """
-import json
 import os
 import socket
 import struct
@@ -25,7 +25,12 @@ class MongoDBSessionHandler(SessionHandler):
     """
 
     def __init__(self, **config):
-        mongo_url = config.get("url", os.environ.get("TINA4_SESSION_MONGO_URL", "mongodb://localhost:27017"))
+        # Canonical TINA4_SESSION_MONGO_URI; TINA4_SESSION_MONGO_URL kept as a
+        # back-compat alias (cross-framework parity - PHP/Ruby/Node use _URI).
+        mongo_url = (config.get("url")
+                     or os.environ.get("TINA4_SESSION_MONGO_URI")
+                     or os.environ.get("TINA4_SESSION_MONGO_URL")
+                     or "mongodb://localhost:27017")
         self._database = config.get("database", os.environ.get("TINA4_SESSION_MONGO_DB", "tina4"))
         self._collection_name = config.get("collection", os.environ.get("TINA4_SESSION_MONGO_COLLECTION", "sessions"))
         self._ttl = int(config.get("ttl", os.environ.get("TINA4_SESSION_TTL", "3600")))
