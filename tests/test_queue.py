@@ -598,3 +598,56 @@ def test_process_batch_size(tmp_path, monkeypatch):
 
     queue.process(handler, batch_size=3)
     assert len(received) == 6
+
+
+class TestQueueIsolation:
+    """Contract: queues are isolated by topic and by storage path.
+
+    A job pushed to one topic must never leak into another topic, and a queue
+    pointed at a fresh storage path must start empty. Locks in the per-topic
+    directory layout so a future backend change can't silently cross-contaminate.
+    """
+
+    def test_topics_are_isolated_same_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        topic_a = Queue(topic="topic_a")
+        topic_b = Queue(topic="topic_b")
+
+        topic_a.push({"to": "a"})
+        topic_a.push({"to": "a2"})
+
+        # topic_b shares the base path but must see none of topic_a's jobs.
+        assert topic_b.size() == 0
+        assert topic_b.pop() is None
+        assert topic_a.size() == 2
+
+    def test_draining_one_topic_leaves_the_other_intact(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        topic_a = Queue(topic="topic_a")
+        topic_b = Queue(topic="topic_b")
+        topic_a.push({"to": "a"})
+        topic_b.push({"to": "b"})
+
+        # Drain topic_a completely.
+        assert topic_a.pop().data["to"] == "a"
+        assert topic_a.pop() is None
+
+        # topic_b is untouched.
+        assert topic_b.size() == 1
+        assert topic_b.pop().data["to"] == "b"
+
+    def test_fresh_storage_path_starts_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue_one"))
+        first = Queue(topic="jobs")
+        first.push({"n": 1})
+        first.push({"n": 2})
+        assert first.size() == 2
+
+        # A second queue on a DIFFERENT base path sees zero jobs.
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue_two"))
+        second = Queue(topic="jobs")
+        assert second.size() == 0
+        assert second.pop() is None
