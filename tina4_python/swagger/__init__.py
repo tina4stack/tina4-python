@@ -23,6 +23,18 @@ v3.13.40 — the generator now:
       request bodies (@example(..., content_type="multipart/form-data")),
     - converts wildcard/splat routes to spec-valid {wildcard} templating,
     - de-duplicates operationIds.
+
+v3.13.42 — configurability for external/public APIs:
+    - per-route security + scopes via @security("oauth2", scopes=[...]) (overrides
+      the default scheme; scopes kept valid — only oauth2/openIdConnect carry them),
+    - configurable security schemes: TINA4_SWAGGER_BEARER_FORMAT (non-JWT bearers),
+      an apiKey scheme via TINA4_SWAGGER_API_KEY_NAME/_IN, TINA4_SWAGGER_DEFAULT_SCHEME,
+      and Swagger.add_security_scheme(name, def) for arbitrary schemes (oauth2 + scopes),
+    - path filtering: TINA4_SWAGGER_INCLUDE / _EXCLUDE prefixes (framework
+      internals /swagger + /__dev always excluded),
+    - OpenAPI 3.1 opt-in: TINA4_SWAGGER_OPENAPI=3.1 (default 3.0.3),
+    - reusable custom schemas: Swagger.add_schema(name, schema) + @request_schema /
+      @response_schema referencing them by $ref.
 """
 import json
 import os
@@ -40,7 +52,17 @@ _SWAGGER_ATTRS = (
     "_swagger_summary", "_swagger_tags", "_swagger_example", "_swagger_example_content_type",
     "_swagger_example_response", "_swagger_example_responses", "_swagger_deprecated",
     "_swagger_model", "_swagger_model_list",
+    "_swagger_security", "_swagger_request_schema", "_swagger_response_schemas",
 )
+
+
+# ── Configuration registry ─────────────────────────────────────
+# Process-wide registries for security schemes and reusable component schemas
+# declared programmatically (Swagger.add_security_scheme / Swagger.add_schema).
+# Kept module-level so app bootstrap can register before any generate() call;
+# reset_registry() clears them (tests).
+_REGISTERED_SCHEMES: dict[str, dict] = {}
+_REGISTERED_SCHEMAS: dict[str, dict] = {}
 
 
 def _carry(fn, wrapper):
@@ -199,10 +221,112 @@ def deprecated():
     return decorator
 
 
+def _normalize_security(scheme_or_reqs, scopes):
+    """Normalize @security args to an OpenAPI security-requirement list.
+
+    Accepts:
+        @security("oauth2", scopes=["read"])     -> [{"oauth2": ["read"]}]
+        @security({"bearerAuth": []})            -> [{"bearerAuth": []}]   (AND within one dict)
+        @security([{"oauth2": ["read"]}, {"apiKeyAuth": []}])  -> verbatim (OR across dicts)
+        @security("public")  /  @security([])    -> [] (explicitly no auth)
+    """
+    if scheme_or_reqs in ("public", "none", None) and not scopes:
+        return []
+    if isinstance(scheme_or_reqs, str):
+        return [{scheme_or_reqs: list(scopes or [])}]
+    if isinstance(scheme_or_reqs, dict):
+        return [{k: list(v or []) for k, v in scheme_or_reqs.items()}]
+    if isinstance(scheme_or_reqs, list):
+        return [{k: list(v or []) for k, v in req.items()} for req in scheme_or_reqs]
+    return []
+
+
+def security(scheme_or_reqs="bearerAuth", scopes=None):
+    """Declare the security requirement(s) for a route (overrides the default).
+
+        @security("bearerAuth")                       # default bearer, no scopes
+        @security("oauth2", scopes=["read:users"])    # oauth2 scheme + scopes
+        @security({"apiKeyAuth": []})                 # a registered API-key scheme
+        @security([{"oauth2": ["read"]}, {"apiKeyAuth": []}])  # either (OR)
+        @security("public")                            # explicitly public (no security)
+
+    Scopes are meaningful only for ``oauth2``/``openIdConnect`` schemes; for
+    ``http``/``apiKey`` schemes OpenAPI requires an empty scope array, so the
+    generator drops any scopes you pass on those (keeping the spec valid).
+    """
+    reqs = _normalize_security(scheme_or_reqs, scopes)
+    def decorator(fn):
+        fn._swagger_security = reqs
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return fn(*args, **kwargs)
+        wrapper._swagger_security = reqs
+        _carry(fn, wrapper)
+        return wrapper
+    return decorator
+
+
+def request_schema(name: str, content_type: str = "application/json"):
+    """Reference a registered component schema as the request body.
+
+        Swagger.add_schema("CreateUser", {...})
+        @request_schema("CreateUser")
+    """
+    def decorator(fn):
+        fn._swagger_request_schema = (name, content_type)
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return fn(*args, **kwargs)
+        wrapper._swagger_request_schema = (name, content_type)
+        _carry(fn, wrapper)
+        return wrapper
+    return decorator
+
+
+def response_schema(name: str, status: int = 200, is_list: bool = False):
+    """Reference a registered component schema as a response body (per status).
+
+        @response_schema("User", status=200)
+        @response_schema("Error", status=404)
+        @response_schema("User", status=200, is_list=True)   # array of User
+    """
+    def decorator(fn):
+        existing = dict(getattr(fn, "_swagger_response_schemas", {}) or {})
+        existing[int(status)] = (name, bool(is_list))
+        fn._swagger_response_schemas = existing
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return fn(*args, **kwargs)
+        wrapper._swagger_response_schemas = existing
+        _carry(fn, wrapper)
+        return wrapper
+    return decorator
+
+
 # ── Swagger Generator ──────────────────────────────────────────
 
 def _swagger_truthy(val) -> bool:
     return str(val or "").strip().lower() in ("true", "1", "yes", "on")
+
+
+def _csv(val) -> list[str]:
+    """Split a comma-separated env value into a clean list."""
+    return [p.strip() for p in str(val or "").split(",") if p.strip()]
+
+
+def _resolve_openapi_version(val) -> str:
+    """Resolve TINA4_SWAGGER_OPENAPI to a concrete version string.
+
+    Default 3.0.3 (broad tool support). '3.1' / '3.1.0' -> '3.1.0'.
+    """
+    v = str(val or "").strip()
+    if not v:
+        return "3.0.3"
+    if v in ("3.1", "3.1.0"):
+        return "3.1.0"
+    if v in ("3.0", "3.0.3"):
+        return "3.0.3"
+    return v  # honour an explicit full version verbatim
 
 
 def is_enabled() -> bool:
@@ -279,6 +403,99 @@ class Swagger:
             if license_name is not None
             else os.environ.get("TINA4_SWAGGER_LICENSE", "")
         )
+        # OpenAPI version — default 3.0.3 for broad tool compatibility; opt in to
+        # 3.1.0 via TINA4_SWAGGER_OPENAPI=3.1 (the schemas this generator emits
+        # are valid in both dialects).
+        self.openapi_version = _resolve_openapi_version(
+            os.environ.get("TINA4_SWAGGER_OPENAPI")
+        )
+        # Default bearer format (the built-in bearerAuth scheme). JWT unless an
+        # API uses opaque tokens / API keys as the bearer (e.g. sk_live_...).
+        self.bearer_format = os.environ.get("TINA4_SWAGGER_BEARER_FORMAT", "JWT")
+        # Optional apiKey scheme — emitted as "apiKeyAuth" when a header/query
+        # name is configured (e.g. X-Api-Key).
+        self.api_key_name = os.environ.get("TINA4_SWAGGER_API_KEY_NAME", "")
+        self.api_key_in = os.environ.get("TINA4_SWAGGER_API_KEY_IN", "header")
+        # Which scheme secured routes use by default when no @security is set.
+        self.default_scheme = os.environ.get("TINA4_SWAGGER_DEFAULT_SCHEME", "bearerAuth")
+        # Path filters (comma-separated prefixes on the raw route path).
+        self.include_prefixes = _csv(os.environ.get("TINA4_SWAGGER_INCLUDE", ""))
+        self.exclude_prefixes = _csv(os.environ.get("TINA4_SWAGGER_EXCLUDE", ""))
+
+    # ── Programmatic registries ────────────────────────────────────
+
+    @staticmethod
+    def add_security_scheme(name: str, definition: dict) -> None:
+        """Register a named OpenAPI security scheme (e.g. an oauth2 scheme with
+        scopes, or a custom apiKey). Call at app bootstrap, before generate().
+
+            Swagger.add_security_scheme("oauth2", {
+                "type": "oauth2",
+                "flows": {"clientCredentials": {
+                    "tokenUrl": "https://api.example.com/oauth/token",
+                    "scopes": {"read:users": "Read users", "write:users": "Write users"},
+                }},
+            })
+        """
+        _REGISTERED_SCHEMES[name] = definition
+
+    @staticmethod
+    def add_schema(name: str, schema: dict) -> None:
+        """Register a reusable component schema, referenceable via
+        @request_schema(name) / @response_schema(name) or a raw $ref."""
+        _REGISTERED_SCHEMAS[name] = schema
+
+    @staticmethod
+    def reset_registry() -> None:
+        """Clear the security-scheme and schema registries (test helper)."""
+        _REGISTERED_SCHEMES.clear()
+        _REGISTERED_SCHEMAS.clear()
+
+    def _security_schemes(self) -> dict:
+        """Resolve components.securitySchemes from defaults + env + registry."""
+        schemes: dict[str, dict] = {
+            "bearerAuth": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": self.bearer_format,
+            }
+        }
+        if self.api_key_name:
+            schemes["apiKeyAuth"] = {
+                "type": "apiKey",
+                "name": self.api_key_name,
+                "in": self.api_key_in if self.api_key_in in ("header", "query", "cookie") else "header",
+            }
+        # Registered schemes win (let an app override bearerAuth or add oauth2).
+        schemes.update(_REGISTERED_SCHEMES)
+        return schemes
+
+    def _sanitize_security(self, reqs: list, schemes: dict) -> list:
+        """Keep a security-requirement list spec-valid: scopes are allowed only
+        on oauth2/openIdConnect schemes; everything else gets an empty array."""
+        scope_ok = {"oauth2", "openIdConnect"}
+        out = []
+        for req in reqs:
+            clean = {}
+            for name, scopes in req.items():
+                stype = (schemes.get(name) or {}).get("type")
+                clean[name] = list(scopes) if stype in scope_ok else []
+            out.append(clean)
+        return out
+
+    def _included(self, raw_path: str) -> bool:
+        """Path-filter a raw route path. Framework internals are always
+        excluded; then TINA4_SWAGGER_INCLUDE (allow-list) / _EXCLUDE apply."""
+        for internal in ("/swagger", "/__dev"):
+            if raw_path == internal or raw_path.startswith(internal + "/"):
+                return False
+        if self.include_prefixes and not any(
+            raw_path == p or raw_path.startswith(p) for p in self.include_prefixes
+        ):
+            return False
+        if any(raw_path == p or raw_path.startswith(p) for p in self.exclude_prefixes):
+            return False
+        return True
 
     def _servers(self) -> list[dict]:
         """Resolve the servers[] block.
@@ -315,27 +532,25 @@ class Swagger:
         if self.license_name:
             info["license"] = {"name": self.license_name}
 
+        schemes = self._security_schemes()
         spec = {
-            "openapi": "3.0.3",
+            "openapi": self.openapi_version,
             "info": info,
             "servers": self._servers(),
             "paths": {},
             "components": {
-                "securitySchemes": {
-                    "bearerAuth": {
-                        "type": "http",
-                        "scheme": "bearer",
-                        "bearerFormat": "JWT",
-                    }
-                }
+                "securitySchemes": schemes,
             },
         }
 
         models: dict[str, type] = {}   # name -> ORM model class, for components.schemas
+        ref_schemas: set[str] = set()  # registered schema names referenced by routes
         used_tags: list[str] = []      # insertion-ordered unique tags
         seen_ids: set[str] = set()     # operationId de-dup
 
         for route in routes:
+            if not self._included(route.get("path", "")):
+                continue
             path = self._openapi_path(route["path"])
             method = route["method"].lower()
             handler = route.get("handler")
@@ -378,10 +593,16 @@ class Swagger:
                 # an inferred schema from @example. application/json unless the
                 # example declares multipart/form-data.
                 if method in ("post", "put", "patch"):
+                    req_schema = getattr(handler, "_swagger_request_schema", None)
                     ct = getattr(handler, "_swagger_example_content_type", "application/json")
                     ex = getattr(handler, "_swagger_example", None)
                     media: dict = {}
-                    if ref is not None:
+                    if req_schema is not None:
+                        sname, sct = req_schema
+                        ct = sct or ct
+                        ref_schemas.add(sname)
+                        media["schema"] = {"$ref": f"#/components/schemas/{sname}"}
+                    elif ref is not None:
                         media["schema"] = {"$ref": ref}
                     elif ex is not None:
                         media["schema"] = self._infer_schema(ex)
@@ -425,6 +646,19 @@ class Swagger:
                         },
                     }
 
+                # Registered response schemas ($ref) — explicit and authoritative.
+                resp_schemas = getattr(handler, "_swagger_response_schemas", None)
+                if resp_schemas:
+                    for status_code, (sname, is_list) in resp_schemas.items():
+                        ref_schemas.add(sname)
+                        sref = f"#/components/schemas/{sname}"
+                        schema = ({"type": "array", "items": {"$ref": sref}} if is_list
+                                  else {"$ref": sref})
+                        operation["responses"][str(status_code)] = {
+                            "description": "Successful response" if str(status_code).startswith("2") else "Response",
+                            "content": {"application/json": {"schema": schema}},
+                        }
+
             # Parameters: path params (+ types) then query params from @description(query=)
             params = self._extract_path_params(route["path"])
             if handler:
@@ -444,9 +678,15 @@ class Swagger:
             if params:
                 operation["parameters"] = params
 
-            # Auth
-            if route.get("auth_required", False):
-                operation["security"] = [{"bearerAuth": []}]
+            # Auth — explicit @security wins (an empty list = explicitly public);
+            # otherwise a secured route gets the default scheme.
+            sec = getattr(handler, "_swagger_security", None) if handler else None
+            if sec is not None:
+                operation["security"] = self._sanitize_security(sec, schemes) if sec else []
+            elif route.get("auth_required", False):
+                operation["security"] = self._sanitize_security(
+                    [{self.default_scheme: []}], schemes
+                )
 
             spec["paths"][path][method] = operation
 
@@ -455,6 +695,13 @@ class Swagger:
             schemas = spec["components"].setdefault("schemas", {})
             for name, model_class in models.items():
                 schemas[name] = self._model_schema(model_class)
+
+        # Registered component schemas referenced via @request_schema/@response_schema.
+        if ref_schemas:
+            schemas = spec["components"].setdefault("schemas", {})
+            for name in ref_schemas:
+                if name in _REGISTERED_SCHEMAS and name not in schemas:
+                    schemas[name] = _REGISTERED_SCHEMAS[name]
 
         # top-level tags[] (name-only is valid OpenAPI; descriptions optional)
         if used_tags:
@@ -609,4 +856,5 @@ __all__ = [
     "Swagger", "is_enabled",
     "description", "summary", "tags",
     "example", "example_response", "deprecated",
+    "security", "request_schema", "response_schema",
 ]

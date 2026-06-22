@@ -277,6 +277,8 @@ class TestMiddleware:
 class TestQueue:
     def test_push_pop_verify_payload(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TINA4_DATABASE_URL", f"sqlite:///{tmp_path / 'q.db'}")
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
         q = Queue(topic="smoke")
         q.push({"action": "send_email", "to": "user@test.com"})
         job = q.pop()
@@ -990,11 +992,15 @@ class TestDotEnvAdvanced:
 class TestQueueAdvanced:
     def test_pop_empty_queue_returns_none(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TINA4_DATABASE_URL", f"sqlite:///{tmp_path / 'eq.db'}")
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
         q = Queue(topic="empty")
         assert q.pop() is None
 
     def test_multiple_pushes(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TINA4_DATABASE_URL", f"sqlite:///{tmp_path / 'mq.db'}")
+        monkeypatch.setenv("TINA4_QUEUE_BACKEND", "file")
+        monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path / "queue"))
         q = Queue(topic="multi")
         q.push({"msg": "first"})
         q.push({"msg": "second"})
