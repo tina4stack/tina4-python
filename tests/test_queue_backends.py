@@ -784,3 +784,35 @@ class TestMongoQueueAdapterContract:
         q._backend._backend._client = MagicMock()
         q._backend._backend._db = MagicMock()
         assert q.dead_letters() == []                      # was TypeError
+
+
+class TestQueueAdapterSignatureContract:
+    """Every queue backend adapter must accept the kwargs the Queue passes.
+
+    Queue.dead_letters()/retry_failed() pass max_retries= to whatever backend is
+    active. A missing kwarg raised TypeError at call time on MongoDB, RabbitMQ,
+    AND Kafka. This inspect-based test guards the whole family at once — no broker
+    or driver needed — so the class of bug cannot silently reappear on any backend.
+    """
+
+    def _adapter_classes(self):
+        from tina4_python.queue.lite_backend import LiteBackend
+        from tina4_python.queue.mongo_backend import MongoBackend
+        from tina4_python.queue.rabbitmq_backend import RabbitMQBackend
+        from tina4_python.queue.kafka_backend import KafkaBackend
+        return {
+            "file": LiteBackend, "mongodb": MongoBackend,
+            "rabbitmq": RabbitMQBackend, "kafka": KafkaBackend,
+        }
+
+    def test_dead_letters_accepts_max_retries_on_every_backend(self):
+        import inspect
+        for name, cls in self._adapter_classes().items():
+            params = inspect.signature(cls.dead_letters).parameters
+            assert "max_retries" in params, f"{name}.dead_letters() missing max_retries"
+
+    def test_retry_failed_accepts_max_retries_on_every_backend(self):
+        import inspect
+        for name, cls in self._adapter_classes().items():
+            params = inspect.signature(cls.retry_failed).parameters
+            assert "max_retries" in params, f"{name}.retry_failed() missing max_retries"
