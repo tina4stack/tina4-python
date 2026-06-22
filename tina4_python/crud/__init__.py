@@ -132,6 +132,8 @@ class AutoCrud:
         list_handler.__qualname__ = f"autocrud_list_{table}"
         list_handler._swagger_summary = f"List all {pretty_name}"
         list_handler._swagger_tags = [table]
+        list_handler._swagger_model = model_class
+        list_handler._swagger_model_list = True
         Router.add("GET", base_path, list_handler)
         generated.append({"method": "GET", "path": base_path, "table": table})
 
@@ -147,6 +149,7 @@ class AutoCrud:
         get_handler.__qualname__ = f"autocrud_get_{table}"
         get_handler._swagger_summary = f"Get {pretty_name} by ID"
         get_handler._swagger_tags = [table]
+        get_handler._swagger_model = model_class
         Router.add("GET", f"{base_path}/{{id}}", get_handler)
         generated.append({"method": "GET", "path": f"{base_path}/{{id}}", "table": table})
 
@@ -169,6 +172,7 @@ class AutoCrud:
         create_handler._swagger_summary = f"Create {pretty_name}"
         create_handler._swagger_tags = [table]
         create_handler._swagger_example = example_body
+        create_handler._swagger_model = model_class
         Router.add("POST", base_path, create_handler)
         generated.append({"method": "POST", "path": base_path, "table": table})
 
@@ -201,6 +205,7 @@ class AutoCrud:
         update_handler._swagger_summary = f"Update {pretty_name}"
         update_handler._swagger_tags = [table]
         update_handler._swagger_example = example_body
+        update_handler._swagger_model = model_class
         Router.add("PUT", f"{base_path}/{{id}}", update_handler)
         generated.append({"method": "PUT", "path": f"{base_path}/{{id}}", "table": table})
 

@@ -1174,7 +1174,15 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
 
 
 def _handle_swagger(request: Request, response: Response) -> Response | None:
-    """Serve /swagger UI and /swagger/openapi.json. Returns Response or None."""
+    """Serve /swagger UI and /swagger/openapi.json. Returns Response or None.
+
+    Self-gated on swagger.is_enabled() (TINA4_SWAGGER_ENABLED, else TINA4_DEBUG)
+    so the documented production on/off switch is actually honoured — before
+    v3.13.40 the dispatch gated only on TINA4_DEBUG and this env var was dead.
+    """
+    from tina4_python.swagger import is_enabled as _swagger_enabled
+    if not _swagger_enabled():
+        return None
     if request.path in ("/swagger", "/swagger/"):
         swagger_html = (
             '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
@@ -1715,8 +1723,11 @@ async def handle(request: Request) -> Response:
     ):
         return await _handle_dev_admin(request, response)
 
-    # Swagger
-    if _is_dev and request.method == "GET":
+    # Swagger — _handle_swagger self-gates on swagger.is_enabled()
+    # (TINA4_SWAGGER_ENABLED, else TINA4_DEBUG), so we call it on any GET:
+    # this honours an explicit prod-enable AND an explicit dev-disable, both
+    # of which the old `_is_dev`-only gate silently ignored.
+    if request.method == "GET":
         swagger_resp = _handle_swagger(request, response)
         if swagger_resp is not None:
             return swagger_resp
