@@ -200,11 +200,13 @@ class RabbitMQConnector:
         # Connection.StartOk
         self._send_connection_start_ok()
 
-        # Connection.Tune
-        self._read_frame()
+        # Connection.Tune (the broker proposes channel-max, frame-max, heartbeat)
+        tune = self._read_frame()
 
-        # Connection.TuneOk
-        self._send_connection_tune_ok()
+        # Connection.TuneOk — negotiate from the broker's proposal (never exceed
+        # its channel-max; a hardcoded channel-max of 0 = "no limit" is treated as
+        # greater than the proposed 2047 and RabbitMQ aborts the handshake).
+        self._send_connection_tune_ok(tune)
 
         # Connection.Open
         self._send_connection_open()
@@ -299,8 +301,37 @@ class RabbitMQConnector:
         )
         self._write_method(0, 10, 11, args)
 
-    def _send_connection_tune_ok(self):
-        args = struct.pack("!HIH", 0, 131072, 60)
+    def _send_connection_tune_ok(self, tune: dict | None = None):
+        """Send Connection.TuneOk negotiated from the broker's Connection.Tune.
+
+        AMQP 0-9-1 requires the client's TuneOk values to not exceed the server's
+        proposal. The Tune payload (after the 4-byte class+method) is
+        channel-max:short, frame-max:long, heartbeat:short. We echo channel-max
+        (the server's cap; 0 = unlimited), clamp frame-max to min(desired, server)
+        treating 0 as unlimited, and choose a heartbeat. Hardcoding channel-max=0
+        means "no limit", which RabbitMQ treats as exceeding its proposed 2047 and
+        aborts the connection right after Open.
+        """
+        desired_frame_max = 131072
+        desired_heartbeat = 60
+
+        channel_max = 2047
+        frame_max = desired_frame_max
+        heartbeat = desired_heartbeat
+
+        if tune is not None and len(tune.get("payload", b"")) >= 12:
+            # payload: class_id(2) + method_id(2) + channel-max(2) + frame-max(4) + heartbeat(2)
+            _cls, _method, server_channel_max, server_frame_max, server_heartbeat = struct.unpack(
+                "!HHHIH", tune["payload"][:12]
+            )
+            # channel-max: never exceed the server's proposal (echo its value).
+            channel_max = server_channel_max
+            # frame-max: min(desired, server), treating 0 as unlimited on either side.
+            frame_max = desired_frame_max if server_frame_max == 0 else min(desired_frame_max, server_frame_max)
+            # heartbeat: our choice, clamped to the server's if it proposed a non-zero one.
+            heartbeat = desired_heartbeat if server_heartbeat == 0 else min(desired_heartbeat, server_heartbeat)
+
+        args = struct.pack("!HIH", channel_max, frame_max, heartbeat)
         self._write_method(0, 10, 31, args)
 
     def _send_connection_open(self):

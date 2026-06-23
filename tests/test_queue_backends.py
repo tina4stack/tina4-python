@@ -816,3 +816,105 @@ class TestQueueAdapterSignatureContract:
         for name, cls in self._adapter_classes().items():
             params = inspect.signature(cls.retry_failed).parameters
             assert "max_retries" in params, f"{name}.retry_failed() missing max_retries"
+
+
+# ── Live RabbitMQ Integration (real broker, no mocks) ────────────────
+
+def _parse_amqp_url(url):
+    """Parse amqp://[user:pass@]host[:port][/vhost] into a config dict."""
+    import re
+    rest = re.sub(r"^amqps?://", "", url)
+    username, password, vhost = "guest", "guest", "/"
+    if "@" in rest:
+        creds, rest = rest.split("@", 1)
+        if ":" in creds:
+            username, password = creds.split(":", 1)
+        else:
+            username = creds
+    hostport = rest
+    if "/" in rest:
+        hostport, vh = rest.split("/", 1)
+        if vh:
+            vhost = vh if vh.startswith("/") else "/" + vh
+    host = hostport
+    port = 5672
+    if ":" in hostport:
+        host, port_s = hostport.split(":", 1)
+        port = int(port_s)
+    return {"host": host or "localhost", "port": port or 5672,
+            "username": username, "password": password, "vhost": vhost}
+
+
+def _rabbitmq_reachable(host, port):
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=1.5):
+            return True
+    except OSError:
+        return False
+
+
+_RABBIT_URL = os.environ.get("TINA4_TEST_RABBITMQ_URL", "")
+_RABBIT_CFG = _parse_amqp_url(_RABBIT_URL) if _RABBIT_URL else None
+
+
+@pytest.mark.skipif(
+    not _RABBIT_URL,
+    reason="Set TINA4_TEST_RABBITMQ_URL (e.g. amqp://guest:guest@localhost:5672) for the live RabbitMQ test.",
+)
+@pytest.mark.skipif(
+    _RABBIT_CFG is not None and not _rabbitmq_reachable(_RABBIT_CFG["host"], _RABBIT_CFG["port"]),
+    reason="RabbitMQ broker unreachable.",
+)
+class TestRabbitMQLiveRawHandshake:
+    """Exercise the REAL broker over the RAW AMQP path (no pika, no mocks).
+
+    Locks in the Connection.TuneOk negotiation fix: the raw fallback must echo
+    the broker's channel-max from Connection.Tune rather than hardcode 0 (which
+    RabbitMQ treats as exceeding its proposed 2047 and aborts the handshake).
+    Forcing ``_use_pika = False`` targets the raw code path specifically — pika
+    negotiates Tune itself, so it would not cover the bug. A full
+    connect -> size(0) -> enqueue -> size(1) -> dequeue -> acknowledge -> size(0)
+    cycle on a fresh queue proves the raw handshake and lifecycle work.
+    """
+
+    def _raw_backend(self):
+        from tina4_python.queue_backends.rabbitmq_backend import RabbitMQConnector
+        backend = RabbitMQConnector(**_RABBIT_CFG)
+        backend._use_pika = False  # force the raw AMQP socket path
+        return backend
+
+    def test_raw_full_lifecycle(self):
+        import secrets
+        topic = "tina4_test_" + secrets.token_hex(8)
+
+        backend = self._raw_backend()
+        backend.connect()  # raw AMQP 0-9-1 handshake — the bug threw here
+        try:
+            assert backend.size(topic) == 0
+            msg_id = backend.enqueue(topic, {"task": "live", "value": 7})
+            assert msg_id
+        finally:
+            backend.close()
+
+        reader = self._raw_backend()
+        reader.connect()
+        try:
+            assert reader.size(topic) == 1
+            message = reader.dequeue(topic)
+            assert isinstance(message, dict)
+            assert message.get("task") == "live"
+            assert message.get("value") == 7
+            assert message.get("id") == msg_id
+            reader.acknowledge(topic, msg_id)
+        finally:
+            reader.close()
+
+        verifier = self._raw_backend()
+        verifier.connect()
+        try:
+            assert verifier.size(topic) == 0
+            # Cleanup: purge the now-empty durable queue.
+            verifier._queue_purge_raw(topic)
+        finally:
+            verifier.close()

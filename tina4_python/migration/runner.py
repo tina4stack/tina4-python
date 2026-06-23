@@ -95,13 +95,26 @@ def _create_v3_table(db) -> None:
             )
         """)
     else:
-        db.execute("""
+        # Engine-aware bookkeeping DDL. Each engine spells an auto-increment
+        # integer PK differently (SQLite AUTOINCREMENT, PostgreSQL SERIAL, MySQL
+        # AUTO_INCREMENT, MSSQL IDENTITY), and a TEXT column cannot carry a UNIQUE
+        # constraint on MySQL -- so migration_id is VARCHAR. (SQLite gives VARCHAR
+        # TEXT affinity, so this stays behaviour-identical there.) Mirrors the
+        # engine-aware DDL in ORM.create_table; without it `migrate()` died with
+        # "syntax error at AUTOINCREMENT" on PostgreSQL/MySQL/MSSQL.
+        engine = (db.get_database_type() or "sqlite").lower()
+        id_column = {
+            "postgresql": "id SERIAL PRIMARY KEY",
+            "mysql": "id INTEGER PRIMARY KEY AUTO_INCREMENT",
+            "mssql": "id INTEGER IDENTITY(1,1) PRIMARY KEY",
+        }.get(engine, "id INTEGER PRIMARY KEY AUTOINCREMENT")
+        db.execute(f"""
             CREATE TABLE tina4_migration (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                migration_id TEXT NOT NULL UNIQUE,
-                description TEXT,
+                {id_column},
+                migration_id VARCHAR(500) NOT NULL UNIQUE,
+                description VARCHAR(500),
                 batch INTEGER NOT NULL DEFAULT 1,
-                executed_at TEXT NOT NULL,
+                executed_at VARCHAR(50) NOT NULL,
                 passed INTEGER NOT NULL DEFAULT 1
             )
         """)

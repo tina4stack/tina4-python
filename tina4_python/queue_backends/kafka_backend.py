@@ -17,6 +17,7 @@ import os
 import secrets
 import socket
 import struct
+import time
 import zlib
 
 
@@ -86,11 +87,29 @@ class KafkaConnector:
         self._ensure_connected()
 
         if self._use_confluent:
-            if topic not in self._subscribed_topics:
+            first = topic not in self._subscribed_topics
+            if first:
                 self._consumer.subscribe([topic])
                 self._subscribed_topics.add(topic)
-            msg = self._consumer.poll(timeout=1.0)
-            if msg is None or msg.error():
+            # The FIRST poll after subscribing must drive the consumer-group
+            # join + partition assignment, which takes several seconds on a cold
+            # broker. Until partitions are assigned, poll() returns None even
+            # when the topic already has messages -- so a single short poll made
+            # dequeue() return None right after enqueue(). Poll in a bounded loop
+            # on first subscribe (deadline TINA4_KAFKA_ASSIGN_TIMEOUT, default
+            # 15s); steady state stays a single ~1s poll.
+            deadline = time.monotonic() + (
+                float(os.environ.get("TINA4_KAFKA_ASSIGN_TIMEOUT", "15")) if first else 1.0
+            )
+            msg = None
+            while True:
+                candidate = self._consumer.poll(timeout=0.5)
+                if candidate is not None and not candidate.error():
+                    msg = candidate
+                    break
+                if time.monotonic() >= deadline:
+                    break
+            if msg is None:
                 return None
             self._last_message = msg
             try:

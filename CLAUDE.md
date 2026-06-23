@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.13.43 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.44 — Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -28,7 +28,7 @@ Version 3.13.43 — Lightweight Python web framework. See https://tina4.com for 
 - **Constants file** — No magic strings or numbers in routes. Put constants in `src/app/constants.py`
 - **Service layer pattern** — For complex business logic, create `class FooService` in `src/app/` with a module-level singleton. Routes should be thin wrappers
 - **Parity across all frameworks** — Every new feature, fix, or optimization must be implemented with equivalent logic AND tests in all 4 Tina4 frameworks (Python, PHP, Ruby, Node.js). Never ship to one without shipping to all.
-- **Tests validate against the real thing — NO mock testing.** Any test that touches an external dependency (a DB engine, MongoDB, Redis/Valkey/Memcached, RabbitMQ/Kafka, an HTTP service) must exercise the REAL service, not a mock/stub/fake/script-introspection. "Verified"/"green" requires a real run — a passing mock test is not verification. CI provisions the services; use them (add one if missing). Pure-logic unit tests with no external dependency are exempt. (The Node MongoDB queue re-delivered every completed job for two releases because its queue tests were mock-based and never ran against a real Mongo.)
+- **NO mock testing. Mocks are not acceptable in any circumstances.** A test double (mock, stub, fake, spy, monkeypatch, or any in-test object standing in for a real collaborator) may never substitute for a real dependency, under any justification. There is no "supplement" exception and no "hard to reproduce" exception. Any test that touches a dependency (a DB engine, MongoDB, Redis/Valkey/Memcached, RabbitMQ/Kafka, an HTTP/SMTP service, the filesystem, a socket) must exercise the REAL service; if a failure mode is hard to trigger, reproduce it for real, never simulate it. "Verified"/"green" requires a real run; a passing mock test is not verification. CI provisions the services; use them and add any that is missing. The only tests that need no live dependency are pure functions with no dependency and no double; that is not a mock test. (The Node MongoDB queue re-delivered every completed job for two releases because its queue tests were mock-based and never ran against a real Mongo.)
 - **Routes return `response()`** — Always use `response()` not `response.json()`. This is the Tina4 convention
 - **Error handling in routes** — Wrap route logic in `try/except`, log with `Debug.error()`, return `response()` with appropriate status
 - **All links and references** should point to https://tina4.com
