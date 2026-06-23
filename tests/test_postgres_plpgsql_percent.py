@@ -41,6 +41,23 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+def _cleanup(d):
+    """Drop everything these tests create, idempotently. CASCADE removes the
+    dependent trigger so DROP FUNCTION cannot fail and leave the function behind
+    (a leftover trigger-typed t4_issue40_raises() collided with the void-typed
+    CREATE OR REPLACE on the next run). Run on setup AND teardown so a leftover
+    from any prior run can never make this real-DB test flake."""
+    for stmt in (
+        "DROP TRIGGER IF EXISTS t4_issue40_trg ON t4_issue40_t",
+        "DROP TABLE IF EXISTS t4_issue40_t CASCADE",
+        "DROP FUNCTION IF EXISTS t4_issue40_raises() CASCADE",
+    ):
+        try:
+            d.execute(stmt)
+        except Exception:
+            pass
+
+
 @pytest.fixture
 def db():
     from tina4_python.database import Database
@@ -48,16 +65,9 @@ def db():
         f"postgresql://{PG_HOST}:{PG_PORT}/{PG_DB}",
         username=PG_USER, password=PG_PASS,
     )
+    _cleanup(d)   # pristine slate, even if a prior run left state behind
     yield d
-    # Cleanup — drop anything we created.
-    try:
-        d.execute("DROP FUNCTION IF EXISTS t4_issue40_raises()")
-    except Exception:
-        pass
-    try:
-        d.execute("DROP TABLE IF EXISTS t4_issue40_t")
-    except Exception:
-        pass
+    _cleanup(d)
     d.close()
 
 

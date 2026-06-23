@@ -155,7 +155,14 @@ class MSSQLAdapter(DatabaseAdapter):
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def insert(self, table: str, data: dict) -> DatabaseResult:
+    def insert(self, table: str, data: dict | list) -> DatabaseResult:
+        # A list of dicts is a batch insert — delegate to the base class, which
+        # builds one parameterised INSERT and runs it per row via execute_many.
+        # (Database.insert / the docs advertise ``data: dict | list``; without
+        # this branch a list crashed with ``'list' object has no attribute
+        # 'keys'`` because this override only handled the single-dict case.)
+        if isinstance(data, list):
+            return super().insert(table, data)
         columns = ", ".join(data.keys())
         placeholders = ", ".join(["%s"] * len(data))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"

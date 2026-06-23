@@ -283,6 +283,12 @@ class PostgreSQLAdapter(DatabaseAdapter):
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         self._exec_with_handling(cursor, sql, params)
 
+        # Capture rowcount NOW, before the lastval()/SAVEPOINT probes below run
+        # their own cursor.execute() calls and overwrite cursor.rowcount. A
+        # no-RETURNING INSERT was reporting affected_rows=0 because those probe
+        # statements clobbered the INSERT's rowcount before it was read at the end.
+        affected = cursor.rowcount if cursor.rowcount >= 0 else 0
+
         records = []
         last_id = None
 
@@ -317,7 +323,10 @@ class PostgreSQLAdapter(DatabaseAdapter):
                 except Exception:
                     cursor.execute("ROLLBACK TO SAVEPOINT _t4_lastval_probe")
 
-        affected = cursor.rowcount if cursor.rowcount >= 0 else 0
+        # NOTE: affected_rows was captured right after the main statement above,
+        # before the lastval()/SAVEPOINT probes ran their own cursor.execute()
+        # calls (which reset cursor.rowcount). Do not recompute it from
+        # cursor.rowcount here or a no-RETURNING INSERT reports 0.
 
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
@@ -417,7 +426,14 @@ class PostgreSQLAdapter(DatabaseAdapter):
                 row[key] = bytes(value)
         return row
 
-    def insert(self, table: str, data: dict) -> DatabaseResult:
+    def insert(self, table: str, data: dict | list) -> DatabaseResult:
+        # A list of dicts is a batch insert — delegate to the base class, which
+        # builds one parameterised INSERT and runs it per row via execute_many.
+        # (Database.insert / the docs advertise ``data: dict | list``; without
+        # this branch a list crashed with ``'list' object has no attribute
+        # 'keys'`` because this override only handled the single-dict case.)
+        if isinstance(data, list):
+            return super().insert(table, data)
         columns = ", ".join(data.keys())
         placeholders = ", ".join(["%s"] * len(data))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders}) RETURNING *"

@@ -1,21 +1,37 @@
-# Tests for Tina4 Queue Backends — RabbitMQ and Kafka.
+# Tests for Tina4 Queue Backends — RabbitMQ, Kafka, and MongoDB connectors.
 """
 Tests cover:
-- Backend interface/contract verification
-- In-memory operation without external services
-- Skip markers for tests requiring actual RabbitMQ/Kafka
+- One consolidated interface/contract test (cheap rename guard) per backend family
+- REAL behavioural tests against live RabbitMQ / Kafka / MongoDB (no mocks)
+- Config-resolution tests (pure constructor state from real env/kwargs)
+
+NO MOCKS. Every test that touches a broker exercises the real service and is
+skip-guarded on reachability so the suite stays green where infra is absent.
+The earlier mock-based classes (MagicMock pika/confluent/pymongo) were deleted:
+a mock-passing queue test is exactly what let the Node Mongo redelivery bug ship
+for two releases. Their behaviour is now proven against the real dependency below.
 """
-import json
 import os
+import socket
+import secrets
+import time
+
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
 
 
 def _pymongo_available():
     try:
-        import pymongo
+        import pymongo  # noqa: F401
         return True
     except ImportError:
+        return False
+
+
+def _reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
         return False
 
 
@@ -23,60 +39,42 @@ def _pymongo_available():
 
 
 class TestQueueBackendContract:
-    """Verify that all backends implement the required interface."""
+    """One rename guard for the whole backend family.
 
-    def test_rabbitmq_backend_has_required_methods(self):
-        from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
+    The Queue facade calls a fixed method set on whatever backend is active;
+    if a connector drops one (e.g. a rename) it must fail loudly here rather
+    than at runtime against a live broker. The real BEHAVIOUR of these methods
+    is covered by the live tests further down — this is only the cheap,
+    infra-free contract check, looping the method set over every connector.
+    """
 
-        backend = RabbitMQBackend()
-        assert callable(getattr(backend, "enqueue", None))
-        assert callable(getattr(backend, "dequeue", None))
-        assert callable(getattr(backend, "acknowledge", None))
-        assert callable(getattr(backend, "reject", None))
-        assert callable(getattr(backend, "size", None))
-        assert callable(getattr(backend, "clear", None))
-        assert callable(getattr(backend, "dead_letter", None))
-        assert callable(getattr(backend, "close", None))
-        assert callable(getattr(backend, "connect", None))
-
-    def test_kafka_backend_has_required_methods(self):
-        from tina4_python.queue_backends.kafka_backend import KafkaBackend
-
-        backend = KafkaBackend()
-        assert callable(getattr(backend, "enqueue", None))
-        assert callable(getattr(backend, "dequeue", None))
-        assert callable(getattr(backend, "acknowledge", None))
-        assert callable(getattr(backend, "reject", None))
-        assert callable(getattr(backend, "size", None))
-        assert callable(getattr(backend, "clear", None))
-        assert callable(getattr(backend, "dead_letter", None))
-        assert callable(getattr(backend, "close", None))
-        assert callable(getattr(backend, "connect", None))
-
-    @pytest.mark.skipif(
-        not _pymongo_available(),
-        reason="pymongo not installed"
+    REQUIRED = (
+        "enqueue", "dequeue", "acknowledge", "reject",
+        "size", "clear", "dead_letter", "close", "connect",
     )
-    def test_mongodb_backend_has_required_methods(self):
-        from tina4_python.queue_backends.mongo_backend import MongoBackend
 
-        backend = MongoBackend()
-        assert callable(getattr(backend, "enqueue", None))
-        assert callable(getattr(backend, "dequeue", None))
-        assert callable(getattr(backend, "acknowledge", None))
-        assert callable(getattr(backend, "reject", None))
-        assert callable(getattr(backend, "size", None))
-        assert callable(getattr(backend, "clear", None))
-        assert callable(getattr(backend, "dead_letter", None))
-        assert callable(getattr(backend, "close", None))
-        assert callable(getattr(backend, "connect", None))
+    def _connector_classes(self):
+        from tina4_python.queue_backends.rabbitmq_backend import RabbitMQConnector
+        from tina4_python.queue_backends.kafka_backend import KafkaConnector
+        classes = {"rabbitmq": RabbitMQConnector, "kafka": KafkaConnector}
+        if _pymongo_available():
+            from tina4_python.queue_backends.mongo_backend import MongoConnector
+            classes["mongodb"] = MongoConnector
+        return classes
+
+    def test_every_backend_implements_the_required_interface(self):
+        for name, cls in self._connector_classes().items():
+            backend = cls()
+            for method in self.REQUIRED:
+                attr = getattr(backend, method, None)
+                assert callable(attr), f"{name} connector is missing {method}()"
 
 
-# ── RabbitMQ Backend Tests ───────────────────────────────────────
+# ── RabbitMQ Backend Config (pure constructor state) ─────────────
 
 
 class TestRabbitMQBackendConfig:
-    """Test RabbitMQ backend configuration without connecting."""
+    """Constructor resolves host/port/credentials from kwargs and env — no broker."""
 
     def test_default_config(self):
         from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
@@ -120,118 +118,40 @@ class TestRabbitMQBackendConfig:
         assert backend._password == "envpass"
         assert backend._vhost == "/env"
 
-    def test_close_without_connect(self):
+    def test_close_when_never_connected_leaves_no_connection(self):
+        # Real behaviour: close() before connect() is a safe no-op AND leaves the
+        # backend in the disconnected state (no socket/connection objects).
         from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
 
         backend = RabbitMQBackend()
-        backend.close()  # Should not raise
+        backend.close()
+        assert backend._connection is None
+        assert backend._socket is None
 
-    def test_acknowledge_without_delivery_tag(self):
+    def test_acknowledge_without_delivery_tag_is_inert(self):
+        # Real behaviour: ack with no outstanding delivery tag does nothing —
+        # the tag stays None (no broker call attempted, no state change).
         from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
 
         backend = RabbitMQBackend()
-        backend.acknowledge("test", "msg-1")  # Should not raise
-
-    def test_reject_without_delivery_tag(self):
-        from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
-
-        backend = RabbitMQBackend()
-        backend.reject("test", "msg-1")  # Should not raise
-
-
-class TestRabbitMQBackendMocked:
-    """Test RabbitMQ backend with mocked pika connection."""
-
-    def _make_backend_with_mock_pika(self):
-        from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
-
-        backend = RabbitMQBackend()
-        backend._use_pika = True
-
-        # Mock pika module
-        mock_pika = MagicMock()
-        backend._pika = mock_pika
-
-        # Mock connection and channel
-        mock_connection = MagicMock()
-        mock_connection.is_open = True
-        mock_channel = MagicMock()
-        backend._connection = mock_connection
-        backend._channel = mock_channel
-
-        return backend, mock_channel
-
-    def test_enqueue_with_pika(self):
-        backend, mock_channel = self._make_backend_with_mock_pika()
-        msg_id = backend.enqueue("emails", {"to": "alice@test.com"})
-        assert isinstance(msg_id, str)
-        mock_channel.basic_publish.assert_called_once()
-        call_kwargs = mock_channel.basic_publish.call_args
-        assert call_kwargs[1]["routing_key"] == "emails"
-
-    def test_dequeue_with_pika_returns_none_when_empty(self):
-        backend, mock_channel = self._make_backend_with_mock_pika()
-        mock_channel.basic_get.return_value = (None, None, None)
-        result = backend.dequeue("emails")
-        assert result is None
-
-    def test_dequeue_with_pika_returns_message(self):
-        backend, mock_channel = self._make_backend_with_mock_pika()
-        mock_method = MagicMock()
-        mock_method.delivery_tag = 42
-        body = json.dumps({"id": "msg-1", "to": "alice@test.com"}).encode()
-        mock_channel.basic_get.return_value = (mock_method, MagicMock(), body)
-
-        result = backend.dequeue("emails")
-        assert result is not None
-        assert result["id"] == "msg-1"
-        assert result["to"] == "alice@test.com"
-        assert backend._last_delivery_tag == 42
-
-    def test_acknowledge_with_pika(self):
-        backend, mock_channel = self._make_backend_with_mock_pika()
-        backend._last_delivery_tag = 42
-        backend.acknowledge("emails", "msg-1")
-        mock_channel.basic_ack.assert_called_once_with(delivery_tag=42)
+        assert backend._last_delivery_tag is None
+        backend.acknowledge("test", "msg-1")
         assert backend._last_delivery_tag is None
 
-    def test_reject_with_pika(self):
-        backend, mock_channel = self._make_backend_with_mock_pika()
-        backend._last_delivery_tag = 42
-        backend.reject("emails", "msg-1", requeue=False)
-        mock_channel.basic_nack.assert_called_once_with(delivery_tag=42, requeue=False)
+    def test_reject_without_delivery_tag_is_inert(self):
+        from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
 
-    def test_size_with_pika(self):
-        backend, mock_channel = self._make_backend_with_mock_pika()
-        mock_result = MagicMock()
-        mock_result.method.message_count = 15
-        mock_channel.queue_declare.return_value = mock_result
-        assert backend.size("emails") == 15
-
-    def test_clear_with_pika(self):
-        backend, mock_channel = self._make_backend_with_mock_pika()
-        backend.clear("emails")
-        mock_channel.queue_purge.assert_called_once_with(queue="emails")
-
-    def test_dead_letter_with_pika(self):
-        backend, mock_channel = self._make_backend_with_mock_pika()
-        backend.dead_letter("emails", {"id": "msg-1", "error": "failed"})
-        call_kwargs = mock_channel.basic_publish.call_args
-        assert call_kwargs[1]["routing_key"] == "emails.dead_letter"
-
-    def test_close_with_pika(self):
-        backend, _ = self._make_backend_with_mock_pika()
-        connection = backend._connection
-        backend.close()
-        connection.close.assert_called_once()
-        assert backend._connection is None
+        backend = RabbitMQBackend()
+        assert backend._last_delivery_tag is None
+        backend.reject("test", "msg-1")
+        assert backend._last_delivery_tag is None
 
 
-# ── Kafka Backend Tests ──────────────────────────────────────────
+# ── Kafka Backend Config (pure constructor state) ────────────────
 
 
 class TestKafkaBackendConfig:
-    """Test Kafka backend configuration without connecting."""
+    """Constructor resolves brokers/group/client from kwargs and env — no broker."""
 
     def test_default_config(self):
         from tina4_python.queue_backends.kafka_backend import KafkaBackend
@@ -263,98 +183,37 @@ class TestKafkaBackendConfig:
         assert backend._brokers == "kafka-host:9093"
         assert backend._group_id == "env-group"
 
-    def test_close_without_connect(self):
+    def test_close_when_never_connected_leaves_no_connection(self):
         from tina4_python.queue_backends.kafka_backend import KafkaBackend
 
         backend = KafkaBackend()
-        backend.close()  # Should not raise
+        backend.close()
+        assert backend._socket is None
 
-    def test_size_returns_zero(self):
-        """Kafka doesn't natively support queue size."""
+    def test_size_is_always_zero(self):
+        # Kafka has no queue-size concept; size() is documented to always
+        # return 0 regardless of how much has been produced. Assert the real
+        # contract value (a constant, not a mock).
         from tina4_python.queue_backends.kafka_backend import KafkaBackend
 
         backend = KafkaBackend()
-        backend._use_confluent = False
-        backend._socket = MagicMock()
-        backend._known_topics.add("test")
-        assert backend.size("test") == 0
-
-    def test_clear_is_noop(self):
-        from tina4_python.queue_backends.kafka_backend import KafkaBackend
-
-        backend = KafkaBackend()
-        backend.clear("test")  # Should not raise
+        assert backend.size("anything") == 0
 
     def test_dead_letter_topic_naming(self):
+        # dead_letter() routes to "<topic>.dead_letter". Prove the real naming
+        # by capturing the topic enqueue() is called with — no producer mock,
+        # we intercept the connector's own enqueue.
         from tina4_python.queue_backends.kafka_backend import KafkaBackend
 
         backend = KafkaBackend()
-        backend._use_confluent = True
-
-        mock_producer = MagicMock()
-        backend._producer = mock_producer
-
+        seen = {}
+        backend.enqueue = lambda topic, msg: seen.update(topic=topic, msg=msg) or "id"
         backend.dead_letter("orders", {"id": "msg-1", "error": "timeout"})
-        call_kwargs = mock_producer.produce.call_args
-        assert call_kwargs[1]["topic"] == "orders.dead_letter"
+        assert seen["topic"] == "orders.dead_letter"
+        assert seen["msg"]["error"] == "timeout"
 
 
-class TestKafkaBackendMocked:
-    """Test Kafka backend with mocked confluent-kafka."""
-
-    def _make_backend_with_mock_confluent(self):
-        from tina4_python.queue_backends.kafka_backend import KafkaBackend
-
-        backend = KafkaBackend()
-        backend._use_confluent = True
-
-        mock_producer = MagicMock()
-        mock_consumer = MagicMock()
-        backend._producer = mock_producer
-        backend._consumer = mock_consumer
-
-        return backend, mock_producer, mock_consumer
-
-    def test_enqueue_with_confluent(self):
-        backend, mock_producer, _ = self._make_backend_with_mock_confluent()
-        msg_id = backend.enqueue("events", {"type": "click"})
-        assert isinstance(msg_id, str)
-        mock_producer.produce.assert_called_once()
-        mock_producer.flush.assert_called_once()
-
-    def test_dequeue_with_confluent_returns_none(self):
-        backend, _, mock_consumer = self._make_backend_with_mock_confluent()
-        mock_consumer.poll.return_value = None
-        result = backend.dequeue("events")
-        assert result is None
-
-    def test_dequeue_with_confluent_returns_message(self):
-        backend, _, mock_consumer = self._make_backend_with_mock_confluent()
-        mock_msg = MagicMock()
-        mock_msg.error.return_value = None
-        mock_msg.value.return_value = json.dumps({"id": "msg-1", "type": "click"}).encode()
-        mock_consumer.poll.return_value = mock_msg
-
-        result = backend.dequeue("events")
-        assert result is not None
-        assert result["id"] == "msg-1"
-        assert result["type"] == "click"
-
-    def test_acknowledge_with_confluent(self):
-        backend, _, mock_consumer = self._make_backend_with_mock_confluent()
-        mock_msg = MagicMock()
-        backend._last_message = mock_msg
-        backend.acknowledge("events", "msg-1")
-        mock_consumer.commit.assert_called_once_with(message=mock_msg)
-
-    def test_close_with_confluent(self):
-        backend, mock_producer, mock_consumer = self._make_backend_with_mock_confluent()
-        backend.close()
-        mock_producer.flush.assert_called_once()
-        mock_consumer.close.assert_called_once()
-
-
-# ── MongoDB Backend Tests ────────────────────────────────────────
+# ── MongoDB Backend Config (pure constructor state) ──────────────
 
 
 _skip_no_pymongo = pytest.mark.skipif(
@@ -365,7 +224,7 @@ _skip_no_pymongo = pytest.mark.skipif(
 
 @_skip_no_pymongo
 class TestMongoDBBackendConfig:
-    """Test MongoDB backend configuration without connecting."""
+    """Constructor resolves host/port/db/collection from kwargs and env — no broker."""
 
     def test_default_config(self):
         from tina4_python.queue_backends.mongo_backend import MongoBackend
@@ -404,205 +263,467 @@ class TestMongoDBBackendConfig:
         assert backend._db_name == "customdb"
         assert backend._collection_name == "custom_queue"
 
-    def test_close_without_connect(self):
+    def test_close_when_never_connected_leaves_no_client(self):
         from tina4_python.queue_backends.mongo_backend import MongoBackend
 
         backend = MongoBackend()
-        backend.close()  # Should not raise
-
-
-@_skip_no_pymongo
-class TestMongoDBBackendMocked:
-    """Test MongoDB backend with mocked pymongo client."""
-
-    def _make_backend_with_mock(self):
-        from tina4_python.queue_backends.mongo_backend import MongoBackend
-
-        backend = MongoBackend()
-        mock_collection = MagicMock()
-        backend._collection = mock_collection
-        backend._client = MagicMock()
-        backend._db = MagicMock()
-        return backend, mock_collection
-
-    def test_enqueue_inserts_document(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        msg_id = backend.enqueue("emails", {"to": "alice@test.com"})
-        assert isinstance(msg_id, str)
-        mock_collection.insert_one.assert_called_once()
-        doc = mock_collection.insert_one.call_args[0][0]
-        assert doc["topic"] == "emails"
-        assert doc["status"] == "pending"
-
-    def test_dequeue_returns_none_when_empty(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        mock_collection.find_one_and_update.return_value = None
-        result = backend.dequeue("emails")
-        assert result is None
-
-    def test_dequeue_returns_message(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        mock_collection.find_one_and_update.return_value = {
-            "_id": "msg-1",
-            "data": {"to": "alice@test.com"},
-            "topic": "emails",
-            "status": "reserved",
-        }
-        result = backend.dequeue("emails")
-        assert result is not None
-        assert result["id"] == "msg-1"
-        assert result["to"] == "alice@test.com"
-
-    def test_dequeue_advances_available_at_and_records_reserved_at(self):
-        # Regression: the visibility-timeout fix. dequeue must push available_at
-        # into the future (now + visibility_timeout) and stamp reserved_at, so a
-        # reserved message can later be reclaimed if its consumer dies.
-        backend, mock_collection = self._make_backend_with_mock()
-        backend._visibility_timeout = 300.0
-        mock_collection.find_one_and_update.return_value = {
-            "_id": "msg-1", "data": {"x": 1}, "topic": "emails", "status": "reserved",
-        }
-        backend.dequeue("emails")
-        update = mock_collection.find_one_and_update.call_args[0][1]
-        assert update["$set"]["status"] == "reserved"
-        assert "reserved_at" in update["$set"]
-        # available_at is set to a real future timestamp (not left unchanged).
-        assert "available_at" in update["$set"]
-        assert update["$set"]["available_at"] > update["$set"]["reserved_at"]
-
-    def test_reclaim_expired_requeues_under_limit(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        backend._visibility_timeout = 300.0
-        # One expired reservation (attempts after inc = 1, below max 3), then none.
-        mock_collection.find_one_and_update.side_effect = [
-            {"_id": "msg-1", "data": {"x": 1}, "topic": "emails", "attempts": 1},
-            None,
-        ]
-        count = backend.reclaim_expired("emails", max_retries=3)
-        assert count == 1
-        # The reclaim flips reserved -> pending and increments attempts.
-        first_update = mock_collection.find_one_and_update.call_args_list[0][0][1]
-        assert first_update["$set"]["status"] == "pending"
-        assert first_update["$inc"]["attempts"] == 1
-        # Under the limit: not dead-lettered, not deleted.
-        mock_collection.insert_one.assert_not_called()
-        mock_collection.delete_one.assert_not_called()
-
-    def test_reclaim_expired_dead_letters_past_max_retries(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        backend._visibility_timeout = 300.0
-        # The reclaimed doc's attempts (after inc) has hit the limit -> dead-letter.
-        mock_collection.find_one_and_update.side_effect = [
-            {"_id": "msg-1", "data": {"x": 1}, "topic": "emails", "attempts": 3},
-            None,
-        ]
-        count = backend.reclaim_expired("emails", max_retries=3)
-        assert count == 1
-        mock_collection.insert_one.assert_called_once()      # moved to dead-letter
-        dl = mock_collection.insert_one.call_args[0][0]
-        assert dl["topic"] == "emails.dead_letter"
-        mock_collection.delete_one.assert_called_once()      # original removed
-
-    def test_reclaim_disabled_when_timeout_zero(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        backend._visibility_timeout = 0
-        assert backend.reclaim_expired("emails", max_retries=3) == 0
-        mock_collection.find_one_and_update.assert_not_called()
+        backend.close()
+        assert backend._client is None
 
     def test_visibility_timeout_from_env(self, monkeypatch):
         from tina4_python.queue_backends.mongo_backend import MongoBackend
+
         monkeypatch.setenv("TINA4_QUEUE_VISIBILITY_TIMEOUT", "45")
         assert MongoBackend()._visibility_timeout == 45.0
 
-    def test_acknowledge_updates_status(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        backend.acknowledge("emails", "msg-1")
-        mock_collection.update_one.assert_called_once()
-        call_args = mock_collection.update_one.call_args[0]
-        assert call_args[0] == {"_id": "msg-1", "topic": "emails"}
-        assert call_args[1]["$set"]["status"] == "completed"
 
-    def test_reject_requeues(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        backend.reject("emails", "msg-1", requeue=True)
-        mock_collection.update_one.assert_called_once()
-        call_args = mock_collection.update_one.call_args[0]
-        assert call_args[1]["$set"]["status"] == "pending"
+# ── Live MongoDB Connector Behaviour (real Mongo, no mocks) ──────
 
-    def test_reject_fails(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        backend.reject("emails", "msg-1", requeue=False)
-        mock_collection.update_one.assert_called_once()
-        call_args = mock_collection.update_one.call_args[0]
-        assert call_args[1]["$set"]["status"] == "failed"
 
-    def test_dequeue_surfaces_live_document_attempts(self):
-        # Bug C regression: the consumer must see the LIVE top-level attempts
-        # (incremented by reclaim/reject), not the push-time snapshot inside
-        # ``data``. Without this, fail()'s attempts>=max_retries check never
-        # tripped and a job could be retried forever instead of dead-lettering.
-        backend, mock_collection = self._make_backend_with_mock()
-        mock_collection.find_one_and_update.return_value = {
-            "_id": "msg-1", "data": {"x": 1, "attempts": 0}, "topic": "emails",
-            "attempts": 2, "priority": 7, "status": "reserved",
-        }
-        result = backend.dequeue("emails")
-        assert result["attempts"] == 2   # live doc-level, not data.attempts (0)
-        assert result["priority"] == 7
+_MONGO_TEST_URL = os.environ.get("TINA4_TEST_MONGO_URL", "mongodb://localhost:27017")
 
-    def test_reject_requeue_resets_available_at(self):
-        # Bug B regression: a requeued job must become visible again (available_at
-        # reset to now + reserved_at cleared), not stay stranded at the
-        # reservation expiry that dequeue() pushed into the future.
-        backend, mock_collection = self._make_backend_with_mock()
-        backend._retry_backoff = 0
-        backend.reject("emails", "msg-1", requeue=True)
-        update = mock_collection.update_one.call_args[0][1]
-        assert update["$set"]["status"] == "pending"
-        assert "available_at" in update["$set"]
-        assert update["$set"]["reserved_at"] is None
-        assert update["$inc"]["attempts"] == 1
 
-    def test_reject_requeue_honors_retry_backoff(self):
-        from tina4_python.queue_backends.mongo_backend import _now
-        backend, mock_collection = self._make_backend_with_mock()
-        backend._retry_backoff = 60
-        backend.reject("emails", "msg-1", requeue=True)
-        update = mock_collection.update_one.call_args[0][1]
-        # available_at pushed ~60s into the future by the backoff.
-        assert update["$set"]["available_at"] > _now()
+def _mongo_reachable() -> bool:
+    import re
+    m = re.match(r"mongodb://([^:/]+)(?::(\d+))?", _MONGO_TEST_URL)
+    host = m.group(1) if m else "localhost"
+    port = int(m.group(2)) if (m and m.group(2)) else 27017
+    return _reachable(host, port)
 
-    def test_size(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        mock_collection.count_documents.return_value = 5
-        assert backend.size("emails") == 5
-        mock_collection.count_documents.assert_called_once_with(
-            {"topic": "emails", "status": "pending"}
+
+@pytest.mark.skipif(not _pymongo_available(), reason="pymongo not installed")
+@pytest.mark.skipif(not _mongo_reachable(), reason="MongoDB not reachable")
+class TestMongoConnectorLive:
+    """Exercise the MongoConnector directly against a LIVE MongoDB.
+
+    Replaces the deleted TestMongoDBBackendMocked (which wired a MagicMock
+    collection onto the connector — forbidden by the no-mock rule and the reason
+    real queue bugs slipped through). Each test uses a throwaway namespaced
+    database that is dropped on teardown, so application data is never touched.
+    """
+
+    DB_NAME = "tina4_test_queue_connector"
+    COLLECTION = "tina4_test_queue_connector_jobs"
+
+    @pytest.fixture()
+    def backend(self):
+        from tina4_python.queue_backends.mongo_backend import MongoConnector
+        b = MongoConnector(
+            uri=_MONGO_TEST_URL,
+            db=self.DB_NAME,
+            collection=self.COLLECTION,
+            visibility_timeout=300.0,
         )
+        b.connect()
+        yield b
+        try:
+            b._client.drop_database(self.DB_NAME)
+        finally:
+            b.close()
 
-    def test_clear(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        backend.clear("emails")
-        mock_collection.delete_many.assert_called_once_with({"topic": "emails"})
+    def _topic(self):
+        return "conn_" + secrets.token_hex(6)
 
-    def test_dead_letter(self):
-        backend, mock_collection = self._make_backend_with_mock()
-        backend.dead_letter("emails", {"id": "msg-1", "error": "failed"})
-        mock_collection.insert_one.assert_called_once()
-        doc = mock_collection.insert_one.call_args[0][0]
-        assert doc["topic"] == "emails.dead_letter"
-        assert doc["status"] == "dead"
+    def test_enqueue_then_size_counts_pending(self, backend):
+        topic = self._topic()
+        assert backend.size(topic) == 0
+        mid = backend.enqueue(topic, {"to": "alice@test.com"})
+        assert isinstance(mid, str) and mid
+        assert backend.size(topic) == 1
+        # The stored document is real: pending, on the right topic.
+        doc = backend._collection.find_one({"_id": mid})
+        assert doc["topic"] == topic
+        assert doc["status"] == "pending"
 
-    def test_close(self):
-        backend, _ = self._make_backend_with_mock()
-        client = backend._client
-        backend.close()
-        client.close.assert_called_once()
-        assert backend._client is None
+    def test_dequeue_returns_payload_and_reserves(self, backend):
+        topic = self._topic()
+        mid = backend.enqueue(topic, {"to": "alice@test.com", "priority": 7})
+        msg = backend.dequeue(topic)
+        assert msg["id"] == mid
+        assert msg["to"] == "alice@test.com"
+        # Live document-level priority surfaces (not the data snapshot).
+        assert msg["priority"] == 7
+        # Reserved, so no longer counted as pending.
+        assert backend.size(topic) == 0
+        assert backend._collection.find_one({"_id": mid})["status"] == "reserved"
+
+    def test_dequeue_empty_topic_returns_none(self, backend):
+        assert backend.dequeue(self._topic()) is None
+
+    def test_priority_ordering_pops_highest_first(self, backend):
+        topic = self._topic()
+        backend.enqueue(topic, {"n": "low", "priority": 1})
+        backend.enqueue(topic, {"n": "high", "priority": 9})
+        backend.enqueue(topic, {"n": "mid", "priority": 5})
+        order = [backend.dequeue(topic)["n"] for _ in range(3)]
+        assert order == ["high", "mid", "low"]
+
+    def test_acknowledge_marks_completed(self, backend):
+        topic = self._topic()
+        mid = backend.enqueue(topic, {"x": 1})
+        backend.dequeue(topic)
+        backend.acknowledge(topic, mid)
+        doc = backend._collection.find_one({"_id": mid})
+        assert doc["status"] == "completed"
+        assert doc["completed_at"] is not None
+
+    def test_reject_requeue_makes_visible_again(self, backend):
+        topic = self._topic()
+        mid = backend.enqueue(topic, {"x": 1})
+        backend.dequeue(topic)
+        assert backend.size(topic) == 0          # reserved
+        backend.reject(topic, mid, requeue=True)
+        assert backend.size(topic) == 1          # back to pending immediately
+        doc = backend._collection.find_one({"_id": mid})
+        assert doc["status"] == "pending"
+        assert doc["attempts"] == 1              # attempt counted
+
+    def test_reject_no_requeue_marks_failed(self, backend):
+        topic = self._topic()
+        mid = backend.enqueue(topic, {"x": 1})
+        backend.dequeue(topic)
+        backend.reject(topic, mid, requeue=False)
+        assert backend._collection.find_one({"_id": mid})["status"] == "failed"
+        assert backend.size(topic) == 0
+
+    def test_dead_letter_writes_to_dead_letter_topic(self, backend):
+        topic = self._topic()
+        backend.dead_letter(topic, {"id": "m1", "error": "failed"})
+        dead = backend._collection.find_one({"topic": f"{topic}.dead_letter"})
+        assert dead is not None
+        assert dead["status"] == "dead"
+        assert dead["error"] == "failed"
+
+    def test_clear_removes_all_topic_documents(self, backend):
+        topic = self._topic()
+        backend.enqueue(topic, {"x": 1})
+        backend.enqueue(topic, {"x": 2})
+        assert backend.size(topic) == 2
+        backend.clear(topic)
+        assert backend.size(topic) == 0
+        assert backend._collection.count_documents({"topic": topic}) == 0
+
+    def test_reclaim_expired_requeues_dead_consumers_reservation(self):
+        # Visibility-timeout reclaim against real Mongo: a reservation whose
+        # consumer died (never acked) becomes visible again after the window,
+        # with attempts incremented. Short timeout so the test is fast.
+        from tina4_python.queue_backends.mongo_backend import MongoConnector
+        b = MongoConnector(
+            uri=_MONGO_TEST_URL, db=self.DB_NAME, collection=self.COLLECTION,
+            visibility_timeout=1.0,
+        )
+        b.connect()
+        topic = self._topic()
+        try:
+            b.enqueue(topic, {"x": 1})
+            b.dequeue(topic)                 # reserve; consumer then "dies"
+            assert b.size(topic) == 0
+            time.sleep(1.3)                  # let the reservation window expire
+            reclaimed = b.reclaim_expired(topic, max_retries=3)
+            assert reclaimed == 1
+            assert b.size(topic) == 1        # requeued -> pending
+            doc = b._collection.find_one({"topic": topic, "status": "pending"})
+            assert doc["attempts"] == 1
+        finally:
+            b._client.drop_database(self.DB_NAME)
+            b.close()
+
+    def test_reclaim_dead_letters_past_max_retries(self):
+        from tina4_python.queue_backends.mongo_backend import MongoConnector
+        b = MongoConnector(
+            uri=_MONGO_TEST_URL, db=self.DB_NAME, collection=self.COLLECTION,
+            visibility_timeout=1.0,
+        )
+        b.connect()
+        topic = self._topic()
+        try:
+            b.enqueue(topic, {"x": 1})
+            # Drive it past max_retries=1: dequeue, let it expire, reclaim ->
+            # attempts hits 1 -> dead-lettered, original removed.
+            b.dequeue(topic)
+            time.sleep(1.3)
+            b.reclaim_expired(topic, max_retries=1)
+            assert b._collection.count_documents({"topic": f"{topic}.dead_letter"}) == 1
+            assert b.size(topic) == 0
+            assert b._collection.count_documents({"topic": topic}) == 0
+        finally:
+            b._client.drop_database(self.DB_NAME)
+            b.close()
+
+    def test_reclaim_disabled_when_timeout_zero(self):
+        from tina4_python.queue_backends.mongo_backend import MongoConnector
+        b = MongoConnector(
+            uri=_MONGO_TEST_URL, db=self.DB_NAME, collection=self.COLLECTION,
+            visibility_timeout=0,
+        )
+        b.connect()
+        topic = self._topic()
+        try:
+            b.enqueue(topic, {"x": 1})
+            b.dequeue(topic)
+            assert b.reclaim_expired(topic, max_retries=3) == 0
+        finally:
+            b._client.drop_database(self.DB_NAME)
+            b.close()
+
+    def test_close_resets_client(self):
+        from tina4_python.queue_backends.mongo_backend import MongoConnector
+        b = MongoConnector(
+            uri=_MONGO_TEST_URL, db=self.DB_NAME, collection=self.COLLECTION,
+        )
+        b.connect()
+        assert b._client is not None
+        b.close()
+        assert b._client is None
+        assert b._collection is None
+
+
+# ── Live RabbitMQ Connector Behaviour (real broker via pika, no mocks) ──
+
+
+_RABBIT_HOST = os.environ.get("TINA4_RABBITMQ_HOST", "localhost")
+_RABBIT_PORT = int(os.environ.get("TINA4_RABBITMQ_PORT", "5672"))
+
+
+def _pika_available():
+    try:
+        import pika  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.mark.skipif(not _pika_available(), reason="pika not installed")
+@pytest.mark.skipif(
+    not _reachable(_RABBIT_HOST, _RABBIT_PORT),
+    reason="RabbitMQ not reachable",
+)
+class TestRabbitMQConnectorLive:
+    """Exercise the RabbitMQConnector over the real broker via pika (no mocks).
+
+    Replaces the deleted TestRabbitMQBackendMocked (MagicMock pika channel).
+    Producer and reader use SEPARATE connector instances (separate connections):
+    RabbitMQ's queue_declare message_count does not reflect a message still
+    in flight on the *publishing* channel right after basic_publish, so a
+    same-connection size() check would race — the at-least-once contract is
+    verified across connections, the way a real producer/worker split runs.
+    """
+
+    def _connector(self):
+        from tina4_python.queue_backends.rabbitmq_backend import RabbitMQConnector
+        b = RabbitMQConnector(host=_RABBIT_HOST, port=_RABBIT_PORT)
+        assert b._use_pika is True   # this class targets the pika path
+        b.connect()
+        return b
+
+    def test_size_on_fresh_queue_is_zero(self):
+        # Regression: size() on a never-declared queue used to raise
+        # ChannelClosedByBroker (404) on the pika path because it declared
+        # passive=True. It must return 0 (declare-then-count, like the raw path).
+        topic = "tina4_test_" + secrets.token_hex(8)
+        b = self._connector()
+        try:
+            assert b.size(topic) == 0
+        finally:
+            b.clear(topic)
+            b.close()
+
+    def test_full_enqueue_dequeue_acknowledge_cycle(self):
+        topic = "tina4_test_" + secrets.token_hex(8)
+
+        producer = self._connector()
+        try:
+            assert producer.size(topic) == 0
+            msg_id = producer.enqueue(topic, {"to": "alice@test.com", "value": 7})
+            assert isinstance(msg_id, str) and msg_id
+        finally:
+            producer.close()
+
+        reader = self._connector()
+        try:
+            assert reader.size(topic) == 1                 # separate connection sees it
+            msg = reader.dequeue(topic)
+            assert msg["to"] == "alice@test.com"
+            assert msg["value"] == 7
+            assert msg["id"] == msg_id
+            assert reader._last_delivery_tag is not None   # delivery tag captured
+            reader.acknowledge(topic, msg_id)
+            assert reader._last_delivery_tag is None        # cleared after ack
+        finally:
+            reader.close()
+
+        verifier = self._connector()
+        try:
+            assert verifier.size(topic) == 0               # acked -> empty
+            verifier.clear(topic)
+        finally:
+            verifier.close()
+
+    def test_reject_requeue_returns_message_to_queue(self):
+        topic = "tina4_test_" + secrets.token_hex(8)
+
+        producer = self._connector()
+        try:
+            producer.enqueue(topic, {"task": "retry-me"})
+        finally:
+            producer.close()
+
+        rejecter = self._connector()
+        try:
+            msg = rejecter.dequeue(topic)
+            assert msg["task"] == "retry-me"
+            rejecter.reject(topic, msg["id"], requeue=True)   # nack + requeue
+        finally:
+            rejecter.close()
+
+        reader = self._connector()
+        try:
+            assert reader.size(topic) == 1                    # requeued, redelivered
+            again = reader.dequeue(topic)
+            assert again["task"] == "retry-me"
+            reader.acknowledge(topic, again["id"])
+            reader.clear(topic)
+        finally:
+            reader.close()
+
+    def test_dead_letter_publishes_to_dead_letter_queue(self):
+        topic = "tina4_test_" + secrets.token_hex(8)
+        producer = self._connector()
+        try:
+            producer.dead_letter(topic, {"id": "d1", "error": "boom"})
+        finally:
+            producer.close()
+
+        reader = self._connector()
+        try:
+            assert reader.size(f"{topic}.dead_letter") == 1
+            dead = reader.dequeue(f"{topic}.dead_letter")
+            assert dead["error"] == "boom"
+            reader.acknowledge(f"{topic}.dead_letter", "d1")
+            reader.clear(f"{topic}.dead_letter")
+        finally:
+            reader.close()
+
+    def test_clear_purges_pending_messages(self):
+        topic = "tina4_test_" + secrets.token_hex(8)
+        producer = self._connector()
+        try:
+            producer.enqueue(topic, {"x": 1})
+            producer.enqueue(topic, {"x": 2})
+        finally:
+            producer.close()
+
+        cleaner = self._connector()
+        try:
+            assert cleaner.size(topic) == 2
+            cleaner.clear(topic)
+            assert cleaner.size(topic) == 0
+        finally:
+            cleaner.close()
+
+    def test_close_resets_connection(self):
+        b = self._connector()
+        assert b._connection is not None
+        b.close()
+        assert b._connection is None
+        assert b._channel is None
+
+
+# ── Live Kafka Connector Behaviour (real broker via confluent, no mocks) ──
+
+
+def _confluent_available():
+    try:
+        import confluent_kafka  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+_KAFKA_BROKER = os.environ.get("TINA4_KAFKA_BROKERS", "localhost:9092")
+
+
+def _kafka_reachable() -> bool:
+    first = _KAFKA_BROKER.split(",")[0]
+    host, _, port = first.partition(":")
+    return _reachable(host or "localhost", int(port or "9092"))
+
+
+@pytest.mark.skipif(not _confluent_available(), reason="confluent-kafka not installed")
+@pytest.mark.skipif(not _kafka_reachable(), reason="Kafka not reachable")
+class TestKafkaConnectorLive:
+    """Exercise the KafkaConnector over the real broker via confluent (no mocks).
+
+    Replaces the deleted TestKafkaBackendMocked (MagicMock producer/consumer).
+    Each test uses a unique topic and a unique consumer group so the
+    earliest-offset read is deterministic and cold-broker partition assignment
+    (the bounded first-poll loop) is exercised for real.
+    """
+
+    def _connector(self):
+        from tina4_python.queue_backends.kafka_backend import KafkaConnector
+        b = KafkaConnector(
+            brokers=_KAFKA_BROKER,
+            group_id="tina4_test_" + secrets.token_hex(8),
+        )
+        assert b._use_confluent is True   # this class targets the confluent path
+        b.connect()
+        return b
+
+    def test_enqueue_dequeue_roundtrip(self):
+        topic = "tina4_test_" + secrets.token_hex(8)
+        producer = self._connector()
+        try:
+            msg_id = producer.enqueue(topic, {"type": "click", "value": 42})
+            assert isinstance(msg_id, str) and msg_id
+        finally:
+            producer.close()
+
+        consumer = self._connector()
+        try:
+            msg = consumer.dequeue(topic)   # first poll drives group join/assignment
+            assert msg is not None, "expected the produced message back from Kafka"
+            assert msg["type"] == "click"
+            assert msg["value"] == 42
+            assert msg["id"] == msg_id
+            consumer.acknowledge(topic, msg_id)   # commits the offset
+            assert consumer._last_message is None  # cleared after commit
+        finally:
+            consumer.close()
+
+    def test_dequeue_unknown_topic_returns_none(self):
+        # A topic that has never been produced to yields no message within the
+        # assignment deadline (kept short here so the test stays fast).
+        consumer = self._connector()
+        try:
+            os.environ["TINA4_KAFKA_ASSIGN_TIMEOUT"] = "3"
+            assert consumer.dequeue("tina4_test_empty_" + secrets.token_hex(8)) is None
+        finally:
+            os.environ.pop("TINA4_KAFKA_ASSIGN_TIMEOUT", None)
+            consumer.close()
+
+    def test_dead_letter_round_trips_through_dead_letter_topic(self):
+        topic = "tina4_test_" + secrets.token_hex(8)
+        producer = self._connector()
+        try:
+            producer.dead_letter(topic, {"id": "d1", "error": "timeout"})
+        finally:
+            producer.close()
+
+        consumer = self._connector()
+        try:
+            msg = consumer.dequeue(f"{topic}.dead_letter")
+            assert msg is not None
+            assert msg["error"] == "timeout"
+        finally:
+            consumer.close()
+
+
+# ── Backend Resolution ───────────────────────────────────────────
 
 
 class TestResolveBackend:
-    """Test _resolve_backend returns the correct adapter for mongodb."""
+    """_resolve_backend returns the correct adapter for mongodb."""
 
     @_skip_no_pymongo
     def test_resolve_backend_mongodb(self, monkeypatch):
@@ -741,49 +862,85 @@ class TestKafkaSecurityConfig:
         assert cfg == {"sasl.mechanism": "PLAIN", "sasl.username": "user", "sasl.password": "secret"}
 
 
+_MONGO_TEST_URL_FACADE = os.environ.get("TINA4_TEST_MONGO_URL", "mongodb://localhost:27017")
+
+
 @pytest.mark.skipif(not _pymongo_available(), reason="pymongo not installed")
-class TestMongoQueueAdapterContract:
-    """The queue adapter (tina4_python.queue.mongo_backend.MongoBackend) must
-    match the LiteBackend method contract. Queue.dead_letters()/retry_failed()
-    pass max_retries as a kwarg — without it the call raised TypeError on
-    MongoDB (Bug D), so dead-letter inspection and retry were unusable there.
+@pytest.mark.skipif(not _mongo_reachable(), reason="MongoDB not reachable for the live queue dead-letter test")
+class TestMongoQueueDeadLetterLive:
+    """Dead-letter + retry_failed end-to-end through the Queue facade against a
+    LIVE MongoDB (no mocks).
+
+    This replaces an earlier contract test that wired a MagicMock collection onto
+    the adapter -- a test double standing in for the real dependency, which the
+    project's no-mock rule forbids and which never exercised real Mongo (the kind
+    of gap that let the queue bugs ship). The kwarg contract is now locked
+    mock-free by TestQueueAdapterSignatureContract; THIS test proves the actual
+    behaviour against a real broker. It uses a throwaway, namespaced
+    tina4_test_* database and drops it on teardown, so it never touches
+    application data.
     """
 
-    def _adapter_with_mock(self, max_retries=3):
-        from tina4_python.queue.mongo_backend import MongoBackend as MongoAdapter
-        from unittest.mock import MagicMock
-        adapter = MongoAdapter("emails", max_retries=max_retries)
-        mock_collection = MagicMock()
-        adapter._backend._collection = mock_collection
-        adapter._backend._client = MagicMock()
-        adapter._backend._db = MagicMock()
-        return adapter, mock_collection
+    TOPIC = "tina4_test_dead_letter"
+    DB_NAME = "tina4_test_queue"
+    COLLECTION = "tina4_test_queue_jobs"
 
-    def test_dead_letters_accepts_max_retries_kwarg(self):
-        adapter, mock_collection = self._adapter_with_mock()
-        mock_collection.find.return_value = []
-        assert adapter.dead_letters(max_retries=3) == []   # must not raise TypeError
-
-    def test_retry_failed_accepts_max_retries_and_resets_available_at(self):
-        from unittest.mock import MagicMock
-        adapter, mock_collection = self._adapter_with_mock()
-        mock_collection.update_many.return_value = MagicMock(modified_count=2)
-        assert adapter.retry_failed(max_retries=5) == 2    # must not raise TypeError
-        flt, upd = mock_collection.update_many.call_args[0]
-        assert flt["attempts"] == {"$lt": 5}               # honored the passed limit
-        assert upd["$set"]["status"] == "pending"
-        assert "available_at" in upd["$set"]               # requeued jobs visible again
-
-    def test_queue_dead_letters_does_not_raise_on_mongo(self):
-        # End-to-end via the Queue facade (the path that actually broke).
+    @pytest.fixture()
+    def queue(self, monkeypatch):
         from tina4_python.queue import Queue
-        from unittest.mock import MagicMock
-        q = Queue(topic="emails", backend="mongodb")
-        q._backend._backend._collection = MagicMock()
-        q._backend._backend._collection.find.return_value = []
-        q._backend._backend._client = MagicMock()
-        q._backend._backend._db = MagicMock()
-        assert q.dead_letters() == []                      # was TypeError
+        # Point the Mongo queue backend at a throwaway, namespaced database.
+        monkeypatch.setenv("TINA4_MONGO_URI", _MONGO_TEST_URL_FACADE)
+        monkeypatch.setenv("TINA4_MONGO_DB", self.DB_NAME)
+        monkeypatch.setenv("TINA4_MONGO_COLLECTION", self.COLLECTION)
+        monkeypatch.delenv("TINA4_QUEUE_URL", raising=False)
+        q = Queue(topic=self.TOPIC, backend="mongodb", max_retries=2)
+        backend = q._backend._backend
+        backend._ensure_connected()
+        coll = backend._collection
+        # Pristine slate, even if a prior run left state behind.
+        coll.delete_many({"topic": self.TOPIC})
+        coll.delete_many({"topic": f"{self.TOPIC}.dead_letter"})
+        yield q
+        coll.delete_many({"topic": self.TOPIC})
+        coll.delete_many({"topic": f"{self.TOPIC}.dead_letter"})
+        try:
+            backend._client.drop_database(self.DB_NAME)
+        except Exception:
+            pass
+
+    def test_fail_past_max_retries_lands_in_dead_letters(self, queue):
+        """push -> pop+fail until attempts hit max_retries (2) -> the job moves to
+        the dead-letter store and is gone from pending. Real Mongo, no mocks."""
+        queue.push({"to": "a@example.com"})
+        for _ in range(5):                      # bounded; converges in 2 cycles
+            job = queue.pop()
+            if job is None:
+                break
+            job.fail("smtp 550")
+            if queue.dead_letters():
+                break
+        dead = queue.dead_letters()
+        assert len(dead) == 1
+        assert dead[0].error == "smtp 550"      # failure reason survives to the DLQ
+        assert queue.size("pending") == 0       # original no longer pending
+
+    def test_retry_failed_requeues_failed_jobs(self, queue):
+        """retry_failed() flips status=failed docs (attempts < max_retries) back to
+        pending against a real collection. The auto-retry fail() path never leaves
+        a job in "failed" (it re-queues or dead-letters), so seed one real failed
+        document directly in the live collection -- real data, not a mock -- to
+        exercise the real update_many."""
+        coll = queue._backend._backend._collection
+        coll.insert_one({
+            "_id": "tina4-test-failed-1", "topic": self.TOPIC, "status": "failed",
+            "attempts": 1, "payload": {"x": 1}, "error": "boom",
+            "available_at": "1970-01-01T00:00:00+00:00",
+        })
+        n = queue.retry_failed(max_retries=3)
+        assert n == 1
+        doc = coll.find_one({"_id": "tina4-test-failed-1"})
+        assert doc["status"] == "pending"       # requeued
+        assert doc["error"] is None             # cleared on requeue
 
 
 class TestQueueAdapterSignatureContract:
@@ -846,12 +1003,7 @@ def _parse_amqp_url(url):
 
 
 def _rabbitmq_reachable(host, port):
-    import socket
-    try:
-        with socket.create_connection((host, port), timeout=1.5):
-            return True
-    except OSError:
-        return False
+    return _reachable(host, port)
 
 
 _RABBIT_URL = os.environ.get("TINA4_TEST_RABBITMQ_URL", "")
@@ -885,7 +1037,6 @@ class TestRabbitMQLiveRawHandshake:
         return backend
 
     def test_raw_full_lifecycle(self):
-        import secrets
         topic = "tina4_test_" + secrets.token_hex(8)
 
         backend = self._raw_backend()

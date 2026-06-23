@@ -73,14 +73,27 @@ class AuditLog(ORM):
 
 class TestMultiDatabase:
     def test_default_db(self, db):
+        # Saving against the default-bound DB must INSERT into that DB and the
+        # row must round-trip back with exactly the data we wrote.
         user = User({"name": "Alice", "email": "a@b.com"})
-        user.save()
+        saved = user.save()
+        assert saved is user  # save() returns self on success (fluent)
         assert user.id is not None
 
+        row = db.fetch_one("SELECT name, email, role FROM users WHERE id = ?", [user.id])
+        assert row == {"name": "Alice", "email": "a@b.com", "role": "user"}  # role defaulted
+
     def test_named_db(self, db, db2):
+        # A model bound via _db = "audit" must write to the AUDIT connection,
+        # not the default one. Assert the row lands in db2 and NOT in db.
         log = AuditLog({"action": "login", "user_id": 1})
         log.save()
         assert log.id is not None
+
+        audit_row = db2.fetch_one("SELECT action, user_id FROM audit_logs WHERE id = ?", [log.id])
+        assert audit_row == {"action": "login", "user_id": 1}
+        # The audit table does not even exist on the default DB — proves routing.
+        assert not db.table_exists("audit_logs")
 
     def test_named_db_find(self, db, db2):
         log = AuditLog({"action": "logout", "user_id": 2})
@@ -171,48 +184,126 @@ class TestEnhancedValidation:
 # ── Result Caching Tests ─────────────────────────────────────
 
 class TestResultCaching:
-    def test_cached_query(self, db):
+    def test_cached_query_returns_same_object(self, db):
+        # First call MISSES (runs the query and stores); second call HITS and
+        # returns the *identical* cached list object — not a re-query.
+        User.clear_cache()
         db.insert("users", {"name": "Alice", "email": "a@b.com", "role": "user"})
         db.commit()
 
-        result1 = User.cached(f"SELECT * FROM users", ttl=60)
-        result2 = User.cached(f"SELECT * FROM users", ttl=60)
-        assert result1[0].name == result2[0].name
+        result1 = User.cached("SELECT * FROM users", ttl=60)
+        result2 = User.cached("SELECT * FROM users", ttl=60)
+        assert [u.name for u in result1] == ["Alice"]
+        assert result2 is result1  # second call is a true cache hit, same object
 
-    def test_clear_cache(self, db):
-        db.insert("users", {"name": "Bob", "email": "b@b.com", "role": "user"})
+    def test_cached_query_serves_stale_until_cleared(self, db):
+        # Prove the cache really shields the second read from a concurrent
+        # write: after caching, an out-of-band INSERT must NOT appear until the
+        # tag is cleared.
+        User.clear_cache()
+        db.insert("users", {"name": "Alice", "email": "a@b.com", "role": "user"})
         db.commit()
 
-        User.cached(f"SELECT * FROM users", ttl=60)
-        assert _query_cache.size() > 0
+        first = User.cached("SELECT * FROM users", ttl=300)
+        assert len(first) == 1
+
+        # Write directly to the DB, bypassing the ORM (no auto-invalidation).
+        db.insert("users", {"name": "Mallory", "email": "m@b.com", "role": "user"})
+        db.commit()
+
+        # Cache still hides the new row.
+        cached_again = User.cached("SELECT * FROM users", ttl=300)
+        assert [u.name for u in cached_again] == ["Alice"]
+
+        # After an explicit clear, the fresh row appears.
         User.clear_cache()
-        # Tag-based clear removes entries for this model
+        fresh = User.cached("SELECT * FROM users", ttl=300)
+        assert sorted(u.name for u in fresh) == ["Alice", "Mallory"]
+
+    def test_clear_cache_removes_only_this_models_tag(self, db, db2):
+        # clear_cache() is tag-scoped: it must drop User's cached entries while
+        # leaving an unrelated model's cache intact.
+        User.clear_cache()
+        AuditLog.clear_cache()
+        db.insert("users", {"name": "Bob", "email": "b@b.com", "role": "user"})
+        db.commit()
+        db2.insert("audit_logs", {"action": "login", "user_id": 1})
+        db2.commit()
+
+        User.cached("SELECT * FROM users", ttl=60)
+        AuditLog.cached("SELECT * FROM audit_logs", ttl=60)
+        size_with_both = _query_cache.size()
+        assert size_with_both >= 2
+
+        User.clear_cache()
+        # User's tag gone, AuditLog's remains.
+        assert _query_cache.size() == size_with_both - 1
+        assert AuditLog.cached("SELECT * FROM audit_logs", ttl=60)  # still a hit
 
     def test_save_invalidates_cache(self, db):
+        # ORM.save() must auto-invalidate this model's query cache so the next
+        # cached() read reflects the freshly-saved row.
+        User.clear_cache()
         db.insert("users", {"name": "Eve", "email": "e@b.com", "role": "user"})
         db.commit()
 
-        User.cached(f"SELECT * FROM users", ttl=300)
+        before = User.cached("SELECT * FROM users ORDER BY id", ttl=300)
+        assert [u.name for u in before] == ["Eve"]
+
         user = User({"name": "New", "email": "n@b.com"})
-        user.save()
-        db.commit()
-        # After save, cache should be cleared for this model
+        assert user.save() is user
+
+        after = User.cached("SELECT * FROM users ORDER BY id", ttl=300)
+        assert [u.name for u in after] == ["Eve", "New"]  # cache was busted by save()
 
 
 # ── ODBC Adapter Tests ───────────────────────────────────────
 
 class TestODBCAdapter:
-    def test_import(self):
+    # Single consolidated interface-contract test: a cheap rename guard that
+    # locks in the adapter's public surface (parity across all 4 frameworks).
+    # The per-method BEHAVIOUR is exercised by the real tests below.
+    EXPECTED_METHODS = [
+        "connect", "close", "execute", "fetch", "fetch_one",
+        "insert", "update", "delete", "start_transaction", "commit",
+        "rollback", "table_exists", "get_tables", "get_columns",
+        "get_database_type",
+    ]
+
+    def test_adapter_interface_contract(self):
         from tina4_python.database.odbc import ODBCAdapter
         adapter = ODBCAdapter()
-        assert adapter.get_database_type() == "odbc"
+        for method in self.EXPECTED_METHODS:
+            assert callable(getattr(adapter, method, None)), f"ODBCAdapter missing {method}()"
 
-    def test_registered(self):
-        from tina4_python.database.connection import _DRIVERS
-        # ODBC may or may not be registered depending on pyodbc availability
-        # Just verify the module loads without error
+    def test_database_type_is_odbc(self):
+        # Real value assertion: the adapter reports its engine name.
         from tina4_python.database.odbc import ODBCAdapter
-        assert ODBCAdapter is not None
+        assert ODBCAdapter().get_database_type() == "odbc"
+
+    def test_translate_sql_is_passthrough(self):
+        # ODBC uses ? placeholders natively — translation must be a no-op so a
+        # query reaches the driver byte-identical (no accidental rewriting).
+        from tina4_python.database.odbc import ODBCAdapter
+        adapter = ODBCAdapter()
+        sql = "SELECT * FROM users WHERE id = ? AND name LIKE ?"
+        assert adapter._translate_sql(sql) is sql
+
+    def test_connect_without_pyodbc_raises_actionable_error(self):
+        # The real behaviour when the optional driver is absent: connect()
+        # raises a clear ImportError that names the install command — it must
+        # NOT silently swallow the missing dependency. (If pyodbc happens to be
+        # installed in this env, connecting to a bogus DSN fails loudly too.)
+        import importlib.util
+        from tina4_python.database.odbc import ODBCAdapter
+        adapter = ODBCAdapter()
+        if importlib.util.find_spec("pyodbc") is None:
+            with pytest.raises(ImportError, match="pyodbc"):
+                adapter.connect("DSN=__tina4_does_not_exist__")
+        else:
+            # Driver present: a bogus DSN must still raise (never connect).
+            with pytest.raises(Exception):
+                adapter.connect("DSN=__tina4_does_not_exist__")
 
 
 # ── Event System Tests ────────────────────────────────────────
@@ -371,10 +462,19 @@ class TestSandboxing:
         assert "visible" in result
 
     def test_sandbox_blocks_include(self, frond, tmp_path):
+        # When "include" is NOT in allowed_tags, the include is skipped and its
+        # content must not leak. When it IS allowed, the same template pulls the
+        # partial in — proving the tag gate actually governs include, not luck.
         (tmp_path / "templates" / "secret.twig").write_text("SECRET CONTENT")
-        frond.sandbox(allowed_tags=["if", "for"])
-        result = frond.render_string('{% include "secret.twig" %}', {})
-        assert "TINA4_SECRET" not in result
+        template = '{% include "secret.twig" %}'
+
+        frond.sandbox(allowed_tags=["if", "for"])  # include not allowed
+        blocked = frond.render_string(template, {})
+        assert "SECRET CONTENT" not in blocked
+
+        frond.sandbox(allowed_tags=["if", "for", "include"])  # now allowed
+        allowed = frond.render_string(template, {})
+        assert "SECRET CONTENT" in allowed
 
 
 # ── Fragment Caching Tests ────────────────────────────────────
@@ -408,20 +508,6 @@ class TestFragmentCaching:
         result = frond.render_string(template, {})
         assert "OUTER" in result
         assert "INNER" in result
-
-
-# ── ODBC Adapter Unit Tests ──────────────────────────────────
-
-class TestODBCAdapterUnit:
-    def test_translate_sql_passthrough(self):
-        from tina4_python.database.odbc import ODBCAdapter
-        adapter = ODBCAdapter()
-        sql = "SELECT * FROM users WHERE id = ?"
-        assert adapter._translate_sql(sql) == sql
-
-    def test_database_type(self):
-        from tina4_python.database.odbc import ODBCAdapter
-        assert ODBCAdapter().get_database_type() == "odbc"
 
 
 # ── Migration Rollback Tests (verify existing) ────────────────

@@ -1753,6 +1753,9 @@ async def handle(request: Request) -> Response:
     if route:
         request._route_params = params
         request.merge_route_params()
+        # Expose the matched handler on the request so before_* middleware
+        # (e.g. CsrfMiddleware) can read handler metadata such as _noauth.
+        request._handler = route.get("handler")
         try:
             skip = _check_auth(request, response, route)
             if not skip:

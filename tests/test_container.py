@@ -4,6 +4,23 @@ import pytest
 from tina4_python.container import Container
 
 
+# ── interface contract (cross-framework rename guard) ────────────
+
+
+class TestContainerContract:
+    """One consolidated contract test: the public DI surface must stay stable.
+
+    Cheap guard against a silent rename drifting Container out of parity with
+    the PHP / Ruby / Node containers. Behaviour of each method is asserted by
+    the dedicated tests below; this only locks the method *set*.
+    """
+
+    def test_public_method_set(self):
+        c = Container()
+        for name in ("register", "singleton", "get", "has", "reset", "reset_all"):
+            assert callable(getattr(c, name)), f"Container.{name} missing or not callable"
+
+
 # ── register() and get() — transient ─────────────────────────────
 
 
@@ -26,11 +43,17 @@ class TestTransientRegistration:
         c = Container()
 
         class Service:
-            pass
+            def __init__(self):
+                self.value = "ready"
 
         c.register("svc", Service)
-        result = c.get("svc")
-        assert isinstance(result, Service)
+        first = c.get("svc")
+        second = c.get("svc")
+        # The factory really ran: a constructed Service with its init state.
+        assert isinstance(first, Service)
+        assert first.value == "ready"
+        # Transient: a class factory yields a brand-new instance each get().
+        assert first is not second
 
 
 # ── singleton() — lazy, same instance ────────────────────────────
@@ -118,14 +141,23 @@ class TestReset:
 
     def test_reset_keeps_factories_clears_cache(self):
         c = Container()
-        c.register("a", lambda: 1)
-        c.singleton("b", lambda: 2)
-        # Prime the singleton cache
-        c.get("b")
+        c.register("a", lambda: object())
+        c.singleton("b", lambda: object())
+        # Prime the singleton cache so reset() has something to clear.
+        cached = c.get("b")
+        assert c.get("b") is cached  # memoised before reset
+
         c.reset()
-        # Factories still registered
+
+        # Factories are still wired after reset().
         assert c.has("a") is True
         assert c.has("b") is True
+        # The cache really cleared: the singleton factory re-runs and yields a
+        # brand-new instance, so the post-reset value is NOT the old cached one.
+        after = c.get("b")
+        assert after is not cached
+        # ...and it re-memoises again going forward.
+        assert c.get("b") is after
 
     def test_reset_all_clears_everything(self):
         c = Container()
@@ -242,12 +274,14 @@ class TestThreadSafety:
     def test_concurrent_register_and_get(self):
         c = Container()
         errors = []
+        resolved = {}
 
         def register_and_get(idx):
             try:
                 name = f"svc-{idx}"
-                c.register(name, lambda: idx)
-                c.get(name)
+                # Bind idx now so each closure captures its own value.
+                c.register(name, lambda value=idx: value)
+                resolved[name] = c.get(name)
             except Exception as e:
                 errors.append(e)
 
@@ -258,6 +292,13 @@ class TestThreadSafety:
             t.join(timeout=5)
 
         assert errors == []
+        # Every concurrent registration is intact and resolves to its own value
+        # (no cross-talk between threads sharing the one container/lock).
+        assert len(resolved) == 20
+        for i in range(20):
+            assert c.has(f"svc-{i}") is True
+            assert resolved[f"svc-{i}"] == i
+            assert c.get(f"svc-{i}") == i
 
 
 # ── Multiple Independent Containers ───────────────────────────────

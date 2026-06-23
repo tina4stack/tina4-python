@@ -351,13 +351,32 @@ class DatabaseAdapter:
                 ["Alice"], ["Bob"], ["Eve"]
             ])
         """
+        rows = params_list or []
+        if not rows:
+            return DatabaseResult(affected_rows=0)
+        # Run the whole batch in ONE transaction on ONE connection so it is
+        # atomic AND affected_rows/last_id are reliable. In autocommit mode each
+        # standalone execute() commits on its own (possibly different, pooled)
+        # connection, which scattered the per-row rowcount / last_insert_id and
+        # made the aggregate non-deterministic. When already inside an explicit
+        # transaction we just join it (never nest).
+        owns_txn = self._autocommit and not getattr(self, "_in_transaction", False)
+        if owns_txn:
+            self.start_transaction()
         total_affected = 0
         last_id = None
-        for params in (params_list or []):
-            result = self.execute(sql, params)
-            total_affected += result.affected_rows
-            if result.last_id is not None:
-                last_id = result.last_id
+        try:
+            for params in rows:
+                result = self.execute(sql, params)
+                total_affected += result.affected_rows
+                if result.last_id is not None:
+                    last_id = result.last_id
+            if owns_txn:
+                self.commit()
+        except Exception:
+            if owns_txn:
+                self.rollback()
+            raise
         return DatabaseResult(
             affected_rows=total_affected,
             last_id=last_id,

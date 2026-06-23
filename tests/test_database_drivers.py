@@ -8,11 +8,37 @@ Tests cover:
 - SQLite: full CRUD tests (always available)
 - PostgreSQL, MySQL, MSSQL, Firebird: skip if driver not available
 """
+import os
+import socket
+
 import pytest
-from unittest.mock import patch, MagicMock
-from urllib.parse import urlparse
-from tina4_python.database import Database, DatabaseResult, SQLTranslator
+from unittest.mock import patch
+from tina4_python.database import Database
 from tina4_python.database.connection import _DRIVERS
+
+
+# ── Live PostgreSQL connection config (canonical TINA4_TEST_PG_* convention) ──
+# Matches the rest of the suite (test_postgres_create_table.py,
+# test_postgres_uuid_pk.py, ...): a real container at localhost:55432,
+# user/pass/db all "tina4". Skips automatically when nothing is listening.
+
+PG_HOST = os.environ.get("TINA4_TEST_PG_HOST", "localhost")
+PG_PORT = int(os.environ.get("TINA4_TEST_PG_PORT", "55432"))
+PG_USER = os.environ.get("TINA4_TEST_PG_USER", "tina4")
+PG_PASS = os.environ.get("TINA4_TEST_PG_PASS", "tina4")
+PG_DB = os.environ.get("TINA4_TEST_PG_DB", "tina4")
+
+
+def _pg_reachable() -> bool:
+    try:
+        with socket.create_connection((PG_HOST, PG_PORT), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def _pg_url() -> str:
+    return f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{PG_DB}"
 
 
 # ── Driver Registration ──────────────────────────────────────────
@@ -86,62 +112,79 @@ class TestGracefulImportErrors:
             fb_module._driver = original_driver
 
 
-# ── Connection URL Parsing ───────────────────────────────────────
+# ── Connection URL → Adapter Selection ───────────────────────────
 
 
-class TestConnectionURLParsing:
-    """URL parsing extracts host, port, user, password, database correctly."""
+class TestConnectionURLAdapterSelection:
+    """The Database class routes a connection URL scheme to the right
+    adapter class. This is real framework logic (``_create_adapter`` reads
+    the URL scheme and looks it up in ``_DRIVERS``) — exercised here without
+    needing a live server for engines that aren't provisioned.
+    """
 
-    def test_postgresql_url(self):
-        url = "postgresql://alice:secret@db.example.com:5433/myapp"
-        parsed = urlparse(url)
-        assert parsed.scheme == "postgresql"
-        assert parsed.hostname == "db.example.com"
-        assert parsed.port == 5433
-        assert parsed.username == "alice"
-        assert parsed.password == "secret"
-        assert parsed.path == "/myapp"
+    def test_postgresql_url_selects_postgres_adapter(self):
+        from tina4_python.database.postgres import PostgreSQLAdapter
+        db = Database.__new__(Database)
+        db.url = "postgresql://alice:secret@db.example.com:5433/myapp"
+        db.username = ""
+        db.password = ""
+        assert db._create_adapter().__class__ is PostgreSQLAdapter
 
-    def test_mysql_url(self):
-        url = "mysql://root:pass123@mysql-server:3307/shop"
-        parsed = urlparse(url)
-        assert parsed.scheme == "mysql"
-        assert parsed.hostname == "mysql-server"
-        assert parsed.port == 3307
-        assert parsed.username == "root"
-        assert parsed.password == "pass123"
-        assert parsed.path == "/shop"
+    def test_postgres_alias_url_selects_same_adapter(self):
+        from tina4_python.database.postgres import PostgreSQLAdapter
+        db = Database.__new__(Database)
+        db.url = "postgres://alice:secret@db.example.com:5433/myapp"
+        db.username = ""
+        db.password = ""
+        assert db._create_adapter().__class__ is PostgreSQLAdapter
 
-    def test_mssql_url(self):
-        url = "mssql://sa:MyPass@mssql-host:1434/warehouse"
-        parsed = urlparse(url)
-        assert parsed.scheme == "mssql"
-        assert parsed.hostname == "mssql-host"
-        assert parsed.port == 1434
-        assert parsed.username == "sa"
-        assert parsed.password == "MyPass"
+    def test_mysql_url_selects_mysql_adapter(self):
+        from tina4_python.database.mysql import MySQLAdapter
+        db = Database.__new__(Database)
+        db.url = "mysql://root:pass123@mysql-server:3307/shop"
+        db.username = ""
+        db.password = ""
+        assert db._create_adapter().__class__ is MySQLAdapter
 
-    def test_firebird_url(self):
-        url = "firebird://SYSDBA:masterkey@fbhost:3050/var/lib/firebird/data/app.fdb"
-        parsed = urlparse(url)
-        assert parsed.scheme == "firebird"
-        assert parsed.hostname == "fbhost"
-        assert parsed.port == 3050
-        assert parsed.username == "SYSDBA"
-        assert parsed.password == "masterkey"
+    def test_mssql_url_selects_mssql_adapter(self):
+        from tina4_python.database.mssql import MSSQLAdapter
+        db = Database.__new__(Database)
+        db.url = "mssql://sa:MyPass@mssql-host:1434/warehouse"
+        db.username = ""
+        db.password = ""
+        assert db._create_adapter().__class__ is MSSQLAdapter
 
-    def test_postgresql_defaults(self):
-        url = "postgresql://localhost/testdb"
-        parsed = urlparse(url)
-        assert parsed.hostname == "localhost"
-        assert parsed.port is None  # defaults to 5432 in adapter
-        assert parsed.path == "/testdb"
+    def test_firebird_url_selects_firebird_adapter(self):
+        from tina4_python.database.firebird import FirebirdAdapter
+        db = Database.__new__(Database)
+        db.url = "firebird://SYSDBA:masterkey@fbhost:3050/var/lib/firebird/data/app.fdb"
+        db.username = ""
+        db.password = ""
+        assert db._create_adapter().__class__ is FirebirdAdapter
 
-    def test_sqlite_url(self, tmp_path):
+    @pytest.mark.skipif(not _pg_reachable(), reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT}")
+    def test_postgresql_url_connects_live(self):
+        """A real PostgreSQL URL connects and the live adapter reports its type."""
+        db = Database(_pg_url())
+        try:
+            assert db.get_database_type() == "postgresql"
+            # The connection is genuinely usable — round-trip a trivial query.
+            row = db.fetch_one("SELECT 1 AS one")
+            assert row["one"] == 1
+        finally:
+            db.close()
+
+    def test_sqlite_url_connects_and_reports_type(self, tmp_path):
         db_path = tmp_path / "test.db"
         db = Database(f"sqlite:///{db_path}")
-        assert db.get_database_type() == "sqlite"
-        db.close()
+        try:
+            assert db.get_database_type() == "sqlite"
+            # The file path was parsed and a live connection opened — prove it
+            # works end to end with a real query.
+            row = db.fetch_one("SELECT 1 AS one")
+            assert row["one"] == 1
+        finally:
+            db.close()
 
 
 # ── SQL Translation Per Dialect ──────────────────────────────────
@@ -403,62 +446,33 @@ class TestSQLiteCRUD:
 
 
 class TestAdapterContract:
-    """Ensure all adapters implement the required interface methods."""
+    """Every adapter must implement the full DatabaseAdapter interface.
 
-    @pytest.fixture(params=["postgresql", "mysql", "mssql", "firebird"])
-    def adapter_class(self, request):
-        return _DRIVERS[request.param]
+    This is a single consolidated rename/parity guard: it asserts the WHOLE
+    expected method set exists on each adapter in one loop, so a future rename
+    or dropped method fails loudly across all four engines. The real BEHAVIOUR
+    of these methods is exercised against live engines elsewhere:
+    ``TestSQLiteCRUD`` (insert/fetch/fetch_one/update/delete/commit/rollback/
+    start_transaction/table_exists/get_tables/get_columns on live SQLite) and
+    ``TestPostgreSQLLive`` (the same round-trip against a live PostgreSQL);
+    ``_translate_sql`` / ``_supports_returning`` / ``get_database_type`` are
+    covered by the per-dialect translation tests above.
+    """
 
-    def test_has_connect(self, adapter_class):
-        assert hasattr(adapter_class, "connect")
+    # The complete interface the framework relies on (see DatabaseAdapter).
+    INTERFACE = (
+        "connect", "close", "execute", "execute_many",
+        "fetch", "fetch_one", "insert", "update", "delete",
+        "start_transaction", "commit", "rollback",
+        "table_exists", "get_tables", "get_columns",
+        "get_database_type", "_translate_sql", "_supports_returning",
+    )
 
-    def test_has_close(self, adapter_class):
-        assert hasattr(adapter_class, "close")
-
-    def test_has_execute(self, adapter_class):
-        assert hasattr(adapter_class, "execute")
-
-    def test_has_fetch(self, adapter_class):
-        assert hasattr(adapter_class, "fetch")
-
-    def test_has_fetch_one(self, adapter_class):
-        assert hasattr(adapter_class, "fetch_one")
-
-    def test_has_insert(self, adapter_class):
-        assert hasattr(adapter_class, "insert")
-
-    def test_has_update(self, adapter_class):
-        assert hasattr(adapter_class, "update")
-
-    def test_has_delete(self, adapter_class):
-        assert hasattr(adapter_class, "delete")
-
-    def test_has_start_transaction(self, adapter_class):
-        assert hasattr(adapter_class, "start_transaction")
-
-    def test_has_commit(self, adapter_class):
-        assert hasattr(adapter_class, "commit")
-
-    def test_has_rollback(self, adapter_class):
-        assert hasattr(adapter_class, "rollback")
-
-    def test_has_table_exists(self, adapter_class):
-        assert hasattr(adapter_class, "table_exists")
-
-    def test_has_get_tables(self, adapter_class):
-        assert hasattr(adapter_class, "get_tables")
-
-    def test_has_get_columns(self, adapter_class):
-        assert hasattr(adapter_class, "get_columns")
-
-    def test_has_get_database_type(self, adapter_class):
-        assert hasattr(adapter_class, "get_database_type")
-
-    def test_has_translate_sql(self, adapter_class):
-        assert hasattr(adapter_class, "_translate_sql")
-
-    def test_has_supports_returning(self, adapter_class):
-        assert hasattr(adapter_class, "_supports_returning")
+    @pytest.mark.parametrize("scheme", ["postgresql", "mysql", "mssql", "firebird"])
+    def test_implements_full_interface(self, scheme):
+        adapter_class = _DRIVERS[scheme]
+        missing = [m for m in self.INTERFACE if not callable(getattr(adapter_class, m, None))]
+        assert not missing, f"{adapter_class.__name__} missing methods: {missing}"
 
 
 # ── Live Database Tests (skip if driver not available) ───────────
@@ -496,37 +510,95 @@ def _has_fdb():
         return False
 
 
-@pytest.mark.skipif(not _has_psycopg2(), reason="psycopg2 not installed")
+@pytest.mark.skipif(
+    not (_has_psycopg2() and _pg_reachable()),
+    reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT} (or psycopg2 missing)",
+)
 class TestPostgreSQLLive:
-    """Live PostgreSQL tests — require a running PostgreSQL instance.
+    """Live PostgreSQL round-trips against the provisioned container.
 
-    Set TINA4_TEST_POSTGRES_URL=postgresql://user:pass@host:port/db to run.
+    Uses the canonical TINA4_TEST_PG_* convention (default localhost:55432,
+    user/pass/db all "tina4") shared with the rest of the PG test suite — so
+    this RUNS in CI (PostgreSQL is provisioned) rather than skipping. Older
+    callers can still point TINA4_TEST_PG_* at a different instance.
     """
 
     @pytest.fixture
     def db(self):
-        import os
-        url = os.environ.get("TINA4_TEST_POSTGRES_URL")
-        if not url:
-            pytest.skip("TINA4_TEST_POSTGRES_URL not set")
-        d = Database(url)
-        d.execute("CREATE TABLE IF NOT EXISTS _tina4_test (id SERIAL PRIMARY KEY, name VARCHAR(100))")
+        d = Database(_pg_url())
+        d.execute("DROP TABLE IF EXISTS _tina4_drv_test")
+        d.execute(
+            "CREATE TABLE _tina4_drv_test "
+            "(id SERIAL PRIMARY KEY, name VARCHAR(100), price NUMERIC(10,2))"
+        )
         d.commit()
         yield d
-        d.execute("DROP TABLE IF EXISTS _tina4_test")
+        d.execute("DROP TABLE IF EXISTS _tina4_drv_test")
         d.commit()
         d.close()
 
-    def test_insert_and_fetch(self, db):
-        result = db.insert("_tina4_test", {"name": "PostgresTest"})
-        db.commit()
-        assert result.last_id is not None
-        row = db.fetch_one("SELECT * FROM _tina4_test WHERE name = %s", ["PostgresTest"])
-        assert row is not None
-        assert row["name"] == "PostgresTest"
-
     def test_database_type(self, db):
         assert db.get_database_type() == "postgresql"
+
+    def test_insert_returns_real_serial_id(self, db):
+        # SERIAL PK is auto-generated server-side; the adapter must surface it.
+        first = db.insert("_tina4_drv_test", {"name": "Alpha", "price": 1.50})
+        db.commit()
+        second = db.insert("_tina4_drv_test", {"name": "Beta", "price": 2.50})
+        db.commit()
+        assert first.last_id == 1
+        assert second.last_id == 2
+        assert first.affected_rows == 1
+
+    def test_fetch_one_round_trips_native_types(self, db):
+        db.insert("_tina4_drv_test", {"name": "Gamma", "price": 9.99})
+        db.commit()
+        row = db.fetch_one("SELECT * FROM _tina4_drv_test WHERE name = %s", ["Gamma"])
+        assert row is not None
+        assert row["name"] == "Gamma"
+        # NUMERIC comes back as a real Decimal, not a string.
+        from decimal import Decimal
+        assert row["price"] == Decimal("9.99")
+
+    def test_fetch_paginates_and_counts(self, db):
+        db.insert("_tina4_drv_test", [
+            {"name": "r1", "price": 1.0},
+            {"name": "r2", "price": 2.0},
+            {"name": "r3", "price": 3.0},
+        ])
+        db.commit()
+        result = db.fetch("SELECT * FROM _tina4_drv_test ORDER BY id", limit=2)
+        assert len(result.records) == 2
+        assert result.count == 3
+
+    def test_update_and_delete(self, db):
+        db.insert("_tina4_drv_test", {"name": "Old", "price": 1.0})
+        db.commit()
+        db.update("_tina4_drv_test", {"name": "New"}, "name = %s", ["Old"])
+        db.commit()
+        assert db.fetch_one("SELECT * FROM _tina4_drv_test WHERE name = %s", ["Old"]) is None
+        assert db.fetch_one("SELECT * FROM _tina4_drv_test WHERE name = %s", ["New"]) is not None
+        db.delete("_tina4_drv_test", "name = %s", ["New"])
+        db.commit()
+        assert db.fetch_one("SELECT * FROM _tina4_drv_test WHERE name = %s", ["New"]) is None
+
+    def test_introspection_against_live_schema(self, db):
+        assert db.table_exists("_tina4_drv_test") is True
+        assert db.table_exists("_tina4_definitely_not_here") is False
+        assert "_tina4_drv_test" in db.get_tables()
+        col_names = [c["name"] for c in db.get_columns("_tina4_drv_test")]
+        assert "id" in col_names
+        assert "name" in col_names
+        assert "price" in col_names
+
+    def test_transaction_rollback_discards_writes(self, db):
+        db.insert("_tina4_drv_test", {"name": "Kept", "price": 1.0})
+        db.commit()
+        db.start_transaction()
+        db.insert("_tina4_drv_test", {"name": "Discarded", "price": 2.0})
+        db.rollback()
+        assert db.fetch_one("SELECT * FROM _tina4_drv_test WHERE name = %s", ["Discarded"]) is None
+        assert db.fetch_one("SELECT * FROM _tina4_drv_test WHERE name = %s", ["Kept"]) is not None
 
 
 @pytest.mark.skipif(not _has_mysql_connector(), reason="mysql-connector-python not installed")

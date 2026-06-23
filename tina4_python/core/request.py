@@ -72,7 +72,7 @@ class Request:
     __slots__ = (
         "method", "path", "url", "query_string", "params", "query", "headers",
         "body", "raw_body", "cookies", "files", "ip", "remote_ip",
-        "content_type", "session", "_route_params",
+        "content_type", "session", "_route_params", "_handler",
     )
 
     def __init__(self):
@@ -92,6 +92,10 @@ class Request:
         self.content_type: str = ""
         self.session = None             # Set by session middleware
         self._route_params: dict = {}   # Dynamic route params ({id}, etc.)
+        self._handler = None            # Matched route handler — set by dispatch
+                                        # before middleware runs, so before_*
+                                        # middleware (e.g. CsrfMiddleware) can read
+                                        # handler metadata like _noauth.
 
     @classmethod
     def from_scope(cls, scope: dict, body: bytes = b"") -> "Request":

@@ -135,7 +135,14 @@ class RabbitMQConnector:
         self._ensure_connected()
 
         if self._use_pika:
-            result = self._channel.queue_declare(queue=topic, durable=True, passive=True)
+            # Declare durably (idempotent — creates the queue if missing) rather
+            # than passive=True. A passive declare raises ChannelClosedByBroker
+            # (404 NOT_FOUND) when the queue does not yet exist, so size() on a
+            # fresh topic crashed on the pika path. The raw-AMQP path already
+            # declares-then-counts and returns 0 for an unseen queue; this brings
+            # the pika path to the same behaviour.
+            self._ensure_queue_pika(topic)
+            result = self._channel.queue_declare(queue=topic, durable=True)
             return result.method.message_count
         else:
             return self._queue_size_raw(topic)

@@ -95,15 +95,25 @@ class SQLiteAdapter(DatabaseAdapter):
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
         """Optimized batch execute using SQLite's executemany."""
         sql = self._translate_sql(sql)
-        cursor = self._conn.executemany(sql, params_list or [])
+        rows = params_list or []
+        self._conn.executemany(sql, rows)
+
+        # cursor.rowcount / cursor.lastrowid are unreliable after executemany()
+        # in sqlite3 (rowcount can come back 0 or -1, lastrowid is not set) and
+        # were non-deterministic across pooled connections. The batch is
+        # all-or-raise, so every supplied row was applied; the last inserted id
+        # is read deterministically from last_insert_rowid() on this connection.
+        affected = len(rows)
+        last_row = self._conn.execute("SELECT last_insert_rowid()").fetchone()
+        last_id = last_row[0] if last_row and last_row[0] else None
 
         if not self._in_transaction and self.autocommit:
             if self._conn.in_transaction:
                 self._conn.execute("COMMIT")
 
         return DatabaseResult(
-            affected_rows=cursor.rowcount,
-            last_id=cursor.lastrowid,
+            affected_rows=affected,
+            last_id=last_id,
         )
 
     def fetch(self, sql: str, params: list = None,
@@ -144,7 +154,14 @@ class SQLiteAdapter(DatabaseAdapter):
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def insert(self, table: str, data: dict) -> DatabaseResult:
+    def insert(self, table: str, data: dict | list) -> DatabaseResult:
+        # A list of dicts is a batch insert — delegate to the base class, which
+        # builds one parameterised INSERT and runs it per row via execute_many.
+        # (Database.insert / the docs advertise ``data: dict | list``; without
+        # this branch a list crashed with ``'list' object has no attribute
+        # 'keys'`` because this override only handled the single-dict case.)
+        if isinstance(data, list):
+            return super().insert(table, data)
         columns = ", ".join(data.keys())
         placeholders = ", ".join(["?"] * len(data))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
