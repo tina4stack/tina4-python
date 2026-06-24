@@ -92,9 +92,24 @@ def test_postgres_batch_insert_list_of_dicts():
         db.close()
 
 
-# ── MySQL / MSSQL: not provisioned locally -> skip cleanly ──────
+# ── MySQL / MSSQL: run against the live engine when reachable ──
+# Mirror tests/test_database_drivers.py: build the connection from the discrete
+# TINA4_TEST_MYSQL_* / _MSSQL_* vars the CI provisions (the *_URL var still works
+# as an override), and gate on the driver being importable AND the service
+# reachable. This is why the batch runs for real in CI (MySQL/MSSQL provisioned
+# in #262) instead of skipping on the absent *_URL — previously it keyed only on
+# TINA4_TEST_MYSQL_URL, which CI does not set, so the gate failed the run.
+_MYSQL_HOST = os.environ.get("TINA4_TEST_MYSQL_HOST", "localhost")
+_MYSQL_PORT = int(os.environ.get("TINA4_TEST_MYSQL_PORT", "3306"))
+_MYSQL_USER = os.environ.get("TINA4_TEST_MYSQL_USER", "root")
+_MYSQL_PASS = os.environ.get("TINA4_TEST_MYSQL_PASS", "")
+_MYSQL_DB = os.environ.get("TINA4_TEST_MYSQL_DB", "tina4_test")
+
+
 def _mysql_url():
-    return os.environ.get("TINA4_TEST_MYSQL_URL")
+    return os.environ.get(
+        "TINA4_TEST_MYSQL_URL", f"mysql://{_MYSQL_HOST}:{_MYSQL_PORT}/{_MYSQL_DB}"
+    )
 
 
 def _has_mysql_connector():
@@ -105,20 +120,29 @@ def _has_mysql_connector():
         return False
 
 
-@pytest.mark.skipif(not (_has_mysql_connector() and _mysql_url()),
-                    reason="MySQL not configured (TINA4_TEST_MYSQL_URL) / driver not installed")
+@pytest.mark.skipif(
+    not (_has_mysql_connector() and _reachable(_MYSQL_HOST, _MYSQL_PORT)),
+    reason=f"MySQL not reachable at {_MYSQL_HOST}:{_MYSQL_PORT} (or mysql-connector-python not installed)",
+)
 def test_mysql_batch_insert_list_of_dicts():
-    db = Database(_mysql_url(),
-                  os.environ.get("TINA4_TEST_MYSQL_USER", "root"),
-                  os.environ.get("TINA4_TEST_MYSQL_PASS", ""))
+    db = Database(_mysql_url(), _MYSQL_USER, _MYSQL_PASS)
     try:
         _assert_batch(db, "CREATE TABLE batch_people (id INTEGER NOT NULL AUTO_INCREMENT, name VARCHAR(100), age INTEGER, PRIMARY KEY(id))")
     finally:
         db.close()
 
 
+_MSSQL_HOST = os.environ.get("TINA4_TEST_MSSQL_HOST", "localhost")
+_MSSQL_PORT = int(os.environ.get("TINA4_TEST_MSSQL_PORT", "1433"))
+_MSSQL_USER = os.environ.get("TINA4_TEST_MSSQL_USER", "sa")
+_MSSQL_PASS = os.environ.get("TINA4_TEST_MSSQL_PASS", "")
+_MSSQL_DB = os.environ.get("TINA4_TEST_MSSQL_DB", "tina4_test")
+
+
 def _mssql_url():
-    return os.environ.get("TINA4_TEST_MSSQL_URL")
+    return os.environ.get(
+        "TINA4_TEST_MSSQL_URL", f"mssql://{_MSSQL_HOST}:{_MSSQL_PORT}/{_MSSQL_DB}"
+    )
 
 
 def _has_pymssql():
@@ -129,12 +153,12 @@ def _has_pymssql():
         return False
 
 
-@pytest.mark.skipif(not (_has_pymssql() and _mssql_url()),
-                    reason="MSSQL not configured (TINA4_TEST_MSSQL_URL) / driver not installed")
+@pytest.mark.skipif(
+    not (_has_pymssql() and _reachable(_MSSQL_HOST, _MSSQL_PORT)),
+    reason=f"MSSQL not reachable at {_MSSQL_HOST}:{_MSSQL_PORT} (or pymssql not installed)",
+)
 def test_mssql_batch_insert_list_of_dicts():
-    db = Database(_mssql_url(),
-                  os.environ.get("TINA4_TEST_MSSQL_USER", "sa"),
-                  os.environ.get("TINA4_TEST_MSSQL_PASS", ""))
+    db = Database(_mssql_url(), _MSSQL_USER, _MSSQL_PASS)
     try:
         _assert_batch(db, "CREATE TABLE batch_people (id INTEGER IDENTITY(1,1) NOT NULL, name VARCHAR(100), age INTEGER, PRIMARY KEY(id))")
     finally:

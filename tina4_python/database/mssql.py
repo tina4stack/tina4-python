@@ -64,6 +64,14 @@ class MSSQLAdapter(DatabaseAdapter):
         cursor = self._conn.cursor(as_dict=True)
         cursor.execute(sql, tuple(params) if params else ())
 
+        # Capture the affected-row count from the MAIN statement NOW, before any
+        # follow-up SELECT (SCOPE_IDENTITY / RETURNING fetch) runs on the SAME
+        # cursor and overwrites cursor.rowcount. Reading it at the end reflected
+        # the SCOPE_IDENTITY SELECT instead of the INSERT, so every INSERT
+        # reported affected_rows=0 (a batch insert summed to 0 even though the
+        # rows landed — surfaced by the live MySQL/MSSQL batch test).
+        affected = cursor.rowcount if cursor.rowcount is not None and cursor.rowcount >= 0 else 0
+
         records = []
         last_id = None
 
@@ -88,8 +96,6 @@ class MSSQLAdapter(DatabaseAdapter):
             row = cursor.fetchone()
             if row:
                 records = [dict(row)]
-
-        affected = cursor.rowcount if cursor.rowcount >= 0 else 0
 
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
