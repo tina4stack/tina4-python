@@ -41,6 +41,40 @@ def _pg_url() -> str:
     return f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{PG_DB}"
 
 
+# ── Live MySQL connection config (#262 — now provisioned in CI + local infra) ──
+# Mirrors the PG block: a real container at localhost:3306, user/pass "tina4",
+# db "tina4_test". Skips automatically when nothing is listening; under
+# TINA4_REQUIRE_SERVICES the conftest gate turns that skip into a failure
+# (MySQL is in the provisioned keyword list since 3.13.44).
+MYSQL_HOST = os.environ.get("TINA4_TEST_MYSQL_HOST", "localhost")
+MYSQL_PORT = int(os.environ.get("TINA4_TEST_MYSQL_PORT", "3306"))
+MYSQL_USER = os.environ.get("TINA4_TEST_MYSQL_USER", "tina4")
+MYSQL_PASS = os.environ.get("TINA4_TEST_MYSQL_PASS", "tina4")
+MYSQL_DB = os.environ.get("TINA4_TEST_MYSQL_DB", "tina4_test")
+
+MSSQL_HOST = os.environ.get("TINA4_TEST_MSSQL_HOST", "localhost")
+MSSQL_PORT = int(os.environ.get("TINA4_TEST_MSSQL_PORT", "1433"))
+MSSQL_USER = os.environ.get("TINA4_TEST_MSSQL_USER", "sa")
+MSSQL_PASS = os.environ.get("TINA4_TEST_MSSQL_PASS", "TinaSQL123!Secure")
+MSSQL_DB = os.environ.get("TINA4_TEST_MSSQL_DB", "tina4_test")
+
+
+def _mysql_reachable() -> bool:
+    try:
+        with socket.create_connection((MYSQL_HOST, MYSQL_PORT), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+def _mssql_reachable() -> bool:
+    try:
+        with socket.create_connection((MSSQL_HOST, MSSQL_PORT), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
 # ── Driver Registration ──────────────────────────────────────────
 
 
@@ -601,21 +635,23 @@ class TestPostgreSQLLive:
         assert db.fetch_one("SELECT * FROM _tina4_drv_test WHERE name = %s", ["Kept"]) is not None
 
 
-@pytest.mark.skipif(not _has_mysql_connector(), reason="mysql-connector-python not installed")
+@pytest.mark.skipif(
+    not (_has_mysql_connector() and _mysql_reachable()),
+    reason=f"MySQL not reachable at {MYSQL_HOST}:{MYSQL_PORT} (or mysql-connector-python not installed)",
+)
 class TestMySQLLive:
-    """Live MySQL tests — require a running MySQL instance.
+    """Live MySQL round-trips against the provisioned container (#262).
 
-    Set TINA4_TEST_MYSQL_URL=mysql://user:pass@host:port/db to run.
+    Defaults to localhost:3306 / tina4 / tina4_test; override via the
+    TINA4_TEST_MYSQL_* env vars. Skips when nothing is listening — under
+    TINA4_REQUIRE_SERVICES the conftest gate turns that into a failure.
     """
 
     @pytest.fixture
     def db(self):
-        import os
-        url = os.environ.get("TINA4_TEST_MYSQL_URL")
-        if not url:
-            pytest.skip("TINA4_TEST_MYSQL_URL not set")
-        d = Database(url)
-        d.execute("CREATE TABLE IF NOT EXISTS _tina4_test (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100))")
+        d = Database(f"mysql://{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}", MYSQL_USER, MYSQL_PASS)
+        d.execute("DROP TABLE IF EXISTS _tina4_test")
+        d.execute("CREATE TABLE _tina4_test (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(100), active TINYINT)")
         d.commit()
         yield d
         d.execute("DROP TABLE IF EXISTS _tina4_test")
@@ -629,31 +665,40 @@ class TestMySQLLive:
         row = db.fetch_one("SELECT * FROM _tina4_test WHERE name = %s", ["MySQLTest"])
         assert row is not None
 
+    def test_boolean_round_trips_as_0_1(self, db):
+        # Locks in the cross-framework bind contract (#262): a raw Python bool
+        # binds as 1/0, never crashing or stringifying. Mirrors the SQLite,
+        # Ruby (mysql2) and Node (mysql2) boolean-coercion behaviour.
+        db.execute("INSERT INTO _tina4_test (name, active) VALUES (%s, %s)", ["on", True])
+        db.execute("INSERT INTO _tina4_test (name, active) VALUES (%s, %s)", ["off", False])
+        db.commit()
+        rows = db.fetch("SELECT active FROM _tina4_test ORDER BY id").records
+        assert [r["active"] for r in rows] == [1, 0]
+
     def test_database_type(self, db):
         assert db.get_database_type() == "mysql"
 
 
-@pytest.mark.skipif(not _has_pymssql(), reason="pymssql not installed")
+@pytest.mark.skipif(
+    not (_has_pymssql() and _mssql_reachable()),
+    reason=f"MSSQL not reachable at {MSSQL_HOST}:{MSSQL_PORT} (or pymssql not installed)",
+)
 class TestMSSQLLive:
-    """Live MSSQL tests — require a running SQL Server instance.
+    """Live MSSQL round-trips against the provisioned container (#262).
 
-    Set TINA4_TEST_MSSQL_URL=mssql://user:pass@host:port/db to run.
+    Defaults to localhost:1433 / sa / tina4_test; override via the
+    TINA4_TEST_MSSQL_* env vars. Skips when nothing is listening — under
+    TINA4_REQUIRE_SERVICES the conftest gate turns that into a failure.
     """
 
     @pytest.fixture
     def db(self):
-        import os
-        url = os.environ.get("TINA4_TEST_MSSQL_URL")
-        if not url:
-            pytest.skip("TINA4_TEST_MSSQL_URL not set")
-        d = Database(url)
-        d.execute(
-            "IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = '_tina4_test') "
-            "CREATE TABLE _tina4_test (id INT IDENTITY(1,1) PRIMARY KEY, name VARCHAR(100))"
-        )
+        d = Database(f"mssql://{MSSQL_HOST}:{MSSQL_PORT}/{MSSQL_DB}", MSSQL_USER, MSSQL_PASS)
+        d.execute("IF OBJECT_ID('_tina4_test','U') IS NOT NULL DROP TABLE _tina4_test")
+        d.execute("CREATE TABLE _tina4_test (id INT IDENTITY(1,1) PRIMARY KEY, name VARCHAR(100), active BIT)")
         d.commit()
         yield d
-        d.execute("DROP TABLE IF EXISTS _tina4_test")
+        d.execute("IF OBJECT_ID('_tina4_test','U') IS NOT NULL DROP TABLE _tina4_test")
         d.commit()
         d.close()
 
@@ -661,6 +706,32 @@ class TestMSSQLLive:
         result = db.insert("_tina4_test", {"name": "MSSQLTest"})
         db.commit()
         assert result.last_id is not None
+
+    def test_boolean_round_trips_as_bit(self, db):
+        # Locks in the bind contract (#262): a raw Python bool binds to a BIT
+        # column without stringifying to '' (the PG/MSSQL footgun). Mirrors the
+        # Ruby (tiny_tds) boolean-coercion fix shipped in the same release.
+        db.execute("INSERT INTO _tina4_test (name, active) VALUES (%s, %s)", ["on", True])
+        db.execute("INSERT INTO _tina4_test (name, active) VALUES (%s, %s)", ["off", False])
+        db.commit()
+        rows = db.fetch("SELECT active FROM _tina4_test ORDER BY id").records
+        assert [bool(r["active"]) for r in rows] == [True, False]
+
+    def test_count_probe_survives_trailing_order_by(self, db):
+        # Regression (#262): the row-count probe wraps the query in
+        # SELECT COUNT(*) FROM (<sql>); SQL Server rejects an ORDER BY in that
+        # derived-table subquery, so a query ending in ORDER BY silently
+        # reported count=0 (rows were still correct). The probe now strips a
+        # trailing top-level ORDER BY. This bug lived in the Python master too,
+        # not only the PHP/Ruby/Node mirrors. Real MSSQL, no mocks.
+        for i in range(3):
+            db.execute("INSERT INTO _tina4_test (name) VALUES (%s)", [f"row{i}"])
+        db.commit()
+        ordered = db.fetch("SELECT id, name FROM _tina4_test ORDER BY id")
+        assert ordered.count == 3 and len(ordered.records) == 3
+        # paginated + ORDER BY keeps the ORDER BY for OFFSET/FETCH; count is full total
+        paged = db.fetch("SELECT id, name FROM _tina4_test ORDER BY id", limit=2)
+        assert paged.count == 3 and len(paged.records) == 2
 
     def test_database_type(self, db):
         assert db.get_database_type() == "mssql"

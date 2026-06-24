@@ -28,6 +28,43 @@ class TestDevMailbox:
         assert messages[0]["subject"] == "Test"
         assert messages[0]["type"] == "outbox"
 
+    def test_non_ascii_round_trips(self, mailbox):
+        # Regression (#262 parity with the Ruby dev_mailbox UTF-8 fix): non-ASCII
+        # subjects/bodies (accented fake-data names, smart quotes) must survive a
+        # capture -> inbox -> read -> count round-trip via real on-disk JSON files.
+        # Python is the safe case here: json.dumps defaults to ensure_ascii=True,
+        # so the file is written as \uXXXX escapes (pure ASCII on disk) and the
+        # UTF-8-pinned read_text() never meets a raw non-ASCII byte -- the locale
+        # decode crash the Ruby fix addressed (JSON.pretty_generate writes raw
+        # UTF-8) cannot occur. This locks in the round-trip and the UTF-8 pin so a
+        # future switch to ensure_ascii=False can't silently reintroduce it. No mocks.
+        subject = "Réservation confirmée — José’s café"
+        body = "Dvořák, naïve façade, “smart quotes”, €"
+        result = mailbox.capture(
+            to="jose@tëst.com", subject=subject, body=body,
+            from_address="dev@test.com",
+        )
+        assert result["success"] is True
+
+        # inbox() reads every message file back off disk
+        messages = mailbox.inbox()
+        assert len(messages) == 1
+        assert messages[0]["subject"] == subject
+
+        # read() re-reads then rewrites the file (read receipt) -- both directions UTF-8
+        msg = mailbox.read(messages[0]["id"])
+        assert msg["subject"] == subject
+        assert msg["body"] == body
+
+        # count() walks every file too -- must not raise on non-ASCII content
+        assert isinstance(mailbox.count(), dict)
+
+        # the file on disk decodes as UTF-8 and round-trips the exact content
+        files = list(mailbox._outbox_dir.glob("*.json"))
+        assert files
+        on_disk = json.loads(files[0].read_bytes().decode("utf-8"))
+        assert on_disk["subject"] == subject and on_disk["body"] == body
+
     def test_capture_multiple_recipients(self, mailbox):
         mailbox.capture(
             to=["a@test.com", "b@test.com"], subject="Multi",

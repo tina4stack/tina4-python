@@ -159,10 +159,10 @@ class BrokenTracker:
 
         if filepath.exists():
             try:
-                existing = json.loads(filepath.read_text())
+                existing = json.loads(filepath.read_text(encoding="utf-8"))
                 existing["count"] = existing.get("count", 1) + 1
                 existing["last_seen"] = datetime.now(timezone.utc).isoformat()
-                filepath.write_text(json.dumps(existing, indent=2))
+                filepath.write_text(json.dumps(existing, indent=2), encoding="utf-8")
                 return sig_hash
             except (json.JSONDecodeError, OSError):
                 pass
@@ -178,7 +178,7 @@ class BrokenTracker:
             "last_seen": datetime.now(timezone.utc).isoformat(),
             "resolved": False,
         }
-        filepath.write_text(json.dumps(entry, indent=2))
+        filepath.write_text(json.dumps(entry, indent=2), encoding="utf-8")
         return sig_hash
 
     @classmethod
@@ -190,7 +190,7 @@ class BrokenTracker:
         entries = []
         for f in sorted(broken_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             try:
-                entries.append(json.loads(f.read_text()))
+                entries.append(json.loads(f.read_text(encoding="utf-8")))
             except (json.JSONDecodeError, OSError):
                 continue
         return entries
@@ -202,9 +202,9 @@ class BrokenTracker:
         if not filepath.exists():
             return False
         try:
-            entry = json.loads(filepath.read_text())
+            entry = json.loads(filepath.read_text(encoding="utf-8"))
             entry["resolved"] = True
-            filepath.write_text(json.dumps(entry, indent=2))
+            filepath.write_text(json.dumps(entry, indent=2), encoding="utf-8")
             return True
         except (json.JSONDecodeError, OSError):
             return False
@@ -217,7 +217,7 @@ class BrokenTracker:
             return
         for f in broken_dir.glob("*.json"):
             try:
-                entry = json.loads(f.read_text())
+                entry = json.loads(f.read_text(encoding="utf-8"))
                 if entry.get("resolved"):
                     f.unlink()
             except (json.JSONDecodeError, OSError):
@@ -1791,7 +1791,7 @@ async def _api_connections(request, response):
     username = ""
     password = ""
     if env_path.exists():
-        for line in env_path.read_text().splitlines():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("#") or "=" not in line:
                 continue
@@ -1863,7 +1863,7 @@ async def _api_connections_save(request, response):
         env_path = Path(".env")
         lines = []
         if env_path.exists():
-            lines = env_path.read_text().splitlines()
+            lines = env_path.read_text(encoding="utf-8").splitlines()
         keys_found = {"TINA4_DATABASE_URL": False, "TINA4_DATABASE_USERNAME": False, "TINA4_DATABASE_PASSWORD": False}
         new_lines = []
         for line in lines:
@@ -1891,7 +1891,7 @@ async def _api_connections_save(request, response):
             if not found:
                 val = {"TINA4_DATABASE_URL": url, "TINA4_DATABASE_USERNAME": username, "TINA4_DATABASE_PASSWORD": password}[key]
                 new_lines.append(f"{key}={val}")
-        env_path.write_text("\n".join(new_lines) + "\n")
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
         return response({"success": True})
     except Exception as e:
         return response({"success": False, "error": str(e)})
@@ -1906,7 +1906,7 @@ async def _api_gallery_list(request, response):
         for entry in sorted(gallery_dir.iterdir()):
             meta_file = entry / "meta.json"
             if entry.is_dir() and meta_file.exists():
-                meta = json.loads(meta_file.read_text())
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
                 meta["id"] = entry.name
                 # List the files that would be deployed
                 src_dir = entry / "src"

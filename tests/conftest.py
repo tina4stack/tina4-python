@@ -5,11 +5,14 @@ import os
 import pytest
 
 # Provisioned real services (and their client libraries). CI stands all of these
-# up, so an integration test should never skip in CI. MySQL / MSSQL / Firebird are
-# deliberately NOT in this list -- they are not provisioned, so their skips stay
-# green.
+# up, so an integration test should never skip in CI. Firebird is deliberately
+# NOT in this list -- it is not provisioned, so its skips stay green. MySQL and
+# MSSQL joined the provisioned set in 3.13.44 (#262), so their reachability /
+# driver skips now fail the gate too.
 _SERVICE_KEYWORDS = (
     "postgres", "postgresql", "psycopg2",
+    "mysql",            # also matches "mysql-connector-python"
+    "mssql", "sqlserver", "pymssql",
     "redis", "valkey", "memcached",
     "mongo",            # also matches "pymongo"
     "rabbit", "amqp",
@@ -39,12 +42,12 @@ def pytest_runtest_makereport(item, call):
     """When TINA4_REQUIRE_SERVICES is set, turn a skip caused by a PROVISIONED
     service being unavailable into a hard FAILURE.
 
-    CI provisions PostgreSQL, Redis, Valkey, Memcached, MongoDB, RabbitMQ, and
-    Kafka and sets every TINA4_TEST_* URL, so these integration tests must run.
-    A skip that names one of those services (or its client library) means the
-    service or driver silently went missing -- the exact gap that let the
-    migration and queue bugs ship green. MySQL / MSSQL / Firebird are not
-    provisioned, so their skips never match these keywords and stay green.
+    CI provisions PostgreSQL, MySQL, MSSQL, Redis, Valkey, Memcached, MongoDB,
+    RabbitMQ, and Kafka and sets every TINA4_TEST_* URL, so these integration
+    tests must run. A skip that names one of those services (or its client
+    library) means the service or driver silently went missing -- the exact gap
+    that let the migration and queue bugs ship green. Firebird is not
+    provisioned, so its skips never match these keywords and stay green.
     """
     outcome = yield
     report = outcome.get_result()

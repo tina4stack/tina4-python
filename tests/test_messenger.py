@@ -1,9 +1,122 @@
-# Tests for tina4_python.messenger
+# Tests for tina4_python.messenger — REAL SMTP + IMAP, no mocks.
+"""
+These tests exercise the Messenger against a LIVE GreenMail server (the same
+container CI provisions). NO MOCKS: every send goes out over a real SMTP socket
+on GreenMail's PLAIN port (3025) and is read back over a real IMAP connection on
+GreenMail's PLAIN port (3143), asserting the subject/body/cc/attachments survive
+the full round-trip. The earlier @patch(smtplib.SMTP/SMTP_SSL) / @patch(imaplib.
+IMAP4_SSL) + MagicMock classes were deleted on purpose: a mock-passing mail test
+is exactly the gap the project's no-mock rule closes (a faked sendmail/fetch
+proves nothing about the wire).
+
+The live tests are gated on GreenMail being REACHABLE, using the same pattern as
+the other real-service suites (tests/test_queue_backends.py,
+tests/test_session_handlers.py): a _reachable(host, port) helper + the conftest
+TINA4_REQUIRE_SERVICES gate, so they RUN BY DEFAULT when the infra is up and
+SKIP (never silently mock) when it is absent.
+
+Plain ports are used deliberately so encryption="none" selects the plain
+smtplib.SMTP (NOT SMTP_SSL) and imap_encryption="none" selects the plain
+imaplib.IMAP4 (NOT IMAP4_SSL) — confirmed in tina4_python/messenger/__init__.py
+(_smtp_send uses smtplib.SMTP when port != 465 and use_tls is False;
+_imap_connect uses imaplib.IMAP4 when imap_encryption == "none").
+
+The failure-path tests point at a closed port (127.0.0.1:59999) for a REAL
+connection refusal — no simulated exception.
+"""
+import os
+import socket
+import time
+import uuid
+
 import pytest
-from unittest.mock import patch, MagicMock
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+
 from tina4_python.messenger import Messenger, MessengerError
+
+
+# ── Live GreenMail targets ───────────────────────────────────────
+# Plain (unencrypted) GreenMail ports. SMTP 3025 + IMAP 3143. Override via env
+# for CI, default to the local docker infra.
+_SMTP_HOST, _SMTP_PORT = (
+    os.environ.get("TINA4_TEST_SMTP_HOST", "127.0.0.1"),
+    int(os.environ.get("TINA4_TEST_SMTP_PORT", "3025")),
+)
+_IMAP_HOST, _IMAP_PORT = (
+    os.environ.get("TINA4_TEST_IMAP_HOST", "127.0.0.1"),
+    int(os.environ.get("TINA4_TEST_IMAP_PORT", "3143")),
+)
+# A port nothing listens on — used for the REAL connection-refused failure paths.
+_CLOSED_HOST, _CLOSED_PORT = "127.0.0.1", 59999
+
+
+def _reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+_greenmail_up = _reachable(_SMTP_HOST, _SMTP_PORT) and _reachable(_IMAP_HOST, _IMAP_PORT)
+
+# Matches the keyword the conftest TINA4_REQUIRE_SERVICES gate scans for, so a
+# "GreenMail SMTP/IMAP not reachable" skip is upgraded to a hard failure in CI
+# (where the service IS provisioned) and stays a benign skip locally.
+_requires_greenmail = pytest.mark.skipif(
+    not _greenmail_up,
+    reason="GreenMail SMTP/IMAP not reachable",
+)
+
+
+def _plain_messenger(address: str) -> Messenger:
+    """A Messenger wired for plain SMTP send + plain IMAP read against GreenMail.
+
+    encryption="none" -> plain smtplib.SMTP (no STARTTLS, no SMTP_SSL).
+    imap_encryption="none" -> plain imaplib.IMAP4 (no IMAP4_SSL).
+    GreenMail auto-provisions a mailbox on first delivery/login, and the IMAP
+    login reads the mailbox for `address`, so each test isolates itself with a
+    fresh, unique recipient address.
+    """
+    m = Messenger(
+        host=_SMTP_HOST,
+        port=_SMTP_PORT,
+        encryption="none",
+        from_address="sender@greenmail.local",
+        imap_host=_IMAP_HOST,
+        imap_port=_IMAP_PORT,
+        username=address,
+        password="greenmail-password",  # GreenMail accepts any password
+    )
+    # IMAP encryption is read from env at construction; force plain explicitly so
+    # the test does not depend on TINA4_MAIL_IMAP_ENCRYPTION being unset.
+    m.imap_encryption = "none"
+    return m
+
+
+def _unique_address(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex[:10]}@greenmail.local"
+
+
+def _wait_for_message(m: Messenger, subject: str, attempts: int = 60,
+                      delay: float = 0.25) -> dict:
+    """Poll the live IMAP mailbox until a message with `subject` arrives.
+
+    SMTP->IMAP delivery in GreenMail is asynchronous, so we poll rather than
+    assume instant availability. Returns the fully-read message dict; fails the
+    test if it never shows up (a real delivery failure, not a flaky skip).
+    """
+    for _ in range(attempts):
+        results = m.search(subject=subject)
+        if results:
+            return m.read(results[0]["uid"])
+        time.sleep(delay)
+    raise AssertionError(
+        f"message with subject {subject!r} never arrived in GreenMail for "
+        f"{m.username} after {attempts * delay:.1f}s"
+    )
+
+
+# ── Config / pure-state tests (no dependency, no doubles) ────────
 
 
 class TestMessengerInit:
@@ -29,6 +142,12 @@ class TestMessengerInit:
         assert m.username == "envuser"
         assert m.from_address == "from@test.com"
 
+    def test_encryption_none_selects_plain_smtp(self):
+        # The contract the live tests rely on: encryption="none" => use_tls False,
+        # so _smtp_send picks plain smtplib.SMTP (port != 465, no STARTTLS).
+        m = Messenger(host="localhost", port=587, encryption="none")
+        assert m.use_tls is False
+
 
 class TestMessengerHeaders:
     def test_add_default_header(self):
@@ -37,155 +156,199 @@ class TestMessengerHeaders:
         assert m._default_headers["X-Mailer"] == "Tina4"
 
 
-class TestMessengerSend:
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_send_plain_text(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
+# ── Live SMTP send + IMAP read-back (real GreenMail, no mocks) ───
 
-        m = Messenger(host="localhost", port=587, use_tls=True)
-        result = m.send(to="user@test.com", subject="Test", body="Hello")
 
+@_requires_greenmail
+class TestMessengerSendLive:
+    """Send over the REAL SMTP socket on GreenMail's plain port and read it back
+    over the REAL IMAP connection, asserting the round-trip preserves content."""
+
+    def test_send_plain_text_round_trips(self):
+        addr = _unique_address("plain")
+        m = _plain_messenger(addr)
+        subject = f"plain-{uuid.uuid4().hex[:8]}"
+
+        result = m.send(to=addr, subject=subject, body="Hello from a real SMTP send")
         assert result["success"] is True
         assert result["error"] is None
-        mock_server.starttls.assert_called_once()
-        mock_server.sendmail.assert_called_once()
 
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_send_html(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
+        msg = _wait_for_message(m, subject)
+        assert msg["subject"] == subject
+        assert "Hello from a real SMTP send" in msg["body_text"]
+        assert addr in msg["to"]
 
-        m = Messenger(host="localhost", port=587)
-        result = m.send(to="user@test.com", subject="Test", body="<h1>Hi</h1>", html=True)
+    def test_send_html_round_trips(self):
+        addr = _unique_address("html")
+        m = _plain_messenger(addr)
+        subject = f"html-{uuid.uuid4().hex[:8]}"
+
+        result = m.send(to=addr, subject=subject, body="<h1>Hi</h1>", html=True)
         assert result["success"] is True
 
-        # Verify HTML content type in the sent message
-        call_args = mock_server.sendmail.call_args
-        msg_str = call_args[0][2]
-        assert "text/html" in msg_str
+        msg = _wait_for_message(m, subject)
+        assert "<h1>Hi</h1>" in msg["body_html"]
 
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_send_with_cc_bcc(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
+    def test_send_with_text_alternative_round_trips(self):
+        addr = _unique_address("alt")
+        m = _plain_messenger(addr)
+        subject = f"alt-{uuid.uuid4().hex[:8]}"
 
-        m = Messenger(host="localhost", port=587)
         result = m.send(
-            to="user@test.com",
-            subject="Test",
-            body="Hello",
-            cc="cc@test.com",
-            bcc=["bcc1@test.com", "bcc2@test.com"],
+            to=addr, subject=subject,
+            body="<p>HTML body</p>", html=True, text="Plain alternative",
         )
         assert result["success"] is True
-        recipients = mock_server.sendmail.call_args[0][1]
-        assert "user@test.com" in recipients
-        assert "cc@test.com" in recipients
-        assert "bcc1@test.com" in recipients
-        assert "bcc2@test.com" in recipients
 
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_send_with_reply_to(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
+        msg = _wait_for_message(m, subject)
+        assert "<p>HTML body</p>" in msg["body_html"]
+        assert "Plain alternative" in msg["body_text"]
 
-        m = Messenger(host="localhost", port=587)
-        result = m.send(to="user@test.com", subject="Test", body="Hi", reply_to="reply@test.com")
-        assert result["success"] is True
-        msg_str = mock_server.sendmail.call_args[0][2]
-        assert "Reply-To: reply@test.com" in msg_str
+    def test_send_with_cc_round_trips(self):
+        addr = _unique_address("cc")
+        cc_addr = _unique_address("ccdest")
+        m = _plain_messenger(addr)
+        subject = f"cc-{uuid.uuid4().hex[:8]}"
 
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_send_with_multiple_to(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
-
-        m = Messenger(host="localhost", port=587)
-        result = m.send(to=["a@test.com", "b@test.com"], subject="Test", body="Hi")
+        result = m.send(to=addr, subject=subject, body="Body with cc", cc=cc_addr)
         assert result["success"] is True
 
-    @patch("tina4_python.messenger.smtplib.SMTP_SSL")
-    def test_send_ssl(self, mock_smtp_ssl_cls):
-        mock_server = MagicMock()
-        mock_smtp_ssl_cls.return_value = mock_server
+        # The recipient sees the Cc header round-trip.
+        msg = _wait_for_message(m, subject)
+        assert cc_addr in msg["cc"]
 
-        m = Messenger(host="smtp.test.com", port=465)
-        result = m.send(to="user@test.com", subject="SSL Test", body="Hi")
+        # And the cc'd address actually received the message (real second mailbox).
+        cc_messenger = _plain_messenger(cc_addr)
+        cc_msg = _wait_for_message(cc_messenger, subject)
+        assert cc_msg["subject"] == subject
+
+    def test_send_with_bcc_delivers_without_header(self):
+        addr = _unique_address("bccto")
+        bcc_addr = _unique_address("bccdest")
+        m = _plain_messenger(addr)
+        subject = f"bcc-{uuid.uuid4().hex[:8]}"
+
+        result = m.send(to=addr, subject=subject, body="Body with bcc", bcc=[bcc_addr])
         assert result["success"] is True
-        mock_smtp_ssl_cls.assert_called_once_with("smtp.test.com", 465, timeout=30)
 
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_send_with_auth(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
+        # The bcc recipient receives the mail (real delivery)...
+        bcc_messenger = _plain_messenger(bcc_addr)
+        bcc_msg = _wait_for_message(bcc_messenger, subject)
+        assert bcc_msg["subject"] == subject
+        # ...but the bcc address is NOT exposed in the visible headers.
+        assert bcc_addr not in bcc_msg["to"]
+        assert bcc_addr not in bcc_msg["cc"]
 
-        m = Messenger(host="localhost", port=587, username="user", password="pass")
-        m.send(to="user@test.com", subject="Test", body="Hi")
-        mock_server.login.assert_called_once_with("user", "pass")
+    def test_send_with_reply_to_round_trips(self):
+        addr = _unique_address("reply")
+        m = _plain_messenger(addr)
+        subject = f"reply-{uuid.uuid4().hex[:8]}"
 
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_send_failure(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_server.sendmail.side_effect = Exception("Connection refused")
-        mock_smtp_cls.return_value = mock_server
-
-        m = Messenger(host="localhost", port=587)
-        result = m.send(to="user@test.com", subject="Test", body="Hi")
-        assert result["success"] is False
-        assert "Connection refused" in result["error"]
-
-
-class TestMessengerAttachments:
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_dict_attachment(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
-
-        m = Messenger(host="localhost", port=587)
         result = m.send(
-            to="user@test.com",
-            subject="With attachment",
+            to=addr, subject=subject, body="Body", reply_to="reply@greenmail.local"
+        )
+        assert result["success"] is True
+
+        msg = _wait_for_message(m, subject)
+        assert "reply@greenmail.local" in str(msg["headers"].get("Reply-To", ""))
+
+    def test_send_with_multiple_to_delivers_to_all(self):
+        addr_a = _unique_address("multi_a")
+        addr_b = _unique_address("multi_b")
+        m = _plain_messenger(addr_a)
+        subject = f"multi-{uuid.uuid4().hex[:8]}"
+
+        result = m.send(to=[addr_a, addr_b], subject=subject, body="To many")
+        assert result["success"] is True
+
+        msg_a = _wait_for_message(_plain_messenger(addr_a), subject)
+        msg_b = _wait_for_message(_plain_messenger(addr_b), subject)
+        assert msg_a["subject"] == subject
+        assert msg_b["subject"] == subject
+
+    def test_send_with_auth_logs_in_and_delivers(self):
+        # Real SMTP AUTH against GreenMail (it accepts any credentials and creates
+        # the user). A failed login would raise inside _smtp_send and surface as
+        # success=False, so a successful delivery proves the real login path ran.
+        addr = _unique_address("auth")
+        m = _plain_messenger(addr)
+        subject = f"auth-{uuid.uuid4().hex[:8]}"
+
+        result = m.send(to=addr, subject=subject, body="Authenticated send")
+        assert result["success"] is True
+        assert result["error"] is None
+
+        msg = _wait_for_message(m, subject)
+        assert msg["subject"] == subject
+
+    def test_send_failure_on_closed_port(self):
+        # REAL connection refusal: point SMTP at a port nothing listens on. No
+        # mock side_effect — the OS refuses the connection for real.
+        m = Messenger(host=_CLOSED_HOST, port=_CLOSED_PORT, encryption="none")
+        result = m.send(to="user@greenmail.local", subject="Nope", body="Hi")
+        assert result["success"] is False
+        assert result["error"]
+
+
+@_requires_greenmail
+class TestMessengerAttachmentsLive:
+    """Attachments must survive the real SMTP->IMAP round-trip with content intact."""
+
+    def test_dict_attachment_round_trips(self):
+        addr = _unique_address("attach_dict")
+        m = _plain_messenger(addr)
+        subject = f"attach-dict-{uuid.uuid4().hex[:8]}"
+
+        result = m.send(
+            to=addr,
+            subject=subject,
             body="See attached",
             attachments=[{"filename": "test.txt", "content": b"hello world", "mime": "text/plain"}],
         )
         assert result["success"] is True
-        msg_str = mock_server.sendmail.call_args[0][2]
-        assert "test.txt" in msg_str
 
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_file_attachment(self, mock_smtp_cls, tmp_path):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
+        msg = _wait_for_message(m, subject)
+        names = [a["filename"] for a in msg["attachments"]]
+        assert "test.txt" in names
+        # Content survives intact (real base64 transfer-encoding round-trip).
+        data = next(a for a in msg["attachments_data"] if a["filename"] == "test.txt")
+        assert data["content"] == b"hello world"
+
+    def test_file_attachment_round_trips(self, tmp_path):
+        addr = _unique_address("attach_file")
+        m = _plain_messenger(addr)
+        subject = f"attach-file-{uuid.uuid4().hex[:8]}"
 
         f = tmp_path / "report.csv"
         f.write_text("a,b,c\n1,2,3")
 
-        m = Messenger(host="localhost", port=587)
         result = m.send(
-            to="user@test.com",
-            subject="CSV Report",
-            body="See attached",
-            attachments=[str(f)],
+            to=addr, subject=subject, body="See attached", attachments=[str(f)]
         )
         assert result["success"] is True
 
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_missing_file_skipped(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
+        msg = _wait_for_message(m, subject)
+        names = [a["filename"] for a in msg["attachments"]]
+        assert "report.csv" in names
+        data = next(a for a in msg["attachments_data"] if a["filename"] == "report.csv")
+        assert data["content"] == b"a,b,c\n1,2,3"
 
-        m = Messenger(host="localhost", port=587)
+    def test_missing_file_is_skipped_send_still_succeeds(self):
+        addr = _unique_address("attach_missing")
+        m = _plain_messenger(addr)
+        subject = f"attach-missing-{uuid.uuid4().hex[:8]}"
+
         result = m.send(
-            to="user@test.com",
-            subject="Test",
-            body="Hi",
-            attachments=["/nonexistent/file.pdf"],
+            to=addr, subject=subject, body="Hi", attachments=["/nonexistent/file.pdf"],
         )
         assert result["success"] is True
 
+        msg = _wait_for_message(m, subject)
+        assert msg["subject"] == subject
+        assert msg["attachments"] == []
 
-# ── IMAP (Read) Tests ─────────────────────────────────────────
+
+# ── IMAP config (no dependency, no doubles) ─────────────────────
 
 
 class TestIMAPConfig:
@@ -212,208 +375,204 @@ class TestIMAPConfig:
             m._imap_connect()
 
 
-class TestIMAPInbox:
-    def _mock_imap(self):
-        mock = MagicMock()
-        mock.search.return_value = ("OK", [b"1 2 3 4 5"])
-        # Build a minimal email header response
-        header = (
-            b"Subject: Test Email\r\n"
-            b"From: sender@test.com\r\n"
-            b"To: me@test.com\r\n"
-            b"Date: Mon, 01 Jan 2024 12:00:00 +0000\r\n"
-        )
-        mock.fetch.return_value = ("OK", [
-            (b"1 (FLAGS (\\Seen) BODY[HEADER] {100}", header),
-            (b"1 BODY[TEXT]<0.200> {5}", b"Hello"),
-            b")",
-        ])
-        return mock
+# ── Live IMAP inbox / read / search / actions (real GreenMail) ───
 
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_inbox_returns_messages(self, mock_imap_cls):
-        mock_conn = self._mock_imap()
-        mock_imap_cls.return_value = mock_conn
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        messages = m.inbox(limit=3)
+@_requires_greenmail
+class TestIMAPInboxLive:
+    def test_inbox_returns_delivered_messages(self):
+        addr = _unique_address("inbox")
+        m = _plain_messenger(addr)
+        subject = f"inbox-{uuid.uuid4().hex[:8]}"
+
+        m.send(to=addr, subject=subject, body="Inbox body")
+        _wait_for_message(m, subject)  # ensure delivered
+
+        messages = m.inbox(limit=10)
         assert isinstance(messages, list)
-        mock_conn.select.assert_called_once()
+        assert any(item["subject"] == subject for item in messages)
 
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_inbox_empty_folder(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        mock_conn.search.return_value = ("OK", [b""])
-        mock_imap_cls.return_value = mock_conn
+    def test_inbox_empty_folder_returns_empty_list(self):
+        # A brand-new GreenMail user with no mail: a real, successful IMAP fetch
+        # of an empty mailbox returns [] (not an error).
+        addr = _unique_address("emptybox")
+        m = _plain_messenger(addr)
+        assert m.inbox() == []
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        messages = m.inbox()
-        assert messages == []
+    def test_unread_counts_unseen_messages(self):
+        addr = _unique_address("unread")
+        m = _plain_messenger(addr)
+        subject = f"unread-{uuid.uuid4().hex[:8]}"
 
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_unread_count(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        mock_conn.search.return_value = ("OK", [b"1 2 3"])
-        mock_imap_cls.return_value = mock_conn
+        m.send(to=addr, subject=subject, body="Unseen body")
+        # Poll the real UNSEEN count until the delivery shows up.
+        count = 0
+        for _ in range(60):
+            count = m.unread()
+            if count >= 1:
+                break
+            time.sleep(0.25)
+        assert count >= 1
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        count = m.unread()
-        assert count == 3
-        mock_conn.search.assert_called_with(None, "UNSEEN")
-
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_unread_zero(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        mock_conn.search.return_value = ("OK", [b""])
-        mock_imap_cls.return_value = mock_conn
-
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
+    def test_unread_zero_on_empty_mailbox(self):
+        addr = _unique_address("unread_zero")
+        m = _plain_messenger(addr)
         assert m.unread() == 0
 
 
-class TestIMAPRead:
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_read_message(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        raw_email = (
-            b"Subject: Hello World\r\n"
-            b"From: alice@test.com\r\n"
-            b"To: bob@test.com\r\n"
-            b"Date: Mon, 01 Jan 2024 12:00:00 +0000\r\n"
-            b"Content-Type: text/plain\r\n"
-            b"\r\n"
-            b"This is the body."
-        )
-        mock_conn.fetch.return_value = ("OK", [(b"1 (RFC822 {100}", raw_email), b")"])
-        mock_imap_cls.return_value = mock_conn
+@_requires_greenmail
+class TestIMAPReadLive:
+    def test_read_plain_message(self):
+        addr = _unique_address("read_plain")
+        m = _plain_messenger(addr)
+        subject = f"read-{uuid.uuid4().hex[:8]}"
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        msg = m.read("1")
-        assert msg["subject"] == "Hello World"
-        assert msg["from"] == "alice@test.com"
-        assert "This is the body" in msg["body_text"]
+        m.send(to=addr, subject=subject, body="This is the body.")
+        results = []
+        for _ in range(60):
+            results = m.search(subject=subject)
+            if results:
+                break
+            time.sleep(0.25)
+        assert results, "message never arrived"
 
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_read_html_message(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        raw_email = (
-            b"Subject: HTML Test\r\n"
-            b"From: alice@test.com\r\n"
-            b"To: bob@test.com\r\n"
-            b"Date: Mon, 01 Jan 2024 12:00:00 +0000\r\n"
-            b"Content-Type: text/html\r\n"
-            b"\r\n"
-            b"<h1>Hello</h1>"
-        )
-        mock_conn.fetch.return_value = ("OK", [(b"1 (RFC822 {100}", raw_email), b")"])
-        mock_imap_cls.return_value = mock_conn
+        msg = m.read(results[0]["uid"])
+        assert msg["subject"] == subject
+        assert "sender@greenmail.local" in msg["from"]
+        assert "This is the body." in msg["body_text"]
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        msg = m.read("1")
+    def test_read_html_message(self):
+        addr = _unique_address("read_html")
+        m = _plain_messenger(addr)
+        subject = f"read-html-{uuid.uuid4().hex[:8]}"
+
+        m.send(to=addr, subject=subject, body="<h1>Hello</h1>", html=True)
+        msg = _wait_for_message(m, subject)
         assert "<h1>Hello</h1>" in msg["body_html"]
 
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_read_not_found(self, mock_imap_cls):
-        # A non-existent UID on a real server returns OK with empty data —
-        # that is "no such message", not a protocol error, so read() -> {}.
-        mock_conn = MagicMock()
-        mock_conn.fetch.return_value = ("OK", [None])
-        mock_imap_cls.return_value = mock_conn
-
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        msg = m.read("999")
-        assert msg == {}
+    def test_read_not_found_returns_empty(self):
+        # A non-existent UID on a real server returns an empty fetch -> {}.
+        addr = _unique_address("read_missing")
+        m = _plain_messenger(addr)
+        assert m.read("999999") == {}
 
 
-class TestIMAPSearch:
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_search_by_subject(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        mock_conn.search.return_value = ("OK", [b"1 2"])
-        header = b"Subject: Invoice\r\nFrom: a@t.com\r\nTo: b@t.com\r\nDate: Mon, 01 Jan 2024 12:00:00 +0000\r\n"
-        mock_conn.fetch.return_value = ("OK", [
-            (b"1 (FLAGS () BODY[HEADER] {50}", header),
-            (b"1 BODY[TEXT]<0.200> {3}", b"Hi"),
-            b")",
-        ])
-        mock_imap_cls.return_value = mock_conn
+@_requires_greenmail
+class TestIMAPSearchLive:
+    def test_search_by_subject(self):
+        addr = _unique_address("search_subj")
+        m = _plain_messenger(addr)
+        token = uuid.uuid4().hex[:8]
+        subject = f"Invoice {token}"
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        results = m.search(subject="Invoice")
-        mock_conn.search.assert_called_with(None, 'SUBJECT "Invoice"')
+        m.send(to=addr, subject=subject, body="Hi")
+        _wait_for_message(m, subject)
 
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_search_unseen(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        mock_conn.search.return_value = ("OK", [b""])
-        mock_imap_cls.return_value = mock_conn
+        results = m.search(subject=f"Invoice {token}")
+        assert results
+        assert any(token in r["subject"] for r in results)
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
+    def test_search_unseen_only(self):
+        addr = _unique_address("search_unseen")
+        m = _plain_messenger(addr)
+        subject = f"unseen-{uuid.uuid4().hex[:8]}"
+
+        m.send(to=addr, subject=subject, body="Hi")
+        # Wait for the message to be deliverable, then search UNSEEN.
+        for _ in range(60):
+            if m.unread() >= 1:
+                break
+            time.sleep(0.25)
         results = m.search(unseen_only=True)
-        mock_conn.search.assert_called_with(None, "UNSEEN")
+        assert any(r["subject"] == subject for r in results)
 
 
-class TestIMAPActions:
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_mark_read(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        mock_imap_cls.return_value = mock_conn
+@_requires_greenmail
+class TestIMAPActionsLive:
+    def test_mark_read_and_unread(self):
+        addr = _unique_address("mark")
+        m = _plain_messenger(addr)
+        subject = f"mark-{uuid.uuid4().hex[:8]}"
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        m.mark_read("1")
-        mock_conn.store.assert_called_with(b"1", "+FLAGS", "\\Seen")
+        m.send(to=addr, subject=subject, body="Hi")
+        # search() uses BODY.PEEK so it does NOT change the seen flag.
+        results = []
+        for _ in range(60):
+            results = m.search(subject=subject)
+            if results:
+                break
+            time.sleep(0.25)
+        assert results
+        uid = results[0]["uid"]
+        assert m.unread() >= 1  # delivered as unseen
 
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_mark_unread(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        mock_imap_cls.return_value = mock_conn
+        m.mark_read(uid)
+        # The message we marked is now seen — it should not be in UNSEEN search.
+        seen_results = m.search(unseen_only=True)
+        assert all(r["uid"] != uid for r in seen_results)
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        m.mark_unread("1")
-        mock_conn.store.assert_called_with(b"1", "-FLAGS", "\\Seen")
+        m.mark_unread(uid)
+        unseen_again = m.search(unseen_only=True)
+        assert any(r["uid"] == uid for r in unseen_again)
 
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_delete(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        mock_imap_cls.return_value = mock_conn
+    def test_delete_removes_message(self):
+        addr = _unique_address("delete")
+        m = _plain_messenger(addr)
+        subject = f"delete-{uuid.uuid4().hex[:8]}"
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
-        m.delete("1")
-        mock_conn.store.assert_called_with(b"1", "+FLAGS", "\\Deleted")
-        mock_conn.expunge.assert_called_once()
+        m.send(to=addr, subject=subject, body="Delete me")
+        results = []
+        for _ in range(60):
+            results = m.search(subject=subject)
+            if results:
+                break
+            time.sleep(0.25)
+        assert results
+        uid = results[0]["uid"]
 
-    @patch("tina4_python.messenger.imaplib.IMAP4_SSL")
-    def test_folders(self, mock_imap_cls):
-        mock_conn = MagicMock()
-        mock_conn.list.return_value = ("OK", [
-            b'(\\HasNoChildren) "/" "INBOX"',
-            b'(\\HasNoChildren) "/" "Sent"',
-            b'(\\HasNoChildren) "/" "Trash"',
-        ])
-        mock_imap_cls.return_value = mock_conn
+        m.delete(uid)
+        # After expunge, the message is gone from the live mailbox.
+        assert m.search(subject=subject) == []
 
-        m = Messenger(imap_host="imap.test.com", username="user", password="pass")
+    def test_folders_lists_inbox(self):
+        addr = _unique_address("folders")
+        m = _plain_messenger(addr)
         folders = m.folders()
         assert "INBOX" in folders
-        assert "Sent" in folders
-        assert "Trash" in folders
 
 
-class TestTestConnection:
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_success(self, mock_smtp_cls):
-        mock_server = MagicMock()
-        mock_smtp_cls.return_value = mock_server
+# ── Live SMTP/IMAP connectivity checks (real GreenMail) ──────────
 
-        m = Messenger(host="localhost", port=587)
+
+@_requires_greenmail
+class TestConnectionLive:
+    def test_smtp_connection_success(self):
+        addr = _unique_address("conn_smtp")
+        m = _plain_messenger(addr)
         result = m.test_connection()
         assert result["success"] is True
+        assert result["error"] is None
 
-    @patch("tina4_python.messenger.smtplib.SMTP")
-    def test_failure(self, mock_smtp_cls):
-        mock_smtp_cls.side_effect = Exception("Connection refused")
-
-        m = Messenger(host="localhost", port=587)
+    def test_smtp_connection_failure_on_closed_port(self):
+        # REAL refusal against a closed port (no mock side_effect).
+        m = Messenger(host=_CLOSED_HOST, port=_CLOSED_PORT, encryption="none")
         result = m.test_connection()
         assert result["success"] is False
-        assert "Connection refused" in result["error"]
+        assert result["error"]
+
+    def test_imap_connection_success(self):
+        addr = _unique_address("conn_imap")
+        m = _plain_messenger(addr)
+        result = m.test_imap_connection()
+        assert result["success"] is True
+        assert result["error"] is None
+
+    def test_imap_connection_failure_on_closed_port(self):
+        m = Messenger(
+            imap_host=_CLOSED_HOST, imap_port=_CLOSED_PORT,
+            username="user", password="pass",
+        )
+        m.imap_encryption = "none"
+        result = m.test_imap_connection()
+        assert result["success"] is False
+        assert result["error"]

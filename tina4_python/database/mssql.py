@@ -116,7 +116,11 @@ class MSSQLAdapter(DatabaseAdapter):
         # the main cursor half-consumed, and the main query below is
         # deliberately NOT wrapped so its error FAILS LOUD (parity with
         # execute()) instead of looking like "no rows".
-        count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
+        # Strip a trailing top-level ORDER BY before wrapping: SQL Server rejects
+        # ORDER BY in a derived-table subquery without TOP/OFFSET/FETCH (#262),
+        # which otherwise zeroed the count for any query ending in ORDER BY. The
+        # paginated query below keeps its ORDER BY.
+        count_sql = f"SELECT COUNT(*) AS cnt FROM ({self._strip_trailing_order_by(sql)}) AS _count_subquery"
         probe = self._conn.cursor(as_dict=True)
         try:
             probe.execute(count_sql, tuple(params) if params else ())

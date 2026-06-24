@@ -409,6 +409,47 @@ class DatabaseAdapter:
         return stripped
 
     @staticmethod
+    def _strip_trailing_order_by(sql: str) -> str:
+        """Strip a trailing top-level ``ORDER BY`` so the SQL can be safely
+        wrapped in ``SELECT COUNT(*) FROM (<sql>)`` for the row-count probe.
+
+        SQL Server rejects an ``ORDER BY`` inside a derived-table subquery
+        unless it carries ``TOP``/``OFFSET``/``FETCH`` (error 20018), which
+        silently zeroed the MSSQL count probe for any query ending in
+        ``ORDER BY`` (issue #262 -- the bug existed in this master adapter too,
+        not only the mirrors). ``ORDER BY`` does not affect ``COUNT(*)``, so
+        dropping it for the probe ONLY is safe; the paginated query keeps its
+        ``ORDER BY`` for ``OFFSET/FETCH``. An ``ORDER BY`` nested in a subquery,
+        or one already legalised by a following ``OFFSET``/``FETCH``/``FOR``, is
+        left intact. Parity with PHP ``SqlNormalizerTrait::stripTrailingOrderBy``.
+        """
+        if not sql or not re.search(r"\bORDER\s+BY\b", sql, re.IGNORECASE):
+            return sql
+        last_top_level = -1
+        for match in re.finditer(r"\bORDER\s+BY\b", sql, re.IGNORECASE):
+            pos = match.start()
+            before = sql[:pos]
+            balanced_before = before.count("(") == before.count(")")
+            depth = 0
+            balanced_after = True
+            for ch in sql[pos:]:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth < 0:
+                        balanced_after = False
+                        break
+            if balanced_before and balanced_after:
+                last_top_level = pos
+        if last_top_level == -1:
+            return sql
+        tail = sql[last_top_level:]
+        if re.search(r"\b(?:OFFSET|FETCH|FOR)\b", tail, re.IGNORECASE):
+            return sql
+        return sql[:last_top_level].rstrip()
+
+    @staticmethod
     def _split_schema(name: str) -> tuple[str | None, str]:
         """Split a possibly-qualified table name into (schema, table).
 
