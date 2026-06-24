@@ -481,17 +481,26 @@ class TestResolveHandlerDatabase:
     def test_resolve_handler_database(self, monkeypatch):
         from tina4_python.session import Session, DatabaseSessionHandler
         from tina4_python.database import Database
+        from tina4_python.orm import model as orm_model
 
         monkeypatch.setenv("TINA4_SESSION_BACKEND", "database")
-        # DatabaseSessionHandler requires a db arg; patch it to accept no-arg construction
+        # Bind a REAL in-memory SQLite database — the database backend resolves
+        # whatever connection the ORM is bound to, exactly as it does in a live
+        # app. No patching: _resolve_handler() runs for real and the returned
+        # handler is wired to this real db.
+        prev_db = orm_model._database
         db = Database("sqlite::memory:")
-        with patch(
-            "tina4_python.session.DatabaseSessionHandler",
-            return_value=DatabaseSessionHandler(db),
-        ) as mock_cls:
+        orm_model.bind_database(db)
+        try:
             handler = Session._resolve_handler()
-            mock_cls.assert_called_once()
             assert isinstance(handler, DatabaseSessionHandler)
+            # Exercise the real handler end-to-end against the real SQLite db.
+            handler.write("resolve-1", {"user_id": 5}, ttl=3600)
+            assert handler.read("resolve-1") == {"user_id": 5}
+            handler.destroy("resolve-1")
+            assert handler.read("resolve-1") == {}
+        finally:
+            orm_model._database = prev_db
 
 
 # ── Session Integration Tests ────────────────────────────────────

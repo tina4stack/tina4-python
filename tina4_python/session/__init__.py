@@ -195,7 +195,11 @@ class Session:
             from tina4_python.session_handlers import MongoDBSessionHandler
             return MongoDBSessionHandler()
         elif backend in ("database", "db"):
-            return DatabaseSessionHandler()
+            # Resolve the same connection the ORM uses (global bound db, then
+            # TINA4_DATABASE_URL). DatabaseSessionHandler "uses whatever DB is
+            # connected" — so reuse the single ORM resolver rather than guess.
+            from tina4_python.orm.model import ORM
+            return DatabaseSessionHandler(ORM._get_db())
         else:
             return FileSessionHandler()
 
