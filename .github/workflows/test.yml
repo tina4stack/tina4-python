@@ -136,7 +136,7 @@ jobs:
           echo "Kafka did not become ready in 60s"; docker logs tina4-kafka | tail -40; exit 1
 
       - name: Install dependencies
-        run: pip install uv && uv sync && uv pip install pymongo confluent-kafka pika psycopg2-binary mysql-connector-python pymssql
+        run: pip install uv && uv sync && uv pip install pymongo confluent-kafka pika psycopg2-binary mysql-connector-python pymssql redis
 
       # The MSSQL image boots with no user database; create tina4_test once the
       # server is healthy (the live MSSQL tests connect to it).
