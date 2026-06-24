@@ -49,6 +49,51 @@ def _assert_batch(db, create_sql, table="batch_people"):
         if result.last_id is not None:
             max_id = db.fetch(f"SELECT MAX(id) AS m FROM {table}").records[0]["m"]
             assert result.last_id == max_id, "last_id must be the final inserted row's id"
+
+        # 3: a single-object insert is unaffected (one row, affected_rows == 1).
+        single = db.insert(table, {"name": "Frank", "age": 40})
+        db.commit()
+        assert single.affected_rows == 1, "single-row insert affects exactly one row"
+        assert db.fetch(f"SELECT COUNT(*) AS c FROM {table}").records[0]["c"] == 4
+
+        # 4: an empty array is a 0-row no-op, not a crash (count unchanged).
+        empty = db.insert(table, [])
+        db.commit()
+        assert empty.affected_rows == 0, "empty-array insert affects no rows"
+        assert db.fetch(f"SELECT COUNT(*) AS c FROM {table}").records[0]["c"] == 4
+    finally:
+        db.execute(f"DROP TABLE IF EXISTS {table}")
+        db.commit()
+
+
+def _assert_atomic_rollback(db, create_sql, table="batch_rollback"):
+    """Point 5 of the contract: a bad row (NULL into a NOT NULL column) rolls the
+    WHOLE batch back as one transaction — no partial write. Kept as a dedicated
+    helper on a FRESH table (matching the Ruby/PHP one-transaction-rollback test)
+    so it never inherits transaction state from the contract run above."""
+    try:
+        db.rollback()  # clear any leftover txn state so the measurement is clean
+    except Exception:
+        pass
+    db.execute(f"DROP TABLE IF EXISTS {table}")
+    db.commit()
+    db.execute(create_sql)
+    db.commit()
+    try:
+        # db.insert fails loud (execute raises) and execute_many rolls the batch
+        # back before the raise propagates, so nothing is left half-applied.
+        with pytest.raises(Exception):
+            db.insert(table, [
+                {"name": "rb1", "age": 1},
+                {"name": "rb2", "age": 2},
+                {"name": None, "age": 3},  # violates NOT NULL
+            ])
+        try:
+            db.rollback()  # clear the aborted-txn state for the read below
+        except Exception:
+            pass
+        after = db.fetch(f"SELECT COUNT(*) AS c FROM {table}").records[0]["c"]
+        assert after == 0, "a bad row must roll the whole batch back (no partial insert)"
     finally:
         db.execute(f"DROP TABLE IF EXISTS {table}")
         db.commit()
@@ -59,7 +104,11 @@ def test_sqlite_batch_insert_list_of_dicts():
         db = Database("sqlite:///" + os.path.join(d, "batch.db"))
         _assert_batch(
             db,
-            "CREATE TABLE batch_people (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, age INTEGER)",
+            "CREATE TABLE batch_people (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, age INTEGER)",
+        )
+        _assert_atomic_rollback(
+            db,
+            "CREATE TABLE batch_rollback (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, age INTEGER)",
         )
         db.close()
 
@@ -87,7 +136,8 @@ def _reachable(host, port):
 def test_postgres_batch_insert_list_of_dicts():
     db = Database(f"postgresql://{_PG['host']}:{_PG['port']}/{_PG['db']}", _PG["user"], _PG["pwd"])
     try:
-        _assert_batch(db, "CREATE TABLE batch_people (id SERIAL PRIMARY KEY, name VARCHAR(100), age INTEGER)")
+        _assert_batch(db, "CREATE TABLE batch_people (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, age INTEGER)")
+        _assert_atomic_rollback(db, "CREATE TABLE batch_rollback (id SERIAL PRIMARY KEY, name VARCHAR(100) NOT NULL, age INTEGER)")
     finally:
         db.close()
 
@@ -127,7 +177,8 @@ def _has_mysql_connector():
 def test_mysql_batch_insert_list_of_dicts():
     db = Database(_mysql_url(), _MYSQL_USER, _MYSQL_PASS)
     try:
-        _assert_batch(db, "CREATE TABLE batch_people (id INTEGER NOT NULL AUTO_INCREMENT, name VARCHAR(100), age INTEGER, PRIMARY KEY(id))")
+        _assert_batch(db, "CREATE TABLE batch_people (id INTEGER NOT NULL AUTO_INCREMENT, name VARCHAR(100) NOT NULL, age INTEGER, PRIMARY KEY(id))")
+        _assert_atomic_rollback(db, "CREATE TABLE batch_rollback (id INTEGER NOT NULL AUTO_INCREMENT, name VARCHAR(100) NOT NULL, age INTEGER, PRIMARY KEY(id)) ENGINE=InnoDB")
     finally:
         db.close()
 
@@ -160,6 +211,7 @@ def _has_pymssql():
 def test_mssql_batch_insert_list_of_dicts():
     db = Database(_mssql_url(), _MSSQL_USER, _MSSQL_PASS)
     try:
-        _assert_batch(db, "CREATE TABLE batch_people (id INTEGER IDENTITY(1,1) NOT NULL, name VARCHAR(100), age INTEGER, PRIMARY KEY(id))")
+        _assert_batch(db, "CREATE TABLE batch_people (id INTEGER IDENTITY(1,1) NOT NULL, name VARCHAR(100) NOT NULL, age INTEGER, PRIMARY KEY(id))")
+        _assert_atomic_rollback(db, "CREATE TABLE batch_rollback (id INTEGER IDENTITY(1,1) NOT NULL, name VARCHAR(100) NOT NULL, age INTEGER, PRIMARY KEY(id))")
     finally:
         db.close()

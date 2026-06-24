@@ -93,23 +93,43 @@ class SQLiteAdapter(DatabaseAdapter):
             )
 
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
-        """Optimized batch execute using SQLite's executemany."""
+        """Optimized batch execute using SQLite's executemany — ATOMIC (one txn).
+
+        The batch runs inside one transaction so a bad row mid-batch rolls the
+        WHOLE batch back (all-or-nothing) instead of leaving the rows applied
+        before the failure in an open, uncommitted transaction. Mirrors the base
+        DatabaseAdapter.execute_many owns-transaction guard and the other engines.
+        """
         sql = self._translate_sql(sql)
         rows = params_list or []
-        self._conn.executemany(sql, rows)
 
-        # cursor.rowcount / cursor.lastrowid are unreliable after executemany()
-        # in sqlite3 (rowcount can come back 0 or -1, lastrowid is not set) and
-        # were non-deterministic across pooled connections. The batch is
-        # all-or-raise, so every supplied row was applied; the last inserted id
-        # is read deterministically from last_insert_rowid() on this connection.
-        affected = len(rows)
-        last_row = self._conn.execute("SELECT last_insert_rowid()").fetchone()
-        last_id = last_row[0] if last_row and last_row[0] else None
+        # Own (and commit/rollback) the batch transaction only for a standalone
+        # write in autocommit mode — never inside a caller's explicit transaction.
+        standalone = self.autocommit and not self._in_transaction
+        if standalone and not self._conn.in_transaction:
+            self._conn.execute("BEGIN")
 
-        if not self._in_transaction and self.autocommit:
-            if self._conn.in_transaction:
-                self._conn.execute("COMMIT")
+        try:
+            self._conn.executemany(sql, rows)
+            # cursor.rowcount / cursor.lastrowid are unreliable after executemany()
+            # in sqlite3 (rowcount can come back 0 or -1, lastrowid is not set).
+            # The batch is all-or-nothing, so every supplied row was applied; read
+            # the last inserted id deterministically from last_insert_rowid().
+            affected = len(rows)
+            last_row = self._conn.execute("SELECT last_insert_rowid()").fetchone()
+            last_id = last_row[0] if last_row and last_row[0] else None
+        except Exception:
+            # Roll the partial batch back so nothing is left half-applied, then
+            # FAIL LOUD (re-raise) — parity with execute() and the other engines.
+            if standalone and self._conn.in_transaction:
+                try:
+                    self._conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+            raise
+
+        if standalone and self._conn.in_transaction:
+            self._conn.execute("COMMIT")
 
         return DatabaseResult(
             affected_rows=affected,
