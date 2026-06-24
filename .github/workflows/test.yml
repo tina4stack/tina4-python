@@ -49,6 +49,27 @@ jobs:
         ports: ['5672:5672', '15672:15672']
         options: >-
           --health-cmd "rabbitmq-diagnostics -q ping" --health-interval 10s --health-timeout 5s --health-retries 20
+      # MySQL 8 + MSSQL 2022 (#262). The MSSQL image starts with no user
+      # database, so a later step CREATEs tina4_test once it is healthy.
+      mysql:
+        image: mysql:8
+        ports: ['3306:3306']
+        env:
+          MYSQL_DATABASE: tina4_test
+          MYSQL_USER: tina4
+          MYSQL_PASSWORD: tina4
+          MYSQL_ROOT_PASSWORD: tina4
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ptina4" --health-interval 5s --health-timeout 3s --health-retries 20
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        ports: ['1433:1433']
+        env:
+          ACCEPT_EULA: 'Y'
+          SA_PASSWORD: 'TinaSQL123!Secure'
+          MSSQL_PID: Developer
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'TinaSQL123!Secure' -C -Q 'SELECT 1' || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'TinaSQL123!Secure' -Q 'SELECT 1'" --health-interval 10s --health-timeout 5s --health-retries 20
 
     env:
       # Enable the real-service integration tests (they skip when unset).
@@ -64,6 +85,18 @@ jobs:
       TINA4_TEST_RABBITMQ_URL: amqp://guest:guest@localhost:5672
       TINA4_TEST_KAFKA_URL: localhost:9092
       TINA4_KAFKA_BROKERS: localhost:9092
+      # MySQL 8 + MSSQL 2022 (#262) — mirror the service containers above; the
+      # MySQL/MSSQL live tests default to these host/port values.
+      TINA4_TEST_MYSQL_HOST: localhost
+      TINA4_TEST_MYSQL_PORT: '3306'
+      TINA4_TEST_MYSQL_USER: tina4
+      TINA4_TEST_MYSQL_PASS: tina4
+      TINA4_TEST_MYSQL_DB: tina4_test
+      TINA4_TEST_MSSQL_HOST: localhost
+      TINA4_TEST_MSSQL_PORT: '1433'
+      TINA4_TEST_MSSQL_USER: sa
+      TINA4_TEST_MSSQL_PASS: 'TinaSQL123!Secure'
+      TINA4_TEST_MSSQL_DB: tina4_test
       # Turn a missing provisioned service into a hard failure (no green skips).
       TINA4_REQUIRE_SERVICES: '1'
 
@@ -103,7 +136,20 @@ jobs:
           echo "Kafka did not become ready in 60s"; docker logs tina4-kafka | tail -40; exit 1
 
       - name: Install dependencies
-        run: pip install uv && uv sync && uv pip install pymongo confluent-kafka pika psycopg2-binary
+        run: pip install uv && uv sync && uv pip install pymongo confluent-kafka pika psycopg2-binary mysql-connector-python pymssql
+
+      # The MSSQL image boots with no user database; create tina4_test once the
+      # server is healthy (the live MSSQL tests connect to it).
+      - name: Create MSSQL database (tina4_test)
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec "$(docker ps -qf ancestor=mcr.microsoft.com/mssql/server:2022-latest)" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'TinaSQL123!Secure' -Q "IF DB_ID('tina4_test') IS NULL CREATE DATABASE tina4_test" 2>/dev/null \
+               || docker exec "$(docker ps -qf ancestor=mcr.microsoft.com/mssql/server:2022-latest)" /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'TinaSQL123!Secure' -Q "IF DB_ID('tina4_test') IS NULL CREATE DATABASE tina4_test" 2>/dev/null; then
+              echo "tina4_test database ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "MSSQL never became ready to create tina4_test"; exit 1
 
       - name: Run tests
         run: uv run pytest tests/ -v
