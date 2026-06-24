@@ -7,9 +7,40 @@ Tests cover:
 """
 import json
 import os
+import socket as _socket
 import time
+from urllib.parse import urlparse
 import pytest
 from unittest.mock import MagicMock, patch
+
+
+# ── Live-service targets ─────────────────────────────────────────
+# The integration tests below run a real write->read->destroy round-trip against
+# the provisioned Redis/MongoDB/Valkey. They are gated on the service being
+# REACHABLE (not on an opt-in env var), so they RUN BY DEFAULT whenever the
+# local/CI infra is up — the same pattern the other real-service suites use
+# (test_queue_backends, test_database_drivers). An env var still overrides the
+# target (CI sets TINA4_TEST_*_URL); it just defaults to the local docker infra.
+# Under TINA4_REQUIRE_SERVICES (CI) a "not reachable" skip becomes a hard failure
+# (see conftest.py), so a provisioned session backend can never silently no-op.
+
+
+def _service_target(env_var: str, default_url: str, default_port: int) -> tuple[str, int]:
+    parsed = urlparse(os.environ.get(env_var) or default_url)
+    return (parsed.hostname or "localhost", parsed.port or default_port)
+
+
+def _reachable(host: str, port: int, timeout: float = 1.5) -> bool:
+    try:
+        with _socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+_REDIS_HOST, _REDIS_PORT = _service_target("TINA4_TEST_REDIS_URL", "redis://localhost:6379", 6379)
+_MONGO_HOST, _MONGO_PORT = _service_target("TINA4_TEST_MONGO_URL", "mongodb://localhost:27017", 27017)
+_VALKEY_HOST, _VALKEY_PORT = _service_target("TINA4_TEST_VALKEY_URL", "redis://localhost:6380", 6380)
 
 
 # ── Interface Contract Tests ─────────────────────────────────────
@@ -511,16 +542,16 @@ class TestSessionWithHandlers:
 
 
 @pytest.mark.skipif(
-    not os.environ.get("TINA4_TEST_REDIS_URL"),
-    reason="TINA4_TEST_REDIS_URL not set"
+    not _reachable(_REDIS_HOST, _REDIS_PORT),
+    reason="redis not reachable"
 )
 class TestRedisIntegration:
-    """Integration tests that require an actual Redis server."""
+    """Integration tests that drive a real Redis server (no mocks)."""
 
     def test_read_write_destroy_cycle(self):
         from tina4_python.session_handlers.redis_handler import RedisSessionHandler
 
-        handler = RedisSessionHandler(ttl=60)
+        handler = RedisSessionHandler(host=_REDIS_HOST, port=_REDIS_PORT, ttl=60)
         handler.write("int-test", {"user_id": 99})
         data = handler.read("int-test")
         assert data["user_id"] == 99
@@ -530,16 +561,16 @@ class TestRedisIntegration:
 
 
 @pytest.mark.skipif(
-    not os.environ.get("TINA4_TEST_MONGO_URL"),
-    reason="TINA4_TEST_MONGO_URL not set"
+    not _reachable(_MONGO_HOST, _MONGO_PORT),
+    reason="mongo not reachable"
 )
 class TestMongoDBIntegration:
-    """Integration tests that require an actual MongoDB server."""
+    """Integration tests that drive a real MongoDB server (no mocks)."""
 
     def test_read_write_destroy_cycle(self):
         from tina4_python.session_handlers.mongodb_handler import MongoDBSessionHandler
 
-        handler = MongoDBSessionHandler(ttl=60)
+        handler = MongoDBSessionHandler(url=f"mongodb://{_MONGO_HOST}:{_MONGO_PORT}", ttl=60)
         handler.write("int-test", {"user_id": 99})
         data = handler.read("int-test")
         assert data["user_id"] == 99
@@ -549,16 +580,16 @@ class TestMongoDBIntegration:
 
 
 @pytest.mark.skipif(
-    not os.environ.get("TINA4_TEST_VALKEY_URL"),
-    reason="TINA4_TEST_VALKEY_URL not set"
+    not _reachable(_VALKEY_HOST, _VALKEY_PORT),
+    reason="valkey not reachable"
 )
 class TestValkeyIntegration:
-    """Integration tests that require an actual Valkey server."""
+    """Integration tests that drive a real Valkey server (no mocks)."""
 
     def test_read_write_destroy_cycle(self):
         from tina4_python.session_handlers.valkey_handler import ValkeySessionHandler
 
-        handler = ValkeySessionHandler(ttl=60)
+        handler = ValkeySessionHandler(host=_VALKEY_HOST, port=_VALKEY_PORT, ttl=60)
         handler.write("int-test", {"user_id": 99})
         data = handler.read("int-test")
         assert data["user_id"] == 99
