@@ -332,59 +332,137 @@ def _normalize_quotes(sql: str) -> str:
 
 
 def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
-    """Split SQL into individual statements.
+    """Split SQL into individual statements with a single-pass, quote- and
+    comment-aware scanner.
 
-    Handles:
-    - Line comments (-- ...)
-    - Block comments (/* ... */)
-    - Empty statements
-    - Stored procedure blocks delimited by $$ or //
-      Example:
-          CREATE TRIGGER foo $$ BEGIN ... END $$;
-          CREATE PROCEDURE bar // BEGIN ... END //;
+    The split decision is made character by character so the delimiter only ever
+    fires in real statement position. This is the fix for issue #54: the old
+    implementation split on ``delimiter`` BEFORE stripping ``-- …`` line comments,
+    so a ``;`` *inside* a line comment fragmented one statement into several
+    broken pieces. A scanner that knows where it is — code, comment, or string —
+    cannot make that mistake.
+
+    Handled, in priority order, only when NOT already inside a stored-proc block:
+
+    - **Stored-procedure blocks** delimited by ``$$`` or ``//`` are kept intact
+      (their inner ``;`` never splits). A ``//`` preceded by ``:`` is a URL
+      scheme (``https://…``), not a block delimiter, so it is left alone.
+    - **Block comments** ``/* … */`` are stripped.
+    - **Line comments** ``-- …`` are stripped to end of line (the newline is
+      kept, so line structure survives). A ``;`` here never splits.
+    - **String literals** — single-quoted ``'…'`` and double-quoted identifiers
+      ``"…"`` — are copied verbatim, honouring the SQL doubled-quote escape
+      (``''`` / ``""``). A ``;``, ``--`` or ``/*`` inside a literal is data, not
+      a delimiter or comment, so it is preserved untouched.
+    - The **delimiter** ends a statement only when reached outside all of the
+      above. Empty statements are dropped; each kept statement is trimmed.
+
+    Smart/curly quotes are normalized to straight ASCII first. Mirrors the
+    tina4-php ``Migration::splitStatements`` scanner for cross-framework parity.
     """
     # Normalize smart/curly quotes to straight ASCII first, so SQL pasted from
     # an editor/doc (which converts " → “ ” and ' → ‘ ’) actually runs.
     sql = _normalize_quotes(sql)
 
-    # Extract blocks delimited by $$ or // first, replacing them with placeholders
-    blocks: list[str] = []
+    statements: list[str] = []
+    current: list[str] = []
+    n = len(sql)
+    dlen = len(delimiter)
+    i = 0
+    in_dollar_block = False
+    in_slash_block = False
 
-    def _save_block(m):
-        blocks.append(m.group(0))
-        return f"__BLOCK_{len(blocks) - 1}__"
+    while i < n:
+        ch = sql[i]
 
-    # Match $$ ... $$ or // ... // blocks (stored procedures, triggers, etc.).
-    # The `//` delimiters must NOT be preceded by a colon, so a URL scheme
-    # (`https://…`) or other `://` literal inside a migration is never captured
-    # as an opaque stored-proc block (it would otherwise swallow everything
-    # between two `//` occurrences and skip statement splitting/cleaning).
-    processed = re.sub(r"\$\$(.*?)\$\$", _save_block, sql, flags=re.DOTALL)
-    processed = re.sub(r"(?<!:)//(.*?)(?<!:)//", _save_block, processed, flags=re.DOTALL)
+        # $$ … $$ stored-proc block (toggle in/out).
+        if not in_slash_block and ch == "$" and i + 1 < n and sql[i + 1] == "$":
+            current.append("$$")
+            i += 2
+            in_dollar_block = not in_dollar_block
+            continue
 
-    # Remove block comments (but not inside stored proc blocks)
-    clean = re.sub(r"/\*.*?\*/", "", processed, flags=re.DOTALL)
+        # // … // stored-proc block (toggle). The `//` must NOT be preceded by a
+        # colon, so a URL scheme (`https://…`) or any `://` literal is never
+        # treated as a block delimiter (it would otherwise swallow everything
+        # between two `//` occurrences and skip statement splitting).
+        if (not in_dollar_block and ch == "/" and i + 1 < n and sql[i + 1] == "/"
+                and not (i > 0 and sql[i - 1] == ":")):
+            current.append("//")
+            i += 2
+            in_slash_block = not in_slash_block
+            continue
 
-    statements = []
-    for stmt in clean.split(delimiter):
-        # Remove line comments and blank lines
-        lines = []
-        for line in stmt.split("\n"):
-            stripped = line.strip()
-            if stripped and not stripped.startswith("--"):
-                # Remove inline comments (-- after SQL)
-                comment_pos = line.find("--")
-                if comment_pos >= 0:
-                    line = line[:comment_pos]
-                lines.append(line)
-        cleaned = "\n".join(lines).strip()
+        # Inside a stored-proc block: consume verbatim (inner ; never splits).
+        if in_dollar_block or in_slash_block:
+            current.append(ch)
+            i += 1
+            continue
 
-        # Restore block placeholders
-        for i, block in enumerate(blocks):
-            cleaned = cleaned.replace(f"__BLOCK_{i}__", block)
+        # Block comment /* … */ — stripped.
+        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
+            end = sql.find("*/", i + 2)
+            i = (end + 2) if end != -1 else n
+            continue
 
-        if cleaned:
-            statements.append(cleaned)
+        # Line comment -- … — stripped to end of line; the newline is left for
+        # the next iteration so line structure (and statement boundaries on the
+        # NEXT line) survive. A ';' inside the comment is NOT a delimiter.
+        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
+            end = sql.find("\n", i + 2)
+            i = end if end != -1 else n
+            continue
+
+        # Single-quoted string literal — '' escapes a quote. Copied verbatim so a
+        # ';' / '--' / '/*' inside the value is data, not a delimiter/comment.
+        if ch == "'":
+            current.append("'")
+            i += 1
+            while i < n:
+                if sql[i] == "'" and i + 1 < n and sql[i + 1] == "'":
+                    current.append("''")
+                    i += 2
+                elif sql[i] == "'":
+                    current.append("'")
+                    i += 1
+                    break
+                else:
+                    current.append(sql[i])
+                    i += 1
+            continue
+
+        # Double-quoted identifier — "" escapes a quote. Same verbatim handling.
+        if ch == '"':
+            current.append('"')
+            i += 1
+            while i < n:
+                if sql[i] == '"' and i + 1 < n and sql[i + 1] == '"':
+                    current.append('""')
+                    i += 2
+                elif sql[i] == '"':
+                    current.append('"')
+                    i += 1
+                    break
+                else:
+                    current.append(sql[i])
+                    i += 1
+            continue
+
+        # Statement delimiter — only reached outside blocks/comments/strings.
+        if delimiter and sql.startswith(delimiter, i):
+            stmt = "".join(current).strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+            i += dlen
+            continue
+
+        current.append(ch)
+        i += 1
+
+    stmt = "".join(current).strip()
+    if stmt:
+        statements.append(stmt)
     return statements
 
 

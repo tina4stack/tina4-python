@@ -131,6 +131,9 @@ def _compile(scss: str) -> str:
     # 6. Resolve @extend
     scss = _resolve_extends(scss, placeholders)
 
+    # 6.5. Resolve #{ ... } interpolation (before $var substitution + nesting).
+    scss = _resolve_interpolation(scss, variables)
+
     # 7. Substitute variables
     scss = _substitute_variables(scss, variables)
 
@@ -169,6 +172,27 @@ def _substitute_variables(scss: str, variables: dict) -> str:
     for name in sorted(variables.keys(), key=len, reverse=True):
         scss = scss.replace(f"${name}", variables[name])
     return scss
+
+
+def _resolve_interpolation(scss: str, variables: dict) -> str:
+    """Resolve SCSS ``#{ ... }`` interpolation.
+
+    Each ``#{ expr }`` is replaced by its resolved inner text: a ``$variable``
+    inside the braces resolves to its value, anything else is inlined verbatim
+    (trimmed). This lets a value carry a variable inside a string context the
+    plain ``$var`` substitution can't reach — e.g. ``calc(100% - #{$gap})`` ->
+    ``calc(100% - 20px)`` — and lets a variable appear in a selector
+    (``.icon-#{$name}`` -> ``.icon-home``). Run BEFORE nested-rule flattening so
+    the literal ``{``/``}`` never confuse the block matcher. The inner cannot
+    contain braces (interpolation is a leaf expression), so ``[^{}]*`` is safe.
+    """
+    def _resolve(m):
+        inner = m.group(1).strip()
+        for name in sorted(variables.keys(), key=len, reverse=True):
+            inner = inner.replace(f"${name}", variables[name])
+        return inner
+
+    return re.sub(r'#\{([^{}]*)\}', _resolve, scss)
 
 
 def _extract_mixins(scss: str, mixins: dict) -> str:

@@ -127,10 +127,19 @@ def _auto_discover(root_dir: str = "src"):
                 importlib.import_module(module_name)
                 _discovered_mtimes[module_name] = current_mtime
                 Log.debug(f"Loaded: {module_name}")
-            elif current_mtime > _discovered_mtimes.get(module_name, 0.0):
-                # Changed module — re-execute so edits to an existing route
-                # take effect in-process. Scope guard: only ever evict a module
-                # that lives under our discovery package. Deleting a
+            elif module_name not in _discovered_mtimes:
+                # Already in sys.modules but NEVER recorded by discovery — it was
+                # imported TRANSITIVELY (e.g. `from src.x import y` pulled it in
+                # before the walk reached its file). Record its current mtime as
+                # the baseline WITHOUT re-importing. Re-importing here would
+                # del+re-add a fresh module object, while the earlier importer
+                # keeps the STALE one — module-level singletons would silently
+                # diverge (issue #53). We only ever reload a module WE loaded.
+                _discovered_mtimes[module_name] = current_mtime
+            elif current_mtime > _discovered_mtimes[module_name]:
+                # Changed since WE loaded it — re-execute so edits to an existing
+                # route take effect in-process. Scope guard: only ever evict a
+                # module that lives under our discovery package. Deleting a
                 # tina4_python.* / third-party module would break shared
                 # singletons and class identity — never do that here.
                 if module_name == root_pkg or module_name.startswith(root_pkg + "."):
@@ -1322,6 +1331,28 @@ def _middleware_500(response: Response, mw_inst, method_name: str, error: Except
     })
 
 
+def _effective_middleware(route: dict) -> list:
+    """Resolve the middleware that actually runs for a route.
+
+    Global middleware (registered via ``Middleware.use`` / ``Router.use``) runs
+    on EVERY route, BEFORE the route's own middleware, in registration order.
+    The list is deduped (by class) so a class that is both global and attached
+    to the route runs once. This is the fix for issue #55 — globals were
+    registered into ``Middleware._global_middleware`` but the dispatcher only
+    ever iterated ``route["middleware"]``, so global middleware never ran.
+    Mirrors the PHP/Ruby/Node dispatchers, which already fold globals in.
+    """
+    from tina4_python.core.middleware import Middleware
+    resolved = []
+    seen = set()
+    for mw in list(Middleware.get_global()) + list(route.get("middleware", [])):
+        key = mw if isinstance(mw, type) else type(mw)
+        if key not in seen:
+            seen.add(key)
+            resolved.append(mw)
+    return resolved
+
+
 def _run_before_middleware(request: Request, response: Response, route: dict) -> tuple[Request, Response, bool]:
     """Run class-based before_* middleware methods. Returns (request, response, skip_handler).
 
@@ -1338,7 +1369,7 @@ def _run_before_middleware(request: Request, response: Response, route: dict) ->
     before_* that sets status >= 400 also short-circuits the handler.
     """
     skip = False
-    for _mw_cls in route.get("middleware", []):
+    for _mw_cls in _effective_middleware(route):
         if _is_function_middleware(_mw_cls):
             continue  # Handled by the continuation wrapper instead
         _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
@@ -1378,7 +1409,7 @@ def _run_after_middleware(request: Request, response: Response, route: dict) -> 
     Resilience (M2): each after_* call is wrapped — a method that THROWS is
     logged and converted to a clean 500; remaining after_* still run.
     """
-    for _mw_cls in route.get("middleware", []):
+    for _mw_cls in _effective_middleware(route):
         if _is_function_middleware(_mw_cls):
             continue
         _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls

@@ -329,3 +329,73 @@ def test_import_failure_writes_a_broken_sentinel(project):
     payload = sentinels[0].read_text()
     assert "auto_discover_failure" in payload
     assert "broken.py" in payload
+
+
+def test_transitively_imported_module_is_not_reimported(project):
+    """Issue #53 — a module pulled in TRANSITIVELY (imported by another src
+    file before the walk reaches its own file) must NOT be del+re-imported by
+    discovery. Re-importing mints a fresh module object while the earlier
+    importer keeps the stale one, so module-level singletons silently diverge.
+
+    Setup: ``aaa_importer`` sorts before ``zzz_state`` in the walk, so the
+    importer is loaded first and drags ``zzz_state`` into sys.modules before
+    discovery reaches ``zzz_state.py`` directly — the exact trigger condition.
+    """
+    # The shared module with a module-level singleton (object identity is the tell).
+    _write_route(project, "zzz_state", """
+        SENTINEL = object()
+    """)
+    # An earlier-sorted file that imports it transitively and captures the singleton.
+    _write_route(project, "aaa_importer", """
+        from tina4_python.core.router import get
+        import src.routes.zzz_state as _state
+        CAPTURED = _state.SENTINEL
+        @get("/uses-state")
+        async def uses_state(request, response):
+            return response({"ok": True})
+    """)
+
+    _server._auto_discover("src")
+
+    importer = sys.modules["src.routes.aaa_importer"]
+    state = sys.modules["src.routes.zzz_state"]
+
+    # The singleton the importer captured must be the SAME object the live
+    # module still exposes — i.e. zzz_state was never del+re-imported.
+    assert importer.CAPTURED is state.SENTINEL, (
+        "transitively-imported module was re-imported by discovery — its "
+        "module-level singleton diverged (issue #53)"
+    )
+    # And the importer's reference IS the module in sys.modules (no duplicate).
+    assert importer._state is state
+    # Discovery still worked — the route registered.
+    assert any(r["path"] == "/uses-state" for r in Router.get_routes())
+
+
+def test_genuinely_edited_module_still_reloads_after_transitive_load(project):
+    """The #53 guard must not block a REAL edit: once a transitively-loaded
+    module has its baseline recorded, a later edit (mtime increases) still
+    hot-reloads on the next discovery pass."""
+    import os as _os
+    import time as _time
+
+    state_path = _write_route(project, "zzz_state2", """
+        VALUE = "v1"
+    """)
+    _write_route(project, "aaa_importer2", """
+        import src.routes.zzz_state2 as _s2
+    """)
+
+    _server._auto_discover("src")
+    assert sys.modules["src.routes.zzz_state2"].VALUE == "v1"
+
+    # Edit the transitively-loaded module and bump its mtime into the future
+    # so the change is unambiguously newer than the recorded baseline.
+    state_path.write_text("VALUE = \"v2\"\n")
+    future = _time.time() + 10
+    _os.utime(state_path, (future, future))
+
+    _server._auto_discover("src")
+    assert sys.modules["src.routes.zzz_state2"].VALUE == "v2", (
+        "a genuine edit to a transitively-loaded module did not hot-reload"
+    )
