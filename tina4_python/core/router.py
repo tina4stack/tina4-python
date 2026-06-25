@@ -219,18 +219,17 @@ class Router:
         """Register a global middleware class applied to every route.
 
         Equivalent to decorating every handler with @middleware(middleware_class).
+        Delegates to the single ``Middleware`` global registry that the request
+        dispatcher actually consults — mirrors PHP ``Router::use`` ->
+        ``Middleware::use``, Ruby ``Router.use`` -> ``Middleware.use`` and the
+        Node equivalent. (Before #55 this wrote to a private ``Router._global_middleware``
+        list that nothing read, so globals registered via ``Router.use`` never ran.)
 
         Args:
             middleware_class: A class with before_*/after_* static methods.
         """
-        from tina4_python.core import middleware as _mw_module  # avoid circular import
-        if hasattr(_mw_module, "register_global"):
-            _mw_module.register_global(middleware_class)
-        else:
-            # Fallback: store in a module-level list the dispatcher can pick up.
-            if not hasattr(cls, "_global_middleware"):
-                cls._global_middleware = []
-            cls._global_middleware.append(middleware_class)
+        from tina4_python.core.middleware import Middleware  # avoid circular import
+        Middleware.use(middleware_class)
 
     @classmethod
     def get(cls, path: str, handler, middleware: list = None, swagger_meta: dict = None, template: str = None, **options) -> "RouteRef":

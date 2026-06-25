@@ -329,3 +329,36 @@ class TestScssCompilerClass:
         compiler2 = ScssCompiler(variables={"size": "16px"})
         css2 = compiler2.compile(".x { font-size: $size; }")
         assert "16px" in css2
+
+
+# ── Interpolation (#{ ... }) — issue #116 ──────────────────────
+
+
+class TestInterpolation:
+    def test_variable_interpolation_inside_calc(self):
+        # The exact issue #116 case: a variable inside calc() via #{}.
+        css = compile_string("$gap: 20px;\n.box { width: calc(100% - #{$gap}); }")
+        assert "calc(100% - 20px)" in css
+        assert "#{" not in css and "$gap" not in css
+
+    def test_interpolation_in_selector(self):
+        css = compile_string("$name: home;\n.icon-#{$name} { color: red; }")
+        assert ".icon-home" in css
+        assert "#{" not in css
+
+    def test_interpolation_literal_inlines_verbatim(self):
+        css = compile_string(".x { margin: #{10px}; }")
+        assert "margin: 10px" in css
+        assert "#{" not in css
+
+    def test_interpolation_then_plain_var_both_resolve(self):
+        scss = "$gap: 8px;\n.y { padding: $gap; width: calc(100% - #{$gap}); }"
+        css = compile_string(scss)
+        assert "padding: 8px" in css
+        assert "calc(100% - 8px)" in css
+
+    def test_mixed_unit_calc_still_preserved(self):
+        # Regression guard for the already-fixed half: a mixed-unit calc() must
+        # not be mis-folded — it stays verbatim.
+        css = compile_string(".z { height: calc(100vh - 170px); }")
+        assert "calc(100vh - 170px)" in css

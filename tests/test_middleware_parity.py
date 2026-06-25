@@ -330,3 +330,85 @@ def _make_request() -> Request:
         "scheme": "http",
     }
     return Request.from_scope(scope, body=b"")
+
+
+# ────────────────────────────────────────────────────────────────────
+# #55 — global middleware (Middleware.use / Router.use) must be dispatched
+# ────────────────────────────────────────────────────────────────────
+
+from tina4_python.core.middleware import Middleware  # noqa: E402
+from tina4_python.core.server import _run_after_middleware  # noqa: E402
+
+
+class TestGlobalMiddlewareDispatched:
+    """Global middleware registered via ``Middleware.use`` / ``Router.use`` must
+    run on every route. Before #55 the dispatcher only iterated
+    ``route['middleware']`` and never consulted the global registry, so global
+    middleware silently never ran. Mirrors PHP/Ruby/Node, which already dispatch
+    globals."""
+
+    def setup_method(self):
+        Middleware.reset()
+        Router.clear()
+
+    def teardown_method(self):
+        Middleware.reset()
+        Router.clear()
+
+    def test_middleware_use_global_runs_before_and_after(self):
+        fired = {"before": False, "after": False}
+
+        class GlobalMarker:
+            @staticmethod
+            def before_mark(req, resp):
+                fired["before"] = True
+                return req, resp
+
+            @staticmethod
+            def after_mark(req, resp):
+                fired["after"] = True
+                return req, resp
+
+        Middleware.use(GlobalMarker)
+        route = {"middleware": []}
+        req, resp = Request(), Response()
+        req, resp, _skip = _run_before_middleware(req, resp, route)
+        req, resp = _run_after_middleware(req, resp, route)
+
+        assert fired["before"] is True, "global before_* middleware did not run"
+        assert fired["after"] is True, "global after_* middleware did not run"
+
+    def test_router_use_registers_into_the_dispatched_registry(self):
+        # Router.use must land in the SAME registry the dispatcher reads
+        # (it used to write a private Router._global_middleware nothing read).
+        calls = {"n": 0}
+
+        class GlobalViaRouter:
+            @staticmethod
+            def before_count(req, resp):
+                calls["n"] += 1
+                return req, resp
+
+        Router.use(GlobalViaRouter)
+        assert GlobalViaRouter in Middleware.get_global(), \
+            "Router.use did not register into the Middleware global registry"
+
+        route = {"middleware": []}
+        req, resp = Request(), Response()
+        _run_before_middleware(req, resp, route)
+        assert calls["n"] == 1, "global middleware registered via Router.use did not run"
+
+    def test_global_not_double_run_when_also_route_level(self):
+        calls = {"n": 0}
+
+        class Once:
+            @staticmethod
+            def before_once(req, resp):
+                calls["n"] += 1
+                return req, resp
+
+        Middleware.use(Once)
+        route = {"middleware": [Once]}  # same class also attached at route level
+        req, resp = Request(), Response()
+        _run_before_middleware(req, resp, route)
+        assert calls["n"] == 1, "middleware that is both global and route-level ran twice (dedupe failed)"
