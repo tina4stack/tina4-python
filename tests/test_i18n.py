@@ -151,6 +151,73 @@ class TestI18nInterpolation:
         assert i18n.t("welcome", name="Alice") == "Bienvenue, Alice!"
 
 
+class TestI18nContractFixes:
+    """Lock-in regression tests for the cross-framework i18n bug batch.
+
+    Each writes real locale files on disk and exercises the real I18n class
+    (no mocks). Mirrored across PHP/Ruby/Node.
+    """
+
+    def _i18n(self, tmp_path, data, default="en"):
+        locale_dir = tmp_path / "locales"
+        locale_dir.mkdir(exist_ok=True)
+        (locale_dir / f"{default}.json").write_text(json.dumps(data))
+        return I18n(locale_dir=str(locale_dir), default_locale=default)
+
+    # BUG-2: leaf-alias must be first-wins and never clobber an explicit flat key
+    def test_leaf_alias_first_wins_on_conflict(self, tmp_path):
+        i18n = self._i18n(tmp_path, {
+            "nav": {"title": "Navigation Title"},
+            "page": {"title": "Page Title"},
+        })
+        assert i18n.t("title") == "Navigation Title"  # first dot-path wins
+        assert i18n.t("nav.title") == "Navigation Title"
+        assert i18n.t("page.title") == "Page Title"
+
+    def test_leaf_alias_does_not_overwrite_explicit_flat_key(self, tmp_path):
+        i18n = self._i18n(tmp_path, {
+            "home": "Flat Home",
+            "nav": {"home": "Nested Home"},
+        })
+        assert i18n.t("home") == "Flat Home"  # explicit flat wins, no data loss
+        assert i18n.t("nav.home") == "Nested Home"
+
+    # BUG-3/BUG-9: partial interpolation; missing/malformed left literal; never throws
+    def test_interpolation_partial_leaves_missing_literal(self, tmp_path):
+        i18n = self._i18n(tmp_path, {"pair": "Hi {first} and {second}"})
+        assert i18n.t("pair", first="A") == "Hi A and {second}"
+
+    def test_interpolation_never_crashes_on_stray_brace(self, tmp_path):
+        i18n = self._i18n(tmp_path, {"oops": "Set { and forget"})
+        assert i18n.t("oops", name="Alice") == "Set { and forget"
+
+    def test_interpolation_never_crashes_on_attr_or_spec(self, tmp_path):
+        i18n = self._i18n(tmp_path, {
+            "attr": "Hello {name.first}",
+            "spec": "You have {n:d} items",
+        })
+        assert i18n.t("attr", name="Alice") == "Hello {name.first}"
+        assert i18n.t("spec", n="five") == "You have {n:d} items"
+
+    # BUG-6: non-string scalars render JSON-native (true/false/null)
+    def test_non_string_scalar_coercion_json_native(self, tmp_path):
+        i18n = self._i18n(tmp_path, {"flag": True, "off": False, "nil": None, "num": 42})
+        assert i18n.t("flag") == "true"
+        assert i18n.t("off") == "false"
+        assert i18n.t("nil") == "null"
+        assert i18n.t("num") == "42"
+
+    # FP-7: translate() with a locale override restores the previous locale
+    def test_translate_override_restores_locale(self, tmp_path):
+        locale_dir = tmp_path / "locales"
+        locale_dir.mkdir(exist_ok=True)
+        (locale_dir / "en.json").write_text(json.dumps({"greeting": "Hello"}))
+        (locale_dir / "fr.json").write_text(json.dumps({"greeting": "Bonjour"}))
+        i18n = I18n(locale_dir=str(locale_dir), default_locale="en")
+        assert i18n.translate("greeting", locale="fr") == "Bonjour"
+        assert i18n.get_locale() == "en"  # restored
+
+
 class TestI18nFallback:
     """Test fallback behavior from non-default locale to default."""
 

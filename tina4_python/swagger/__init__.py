@@ -39,22 +39,10 @@ v3.13.42 — configurability for external/public APIs:
 import json
 import os
 import re
-import functools
 
 
 # ── Decorators ─────────────────────────────────────────────────
 # These attach metadata to route handlers for Swagger generation.
-
-# Every swagger attr a decorator may need to carry forward when it wraps a
-# handler that another decorator already annotated.
-_SWAGGER_ATTRS = (
-    "_swagger_description", "_swagger_detail", "_swagger_params", "_swagger_query",
-    "_swagger_summary", "_swagger_tags", "_swagger_example", "_swagger_example_content_type",
-    "_swagger_example_response", "_swagger_example_responses", "_swagger_deprecated",
-    "_swagger_model", "_swagger_model_list",
-    "_swagger_security", "_swagger_request_schema", "_swagger_response_schemas",
-)
-
 
 # ── Configuration registry ─────────────────────────────────────
 # Process-wide registries for security schemes and reusable component schemas
@@ -63,13 +51,6 @@ _SWAGGER_ATTRS = (
 # reset_registry() clears them (tests).
 _REGISTERED_SCHEMES: dict[str, dict] = {}
 _REGISTERED_SCHEMAS: dict[str, dict] = {}
-
-
-def _carry(fn, wrapper):
-    """Copy any already-set swagger attrs from fn onto wrapper (idempotent)."""
-    for attr in _SWAGGER_ATTRS:
-        if hasattr(fn, attr) and not hasattr(wrapper, attr):
-            setattr(wrapper, attr, getattr(fn, attr))
 
 
 def description(text: str = "", detail: str = "", params: dict | None = None,
@@ -99,19 +80,12 @@ def description(text: str = "", detail: str = "", params: dict | None = None,
             fn._swagger_params = params
         if query:
             fn._swagger_query = query
-
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        wrapper._swagger_description = text
-        if detail:
-            wrapper._swagger_detail = detail
-        if params:
-            wrapper._swagger_params = params
-        if query:
-            wrapper._swagger_query = query
-        _carry(fn, wrapper)
-        return wrapper
+        # No wrapper: annotate the handler in place and return the SAME object.
+        # @get is innermost and registers this exact object, so every stacked
+        # decorator must land its metadata here. A wrapper would be registered
+        # by nothing (the outer decorators never reach the router) and silently
+        # drop all metadata except the decorator adjacent to @get.
+        return fn
     return decorator
 
 
@@ -119,12 +93,7 @@ def summary(text: str):
     """Add a short summary to a route handler."""
     def decorator(fn):
         fn._swagger_summary = text
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        wrapper._swagger_summary = text
-        _carry(fn, wrapper)
-        return wrapper
+        return fn
     return decorator
 
 
@@ -140,12 +109,7 @@ def tags(tag_list):
 
     def decorator(fn):
         fn._swagger_tags = tag_list
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        wrapper._swagger_tags = tag_list
-        _carry(fn, wrapper)
-        return wrapper
+        return fn
     return decorator
 
 
@@ -160,13 +124,7 @@ def example(data: dict | list, content_type: str = "application/json"):
     def decorator(fn):
         fn._swagger_example = data
         fn._swagger_example_content_type = content_type
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        wrapper._swagger_example = data
-        wrapper._swagger_example_content_type = content_type
-        _carry(fn, wrapper)
-        return wrapper
+        return fn
     return decorator
 
 
@@ -198,13 +156,7 @@ def example_response(status_or_data, data=None):
         responses[status_code] = body
         fn._swagger_example_responses = responses
         fn._swagger_example_response = body
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        wrapper._swagger_example_responses = responses
-        wrapper._swagger_example_response = body
-        _carry(fn, wrapper)
-        return wrapper
+        return fn
     return decorator
 
 
@@ -212,12 +164,7 @@ def deprecated():
     """Mark a route as deprecated."""
     def decorator(fn):
         fn._swagger_deprecated = True
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        wrapper._swagger_deprecated = True
-        _carry(fn, wrapper)
-        return wrapper
+        return fn
     return decorator
 
 
@@ -257,12 +204,7 @@ def security(scheme_or_reqs="bearerAuth", scopes=None):
     reqs = _normalize_security(scheme_or_reqs, scopes)
     def decorator(fn):
         fn._swagger_security = reqs
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        wrapper._swagger_security = reqs
-        _carry(fn, wrapper)
-        return wrapper
+        return fn
     return decorator
 
 
@@ -274,12 +216,7 @@ def request_schema(name: str, content_type: str = "application/json"):
     """
     def decorator(fn):
         fn._swagger_request_schema = (name, content_type)
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        wrapper._swagger_request_schema = (name, content_type)
-        _carry(fn, wrapper)
-        return wrapper
+        return fn
     return decorator
 
 
@@ -294,12 +231,7 @@ def response_schema(name: str, status: int = 200, is_list: bool = False):
         existing = dict(getattr(fn, "_swagger_response_schemas", {}) or {})
         existing[int(status)] = (name, bool(is_list))
         fn._swagger_response_schemas = existing
-        @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
-            return fn(*args, **kwargs)
-        wrapper._swagger_response_schemas = existing
-        _carry(fn, wrapper)
-        return wrapper
+        return fn
     return decorator
 
 

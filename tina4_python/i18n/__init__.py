@@ -9,8 +9,25 @@ Simple key-based translations loaded from JSON files.
     _("greeting")  # "Hello" or "Bonjour" depending on locale
 """
 import os
+import re
 import json
 from pathlib import Path
+
+
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
+def _interpolate(template: str, params: dict) -> str:
+    """Substitute {name} placeholders from params.
+
+    Partial + literal-leftover: a placeholder present in params is replaced; a
+    missing or malformed placeholder ({x.y}, {n:d}, a lone brace) is left
+    untouched. Never raises -- a bad template must not crash t().
+    """
+    return _PLACEHOLDER.sub(
+        lambda m: str(params[m.group(1)]) if m.group(1) in params else m.group(0),
+        template,
+    )
 
 
 class I18n:
@@ -61,12 +78,11 @@ class I18n:
         if value is None:
             value = key
 
-        # Interpolate
+        # Interpolate {placeholder} tokens. Partial substitution: each token
+        # present in kwargs is replaced; a missing or malformed placeholder is
+        # left literal. Never raises (a bad template must not crash t()).
         if kwargs:
-            try:
-                value = value.format(**kwargs)
-            except (KeyError, IndexError):
-                pass
+            value = _interpolate(value, kwargs)
 
         return value
 
@@ -86,9 +102,10 @@ class I18n:
         if locale:
             old = self._current_locale
             self.locale = locale
-            result = self.t(key, **(params or {}))
-            self.locale = old
-            return result
+            try:
+                return self.t(key, **(params or {}))
+            finally:
+                self.locale = old
         return self.t(key, **(params or {}))
 
     def load_translations(self, locale: str) -> dict:
@@ -183,27 +200,49 @@ class I18n:
 
     @staticmethod
     def _flatten(data: dict, prefix: str = "") -> dict:
-        """Flatten nested dict with leaf-key aliasing.
+        """Flatten a nested dict to dot-paths, then add leaf-key aliases.
 
-        {"nav": {"home": "Home"}} → {"nav.home": "Home", "home": "Home"}
+        {"nav": {"home": "Home"}} -> {"nav.home": "Home", "home": "Home"}
 
-        Both the full dot-path AND the leaf key are stored, so templates
-        can use either ``t("home")`` or ``t("nav.home")``.  If two
-        sections define the same leaf key, the full dot-path always works
-        and the leaf key keeps whichever value was seen first.
+        Two passes so the alias rule is correct:
+        1. Flatten to full dot-path keys only.
+        2. Add each leaf key as a shortcut ONLY if it is not already present.
+
+        So the FIRST dot-path wins on a leaf-key collision, and an explicit
+        top-level flat key is never overwritten by a derived alias. (The old
+        single-pass recursive merge was last-wins and could clobber an
+        explicit flat key -- silent data loss.)
         """
+        flat = I18n._flatten_paths(data, prefix)
+        result = dict(flat)
+        for full_key, value in flat.items():
+            leaf = full_key.rsplit(".", 1)[-1]
+            if leaf not in result:
+                result[leaf] = value
+        return result
+
+    @staticmethod
+    def _flatten_paths(data: dict, prefix: str = "") -> dict:
+        """Flatten a nested dict to dot-path keys only (no leaf aliasing)."""
         result = {}
         for key, value in data.items():
             full_key = f"{prefix}.{key}" if prefix else key
             if isinstance(value, dict):
-                result.update(I18n._flatten(value, full_key))
+                result.update(I18n._flatten_paths(value, full_key))
             else:
-                str_value = str(value)
-                result[full_key] = str_value
-                # Also store the leaf key as a shortcut (first-wins on conflict)
-                if key not in result:
-                    result[key] = str_value
+                result[full_key] = I18n._coerce_scalar(value)
         return result
+
+    @staticmethod
+    def _coerce_scalar(value) -> str:
+        """Render a non-string locale scalar JSON-natively (true/false/null)."""
+        if value is True:
+            return "true"
+        if value is False:
+            return "false"
+        if value is None:
+            return "null"
+        return str(value)
 
     @staticmethod
     def _resolve(key: str, translations: dict) -> str | None:

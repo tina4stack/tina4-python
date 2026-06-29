@@ -424,3 +424,68 @@ class TestSwaggerConstructor:
         s = Swagger(server_url="https://api.example.com")
         spec = s.generate([])
         assert spec["servers"][0]["url"] == "https://api.example.com"
+
+
+# ── Decorator-stacking regression (issue #59) ─────────────────────
+#
+# The swagger decorators MUST annotate the handler in place and return the
+# SAME object, never a wrapper. @get/@post is innermost and registers the bare
+# handler; if a decorator returned a wrapper, only the decorator directly above
+# @get would land its metadata on the registered object and every outer
+# decorator (e.g. @description above @tags) would silently vanish from the spec.
+# These tests go through the REAL router registration path (Router._routes)
+# -- the older TestSwaggerDecorators tests passed despite the bug because they
+# handed the generator the outermost wrapper directly instead of the registered
+# handler.
+
+
+class TestSwaggerDecoratorStackingRegression:
+    def test_stacked_decorators_survive_real_router_registration(self, swagger):
+        import tina4_python.core.router as r
+        from tina4_python.core.router import post
+        from tina4_python.swagger import description, tags, example, summary, security
+
+        snapshot = list(r._routes)
+        try:
+            @summary("Create a user")
+            @description("Creates a user account", detail="Validates input.")
+            @tags(["Users"])
+            @example({"email": "a@b.c"})
+            @security("bearerAuth")
+            @post("/__regr/users")
+            async def create_user(request, response):
+                return response({"ok": True})
+
+            # Every stacked decorator's metadata must land on the ONE object the
+            # router registered -- not just the decorator adjacent to @post.
+            for attr in ("_swagger_summary", "_swagger_description",
+                         "_swagger_tags", "_swagger_example", "_swagger_security"):
+                assert hasattr(create_user, attr), f"{attr} lost on registered handler"
+
+            op = swagger.generate(r._routes)["paths"]["/__regr/users"]["post"]
+            assert op["summary"] == "Create a user"
+            assert "Creates a user account" in op["description"]
+            assert op["tags"] == ["Users"]
+            assert op["security"] == [{"bearerAuth": []}]
+            assert "requestBody" in op  # @example
+        finally:
+            r._routes[:] = snapshot
+
+    def test_stacking_is_order_independent(self, swagger):
+        import tina4_python.core.router as r
+        from tina4_python.core.router import get
+        from tina4_python.swagger import description, tags
+
+        snapshot = list(r._routes)
+        try:
+            @tags(["A"])
+            @description("D")
+            @get("/__regr/order")
+            async def handler(request, response):
+                return response({})
+
+            op = swagger.generate(r._routes)["paths"]["/__regr/order"]["get"]
+            assert op["description"] == "D"
+            assert op["tags"] == ["A"]
+        finally:
+            r._routes[:] = snapshot
