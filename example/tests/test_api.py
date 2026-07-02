@@ -24,8 +24,11 @@ class TestProductAPI:
 
         page1 = Product.where("is_active = 1", limit=12, offset=0)
         page2 = Product.where("is_active = 1", limit=12, offset=12)
+        page3 = Product.where("is_active = 1", limit=12, offset=24)
+        # 25 items, page size 12 -> pages of 12 / 12 / 1 (where() honours the limit)
         assert len(page1) == 12
-        assert len(page2) == 13  # 25 - 12
+        assert len(page2) == 12
+        assert len(page3) == 1
 
     def test_product_by_category(self, db):
         cat1 = Category.create(name="Cat1", slug="cat1")

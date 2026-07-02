@@ -1,0 +1,4 @@
+# Ephemeral runtime state written by the demo store when it runs.
+# The file queue backend writes per-job *.queue-data files here at runtime;
+# they carry timestamps + UUIDs and must never be committed.
+data/queue/

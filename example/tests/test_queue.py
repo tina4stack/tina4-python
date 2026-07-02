@@ -78,13 +78,24 @@ class TestJobLifecycle:
         # After completing, pending size should be 0
         assert q.size("pending") == 0
 
-    def test_fail_marks_failed(self):
-        q = Queue(topic="test_fail")
+    def test_fail_requeues_while_retries_remain(self):
+        # fail() auto-retries: with retries left, the job returns to pending
+        # (attempts incremented) rather than failing outright.
+        q = Queue(topic="test_fail_retry", max_retries=3)
         q.push({"order": 99})
         job = q.pop()
         job.fail("Payment declined")
-        # Job should no longer be pending
+        assert q.size("pending") == 1
+
+    def test_fail_dead_letters_after_retries_exhausted(self):
+        # With max_retries=1, a single fail() exhausts retries: the job leaves
+        # pending and lands in the dead-letter queue.
+        q = Queue(topic="test_fail_dead", max_retries=1)
+        q.push({"order": 99})
+        job = q.pop()
+        job.fail("Payment declined")
         assert q.size("pending") == 0
+        assert len(q.dead_letters()) == 1
 
     def test_job_payload_accessible(self):
         q = Queue(topic="test_payload")

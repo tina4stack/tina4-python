@@ -7,13 +7,19 @@ import os
 import sys
 import pytest
 
-# Add store root to path
+# Put the store root (for `src.*` and this demo's own `tests` package) and the
+# tina4-python repo root (for the local `tina4_python` package) on the path.
+# ORDER MATTERS: STORE_ROOT must sit AHEAD of REPO_ROOT so `from tests.conftest
+# import ...` resolves to THIS demo's example/tests -- not the framework's own
+# top-level tests/ dir, which shares the name. REPO_ROOT still supplies the
+# checked-out framework source, ahead of any stale pip-installed copy.
 STORE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.abspath(os.path.join(STORE_ROOT, ".."))
+sys.path.insert(0, REPO_ROOT)
 sys.path.insert(0, STORE_ROOT)
-sys.path.insert(0, os.path.join(STORE_ROOT, "..", ".."))
 
 from tina4_python.database import Database
-from tina4_python.orm import orm_bind
+from tina4_python.orm import bind_database
 from tina4_python.migration import Migration
 
 
@@ -21,7 +27,7 @@ from tina4_python.migration import Migration
 def db():
     """Create an in-memory SQLite database with all migrations applied."""
     database = Database("sqlite::memory:")
-    orm_bind(database)
+    bind_database(database)
     # Run migrations from the store's migrations folder
     migration = Migration(database, os.path.join(STORE_ROOT, "migrations"))
     migration.migrate()
