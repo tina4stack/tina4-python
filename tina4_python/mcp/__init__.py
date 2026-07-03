@@ -22,6 +22,8 @@ import os
 import json
 import inspect
 import socket
+import secrets
+import time
 from pathlib import Path
 
 from .protocol import (
@@ -30,6 +32,12 @@ from .protocol import (
     PARSE_ERROR, INVALID_REQUEST, METHOD_NOT_FOUND,
     INVALID_PARAMS, INTERNAL_ERROR,
 )
+
+# MCP protocol versions this server can speak, newest first. The 2025-*
+# versions are the Streamable HTTP era; 2024-11-05 is the legacy HTTP+SSE
+# transport we still accept for older clients (Claude Desktop et al.).
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
 
 # Re-export protocol helpers as public API (parity with PHP/Ruby/Node)
 __all__ = [
@@ -192,7 +200,125 @@ class McpServer:
         self._tools: dict[str, dict] = {}
         self._resources: dict[str, dict] = {}
         self._initialized = False
+        # Streamable HTTP session ids issued at initialize time, mapped to
+        # their creation timestamp. Transport layers echo the id back in the
+        # Mcp-Session-Id header; a request bearing an unknown id gets a 404 so
+        # the client knows to re-initialize.
+        self._sessions: dict[str, float] = {}
+        # Open legacy HTTP+SSE streams keyed by session id. The GET /sse
+        # handler registers an asyncio.Queue here; the POST /message handler
+        # pushes each JSON-RPC response onto it so it streams back on the open
+        # connection (the 2024-11-05 transport). Empty for Streamable HTTP.
+        self._sse_queues: dict = {}
         McpServer._instances.append(self)
+
+    # ── Session lifecycle (Streamable HTTP + legacy SSE correlation) ──
+
+    def open_session(self) -> str:
+        """Mint a new session id and remember it. Called on `initialize`."""
+        sid = secrets.token_hex(16)
+        self._sessions[sid] = time.time()
+        return sid
+
+    def is_valid_session(self, session_id: str) -> bool:
+        """True when `session_id` was issued by this server and still open."""
+        return bool(session_id) and session_id in self._sessions
+
+    def close_session(self, session_id: str) -> bool:
+        """Forget a session (client DELETE or SSE stream close). Returns
+        True when a live session was actually removed."""
+        return self._sessions.pop(session_id, None) is not None
+
+    def negotiate_protocol_version(self, requested: str | None) -> str:
+        """Pick the protocol version to run on. Echo the client's requested
+        version when we support it (proper negotiation), else fall back to the
+        newest version we speak so an unversioned/old client still connects."""
+        if requested in SUPPORTED_PROTOCOL_VERSIONS:
+            return requested
+        return LATEST_PROTOCOL_VERSION
+
+    def _peek_method(self, raw_data) -> str | None:
+        """Read the JSON-RPC `method` from a raw request without dispatching.
+        Used by the transport to spot `initialize` (mint a session) before it
+        hands the message to handle_message()."""
+        try:
+            obj = raw_data if isinstance(raw_data, dict) else json.loads(raw_data or "{}")
+        except (ValueError, TypeError):
+            return None
+        return obj.get("method") if isinstance(obj, dict) else None
+
+    def dispatch_http(self, raw_data, session_id: str = "") -> dict:
+        """Transport-agnostic Streamable HTTP POST handler.
+
+        Every language's transport calls this so the wire behaviour stays
+        identical:
+          - `initialize` mints a session id, returned in the Mcp-Session-Id
+            response header.
+          - a non-initialize request carrying an unknown session id is a 404
+            (JSON-RPC error) so the client knows to re-initialize.
+          - a notification / response-only POST (no id) yields 202 with an
+            empty body.
+          - anything else returns 200 with the JSON-RPC response as
+            application/json, which the MCP Streamable HTTP spec permits for a
+            POST that resolves to a single response.
+
+        Returns {"status": int, "headers": {name: value}, "body": str}.
+        """
+        is_init = self._peek_method(raw_data) == "initialize"
+        if not is_init and session_id and not self.is_valid_session(session_id):
+            return {
+                "status": 404,
+                "headers": {},
+                "body": encode_error(None, INVALID_REQUEST, "session not found"),
+            }
+        body = self.handle_message(raw_data)
+        headers: dict[str, str] = {}
+        if is_init:
+            headers["Mcp-Session-Id"] = self.open_session()
+        if not body:
+            return {"status": 202, "headers": headers, "body": ""}
+        return {"status": 200, "headers": headers, "body": body}
+
+    def dispatch_sse_message(self, raw_data, session_id: str = "") -> dict:
+        """Legacy HTTP+SSE POST /message handler.
+
+        When a live SSE stream is open for `session_id`, run the message and
+        push the JSON-RPC response down that stream (returning 202 here, per
+        the 2024-11-05 transport). With no open stream this degrades to an
+        inline Streamable HTTP response, so the same /message path serves both
+        a legacy SSE client and a plain POST client.
+        """
+        queue = self._sse_queues.get(session_id) if session_id else None
+        if queue is None:
+            return self.dispatch_http(raw_data, session_id)
+        body = self.handle_message(raw_data)
+        if body:
+            queue.put_nowait(body)
+        return {"status": 202, "headers": {}, "body": ""}
+
+    async def sse_stream(self, session_id: str, endpoint_url: str, keepalive: float = 15.0):
+        """Async generator of SSE frames for the legacy HTTP+SSE transport.
+
+        Emits the `endpoint` event first (telling the client where to POST),
+        then each queued JSON-RPC response as it arrives, with periodic
+        keep-alive comment frames so proxies do not close an idle connection.
+        Registers the per-session queue up front and tears it down (plus the
+        session) when the client disconnects and the generator is closed.
+        """
+        import asyncio
+        queue: asyncio.Queue = asyncio.Queue()
+        self._sse_queues[session_id] = queue
+        try:
+            yield f"event: endpoint\ndata: {endpoint_url}\n\n"
+            while True:
+                try:
+                    message = await asyncio.wait_for(queue.get(), timeout=keepalive)
+                    yield f"event: message\ndata: {message}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+        finally:
+            self._sse_queues.pop(session_id, None)
+            self.close_session(session_id)
 
     def register_tool(self, name: str, handler, description: str = "", schema: dict | None = None):
         """Register a tool callable."""
@@ -244,10 +370,14 @@ class McpServer:
             return encode_error(request_id, INTERNAL_ERROR, str(e))
 
     def _handle_initialize(self, params: dict) -> dict:
-        """Handle initialize request — return server capabilities."""
+        """Handle initialize request — negotiate the protocol version and
+        return server capabilities. We echo the client's requested version
+        when we support it and otherwise offer our newest, so both a current
+        Streamable HTTP client and a legacy 2024-11-05 client connect."""
         self._initialized = True
+        requested = (params or {}).get("protocolVersion")
         return {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": self.negotiate_protocol_version(requested),
             "capabilities": {
                 "tools": {"listChanged": False},
                 "resources": {"subscribe": False, "listChanged": False},
@@ -344,44 +474,52 @@ class McpServer:
     def register_routes(self, router_module):
         """Register HTTP routes for this MCP server on the Tina4 router.
 
-        Registers:
-            POST {path}/message — JSON-RPC message endpoint
-            GET {path}/sse — SSE endpoint for streaming
+        Mounts both supported transports on `path`:
+            POST {path}          — Streamable HTTP (the current transport)
+            POST {path}/message  — legacy HTTP+SSE message sink (+ inline fallback)
+            GET  {path}/sse      — legacy HTTP+SSE stream (persistent)
+
+        A Streamable HTTP client (Claude Code `--transport http`) POSTs to
+        `{path}` and reads the JSON-RPC response inline, with an Mcp-Session-Id
+        header issued on initialize. A legacy SSE client (Claude Desktop,
+        `--transport sse`) GETs `{path}/sse`, receives the endpoint event, and
+        its responses stream back on that connection.
         """
         server = self
-        msg_path = f"{self.path}/message"
-        sse_path = f"{self.path}/sse"
 
-        @router_module.post(msg_path)
+        def _session_header(request) -> str:
+            headers = getattr(request, "headers", None) or {}
+            return headers.get("mcp-session-id", "") or ""
+
+        def _apply(response, outcome):
+            for name, value in outcome["headers"].items():
+                response.header(name, value)
+            body = outcome["body"]
+            if not body:
+                return response("", outcome["status"])
+            return response(json.loads(body), outcome["status"])
+
+        @router_module.post(self.path)
+        @router_module.noauth()
+        async def mcp_streamable(request, response):
+            outcome = server.dispatch_http(request.body, _session_header(request))
+            return _apply(response, outcome)
+
+        @router_module.post(f"{self.path}/message")
         @router_module.noauth()
         async def mcp_message(request, response):
-            body = request.body
-            if isinstance(body, dict):
-                raw = body
-            else:
-                raw = body if isinstance(body, str) else str(body)
-            result = server.handle_message(raw)
-            if not result:
-                return response("", 204)
-            return response(json.loads(result))
+            params = getattr(request, "params", None) or {}
+            session_id = params.get("sessionId") or _session_header(request)
+            outcome = server.dispatch_sse_message(request.body, session_id)
+            return _apply(response, outcome)
 
-        @router_module.get(sse_path)
+        @router_module.get(f"{self.path}/sse")
         @router_module.noauth()
         async def mcp_sse(request, response):
-            # SSE endpoint — send initial endpoint message
-            endpoint_url = f"{request.url.rsplit('/sse', 1)[0]}/message"
-            sse_data = f"event: endpoint\ndata: {endpoint_url}\n\n"
-            from tina4_python.core.response import Response as Resp
-            r = Resp()
-            r.status_code = 200
-            r.content_type = "text/event-stream"
-            r.content = sse_data.encode()
-            r._headers = [
-                (b"content-type", b"text/event-stream"),
-                (b"cache-control", b"no-cache"),
-                (b"connection", b"keep-alive"),
-            ]
-            return r
+            session_id = server.open_session()
+            base = getattr(request, "path", self.path).rsplit("/sse", 1)[0]
+            endpoint_url = f"{base}/message?sessionId={session_id}"
+            return response.stream(server.sse_stream(session_id, endpoint_url))
 
     def write_claude_config(self, port: int = 7145):
         """Write/update .claude/settings.json with this MCP server config."""
@@ -401,7 +539,8 @@ class McpServer:
 
         server_key = self.name.lower().replace(" ", "-")
         config["mcpServers"][server_key] = {
-            "url": f"http://localhost:{port}{self.path}/sse"
+            "type": "http",
+            "url": f"http://localhost:{port}{self.path}",
         }
 
         config_file.write_text(json.dumps(config, indent=2) + "\n")

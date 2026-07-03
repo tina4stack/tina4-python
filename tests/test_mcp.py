@@ -418,52 +418,108 @@ class TestDevToolCoverage:
         assert "error" in resp
 
 
+class _FakeResponse:
+    """Mirrors the dev-admin `_resp` contract the server hands each handler:
+    callable for (body, status, content_type), plus .header() and .stream().
+    Lets the tests drive the real MCP handlers without opening a socket."""
+
+    def __init__(self):
+        self.captured = []      # list of (data, code, content_type)
+        self.headers = {}
+        self.stream_source = None
+
+    def __call__(self, data, code=200, content_type=None):
+        self.captured.append((data, code, content_type))
+        return data
+
+    def header(self, name, value):
+        self.headers[name] = value
+        return self
+
+    def stream(self, source, content_type="text/event-stream"):
+        self.stream_source = source
+        return source
+
+    @property
+    def last(self):
+        return self.captured[-1]
+
+
 class TestMcpEndpointMounted:
     """The dev-server endpoint that makes /__dev/mcp reachable as an MCP
-    server (the mount fix). Drives the dev_admin handlers directly."""
+    server over Streamable HTTP + legacy SSE. Drives the dev_admin handlers
+    against the real default McpServer."""
 
     def _resp(self):
-        captured = []
-        def resp(data, code=200, content_type=None):
-            captured.append((data, code, content_type))
-            return data
-        resp.captured = captured
-        return resp
+        return _FakeResponse()
 
-    def _req(self, body=None, path="/__dev/mcp/message"):
-        return type("Req", (), {"body": body or {}, "path": path, "params": {}})()
+    def _req(self, body=None, path="/__dev/mcp", method="POST", params=None, headers=None):
+        return type("Req", (), {
+            "body": body or {}, "path": path, "params": params or {},
+            "method": method, "headers": headers or {}, "remote_ip": "",
+        })()
 
-    async def test_initialize_round_trip(self, monkeypatch):
+    async def test_initialize_issues_session_header(self, monkeypatch):
         monkeypatch.setenv("TINA4_DEBUG", "true")
-        from tina4_python.dev_admin import _api_mcp_rpc
+        from tina4_python.dev_admin import _api_mcp_endpoint
+        resp = self._resp()
         req = self._req({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
-        result = await _api_mcp_rpc(req, self._resp())
-        assert result["result"]["serverInfo"]["name"]
-        assert result["result"]["protocolVersion"]
+        await _api_mcp_endpoint(req, resp)
+        data, code, _ = resp.last
+        assert code == 200
+        assert data["result"]["serverInfo"]["name"]
+        assert data["result"]["protocolVersion"]
+        assert resp.headers.get("Mcp-Session-Id")
 
     async def test_tools_list_round_trip(self, monkeypatch):
         monkeypatch.setenv("TINA4_DEBUG", "true")
-        from tina4_python.dev_admin import _api_mcp_rpc
+        from tina4_python.dev_admin import _api_mcp_endpoint
+        resp = self._resp()
         req = self._req({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
-        result = await _api_mcp_rpc(req, self._resp())
-        assert len(result["result"]["tools"]) > 5
+        await _api_mcp_endpoint(req, resp)
+        data, code, _ = resp.last
+        assert len(data["result"]["tools"]) > 5
 
-    async def test_sse_handshake(self, monkeypatch):
+    async def test_get_on_endpoint_is_405(self, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        from tina4_python.dev_admin import _api_mcp_endpoint
+        resp = self._resp()
+        await _api_mcp_endpoint(self._req(method="GET"), resp)
+        _, code, _ = resp.last
+        assert code == 405
+        assert resp.headers.get("Allow")
+
+    async def test_delete_terminates_session(self, monkeypatch):
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        from tina4_python.dev_admin import _api_mcp_endpoint
+        from tina4_python.mcp import _get_default_server
+        server = _get_default_server()
+        sid = server.open_session()
+        resp = self._resp()
+        await _api_mcp_endpoint(
+            self._req(method="DELETE", headers={"mcp-session-id": sid}), resp
+        )
+        _, code, _ = resp.last
+        assert code == 204
+        assert not server.is_valid_session(sid)
+
+    async def test_sse_handshake_streams_endpoint_event(self, monkeypatch):
         monkeypatch.setenv("TINA4_DEBUG", "true")
         from tina4_python.dev_admin import _api_mcp_sse
         resp = self._resp()
-        await _api_mcp_sse(self._req(path="/__dev/mcp/sse"), resp)
-        data, code, content_type = resp.captured[-1]
-        assert code == 200
-        assert content_type == "text/event-stream"
-        assert "event: endpoint" in data
-        assert "/__dev/mcp/message" in data
+        await _api_mcp_sse(self._req(path="/__dev/mcp/sse", method="GET"), resp)
+        # The SSE handler returns a persistent stream, not a one-shot body.
+        assert resp.stream_source is not None
+        frame = await resp.stream_source.__anext__()
+        assert "event: endpoint" in frame
+        assert "/__dev/mcp/message" in frame
+        await resp.stream_source.aclose()
 
     async def test_disabled_returns_404(self, monkeypatch):
         monkeypatch.delenv("TINA4_DEBUG", raising=False)
         monkeypatch.setenv("TINA4_MCP", "false")
-        from tina4_python.dev_admin import _api_mcp_rpc
+        from tina4_python.dev_admin import _api_mcp_endpoint
         resp = self._resp()
-        await _api_mcp_rpc(self._req({"jsonrpc": "2.0", "id": 1, "method": "ping"}), resp)
-        _, code, _ = resp.captured[-1]
+        await _api_mcp_endpoint(self._req({"jsonrpc": "2.0", "id": 1, "method": "ping"}), resp)
+        _, code, _ = resp.last
         assert code == 404

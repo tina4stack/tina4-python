@@ -320,8 +320,9 @@ def write_mcp_discovery_file() -> None:
     expected = {
         "mcpServers": {
             "tina4-live-docs": {
-                "url": f"http://localhost:{port}/__dev/api/mcp",
-                "description": "Live API docs for this Tina4 project (framework + user code)",
+                "type": "http",
+                "url": f"http://localhost:{port}/__dev/mcp",
+                "description": "Live API docs + dev tools for this Tina4 project (framework + user code)",
             }
         }
     }
@@ -485,11 +486,13 @@ def get_api_handlers() -> dict:
         # @mcp_tool decorator appear in both immediately.
         "/__dev/api/mcp/tools": ("GET", _api_mcp_tools),
         "/__dev/api/mcp/call": ("POST", _api_mcp_call),
-        # JSON-RPC + SSE surface for real MCP clients (Claude Desktop/Code).
-        # Same registry as the REST shim above; this is what makes /__dev/mcp
-        # actually reachable as an MCP server (previously defined but unmounted).
-        "/__dev/mcp": ("POST", _api_mcp_rpc),
-        "/__dev/mcp/message": ("POST", _api_mcp_rpc),
+        # MCP transport surface for real clients (Claude Code / Desktop).
+        # Same registry as the REST shim above. /__dev/mcp is the Streamable
+        # HTTP endpoint (POST message + DELETE session; "*" so one handler
+        # switches on the method); /message + /sse are the legacy HTTP+SSE
+        # transport, kept working for older SSE-only clients.
+        "/__dev/mcp": ("*", _api_mcp_endpoint),
+        "/__dev/mcp/message": ("POST", _api_mcp_message),
         "/__dev/mcp/sse": ("GET", _api_mcp_sse),
         # ── Scaffold REST shim ──
         # Wraps the tina4python CLI's `generate <kind> <name>` so the
@@ -2964,43 +2967,102 @@ async def _api_mcp_call(request, response):
         return response({"ok": False, "name": name, "error": str(exc)}, 500)
 
 
-# ─── MCP JSON-RPC + SSE endpoint ───────────────────────────────────
+# ─── MCP transport endpoint ────────────────────────────────────────
 #
-# The protocol surface real MCP clients (Claude Desktop/Code) speak —
-# JSON-RPC 2.0 over the HTTP+SSE transport. Mounted on the running dev
-# server so each `tina4 serve`d project exposes its OWN endpoint, giving
-# an AI agent live access scoped to that project. Shares the same
-# `_default_server` tool registry as the REST shim above, so every
-# @mcp_tool shows up on both surfaces.
+# The protocol surface real MCP clients (Claude Code / Claude Desktop)
+# speak. Mounted on the running dev server so each `tina4 serve`d project
+# exposes its OWN endpoint, giving an AI agent live access scoped to that
+# project. Shares the same `_default_server` tool registry as the REST
+# shim above, so every @mcp_tool shows up on all surfaces.
+#
+# Two transports live here:
+#   * Streamable HTTP (current) — POST /__dev/mcp with the JSON-RPC message;
+#     the response comes back inline as application/json, and initialize
+#     issues an Mcp-Session-Id header the client echoes on later requests.
+#     GET is 405 (this server initiates no messages) and DELETE ends a
+#     session.
+#   * Legacy HTTP+SSE (2024-11-05) — GET /__dev/mcp/sse opens a persistent
+#     stream that first names the POST endpoint, then delivers each JSON-RPC
+#     response as an SSE `message` event; POST /__dev/mcp/message feeds it.
+#     Kept working for older SSE-only clients.
 
-async def _api_mcp_rpc(request, response):
-    """POST — the JSON-RPC endpoint. Mounted at /__dev/mcp and
-    /__dev/mcp/message. Forwards to the default MCP server's
-    handle_message() and returns the JSON-RPC response; notifications
-    (no id) yield an empty 204.
-    """
+
+def _mcp_session_header(request) -> str:
+    """Read the Mcp-Session-Id request header (empty string when absent)."""
+    headers = getattr(request, "headers", None) or {}
+    return headers.get("mcp-session-id", "") or ""
+
+
+def _mcp_apply(response, outcome):
+    """Apply a dispatch_http/dispatch_sse_message result dict (status,
+    headers, body) onto the dev-admin response."""
     import json as _json
+    for name, value in outcome["headers"].items():
+        response.header(name, value)
+    body = outcome["body"]
+    if not body:
+        return response("", outcome["status"])
+    return response(_json.loads(body), outcome["status"])
+
+
+async def _api_mcp_endpoint(request, response):
+    """The Streamable HTTP endpoint at /__dev/mcp (method wildcard).
+
+    POST   — a JSON-RPC message; response is inline application/json.
+    GET    — 405, this server pushes no unsolicited messages (use the
+             legacy /sse stream if you need server-initiated framing).
+    DELETE — terminate the session named by Mcp-Session-Id.
+    """
     from tina4_python.mcp import _get_default_server
     if not _mcp_request_allowed(request):
         return response({"error": "MCP disabled"}, 404)
     server = _get_default_server()
-    body = request.body
-    raw = body if isinstance(body, (dict, str)) else str(body)
-    result = server.handle_message(raw)
-    if not result:
+    method = (getattr(request, "method", "") or "GET").upper()
+
+    if method == "POST":
+        outcome = server.dispatch_http(request.body, _mcp_session_header(request))
+        return _mcp_apply(response, outcome)
+
+    if method == "DELETE":
+        server.close_session(_mcp_session_header(request))
         return response("", 204)
-    return response(_json.loads(result))
+
+    # GET (and anything else): no server-initiated stream on this endpoint.
+    response.header("Allow", "POST, DELETE")
+    return response({"error": "method not allowed"}, 405)
+
+
+async def _api_mcp_message(request, response):
+    """POST /__dev/mcp/message — legacy HTTP+SSE message sink.
+
+    Delivers the JSON-RPC response on the matching open SSE stream (202
+    here); with no open stream it degrades to an inline Streamable HTTP
+    response, so the path also serves a plain POST client.
+    """
+    from tina4_python.mcp import _get_default_server
+    if not _mcp_request_allowed(request):
+        return response({"error": "MCP disabled"}, 404)
+    server = _get_default_server()
+    params = getattr(request, "params", None) or {}
+    session_id = params.get("sessionId") or _mcp_session_header(request)
+    outcome = server.dispatch_sse_message(request.body, session_id)
+    return _mcp_apply(response, outcome)
 
 
 async def _api_mcp_sse(request, response):
-    """GET — SSE handshake. Emits the `endpoint` event telling the client
-    where to POST JSON-RPC messages, per the MCP HTTP+SSE transport.
+    """GET /__dev/mcp/sse — legacy HTTP+SSE stream.
+
+    Opens a persistent SSE connection: first the `endpoint` event naming the
+    POST target (session-tagged), then each JSON-RPC response as it arrives.
     """
+    from tina4_python.mcp import _get_default_server
     if not _mcp_request_allowed(request):
         return response({"error": "MCP disabled"}, 404)
-    base = request.path.rsplit("/sse", 1)[0]
-    sse = f"event: endpoint\ndata: {base}/message\n\n"
-    return response(sse, 200, "text/event-stream")
+    server = _get_default_server()
+    session_id = server.open_session()
+    base = getattr(request, "path", "/__dev/mcp/sse").rsplit("/sse", 1)[0]
+    endpoint_url = f"{base}/message?sessionId={session_id}"
+    return response.stream(server.sse_stream(session_id, endpoint_url))
 
 
 # ─── Scaffold REST shim ────────────────────────────────────────────

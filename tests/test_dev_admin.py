@@ -321,10 +321,13 @@ class TestGetAPIHandlers:
         assert len(handlers) == 79
 
     def test_mcp_jsonrpc_endpoint_registered(self):
-        # The JSON-RPC + SSE surface real MCP clients speak — must be
-        # mounted so /__dev/mcp is actually reachable as an MCP server.
+        # The MCP transport surface real clients speak — must be mounted so
+        # /__dev/mcp is reachable as an MCP server. /__dev/mcp is the
+        # Streamable HTTP endpoint (POST message + DELETE session + GET->405),
+        # so it uses the "*" method wildcard and switches on request.method;
+        # /message + /sse are the legacy HTTP+SSE transport.
         handlers = get_api_handlers()
-        assert handlers["/__dev/mcp"] [0] == "POST"
+        assert handlers["/__dev/mcp"][0] == "*"
         assert handlers["/__dev/mcp/message"][0] == "POST"
         assert handlers["/__dev/mcp/sse"][0] == "GET"
         for path in ("/__dev/mcp", "/__dev/mcp/message", "/__dev/mcp/sse"):
