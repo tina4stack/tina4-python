@@ -208,6 +208,26 @@ class TestColorFunctions:
         assert "#" in css
         assert "darken" not in css
 
+    def test_rgba_hex_becomes_valid_css(self):
+        # issue #124: rgba(<hex>, a) is invalid CSS; must become rgba(r,g,b,a).
+        css = compile_string("$c: #0f3460; .box { box-shadow: 0 0 4px rgba($c, 0.12); }")
+        assert "rgba(15, 52, 96, 0.12)" in css
+        assert "rgba(#" not in css
+
+    def test_rgba_numeric_form_untouched(self):
+        # A valid 4-arg rgba(r,g,b,a) must be left exactly as-is (no false match).
+        css = compile_string(".box { color: rgba(10, 20, 30, 0.4); }")
+        assert "rgba(10, 20, 30, 0.4)" in css
+
+    def test_rgb_hex_becomes_valid_css(self):
+        css = compile_string(".box { color: rgb(#ffffff); }")
+        assert "rgb(255, 255, 255)" in css
+
+    def test_mix(self):
+        css = compile_string(".box { background: mix(#ffffff, #000000, 50%); }")
+        assert "#808080" in css
+        assert "mix(" not in css
+
 
 # ── Media Query Tests ─────────────────────────────────────────
 

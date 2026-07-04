@@ -348,7 +348,13 @@ def _eval_math(scss: str) -> str:
 
 
 def _resolve_color_functions(scss: str, variables: dict) -> str:
-    """Resolve lighten(), darken(), rgba() functions."""
+    """Resolve lighten(), darken(), rgba()/rgb(), and mix() color functions.
+
+    ``rgba(<hex>, <alpha>)`` is the damaging case (issue #124): the functional
+    ``rgba()`` notation cannot take a hex, so ``rgba(#0f3460, 0.12)`` is invalid
+    CSS and browsers drop the whole declaration. We convert the hex to its
+    ``r, g, b`` components so the output is valid ``rgba(15, 52, 96, 0.12)``.
+    """
     def _lighten(m):
         color = m.group(1).strip()
         amount = float(m.group(2).strip().rstrip("%")) / 100
@@ -359,9 +365,51 @@ def _resolve_color_functions(scss: str, variables: dict) -> str:
         amount = float(m.group(2).strip().rstrip("%")) / 100
         return _adjust_lightness(color, -amount)
 
+    def _rgba(m):
+        rgb = _hex_to_rgb(m.group(1))
+        if rgb is None:
+            return m.group(0)  # not a hex colour — leave verbatim
+        r, g, b = rgb
+        return f"rgba({r}, {g}, {b}, {m.group(2).strip()})"
+
+    def _rgb(m):
+        rgb = _hex_to_rgb(m.group(1))
+        if rgb is None:
+            return m.group(0)
+        r, g, b = rgb
+        return f"rgb({r}, {g}, {b})"
+
+    def _mix(m):
+        c1, c2 = _hex_to_rgb(m.group(1)), _hex_to_rgb(m.group(2))
+        if c1 is None or c2 is None:
+            return m.group(0)
+        w = (float(m.group(3).strip().rstrip("%")) / 100) if m.group(3) else 0.5
+        mixed = tuple(round(a * w + b * (1 - w)) for a, b in zip(c1, c2))
+        return f"#{mixed[0]:02x}{mixed[1]:02x}{mixed[2]:02x}"
+
     scss = re.sub(r'lighten\(\s*([^,]+)\s*,\s*([^)]+)\s*\)', _lighten, scss)
     scss = re.sub(r'darken\(\s*([^,]+)\s*,\s*([^)]+)\s*\)', _darken, scss)
+    # rgba(<hex>, <alpha>) — only the two-arg hex form; leave rgba(r,g,b,a) alone.
+    scss = re.sub(r'rgba\(\s*(#[0-9a-fA-F]{3,8})\s*,\s*([\d.]+)\s*\)', _rgba, scss)
+    scss = re.sub(r'rgb\(\s*(#[0-9a-fA-F]{3,8})\s*\)', _rgb, scss)
+    # mix(<c1>, <c2>[, <weight>]) — Sass weight is c1's proportion (default 50%).
+    scss = re.sub(
+        r'mix\(\s*(#[0-9a-fA-F]{3,8})\s*,\s*(#[0-9a-fA-F]{3,8})\s*(?:,\s*([\d.]+%?)\s*)?\)',
+        _mix, scss)
     return scss
+
+
+def _hex_to_rgb(color: str):
+    """Parse a #rgb / #rrggbb hex string into an (r, g, b) int tuple, or None."""
+    color = color.strip().lstrip("#")
+    if len(color) == 3:
+        color = "".join(c * 2 for c in color)
+    if len(color) != 6:
+        return None
+    try:
+        return int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+    except ValueError:
+        return None
 
 
 def _adjust_lightness(color: str, amount: float) -> str:
