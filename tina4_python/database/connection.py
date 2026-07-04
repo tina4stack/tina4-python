@@ -110,6 +110,7 @@ except ImportError:
 from tina4_python.database.postgres import PostgreSQLAdapter
 register_driver("postgresql", PostgreSQLAdapter)
 register_driver("postgres", PostgreSQLAdapter)
+register_driver("pgsql", PostgreSQLAdapter)  # PDO / Laravel / Doctrine scheme name (issue #58)
 
 # Register MySQL (mysql-connector-python — optional)
 from tina4_python.database.mysql import MySQLAdapter

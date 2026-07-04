@@ -90,6 +90,11 @@ class TestDriverRegistration:
     def test_postgres_alias_registered(self):
         assert "postgres" in _DRIVERS
 
+    def test_pgsql_alias_registered(self):
+        # pgsql:// is the PDO / Laravel / Doctrine scheme name (issue #58)
+        assert "pgsql" in _DRIVERS
+        assert _DRIVERS["pgsql"] is _DRIVERS["postgres"]
+
     def test_mysql_registered(self):
         assert "mysql" in _DRIVERS
 
