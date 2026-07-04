@@ -276,6 +276,12 @@ Router.add("GET", _HEALTH_PATH, _health_handler)
 if _HEALTH_PATH != "/health":
     Router.add("GET", "/health", _health_handler)
 
+# Frond live blocks: re-render a registered {% live %} fragment on demand.
+# Always on (production too) - the poll/sse client fetches this; auth re-applies
+# through the normal middleware chain on every refresh.
+from tina4_python.frond import live_endpoint as _live_endpoint
+Router.add("GET", "/__frond/live/{name}", _live_endpoint)
+
 
 def _render_error_page(status_code: int, path: str, request_id: str, error_message: str = "") -> str | None:
     """Render a styled error page using Frond engine.

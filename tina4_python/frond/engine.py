@@ -117,6 +117,15 @@ _FILTER_CMP_RE = re.compile(r"(\w+)\s*(!=|==|>=|<=|>|<)\s*(.+)")
 _FOR_RE = re.compile(r"for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s+(.+)")
 _SET_RE = re.compile(r"set\s+(\w+)\s*=\s*(.+)", re.DOTALL)
 _INCLUDE_RE = re.compile(r'include\s+["\'](.+?)["\'](?:\s+with\s+(.+))?')
+_LIVE_RE = re.compile(r'live\s+["\'](?P<name>[^"\']+)["\'](?P<rest>.*)$', re.DOTALL)
+_LIVE_WS_RE = re.compile(r'ws\s+["\']([^"\']+)["\']')
+_LIVE_SRC_RE = re.compile(r'src\s+["\']([^"\']+)["\']')
+
+
+def _live_attr(value) -> str:
+    """Escape a value for use inside an HTML attribute on a live marker."""
+    return (str(value).replace("&", "&amp;").replace('"', "&quot;")
+            .replace("<", "&lt;").replace(">", "&gt;"))
 _MACRO_RE = re.compile(r"macro\s+(\w+)\s*\(([^)]*)\)")
 _FROM_IMPORT_RE = re.compile(r'from\s+["\'](.+?)["\']\s+import\s+(.+)')
 _IMPORT_AS_RE = re.compile(r'import\s+["\'](.+?)["\']\s+as\s+(\w+)')
@@ -1309,6 +1318,11 @@ class Frond:
     _class_globals: dict = {}
     _class_filters: dict = {}
     _class_tests: dict = {}
+    # Live blocks: name -> body template source (registered when a {% live %}
+    # block renders); name -> data provider (registered via @live_source).
+    _class_live_fragments: dict = {}
+    _class_live_sources: dict = {}
+    _class_live_ws_paths: dict = {}
 
     @classmethod
     def clear_registry(cls):
@@ -1320,6 +1334,9 @@ class Frond:
         cls._class_globals.clear()
         cls._class_filters.clear()
         cls._class_tests.clear()
+        cls._class_live_fragments.clear()
+        cls._class_live_sources.clear()
+        cls._class_live_ws_paths.clear()
 
     def __init__(self, template_dir: str = "src/templates"):
         self.template_dir = Path(template_dir)
@@ -1763,6 +1780,11 @@ class Frond:
 
                 elif tag == "autoescape":
                     result, skip = self._handle_autoescape(tokens, i, context)
+                    output.append(result)
+                    i = skip
+
+                elif tag == "live":
+                    result, skip = self._handle_live(tokens, i, context)
                     output.append(result)
                     i = skip
 
@@ -2395,6 +2417,93 @@ class Frond:
         rendered = self._render_tokens(list(body_tokens), context)
         self._fragment_cache[cache_key] = (rendered, time.time() + ttl)
         return rendered, i
+
+    def _handle_live(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
+        """Handle {% live "name" poll N | sse | ws "path" [src "url"] %}...{% endlive %}.
+
+        Server-rendered live region. The body renders once for first paint, is
+        registered under <name> so the /__frond/live/<name> endpoint (or a
+        @live_source provider) can re-render it, and is wrapped in a marker
+        element that frond.js wires to the chosen transport (poll / sse / ws).
+        """
+        content, _, _ = _strip_tag(tokens[start][1])
+        m = _LIVE_RE.match(content)
+        if not m:
+            raise ValueError('live: expected {% live "name" poll N | sse | ws "path" %}')
+        name = m.group("name")
+        rest = (m.group("rest") or "").strip()
+        parts = rest.split()
+        mode = parts[0] if parts else ""
+
+        src = None
+        sm = _LIVE_SRC_RE.search(rest)
+        if sm:
+            src = sm.group(1)
+        if src and (src.startswith("http://") or src.startswith("https://") or src.startswith("//")):
+            raise ValueError("live: src must be a same-origin path, not an absolute URL")
+
+        interval = None
+        ws_path = None
+        if mode == "poll":
+            if len(parts) < 2 or not parts[1].isdigit():
+                raise ValueError('live: poll requires seconds, e.g. {% live "x" poll 5 %}')
+            interval = int(parts[1])
+        elif mode == "sse":
+            pass
+        elif mode == "ws":
+            wm = _LIVE_WS_RE.search(rest)
+            if not wm:
+                raise ValueError('live: ws requires a path, e.g. {% live "x" ws "/ws/x" %}')
+            ws_path = wm.group(1)
+        else:
+            raise ValueError(f'live: unknown transport "{mode}" (use poll N, sse, or ws "path")')
+
+        # Collect body tokens up to {% endlive %}. Nested live is unsupported.
+        body_tokens = []
+        i = start + 1
+        while i < len(tokens):
+            if tokens[i][0] == BLOCK:
+                tag_content, _, _ = _strip_tag(tokens[i][1])
+                tag = tag_content.split()[0] if tag_content.split() else ""
+                if tag == "live":
+                    raise ValueError("live: nested live blocks are not supported")
+                if tag == "endlive":
+                    i += 1
+                    break
+                body_tokens.append(tokens[i])
+            else:
+                body_tokens.append(tokens[i])
+            i += 1
+
+        # Register the body source so the auto endpoint can re-render it.
+        Frond._class_live_fragments[name] = "".join(raw for (_t, raw) in body_tokens)
+
+        endpoint = src or ("/__frond/live/" + name)
+        attrs = [f'data-frond-live="{_live_attr(name)}"', f'id="live-{_live_attr(name)}"']
+        if mode == "poll":
+            attrs += ['data-mode="poll"', f'data-interval="{interval}"',
+                      f'data-src="{_live_attr(endpoint)}"']
+        elif mode == "sse":
+            attrs += ['data-mode="sse"', f'data-src="{_live_attr(endpoint)}"']
+        elif mode == "ws":
+            Frond._class_live_ws_paths[name] = ws_path
+            attrs += ['data-mode="ws"', f'data-ws="{_live_attr(ws_path)}"']
+
+        first_paint = self._render_tokens(list(body_tokens), context)
+        return f'<div {" ".join(attrs)}>{first_paint}</div>', i
+
+    @classmethod
+    def render_live(cls, name: str, data: dict = None):
+        """Re-render a registered {% live %} fragment by name.
+
+        Returns the rendered HTML fragment, or None if no fragment is registered
+        under that name yet (the page carrying the block has not rendered). The
+        /__frond/live/<name> endpoint calls this after resolving the provider data.
+        """
+        source = cls._class_live_fragments.get(name)
+        if source is None:
+            return None
+        return cls().render_string(source, data or {})
 
     def _handle_spaceless(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
         """Handle {% spaceless %}...{% endspaceless %}.
