@@ -383,6 +383,85 @@ Macros don't inherit parent context — pass everything explicitly via parameter
 
 ---
 
+## Live Blocks
+
+A live block renders on the server, then keeps itself fresh. The first paint ships with the
+page, so there is no loading flash. After that, the block re-fetches its own HTML and swaps
+it in place. You write server-side Frond and the block stays current, with no hand-written
+JavaScript.
+
+```twig
+{% live "cart" poll 5 %}
+    <strong>{{ count }}</strong> items - {{ total | number_format(2) }}
+{% endlive %}
+```
+
+That block paints once with the page, then re-renders every 5 seconds. `frond.js` (already
+loaded from `/js/frond.js`) finds the marker, calls `GET /__frond/live/cart`, and morphs the
+returned HTML into place. A focused input and its caret survive the swap.
+
+### Transports
+
+Pick how the block refreshes:
+
+```twig
+{% live "cart" poll 5 %}...{% endlive %}          {# re-fetch every 5 seconds #}
+{% live "feed" sse %}...{% endlive %}             {# Server-Sent Events stream #}
+{% live "chat" ws "/ws/chat" %}...{% endlive %}   {# WebSocket on /ws/chat #}
+```
+
+`poll N` pulls every `N` seconds. `sse` and `ws` push: the server decides when to send. All
+three render the same server-side body. Only the delivery changes.
+
+### The data source
+
+A live block needs data on every refresh, not just the first paint. Register a provider by
+name with `@live_source`. It runs on each refresh with the live request, so the block
+re-renders against fresh data and re-applies auth every time. An unauthenticated caller never
+sees another user's numbers.
+
+```python
+from tina4_python.frond import live_source
+
+@live_source("cart")
+def cart_data(request):
+    user = request.session.get("user_id")
+    return {"count": cart_count(user), "total": cart_total(user)}
+```
+
+The provider feeds the always-on endpoint `GET /__frond/live/{name}`. There is no route to
+write. The block name is the route.
+
+### Pushing updates
+
+A `ws` block can update the moment data changes, without waiting for the next poll. Call
+`push_live(name, data)`. It re-renders the block and broadcasts the new HTML to every client
+connected on the block's WebSocket path.
+
+```python
+from tina4_python.frond import push_live
+
+# after an order lands:
+push_live("cart", {"count": 3, "total": 59.97})
+```
+
+### Same-origin only
+
+A block can point at your own route with `src` instead of the auto endpoint:
+
+```twig
+{% live "cart" poll 5 src "/fragments/cart" %}...{% endlive %}
+```
+
+`src` must be a same-origin path. An absolute URL is rejected at render time, so a live block
+never fetches from a host you did not write. Nested live blocks are rejected too.
+
+The marker element is byte-identical across Python, PHP, Ruby, and Node, so the shared
+`frond.js` drives every backend the same way. Write the block once. It renders anywhere
+Tina4 runs.
+
+---
+
 ## Comments
 
 ```twig
