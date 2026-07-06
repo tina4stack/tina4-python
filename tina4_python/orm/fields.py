@@ -9,6 +9,8 @@ Fields define column types, constraints, and defaults for ORM models.
         role = Field(str, choices=["admin", "user", "guest"])
         active = Field(bool, default=True)
 """
+import copy as _copy
+import json as _json
 import re as _re
 from datetime import datetime
 
@@ -165,6 +167,16 @@ class Field:
 
         return value
 
+    def to_db(self, value):
+        """Serialize an in-memory value to the form the driver should store.
+
+        Identity by default — the value already round-trips through the driver
+        as-is. Overridden by fields whose Python representation differs from
+        their column representation (e.g. ``JSONField`` stores a JSON string).
+        Called by ``ORM.save()`` when building the row for INSERT/UPDATE.
+        """
+        return value
+
     def __repr__(self):
         parts = [self.field_type.__name__]
         if self.primary_key:
@@ -211,6 +223,80 @@ def BlobField(**kwargs):
 
 def NumericField(**kwargs):
     return _make_field(float, "NumericField", **kwargs)
+
+class JSONField(Field):
+    """A column that stores a JSON document (a ``dict`` or a ``list``).
+
+    You work with a plain Python ``dict``/``list``; the ORM serializes it to a
+    JSON string on save and parses it back on load. The column DDL is
+    engine-aware (see :meth:`ORM.create_table`): ``JSONB`` on PostgreSQL,
+    ``JSON`` on MySQL, ``NVARCHAR(MAX)`` on MSSQL, ``TEXT`` on SQLite/ODBC,
+    ``BLOB SUB_TYPE TEXT`` on Firebird.
+
+    Read normalization: a native-JSON driver (PostgreSQL JSONB, MySQL JSON) may
+    hand back an already-parsed object, while a string-backed engine (SQLite)
+    hands back a JSON string. :meth:`validate` normalizes both to a Python
+    object, so ``model.data`` is always a ``dict``/``list`` regardless of engine.
+
+    Usage::
+
+        class Event(ORM):
+            id      = IntegerField(primary_key=True, auto_increment=True)
+            payload = JSONField()
+
+        Event({"payload": {"type": "click", "tags": ["a", "b"]}}).save()
+        e = Event.find(1)
+        e.payload["type"]   # "click"  — a real dict, not a string
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(dict, **kwargs)
+        self.kind = "JSONField"
+
+    def _resolve_default(self):
+        # Deep-copy a mutable JSON default (``default={}`` / ``default=[]``) so
+        # separate instances never alias the same object — the classic
+        # shared-default footgun. This runs on BOTH the __init__ default path
+        # (which calls _resolve_default directly) and the validate() None path.
+        d = super()._resolve_default()
+        return _copy.deepcopy(d) if isinstance(d, (dict, list)) else d
+
+    def validate(self, value):
+        # None -> required check + default (mirrors base Field).
+        if value is None:
+            if self.required and self.default is None:
+                raise ValueError(f"Field '{self.name}' is required")
+            return self._resolve_default()
+
+        # A driver returns a JSON string (SQLite/TEXT) or an already-parsed
+        # dict/list (PostgreSQL JSONB, MySQL JSON). Normalize to a Python object.
+        if isinstance(value, (bytes, bytearray)):
+            value = value.decode("utf-8")
+        if isinstance(value, str):
+            try:
+                value = _json.loads(value)
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"Field '{self.name}': value is not valid JSON") from e
+        if not isinstance(value, (dict, list)):
+            raise ValueError(
+                f"Field '{self.name}': expected a dict or list, got {type(value).__name__}"
+            )
+        if self.validator is not None:
+            self.validator(value)
+        return value
+
+    def to_db(self, value):
+        # Serialize to a JSON string for the driver. A TEXT column stores it
+        # verbatim; a native JSON column (JSONB/JSON) casts the string literal.
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value  # already serialized (defensive)
+        try:
+            return _json.dumps(value)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"Field '{self.name}': value is not JSON-serializable") from e
+
 
 class ForeignKeyField(Field):
     """Integer field that references another model's primary key.

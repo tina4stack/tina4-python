@@ -390,7 +390,9 @@ class ORM(metaclass=ORMMeta):
             if value is not None or not field.auto_increment:
                 # Use field_mapping for the column name, fall back to field.column
                 db_col = self.field_mapping.get(name, field.column)
-                data[db_col] = value
+                # Serialize to the column's storage form: identity for most
+                # fields, JSON string for JSONField (see Field.to_db).
+                data[db_col] = field.to_db(value)
 
         # v3.13.11 (issue #50): pick INSERT vs UPDATE on row existence
         # for non-auto-increment PKs. Auto-increment keeps the legacy
@@ -840,6 +842,23 @@ class ORM(metaclass=ORMMeta):
         else:
             datetime_sql = "DATETIME"
 
+        # JSONField -> the engine's native JSON type where it has one, else a
+        # text column. PostgreSQL JSONB (binary, indexable, canonical form);
+        # MySQL JSON; MSSQL has no JSON type so NVARCHAR(MAX) (its documented
+        # JSON storage); SQLite/ODBC TEXT; Firebird has no TEXT/JSON type so
+        # BLOB SUB_TYPE TEXT. The ORM stores a JSON string in every case, so a
+        # text-backed column round-trips identically to a native one.
+        if engine in ("postgres", "postgresql"):
+            json_sql = "JSONB"
+        elif engine == "mysql":
+            json_sql = "JSON"
+        elif engine == "mssql":
+            json_sql = "NVARCHAR(MAX)"
+        elif engine == "firebird":
+            json_sql = "BLOB SUB_TYPE TEXT"
+        else:
+            json_sql = "TEXT"
+
         # Don't recreate if table already exists
         if db.table_exists(table):
             return True
@@ -866,6 +885,8 @@ class ORM(metaclass=ORMMeta):
                 sql_type = datetime_sql
             elif kind == "BlobField":
                 sql_type = "BLOB"
+            elif kind == "JSONField":
+                sql_type = json_sql
             else:
                 # Fallback based on field_type
                 ft = field_obj.field_type
@@ -886,7 +907,7 @@ class ORM(metaclass=ORMMeta):
                 parts.append("AUTOINCREMENT")
             if field_obj.required and not field_obj.primary_key:
                 parts.append("NOT NULL")
-            if field_obj.default is not None and not field_obj.auto_increment:
+            if field_obj.default is not None and not field_obj.auto_increment and kind != "JSONField":
                 default_val = field_obj.default
                 if isinstance(default_val, str):
                     parts.append(f"DEFAULT '{default_val}'")

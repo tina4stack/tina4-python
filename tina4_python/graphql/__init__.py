@@ -382,7 +382,8 @@ class Schema:
                 gql_type = "Float"
             elif ftype == "BooleanField":
                 gql_type = "Boolean"
-            elif ftype in ("StringField", "TextField", "DateTimeField"):
+            elif ftype in ("StringField", "TextField", "DateTimeField", "JSONField"):
+                # JSONField serializes to a JSON string in the GraphQL payload.
                 gql_type = "String"
             else:
                 gql_type = "String"

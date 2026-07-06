@@ -901,7 +901,9 @@ User.query().where("name = ?", ["Alice"]).to_mongo()
 ```
 
 ### Available field types
-`IntegerField`, `StringField`, `TextField`, `DateTimeField`, `NumericField`, `BlobField`, `BooleanField`, `FloatField`, `ForeignKeyField`
+`IntegerField`, `StringField`, `TextField`, `DateTimeField`, `NumericField`, `BlobField`, `BooleanField`, `FloatField`, `JSONField`, `ForeignKeyField`
+
+`JSONField()` stores a `dict`/`list` as JSON. You work with a plain Python object; the ORM serializes to a JSON string on save and parses it back on load, so `model.field` is always a `dict`/`list`. Engine-aware column: `JSONB` (PostgreSQL), `JSON` (MySQL), `NVARCHAR(MAX)` (MSSQL), `TEXT` (SQLite), `BLOB SUB_TYPE TEXT` (Firebird). Use it for a JSON column inside a relational row; use DocStore for whole-document storage with Mongo-style queries.
 
 Import from `tina4_python` or `tina4_python.orm.fields`.
 
