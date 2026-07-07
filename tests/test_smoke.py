@@ -1111,7 +1111,7 @@ class TestMigrationAdvanced:
         assert "add_users_table" in filename
         assert (mig_dir / filename).exists()
 
-    def test_migration_idempotent(self, tmp_path):
+    def test_migration_nameempotent(self, tmp_path):
         db = Database(f"sqlite:///{tmp_path / 'idm.db'}")
         mig_dir = tmp_path / "migrations"
         mig_dir.mkdir()

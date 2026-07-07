@@ -91,8 +91,8 @@ class TestMigrate:
         (mig_dir / "000002_second.sql").write_text("CREATE TABLE second (id INTEGER);")
         m.migrate()
 
-        row1 = db.fetch_one("SELECT batch FROM tina4_migration WHERE migration_id = ?", ["000001_first"])
-        row2 = db.fetch_one("SELECT batch FROM tina4_migration WHERE migration_id = ?", ["000002_second"])
+        row1 = db.fetch_one("SELECT batch FROM tina4_migration WHERE migration_name = ?", ["000001_first"])
+        row2 = db.fetch_one("SELECT batch FROM tina4_migration WHERE migration_name = ?", ["000002_second"])
         assert row1["batch"] == 1
         assert row2["batch"] == 2
 
@@ -144,7 +144,7 @@ class TestMigrateNegative:
             m.migrate()
         # Tracking table should exist but no passed migration
         assert db.table_exists("tina4_migration")
-        row = db.fetch_one("SELECT * FROM tina4_migration WHERE migration_id = ?", ["000001_bad"])
+        row = db.fetch_one("SELECT * FROM tina4_migration WHERE migration_name = ?", ["000001_bad"])
         assert row is None
 
     def test_partial_failure_rolls_back(self, db, mig_dir):
@@ -263,7 +263,7 @@ class TestMigrationStatus:
         result = m.status()
         assert len(result["completed"]) == 0
         assert len(result["pending"]) == 1
-        assert result["pending"][0]["migration_id"] == "000001_create_users"
+        assert result["pending"][0]["migration_name"] == "000001_create_users"
 
     def test_status_with_completed(self, db, mig_dir):
         (mig_dir / "000001_create_users.sql").write_text(
@@ -274,7 +274,7 @@ class TestMigrationStatus:
         result = m.status()
         assert len(result["completed"]) == 1
         assert len(result["pending"]) == 0
-        assert result["completed"][0]["migration_id"] == "000001_create_users"
+        assert result["completed"][0]["migration_name"] == "000001_create_users"
         assert "batch" in result["completed"][0]
         assert "executed_at" in result["completed"][0]
 
@@ -298,4 +298,4 @@ class TestMigrationStatus:
         m = Migration(db, str(mig_dir))
         result = m.status()
         assert len(result["pending"]) == 1
-        assert result["pending"][0]["migration_id"] == "20260324120000_create_orders"
+        assert result["pending"][0]["migration_name"] == "20260324120000_create_orders"
