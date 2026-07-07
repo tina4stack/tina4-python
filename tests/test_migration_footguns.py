@@ -6,6 +6,7 @@
 """
 from tina4_python.migration.runner import (
     _split_statements,
+    _parse_set_term,
     _migration_sort_key,
     _should_skip_create_table,
     _normalize_quotes,
@@ -43,6 +44,73 @@ def test_split_still_handles_real_stored_proc_block():
     sql = "CREATE PROCEDURE foo() // BEGIN SELECT 1; SELECT 2; END //;"
     stmts = _split_statements(sql, ";")
     assert any("BEGIN SELECT 1; SELECT 2; END" in s for s in stmts), stmts
+
+
+# ── SET TERM switches the terminator so PSQL bodies survive ──────────────
+
+def test_set_term_keeps_trigger_body_intact():
+    # A trigger body has ';'-terminated inner statements; under the default ';'
+    # runner it must survive as ONE statement, not be split on those inner ';'.
+    sql = (
+        "SET TERM ^ ;\n"
+        "CREATE OR ALTER TRIGGER t_bi FOR t ACTIVE BEFORE INSERT AS\n"
+        "BEGIN\n"
+        "  IF (NEW.id IS NULL) THEN NEW.id = GEN_ID(GEN_T, 1);\n"
+        "END^\n"
+        "SET TERM ; ^"
+    )
+    stmts = _split_statements(sql, ";")
+    assert len(stmts) == 1, f"trigger body was split on its inner ';': {stmts}"
+    assert stmts[0].startswith("CREATE OR ALTER TRIGGER")
+    assert stmts[0].endswith("END")
+    assert "NEW.id = GEN_ID(GEN_T, 1);" in stmts[0]
+
+
+def test_set_term_directives_are_consumed_not_emitted():
+    sql = "SET TERM ^ ;\nEXECUTE BLOCK AS BEGIN a; b; END^\nSET TERM ; ^"
+    stmts = _split_statements(sql, ";")
+    assert len(stmts) == 1
+    assert all("SET TERM" not in s for s in stmts), f"SET TERM leaked as SQL: {stmts}"
+
+
+def test_set_term_restores_previous_delimiter():
+    # After `SET TERM ; ^`, plain ';' splitting resumes.
+    sql = (
+        "CREATE TABLE a (id INT);\n"
+        "SET TERM ^ ;\n"
+        "CREATE TRIGGER a_bi FOR a AS BEGIN NEW.id = 1; END^\n"
+        "SET TERM ; ^\n"
+        "INSERT INTO a VALUES (1);\nUPDATE a SET id = 2;"
+    )
+    stmts = _split_statements(sql, ";")
+    assert len(stmts) == 4, f"delimiter not restored to ';' after the block: {stmts}"
+    assert stmts[0].startswith("CREATE TABLE")
+    assert stmts[1].startswith("CREATE TRIGGER")
+    assert stmts[2].startswith("INSERT INTO")
+    assert stmts[3].startswith("UPDATE")
+
+
+def test_set_term_supports_multi_char_terminator():
+    sql = "SET TERM !! ;\nCREATE TRIGGER t FOR x AS BEGIN NEW.a = 1; END!!\nSET TERM ; !!"
+    stmts = _split_statements(sql, ";")
+    assert len(stmts) == 1
+    assert "!!" not in stmts[0]
+    assert "SET TERM" not in stmts[0]
+
+
+def test_plain_semicolon_unaffected_by_set_term_support():
+    # No SET TERM → ordinary ';' splitting, behaviour unchanged.
+    sql = "CREATE TABLE a (id INT);\nINSERT INTO a VALUES (1);\nUPDATE a SET id = 2;"
+    stmts = _split_statements(sql, ";")
+    assert len(stmts) == 3
+    assert not any(s.endswith(";") for s in stmts)
+
+
+def test_parse_set_term_recognises_directive_only():
+    assert _parse_set_term("SET TERM ^") == "^"
+    assert _parse_set_term("set term !!") == "!!"
+    assert _parse_set_term("CREATE TABLE a (id INT)") is None
+    assert _parse_set_term("SELECT 'SET TERM ^ ;'") is None
 
 
 # ── smart/curly quotes normalized so the SQL runs ───────────────────────

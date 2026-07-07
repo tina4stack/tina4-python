@@ -192,6 +192,16 @@ def _upgrade_v2_to_v3(db, migration_folder: str | None) -> None:
         "Detected legacy v2 tina4_migration schema — performing in-place upgrade to v3"
     )
 
+    # A v2 table has no id generator; on Firebird, ids for rows recorded after
+    # the upgrade come from GEN_TINA4_MIGRATION_ID (see _record_migration), so
+    # make sure it exists. Fresh v3 tables get it in _create_v3_table.
+    if _is_firebird(db):
+        try:
+            db.execute("CREATE GENERATOR GEN_TINA4_MIGRATION_ID")
+            db.commit()
+        except Exception:
+            pass  # Generator may already exist
+
     cols = _column_names(db)
 
     if "migration_id" not in cols:
@@ -331,6 +341,27 @@ def _normalize_quotes(sql: str) -> str:
     return _SMART_QUOTE_RE.sub(lambda m: _SMART_QUOTES[m.group(0)], sql)
 
 
+_SET_TERM_RE = re.compile(r"^SET\s+TERM\s+(\S+)$", re.IGNORECASE)
+
+
+def _parse_set_term(statement: str) -> str | None:
+    """Return the new terminator from a ``SET TERM <new> <current>`` directive.
+
+    ``SET TERM`` is a script-level directive (recognised by isql and other
+    InterBase/Firebird tooling, not run by the engine) that changes the
+    terminator separating statements. Recognising it lets a statement whose own
+    body contains the default ``;`` terminator — a trigger, stored procedure or
+    ``EXECUTE BLOCK`` — be kept intact rather than split on those inner ``;``.
+    The terminator may be more than one character (e.g. ``!!``).
+
+    :param statement: A single, already-stripped statement.
+    :returns: The new terminator, or ``None`` when *statement* is not a
+        ``SET TERM`` directive.
+    """
+    match = _SET_TERM_RE.match(statement.strip())
+    return match.group(1) if match else None
+
+
 def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
     """Split SQL into individual statements with a single-pass, quote- and
     comment-aware scanner.
@@ -356,6 +387,10 @@ def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
       a delimiter or comment, so it is preserved untouched.
     - The **delimiter** ends a statement only when reached outside all of the
       above. Empty statements are dropped; each kept statement is trimmed.
+    - A **SET TERM directive** (``SET TERM <new> <current>``) switches the active
+      terminator and is consumed, never emitted, so a statement whose own body
+      contains the default terminator survives as one. Multi-character
+      terminators (e.g. ``!!``) are supported.
 
     Smart/curly quotes are normalized to straight ASCII first. Mirrors the
     tina4-php ``Migration::splitStatements`` scanner for cross-framework parity.
@@ -367,7 +402,6 @@ def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
     statements: list[str] = []
     current: list[str] = []
     n = len(sql)
-    dlen = len(delimiter)
     i = 0
     in_dollar_block = False
     in_slash_block = False
@@ -448,20 +482,28 @@ def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
                     i += 1
             continue
 
-        # Statement delimiter — only reached outside blocks/comments/strings.
+        # Statement delimiter — only reached outside blocks/comments/strings. A
+        # SET TERM directive switches the active terminator and is consumed
+        # (never emitted); any other completed statement is collected.
         if delimiter and sql.startswith(delimiter, i):
+            i += len(delimiter)
             stmt = "".join(current).strip()
-            if stmt:
-                statements.append(stmt)
             current = []
-            i += dlen
+            if stmt:
+                new_term = _parse_set_term(stmt)
+                if new_term is not None:
+                    delimiter = new_term
+                else:
+                    statements.append(stmt)
             continue
 
         current.append(ch)
         i += 1
 
+    # Trailing statement (may not end with a delimiter). A trailing SET TERM
+    # directive is a no-op — consume it, don't emit it.
     stmt = "".join(current).strip()
-    if stmt:
+    if stmt and _parse_set_term(stmt) is None:
         statements.append(stmt)
     return statements
 
