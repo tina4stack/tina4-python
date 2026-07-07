@@ -75,9 +75,9 @@ def test_migration_runner_works_on_live_postgres(pg, tmp_path):
 
     # The tracking row carries a SERIAL-assigned id (proves the PK type works,
     # not just that the DDL parsed).
-    bk = pg.fetch_one("SELECT id, migration_id FROM tina4_migration ORDER BY id")
+    bk = pg.fetch_one("SELECT id, migration_name FROM tina4_migration ORDER BY id")
     assert bk is not None and int(bk["id"]) >= 1
-    assert bk["migration_id"] == "000001_create_widget"
+    assert bk["migration_name"] == "000001_create_widget"
 
 
 def test_rerun_is_idempotent_on_postgres(pg, tmp_path):

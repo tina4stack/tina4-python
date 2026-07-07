@@ -87,7 +87,7 @@ def _create_v3_table(db) -> None:
         db.execute("""
             CREATE TABLE tina4_migration (
                 id INTEGER NOT NULL PRIMARY KEY,
-                migration_id VARCHAR(500) NOT NULL UNIQUE,
+                migration_name VARCHAR(500) NOT NULL UNIQUE,
                 description VARCHAR(500),
                 batch INTEGER DEFAULT 1 NOT NULL,
                 executed_at VARCHAR(50) NOT NULL,
@@ -98,7 +98,7 @@ def _create_v3_table(db) -> None:
         # Engine-aware bookkeeping DDL. Each engine spells an auto-increment
         # integer PK differently (SQLite AUTOINCREMENT, PostgreSQL SERIAL, MySQL
         # AUTO_INCREMENT, MSSQL IDENTITY), and a TEXT column cannot carry a UNIQUE
-        # constraint on MySQL -- so migration_id is VARCHAR. (SQLite gives VARCHAR
+        # constraint on MySQL -- so migration_name is VARCHAR. (SQLite gives VARCHAR
         # TEXT affinity, so this stays behaviour-identical there.) Mirrors the
         # engine-aware DDL in ORM.create_table; without it `migrate()` died with
         # "syntax error at AUTOINCREMENT" on PostgreSQL/MySQL/MSSQL.
@@ -111,7 +111,7 @@ def _create_v3_table(db) -> None:
         db.execute(f"""
             CREATE TABLE tina4_migration (
                 {id_column},
-                migration_id VARCHAR(500) NOT NULL UNIQUE,
+                migration_name VARCHAR(500) NOT NULL UNIQUE,
                 description VARCHAR(500),
                 batch INTEGER NOT NULL DEFAULT 1,
                 executed_at VARCHAR(50) NOT NULL,
@@ -136,7 +136,7 @@ def _build_stem_map(migration_folder: str | None) -> list[str]:
     """Scan the migrations folder and return a list of file stems.
 
     Used by the v2→v3 backfill to match a v2 row's `description` to the
-    actual file on disk, so the resulting `migration_id` matches what
+    actual file on disk, so the resulting `migration_name` matches what
     `migrate()` will compare against next.
     """
     if not migration_folder:
@@ -153,7 +153,7 @@ def _build_stem_map(migration_folder: str | None) -> list[str]:
     return stems
 
 
-def _resolve_migration_id(description: str, stems: list[str]) -> str:
+def _resolve_migration_name(description: str, stems: list[str]) -> str:
     """Find the file stem that corresponds to a v2 description, or fall back.
 
     Match strategy, in order:
@@ -179,11 +179,11 @@ def _resolve_migration_id(description: str, stems: list[str]) -> str:
 def _upgrade_v2_to_v3(db, migration_folder: str | None) -> None:
     """In-place upgrade of a Python-v2 tina4_migration table to v3.
 
-    1. ALTER TABLE ADD the v3 columns (migration_id, batch, executed_at)
+    1. ALTER TABLE ADD the v3 columns (migration_name, batch, executed_at)
        alongside the existing v2 columns. v2 columns stay in place so a
        manual rollback path remains open; they are simply ignored from
        now on.
-    2. Backfill every v2 row's migration_id by matching `description`
+    2. Backfill every v2 row's migration_name by matching `description`
        against the on-disk file stems. Falls back to the description
        verbatim when no file matches. All legacy rows get batch=1 and
        executed_at='legacy'.
@@ -204,13 +204,13 @@ def _upgrade_v2_to_v3(db, migration_folder: str | None) -> None:
 
     cols = _column_names(db)
 
-    if "migration_id" not in cols:
+    if "migration_name" not in cols:
         col_type = "VARCHAR(500)" if _is_firebird(db) else "TEXT"
         try:
-            db.execute(f"ALTER TABLE tina4_migration ADD migration_id {col_type}")
+            db.execute(f"ALTER TABLE tina4_migration ADD migration_name {col_type}")
             db.commit()
         except Exception as e:
-            logger.debug(f"v2→v3 upgrade: ALTER ADD migration_id skipped: {e}")
+            logger.debug(f"v2→v3 upgrade: ALTER ADD migration_name skipped: {e}")
 
     if "batch" not in cols:
         try:
@@ -234,7 +234,7 @@ def _upgrade_v2_to_v3(db, migration_folder: str | None) -> None:
 
     try:
         rows = db.fetch(
-            "SELECT description, passed FROM tina4_migration WHERE migration_id IS NULL",
+            "SELECT description, passed FROM tina4_migration WHERE migration_name IS NULL",
             limit=100000,
         ).records
     except Exception as e:
@@ -249,13 +249,13 @@ def _upgrade_v2_to_v3(db, migration_folder: str | None) -> None:
         if not desc:
             continue
 
-        migration_id = _resolve_migration_id(desc, stems)
+        migration_name = _resolve_migration_name(desc, stems)
 
         try:
             db.execute(
-                "UPDATE tina4_migration SET migration_id = ?, batch = 1 "
-                "WHERE description = ? AND migration_id IS NULL",
-                [migration_id, desc],
+                "UPDATE tina4_migration SET migration_name = ?, batch = 1 "
+                "WHERE description = ? AND migration_name IS NULL",
+                [migration_name, desc],
             )
             db.commit()
             backfilled += 1
@@ -277,8 +277,8 @@ def _upgrade_v2_to_v3(db, migration_folder: str | None) -> None:
 def _ensure_tracking_table(db, migration_folder: str | None = None):
     """Create or upgrade the migration tracking table.
 
-    Handles v2→v3 upgrade: v2 tables have `description` but no `migration_id`.
-    When detected, adds the missing v3 columns and backfills `migration_id`
+    Handles v2→v3 upgrade: v2 tables have `description` but no `migration_name`.
+    When detected, adds the missing v3 columns and backfills `migration_name`
     by matching `description` against the on-disk file stems so subsequent
     `migrate()` calls do not re-apply already-applied migrations.
 
@@ -289,8 +289,26 @@ def _ensure_tracking_table(db, migration_folder: str | None = None):
         return
 
     cols = _column_names(db)
+
+    # In-place rename for a table created by an older v3 (<= 3.13.54), which
+    # named the column `migration_id`. The canonical name is now
+    # `migration_name` (unified across all four frameworks). Add the new column
+    # and copy the values across so already-applied migrations are still seen as
+    # applied — without this the `migration_name`-based read below finds nothing
+    # and every migration re-runs. The old `migration_id` column is left in
+    # place (harmless, ignored from now on).
+    if "migration_id" in cols and "migration_name" not in cols:
+        col_type = "VARCHAR(500)" if _is_firebird(db) else "TEXT"
+        try:
+            db.execute(f"ALTER TABLE tina4_migration ADD migration_name {col_type}")
+            db.execute("UPDATE tina4_migration SET migration_name = migration_id")
+            db.commit()
+            cols = _column_names(db)
+        except Exception as e:
+            logger.debug(f"v3 migration_id->migration_name rename skipped: {e}")
+
     has_v3_shape = (
-        "migration_id" in cols
+        "migration_name" in cols
         and "batch" in cols
         and "executed_at" in cols
     )
@@ -302,12 +320,12 @@ def _get_executed(db) -> set[str]:
     """Get set of already-executed migration IDs."""
     try:
         result = db.fetch(
-            "SELECT migration_id FROM tina4_migration WHERE passed = 1",
+            "SELECT migration_name FROM tina4_migration WHERE passed = 1",
             limit=10000,
         )
-        return {row["migration_id"] for row in result.records if row.get("migration_id")}
+        return {row["migration_name"] for row in result.records if row.get("migration_name")}
     except Exception:
-        # Fallback for v2 tables where migration_id may not exist yet
+        # Fallback for v2 tables where migration_name may not exist yet
         result = db.fetch(
             "SELECT description FROM tina4_migration WHERE passed = 1",
             limit=10000,
@@ -647,9 +665,9 @@ def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
         )
 
     for mig_file in migration_files:
-        migration_id = mig_file.stem  # e.g., "000001_create_users_table"
+        migration_name = mig_file.stem  # e.g., "000001_create_users_table"
 
-        if migration_id in executed:
+        if migration_name in executed:
             continue
 
         try:
@@ -672,18 +690,18 @@ def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
 
             # Record as passed
             now = datetime.now(timezone.utc).isoformat()
-            desc = re.sub(r"^\d+_", "", migration_id, count=1).replace("_", " ")
+            desc = re.sub(r"^\d+_", "", migration_name, count=1).replace("_", " ")
             if _is_firebird(db):
                 row = db.fetch_one("SELECT GEN_ID(GEN_TINA4_MIGRATION_ID, 1) AS next_id FROM RDB$DATABASE")
                 next_id = row["next_id"] if row else 1
                 db.execute(
-                    "INSERT INTO tina4_migration (id, migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, 1)",
-                    [next_id, migration_id, desc, batch, now],
+                    "INSERT INTO tina4_migration (id, migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, 1)",
+                    [next_id, migration_name, desc, batch, now],
                 )
             else:
                 db.execute(
-                    "INSERT INTO tina4_migration (migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, 1)",
-                    [migration_id, desc, batch, now],
+                    "INSERT INTO tina4_migration (migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, 1)",
+                    [migration_name, desc, batch, now],
                 )
             db.commit()
             ran.append(mig_file.name)
@@ -713,7 +731,7 @@ def _rollback(db, migration_folder: str = "migrations", delimiter: str = ";") ->
 
     last_batch = row["max_batch"]
     result = db.fetch(
-        "SELECT migration_id FROM tina4_migration WHERE batch = ? AND passed = 1 ORDER BY migration_id DESC",
+        "SELECT migration_name FROM tina4_migration WHERE batch = ? AND passed = 1 ORDER BY migration_name DESC",
         [last_batch],
         limit=10000,
     )
@@ -722,7 +740,7 @@ def _rollback(db, migration_folder: str = "migrations", delimiter: str = ";") ->
     rolled_back = []
 
     for migration in result.records:
-        mid = migration["migration_id"]
+        mid = migration["migration_name"]
         py_file = folder / f"{mid}.py"
         down_file = folder / f"{mid}.down.sql"
 
@@ -745,7 +763,7 @@ def _rollback(db, migration_folder: str = "migrations", delimiter: str = ";") ->
                 )
 
             db.execute(
-                "DELETE FROM tina4_migration WHERE migration_id = ?",
+                "DELETE FROM tina4_migration WHERE migration_name = ?",
                 [mid],
             )
             db.commit()
@@ -900,12 +918,12 @@ class Migration:
             row = self._db.fetch_one("SELECT GEN_ID(GEN_TINA4_MIGRATION_ID, 1) AS next_id FROM RDB$DATABASE")
             next_id = row["next_id"] if row else 1
             self._db.execute(
-                "INSERT INTO tina4_migration (id, migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tina4_migration (id, migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, ?)",
                 [next_id, name, desc, batch, now, passed],
             )
         else:
             self._db.execute(
-                "INSERT INTO tina4_migration (migration_id, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO tina4_migration (migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?)",
                 [name, desc, batch, now, passed],
             )
 
@@ -916,7 +934,7 @@ class Migration:
             name: Migration ID to remove (stem of the filename).
         """
         self._db.execute(
-            "DELETE FROM tina4_migration WHERE migration_id = ?",
+            "DELETE FROM tina4_migration WHERE migration_name = ?",
             [name],
         )
 
@@ -925,7 +943,7 @@ def _status(db, migration_folder: str = "migrations") -> dict:
     """Get migration status (internal implementation).
 
     Returns {"completed": [...], "pending": [...]}, where each entry is
-    a dict with 'migration_id', 'description', and (for completed)
+    a dict with 'migration_name', 'description', and (for completed)
     'executed_at' and 'batch'.
     """
     _ensure_tracking_table(db, migration_folder)
@@ -944,12 +962,12 @@ def _status(db, migration_folder: str = "migrations") -> dict:
 
     # Build completed list from the database with execution metadata
     result = db.fetch(
-        "SELECT migration_id, description, batch, executed_at FROM tina4_migration WHERE passed = 1 ORDER BY migration_id",
+        "SELECT migration_name, description, batch, executed_at FROM tina4_migration WHERE passed = 1 ORDER BY migration_name",
         limit=10000,
     )
     completed = [
         {
-            "migration_id": row["migration_id"],
+            "migration_name": row["migration_name"],
             "description": row["description"],
             "batch": row["batch"],
             "executed_at": row["executed_at"],
@@ -960,11 +978,11 @@ def _status(db, migration_folder: str = "migrations") -> dict:
     # Build pending list from files not yet executed
     pending = []
     for sql_file in sql_files:
-        migration_id = sql_file.stem
-        if migration_id not in executed:
-            desc = re.sub(r"^\d+_", "", migration_id, count=1).replace("_", " ")
+        migration_name = sql_file.stem
+        if migration_name not in executed:
+            desc = re.sub(r"^\d+_", "", migration_name, count=1).replace("_", " ")
             pending.append({
-                "migration_id": migration_id,
+                "migration_name": migration_name,
                 "description": desc,
             })
 

@@ -61,14 +61,14 @@ def _table_exists(db_path, table):
         db.close()
 
 
-def _migration_ids(db_path):
+def _migration_names(db_path):
     """Return the list of recorded migration ids in tina4_migration (empty if none)."""
     db = Database(f"sqlite:///{db_path}")
     try:
         if not db.table_exists("tina4_migration"):
             return []
-        rows = db.fetch("SELECT migration_id FROM tina4_migration WHERE passed = 1").records
-        return [r["migration_id"] for r in rows]
+        rows = db.fetch("SELECT migration_name FROM tina4_migration WHERE passed = 1").records
+        return [r["migration_name"] for r in rows]
     finally:
         db.close()
 
@@ -82,7 +82,7 @@ def test_applies_pending_on_startup(project):
 
     assert _table_exists(db_path, "items"), "pending migration should be applied on startup"
     # The schema change is not enough — the run must be RECORDED so a re-run skips it.
-    assert _migration_ids(db_path) == ["000001_items"], (
+    assert _migration_names(db_path) == ["000001_items"], (
         "the applied migration must be recorded in tina4_migration"
     )
 
@@ -100,7 +100,7 @@ def test_disabled_by_env(project):
     assert not _table_exists(db_path, "tina4_migration"), (
         "disabled startup migration must not even create the tracking table"
     )
-    assert _migration_ids(db_path) == []
+    assert _migration_names(db_path) == []
 
 
 def test_no_folder_is_noop(project):
@@ -148,7 +148,7 @@ def test_failure_is_non_breaking(project):
     assert _table_exists(db_path, "ok_tbl"), "the good migration must stay applied"
     # The broken migration left no table and no record behind.
     assert not _table_exists(db_path, "bad_tbl"), "the broken migration must not partially apply"
-    assert _migration_ids(db_path) == ["000001_ok"], (
+    assert _migration_names(db_path) == ["000001_ok"], (
         "only the good migration is recorded; the failed one is never recorded as passed"
     )
 
@@ -233,9 +233,9 @@ def test_applies_pending_on_startup_postgres(pg_project):
     try:
         assert db.table_exists("astartup_pg_items"), "migration applied on live PostgreSQL"
         rows = db.fetch(
-            "SELECT migration_id FROM tina4_migration WHERE passed = 1"
+            "SELECT migration_name FROM tina4_migration WHERE passed = 1"
         ).records
-        assert [r["migration_id"] for r in rows] == ["000001_items"], (
+        assert [r["migration_name"] for r in rows] == ["000001_items"], (
             "the applied migration is recorded in tina4_migration on PG"
         )
     finally:
