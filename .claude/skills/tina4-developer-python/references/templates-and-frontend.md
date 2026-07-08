@@ -1,20 +1,30 @@
-# Templates & Frontend
+# Templates & Frontend (Python)
 
 ## Frond Templates
 
-Tina4 uses Frond, a Twig-compatible template engine. Templates go in `src/templates/`.
+Tina4 uses Frond, a Twig-like template engine. Templates go in `src/templates/`.
 
 ### Rendering
+
 ```python
 @get("/")
 async def home(request, response):
     return response.render("index.twig", {
         "title": "My App",
-        "users": User().select("*").fetch()
+        "users": [u.to_dict() for u in User.all()],
     })
 ```
 
+Need the rendered HTML as a string instead of a response? Instantiate the engine — `render` is
+an instance method, not a static one:
+
+```python
+from tina4_python.frond import Frond
+html = Frond(template_dir="src/templates").render("index.twig", {"title": "My App"})
+```
+
 ### Basic Syntax
+
 ```twig
 {# Output variables #}
 <h1>{{ title }}</h1>
@@ -43,23 +53,30 @@ async def home(request, response):
 ```
 
 ### Useful Filters
+
 ```twig
 {{ name | upper }}                 → UPPERCASE
 {{ name | lower }}                 → lowercase
 {{ name | capitalize }}            → First letter cap
 {{ text | truncate(100) }}         → Truncate
-{{ list | join(", ") }}            → Join array
-{{ value | default("N/A") }}       → Default if null
+{{ list | join(", ") }}            → Join list
+{{ value | default("N/A") }}       → Default if null/empty
 {{ html | raw }}                   → No auto-escaping
 {{ price | number_format(2) }}     → 1,234.56
-{{ date | date("Y-m-d") }}        → Formatted date
+{{ date | date("%Y-%m-%d") }}      → Formatted date
 {{ text | slug }}                  → url-friendly-slug
-{{ created | timeago }}            → "3 hours ago"
 ```
 
-All filter names use **snake_case** regardless of language.
+Other built-ins include `title`, `trim`, `length`, `reverse`, `sort`, `first`, `last`, `split`,
+`replace`, `nl2br`, `round`, `json_encode`, `to_json`, `keys`, `values`, `merge`, `slice`,
+`escape`. All filter names are snake_case.
+
+> There is **no** `timeago` filter and **no** `trans` filter. For relative times, format in the
+> route/helper and pass a string. For translation, use the `I18n` class in Python (see
+> `auth-and-services.md`) and pass translated strings into the template context.
 
 ### Includes and Macros
+
 ```twig
 {# Include a partial #}
 {% include "partials/header.twig" %}
@@ -74,20 +91,15 @@ All filter names use **snake_case** regardless of language.
 {{ forms.input("email", "", "email") }}
 ```
 
-### Inline SQL Queries (Frond-unique)
-```twig
-{% query "SELECT * FROM products WHERE active = ?" params=[true] as products %}
-{% for product in products.data %}
-    <div>{{ product.name }} — ${{ product.price | number_format(2) }}</div>
-{% endfor %}
-<p>{{ products.total }} products found</p>
-```
+> There is **no** `{% query %}` inline-SQL tag. Do data access in the route or a helper class in
+> `src/app/` and pass the results into the template context — never query the database from a
+> template.
 
 ### Live Blocks (server-rendered, self-refreshing)
 
-A live block renders on the server for first paint, then re-fetches its own HTML and swaps it
-in place. Pick a transport: `poll N` (every N seconds), `sse`, or `ws "path"`. `frond.js`
-(already loaded) wires the marker and morphs the result, so a focused input survives the swap.
+A live block renders on the server for first paint, then re-fetches its own HTML and swaps it in
+place. Pick a transport: `poll N` (every N seconds), `sse`, or `ws "path"`. `frond.js` (already
+loaded) wires the marker and morphs the result, so a focused input survives the swap.
 
 ```twig
 {# Poll every 5 seconds #}
@@ -95,7 +107,7 @@ in place. Pick a transport: `poll N` (every N seconds), `sse`, or `ws "path"`. `
     <strong>{{ count }}</strong> items
 {% endlive %}
 
-{# WebSocket - the server pushes updates #}
+{# WebSocket — the server pushes updates #}
 {% live "chat" ws "/ws/chat" %}
     {% for msg in messages %}<div>{{ msg.user }}: {{ msg.text }}</div>{% endfor %}
 {% endlive %}
@@ -112,30 +124,39 @@ def cart_data(request):
     return {"count": cart_count(request), "items": cart_items(request)}
 ```
 
-The provider feeds the always-on `GET /__frond/live/{name}` endpoint - the block name is the
+The provider feeds the always-on `GET /__frond/live/{name}` endpoint — the block name is the
 route. For a `ws` block, push a fresh render the instant data changes with
-`push_live("cart", {...})`. Point at your own route with `src "/path"` (same-origin only);
-nested live blocks are rejected.
+`push_live("cart", {...})`. Nested live blocks are rejected.
 
 ### Cache Blocks
+
+Wrap expensive-to-render markup in a `{% cache %}` block — the rendered fragment is stored and
+reused for the given number of seconds:
+
 ```twig
 {% cache "sidebar" 300 %}
-    {# This block is cached for 300 seconds #}
-    {% query "SELECT * FROM popular_posts LIMIT 10" as posts %}
-    {% for post in posts.data %}
-        <a href="/posts/{{ post.id }}">{{ post.title }}</a>
+    {# Rendered once, then served from cache for 300 seconds #}
+    <ul>
+    {% for post in popular_posts %}
+        <li><a href="/posts/{{ post.id }}">{{ post.title }}</a></li>
     {% endfor %}
+    </ul>
 {% endcache %}
 ```
 
+Provide the data (`popular_posts` here) from the route context as usual — a cache block caches
+rendered output, it does not run queries.
+
 ## frond.js — Frontend Helper
 
-A lightweight (<10KB) JavaScript library that works with all Tina4 backends. Include it:
+A lightweight (<10KB) JavaScript library that ships with the framework. Include it:
+
 ```html
 <script src="/js/frond.js"></script>
 ```
 
 ### HTTP Requests
+
 ```javascript
 const users = await Frond.get("/api/users");
 await Frond.post("/api/users", { name: "Alice" });
@@ -144,6 +165,7 @@ await Frond.delete("/api/users/1");
 ```
 
 ### Forms
+
 ```javascript
 Frond.submitForm("#user-form", "/api/users");
 Frond.fillForm("#user-form", { name: "Alice", email: "alice@example.com" });
@@ -151,6 +173,7 @@ Frond.resetForm("#user-form");
 ```
 
 ### CRUD Table (auto-generated)
+
 ```javascript
 Frond.crud({
     target: "#users-table",
@@ -162,6 +185,7 @@ Frond.crud({
 ```
 
 ### Notifications and Modals
+
 ```javascript
 Frond.notify("Saved!", "success");
 Frond.notify("Error!", "error");
@@ -170,13 +194,15 @@ Frond.modal({ title: "Edit User", body: "<form>...</form>" });
 ```
 
 ### Authentication
+
 ```javascript
 Frond.config({ auth: true });
-Frond.setToken(jwt);        // Stored in memory
-// All subsequent requests auto-attach Bearer token
+Frond.setToken(jwt);        // stored in memory
+// All subsequent requests auto-attach the Bearer token
 ```
 
 ### WebSocket
+
 ```javascript
 const ws = Frond.ws("/ws/chat", {
     reconnect: true,
