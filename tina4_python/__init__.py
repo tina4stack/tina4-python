@@ -83,6 +83,9 @@ from tina4_python.core.events import on, emit, once, off  # noqa: E402, F401
 # ── Email (Messenger) ──
 from tina4_python.messenger import Messenger  # noqa: E402, F401
 
+# ── Real-time collaboration (WebRTC signalling + control plane) ──
+from tina4_python.realtime import realtime, RtcMediaBackend, MeshBackend  # noqa: E402, F401
+
 # ── Inline testing (@tests + assertions for inline test cases) ──
 # Class-based xUnit testing lives in tina4_python.test (a separate module).
 # Keep both surfaces re-exported so users can write either style.
