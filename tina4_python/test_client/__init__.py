@@ -150,6 +150,17 @@ class TestClient:
         # Create response callable
         response = Response()
 
+        # Route through the REAL auth gate (parity with the live server). A write
+        # to an auth-required route (POST/PUT/PATCH/DELETE by default, or any
+        # @secured() route) with no valid token / API key / formToken 401s here
+        # exactly as it would in production. The TestClient used to skip this, so
+        # a green test could hide a live 401 — the verification layer lied. A
+        # public route (GET, or a write marked @noauth()) has auth_required False,
+        # so _check_auth is a no-op and the handler runs unchanged. (#PY2)
+        from tina4_python.core.server import _check_auth
+        if _check_auth(request, response, route):
+            return TestResponse(response)
+
         # Execute handler (sync or async)
         handler = route["handler"]
         result = handler(request, response)
