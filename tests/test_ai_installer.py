@@ -66,6 +66,8 @@ class TestSkillBlock:
         assert "tina4-js" in block
         assert "tina4-maintainer" in block
         assert "tina4.com" in block
+        # Every generated context tells the assistant how to report a stale/wrong skill.
+        assert "report-a-skill" in block
 
     def test_rule_block_has_no_markdown_syntax(self):
         block = _skill_block(".cursorules")
