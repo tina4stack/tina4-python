@@ -907,7 +907,12 @@ class ORM(metaclass=ORMMeta):
                 parts.append("AUTOINCREMENT")
             if field_obj.required and not field_obj.primary_key:
                 parts.append("NOT NULL")
-            if field_obj.default is not None and not field_obj.auto_increment and kind != "JSONField":
+            # Callable defaults (e.g. DateTimeField(default=lambda: datetime.now())) are
+            # resolved per-row at insert time (_resolve_default, issue #50); they must NOT
+            # be emitted into the CREATE TABLE DDL, where they stringify to an invalid
+            # `DEFAULT <function ...>` and silently fail table creation.
+            if field_obj.default is not None and not field_obj.auto_increment \
+                    and kind != "JSONField" and not callable(field_obj.default):
                 default_val = field_obj.default
                 if isinstance(default_val, str):
                     parts.append(f"DEFAULT '{default_val}'")

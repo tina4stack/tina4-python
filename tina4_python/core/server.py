@@ -919,7 +919,7 @@ class _AsgiWebSocketConnection:
             pass
 
 
-async def _handle_dev_websocket(reader, writer, headers, path):
+async def _handle_dev_websocket(reader, writer, headers, path, query_string: str = ""):
     """Handle WebSocket upgrade in the built-in dev server, dispatching to registered routes."""
     route, params = Router.match_ws(path)
     if route is None:
@@ -944,18 +944,38 @@ async def _handle_dev_websocket(reader, writer, headers, path):
         writer.close()
         return
 
-    # Send upgrade response
+    # Per-route auth: a @secured() WS route needs a valid JWT on the upgrade
+    # (Authorization header, "bearer" subprotocol, or ?token=). Public by default.
+    # (This mirrors the ASGI path — the built-in server used to skip it, which
+    # both left secured WS routes unauthenticated AND left conn.auth unset.)
+    _ws_subproto = headers.get("sec-websocket-protocol", "")
+    _ws_payload, _ws_ok = ws_authorized(route, headers, query_string, _ws_subproto)
+    if not _ws_ok:
+        writer.write(b"HTTP/1.1 401 Unauthorized\r\n\r\n")
+        await writer.drain()
+        writer.close()
+        return
+
+    # Send upgrade response. Echo the `bearer` subprotocol when the client
+    # offered it (a browser sends the JWT as `Sec-WebSocket-Protocol: bearer,
+    # <jwt>` since it can't set an Authorization header); a browser fails the
+    # handshake if the server doesn't select one of the offered subprotocols.
     accept = compute_accept_key(ws_key)
+    _proto_header = ""
+    if any(p.strip().lower() == "bearer" for p in _ws_subproto.split(",")):
+        _proto_header = "Sec-WebSocket-Protocol: bearer\r\n"
     response_data = (
         f"HTTP/1.1 101 Switching Protocols\r\n"
         f"Upgrade: websocket\r\n"
         f"Connection: Upgrade\r\n"
-        f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
+        f"Sec-WebSocket-Accept: {accept}\r\n"
+        f"{_proto_header}\r\n"
     )
     writer.write(response_data.encode())
     await writer.drain()
 
     ws = WebSocketConnection(reader, writer, path, headers, params)
+    ws.auth = _ws_payload
     _ws_manager.add(ws)
 
     handler = route["handler"]
@@ -2591,7 +2611,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                     await writer.drain()
                     writer.close()
                     return
-                await _handle_dev_websocket(reader, writer, _header_dict, path)
+                await _handle_dev_websocket(reader, writer, _header_dict, path, qs)
                 return
 
             # Read body

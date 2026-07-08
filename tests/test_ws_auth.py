@@ -98,3 +98,80 @@ class TestSecuredWsRoute:
             pass
         route, _ = Router.match_ws("/ws/auth-below")
         assert route["auth_required"] is True
+
+
+class TestNativeServerUpgrade:
+    """Real socket-pair integration for the built-in webserver's WS upgrade.
+
+    Regression for the gap the realtime chat demo surfaced: the native
+    (TINA4_DEFAULT_WEBSERVER) upgrade path imported ws_authorized but never
+    called it — so a @secured WS route was unauthenticated, conn.auth was never
+    set, and the `bearer` subprotocol was not echoed (which makes a browser fail
+    the handshake). No mocks: a real socketpair carries the real handshake.
+    """
+
+    @staticmethod
+    async def _drive(headers, path, captured=None):
+        import asyncio
+        import socket
+        from tina4_python.core import server as srv
+
+        s_srv, s_cli = socket.socketpair()
+        for s in (s_srv, s_cli):
+            s.setblocking(False)
+        sr, sw = await asyncio.open_connection(sock=s_srv)
+        cr, cw = await asyncio.open_connection(sock=s_cli)
+
+        task = asyncio.create_task(
+            srv._handle_dev_websocket(sr, sw, headers, path, ""))
+        await asyncio.sleep(0.1)
+        try:
+            data = await asyncio.wait_for(cr.read(4096), timeout=0.5)
+        except asyncio.TimeoutError:
+            data = b""
+        cw.close()
+        try:
+            await asyncio.wait_for(task, timeout=1.0)
+        except Exception:
+            task.cancel()
+        return data.decode("utf-8", errors="replace")
+
+    def _register(self, path, secured_flag, captured):
+        async def handler(connection, event, data):
+            if event == "open":
+                captured["auth"] = connection.auth
+        if secured_flag:
+            handler._secured = True
+        Router.websocket(path, handler)
+
+    async def test_secured_rejects_without_token(self):
+        captured = {}
+        self._register("/ws/native-secure-a", True, captured)
+        resp = await self._drive(
+            {"upgrade": "websocket", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ=="},
+            "/ws/native-secure-a", captured)
+        assert "401" in resp
+        assert "101" not in resp
+        assert "auth" not in captured        # open handler never ran
+
+    async def test_secured_accepts_bearer_and_echoes_subprotocol(self):
+        captured = {}
+        self._register("/ws/native-secure-b", True, captured)
+        token = get_token({"user_id": 42})
+        resp = await self._drive({
+            "upgrade": "websocket",
+            "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+            "sec-websocket-protocol": f"bearer, {token}",
+        }, "/ws/native-secure-b", captured)
+        assert "101 Switching Protocols" in resp
+        assert "sec-websocket-protocol: bearer" in resp.lower()   # echoed for the browser
+        assert captured.get("auth", {}).get("user_id") == 42       # conn.auth populated
+
+    async def test_public_route_upgrades_without_token(self):
+        captured = {}
+        self._register("/ws/native-public", False, captured)
+        resp = await self._drive(
+            {"upgrade": "websocket", "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ=="},
+            "/ws/native-public", captured)
+        assert "101 Switching Protocols" in resp
+        assert captured.get("auth") is None                        # public → no payload
