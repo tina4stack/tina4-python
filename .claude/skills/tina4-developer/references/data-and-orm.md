@@ -263,6 +263,12 @@ results.to_json()    # '[{"id": 1, "name": "Alice"}, ...]'
 results.to_csv()     # 'id,name\n1,Alice\n...'
 ```
 
+> **`to_array()`/`to_json()`/`to_csv()` are on the `DatabaseResult` from `db.fetch()` only.**
+> The ORM query methods **`Model.all()` and `Model.select()` return a plain Python list of
+> model instances** — a list has no `.to_array()`. To serialize ORM results, use a
+> comprehension: `[m.to_dict() for m in Note.all()]`. (Chaining `Note().select().to_array()`
+> raises `'list' object has no attribute 'to_array'` — a common, boot-time-only failure.)
+
 ## QueryBuilder — Fluent Queries with JOINs
 
 Use `QueryBuilder` for complex queries (JOINs, aggregates, GROUP BY) instead of raw SQL.
