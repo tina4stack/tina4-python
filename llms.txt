@@ -192,3 +192,10 @@ tests/          # pytest test files
 9. Server entry point: `from tina4_python.core import run; run()`
 10. Default port: 7145
 11. ORM defaults table name to lowercase class name (`Contact` → `contact`). Set `ORM_PLURAL_TABLE_NAMES=true` in `.env` to append "s"
+
+## Scaffolding (`tina4py generate`)
+Scaffold boilerplate instead of hand-writing it: `tina4py generate <feature>` for model, route, crud,
+migration, service, queue, validator, seeder, websocket, listener, form, view, auth. Generated write
+routes are secure by default (token-gated; pass `--public` to open them); reads are public. Logic
+stubs carry an AI-FILL fill-spec placeholder (Intent/Given/Use/Return/Ground + a loud not-implemented
+throw) — fill only that; working CRUD carries a lighter EXTEND marker.

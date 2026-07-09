@@ -1,23 +1,77 @@
 """Tests for CLI scaffolding generators."""
+import ast
+import asyncio
+import importlib.util
 import os
 import shutil
+import subprocess
+import sys
 import pytest
 from pathlib import Path
 from tina4_python.cli import (
     _parse_fields, _parse_flags, _to_snake, _to_table,
     _gen_model, _gen_route, _gen_migration, _gen_middleware,
     _gen_test, _gen_form, _gen_view, _gen_auth, _gen_crud,
+    _gen_service, _gen_queue, _gen_validator, _gen_seeder,
+    _gen_websocket, _gen_listener, _ai_fill, _extend, _parse_every,
     FIELD_TYPE_MAP,
 )
 
 
 @pytest.fixture
 def tmp_project(tmp_path):
-    """Create a temp project directory and cd into it."""
+    """Create a temp project directory, cd into it, and put it on sys.path so a
+    generated file's `from src.orm.X import X` resolves to THIS project."""
     old_cwd = os.getcwd()
     os.chdir(tmp_path)
+    sys.path.insert(0, str(tmp_path))
     yield tmp_path
     os.chdir(old_cwd)
+    try:
+        sys.path.remove(str(tmp_path))
+    except ValueError:
+        pass
+    # Drop any `src.*` modules this test imported so the name can't resolve to a
+    # previous tmp project on the next test.
+    for mod in [m for m in list(sys.modules) if m == "src" or m.startswith("src.")]:
+        del sys.modules[mod]
+
+
+def _load_generated(path: Path, modname: str):
+    """Import a generated file for real (no mocks) and return the module.
+
+    Executes the module top-to-bottom, so decorator-based wiring (@websocket,
+    @on) actually registers on the real Router / event bus, and a bad import
+    raises ImportError here — proving the scaffold's imports resolve.
+    """
+    assert path.exists(), f"expected generated file at {path}"
+    # Fresh-resolve any `src.*` imports (avoid a stale tmp binding).
+    for mod in [m for m in list(sys.modules) if m == "src" or m.startswith("src.")]:
+        del sys.modules[mod]
+    spec = importlib.util.spec_from_file_location(modname, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[modname] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def clean_registry():
+    """Clear the global Router / event bus / DB binding around a behavioural
+    test so registrations and bindings never leak between tests."""
+    from tina4_python.core.router import Router
+    # core.events re-exports an `events()` fn that shadows the submodule attr, so
+    # `import ... as ev` yields the function — import_module returns the module.
+    ev = importlib.import_module("tina4_python.core.events")
+    import tina4_python.orm.model as orm_model
+
+    Router.clear()
+    ev.clear()
+    _prev_db = getattr(orm_model, "_database", None)
+    yield
+    Router.clear()
+    ev.clear()
+    orm_model._database = _prev_db
 
 
 # ── Helper tests ──────────────────────────────────────────────────────
@@ -141,10 +195,14 @@ class TestGenerateRoute:
         assert "Product.create" in content
 
     def test_route_without_model(self, tmp_project):
+        # No --model → a custom route: every handler body is an AI-FILL stub
+        # (raise NotImplementedError), not working code and not a public write.
         _gen_route("items", {})
         content = (tmp_project / "src" / "routes" / "items.py").read_text()
-        assert "from src.orm" not in content
-        assert '{"data": []}' in content
+        assert "from src.orm.Item import" not in content  # no real model import
+        assert "AI-FILL" in content
+        assert "raise NotImplementedError" in content
+        assert "@noauth" not in content  # secure by default
 
 
 # ── Migration generator ──────────────────────────────────────────────
@@ -306,3 +364,342 @@ class TestGenerateCrud:
         _gen_crud("Product", {"fields": "name:string"})
         content = (tmp_project / "src" / "routes" / "products.py").read_text()
         assert "from src.orm.Product import Product" in content
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Scaffolding-first acceptance matrix — real temp project, real test
+# client, NO mocks. Compile + import + boot behaviour, not string-grep.
+# ══════════════════════════════════════════════════════════════════════
+
+def _compiles(path: Path):
+    """B2 — the generated source COMPILES (stricter than ast.parse)."""
+    src = path.read_text()
+    compile(src, str(path), "exec")   # raises SyntaxError if not
+
+
+# ── Placeholder / helper unit tests ───────────────────────────────────
+
+class TestPlaceholderHelpers:
+    def test_ai_fill_is_a_grounded_fill_spec(self):
+        block = _ai_fill(
+            "create_widget", "persist a widget", "Widget.create(request.body)",
+            "create_widget: persist and return",
+            given="request.body -> dict", ret="response(item.to_dict(), 201)",
+            ground='tina4_context("create ORM record", "python")',
+        )
+        assert "AI-FILL: create_widget" in block
+        assert "# Intent:" in block and "# Use:" in block and "# Ground:" in block
+        assert 'raise NotImplementedError("create_widget: persist and return")' in block
+
+    def test_extend_marks_without_notimplemented(self):
+        block = _extend("validate before persist", "e.g. reject invalid input")
+        assert "EXTEND: validate before persist" in block
+        assert "NotImplementedError" not in block
+
+    def test_parse_every_durations(self):
+        assert _parse_every("5m") == 300
+        assert _parse_every("30s") == 30
+        assert _parse_every("2h") == 7200
+        assert _parse_every("1d") == 86400
+        assert _parse_every("45") == 45
+        assert _parse_every("") == 60          # default
+        assert _parse_every("garbage") == 60   # unparseable → default
+
+
+# ── Route: secure-by-default BEHAVIOUR (R1–R4) ────────────────────────
+
+def _boot_model_route(tmp_project, model, route, *, public=False, fields="name:string"):
+    """Generate model + route, bind a REAL sqlite DB, create the table, import
+    the route (registers the 5 handlers). Returns the imported route module."""
+    from tina4_python.database import Database
+    from tina4_python.orm.model import bind_database
+
+    _gen_model(model, {"fields": fields, "no-migration": True})
+    flags = {"model": model}
+    if public:
+        flags["public"] = True
+    _gen_route(route, flags)
+
+    bind_database(Database(f"sqlite:///{tmp_project}/app.db"))
+    mod = _load_generated(tmp_project / "src" / "routes" / f"{route}.py", f"genroute_{route}")
+    getattr(mod, model).create_table()
+    return mod
+
+
+class TestRouteSecureByDefaultBehaviour:
+    def test_model_route_boot_gate(self, tmp_project, clean_registry):
+        from tina4_python.core.router import Router
+        from tina4_python.test_client import TestClient
+        from tina4_python.auth import get_token
+        os.environ["TINA4_SECRET"] = "scaffold-test-secret"
+        os.environ.pop("TINA4_API_KEY", None)
+
+        _boot_model_route(tmp_project, "Sprocket", "sprockets")
+
+        # R1 — all five routes registered.
+        paths = {(r["method"], r["path"]) for r in Router.get_routes()}
+        assert ("GET", "/api/sprockets") in paths
+        assert ("GET", "/api/sprockets/{id:int}") in paths
+        assert ("POST", "/api/sprockets") in paths
+        assert ("PUT", "/api/sprockets/{id:int}") in paths
+        assert ("DELETE", "/api/sprockets/{id:int}") in paths
+
+        client = TestClient()
+        # R2 — secure by default, proven by behaviour.
+        assert client.get("/api/sprockets").status == 200                       # read public
+        assert client.get("/api/sprockets/1").status in (200, 404)              # read public
+        assert client.post("/api/sprockets", json={"name": "a"}).status == 401  # write gated
+        token = get_token({"user_id": 1})
+        created = client.post("/api/sprockets", json={"name": "a"},
+                              headers={"Authorization": f"Bearer {token}"})
+        assert created.status == 201                                            # token → 201
+
+    def test_model_route_source_has_no_noauth_by_default(self, tmp_project):
+        # R4 — no @noauth, no noauth import, secure by default.
+        _gen_model("Cog", {"fields": "name:string", "no-migration": True})
+        _gen_route("cogs", {"model": "Cog"})
+        src = (tmp_project / "src" / "routes" / "cogs.py").read_text()
+        assert "@noauth" not in src
+        assert "noauth" not in src.splitlines()[0]  # not imported
+
+
+class TestRoutePublicOptOut:
+    def test_public_route_boot_gate(self, tmp_project, clean_registry):
+        from tina4_python.test_client import TestClient
+        os.environ["TINA4_SECRET"] = "scaffold-test-secret"
+        os.environ.pop("TINA4_API_KEY", None)
+
+        _boot_model_route(tmp_project, "Widget", "widgets", public=True)
+        client = TestClient()
+        # R3 — --public opened the writes: anonymous POST creates.
+        assert client.post("/api/widgets", json={"name": "a"}).status == 201
+        # DELETE is open too (gate passed → handler runs → 404 for the missing row).
+        assert client.delete("/api/widgets/999").status in (204, 404)
+
+    def test_public_route_source_has_noauth_on_writes_only(self, tmp_project):
+        # R4 (--public) — @noauth on the 3 writes, noauth imported, never on GETs.
+        _gen_model("Gadget", {"fields": "name:string", "no-migration": True})
+        _gen_route("gadgets", {"model": "Gadget", "public": True})
+        src = (tmp_project / "src" / "routes" / "gadgets.py").read_text()
+        assert src.count("@noauth()") == 3            # create + update + delete
+        assert "get, post, put, delete, noauth" in src
+        # @noauth sits directly above each WRITE handler, and neither READ.
+        assert '@noauth()\n@description("Create a new gadget")' in src
+        assert '@noauth()\n@description("Update a gadget")' in src
+        assert '@noauth()\n@description("Delete a gadget")' in src
+        assert '@noauth()\n@description("List all gadgets")' not in src
+        assert '@noauth()\n@description("Get a gadget by ID")' not in src
+
+
+class TestRouteNoModelStub:
+    def test_no_model_route_is_a_live_stub(self, tmp_project, clean_registry):
+        from tina4_python.core.router import Router
+        from tina4_python.test_client import TestClient
+        os.environ["TINA4_SECRET"] = "scaffold-test-secret"
+        os.environ.pop("TINA4_API_KEY", None)
+
+        _gen_route("notes", {})
+        path = tmp_project / "src" / "routes" / "notes.py"
+        _compiles(path)                                        # B2
+        mod = _load_generated(path, "genroute_notes")          # B3 imports clean
+        # R1 — five routes registered.
+        assert len([r for r in Router.get_routes() if "/api/notes" in r["path"]]) == 5
+        # S2 — AI-FILL banner + Ground line present.
+        src = path.read_text()
+        assert "AI-FILL" in src and "# Ground:" in src
+        # Secure gate holds even though the handler is a stub (gate runs first).
+        assert TestClient().post("/api/notes", json={}).status == 401
+        # S1 — calling a handler raises NotImplementedError (placeholder is live).
+        from tina4_python.core.request import Request
+        from tina4_python.core.response import Response
+        req = Request.from_scope({"type": "http", "method": "GET", "path": "/api/notes",
+                                  "query_string": b"", "headers": [], "client": ("127.0.0.1", 0)}, b"")
+        with pytest.raises(NotImplementedError):
+            asyncio.run(mod.list_notes(req, Response()))
+
+
+# ── CRUD: generated test file itself PASSES (R5) ──────────────────────
+
+class TestCrudGeneratedTestPasses:
+    def test_generated_crud_test_runs_green(self, tmp_project):
+        _gen_crud("Trinket", {"fields": "name:string,qty:int"})
+        # R5 — the emitted test file executes green in a real pytest subprocess.
+        test_file = tmp_project / "tests" / "test_trinkets.py"
+        assert test_file.exists()
+        env = {**os.environ, "PYTHONPATH": str(tmp_project)}
+        env.pop("TINA4_API_KEY", None)
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", str(test_file), "-q"],
+            cwd=str(tmp_project), env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stdout + "\n" + result.stderr
+
+    def test_crud_default_routes_secure(self, tmp_project):
+        _gen_crud("Doohickey", {"fields": "name:string"})
+        src = (tmp_project / "src" / "routes" / "doohickeys.py").read_text()
+        assert "@noauth" not in src
+
+    def test_crud_public_routes_open_writes(self, tmp_project):
+        _gen_crud("Contraption", {"fields": "name:string", "public": True})
+        src = (tmp_project / "src" / "routes" / "contraptions.py").read_text()
+        assert src.count("@noauth()") == 3
+
+
+# ── The six new logic-shaped generators (B1–B4 + S1–S3) ───────────────
+
+class TestServiceGenerator:
+    def test_interval_service(self, tmp_project, capsys):
+        _gen_service("Reaper", {"every": "5m"})
+        path = tmp_project / "src" / "services" / "reaper.py"
+        assert path.exists()                       # B1
+        _compiles(path)                            # B2
+        mod = _load_generated(path, "gen_reaper")  # B3
+        # B4 — second run refuses to overwrite.
+        _gen_service("Reaper", {"every": "5m"})
+        assert "already exists" in capsys.readouterr().out
+        # S2 — AI-FILL + Ground.
+        src = path.read_text()
+        assert "AI-FILL" in src and "# Ground:" in src
+        # S1 — the task body raises until filled.
+        with pytest.raises(NotImplementedError):
+            mod.reaper_task(None)
+        # S3 — the service is registrable / discoverable on a REAL ServiceRunner.
+        from tina4_python.service import ServiceRunner
+        assert mod.service["name"] == "reaper" and mod.service["interval"] == 300
+        runner = ServiceRunner()
+        mod.register(runner)
+        assert any(s["name"] == "reaper" for s in runner.list())
+        assert "reaper" in ServiceRunner().discover("src/services")
+
+    def test_cron_service(self, tmp_project):
+        _gen_service("Nightly", {"cron": "0 3 * * *"})
+        mod = _load_generated(tmp_project / "src" / "services" / "nightly.py", "gen_nightly")
+        assert mod.service["cron"] == "0 3 * * *"
+
+
+class TestQueueGenerator:
+    def test_queue_consumer_and_producer(self, tmp_project):
+        _gen_queue("order-emails", {})
+        path = tmp_project / "src" / "services" / "order_emails_consumer.py"
+        assert path.exists()                              # B1
+        _compiles(path)                                   # B2
+        mod = _load_generated(path, "gen_queue_orders")   # B3
+        src = path.read_text()
+        assert "AI-FILL" in src and "# Ground:" in src    # S2
+        # S1 — the consume body raises until filled.
+        with pytest.raises(NotImplementedError):
+            mod.handle_order_emails({})
+        # S3 — consumer wired as a daemon service; producer is callable + real.
+        assert mod.service["daemon"] is True
+        assert mod.service["handler"].__name__ == "consume_order_emails"
+        job_id = mod.publish_order_emails({"to": "a@b.c"})  # real file-backend push
+        assert job_id
+        assert "order-emails-consumer" in ServiceRunnerNames(tmp_project)
+
+    def test_idempotent(self, tmp_project, capsys):
+        _gen_queue("invoices", {})
+        _gen_queue("invoices", {})
+        assert "already exists" in capsys.readouterr().out
+
+
+def ServiceRunnerNames(tmp_project):
+    from tina4_python.service import ServiceRunner
+    return ServiceRunner().discover("src/services")
+
+
+class TestValidatorGenerator:
+    def test_validator(self, tmp_project, capsys):
+        _gen_validator("CreateUser", {})
+        path = tmp_project / "src" / "validators" / "create_user.py"
+        assert path.exists()                                # B1
+        _compiles(path)                                     # B2
+        mod = _load_generated(path, "gen_validator")        # B3
+        _gen_validator("CreateUser", {})                    # B4
+        assert "already exists" in capsys.readouterr().out
+        src = path.read_text()
+        assert "AI-FILL" in src and "# Ground:" in src      # S2
+        assert "from tina4_python.validator import Validator" in src  # S3 wiring
+        with pytest.raises(NotImplementedError):            # S1
+            mod.validate_create_user({})
+
+
+class TestSeederGenerator:
+    def test_seeder(self, tmp_project, capsys):
+        from tina4_python.seeder import FakeData
+        _gen_model("Sprocket", {"fields": "name:string", "no-migration": True})
+        _gen_seeder("Sprocket", {})
+        path = tmp_project / "src" / "seeds" / "sprocket_seeder.py"
+        assert path.exists()                                # B1
+        _compiles(path)                                     # B2
+        mod = _load_generated(path, "gen_seeder")           # B3 (resolves src.orm.Sprocket)
+        _gen_seeder("Sprocket", {})                         # B4
+        assert "already exists" in capsys.readouterr().out
+        src = path.read_text()
+        assert "AI-FILL" in src and "# Ground:" in src      # S2
+        assert "seed_orm" in src and "run" in src           # S3 wiring (run() for `tina4 seed`)
+        with pytest.raises(NotImplementedError):            # S1
+            mod.field_overrides(FakeData())
+
+
+class TestWebsocketGenerator:
+    def test_websocket(self, tmp_project, capsys, clean_registry):
+        from tina4_python.core.router import Router
+        _gen_websocket("chat", {})
+        path = tmp_project / "src" / "routes" / "ws_chat.py"
+        assert path.exists()                                # B1
+        _compiles(path)                                     # B2
+        mod = _load_generated(path, "gen_ws")               # B3
+        _gen_websocket("chat", {})                          # B4
+        assert "already exists" in capsys.readouterr().out
+        src = path.read_text()
+        assert "AI-FILL" in src and "# Ground:" in src      # S2
+        # S3 — the ws handler registered on the real Router.
+        assert any(r["path"] == "/ws/chat" for r in Router.get_web_socket_routes())
+        # S1 — the message body raises until filled.
+        with pytest.raises(NotImplementedError):
+            asyncio.run(mod.chat_ws(None, "message", None))
+
+
+class TestListenerGenerator:
+    def test_listener(self, tmp_project, capsys, clean_registry):
+        events = importlib.import_module("tina4_python.core.events")
+        _gen_listener("user.created", {})
+        path = tmp_project / "src" / "listeners" / "user_created.py"
+        assert path.exists()                                # B1
+        _compiles(path)                                     # B2
+        mod = _load_generated(path, "gen_listener")         # B3
+        _gen_listener("user.created", {})                   # B4
+        assert "already exists" in capsys.readouterr().out
+        src = path.read_text()
+        assert "AI-FILL" in src and "# Ground:" in src      # S2
+        # S3 — the listener bound on the real event bus.
+        assert "user.created" in events.events()
+        assert len(events.listeners("user.created")) >= 1
+        # S1 — the reaction body raises until filled.
+        with pytest.raises(NotImplementedError):
+            mod.on_user_created({"id": 1})
+
+
+# ── Regression guard (A1) + robustness (N1) ───────────────────────────
+
+class TestAuthNotOverSwept:
+    def test_auth_routes_still_public(self, tmp_project):
+        # A1 — the CRUD secure-by-default fix must NOT strip @noauth from the
+        # genuinely-public auth routes (login/register).
+        _gen_auth()
+        src = (tmp_project / "src" / "routes" / "auth.py").read_text()
+        assert src.count("@noauth()") >= 2   # register + login are public
+
+
+class TestRobustness:
+    def test_invalid_fields_no_stacktrace(self, tmp_project):
+        # N1 — a malformed --fields value must not raise.
+        _gen_model("Junk", {"fields": ":::,,,bad"})
+        assert (tmp_project / "src" / "orm" / "Junk.py").exists()
+
+    def test_existing_file_not_clobbered(self, tmp_project, capsys):
+        _gen_validator("Once", {})
+        original = (tmp_project / "src" / "validators" / "once.py").read_text()
+        _gen_validator("Once", {})
+        assert (tmp_project / "src" / "validators" / "once.py").read_text() == original
+        assert "already exists" in capsys.readouterr().out

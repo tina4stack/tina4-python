@@ -71,7 +71,8 @@ def _parse_fields(fields_str: str) -> list[tuple[str, str]]:
 def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
     """Parse --key value and --flag from args. Returns (flags, positional)."""
     # Boolean-only flags that never take a value argument
-    boolean_flags = {"no-browser", "no-reload", "production", "managed", "all", "clear", "json"}
+    boolean_flags = {"no-browser", "no-reload", "production", "managed", "all", "clear", "json",
+                     "public", "no-migration"}
 
     flags = {}
     positional = []
@@ -92,6 +93,75 @@ def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
             positional.append(args[i])
             i += 1
     return flags, positional
+
+
+def _ai_fill(fn: str, intent: str, use: str, raise_msg: str, *,
+             given: str = "", ret: str = "", ground: str = "",
+             indent: str = "    ") -> str:
+    """Return the canonical AI-FILL placeholder block for a LOGIC-shaped stub.
+
+    A tight, grounded *fill-spec* — not a vague ``# TODO`` — so a coding agent
+    (or dev) completes it correctly and idiomatically. ``raise
+    NotImplementedError`` makes an unfilled scaffold fail LOUD, and the greppable
+    ``AI-FILL`` banner lets a human/agent jump to every gap in a file. ≤ 6
+    comment lines; ``Use:`` names only REAL Tina4 symbols (verified in source).
+
+        {indent}# ─── AI-FILL: <fn> ───────────────────────────────
+        {indent}# Intent:  <what this must do>
+        {indent}# Given:   <inputs + shape>
+        {indent}# Use:     <named REAL Tina4 API — the idiomatic path>
+        {indent}# Return:  <exact return value + status>
+        {indent}# Ground:  tina4_context("<intent>", "python") · skill tina4-developer-python
+        {indent}raise NotImplementedError("<feature>: <what>")   # remove when done
+        {indent}# ─────────────────────────────────────────────────
+    """
+    bar = "─" * 60
+    head = f"{indent}# ─── AI-FILL: {fn} "
+    head = head + "─" * max(4, 66 - len(head))
+    lines = [head, f"{indent}# Intent:  {intent}"]
+    if given:
+        lines.append(f"{indent}# Given:   {given}")
+    lines.append(f"{indent}# Use:     {use}")
+    if ret:
+        lines.append(f"{indent}# Return:  {ret}")
+    if ground:
+        lines.append(f"{indent}# Ground:  {ground}")
+    lines.append(f'{indent}raise NotImplementedError("{raise_msg}")   # remove when done')
+    lines.append(f"{indent}# {bar}")
+    return "\n".join(lines) + "\n"
+
+
+def _extend(note: str, hint: str = "", indent: str = "    ") -> str:
+    """Return the lighter EXTEND marker for CRUD-shaped WORKING code.
+
+    Marks the natural extension point in generated code that already runs — NO
+    ``NotImplementedError`` (the boilerplate IS the feature); just a greppable
+    hint at where custom validation / business rules go.
+    """
+    head = f"{indent}# ─── EXTEND: {note} "
+    head = head + "─" * max(4, 66 - len(head))
+    out = head + "\n"
+    if hint:
+        out += f"{indent}# {hint}\n"
+    return out
+
+
+def _parse_every(every: str) -> int:
+    """Parse a --every duration ('5m', '30s', '2h', '1d', or bare seconds) → seconds.
+
+    Falls back to 60s on an empty/unparseable value so a scaffold always has a
+    valid interval for ServiceRunner.register(interval=...).
+    """
+    if not every:
+        return 60
+    every = str(every).strip().lower()
+    units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    try:
+        if every[-1] in units:
+            return max(1, int(float(every[:-1]) * units[every[-1]]))
+        return max(1, int(float(every)))
+    except (ValueError, IndexError):
+        return 60
 
 
 def _kill_process_on_port(port: int) -> bool:
@@ -227,14 +297,24 @@ Commands:
 
 Generators:
   generate model <Name> [--fields "name:string,price:float"]
-  generate route <name> [--model Name]
-  generate crud <Name> [--fields "..."]   Model + migration + routes + form + view + test
+  generate route <name> [--model Name] [--public]   Writes secure by default; --public opens them
+  generate crud <Name> [--fields "..."] [--public]   Model + migration + routes + form + view + test
   generate migration <description>
   generate middleware <Name>
   generate test <name>
   generate form <Name> [--fields "..."]   Form template with inputs matching model fields
   generate view <Name> [--fields "..."]   List + detail templates for viewing records
   generate auth                           Login/register/logout routes + User model + templates
+  generate service <Name> [--every 5m | --cron "..."]   Scheduled ServiceRunner task (src/services/)
+  generate queue <topic>                  Producer + consumer worker (src/services/)
+  generate validator <Name>               Request-body Validator (src/validators/)
+  generate seeder <Model>                 FakeData + seed_orm seeder (src/seeds/)
+  generate websocket <path>               @websocket handler (src/routes/)
+  generate listener <event>               @on(event) listener (src/listeners/)
+
+Scaffolding-first: logic-shaped generators emit wiring + an AI-FILL placeholder
+(raise NotImplementedError) where the custom logic goes; CRUD-shaped ones emit
+working code. Writes are secure by default — use --public to open them.
 
 Field types: string, int, float, bool, text, datetime, blob
 Table names: singular by default (Product → product)
@@ -704,11 +784,23 @@ def _ai(args):
 # ── Generate (rich scaffolding) ───────────────────────────────────────
 
 def _generate(args):
-    """Generate scaffolding: model, route, crud, migration, middleware, test, form, view, auth."""
+    """Generate scaffolding.
+
+    CRUD-shaped generators (crud/form/view/migration/model/test/auth) emit
+    working code — the boilerplate IS the feature. Logic-shaped generators
+    (route/service/queue/validator/seeder/websocket/listener) scaffold the
+    WIRING (real imports + registration + signature + error skeleton) and drop a
+    single ``# your code here`` placeholder (``raise NotImplementedError``) where
+    the custom logic goes, so an unfilled scaffold fails loud.
+    """
+    _all = ("model, route, crud, migration, middleware, test, form, view, auth, "
+            "service, queue, validator, seeder, websocket, listener")
     if not args:
         print("Usage: tina4python generate <what> <name> [options]")
-        print("  Generators: model, route, crud, migration, middleware, test, form, view, auth")
+        print(f"  Generators: {_all}")
         print('  Options:    --fields "name:string,price:float"  --model ModelName')
+        print('              --public                 open a route\'s writes (default: secure)')
+        print('              --every 5m | --cron "..."  service schedule')
         sys.exit(1)
 
     what = args[0].lower()
@@ -732,6 +824,12 @@ def _generate(args):
         "form": _gen_form,
         "view": _gen_view,
         "auth": _gen_auth,
+        "service": _gen_service,
+        "queue": _gen_queue,
+        "validator": _gen_validator,
+        "seeder": _gen_seeder,
+        "websocket": _gen_websocket,
+        "listener": _gen_listener,
     }
 
     gen = generators.get(what)
@@ -739,7 +837,7 @@ def _generate(args):
         gen(name, flags)
     else:
         print(f"Unknown generator: {what}")
-        print("  Available: model, route, crud, migration, middleware, test, form, view, auth")
+        print(f"  Available: {_all}")
         sys.exit(1)
 
 
@@ -797,14 +895,22 @@ def _gen_model(name: str, flags: dict):
 
 
 def _gen_route(name: str, flags: dict):
-    """Generate CRUD route file.
+    """Generate CRUD route file — SECURE BY DEFAULT.
 
     tina4python generate route products
     tina4python generate route products --model Product
+    tina4python generate route products --model Product --public   # open writes
+
+    Writes (POST/PUT/DELETE) are Bearer-token-gated by default (the router
+    gates them unless ``@noauth()``). Reads (GET) are public by default, so no
+    decorator is emitted for them. ``--public`` re-adds ``@noauth()`` on the
+    write handlers as the explicit opt-out — mirroring AutoCrud's ``public=True``
+    (tina4_python/crud/__init__.py: secure-by-default write routes).
     """
     route_path = name.lstrip("/")
     singular = route_path.rstrip("s") if route_path.endswith("s") else route_path
     model = flags.get("model", "")
+    public = bool(flags.get("public"))
 
     target = Path("src/routes")
     target.mkdir(parents=True, exist_ok=True)
@@ -813,17 +919,36 @@ def _gen_route(name: str, flags: dict):
         print(f"  ✗ File already exists: {path}")
         return
 
-    # Import line
-    imports = "from tina4_python.core.router import get, post, put, delete, noauth\n"
+    # ``@noauth()`` is only imported/emitted when the caller opts writes public.
+    w = "@noauth()\n" if public else ""  # write-handler auth decorator (opt-in)
+    router_imports = "get, post, put, delete, noauth" if public else "get, post, put, delete"
+
+    imports = f"from tina4_python.core.router import {router_imports}\n"
     imports += "from tina4_python.swagger import description, tags\n"
     if model:
         imports += f"from src.orm.{model} import {model}\n"
 
+    # Secure-by-default posture note for the WRITE handler docstrings.
+    write_doc = (
+        "Public (--public): no token required."
+        if public else
+        "Secure-by-default: requires a Bearer token (use --public to open)."
+    )
+
     # Route handlers
     if model:
+        # WORKING code (the boilerplate IS the feature) + EXTEND markers at the
+        # natural extension points (no NotImplementedError).
+        ext_create = _extend(
+            "validate / business rules before persist",
+            'e.g. reject invalid input; ground: tina4_context("validate before create", "python")',
+        )
+        ext_update = _extend(
+            "guard which fields / who may update",
+            'e.g. enforce ownership; ground: tina4_context("authorize update", "python")',
+        )
         content = f'''{imports}
 
-@noauth()
 @description("List all {route_path}")
 @tags(["{route_path}"])
 @get("/api/{route_path}")
@@ -842,7 +967,6 @@ async def list_{route_path}(request, response):
     }})
 
 
-@noauth()
 @description("Get a {singular} by ID")
 @tags(["{route_path}"])
 @get("/api/{route_path}/{{id:int}}")
@@ -854,36 +978,35 @@ async def get_{singular}(request, response):
     return response({singular}.to_dict())
 
 
-@noauth()
-@description("Create a new {singular}")
+{w}@description("Create a new {singular}")
 @tags(["{route_path}"])
 @post("/api/{route_path}")
 async def create_{singular}(request, response):
-    """Create a new {singular}."""
-    item = {model}.create(request.body)
+    """Create a new {singular}. {write_doc}"""
+{ext_create}    item = {model}.create(request.body)
     return response(item.to_dict(), 201)
 
 
-@description("Update a {singular}")
+{w}@description("Update a {singular}")
 @tags(["{route_path}"])
 @put("/api/{route_path}/{{id:int}}")
 async def update_{singular}(request, response):
-    """Update a {singular} by ID."""
+    """Update a {singular} by ID. {write_doc}"""
     item = {model}.find_by_id(request.params["id"])
     if item is None:
         return response({{"error": "Not found"}}, 404)
-    for key, value in request.body.items():
+{ext_update}    for key, value in request.body.items():
         if hasattr(item, key) and key != "id":
             setattr(item, key, value)
     item.save()
     return response(item.to_dict())
 
 
-@description("Delete a {singular}")
+{w}@description("Delete a {singular}")
 @tags(["{route_path}"])
 @delete("/api/{route_path}/{{id:int}}")
 async def delete_{singular}(request, response):
-    """Delete a {singular} by ID."""
+    """Delete a {singular} by ID. {write_doc}"""
     item = {model}.find_by_id(request.params["id"])
     if item is None:
         return response({{"error": "Not found"}}, 404)
@@ -891,50 +1014,89 @@ async def delete_{singular}(request, response):
     return response(None, 204)
 '''
     else:
+        # CUSTOM route — no model. Every handler body is a LOGIC-shaped stub:
+        # AI-FILL fill-spec + raise NotImplementedError (fails loud until filled).
+        m = "".join(p.capitalize() for p in singular.split("_"))  # PascalCase hint
+        b_list = _ai_fill(
+            f"list_{route_path}",
+            f"return the {route_path} collection (add pagination if it grows)",
+            f"{m}.all()  or  {m}.where(sql, params, with_count=True)  (import {m} from src.orm.{m})",
+            f"list_{route_path}: query and return the records",
+            ret='response({"records": [r.to_dict() for r in rows]})',
+            ground=f'tina4_context("list ORM records with pagination", "python")',
+        )
+        b_get = _ai_fill(
+            f"get_{singular}",
+            f"fetch one {singular} by id",
+            f'{m}.find_by_id(request.params["id"])  (import {m} from src.orm.{m})',
+            f"get_{singular}: fetch by id or 404",
+            given='request.params["id"] -> int',
+            ret='response(item.to_dict())  or  response({"error": "Not found"}, 404)',
+            ground='tina4_context("find ORM record by id", "python")',
+        )
+        b_create = _ai_fill(
+            f"create_{singular}",
+            f"validate the body and persist a new {singular}",
+            f"{m}.create(request.body)  (import {m} from src.orm.{m})",
+            f"create_{singular}: persist and return the new record",
+            given="request.body -> dict of fields",
+            ret="response(item.to_dict(), 201)",
+            ground='tina4_context("create ORM record and return 201", "python")',
+        )
+        b_update = _ai_fill(
+            f"update_{singular}",
+            f"load, mutate and save an existing {singular}",
+            f'{m}.find_by_id(request.params["id"])  then set fields and item.save()',
+            f"update_{singular}: apply changes and return the record",
+            given='request.params["id"] -> int; request.body -> changed fields',
+            ret="response(item.to_dict())  or  404",
+            ground='tina4_context("update ORM record", "python")',
+        )
+        b_delete = _ai_fill(
+            f"delete_{singular}",
+            f"delete a {singular} by id",
+            f'{m}.find_by_id(request.params["id"])  then item.delete()',
+            f"delete_{singular}: delete and return 204",
+            given='request.params["id"] -> int',
+            ret="response(None, 204)  or  404",
+            ground='tina4_context("delete ORM record", "python")',
+        )
         content = f'''{imports}
 
-@noauth()
 @description("List all {route_path}")
 @tags(["{route_path}"])
 @get("/api/{route_path}")
 async def list_{route_path}(request, response):
     """List all {route_path}."""
-    return response({{"data": []}})
+{b_list}
 
-
-@noauth()
 @description("Get a {singular} by ID")
 @tags(["{route_path}"])
 @get("/api/{route_path}/{{id:int}}")
 async def get_{singular}(request, response):
     """Get a single {singular}."""
-    return response({{"data": {{}}}})
+{b_get}
 
-
-@noauth()
-@description("Create a new {singular}")
+{w}@description("Create a new {singular}")
 @tags(["{route_path}"])
 @post("/api/{route_path}")
 async def create_{singular}(request, response):
-    """Create a new {singular}."""
-    return response({{"data": request.body}}, 201)
+    """Create a new {singular}. {write_doc}"""
+{b_create}
 
-
-@description("Update a {singular}")
+{w}@description("Update a {singular}")
 @tags(["{route_path}"])
 @put("/api/{route_path}/{{id:int}}")
 async def update_{singular}(request, response):
-    """Update a {singular}."""
-    return response({{"data": request.body}})
+    """Update a {singular}. {write_doc}"""
+{b_update}
 
-
-@description("Delete a {singular}")
+{w}@description("Delete a {singular}")
 @tags(["{route_path}"])
 @delete("/api/{route_path}/{{id:int}}")
 async def delete_{singular}(request, response):
-    """Delete a {singular}."""
-    return response(None, 204)
-'''
+    """Delete a {singular}. {write_doc}"""
+{b_delete}'''
 
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
@@ -954,8 +1116,10 @@ def _gen_crud(name: str, flags: dict):
     # 1. Model + migration
     _gen_model(name, flags)
 
-    # 2. Routes with model
-    route_flags = {"model": name}
+    # 2. Routes with model — secure-by-default; thread --public through so
+    #    `generate crud X --public` opens the writes (mirrors AutoCrud public=).
+    is_public = bool(flags.get("public"))
+    route_flags = {"model": name, "public": is_public}
     _gen_route(route_name, route_flags)
 
     # 3. Template
@@ -1004,8 +1168,8 @@ def _gen_crud(name: str, flags: dict):
     # 5. View (list + detail)
     _gen_view(name, flags)
 
-    # 6. Test
-    _gen_test(route_name, {"model": name})
+    # 6. Test — secure-by-default gate test (behavioural, real TestClient).
+    _gen_test(route_name, {"model": name, "secure_writes": True, "public": is_public})
 
     print(f"\n  CRUD generation complete for {name}.")
     print(f"  Run: tina4python migrate")
@@ -1139,6 +1303,84 @@ def _gen_test(name: str, flags: dict = None):
         print(f"  ✗ File already exists: {path}")
         return
 
+    # Secure-by-default CRUD test (emitted by `generate crud`): proves the gate
+    # by BEHAVIOR through the real TestClient — reads public, writes gated —
+    # instead of assuming an anonymous create returns 201. Grounded on
+    # tests/test_test_client_auth.py (real Router, real _check_auth, real JWT).
+    if model and flags.get("secure_writes"):
+        singular_ = singular
+        write_neg = (
+            '    def test_create___SINGULAR___requires_auth(self):\n'
+            '        """Secure by default: a tokenless POST is rejected with 401."""\n'
+            '        assert TestClient().post("/api/__SNAKE__", json={"name": "test"}).status == 401\n'
+        )
+        write_pos = (
+            '    def test_create___SINGULAR___with_token(self):\n'
+            '        """A valid Bearer token passes the gate and creates → 201."""\n'
+            '        res = TestClient().post("/api/__SNAKE__", json={"name": "test"}, headers=_auth_headers())\n'
+            "        assert res.status == 201\n"
+        )
+        if flags.get("public"):
+            # --public opened the writes: an anonymous POST must succeed (201).
+            write_neg = (
+                '    def test_create___SINGULAR___is_public(self):\n'
+                '        """--public opened the write: an anonymous POST creates → 201."""\n'
+                '        assert TestClient().post("/api/__SNAKE__", json={"name": "test"}).status == 201\n'
+            )
+            write_pos = ""
+        gate_template = (
+            '"""Tests for __NAME__ CRUD — reads public, writes __POSTURE__.\n'
+            "\n"
+            "Real end-to-end via TestClient: no mocks — real Router, real auth gate\n"
+            "(_check_auth), real JWT. A real SQLite DB + table is bound in setup so\n"
+            "the create path is exercised for real.\n"
+            '"""\n'
+            "import os\n"
+            "\n"
+            'os.environ.setdefault("TINA4_SECRET", "test-secret")\n'
+            'os.environ.pop("TINA4_API_KEY", None)\n'
+            "\n"
+            "from tina4_python.auth import get_token\n"
+            "from tina4_python.database import Database\n"
+            "from tina4_python.orm.model import bind_database\n"
+            "from tina4_python.test_client import TestClient\n"
+            "from src.orm.__MODEL__ import __MODEL__\n"
+            "import src.routes.__SNAKE__  # noqa: F401 — importing registers the routes\n"
+            "\n"
+            "\n"
+            "def _auth_headers():\n"
+            '    """A valid Bearer token for the gated write routes."""\n'
+            '    return {"Authorization": f"Bearer {get_token({\'user_id\': 1})}"}\n'
+            "\n"
+            "\n"
+            "class Test__MODEL__:\n"
+            '    """__MODEL__ CRUD — reads public, writes __POSTURE__ (secure by default)."""\n'
+            "\n"
+            "    def setup_method(self, _method):\n"
+            '        bind_database(Database("sqlite:///test___SNAKE__.db"))\n'
+            "        __MODEL__.create_table()\n"
+            "\n"
+            "    def test_list___SNAKE___is_public(self):\n"
+            '        """GET is public — no token needed."""\n'
+            '        assert TestClient().get("/api/__SNAKE__").status == 200\n'
+            "\n"
+            "__WRITE_NEG__"
+            "\n"
+            "__WRITE_POS__"
+        )
+        content = (
+            gate_template.replace("__WRITE_NEG__", write_neg)
+            .replace("__WRITE_POS__", write_pos)
+            .replace("__POSTURE__", "open (--public)" if flags.get("public") else "gated")
+            .replace("__NAME__", name)
+            .replace("__MODEL__", model)
+            .replace("__SINGULAR__", singular_)
+            .replace("__SNAKE__", snake)
+        )
+        path.write_text(content, encoding="utf-8")
+        print(f"  ✓ Created {path}")
+        return
+
     if model:
         content = f'''"""Tests for {name} CRUD operations."""
 import pytest
@@ -1201,6 +1443,370 @@ class Test{name.title().replace("_", "")}:
         assert True
 '''
 
+    path.write_text(content, encoding="utf-8")
+    print(f"  ✓ Created {path}")
+
+
+# ── Scaffolding-first generators (wiring + `# your code here`) ────────
+#
+# Each grounds on the REAL current Tina4 API (verified against the source) and
+# drops the _ai_fill() AI-FILL placeholder where the custom logic goes:
+#   service   → tina4_python/service/__init__.py   ServiceRunner.register / discover
+#   queue     → tina4_python/queue/__init__.py     Queue.push / Queue.consume / Job.complete
+#   validator → tina4_python/validator/__init__.py Validator
+#   seeder    → tina4_python/seeder/__init__.py    FakeData / seed_orm
+#   websocket → tina4_python/core/router.py        @websocket (conn, event, data)
+#   listener  → tina4_python/core/events.py        @on(event)
+
+def _gen_service(name: str, flags: dict = None):
+    """Generate a scheduled background service (ServiceRunner).
+
+    tina4python generate service Cleanup --every 5m
+    tina4python generate service Report --cron "0 3 * * *"
+    """
+    flags = flags or {}
+    snake = _to_snake(name)
+    cron = flags.get("cron")
+    if cron and cron is not True:
+        schedule_reg = f'cron="{cron}"'
+        schedule_kv = f'"cron": "{cron}",'
+        schedule_note = f"cron '{cron}'"
+    else:
+        seconds = _parse_every(flags.get("every", "") if flags.get("every") is not True else "")
+        schedule_reg = f"interval={seconds}"
+        schedule_kv = f'"interval": {seconds},'
+        schedule_note = f"every {seconds}s"
+
+    target = Path("src/services")
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{snake}.py"
+    if path.exists():
+        print(f"  ✗ File already exists: {path}")
+        return
+
+    body = _ai_fill(
+        f"{snake}_task",
+        "do the scheduled work for this service",
+        "context.log.info(...) to log; call your ORM / app code (re-run on schedule)",
+        f"service:{snake}: implement the scheduled task",
+        given="context -> ServiceContext (.name, .stop_event, .log)",
+        ground='tina4_context("background service scheduled task", "python")',
+    )
+    template = (
+        '"""__NAME__ background service — runs __NOTE__ via ServiceRunner.\n'
+        "\n"
+        "Wire a runner once (e.g. in app.py) to actually run it — `tina4python\n"
+        "serve` does NOT auto-start services:\n"
+        "\n"
+        "    from tina4_python.service import ServiceRunner\n"
+        "    runner = ServiceRunner()\n"
+        '    register(runner)              # or: runner.discover("src/services")\n'
+        "    runner.start()\n"
+        '"""\n'
+        "from tina4_python.service import ServiceRunner\n"
+        "\n"
+        "\n"
+        "def __SNAKE___task(context):\n"
+        '    """The scheduled task body. `context` is a ServiceContext with\n'
+        "    .name, .stop_event and .log; a daemon-style task would loop until\n"
+        '    context.stop_event.is_set()."""\n'
+        "__BODY__"
+        "\n\n"
+        "def register(runner: ServiceRunner) -> None:\n"
+        '    """Register this service on a ServiceRunner."""\n'
+        '    runner.register("__SNAKE__", __SNAKE___task, __SCHEDULE_REG__)\n'
+        "\n"
+        "\n"
+        '# Discovered by ServiceRunner.discover("src/services"), which calls\n'
+        "# register(name=, handler=, interval=/cron=) from these keys.\n"
+        "service = {\n"
+        '    "name": "__SNAKE__",\n'
+        '    "handler": __SNAKE___task,\n'
+        "    __SCHEDULE_KV__\n"
+        "}\n"
+    )
+    content = (
+        template.replace("__BODY__", body)
+        .replace("__NAME__", name)
+        .replace("__NOTE__", schedule_note)
+        .replace("__SCHEDULE_REG__", schedule_reg)
+        .replace("__SCHEDULE_KV__", schedule_kv)
+        .replace("__SNAKE__", snake)
+    )
+    path.write_text(content, encoding="utf-8")
+    print(f"  ✓ Created {path}")
+
+
+def _gen_queue(name: str, flags: dict = None):
+    """Generate a queue producer + consumer worker.
+
+    tina4python generate queue order-emails
+    """
+    topic = name.lstrip("/")
+    slug = _to_snake(re.sub(r"[^0-9a-zA-Z]+", "_", topic)).strip("_") or "topic"
+
+    target = Path("src/services")  # consumer runs as a daemon service (see below)
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{slug}_consumer.py"
+    if path.exists():
+        print(f"  ✗ File already exists: {path}")
+        return
+
+    body = _ai_fill(
+        f"handle_{slug}",
+        f"process ONE {topic} job payload",
+        "your ORM / Messenger() code; return to ack (job.complete), raise to nack (job.fail)",
+        f"queue:{topic}: process the job payload",
+        given="data -> dict (the pushed Job.data)",
+        ground='tina4_context("process a queue job", "python")',
+    )
+    template = (
+        '"""__TOPIC__ queue — producer + consumer worker.\n'
+        "\n"
+        "Produce from anywhere:   publish___SLUG__({...})\n"
+        "The consumer is a long-running worker wired as a daemon `service` so\n"
+        '    ServiceRunner().discover("src/services") + runner.start()\n'
+        "runs it without blocking boot (consume() is an endless generator).\n"
+        '"""\n'
+        "from tina4_python.queue import Queue\n"
+        "\n"
+        "\n"
+        "def publish___SLUG__(data: dict):\n"
+        '    """Enqueue a __TOPIC__ job for the worker below to process."""\n'
+        '    return Queue(topic="__TOPIC__").push(data)\n'
+        "\n"
+        "\n"
+        "def handle___SLUG__(data: dict):\n"
+        '    """Process ONE __TOPIC__ job payload (`data` is Job.data — the pushed dict)."""\n'
+        "__BODY__"
+        "\n\n"
+        "def consume___SLUG__(context=None):\n"
+        '    """Long-running __TOPIC__ worker. consume() yields Jobs; ack with\n'
+        "    job.complete(), nack with job.fail(). `context` is the ServiceContext\n"
+        '    when run under ServiceRunner (unused here)."""\n'
+        '    for job in Queue(topic="__TOPIC__").consume():\n'
+        "        try:\n"
+        "            handle___SLUG__(job.data)\n"
+        "            job.complete()          # ack — job done, remove from the queue\n"
+        "        except Exception as exc:    # noqa: BLE001\n"
+        "            job.fail(str(exc))      # nack — retry / dead-letter\n"
+        "\n"
+        "\n"
+        '# Discovered by ServiceRunner.discover("src/services"); daemon=True because\n'
+        "# consume___SLUG__ manages its own loop.\n"
+        'service = {"name": "__TOPIC__-consumer", "handler": consume___SLUG__, "daemon": True}\n'
+    )
+    content = (
+        template.replace("__BODY__", body)
+        .replace("__TOPIC__", topic)
+        .replace("__SLUG__", slug)
+    )
+    path.write_text(content, encoding="utf-8")
+    print(f"  ✓ Created {path}")
+
+
+def _gen_validator(name: str, flags: dict = None):
+    """Generate a request-body validator.
+
+    tina4python generate validator CreateUser
+    """
+    snake = _to_snake(name)
+    target = Path("src/validators")
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{snake}.py"
+    if path.exists():
+        print(f"  ✗ File already exists: {path}")
+        return
+
+    body = _ai_fill(
+        f"validate_{snake}",
+        f"declare the validation rules for a {name} payload",
+        'validator.required("name").email("email").min_length("name", 2).integer("age")',
+        f"validator:{snake}: add the rule set",
+        given="validator -> Validator(data) (chainable)",
+        ret="the same validator (caller checks .is_valid() / .errors())",
+        ground='tina4_context("validate request body with Validator", "python")',
+    )
+    template = (
+        '"""__NAME__ request validator."""\n'
+        "from tina4_python.validator import Validator\n"
+        "\n"
+        "\n"
+        "def validate___SNAKE__(data: dict) -> Validator:\n"
+        '    """Validate a __NAME__ payload. Returns a Validator (chainable rules).\n'
+        "\n"
+        "    Usage in a route::\n"
+        "\n"
+        "        v = validate___SNAKE__(request.body)\n"
+        "        if not v.is_valid():\n"
+        '            return response.error("VALIDATION_FAILED", v.errors()[0]["message"], 400)\n'
+        '    """\n'
+        "    validator = Validator(data)\n"
+        "__BODY__"
+        "    return validator\n"
+    )
+    content = (
+        template.replace("__BODY__", body)
+        .replace("__NAME__", name)
+        .replace("__SNAKE__", snake)
+    )
+    path.write_text(content, encoding="utf-8")
+    print(f"  ✓ Created {path}")
+
+
+def _gen_seeder(name: str, flags: dict = None):
+    """Generate a seeder for an ORM model.
+
+    tina4python generate seeder Product
+    """
+    table = _to_table(name)
+    target = Path("src/seeds")
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{table}_seeder.py"
+    if path.exists():
+        print(f"  ✗ File already exists: {path}")
+        return
+
+    body = _ai_fill(
+        "field_overrides",
+        f"map {name} fields to fake-data generators (only those needing a specific shape)",
+        "fake.name() / fake.email() / fake.integer(1, 99) / fake.company()  (FakeData)",
+        f"seeder:{name}: return the field->generator overrides",
+        given="fake -> FakeData instance",
+        ret='{"email": lambda fake: fake.email(), "status": "active"}  (dict)',
+        ground='tina4_context("seed ORM model with FakeData", "python")',
+    )
+    template = (
+        '"""Seeder for __NAME__ — run with: tina4python seed"""\n'
+        "from tina4_python.seeder import FakeData, seed_orm\n"
+        "from src.orm.__NAME__ import __NAME__\n"
+        "\n"
+        "\n"
+        "def field_overrides(fake: FakeData) -> dict:\n"
+        '    """Map __NAME__ fields → FakeData generators (or static values).\n'
+        "\n"
+        "    seed_orm auto-fills every field by type/name; override the ones that\n"
+        "    need a specific shape here. Each callable receives a FakeData instance:\n"
+        '        return {"email": lambda fake: fake.email(), "status": "active"}\n'
+        '    """\n'
+        "__BODY__"
+        "\n\n"
+        "def run(db):\n"
+        '    """Seed rows. Invoked by `tina4python seed` (passes the Database)."""\n'
+        "    fake = FakeData()\n"
+        "    summary = seed_orm(__NAME__, count=20, overrides=field_overrides(fake))\n"
+        '    print(f"Seeded {summary.seeded} __NAME__ row(s), {summary.failed} failed")\n'
+    )
+    content = template.replace("__BODY__", body).replace("__NAME__", name)
+    path.write_text(content, encoding="utf-8")
+    print(f"  ✓ Created {path}")
+
+
+def _gen_websocket(name: str, flags: dict = None):
+    """Generate a WebSocket route.
+
+    tina4python generate websocket chat
+    tina4python generate websocket /ws/rooms/{id}
+    """
+    raw = name.strip()
+    ws_path = raw if raw.startswith("/") else "/ws/" + raw.lstrip("/")
+    slug = _to_snake(re.sub(r"[^0-9a-zA-Z]+", "_", raw.strip("/"))).strip("_") or "ws"
+    base = slug[3:] if slug.startswith("ws_") else slug
+    base = base or "ws"
+    handler = f"{base}_ws"
+
+    target = Path("src/routes")  # @websocket auto-registers on import (src/ is discovered)
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"ws_{base}.py"
+    if path.exists():
+        print(f"  ✗ File already exists: {path}")
+        return
+
+    body = _ai_fill(
+        handler,
+        f'handle an inbound "message" frame on {ws_path}',
+        "await connection.broadcast(data)  or  await connection.send_json({...})",
+        f"websocket:{ws_path}: handle the inbound message",
+        given="data -> str (message payload); connection -> WebSocketConnection",
+        ground='tina4_context("websocket broadcast message", "python")',
+    )
+    template = (
+        '"""__WSPATH__ WebSocket route.\n'
+        "\n"
+        "Auto-registered on import by @websocket (src/ is auto-discovered at boot).\n"
+        "The server invokes the handler as handler(connection, event, data) for\n"
+        'each event: "open" (connect), "message" (inbound frame), "close"\n'
+        "(disconnect). Put @secured() above @websocket to require a JWT on the\n"
+        "upgrade; connection.broadcast()/connection.send() reach the other clients.\n"
+        '"""\n'
+        "from tina4_python.core.router import websocket\n"
+        "\n"
+        "\n"
+        '@websocket("__WSPATH__")\n'
+        "async def __HANDLER__(connection, event, data):\n"
+        '    """__WSPATH__ handler. `data` is the message payload on "message",\n'
+        '    None on "open"/"close"; connection.params holds any path params."""\n'
+        '    if event == "open":\n'
+        '        await connection.send(\'{"type": "welcome"}\')\n'
+        "        return\n"
+        '    if event == "close":\n'
+        "        return\n"
+        '    # event == "message"\n'
+        "__BODY__"
+    )
+    content = (
+        template.replace("__BODY__", body)
+        .replace("__WSPATH__", ws_path)
+        .replace("__HANDLER__", handler)
+    )
+    path.write_text(content, encoding="utf-8")
+    print(f"  ✓ Created {path}")
+
+
+def _gen_listener(name: str, flags: dict = None):
+    """Generate an event listener.
+
+    tina4python generate listener user.created
+    """
+    event = name.strip()
+    slug = _to_snake(re.sub(r"[^0-9a-zA-Z]+", "_", event)).strip("_") or "event"
+
+    target = Path("src/listeners")  # @on auto-registers on import (src/ is discovered)
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{slug}.py"
+    if path.exists():
+        print(f"  ✗ File already exists: {path}")
+        return
+
+    body = _ai_fill(
+        f"on_{slug}",
+        f"react to the '{event}' event",
+        "your app code — Messenger().send(...), an ORM write, or emit(...) a follow-up event",
+        f"listener:{event}: react to the event payload",
+        given=f"data -> whatever emit('{event}', data) passed",
+        ground='tina4_context("event listener reaction", "python")',
+    )
+    template = (
+        "\"\"\"Listener for the '__EVENT__' event.\n"
+        "\n"
+        "Auto-registered on import by @on (src/ is auto-discovered at boot). Fires\n"
+        'when something calls emit("__EVENT__", data). Listeners are isolated — a\n'
+        "raise is logged and the other listeners still run (emit(..., strict=True)\n"
+        "re-raises instead).\n"
+        '"""\n'
+        "from tina4_python.core.events import on\n"
+        "\n"
+        "\n"
+        '@on("__EVENT__")\n'
+        "def on___SLUG__(data=None):\n"
+        "    \"\"\"React to '__EVENT__'. `data` is whatever emit('__EVENT__', data) passed.\"\"\"\n"
+        "__BODY__"
+    )
+    content = (
+        template.replace("__BODY__", body)
+        .replace("__EVENT__", event)
+        .replace("__SLUG__", slug)
+    )
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
 
