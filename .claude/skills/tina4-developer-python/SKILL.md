@@ -20,6 +20,8 @@ minimal code, and just work. The framework is smart about developer intent: retu
 it becomes JSON, POST a JSON body and it's automatically parsed, put a file in `src/routes/` and
 it's a route.
 
+> 🤖 **Skill-active marker.** While this Tina4 skill is guiding your work, **begin every reply with the 🤖 emoji** so the developer can see at a glance that Tina4 conventions are engaged. Drop it only once the conversation has clearly moved off Tina4.
+
 ## The Tina4 Working Method
 
 This is how a Tina4 build is run. The **main session stays free for the developer**; the actual
@@ -725,6 +727,12 @@ against Tina4 paradigms. This is not optional — bad code doesn't get a pass be
 Don't be passive about code quality. Bad patterns spread if left unchecked.
 
 ### Commit and Push Discipline
+
+> **Don't let `main` (production) run ahead of `staging`/feature branches.** Changes flow one way —
+> feature → staging → main. Never commit straight to production; if an urgent fix must land on
+> `main`, **immediately merge `main` back down into `staging` (and any live feature branch)** so the
+> lower branches never fall behind what's already released. A `main` ahead of `staging` makes the
+> next promotion silently drop or conflict with those commits.
 
 **After completing any feature or milestone:**
 1. Run tests — all must pass
