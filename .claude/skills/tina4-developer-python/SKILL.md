@@ -766,6 +766,11 @@ No shortcuts. No "we'll check it later." The check happens before the deploy, ev
 
 ### Monitor the Metrics Dashboard
 
+> **CLI:** run **`tina4 metrics`** for a code-health report in the terminal — the top complexity
+> offenders — with `--top N`, `--json`, `--path DIR`, and `--fail-on warn|error` (use the last to
+> fail a commit or CI on a complexity regression). Keep the `tina4` binary itself current with
+> **`tina4 update`** (self-updates to the latest release).
+
 The Tina4 Dev Admin panel (`/__dev/` → Metrics tab) provides a **live code health visualization**
 that every developer must use. It shows a bubble chart where:
 
