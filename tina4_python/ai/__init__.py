@@ -36,6 +36,76 @@ AI_TOOLS = [
 ]
 
 
+# ── Skill files (the SKILL.md system) ───────────────────────────────────────
+# `tina4 ai` installs the actual skills — not just a CLAUDE.md pointer to them —
+# into BOTH the project (.claude/skills, so they travel with the repo) and the
+# user's global ~/.claude/skills (so they're available in every project). A
+# Python project needs the python developer skill plus the two shared skills;
+# all three are served from the tina4-python release tag.
+_DEV_SKILL = "tina4-developer-python"
+_SKILL_REPO = "tina4-python"
+_SKILLS = {
+    _DEV_SKILL: ["auth-and-services.md", "data-and-orm.md", "deployment.md",
+                 "routes-and-api.md", "templates-and-frontend.md", "realtime.md"],
+    "tina4-js": ["html-and-components.md", "signals-and-reactivity.md",
+                 "persistence.md", "rtc.md"],
+    "tina4-maintainer": ["cli-and-deployment.md", "frond-and-frontend.md",
+                         "routing-and-orm.md", "subsystems.md"],
+}
+
+
+def _skills_ref() -> str:
+    """Release tag to pull skills from — the installed framework version,
+    overridable with TINA4_SKILLS_REF (e.g. to test a branch)."""
+    ref = os.environ.get("TINA4_SKILLS_REF")
+    if ref:
+        return ref
+    try:
+        from tina4_python import __version__
+        return __version__
+    except Exception:
+        return "main"
+
+
+def _fetch_bytes(url: str) -> "bytes | None":
+    import urllib.error
+    import urllib.request
+    try:
+        with urllib.request.urlopen(url, timeout=15) as resp:
+            return resp.read()
+    except (urllib.error.URLError, OSError):
+        return None
+
+
+def install_skills(root: str = ".", targets: "list[Path] | None" = None) -> list[str]:
+    """Install the Tina4 SKILL.md skills into the project AND global
+    ~/.claude/skills, fetched from the release tag matching this framework
+    version. Returns the skills fully installed. Network-dependent."""
+    ref = _skills_ref()
+    base = f"https://raw.githubusercontent.com/tina4stack/{_SKILL_REPO}/{ref}/.claude/skills"
+    if targets is None:
+        targets = [Path(root).resolve() / ".claude" / "skills",
+                   Path.home() / ".claude" / "skills"]
+    installed = []
+    for skill, refs in _SKILLS.items():
+        skill_ok = True
+        for dest in targets:
+            skill_dir = dest / skill
+            (skill_dir / "references").mkdir(parents=True, exist_ok=True)
+            data = _fetch_bytes(f"{base}/{skill}/SKILL.md")
+            if data is None:
+                skill_ok = False
+                continue
+            (skill_dir / "SKILL.md").write_bytes(data)
+            for r in refs:
+                rd = _fetch_bytes(f"{base}/{skill}/references/{r}")
+                if rd is not None:
+                    (skill_dir / "references" / r).write_bytes(rd)
+        if skill_ok:
+            installed.append(skill)
+    return installed
+
+
 def is_installed(root: str, tool: dict) -> bool:
     """Check if a tool's context file already exists."""
     return (Path(root).resolve() / tool["context_file"]).exists()
@@ -197,7 +267,7 @@ def _skill_block(context_file: str) -> str:
             "## Tina4 Skills\n\n"
             "When working on this Tina4 project, these skills give the "
             "assistant project-aware behaviour:\n\n"
-            "- **tina4-developer** — Read `.claude/skills/tina4-developer/SKILL.md` before building features.\n"
+            f"- **{_DEV_SKILL}** — Read `.claude/skills/{_DEV_SKILL}/SKILL.md` before building features.\n"
             "- **tina4-js** — Read `.claude/skills/tina4-js/SKILL.md` for frontend work.\n"
             "- **tina4-maintainer** — Read `.claude/skills/tina4-maintainer/SKILL.md` for framework-level changes.\n\n"
             "If Tina4 behaves differently from what these skills describe, that is a bug in the skill. "
@@ -208,7 +278,7 @@ def _skill_block(context_file: str) -> str:
     else:
         body = (
             "Tina4 Skills — read these files before working on this project:\n"
-            "  .claude/skills/tina4-developer/SKILL.md   (feature development)\n"
+            f"  .claude/skills/{_DEV_SKILL}/SKILL.md   (feature development)\n"
             "  .claude/skills/tina4-js/SKILL.md          (frontend / tina4-js)\n"
             "  .claude/skills/tina4-maintainer/SKILL.md  (framework-level changes)\n"
             "Found a skill that disagrees with how Tina4 actually behaves? Tell the developer,\n"
@@ -367,21 +437,18 @@ def _install_claude_skills(root: Path) -> list[str]:
                 rel = str(target.relative_to(root))
                 created.append(rel)
 
-    # Copy skill directories from framework .claude/skills/
-    framework_root = pkg_dir.parent
-    framework_skills_dir = framework_root / ".claude" / "skills"
-    if framework_skills_dir.is_dir():
-        target_skills_dir = root / ".claude" / "skills"
-        target_skills_dir.mkdir(parents=True, exist_ok=True)
-        for skill_dir in framework_skills_dir.iterdir():
-            if skill_dir.is_dir():
-                target_dir = target_skills_dir / skill_dir.name
-                if target_dir.exists():
-                    shutil.rmtree(target_dir)
-                shutil.copytree(skill_dir, target_dir)
-                rel = str(target_dir.relative_to(root))
-                created.append(rel)
-                print(f"  \033[32m✓\033[0m Updated {rel}")
+    # Install the SKILL.md skills into the project AND the user's global
+    # ~/.claude/skills, fetched from the release tag matching this framework
+    # version. (The previous code copied from framework_root/.claude/skills,
+    # which exists only in a dev/editable checkout — NOT in an installed pip
+    # package, where .claude/skills sits outside the tina4_python package and
+    # is never shipped. So installed users got no skills at all.)
+    for skill in install_skills(str(root)):
+        created.append(f".claude/skills/{skill}/")
+        try:
+            print(f"  \033[32m✓\033[0m Installed .claude/skills/{skill}  (project + global)")
+        except UnicodeEncodeError:
+            print(f"  [OK] Installed .claude/skills/{skill} (project + global)")
 
     return created
 
