@@ -200,6 +200,37 @@ def test_clear_removes_tracked_models(db):
     assert AutoCrud.models() == {}
 
 
+# ── Secure-by-default writes (opt-in public) ────────────────────────────────
+
+
+def test_writes_are_secure_by_default():
+    """The write routes (POST/PUT/DELETE) are GATED by default — no `_noauth` —
+    so the framework's write-auth applies. Regression guard for the 'AutoCrud
+    silently ships public writes' footgun."""
+    Widget = _make_widget_model()
+    AutoCrud.register(Widget)   # default: public=False
+    for method, path in (("POST", "/api/crud_widget"),
+                         ("PUT", "/api/crud_widget/1"),
+                         ("DELETE", "/api/crud_widget/1")):
+        route, _ = Router.match(method, path)
+        assert route is not None
+        assert not getattr(route["handler"], "_noauth", False), \
+            f"{method} must be secure-by-default (no _noauth)"
+
+
+def test_public_true_opts_writes_out_to_open():
+    """`public=True` explicitly opens the write routes (`_noauth`) for a demo /
+    quick-start open API — the visible, intentional escape hatch."""
+    Widget = _make_widget_model()
+    AutoCrud.register(Widget, public=True)
+    for method, path in (("POST", "/api/crud_widget"),
+                         ("PUT", "/api/crud_widget/1"),
+                         ("DELETE", "/api/crud_widget/1")):
+        route, _ = Router.match(method, path)
+        assert getattr(route["handler"], "_noauth", False) is True, \
+            f"{method} must be public when public=True"
+
+
 # ── End-to-end CRUD behaviour through the generated handlers ────────────────
 
 

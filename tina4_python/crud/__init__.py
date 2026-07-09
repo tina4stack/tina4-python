@@ -21,8 +21,10 @@ Generated endpoints per model:
     PUT    /api/{table_name}/{id}  — update record by primary key
     DELETE /api/{table_name}/{id}  — delete record by primary key
 
-All write routes (POST/PUT/DELETE) are registered with noauth so they
-don't conflict with existing auth defaults. Add auth via middleware.
+Write routes (POST/PUT/DELETE) are SECURE BY DEFAULT — they require a valid
+token, matching Tina4's framework-wide default (the router gates writes unless a
+route is @noauth). Pass ``public=True`` to open them explicitly, e.g.
+``AutoCrud.register(Note, public=True)``.
 """
 import importlib
 import inspect
@@ -66,12 +68,15 @@ class AutoCrud:
         return example
 
     @staticmethod
-    def register(model_class, prefix: str = "/api"):
+    def register(model_class, prefix: str = "/api", public: bool = False):
         """Register REST endpoints for a single ORM model class.
 
         Args:
             model_class: An ORM subclass with table_name and fields defined.
             prefix: URL prefix for the generated routes (default "/api").
+            public: If True, the write routes (POST/PUT/DELETE) are OPEN (no auth).
+                Default False keeps them **secure-by-default** — a valid token is
+                required, matching the framework's write-gating.
 
         Returns:
             List of dicts describing the generated routes.
@@ -168,7 +173,8 @@ class AutoCrud:
 
         create_handler.__name__ = f"autocrud_create_{table}"
         create_handler.__qualname__ = f"autocrud_create_{table}"
-        create_handler._noauth = True
+        if public:                       # secure-by-default; opt-in to public writes
+            create_handler._noauth = True
         create_handler._swagger_summary = f"Create {pretty_name}"
         create_handler._swagger_tags = [table]
         create_handler._swagger_example = example_body
@@ -201,7 +207,8 @@ class AutoCrud:
 
         update_handler.__name__ = f"autocrud_update_{table}"
         update_handler.__qualname__ = f"autocrud_update_{table}"
-        update_handler._noauth = True
+        if public:
+            update_handler._noauth = True
         update_handler._swagger_summary = f"Update {pretty_name}"
         update_handler._swagger_tags = [table]
         update_handler._swagger_example = example_body
@@ -224,7 +231,8 @@ class AutoCrud:
 
         delete_handler.__name__ = f"autocrud_delete_{table}"
         delete_handler.__qualname__ = f"autocrud_delete_{table}"
-        delete_handler._noauth = True
+        if public:
+            delete_handler._noauth = True
         delete_handler._swagger_summary = f"Delete {pretty_name}"
         delete_handler._swagger_tags = [table]
         Router.add("DELETE", f"{base_path}/{{id}}", delete_handler)
@@ -237,7 +245,7 @@ class AutoCrud:
         return generated
 
     @staticmethod
-    def discover(models_dir: str = "src/orm", prefix: str = "/api"):
+    def discover(models_dir: str = "src/orm", prefix: str = "/api", public: bool = False):
         """Auto-discover all ORM models in a directory and register CRUD routes.
 
         Scans .py files in the given directory, imports them, and registers
@@ -308,7 +316,7 @@ class AutoCrud:
                     and attr._get_table()  # Has a table name
                     and attr._get_table() not in AutoCrud._registered
                 ):
-                    AutoCrud.register(attr, prefix=prefix)
+                    AutoCrud.register(attr, prefix=prefix, public=public)
                     discovered.append(attr.__name__)
 
         if discovered:
