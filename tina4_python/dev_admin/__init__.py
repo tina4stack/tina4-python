@@ -2000,6 +2000,19 @@ async def _api_reload(request, response):
     except Exception as e:
         Log.error(f"Re-discover on reload failed: {e}")
 
+    # Keep the code Context index LIVE on the same WebSocket-reload trigger:
+    # reindex just the changed file (UPSERT) so the dev-MCP code_search reflects
+    # the edit immediately. Only touches an already-built index (existing_context
+    # never creates one); guarded so a context failure never breaks the reload.
+    try:
+        if _reload_file[0]:
+            from tina4_python.context import existing_context
+            _ctx = existing_context()
+            if _ctx is not None:
+                _ctx.reindex_file(_reload_file[0])
+    except Exception as e:
+        Log.error(f"Context reindex on reload failed: {e}")
+
     # WebSocket-primary reload: push an instant message to every browser
     # connected on /__dev_reload. The toolbar client (and the dev-admin
     # dashboard) act on this immediately — the mtime poll above is only a

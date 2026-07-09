@@ -971,6 +971,36 @@ def register_dev_tools(server):
         spec = Docs(project_root=str(project_root)).method_spec(class_, name)
         return spec if spec is not None else {"error": f"method not found: {class_}.{name}"}
 
+    # ── Code/doc grounding (tina4_python.context) ───────────────
+    # Sibling of api_* but the DUAL of it: api_* is exact structural
+    # reflection (class/method signatures); code_search is fuzzy/semantic
+    # FTS over the project's own SOURCE + docs. Use code_search for
+    # "where/how is X done in THIS codebase?" and api_* for "what's the
+    # signature of X?". Backed by a zero-dependency SQLite FTS5 index at
+    # .tina4/context.db, kept in a closure so repeat calls reuse it.
+    # Held as a PROCESS-WIDE shared Context (context.default_context) so the dev
+    # WebSocket reload hook can keep the SAME index fresh on every file save.
+    def _code_root():
+        return project_root / "src" if (project_root / "src").is_dir() else project_root
+
+    def code_search(query: str, k: int = 5, rebuild: bool = False) -> list:
+        """Fuzzy/semantic search over THIS project's own source + docs
+        (SQLite FTS5, zero-dep). Ranks definitions above tests that merely
+        mention a symbol. Use for 'where is X done here?'; use api_* for exact
+        signatures. First call (or rebuild=True) indexes src/ (falls back to
+        the project root); thereafter the dev-reload hook keeps it live on save.
+        Returns [{path, score, snippet}]."""
+        from tina4_python.context import default_context
+        ctx = default_context(root=_code_root(),
+                              db=str(project_root / ".tina4" / "context.db"))
+        if not ctx.available:
+            return {"error": "SQLite FTS5 is not available in this Python build; "
+                             "code_search is disabled."}
+        if rebuild:
+            ctx.reset()
+            ctx.index_root(_code_root())
+        return ctx.search(query, k=k)
+
     # ── Register all tools ──────────────────────────────────────
 
     tools = [
@@ -1029,6 +1059,12 @@ def register_dev_tools(server):
         ("api_search", api_search, "Live API search — finds framework + user classes/methods by name/summary. Use BEFORE guessing a method exists."),
         ("api_class", api_class, "Live class reflection — returns full method list + signatures for an FQN."),
         ("api_method", api_method, "Live method reflection — returns signature, params, return type, file, line."),
+
+        # ── Code/doc grounding (semantic FTS over this repo's source) ──
+        # code_search is the fuzzy DUAL of the structural api_* tools:
+        # api_* = exact signature lookup; code_search = "where/how is X
+        # done in THIS codebase?" over source + docs (zero-dep FTS5).
+        ("code_search", code_search, "Fuzzy/semantic search over THIS project's source + docs (FTS5). Use for 'where/how is X done here?'; api_* for exact signatures."),
     ]
 
     for name, handler, description in tools:

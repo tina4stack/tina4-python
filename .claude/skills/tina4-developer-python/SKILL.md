@@ -164,15 +164,17 @@ whenever the dev server is running (`tina4 serve` with `TINA4_DEBUG=true`):
 - **`api_search("render template")`** — ranked search across framework + your own code; returns fqn, signature, file:line. Run it BEFORE assuming a method exists.
 - **`api_class("Frond")`** — every method on a class, with signatures. A bare name (`Frond`), an import path, or the full fqn all resolve.
 - **`api_method("Frond", "add_test")`** — exact signature, params, return type, file and line for one method.
+- **`code_search("where is the auth token issued?")`** — fuzzy/semantic full-text search over **THIS project's own source + docs** (the native `Context` FTS5 index — zero-dep, kept live on every file save). Ranks the file that *defines* a symbol above tests that merely mention it. The in-repo, semantic counterpart to `api_*`.
 
 ```
 api_search("queue consume")     -> finds Queue.consume and its signature
 api_class("Database")           -> every method on Database, with signatures
 api_method("Frond", "add_test") -> add_test(name, fn)
+code_search("send an email")    -> the routes/services in YOUR app that already do it
 ```
 
 - **Unsure of a name or signature? Look it up — don't recall it.** A 5-second `api_method` call beats a hallucinated method that costs 20 minutes of debugging.
-- **`api_*` is live reflection (exact code); `docs_search` searches the prose docs.** Use `api_*` for signatures, `docs_search` for "how do I X" guidance.
+- **The grounding ladder — pick the tool by the question.** `api_*` = *exact structure* ("what's the signature of X?"); `code_search` = *semantic, in your own repo* ("where/how is X done in THIS app?"); `docs_search` = the prose docs; `tina4_context` = the current framework API + idioms (external corpus, for framework facts not in your project).
 - If `api_search`/`api_class` returns nothing for a name you expected, it probably **does not exist** in this version — tell the developer rather than inventing it.
 
 ## Quick Start
