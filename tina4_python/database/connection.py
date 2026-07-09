@@ -274,7 +274,8 @@ class Database:
         parsed = urlparse(self.url)
         scheme = parsed.scheme.lower()
 
-        # Handle sqlite:///path (three slashes = absolute, two = relative)
+        # Handle sqlite: URLs — see _connection_path for the slash rule
+        # (three slashes = relative to cwd, four = absolute).
         if scheme.startswith("sqlite"):
             scheme = "sqlite"
 
