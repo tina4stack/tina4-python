@@ -71,7 +71,8 @@ incl. 2 skill bugs; `pyproject.toml` `dependencies = []` yet the skill has **0**
       column-not-found doesn't get a spurious table hint (SQLite unaffected).
 - [ ] Not committed yet — bundle into `feature/release` with the docs (workstream A) once A lands.
 
-## Commits
-- (log here — hash + one-line description per landed change)
+## Commits (branch `feature/orm-footguns-batteries`, off v3, NOT tagged — holding for parity)
+- 5688e05  skills(python): Footguns + Batteries + grounding ladder + 2 skill-bug fixes (13-test boot-gate)
+- 5ad084a  orm: save() create_table()/migrate hint + CLAUDE.md drift fix (§11.2/3/7); 112 ORM tests green
 
-## Status: Approved (2026-07-09) — in progress, Python-first (2 workers: docs + framework)
+## Status: Python DONE + committed (feature/orm-footguns-batteries, no tag). Parity to php/ruby/nodejs NEXT, then release all four together.
