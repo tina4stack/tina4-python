@@ -63,6 +63,78 @@ hashed = Auth.hash_password("mypassword")
 matches = Auth.check_password("mypassword", hashed)  # True
 ```
 
+## Auth footguns
+
+Tina4's default is **secure**: `POST`/`PUT`/`PATCH`/`DELETE` require a Bearer token;
+`GET`/`HEAD`/`OPTIONS` are public (`core/router.py:335`). `@noauth()` opens a write
+route; `@secured()` locks a read route. Verified against source — get these wrong and
+you either ship an unauthenticated write or fight phantom 401s.
+
+### An unexpected 401 means "authenticate the request", not "open the route"
+
+**`@noauth()` is a LAST RESORT.** When a write route returns 401 in dev or from a
+client, the fix is almost always to **send the Bearer token** the route legitimately
+requires — not to strip its auth. Reserve `@noauth()` for endpoints that are
+*genuinely* public: login, register, health-check, inbound webhooks.
+
+```python
+from tina4_python.core.router import post, noauth   # or: from tina4_python import post, noauth
+
+@noauth()                         # login is public — the caller has no token YET
+@post("/login")
+async def login(request, response):
+    ...
+```
+
+* **Never blanket `@noauth()` to silence 401s.** Slapping it on every write route that
+  returns 401 doesn't "fix auth" — it **ships unauthenticated writes**. A 401 on
+  `POST /orders` means the request arrived without a valid token; authenticate it
+  (`Authorization: Bearer <token>`), don't open the route.
+
+### Import the auth decorators from `core.router` — swagger decorators don't gate anything
+
+`noauth` / `secured` come from **`tina4_python.core.router`** (also re-exported at the
+top level: `from tina4_python import noauth, secured`). There is **no**
+`tina4_python.Decorators` module.
+
+The **swagger** module (`tina4_python.swagger`) exports **documentation-only**
+decorators — `@description`, `@tags`, `@example`, `@security(...)`, … They annotate the
+OpenAPI spec and **never change enforcement**. In particular, **`@security("bearerAuth")`
+documents that a route needs a token but does NOT enforce it** (`swagger/__init__.py:191`
+sets `_swagger_security` metadata only). The real gate is the method default plus
+`@noauth()` / `@secured()`.
+
+```python
+from tina4_python.swagger import security
+from tina4_python.core.router import get, secured
+
+@secured()                        # THIS enforces auth on the GET
+@security("bearerAuth")           # this only documents it in Swagger
+@get("/reports")
+async def reports(request, response):
+    ...
+```
+
+* **Breaks:** relying on `@security(...)` alone to protect a public-by-default `GET` —
+  the route stays open and Swagger *claims* it's secured (worst kind of drift). Note
+  `tina4_python.swagger` does not even define a `noauth`, so
+  `from tina4_python.swagger import noauth` raises `ImportError` (it's not a silent
+  docs-only bypass — just import from `core.router`).
+
+### Decorator order: route decorator innermost, meta above
+
+```python
+@noauth()                 # meta (auth/docs) decorators on top
+@description("...")
+@post("/webhook")         # @get/@post/... innermost — closest to def
+async def webhook(request, response):
+    ...
+```
+
+Putting `@post(...)` above `@description(...)` crashes at registration. The middleware
+decorator is purely additive — it does **not** change a route's auth requirement
+(`core/router.py:755`).
+
 ## Sessions
 
 Configure in `.env`:
