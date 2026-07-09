@@ -315,16 +315,32 @@ class Database:
             return self.url
 
         # In-memory forms — passthrough
-        raw_path = parsed.path
-        if raw_path in (":memory:", "/:memory:"):
+        if self.url in ("sqlite::memory:", "sqlite:///:memory:"):
             return ":memory:"
 
-        # Strip exactly one leading "/" — the URL "/"-delimiter between the
-        # empty netloc and the start of the path.
-        if raw_path.startswith("/"):
-            stripped = raw_path[1:]
+        # Strip the scheme on the RAW url string, NOT via urlparse. urlparse collapses
+        # "sqlite:/x" and "sqlite:///x" to the same .path, which loses the distinction
+        # between a one-slash ABSOLUTE path and the documented three-slash RELATIVE form —
+        # that was the "sqlite:<abspath> silently goes relative" footgun. Mirror the
+        # sequential strip php/ruby/nodejs use (strip sqlite:/// then sqlite:// then sqlite:):
+        #   sqlite:///app.db       → "app.db"        (three slashes = relative to cwd)
+        #   sqlite:///data/app.db  → "data/app.db"
+        #   sqlite:////abs/app.db  → "/abs/app.db"   (four slashes = absolute)
+        #   sqlite:///C:/Users/x   → "C:/Users/x"    (Windows absolute)
+        #   sqlite:/abs/app.db     → "/abs/app.db"   (one slash = a real absolute path)
+        #   sqlite://rel/app.db    → "rel/app.db"    (two-slash legacy = relative)
+        #   sqlite:app.db          → "app.db"        (relative)
+        url = self.url
+        if url.startswith("sqlite:///"):
+            stripped = url[len("sqlite:///"):]
+        elif url.startswith("sqlite://"):
+            stripped = url[len("sqlite://"):]
+        elif url.startswith("sqlite:"):
+            stripped = url[len("sqlite:"):]
         else:
-            stripped = raw_path
+            stripped = url
+        if stripped == ":memory:":
+            return ":memory:"
 
         # Windows absolute path (drive-letter form): C:/... or C:\...
         is_windows_abs = (
@@ -333,8 +349,8 @@ class Database:
             and stripped[1] == ":"
             and stripped[2] in ("/", "\\")
         )
-        # Unix absolute path: urlparse("sqlite:////abs/app.db").path == "//abs/app.db"
-        # After one strip it's still "/abs/app.db" → still starts with "/".
+        # Unix absolute path — a leading "/" that survived the scheme strip
+        # (four-slash "sqlite:////abs" or the one-slash "sqlite:/abs" form).
         is_unix_abs = stripped.startswith("/")
 
         if is_windows_abs or is_unix_abs:
