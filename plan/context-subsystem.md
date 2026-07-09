@@ -28,11 +28,15 @@ the existing `api_*` reflection index (structured/exact) with semantic/FTS retri
       `index_path(file, label=None)`, `index_root(root)`, `search(query, k=5) → [{path, score, snippet}]`.
       Files: `tina4_python/context/__init__.py` (Context), `tina4_python/context/chunker.py` (fold/terms/
       chunk_code/chunk_text). FTS5 schema `chunks(cid, path, raw UNINDEXED, body)`; `bm25()` ranking.
-- [~] **Incremental reindex on file-change** — `index_path()` IS the UPSERT (delete-by-path + re-chunk +
-      insert), verified sub-100ms and non-duplicating by real tests. NOT wired to a watcher: the dev
-      hot-reload is **mtime-poll on `/__dev/api/reload`** (`core/router.py::_auto_discover`), not an
-      event watcher with per-file callbacks — no clean hook exists, so per the no-invent rule the method
-      is exposed for a follow-up to call. `code_search` also lazy-rebuilds on demand (`rebuild=True`).
+- [x] **Incremental reindex on file-change — WIRED to the dev WebSocket-reload trigger.** `POST
+      /__dev/api/reload` (`dev_admin._api_reload`, the same handler that broadcasts the instant reload
+      over the `/__dev_reload` WebSocket) now calls `Context.reindex_file(changed_file)` after
+      `_auto_discover`, so a saved file is reindexed (UPSERT) and searchable immediately — no rebuild.
+      `Context` + `code_search` share ONE process-wide index (`context.default_context` /
+      `existing_context`) so the hook keeps the same index `code_search` reads. `reindex_file` resolves
+      the project-root-relative path the trigger reports against the index root (may be `src/`),
+      handles deletes (drop rows), and skips outside-root / skip-dir / ineligible files. Guarded so a
+      context failure never breaks the reload. Real end-to-end test drives `_api_reload` → search.
 - [x] **Dev-MCP `code_search` tool** — registered as a sibling of `api_search` in
       `tina4_python/mcp/tools.py` (handler + entry in the `tools` list). Docstring + list description
       state the split: `api_*` = exact structural lookup, `code_search` = fuzzy/semantic over source+docs.
@@ -47,9 +51,9 @@ the existing `api_*` reflection index (structured/exact) with semantic/FTS retri
 ## Parity
 | Item | Python | PHP | Ruby | Node |
 |------|--------|-----|------|------|
-| `Context` core (stdlib FTS) | ❌ BUILD | ❌ | ❌ | ❌ |
-| reindex-on-change | ❌ BUILD | ❌ | ❌ | ❌ |
-| dev-MCP `code_search` | ❌ BUILD | ❌ | ❌ | ❌ |
+| `Context` core (stdlib FTS) | ✅ | ❌ | ❌ | ❌ |
+| reindex-on-change (WS-reload trigger) | ✅ | ❌ | ❌ | ❌ |
+| dev-MCP `code_search` | ✅ | ❌ | ❌ | ❌ |
 | optional dense rerank | ❌ BUILD | ❌ | ❌ | ❌ |
 
 ## Design decisions / open questions (need the maintainer's call)

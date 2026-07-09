@@ -978,30 +978,27 @@ def register_dev_tools(server):
     # "where/how is X done in THIS codebase?" and api_* for "what's the
     # signature of X?". Backed by a zero-dependency SQLite FTS5 index at
     # .tina4/context.db, kept in a closure so repeat calls reuse it.
-    _code_ctx: dict = {}
-
-    def _get_code_context():
-        from tina4_python.context import Context
-        ctx = _code_ctx.get("ctx")
-        if ctx is None:
-            ctx = Context(str(project_root / ".tina4" / "context.db"))
-            _code_ctx["ctx"] = ctx
-        return ctx
+    # Held as a PROCESS-WIDE shared Context (context.default_context) so the dev
+    # WebSocket reload hook can keep the SAME index fresh on every file save.
+    def _code_root():
+        return project_root / "src" if (project_root / "src").is_dir() else project_root
 
     def code_search(query: str, k: int = 5, rebuild: bool = False) -> list:
         """Fuzzy/semantic search over THIS project's own source + docs
         (SQLite FTS5, zero-dep). Ranks definitions above tests that merely
         mention a symbol. Use for 'where is X done here?'; use api_* for exact
         signatures. First call (or rebuild=True) indexes src/ (falls back to
-        the project root). Returns [{path, score, snippet}]."""
-        ctx = _get_code_context()
+        the project root); thereafter the dev-reload hook keeps it live on save.
+        Returns [{path, score, snippet}]."""
+        from tina4_python.context import default_context
+        ctx = default_context(root=_code_root(),
+                              db=str(project_root / ".tina4" / "context.db"))
         if not ctx.available:
             return {"error": "SQLite FTS5 is not available in this Python build; "
                              "code_search is disabled."}
-        if rebuild or ctx.is_empty():
+        if rebuild:
             ctx.reset()
-            root = project_root / "src" if (project_root / "src").is_dir() else project_root
-            ctx.index_root(root)
+            ctx.index_root(_code_root())
         return ctx.search(query, k=k)
 
     # ── Register all tools ──────────────────────────────────────

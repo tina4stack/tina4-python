@@ -186,6 +186,109 @@ def test_empty_or_stopword_query_returns_empty(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# 5. reindex-on-change — reindex_file UPSERT against the index root
+# --------------------------------------------------------------------------- #
+def test_reindex_file_upserts_against_a_subdir_root(tmp_path):
+    """The reload trigger reports project-root-relative paths ('src/mod.py'),
+    but the index root may be a subdir (src/); reindex_file must relabel and
+    upsert correctly."""
+    _write(tmp_path, "src/mod.py", "def wombat():\n    return 1\n")
+    ctx = Context(tmp_path / ".tina4" / "context.db")
+    ctx.index_root(tmp_path / "src")                 # root = src/, label = "mod.py"
+    assert any(r["path"] == "mod.py" for r in ctx.search("wombat"))
+
+    (tmp_path / "src" / "mod.py").write_text("def giraffe():\n    return 2\n", encoding="utf-8")
+    old = os.getcwd(); os.chdir(tmp_path)
+    try:
+        assert ctx.reindex_file("src/mod.py") >= 1   # project-root-relative path
+    finally:
+        os.chdir(old)
+    assert any(r["path"] == "mod.py" for r in ctx.search("giraffe")), "new content found"
+    assert not any(r["path"] == "mod.py" for r in ctx.search("wombat")), "old content gone"
+    ctx.close()
+
+
+def test_reindex_file_skips_outside_root_ineligible_and_skipdirs(tmp_path):
+    _write(tmp_path, "src/a.py", "def a():\n    return 1\n")
+    ctx = Context(tmp_path / ".tina4" / "context.db")
+    ctx.index_root(tmp_path / "src")
+    old = os.getcwd(); os.chdir(tmp_path)
+    try:
+        _write(tmp_path, "README.md", "# top-level, outside src/\n")
+        assert ctx.reindex_file("README.md") == -1        # outside the index root
+        _write(tmp_path, "src/data.bin", "x")
+        assert ctx.reindex_file("src/data.bin") == -1      # ineligible extension
+        _write(tmp_path, "src/__pycache__/j.py", "def j(): pass\n")
+        assert ctx.reindex_file("src/__pycache__/j.py") == -1   # skip-dir
+    finally:
+        os.chdir(old)
+    ctx.close()
+
+
+def test_reindex_file_drops_a_deleted_file(tmp_path):
+    f = _write(tmp_path, "src/gone.py", "def unique_gone_sym():\n    return 1\n")
+    ctx = Context(tmp_path / ".tina4" / "context.db")
+    ctx.index_root(tmp_path / "src")
+    assert any(r["path"] == "gone.py" for r in ctx.search("unique_gone_sym"))
+    f.unlink()
+    old = os.getcwd(); os.chdir(tmp_path)
+    try:
+        assert ctx.reindex_file("src/gone.py") == 0        # delete → drop rows
+    finally:
+        os.chdir(old)
+    assert ctx.search("unique_gone_sym") == [], "deleted file's chunks must be gone"
+    ctx.close()
+
+
+def test_default_context_is_a_shared_singleton(tmp_path):
+    from tina4_python.context import default_context, existing_context, _shared_contexts
+    _shared_contexts.clear()
+    db = tmp_path / ".tina4" / "ctx.db"
+    _write(tmp_path, "src/x.py", "def findme_sym():\n    return 1\n")
+    a = default_context(root=tmp_path / "src", db=db)
+    assert a is default_context(db=db), "same db path → same instance"
+    assert existing_context(db=db) is a
+    assert existing_context(db=tmp_path / "nope.db") is None
+    assert any("x.py" in r["path"] for r in a.search("findme_sym"))
+    a.close(); _shared_contexts.clear()
+
+
+# --------------------------------------------------------------------------- #
+# 6. the dev WebSocket-reload TRIGGER reindexes the changed file end-to-end
+# --------------------------------------------------------------------------- #
+class TestReloadReindex:
+    def test_api_reload_reindexes_changed_file(self, tmp_path):
+        """POST /__dev/api/reload (the WebSocket reload trigger) must reindex the
+        changed file into the shared Context so code_search reflects the edit."""
+        import asyncio
+        from tina4_python.context import default_context, _shared_contexts
+        import tina4_python.dev_admin as dev
+
+        _shared_contexts.clear()
+        src = tmp_path / "src"; src.mkdir(parents=True)
+        (src / "mod.py").write_text("def wombat():\n    return 1\n", encoding="utf-8")
+
+        old = os.getcwd(); os.chdir(tmp_path)
+        try:
+            # build the shared index the way code_search does (cwd/.tina4/context.db)
+            ctx = default_context(root=src)
+            assert any(r["path"] == "mod.py" for r in ctx.search("wombat"))
+
+            # edit, then FIRE the reload trigger with the changed file (real request obj)
+            (src / "mod.py").write_text("def giraffe():\n    return 2\n", encoding="utf-8")
+            req = type("Req", (), {"body": {"file": "src/mod.py", "type": "reload"}, "params": {}})()
+            asyncio.run(dev._api_reload(req, lambda payload=None, *a, **k: payload))
+
+            assert any(r["path"] == "mod.py" for r in ctx.search("giraffe")), \
+                "the reload trigger must reindex the new content"
+            assert not any(r["path"] == "mod.py" for r in ctx.search("wombat")), \
+                "old content must be gone after the reload reindex"
+        finally:
+            os.chdir(old)
+            _shared_contexts.clear()
+
+
+# --------------------------------------------------------------------------- #
 # 5. dev-MCP `code_search` tool — real registration over a temp project
 # --------------------------------------------------------------------------- #
 class TestCodeSearchTool:

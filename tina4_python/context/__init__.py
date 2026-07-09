@@ -37,7 +37,7 @@ from .chunker import (
     terms,
 )
 
-__all__ = ["Context"]
+__all__ = ["Context", "default_context", "existing_context"]
 
 # File classification — mirrors neemee's repo walk.
 CODE_EXTS = {".py", ".php", ".js", ".mjs", ".ts", ".rb",
@@ -102,6 +102,7 @@ class Context:
         self.path = str(path)
         self._lock = threading.Lock()
         self.conn = None
+        self.root = None            # set by index_root; reindex_file relabels against it
         check = fts5_check or _fts5_supported
         self.available = bool(check())
         if not self.available:
@@ -179,29 +180,68 @@ class Context:
             self.conn.commit()
         return len(rows)
 
+    @staticmethod
+    def _eligible(filename) -> bool:
+        """True if a file should be indexed (the per-file filter used by both
+        index_root and reindex_file). Directory skipping is handled separately."""
+        fn = filename.lower()
+        if fn.endswith(".min.js"):
+            return False
+        ext = os.path.splitext(fn)[1]
+        return (ext in CODE_EXTS or ext in DOC_EXTS or ext in CONFIG_EXTS
+                or fn in SPECIAL_FILES)
+
     def index_root(self, root) -> int:
         """Walk ``root``, indexing every eligible file (skips vendor/build/
         runtime dirs). Paths are stored RELATIVE to ``root`` for clean
-        citations. Returns the total number of chunks inserted."""
+        citations. Records ``root`` so reindex_file can relabel a changed file
+        consistently. Returns the total number of chunks inserted."""
         if not self.available:
             return 0
         root = Path(root).resolve()
+        self.root = root
         total = 0
         for dirpath, dirnames, filenames in os.walk(root):
             # prune skip-dirs and dotdirs in place
             dirnames[:] = [d for d in dirnames
                            if d not in SKIP_DIRS and not d.startswith(".")]
             for fn in sorted(filenames):
-                ext = os.path.splitext(fn)[1].lower()
-                special = fn.lower() in SPECIAL_FILES
-                if (ext not in CODE_EXTS and ext not in DOC_EXTS
-                        and ext not in CONFIG_EXTS and not special) \
-                        or fn.endswith(".min.js"):
+                if not self._eligible(fn):
                     continue
                 full = Path(dirpath) / fn
                 rel = str(full.relative_to(root))
                 total += self.index_path(full, label=rel)
         return total
+
+    def reindex_file(self, changed_path) -> int:
+        """Re-index a single changed file into the LIVE index — the hook the dev
+        WebSocket reload trigger (POST /__dev/api/reload) calls so code_search
+        tracks edits without a rebuild. Resolves ``changed_path`` against the
+        indexed root, then: outside root / under a skip-or-dot dir / ineligible
+        → skip (-1); deleted → drop its chunks (0); otherwise UPSERT (rows).
+        No-op (-1) until index_root has run (nothing to keep fresh yet)."""
+        if not self.available or self.root is None:
+            return -1
+        p = Path(changed_path)
+        if not p.is_absolute():
+            # the reload trigger reports paths relative to the project root (cwd
+            # during `tina4 serve`); the index root may be a subdir like src/.
+            p = Path.cwd() / changed_path
+        try:
+            rel = p.resolve().relative_to(self.root)
+        except (ValueError, OSError):
+            return -1                          # outside the indexed root
+        if set(rel.parts) & SKIP_DIRS or any(part.startswith(".") for part in rel.parts[:-1]):
+            return -1                          # under a skipped / dot dir
+        if not self._eligible(rel.name):
+            return -1
+        stored = str(rel)
+        if not p.exists():                     # deleted → drop its chunks
+            with self._lock:
+                self.conn.execute("DELETE FROM chunks WHERE path = ?", (stored,))
+                self.conn.commit()
+            return 0
+        return self.index_path(p, label=stored)
 
     # ── query ───────────────────────────────────────────────────
     def _match_expr(self, query):
@@ -297,3 +337,35 @@ class Context:
             with self._lock:
                 self.conn.close()
                 self.conn = None
+
+
+# ── process-wide shared index ───────────────────────────────────
+# code_search (dev MCP) and the dev-reload reindex hook must share ONE index so
+# a saved file is immediately searchable. Keyed by resolved db path.
+_shared_contexts: dict = {}
+
+
+def _db_key(db=None) -> str:
+    return str((Path(db) if db else Path.cwd() / ".tina4" / "context.db").resolve())
+
+
+def default_context(root=None, db=None) -> "Context":
+    """Get (or create) the process-wide Context at ``db`` (default
+    ``<cwd>/.tina4/context.db``). If ``root`` is given and the index is empty,
+    builds it once. This is what code_search uses so the reload hook can keep
+    the SAME index fresh."""
+    key = _db_key(db)
+    ctx = _shared_contexts.get(key)
+    if ctx is None:
+        ctx = Context(key)
+        _shared_contexts[key] = ctx
+    if root is not None and ctx.available and ctx.is_empty():
+        ctx.index_root(root)
+    return ctx
+
+
+def existing_context(db=None):
+    """Return the already-created shared Context for ``db`` (or None). Used by
+    the reload hook so a file change reindexes an EXISTING index but never
+    creates one on its own (nothing to keep fresh until code_search runs)."""
+    return _shared_contexts.get(_db_key(db))
