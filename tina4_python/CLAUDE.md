@@ -24,14 +24,14 @@ Every piece of repeated logic must be centralised. If two routes format a date, 
 ```python
 @get("/api/orders")
 async def list_orders(request, response):
-    orders = Order().select().to_array()
+    orders = [o.to_dict() for o in Order.select()]
     for o in orders:
         o["total"] = f"${abs(float(o['total'])):,.2f}"  # duplicated
     return response(orders)
 
 @get("/api/invoices")
 async def list_invoices(request, response):
-    invoices = Invoice().select().to_array()
+    invoices = [i.to_dict() for i in Invoice.select()]
     for i in invoices:
         i["amount"] = f"${abs(float(i['amount'])):,.2f}"  # duplicated!
     return response(invoices)
@@ -890,8 +890,8 @@ user.save()
 # Delete
 user.delete()
 
-# Query
-result = User().select(sql="name = ?", params=["Alice"], limit=10)
+# Query (WHERE fragment -> use where(); select() takes FULL SQL, not a fragment)
+result = User.where("name = ?", params=["Alice"], limit=10)
 
 # Convert to dict
 user.to_dict()
@@ -1797,7 +1797,7 @@ uv run tina4python migrate
 ```python
 @get("/api/products")
 async def list_products(request, response):
-    return response(Product().select(limit=100).to_array())
+    return response(Product.select(limit=100))
 
 @post("/api/products")
 async def create_product(request, response):

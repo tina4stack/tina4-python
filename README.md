@@ -227,7 +227,7 @@ from tina4_python.core.router import get, post, noauth
 @get("/api/users")
 async def list_users(request, response):
     from src.orm.User import User
-    return response(User().select(limit=100).to_array())
+    return response(User.select(limit=100))
 
 @get("/api/users/{id:int}")
 async def get_user(id, request, response):
@@ -288,7 +288,7 @@ Render it from a route:
 @get("/")
 async def home(request, response):
     from src.orm.User import User
-    users = User().select(limit=20).to_array()
+    users = [u.to_dict() for u in User.select(limit=20)]
     return response.render("pages/home.twig", {"title": "Users", "users": users})
 ```
 
@@ -467,7 +467,7 @@ Auto-generated at `/swagger`:
 @tags(["users"])
 @get("/api/users")
 async def users(request, response):
-    return response(User().select().to_array())
+    return response(User.select())
 ```
 
 ### Event System
@@ -629,7 +629,7 @@ profile = user.has_one("Profile", "user_id")
 customer = order.belongs_to("Customer", "customer_id")
 
 # Eager loading with include=
-users = User().select(include=["orders", "profile"])
+users = User.select(include=["orders", "profile"])
 ```
 
 ### DB Query Caching
