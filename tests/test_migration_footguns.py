@@ -142,6 +142,58 @@ def test_sort_key_is_numeric_aware():
     ]
 
 
+def test_migrate_applies_a_batch_in_numeric_order(tmp_path):
+    # Regression for a real prod incident: several migrations pending in ONE run,
+    # all rewriting the SAME table (later supersedes earlier). If migrate() applies
+    # them in filesystem/hash order instead of numeric order, the table is left at
+    # a non-final migration's shape. This drives the WHOLE runner end-to-end against
+    # a REAL temp SQLite DB (no mocks) and asserts the batch applied in sequence.
+    # The unit test above locks the sort KEY; this locks the sort actually driving
+    # apply order through migrate() (e.g. catches a pending-filter regressed to an
+    # unordered set difference).
+    from tina4_python.database import Database
+    from tina4_python.migration import Migration
+
+    mig_dir = tmp_path / "migrations"
+    mig_dir.mkdir()
+
+    # UNPADDED prefixes on purpose: 1..10 so a LEXICAL sort ("10" < "2") differs
+    # from the numeric order. This makes the test fail under BOTH failure modes —
+    # no sort at all AND a lexical-only sort (a numeric-sort regression) — not just
+    # total disorder. (Zero-padded names would sort correctly under a plain lexical
+    # sort and would NOT catch a numeric-sort regression.)
+    #
+    # File 0 bootstraps the probe tables. probe_final holds one row every later
+    # migration overwrites with its own number; probe_log appends the number in
+    # real apply order (autoincrement id == apply sequence).
+    (mig_dir / "0_init.sql").write_text(
+        "CREATE TABLE probe_final (n INTEGER);\n"
+        "INSERT INTO probe_final (n) VALUES (0);\n"
+        "CREATE TABLE probe_log (id INTEGER PRIMARY KEY AUTOINCREMENT, n INTEGER);\n"
+    )
+    # Write 1..10 in SCRAMBLED order so mtime/creation order != numeric order.
+    for n in (7, 3, 10, 1, 5, 9, 2, 8, 4, 6):
+        (mig_dir / f"{n}_step.sql").write_text(
+            f"UPDATE probe_final SET n = {n};\n"
+            f"INSERT INTO probe_log (n) VALUES ({n});\n"
+        )
+
+    db = Database(f"sqlite:///{tmp_path / 'batch_order.db'}")
+    ran = Migration(db, str(mig_dir)).migrate()
+
+    # migrate() reports the applied filenames in the order they ran.
+    assert ran == ["0_init.sql"] + [f"{n}_step.sql" for n in range(1, 11)], \
+        f"batch applied out of numeric order: {ran}"
+
+    # The real apply sequence recorded in the DB is strictly numeric (a lexical
+    # sort would put 10 before 2 here).
+    log = [r["n"] for r in db.fetch("SELECT n FROM probe_log ORDER BY id", limit=100).records]
+    assert log == list(range(1, 11)), f"migrations ran out of order: {log}"
+
+    # The last-applied migration wins — the exact contract that broke in prod.
+    assert db.fetch_one("SELECT n FROM probe_final")["n"] == 10
+
+
 # ── [9] CREATE TABLE idempotency on Firebird/MSSQL ──────────────────────
 
 def test_create_table_skipped_on_mssql_when_table_exists():
