@@ -262,16 +262,16 @@ Queue(topic="tasks").push({"action": "send_email"})
 ### 11. Key tina4_python Gotchas
 
 1. **Database import**: Use `from tina4_python.database import Database` (NOT `from tina4_python import Database`)
-2. **noauth/secured import**: Use `from tina4_python.core.router import noauth, secured` (there is NO `tina4_python.Decorators` module). **Never** import `noauth` from `tina4_python.swagger` — that version only affects documentation, not actual auth.
+2. **noauth/secured import**: Use `from tina4_python.core.router import noauth, secured` (there is NO `tina4_python.Decorators` module). `tina4_python.swagger` does **not** export `noauth` (importing it raises `ImportError`). The real docs-only trap is **`@security()`** (from `tina4_python.swagger`): it sets OpenAPI metadata only and does NOT gate a route — use `@secured()`/`@noauth()` for actual auth.
 2b. **Decorator ordering**: Route decorators (`@get`, `@post`, etc.) must be the **innermost** (closest to the function). Swagger/meta decorators (`@description`, `@tags`, `@noauth`, `@secured`) go above. Correct: `@noauth()` → `@description(...)` → `@post(...)` → `def handler`. Wrong: `@post(...)` → `@description(...)` → `def handler` (will crash).
-3. **Jinja2 template syntax** (common mistakes):
+3. **Frond template syntax** (Frond is Jinja2-*like*, not Jinja2 — note the differences):
     - **Ternary operator supported**: Both `{{ x ? 'a' : 'b' }}` and `{{ 'a' if x else 'b' }}` work
-    - **elif not elseif**: Use `{% elif %}` NOT `{% elseif %}`
+    - **elif or elseif**: Frond accepts **both** `{% elif %}` and `{% elseif %}`
     - **Unescaped output**: Both `{{ var | safe }}` and `{{ var | raw }}` work for unescaped output
     - **format filter**: Use `{{ "%.2f" | format(value) }}` for number formatting
     - **e() filter has NO arguments**: Use `{{ var|e }}` NOT `{{ var|e('js') }}` — Jinja2's `|e` is HTML-only with no mode parameter (that's PHP Twig syntax)
     - **JS string escaping**: Use `{{ var|replace("'", "\\'") }}` to escape single quotes for inline JS onclick handlers
-    - **No `|escape('js')` or `|e('js')`**: These will throw `escape() takes 1 positional argument but 2 were given`
+    - **`|e`/`|escape` are HTML-only**: a mode arg like `|e('js')` is **ignored** by Frond (not an error) — for inline-JS escaping use `{{ var|replace("'", "\\'") }}`
     - **Ternary inline**: Use `{{ 's' if count != 1 else '' }}` NOT `{{ count != 1 ? 's' : '' }}`
     - **Default values**: Use `{{ var|default('fallback') }}` — works on undefined and None
     - **Chaining filters**: `{{ var|default('')|replace("'", "\\'") }}` — left to right
@@ -289,7 +289,7 @@ Queue(topic="tasks").push({"action": "send_email"})
 4. **fetch_one()**: Returns a plain dict (or None), NOT a DatabaseResult
 5. **Dict access**: All query results use dict access `row["column"]` not attribute access `row.column`
 6. **Connection strings**: v3 uses standard URL format: `driver://host:port/database` with separate `username` and `password` parameters. Example: `Database("firebird://localhost:3050//path/to/db", "SYSDBA", "masterkey")`. Environment variable: `TINA4_DATABASE_URL`.
-7. **Running the app**: `uv run python app.py <port> <name>` — port and name are CLI args handled by tina4_python
+7. **Running the app**: use the `tina4` CLI — `tina4 serve`. The framework **refuses to boot via a plain `python app.py`** (it must be launched by the CLI; `TINA4_OVERRIDE_CLIENT=true` only for embedding). Port/name are CLI args.
 8. **SCSS**: Files in `src/scss/` are auto-compiled to `src/public/css/` on startup
 12. **Background tasks**: Use `background(fn, interval)` from `tina4_python.core.server` — never use `threading.Thread` for periodic work. The `background()` function runs tasks cooperatively in the asyncio event loop with proper shutdown handling.
 

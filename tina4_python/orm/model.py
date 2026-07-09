@@ -437,7 +437,35 @@ class ORM(metaclass=ORMMeta):
             # which db.execute()/insert()/update() populate, falling back to
             # the exception text) on self.last_error so it survives, and log
             # it with model/table context. ──
-            self.last_error = db.get_error() or str(e)
+            cause = db.get_error() or str(e)
+            # ── DX hint (v3.13.60): turn a bare driver error into an
+            # actionable fix for the two commonest ORM write footguns. Match
+            # the message case-insensitively (SQLite says "no such table" /
+            # "no such column: is_deleted" / "has no column named is_deleted";
+            # Postgres/MySQL say "does not exist" / "doesn't exist"). Any
+            # OTHER error keeps its raw cause untouched so we never mask an
+            # unrelated failure (e.g. a NOT NULL / duplicate-PK violation). ──
+            low = cause.lower()
+            if self.soft_delete and "is_deleted" in low and (
+                "no such column" in low or "has no column" in low
+                or "does not exist" in low or "doesn't exist" in low
+                or "unknown column" in low
+            ):
+                cause += (
+                    " — soft_delete=True requires an is_deleted column; declare "
+                    "it (is_deleted = IntegerField(default=0)) or add a migration"
+                )
+            elif "no such table" in low or (
+                ("does not exist" in low or "doesn't exist" in low)
+                # exclude a column-not-found (e.g. Postgres 'column "x" does not exist')
+                # so a genuine missing-column error never gets a spurious table hint
+                and "column" not in low
+            ):
+                cause += (
+                    f" — table '{table}' does not exist; call "
+                    f"{type(self).__name__}.create_table() or run a migration"
+                )
+            self.last_error = cause
             Log.error(
                 f"{type(self).__name__}.save() failed for table "
                 f"'{table}': {self.last_error}"
