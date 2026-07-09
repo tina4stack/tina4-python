@@ -33,17 +33,24 @@ Fix pattern (all): strip the scheme on the RAW url string in order `sqlite:///` 
 | `sqlite:///rel` → relative-to-cwd (documented) | ✅ | ✅ | ✅ | ✅ |
 
 ## Tests (written FIRST / real — no mocks; run against the actual driver)
-- [x] python `tests/test_sqlite_abspath.py` — naive-abs opens abs file + documented forms; 4 pass; 626 DB/ORM/migration tests green (no regression)
-- [ ] php — worker writing PHPUnit test + running db suite
-- [ ] nodejs — worker writing tsx test + running orm suite
-- [ ] ruby — worker writing regression spec + running sqlite specs
+- [x] python `tests/test_sqlite_abspath.py` — 4 pass; 626 DB/ORM/migration tests green
+- [x] php `tests/SqliteAbsolutePathParityTest.php` — 5 pass (incl. the real `new Database()` path); 357 DB tests green
+- [x] nodejs `test/sqliteAbsolutePath.test.ts` — 14 pass (real `Database.create()`); 172 orm/db tests green
+- [x] ruby `spec/sqlite_absolute_path_spec.rb` — 7 pass; 119 sqlite/driver specs green
 
 ## Bugs
 - [x] python probe/pre-fix run polluted the repo (`tmp/`, `x.db`, `data/x.db`); cleaned. Also
-  accidentally `rm`'d two tracked `tmp/*.db` files — **restored** via `git restore` (kept the diff focused).
+  accidentally `rm`'d two tracked `tmp/*.db` files — **restored** via `git restore`.
+- [x] php had a SECOND, undiscovered parser — `Database::createAdapter()` (the real `new Database()`
+  path) — that footgunned on `sqlite:/abs` AND mis-counted `sqlite:///` (treated the documented
+  3-slash relative form as absolute `/data` → "unable to open database file"). Fixed both + added
+  real-path test coverage. (The worker's first test only covered `DatabaseUrl`.)
 
 ## Commits
-- (python) pending — connection.py fix + test
-- (php/nodejs/ruby) pending — worker tests + fixes
+- python  PR #67  — `_connection_path` raw-string strip + test
+- php     PR #138 — `DatabaseUrl` + `createAdapter` raw-string strip + real-path test
+- nodejs  PR #7   — `parseDatabaseUrl` `sqlite:` branch + test
+- ruby    PR #6   — regression spec only (already correct)
 
-## Status: In Progress — python fixed+tested; php/nodejs fixed (probe-verified), tests in flight; ruby confirmed correct
+## Status: Complete — all 4 backends parity-fixed + merged to v3 (2026-07-09). Premise corrected:
+python + php were broken, nodejs threw "unsupported scheme", ruby was already correct.
