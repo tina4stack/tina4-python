@@ -46,6 +46,10 @@ test_queue*.db
 /publish.sh
 /src/scss/
 /broken
+# Framework runtime artefacts under .tina4/ — the Context FTS5 index
+# (.tina4/context.db), agent.log, and file-write backups. Transient,
+# per-machine, never source-of-truth. Keep the whole dir out of git.
+/.tina4/
 # Framework runtime artefacts — BrokenTracker writes import-time and
 # route-time failure dumps here. They're transient (timestamped per
 # error) and contain stack traces, never source-of-truth content.
