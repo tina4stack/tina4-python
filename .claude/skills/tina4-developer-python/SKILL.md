@@ -513,6 +513,22 @@ Always target the latest supported Python:
 Never write code that targets older versions. Use modern language features (structural pattern
 matching, `X | None` unions, `type` aliases, etc.).
 
+## Staying current: check for Tina4 updates
+
+Tina4 ships fixes and features often, and a bug the user reports may already be fixed
+upstream. When you start substantial work — or whenever a user hits a bug a newer release
+might resolve — check whether the project's Tina4 is behind the latest, then surface it.
+**Never upgrade silently:** report the delta and let the user decide (a version bump can
+change behaviour).
+
+- **Installed:** `uv pip show tina4_python` (look at `Version`). The `tina4` CLI's own
+  version: `tina4 --version`.
+- **Latest published:** `pip index versions tina4_python` (PyPI).
+- **If behind:** tell the user what changed — point them at the release notes on
+  https://tina4.com — and offer the upgrade: bump the `tina4_python` pin in
+  `pyproject.toml` then `uv sync`, or `uv pip install -U tina4_python`.
+- The `tina4` CLI self-updates with `tina4 update`; `tina4 doctor` checks your toolchain.
+
 ## Reference Files
 
 Read these when you need detailed patterns for a specific area:
