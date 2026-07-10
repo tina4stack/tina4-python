@@ -72,7 +72,7 @@ def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
     """Parse --key value and --flag from args. Returns (flags, positional)."""
     # Boolean-only flags that never take a value argument
     boolean_flags = {"no-browser", "no-reload", "production", "managed", "all", "clear", "json",
-                     "public", "no-migration"}
+                     "public", "no-migration", "once"}
 
     flags = {}
     positional = []
@@ -731,17 +731,50 @@ def _test(args):
 
 
 def _build(args):
-    """Build a distributable package."""
-    try:
-        subprocess.run(
-            [sys.executable, "-m", "PyInstaller", "--onefile", "app.py",
-             "--name", "tina4app", "--hidden-import", "tina4_python"],
-            check=True,
-        )
-        print("Built: dist/tina4app")
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        subprocess.run([sys.executable, "-m", "build"], check=True)
-        print("Built: dist/")
+    """Build the deployable Docker image for this Tina4 app.
+
+    A Tina4 app deploys as a container — ``tina4python init`` and ``tina4 deploy
+    docker`` both scaffold a Dockerfile — so ``build`` produces THAT artifact:
+    the image. It shells out to the ``docker`` CLI (no new Python dependency)
+    and fails loud with guidance when there is no Dockerfile or docker is not on
+    PATH, instead of silently packaging the framework as a Python library (the
+    old ``python -m build`` fallback shipped the lib, not the app).
+
+        tina4python build                    # docker build -t <dir>:latest .
+        tina4python build --tag myapp:1.2     # explicit image tag
+        tina4python build --file docker/uv/Dockerfile
+    """
+    import shutil
+
+    flags, _ = _parse_flags(args)
+
+    tag = flags.get("tag")
+    if not tag or tag is True:
+        # Default tag: <project-folder>:latest, lower-cased (docker repo names
+        # must be lowercase). Fall back to a sane name for an unnamed cwd.
+        tag = f"{(Path.cwd().name.lower() or 'tina4app')}:latest"
+
+    dockerfile = Path(flags.get("file") or "Dockerfile")
+    if not dockerfile.is_file():
+        print(f"  ✗ No {dockerfile} found.")
+        print("  A Tina4 app deploys as a container. Scaffold a Dockerfile first:")
+        print("      tina4 deploy docker        (or: tina4python init)")
+        sys.exit(1)
+
+    docker = shutil.which("docker")
+    if not docker:
+        print("  ✗ docker was not found on PATH.")
+        print("  Install Docker to build the deployable image, or build manually:")
+        print(f"      docker build -t {tag} -f {dockerfile} .")
+        sys.exit(1)
+
+    print(f"  Building image {tag} from {dockerfile} ...")
+    result = subprocess.run([docker, "build", "-t", tag, "-f", str(dockerfile), "."])
+    if result.returncode != 0:
+        print(f"  ✗ docker build failed (exit {result.returncode})")
+        sys.exit(result.returncode)
+    print(f"  ✓ Built image {tag}")
+    print(f"  Run: docker run -p 7146:7146 {tag}")
 
 
 def _ai(args):
@@ -1551,8 +1584,16 @@ def _gen_queue(name: str, flags: dict = None):
         "\n"
         "\n"
         '# Discovered by ServiceRunner.discover("src/services"); daemon=True because\n'
-        "# consume___SLUG__ manages its own loop.\n"
-        'service = {"name": "__TOPIC__-consumer", "handler": consume___SLUG__, "daemon": True}\n'
+        "# consume___SLUG__ manages its own loop. The `topic` + per-job `handle`\n"
+        '# keys let `tina4python queue work __TOPIC__` drive this consumer directly\n'
+        "# (own the poll loop / bounded --once drain) without wiring a ServiceRunner.\n"
+        "service = {\n"
+        '    "name": "__TOPIC__-consumer",\n'
+        '    "topic": "__TOPIC__",\n'
+        "    \"handler\": consume___SLUG__,\n"
+        "    \"handle\": handle___SLUG__,\n"
+        '    "daemon": True,\n'
+        "}\n"
     )
     content = (
         template.replace("__BODY__", body)
@@ -2092,6 +2133,220 @@ def _load_env():
         load_env(str(env_path))
 
 
+# ── Queue worker + management ─────────────────────────────────────────
+#
+# The top-level `queue` command wires straight to the real
+# tina4_python.queue.Queue (file backend by default; RabbitMQ/Kafka/MongoDB via
+# TINA4_QUEUE_BACKEND). `stats`, `retry` and `clear` operate on the queue
+# without booting the app or a database; `work` runs the app's consumer for a
+# topic. Distinct from `generate queue`, which SCAFFOLDS a consumer file.
+
+def _resolve_queue_handler(services_dir: str, topic: str):
+    """Return the per-job handler that a consumer module declares for ``topic``.
+
+    A consumer module (e.g. the one `generate queue <topic>` scaffolds) exposes
+    a module-level ``service`` dict; when its ``topic`` matches, ``queue work``
+    drives the consumer through that dict's per-job ``handle`` callable — so the
+    worker owns the poll loop (honouring ``--poll`` and the bounded ``--once``
+    drain) instead of the consumer's own endless loop. Returns the callable, or
+    ``None`` when no consumer in ``services_dir`` targets this topic.
+    """
+    import importlib.util
+
+    svc_path = Path(services_dir)
+    if not svc_path.is_dir():
+        return None
+    for py_file in sorted(svc_path.glob("*.py")):
+        if py_file.name.startswith("_"):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(
+                f"tina4_qwork_{py_file.stem}", str(py_file)
+            )
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        except Exception:  # noqa: BLE001 — a broken sibling must not sink the worker
+            continue
+        config = getattr(mod, "service", None)
+        if isinstance(config, dict) and config.get("topic") == topic \
+                and callable(config.get("handle")):
+            return config["handle"]
+    return None
+
+
+def _queue_work(args):
+    """Run a consumer loop that pops and processes jobs on a topic.
+
+        tina4python queue work [topic] [--once] [--poll N] [--services DIR]
+
+    Long-running by default (polls every ``--poll`` seconds, 1.0 default; Ctrl-C
+    to stop). ``--once`` does a single-pass drain — it processes every currently
+    available job then exits (poll interval 0). The per-job handler is resolved
+    from the app's consumer for this topic (see _resolve_queue_handler); with no
+    handler it drains and acks with a warning rather than inventing behaviour.
+    """
+    _load_env()
+    flags, positional = _parse_flags(args)
+    topic = positional[0] if positional else "default"
+    once = bool(flags.get("once"))
+
+    poll_raw = str(flags.get("poll", "")).strip()
+    try:
+        poll = float(poll_raw) if poll_raw and poll_raw != "True" else (1.0 if not once else 0.0)
+    except ValueError:
+        poll = 1.0
+    if once:
+        poll = 0.0  # single-pass: consume() returns as soon as the topic is empty
+
+    services_dir = flags.get("services") or os.environ.get("TINA4_SERVICE_DIR", "src/services")
+    if services_dir is True:
+        services_dir = "src/services"
+
+    handler = _resolve_queue_handler(services_dir, topic)
+    from tina4_python.queue import Queue
+    queue = Queue(topic=topic)
+
+    if handler is None:
+        print(f"  ⚠ No consumer handler found for topic '{topic}' in {services_dir}.")
+        print(f"    Scaffold one with: tina4python generate queue {topic}")
+        print("    Draining (consume + ack) without processing.")
+
+    mode = "single-pass drain" if once else f"polling every {poll:g}s (Ctrl-C to stop)"
+    print(f"  Queue worker on '{topic}' — {mode}...")
+
+    processed = 0
+    failed = 0
+    try:
+        for job in queue.consume(topic, poll_interval=poll):
+            try:
+                if handler is not None:
+                    handler(job.data)
+                job.complete()
+                processed += 1
+            except Exception as exc:  # noqa: BLE001 — a bad job nacks, worker lives
+                job.fail(str(exc))
+                failed += 1
+    except KeyboardInterrupt:
+        print("\n  Interrupted — stopping worker.")
+
+    print(f"  Processed {processed} job(s), {failed} failed on '{topic}'.")
+
+
+def _queue_stats(args):
+    """Print pending / in-flight / failed / dead-letter / completed counts.
+
+        tina4python queue stats [topic] [--json]
+    """
+    import json as _json
+
+    _load_env()
+    flags, positional = _parse_flags(args)
+    topic = positional[0] if positional else "default"
+
+    from tina4_python.queue import Queue
+    queue = Queue(topic=topic)
+    stats = {
+        "topic": topic,
+        "pending": queue.size("pending"),      # waiting to run
+        "reserved": queue.size("reserved"),     # popped, not yet acked (in-flight)
+        "failed": len(queue.failed()),          # failed once, still retrying
+        "dead": queue.size("dead"),             # exhausted retries (dead-letter)
+        "completed": queue.size("completed"),   # terminal-completed (0 on the file backend)
+    }
+
+    if "json" in flags:
+        print(_json.dumps(stats, indent=2))
+        return
+
+    print(f"\n  Queue '{topic}'")
+    print(f"    pending    {stats['pending']}")
+    print(f"    reserved   {stats['reserved']}    (in-flight)")
+    print(f"    failed     {stats['failed']}    (retrying)")
+    print(f"    dead       {stats['dead']}    (dead-letter)")
+    print(f"    completed  {stats['completed']}")
+    print()
+
+
+def _queue_retry(args):
+    """Re-queue failed and dead-letter jobs so they run again.
+
+        tina4python queue retry [topic]
+
+    Revives every dead-letter job (manual override, regardless of attempt count)
+    and re-queues any failed-but-still-eligible jobs.
+    """
+    _load_env()
+    flags, positional = _parse_flags(args)
+    topic = positional[0] if positional else "default"
+
+    from tina4_python.queue import Queue
+    queue = Queue(topic=topic)
+
+    # max_retries=0 => every job in the dead-letter store, whatever its attempt
+    # count (matches what `stats`/`size("dead")` reports), not only attempts>=N.
+    dead = queue.dead_letters(max_retries=0)
+    revived = sum(1 for job in dead if queue.retry(job.id))
+    # Any failed-but-retryable jobs still under the limit (no-op on the file
+    # backend once the above moved them out, meaningful for other backends).
+    requeued = queue.retry_failed()
+
+    total = revived + requeued
+    print(f"  Re-queued {total} job(s) on '{topic}' "
+          f"({revived} dead-letter, {requeued} failed).")
+
+
+def _queue_clear(args):
+    """Purge jobs of a given status (default: completed).
+
+        tina4python queue clear [status] [topic]
+
+    status is one of pending / reserved / completed / failed / dead. The default
+    'completed' clears finished jobs; pass e.g. `queue clear pending` or
+    `queue clear dead orders` to purge another status / topic.
+    """
+    _load_env()
+    flags, positional = _parse_flags(args)
+    status = positional[0] if positional else "completed"
+    topic = positional[1] if len(positional) > 1 else "default"
+
+    from tina4_python.queue import Queue
+    queue = Queue(topic=topic)
+    removed = queue.purge(status)
+    print(f"  Cleared {removed} '{status}' job(s) from '{topic}'.")
+
+
+# Sub-dispatch table for the `queue` command — the single source for its
+# subcommands (drives _queue dispatch AND the manifest's queue.subcommands).
+_QUEUE_SUBCOMMANDS = {
+    "work":  _queue_work,
+    "stats": _queue_stats,
+    "retry": _queue_retry,
+    "clear": _queue_clear,
+}
+
+
+def _queue(args):
+    """Top-level queue command: run workers and manage jobs.
+
+        tina4python queue work  [topic] [--once] [--poll N] [--services DIR]
+        tina4python queue stats [topic] [--json]
+        tina4python queue retry [topic]
+        tina4python queue clear [status] [topic]
+    """
+    args = args or []
+    if not args:
+        print("Usage: tina4python queue <work|stats|retry|clear> [options]")
+        print(f"  Subcommands: {', '.join(_QUEUE_SUBCOMMANDS)}")
+        sys.exit(1)
+    sub = args[0].lower()
+    handler = _QUEUE_SUBCOMMANDS.get(sub)
+    if handler is None:
+        print(f"Unknown queue subcommand: {sub}")
+        print(f"  Available: {', '.join(_QUEUE_SUBCOMMANDS)}")
+        sys.exit(1)
+    handler(args[1:])
+
+
 # ── Self-describing command surface ───────────────────────────────────
 
 def _commands_manifest() -> dict:
@@ -2190,7 +2445,8 @@ COMMANDS = {
     "seed":             {"handler": _seed,             "summary": "Run database seeders"},
     "routes":           {"handler": _routes,           "summary": "List all registered routes"},
     "test":             {"handler": _test,             "summary": "Run test suite"},
-    "build":            {"handler": _build,            "summary": "Build distributable package"},
+    "queue":            {"handler": _queue,            "usage": "<work|stats|retry|clear> [topic]", "subcommands": list(_QUEUE_SUBCOMMANDS), "summary": "Run queue workers and manage jobs"},
+    "build":            {"handler": _build,            "usage": "[--tag NAME] [--file PATH]", "summary": "Build the deployable Docker image"},
     "ai":               {"handler": _ai,               "usage": "[--all]", "summary": "Install AI coding assistant context"},
     "generate":         {"handler": _generate,         "usage": "<what> <name> [options]", "subcommands": list(GENERATORS), "summary": "Generate scaffolding (see Generators below)"},
     "console":          {"handler": _console,          "summary": "Start interactive REPL with framework loaded"},

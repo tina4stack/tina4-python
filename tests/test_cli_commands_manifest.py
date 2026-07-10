@@ -21,7 +21,8 @@ from tina4_python import __version__
 from tina4_python.cli import _commands, _commands_manifest, COMMANDS, GENERATORS
 
 # The command set the tina4 client must be able to discover truthfully.
-KNOWN_COMMANDS = {"migrate", "migrate:create", "seed", "test", "routes", "generate", "commands"}
+KNOWN_COMMANDS = {"migrate", "migrate:create", "seed", "test", "routes", "generate", "commands",
+                  "queue", "build"}
 
 
 def _manifest_from_handler(capsys) -> dict:
@@ -80,12 +81,24 @@ class TestCommandsManifestContent:
         )
         assert entry.get("args") == ["description"]
 
-    def test_no_invented_top_level_queue_command(self, capsys):
-        """`queue` is a later phase: it must NOT appear as a top-level command
-        (it exists only as a `generate` subcommand today)."""
-        names = {c["name"] for c in _manifest_from_handler(capsys)["commands"]}
-        assert "queue" not in names
+    def test_queue_is_a_top_level_command_and_a_generator(self, capsys):
+        """Phase 3: `queue` is now BOTH a top-level command (run workers / manage
+        jobs) with work/stats/retry/clear subcommands, AND a `generate`
+        subcommand (scaffold a consumer). The two are distinct surfaces."""
+        commands = _manifest_from_handler(capsys)["commands"]
+        names = {c["name"] for c in commands}
+        assert "queue" in names, "top-level queue command missing from manifest"
+        queue = next(c for c in commands if c["name"] == "queue")
+        assert queue.get("subcommands") == ["work", "stats", "retry", "clear"]
+        # Still a scaffolding generator too (unchanged).
         assert "queue" in list(GENERATORS)
+
+    def test_build_declares_deploy_oriented_summary(self, capsys):
+        """`build` produces the deployable Docker image, not a library package."""
+        entry = next(
+            c for c in _manifest_from_handler(capsys)["commands"] if c["name"] == "build"
+        )
+        assert "Docker" in entry["summary"]
 
 
 class TestCommandsHumanOutput:
