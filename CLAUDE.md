@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.13.68 — Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.69 - Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -446,17 +446,54 @@ seed_table(db, table_name, count=10, field_map=None, overrides=None) -> int
 ```python
 from tina4_python.api import Api
 
-api = Api(base_url="", auth_header="", ignore_ssl=False, timeout=30)
+api = Api(base_url="", auth_header="", ignore_ssl=False, timeout=30,
+          bearer_token=None, username=None, password=None, headers=None,
+          verify_ssl=None, max_retries=0, retry_backoff=0.5,
+          transport=None, cookies=False)
 api.get(path="", params=None) -> dict
 api.post(path="", body=None, content_type="application/json") -> dict
 api.put(path="", body=None, content_type="application/json") -> dict
 api.patch(path="", body=None, content_type="application/json") -> dict
 api.delete(path="", body=None) -> dict
 api.send(method="", path="", body=None, content_type="application/json") -> dict
+api.upload(path="", file_path=None, field_name="file", extra_fields=None,
+           headers=None, file_bytes=None, filename=None) -> dict
+api.download(path="", dest_path=None, params=None) -> dict
 api.add_headers(headers: dict)
 api.set_basic_auth(username, password)
 api.set_bearer_token(token)
-# Returns: {"http_code": 200, "body": {...}, "headers": {...}, "error": None}
+# get/post/put/patch/delete/send/upload return:
+#   {"http_code": 200, "body": {...}, "headers": {...}, "error": None}
+# download returns (no "body" key, the body went to disk):
+#   {"http_code": 200, "headers": {...}, "error": None, "path": "/tmp/out.pdf"}
+```
+
+- **Multipart upload** (`upload`): POSTs a `multipart/form-data` body from a file on
+  disk (`file_path`) OR from in-memory bytes (`file_bytes` + `filename`), so no temp
+  file is ever needed. `field_name` is the file's form field (default `file`),
+  `extra_fields` become extra text parts, `headers` are extra per-call headers. The
+  part Content-Type is guessed from the filename (fallback `application/octet-stream`).
+  A missing file or no source given returns a clean error dict (`http_code` None,
+  `error` set); it never raises.
+- **Streaming download** (`download`): streams the GET body to `dest_path` in 64KB
+  chunks, so a multi-megabyte response never lands in memory whole. Returns
+  `{"http_code", "headers", "error", "path"}` with no `body` key; `path` is None and
+  no file is written on any error (missing `dest_path`, HTTP error status, or a
+  transport failure).
+- **Transport seam** (`transport=`): an injectable callable
+  `transport(method, url, headers, body, timeout)` returning the standard result dict,
+  that fully REPLACES the network call so APPLICATION developers can unit-test code
+  that calls an `Api`. Default None means the real urllib path. Tina4's own suite
+  NEVER injects a fake transport (the no-mock rule stands); framework tests always hit
+  a real local server.
+- **Cookie jar** (`cookies=True`): opt-in, off by default. Keeps a per-client,
+  in-memory jar: parses `Set-Cookie` (leading `name=value` only, last write wins) and
+  replays the accumulated `Cookie` header on later requests. Not persisted; scoped to
+  the instance.
+- **Redirect safety:** every verb and `download` follows redirects, but the
+  `Authorization` AND `Cookie` headers are stripped on a cross-origin hop (a different
+  scheme/host/port), so a bearer token or session cookie never leaks to a host you did
+  not authenticate to; same-origin redirects keep them.
 ```
 
 ### Queue — Database-backed job queue
@@ -785,8 +822,8 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
 - SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools auto-start when MCP is a capability of the deployment. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. **Security is a two-layer gate (v3.13.40):** `is_enabled()` is a pure capability gate (explicit `TINA4_MCP` wins, else `TINA4_DEBUG`; host-independent), and `is_request_allowed(remote_ip, has_valid_token)` authorises each request on the RAW socket peer (`request.remote_ip`, never X-Forwarded-For): loopback always; a remote caller needs `TINA4_MCP_REMOTE=true` AND a token matching `TINA4_MCP_TOKEN` (fallback `TINA4_API_KEY`; sent as Authorization Bearer / X-MCP-Token / X-Api-Key; no configured token means remote is always denied). All MCP surfaces (REST shim, JSON-RPC, SSE) 404 a disallowed caller. `database_query` is SELECT/WITH-only and rejects stacked statements; the file tools are sandboxed to the project root. `is_localhost()` is informational only, not the gate
-- Tests: 2,901 passing (122 modules)
-- Version: 3.13.68
+- Tests: 3,450 passing (174 modules)
+- Version: 3.13.69
 
 ## Links
 
