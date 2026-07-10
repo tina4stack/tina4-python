@@ -311,16 +311,26 @@ def _console(args=None):
 
     # Import everything the user needs
     from tina4_python import get, post, put, patch, delete, Router, Database, ORM, Auth, Queue, Frond
+    from tina4_python.orm import bind_database
     from tina4_python.debug import Log
     from tina4_python.api import Api
     from tina4_python.core.events import on, emit
 
-    # Try to connect database from TINA4_DATABASE_URL
+    # Try to connect database from TINA4_DATABASE_URL. Honour the SEPARATE
+    # credential env vars (TINA4_DATABASE_USERNAME/PASSWORD) — the documented
+    # Tina4 convention keeps credentials out of the URL, so building the handle
+    # from the URL alone left `db` unauthenticated and it failed on every
+    # credentialed engine (PostgreSQL/MySQL/Firebird/MSSQL). Bind it globally
+    # too, so the `db` handle and the ORM models share ONE connected instance
+    # (mirrors ORM._get_db()'s own lazy auto-bind).
     db = None
     db_url = os.environ.get("TINA4_DATABASE_URL")
     if db_url:
         try:
-            db = Database(db_url)
+            username = os.environ.get("TINA4_DATABASE_USERNAME", "")
+            password = os.environ.get("TINA4_DATABASE_PASSWORD", "")
+            db = Database(db_url, username, password)
+            bind_database(db)
             print(f"  Database: {db_url}")
         except Exception as e:
             print(f"  Database: failed ({e})")
