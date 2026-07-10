@@ -794,12 +794,19 @@ def _ai(args):
 def _generate(args):
     """Generate scaffolding.
 
-    CRUD-shaped generators (crud/form/view/migration/model/test/auth) emit
-    working code — the boilerplate IS the feature. Logic-shaped generators
-    (route/service/queue/validator/seeder/websocket/listener) scaffold the
-    WIRING (real imports + registration + signature + error skeleton) and drop a
+    CRUD-shaped generators (crud/form/view/migration/model/test/auth/validator/
+    seeder) emit working code — the boilerplate IS the feature. Logic-shaped
+    generators (route/service/queue/websocket/listener) scaffold the WIRING
+    (real imports + registration + signature + error skeleton) and drop a
     single ``# your code here`` placeholder (``raise NotImplementedError``) where
     the custom logic goes, so an unfilled scaffold fails loud.
+
+    Every code-producing generator also co-emits a REAL, green, no-mock test
+    next to the code (via ``_write_test``): CRUD-shaped tests exercise the
+    working scaffold against a real dependency (SQLite / TestClient / Queue);
+    logic-shaped tests assert the real wiring + lock in that the placeholder
+    fails loud. ``test`` (it IS the test generator) and ``form``/``view``
+    (template-only, no logic to run) are the only exemptions.
     """
     _all = ", ".join(GENERATORS)  # single source: the GENERATORS registry
     if not args:
@@ -832,11 +839,15 @@ def _generate(args):
         sys.exit(1)
 
 
-def _gen_model(name: str, flags: dict):
-    """Generate ORM model + matching migration.
+def _gen_model(name: str, flags: dict, *, emit_test: bool = True):
+    """Generate ORM model + matching migration (+ a real co-emitted test).
 
     tina4python generate model Product
     tina4python generate model Product --fields "name:string,price:float,in_stock:bool"
+
+    ``emit_test`` (default True) co-emits tests/test_<table>_model.py — a real
+    SQLite roundtrip test. Composite generators (crud/auth) pass emit_test=False
+    and emit their own broader test instead.
     """
     fields = _parse_fields(flags.get("fields", ""))
     table = _to_table(name)
@@ -880,13 +891,20 @@ def _gen_model(name: str, flags: dict):
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
 
-    # Generate matching migration (unless --no-migration)
+    # Generate matching migration (unless --no-migration). The model's own test
+    # (below) proves the schema through the real ORM, so the migration sub-call
+    # does not also co-emit a migration test (emit_test=False).
     if "no-migration" not in flags:
-        _gen_migration(f"create_{table}", flags, fields_override=fields, table_override=table)
+        _gen_migration(f"create_{table}", flags, fields_override=fields,
+                       table_override=table, emit_test=False)
+
+    # Co-emit a real SQLite roundtrip test next to the model.
+    if emit_test:
+        _emit_model_test(name, table, fields)
 
 
-def _gen_route(name: str, flags: dict):
-    """Generate CRUD route file — SECURE BY DEFAULT.
+def _gen_route(name: str, flags: dict, *, emit_test: bool = True):
+    """Generate CRUD route file — SECURE BY DEFAULT (+ a real co-emitted test).
 
     tina4python generate route products
     tina4python generate route products --model Product
@@ -1092,6 +1110,15 @@ async def delete_{singular}(request, response):
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
 
+    # Co-emit a real test. A --model route is working code → the secure-gate
+    # behavioural test (reads public, writes gated); a no-model route's handlers
+    # are loud stubs → the Router-registration + live-stub test.
+    if emit_test:
+        if model:
+            _gen_test(route_path, {"model": model, "secure_writes": True, "public": public})
+        else:
+            _emit_route_stub_test(route_path)
+
 
 def _gen_crud(name: str, flags: dict):
     """Generate full CRUD stack: model + migration + routes + template + test.
@@ -1104,14 +1131,15 @@ def _gen_crud(name: str, flags: dict):
 
     print(f"\n  Generating CRUD for {name}...\n")
 
-    # 1. Model + migration
-    _gen_model(name, flags)
+    # 1. Model + migration (emit_test=False — crud emits its own broader test
+    #    at step 6, so the sub-generators stay quiet to avoid double-emission).
+    _gen_model(name, flags, emit_test=False)
 
     # 2. Routes with model — secure-by-default; thread --public through so
     #    `generate crud X --public` opens the writes (mirrors AutoCrud public=).
     is_public = bool(flags.get("public"))
     route_flags = {"model": name, "public": is_public}
-    _gen_route(route_name, route_flags)
+    _gen_route(route_name, route_flags, emit_test=False)
 
     # 3. Template
     template_dir = Path("src/templates/pages")
@@ -1168,11 +1196,18 @@ def _gen_crud(name: str, flags: dict):
 
 
 def _gen_migration(name: str, flags: dict = None, *,
-                   fields_override: list = None, table_override: str = None):
+                   fields_override: list = None, table_override: str = None,
+                   emit_test: bool = True):
     """Generate a timestamped migration file with UP/DOWN sections.
 
     tina4python generate migration create_product
     tina4python generate migration add_category_to_product
+
+    ``emit_test`` (default True) co-emits a real test that applies the UP then
+    DOWN SQL against real SQLite and asserts the table appears then disappears —
+    but only for CREATE migrations (a placeholder ALTER has no real SQL to
+    assert yet). The model generator passes emit_test=False (its ORM test
+    already proves the schema).
     """
     flags = flags or {}
     now = datetime.now()
@@ -1217,7 +1252,8 @@ def _gen_migration(name: str, flags: dict = None, *,
     print(f"  ✓ Created {path}")
 
     # Also create .down.sql for the migration runner
-    down_path = target / f"{timestamp}_{name}.down.sql"
+    down_filename = f"{timestamp}_{name}.down.sql"
+    down_path = target / down_filename
     down_path.write_text(
         f"-- Rollback: {name}\n"
         f"-- Created: {now.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
@@ -1225,6 +1261,11 @@ def _gen_migration(name: str, flags: dict = None, *,
         encoding="utf-8",
     )
     print(f"  ✓ Created {down_path}")
+
+    # Co-emit a real apply-up/down test — only for CREATE migrations, whose UP
+    # SQL is real DDL to assert against (a placeholder ALTER has nothing yet).
+    if emit_test and is_create:
+        _emit_migration_test(name, table, filename, down_filename)
 
 
 def _gen_middleware(name: str, flags: dict = None):
@@ -1275,6 +1316,10 @@ class {name}:
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
 
+    # Co-emit a real dispatch test (drives the scaffold through the real
+    # server middleware dispatch).
+    _emit_middleware_test(name, snake)
+
 
 def _gen_test(name: str, flags: dict = None):
     """Generate a pytest test file.
@@ -1286,13 +1331,6 @@ def _gen_test(name: str, flags: dict = None):
     model = flags.get("model", "")
     snake = _to_snake(name)
     singular = snake.rstrip("s") if snake.endswith("s") else snake
-
-    target = Path("tests")
-    target.mkdir(parents=True, exist_ok=True)
-    path = target / f"test_{snake}.py"
-    if path.exists():
-        print(f"  ✗ File already exists: {path}")
-        return
 
     # Secure-by-default CRUD test (emitted by `generate crud`): proves the gate
     # by BEHAVIOR through the real TestClient — reads public, writes gated —
@@ -1368,8 +1406,7 @@ def _gen_test(name: str, flags: dict = None):
             .replace("__SINGULAR__", singular_)
             .replace("__SNAKE__", snake)
         )
-        path.write_text(content, encoding="utf-8")
-        print(f"  ✓ Created {path}")
+        _write_test(snake, content)
         return
 
     if model:
@@ -1434,8 +1471,497 @@ class Test{name.title().replace("_", "")}:
         assert True
 '''
 
+    _write_test(snake, content)
+
+
+# ── Co-emitted tests — every code-producing generator ships a real, green,
+#    no-mock test next to its code (owner req 2026-07-10, Phase 4). ────────
+#
+# One shared writer (_write_test) + one focused content builder per generator.
+# The builders are NOT copy-paste boilerplate — each exercises a different real
+# subsystem (real SQLite / TestClient / Router / ServiceRunner / Queue / event
+# bus), grounded on the same real-collaborator patterns the acceptance matrix
+# in tests/test_cli_generate.py already proves. CRUD-shaped scaffolds (working
+# code) get behavioural tests; logic-shaped scaffolds (loud NotImplementedError
+# stubs) get wiring tests + a lock-in that the placeholder fails loud.
+
+def _write_test(test_name: str, content: str) -> None:
+    """Write a co-emitted test to tests/test_<name>.py — the SINGLE place a
+    generated test is written (path + overwrite refusal + the same ✓/✗ line
+    every generator prints). Generalized from _gen_test so the generators share
+    one rule instead of 12 copy-pasted write blocks."""
+    target = Path("tests")
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"test_{test_name}.py"
+    if path.exists():
+        print(f"  ✗ File already exists: {path}")
+        return
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
+
+
+def _pascal(name: str) -> str:
+    """snake/kebab/dotted → PascalCase: user_created → UserCreated."""
+    return "".join(part.capitalize() for part in re.split(r"[^0-9a-zA-Z]+", name) if part)
+
+
+def _sample_literal(field_type: str) -> str:
+    """A source-text Python literal that is a valid value for a scaffolded
+    field type (used to build a real create() payload in the model test)."""
+    return {
+        "int": "1", "integer": "1",
+        "float": "1.5", "numeric": "1.5", "decimal": "1.5",
+        "bool": "True", "boolean": "True",
+        "datetime": '"2020-01-01 00:00:00"',
+        "blob": 'b"x"',
+    }.get((field_type or "string").lower(), '"sample"')
+
+
+def _emit_model_test(model: str, table: str, fields: list) -> None:
+    """model → real SQLite roundtrip (create / read back / missing → None)."""
+    fields = fields or [("name", "string")]
+    payload = ", ".join(f'"{fname}": {_sample_literal(ftype)}' for fname, ftype in fields)
+    # Assert a STRING field round-trips (type-safe); else just the id round-trips
+    # (avoids datetime/bool/float equality pitfalls on the read-back).
+    string_field = next(
+        (fname for fname, ftype in fields
+         if (ftype or "string").lower() in ("string", "str", "text")), None)
+    value_assert = f'        assert fetched.{string_field} == "sample"\n' if string_field else ""
+    content = (
+        '"""Real ORM roundtrip test for __MODEL__ — no mocks, real SQLite.\n'
+        "\n"
+        "Generated with src/orm/__MODEL__.py by `tina4python generate model\n"
+        "__MODEL__`. The model scaffold is working code, so this passes on\n"
+        "generation: it binds a real on-disk SQLite database, creates the table,\n"
+        "saves a row and reads it back.\n"
+        '"""\n'
+        "from tina4_python.database import Database\n"
+        "from tina4_python.orm.model import bind_database\n"
+        "from src.orm.__MODEL__ import __MODEL__\n"
+        "\n"
+        "\n"
+        "class Test__MODEL__Model:\n"
+        '    """__MODEL__ persists to and reads back from real SQLite."""\n'
+        "\n"
+        "    def setup_method(self, _method):\n"
+        '        bind_database(Database("sqlite:///test___TABLE___model.db"))\n'
+        "        __MODEL__.create_table()\n"
+        "\n"
+        "    def test_create_and_read_back(self):\n"
+        "        row = __MODEL__.create({__PAYLOAD__})\n"
+        '        assert row and row.id, "create() should persist and return the row"\n'
+        "        fetched = __MODEL__.find_by_id(row.id)\n"
+        "        assert fetched is not None\n"
+        "        assert fetched.id == row.id\n"
+        "__VALUE_ASSERT__"
+        "\n"
+        "    def test_find_missing_returns_none(self):\n"
+        "        assert __MODEL__.find_by_id(999999) is None\n"
+    )
+    content = (
+        content.replace("__PAYLOAD__", payload)
+        .replace("__VALUE_ASSERT__", value_assert)
+        .replace("__MODEL__", model)
+        .replace("__TABLE__", table)
+    )
+    _write_test(f"{table}_model", content)
+
+
+def _emit_route_stub_test(route: str) -> None:
+    """route (no --model) → real Router registration + the handler is a live
+    loud stub. (route --model reuses the secure-gate _gen_test instead.)"""
+    content = (
+        '"""Routing test for __ROUTE__ — no mocks, real Router.\n'
+        "\n"
+        "Generated with src/routes/__ROUTE__.py by `tina4python generate route\n"
+        "__ROUTE__` (no --model). The handlers are AI-FILL stubs that raise until\n"
+        "you implement them, so this tests what IS live on generation: all five\n"
+        "routes register on the REAL Router, and the list handler fails loud until\n"
+        "filled. Fill a handler, then assert its real response here.\n"
+        '"""\n'
+        "import asyncio\n"
+        "\n"
+        "import pytest\n"
+        "\n"
+        "from tina4_python.core.request import Request\n"
+        "from tina4_python.core.response import Response\n"
+        "from tina4_python.core.router import Router\n"
+        "import src.routes.__ROUTE__ as route_module  # importing registers the routes\n"
+        "\n"
+        "\n"
+        "class Test__CLASS__Routing:\n"
+        "    def test_all_five_routes_registered(self):\n"
+        '        paths = {(r["method"], r["path"]) for r in Router.get_routes()}\n'
+        '        assert ("GET", "/api/__ROUTE__") in paths\n'
+        '        assert ("GET", "/api/__ROUTE__/{id:int}") in paths\n'
+        '        assert ("POST", "/api/__ROUTE__") in paths\n'
+        '        assert ("PUT", "/api/__ROUTE__/{id:int}") in paths\n'
+        '        assert ("DELETE", "/api/__ROUTE__/{id:int}") in paths\n'
+        "\n"
+        "    def test_list_handler_is_a_live_stub(self):\n"
+        '        """The scaffolded handler raises until filled (fails loud, good DX)."""\n'
+        "        request = Request.from_scope(\n"
+        '            {"type": "http", "method": "GET", "path": "/api/__ROUTE__",\n'
+        '             "query_string": b"", "headers": [], "client": ("127.0.0.1", 0)}, b"")\n'
+        "        with pytest.raises(NotImplementedError):\n"
+        "            asyncio.run(route_module.list___ROUTE__(request, Response()))\n"
+    )
+    content = content.replace("__CLASS__", _pascal(route)).replace("__ROUTE__", route)
+    _write_test(route, content)
+
+
+def _emit_middleware_test(name: str, snake: str) -> None:
+    """middleware → a request routed THROUGH the real server dispatch."""
+    content = (
+        '"""Real dispatch test for the __NAME__ middleware — no mocks.\n'
+        "\n"
+        "Generated with src/middleware/__SNAKE__.py by `tina4python generate\n"
+        "middleware __NAME__`. Drives the middleware through the REAL server\n"
+        "dispatch (_run_before_middleware / _run_after_middleware) with a real\n"
+        "Request + Response — the same code path the live server runs.\n"
+        '"""\n'
+        "from tina4_python.core.request import Request\n"
+        "from tina4_python.core.response import Response\n"
+        "from tina4_python.core.server import _run_before_middleware, _run_after_middleware\n"
+        "from src.middleware.__SNAKE__ import __NAME__\n"
+        "\n"
+        "\n"
+        "def _request():\n"
+        "    return Request.from_scope(\n"
+        '        {"type": "http", "method": "GET", "path": "/", "query_string": b"",\n'
+        '         "headers": [], "client": ("127.0.0.1", 0)}, b"")\n'
+        "\n"
+        "\n"
+        "class Test__NAME__Middleware:\n"
+        "    def test_before_passes_request_through(self):\n"
+        '        route = {"middleware": [__NAME__]}\n'
+        "        request, response, skip = _run_before_middleware(_request(), Response(), route)\n"
+        "        assert skip is False            # the scaffold does not block the handler\n"
+        "        assert response.status_code < 400\n"
+        "\n"
+        "    def test_after_runs_and_returns_the_pair(self):\n"
+        '        route = {"middleware": [__NAME__]}\n'
+        "        request, response = _run_after_middleware(_request(), Response(), route)\n"
+        "        assert request is not None and response is not None\n"
+    )
+    content = content.replace("__NAME__", name).replace("__SNAKE__", snake)
+    _write_test(snake, content)
+
+
+def _emit_service_test(name: str, snake: str) -> None:
+    """service → registrable / discoverable on a REAL ServiceRunner + loud stub."""
+    content = (
+        '"""Real ServiceRunner test for the __NAME__ service — no mocks.\n'
+        "\n"
+        "Generated with src/services/__SNAKE__.py by `tina4python generate service\n"
+        "__NAME__`. Registers the scaffold on a REAL ServiceRunner and confirms the\n"
+        "descriptor; the task body is an AI-FILL stub that raises until filled.\n"
+        '"""\n'
+        "import pytest\n"
+        "\n"
+        "from tina4_python.service import ServiceRunner\n"
+        "from src.services.__SNAKE__ import __SNAKE___task, register, service\n"
+        "\n"
+        "\n"
+        "class Test__CLASS__Service:\n"
+        "    def test_registers_on_a_real_runner(self):\n"
+        "        runner = ServiceRunner()\n"
+        "        register(runner)\n"
+        '        assert any(s["name"] == service["name"] for s in runner.list())\n'
+        "\n"
+        "    def test_descriptor_shape(self):\n"
+        '        assert service["name"] and callable(service["handler"])\n'
+        "\n"
+        "    def test_task_is_a_live_stub(self):\n"
+        '        """The scaffolded task raises until filled (fails loud, good DX)."""\n'
+        "        with pytest.raises(NotImplementedError):\n"
+        "            __SNAKE___task(None)\n"
+    )
+    content = (content.replace("__CLASS__", _pascal(snake))
+               .replace("__NAME__", name).replace("__SNAKE__", snake))
+    _write_test(snake, content)
+
+
+def _emit_queue_test(topic: str, slug: str) -> None:
+    """queue → push a REAL job onto the real file-backed Queue + daemon wiring."""
+    content = (
+        '"""Real file-backed Queue test for the __TOPIC__ worker — no mocks.\n'
+        "\n"
+        "Generated with src/services/__SLUG___consumer.py by `tina4python generate\n"
+        "queue __TOPIC__`. Pushes a REAL job onto the real file-backed Queue and\n"
+        "asserts it is enqueued, and that the consumer is wired as a daemon\n"
+        "service. handle___SLUG__ is an AI-FILL stub that raises until you fill it\n"
+        "— then assert the processed side effect here.\n"
+        '"""\n'
+        "import pytest\n"
+        "\n"
+        "from tina4_python.queue import Queue\n"
+        "from src.services.__SLUG___consumer import (\n"
+        "    publish___SLUG__, handle___SLUG__, consume___SLUG__, service,\n"
+        ")\n"
+        "\n"
+        "\n"
+        "class Test__CLASS__Queue:\n"
+        "    def test_publish_enqueues_a_real_job(self):\n"
+        '        before = Queue(topic="__TOPIC__").size()\n'
+        '        job_id = publish___SLUG__({"hello": "world"})\n'
+        "        assert job_id\n"
+        '        assert Queue(topic="__TOPIC__").size() >= before + 1\n'
+        "\n"
+        "    def test_consumer_is_a_daemon_service(self):\n"
+        '        assert service["daemon"] is True\n'
+        '        assert service["handler"] is consume___SLUG__\n'
+        "\n"
+        "    def test_handle_is_a_live_stub(self):\n"
+        '        """The scaffolded per-job handler raises until filled (fails loud)."""\n'
+        "        with pytest.raises(NotImplementedError):\n"
+        "            handle___SLUG__({})\n"
+    )
+    content = (content.replace("__CLASS__", _pascal(slug))
+               .replace("__TOPIC__", topic).replace("__SLUG__", slug))
+    _write_test(slug, content)
+
+
+def _emit_validator_test(name: str, snake: str) -> None:
+    """validator → run the scaffold against valid + invalid real input."""
+    content = (
+        '"""Real validation test for validate___SNAKE__ — no mocks.\n'
+        "\n"
+        "Generated with src/validators/__SNAKE__.py by `tina4python generate\n"
+        "validator __NAME__`. The scaffold ships a starter rule (required \"name\"),\n"
+        "so this passes on generation — adjust the rules for your payload and\n"
+        "update these cases with them.\n"
+        '"""\n'
+        "from src.validators.__SNAKE__ import validate___SNAKE__\n"
+        "\n"
+        "\n"
+        "class Test__CLASS__Validator:\n"
+        "    def test_valid_input_passes(self):\n"
+        '        assert validate___SNAKE__({"name": "Ada"}).is_valid()\n'
+        "\n"
+        "    def test_invalid_input_fails(self):\n"
+        "        result = validate___SNAKE__({})\n"
+        "        assert not result.is_valid()\n"
+        "        assert result.errors()\n"
+    )
+    content = (content.replace("__CLASS__", _pascal(snake))
+               .replace("__NAME__", name).replace("__SNAKE__", snake))
+    _write_test(snake, content)
+
+
+def _emit_seeder_test(model: str, table: str) -> None:
+    """seeder → run the scaffold against real SQLite, assert rows created."""
+    content = (
+        '"""Real seeding test for the __MODEL__ seeder — no mocks, real SQLite.\n'
+        "\n"
+        "Generated with src/seeds/__TABLE___seeder.py by `tina4python generate\n"
+        "seeder __MODEL__`. Binds a real SQLite DB, creates the table, runs the\n"
+        "scaffolded seeder (auto-fills every field via FakeData) and asserts rows\n"
+        "were created.\n"
+        '"""\n'
+        "from tina4_python.database import Database\n"
+        "from tina4_python.orm.model import bind_database\n"
+        "from tina4_python.seeder import FakeData\n"
+        "from src.orm.__MODEL__ import __MODEL__\n"
+        "from src.seeds.__TABLE___seeder import field_overrides, run\n"
+        "\n"
+        "\n"
+        "class Test__MODEL__Seeder:\n"
+        "    def setup_method(self, _method):\n"
+        '        bind_database(Database("sqlite:///test___TABLE___seeder.db"))\n'
+        "        __MODEL__.create_table()\n"
+        "\n"
+        "    def test_field_overrides_is_a_dict(self):\n"
+        "        assert isinstance(field_overrides(FakeData()), dict)\n"
+        "\n"
+        "    def test_run_creates_rows(self):\n"
+        "        run(None)\n"
+        "        assert len(__MODEL__.all(limit=1000)) >= 1\n"
+    )
+    content = content.replace("__MODEL__", model).replace("__TABLE__", table)
+    _write_test(f"{table}_seeder", content)
+
+
+def _emit_websocket_test(ws_path: str, base: str, handler: str) -> None:
+    """websocket → real Router registration + drive the real async handler
+    (the socket-free "close" event) directly (no mock socket)."""
+    content = (
+        '"""Real handler test for the __WSPATH__ WebSocket route — no mocks.\n'
+        "\n"
+        "Generated with src/routes/ws___BASE__.py by `tina4python generate\n"
+        "websocket ...`. Confirms the handler registers on the REAL Router and\n"
+        'drives the real async handler for the "close" event (no socket needed).\n'
+        'The "message" branch is an AI-FILL stub that raises until you fill it; a\n'
+        "full RFC6455 loopback is out of scope for a unit test, so assert its\n"
+        "broadcast/response against a live server once implemented.\n"
+        '"""\n'
+        "import asyncio\n"
+        "\n"
+        "import pytest\n"
+        "\n"
+        "from tina4_python.core.router import Router\n"
+        "from src.routes.ws___BASE__ import __HANDLER__\n"
+        "\n"
+        "\n"
+        "class Test__CLASS__WebSocket:\n"
+        "    def test_handler_registered_on_router(self):\n"
+        '        assert any(r["path"] == "__WSPATH__" for r in Router.get_web_socket_routes())\n'
+        "\n"
+        "    def test_close_event_is_handled(self):\n"
+        '        """The "close" branch returns cleanly without a connection."""\n'
+        '        assert asyncio.run(__HANDLER__(None, "close", None)) is None\n'
+        "\n"
+        "    def test_message_branch_is_a_live_stub(self):\n"
+        "        with pytest.raises(NotImplementedError):\n"
+        '            asyncio.run(__HANDLER__(None, "message", "hi"))\n'
+    )
+    content = (content.replace("__CLASS__", _pascal(base))
+               .replace("__WSPATH__", ws_path)
+               .replace("__HANDLER__", handler)
+               .replace("__BASE__", base))
+    _write_test(f"ws_{base}", content)
+
+
+def _emit_listener_test(event: str, slug: str) -> None:
+    """listener → emit the REAL event on the real bus, assert the listener ran."""
+    content = (
+        "\"\"\"Real event-bus test for the '__EVENT__' listener — no mocks.\n"
+        "\n"
+        "Generated with src/listeners/__SLUG__.py by `tina4python generate listener\n"
+        "__EVENT__`. Confirms the listener binds on the REAL event bus and that\n"
+        "emitting the event reaches it. The reaction body is an AI-FILL stub that\n"
+        "raises until filled, so a strict emit re-raises here (proving it ran).\n"
+        "\"\"\"\n"
+        "import pytest\n"
+        "\n"
+        "from tina4_python.core.events import emit, events, listeners\n"
+        "import src.listeners.__SLUG__  # noqa: F401 — importing binds the listener\n"
+        "\n"
+        "\n"
+        "class Test__CLASS__Listener:\n"
+        "    def test_listener_is_registered(self):\n"
+        '        assert "__EVENT__" in events()\n'
+        '        assert len(listeners("__EVENT__")) >= 1\n'
+        "\n"
+        "    def test_emit_reaches_the_listener(self):\n"
+        '        """strict=True re-raises the stub error, proving the listener ran."""\n'
+        "        with pytest.raises(NotImplementedError):\n"
+        '            emit("__EVENT__", {"id": 1}, strict=True)\n'
+    )
+    content = (content.replace("__CLASS__", _pascal(slug))
+               .replace("__EVENT__", event).replace("__SLUG__", slug))
+    _write_test(slug, content)
+
+
+def _emit_auth_test() -> None:
+    """auth → real register / login / me end-to-end via the real TestClient."""
+    content = (
+        '"""Real auth test — register / login / me via the real TestClient.\n'
+        "\n"
+        "Generated with the auth scaffold by `tina4python generate auth`. No mocks:\n"
+        "real Router, real Auth (PBKDF2 + JWT), real SQLite. register + login are\n"
+        "public (@noauth); the token from login authenticates /api/auth/me.\n"
+        '"""\n'
+        "import os\n"
+        "\n"
+        'os.environ.setdefault("TINA4_SECRET", "test-secret")\n'
+        'os.environ.pop("TINA4_API_KEY", None)\n'
+        "\n"
+        "from tina4_python.database import Database\n"
+        "from tina4_python.orm.model import bind_database\n"
+        "from tina4_python.test_client import TestClient\n"
+        "from src.orm.User import User\n"
+        "import src.routes.auth  # noqa: F401 — importing registers the auth routes\n"
+        "\n"
+        "\n"
+        "class TestAuth:\n"
+        '    """register → login → me, end to end against real SQLite."""\n'
+        "\n"
+        "    def setup_method(self, _method):\n"
+        '        bind_database(Database("sqlite:///test_auth.db"))\n'
+        "        User.create_table()\n"
+        "        for existing in User.all(limit=1000):   # start from an empty table\n"
+        "            existing.delete()\n"
+        "\n"
+        "    def test_register_then_login_then_me(self):\n"
+        "        client = TestClient()\n"
+        '        registered = client.post("/api/auth/register",\n'
+        '                                 json={"email": "a@b.c", "password": "secret12"})\n'
+        "        assert registered.status == 201\n"
+        "\n"
+        '        duplicate = client.post("/api/auth/register",\n'
+        '                                json={"email": "a@b.c", "password": "secret12"})\n'
+        "        assert duplicate.status == 409\n"
+        "\n"
+        '        login = client.post("/api/auth/login",\n'
+        '                            json={"email": "a@b.c", "password": "secret12"})\n'
+        "        assert login.status == 200\n"
+        '        token = login.json()["token"]\n'
+        "        assert token\n"
+        "\n"
+        '        profile = client.get("/api/auth/me",\n'
+        '                             headers={"Authorization": f"Bearer {token}"})\n'
+        "        assert profile.status == 200\n"
+        '        assert profile.json()["email"] == "a@b.c"\n'
+        "\n"
+        "    def test_login_wrong_password_is_401(self):\n"
+        "        client = TestClient()\n"
+        '        client.post("/api/auth/register",\n'
+        '                    json={"email": "x@y.z", "password": "secret12"})\n'
+        '        bad = client.post("/api/auth/login",\n'
+        '                          json={"email": "x@y.z", "password": "WRONG"})\n'
+        "        assert bad.status == 401\n"
+        "\n"
+        "    def test_me_without_token_is_401(self):\n"
+        '        assert TestClient().get("/api/auth/me").status == 401\n'
+    )
+    _write_test("auth", content)
+
+
+def _emit_migration_test(migration_name: str, table: str,
+                         up_file: str, down_file: str) -> None:
+    """migration (create_*) → apply UP then DOWN against real SQLite, assert
+    the table appears then disappears. Only for CREATE migrations — a
+    placeholder ALTER migration has no real SQL to assert yet."""
+    content = (
+        '"""Real migration test for __UP_FILE__ — no mocks, real SQLite.\n'
+        "\n"
+        "Generated with the migration by `tina4python generate migration\n"
+        "__MIG_NAME__`. Applies the UP migration against a fresh real SQLite\n"
+        "database and asserts the table exists, then applies DOWN and asserts it\n"
+        "is gone — the raw SQL the migration runner executes.\n"
+        '"""\n'
+        "import sqlite3\n"
+        "from pathlib import Path\n"
+        "\n"
+        'MIGRATIONS = Path(__file__).resolve().parent.parent / "migrations"\n'
+        "\n"
+        "\n"
+        "def _table_exists(cursor, table):\n"
+        "    cursor.execute(\n"
+        "        \"SELECT name FROM sqlite_master WHERE type='table' AND name=?\", (table,))\n"
+        "    return cursor.fetchone() is not None\n"
+        "\n"
+        "\n"
+        "class Test__CLASS__Migration:\n"
+        "    def test_up_creates_and_down_drops(self):\n"
+        '        connection = sqlite3.connect(":memory:")\n'
+        "        cursor = connection.cursor()\n"
+        "\n"
+        '        cursor.executescript((MIGRATIONS / "__UP_FILE__").read_text())\n'
+        '        assert _table_exists(cursor, "__TABLE__")\n'
+        "\n"
+        '        cursor.executescript((MIGRATIONS / "__DOWN_FILE__").read_text())\n'
+        '        assert not _table_exists(cursor, "__TABLE__")\n'
+        "\n"
+        "        connection.close()\n"
+    )
+    content = (content.replace("__CLASS__", _pascal(table))
+               .replace("__MIG_NAME__", migration_name)
+               .replace("__UP_FILE__", up_file)
+               .replace("__DOWN_FILE__", down_file)
+               .replace("__TABLE__", table))
+    _write_test(f"{table}_migration", content)
 
 
 # ── Scaffolding-first generators (wiring + `# your code here`) ────────
@@ -1527,6 +2053,9 @@ def _gen_service(name: str, flags: dict = None):
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
 
+    # Co-emit a real ServiceRunner registration/discovery test.
+    _emit_service_test(name, snake)
+
 
 def _gen_queue(name: str, flags: dict = None):
     """Generate a queue producer + consumer worker.
@@ -1603,6 +2132,9 @@ def _gen_queue(name: str, flags: dict = None):
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
 
+    # Co-emit a real file-backed Queue test (push a real job + daemon wiring).
+    _emit_queue_test(topic, slug)
+
 
 def _gen_validator(name: str, flags: dict = None):
     """Generate a request-body validator.
@@ -1617,14 +2149,17 @@ def _gen_validator(name: str, flags: dict = None):
         print(f"  ✗ File already exists: {path}")
         return
 
-    body = _ai_fill(
-        f"validate_{snake}",
-        f"declare the validation rules for a {name} payload",
-        'validator.required("name").email("email").min_length("name", 2).integer("age")',
-        f"validator:{snake}: add the rule set",
-        given="validator -> Validator(data) (chainable)",
-        ret="the same validator (caller checks .is_valid() / .errors())",
-        ground='tina4_context("validate request body with Validator", "python")',
+    # Ships a working starter rule (not a loud stub): a rules-less validator
+    # validates nothing, so there would be no negative case to co-emit a real
+    # valid/invalid test against. `required("name")` mirrors the model
+    # generator's default `name` field — edit it for your real payload.
+    body = (
+        _extend(
+            f"add / adjust the rules for your {name} payload",
+            'e.g. validator.email("email").min_length("name", 2).integer("age") · '
+            'ground: tina4_context("validate request body with Validator", "python")',
+        )
+        + '    validator.required("name")\n'
     )
     template = (
         '"""__NAME__ request validator."""\n'
@@ -1652,6 +2187,9 @@ def _gen_validator(name: str, flags: dict = None):
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
 
+    # Co-emit a real valid + invalid test against the starter rule.
+    _emit_validator_test(name, snake)
+
 
 def _gen_seeder(name: str, flags: dict = None):
     """Generate a seeder for an ORM model.
@@ -1666,14 +2204,16 @@ def _gen_seeder(name: str, flags: dict = None):
         print(f"  ✗ File already exists: {path}")
         return
 
-    body = _ai_fill(
-        "field_overrides",
-        f"map {name} fields to fake-data generators (only those needing a specific shape)",
-        "fake.name() / fake.email() / fake.integer(1, 99) / fake.company()  (FakeData)",
-        f"seeder:{name}: return the field->generator overrides",
-        given="fake -> FakeData instance",
-        ret='{"email": lambda fake: fake.email(), "status": "active"}  (dict)',
-        ground='tina4_context("seed ORM model with FakeData", "python")',
+    # Ships working out of the box (not a loud stub): seed_orm auto-fills every
+    # field by type/name, so a zero-override seeder already seeds real rows.
+    # Return overrides only for fields that need a specific shape.
+    body = (
+        _extend(
+            f"override {name} fields that need a specific shape (optional)",
+            'e.g. return {"email": lambda fake: fake.email(), "status": "active"} · '
+            'ground: tina4_context("seed ORM model with FakeData", "python")',
+        )
+        + "    return {}\n"
     )
     template = (
         '"""Seeder for __NAME__ — run with: tina4python seed"""\n'
@@ -1699,6 +2239,9 @@ def _gen_seeder(name: str, flags: dict = None):
     content = template.replace("__BODY__", body).replace("__NAME__", name)
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
+
+    # Co-emit a real seeding test (runs the seeder against real SQLite).
+    _emit_seeder_test(name, table)
 
 
 def _gen_websocket(name: str, flags: dict = None):
@@ -1761,6 +2304,9 @@ def _gen_websocket(name: str, flags: dict = None):
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
 
+    # Co-emit a real handler test (Router registration + drives the handler).
+    _emit_websocket_test(ws_path, base, handler)
+
 
 def _gen_listener(name: str, flags: dict = None):
     """Generate an event listener.
@@ -1808,6 +2354,9 @@ def _gen_listener(name: str, flags: dict = None):
     )
     path.write_text(content, encoding="utf-8")
     print(f"  ✓ Created {path}")
+
+    # Co-emit a real event-bus test (emit the real event, assert it ran).
+    _emit_listener_test(event, slug)
 
 
 # ── Utilities ─────────────────────────────────────────────────────────
@@ -1990,8 +2539,10 @@ def _gen_auth(name: str = None, flags: dict = None):
     """
     print("\n  Generating authentication scaffolding...\n")
 
-    # 1. User model + migration
-    _gen_model("User", {"fields": "email:string,password:string,role:string"})
+    # 1. User model + migration (emit_test=False — auth emits its own broader
+    #    register/login/me test at step 5).
+    _gen_model("User", {"fields": "email:string,password:string,role:string"},
+               emit_test=False)
 
     # 2. Auth routes
     target = Path("src/routes")
@@ -2046,7 +2597,9 @@ def _gen_auth(name: str = None, flags: dict = None):
             '@get("/api/auth/me")\n'
             'async def me(request, response):\n'
             '    """Get current authenticated user."""\n'
-            '    payload = Auth.get_payload(request)\n'
+            '    auth_header = request.headers.get("authorization", "")\n'
+            '    token = auth_header[7:] if auth_header.startswith("Bearer ") else ""\n'
+            '    payload = Auth.valid_token_static(token) if token else None\n'
             '    if not payload:\n'
             '        return response({"error": "Unauthorized"}, 401)\n'
             '    user = User.find_by_id(payload.get("user_id"))\n'
@@ -2115,8 +2668,9 @@ def _gen_auth(name: str = None, flags: dict = None):
         )
         print(f"  ✓ Created {register_path}")
 
-    # 5. Auth test
-    _gen_test("auth", {"model": "User"})
+    # 5. Auth test — real register/login/me end-to-end (real Router, real Auth
+    #    JWT + PBKDF2, real SQLite). Replaces the old placeholder stub test.
+    _emit_auth_test()
 
     print("\n  Authentication scaffolding complete.")
     print("  Run: tina4python migrate")
