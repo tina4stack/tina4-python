@@ -199,29 +199,12 @@ def main():
     command = args[0].lower()
     cmd_args = args[1:]
 
-    commands = {
-        "init": _init,
-        "serve": _serve,
-        "start": _serve,
-        "migrate": _migrate,
-        "migrate:create": _migrate_create,
-        "migrate:rollback": _migrate_rollback,
-        "migrate:status": _migrate_status,
-        "env-migrate": _env_migrate,
-        "seed": _seed,
-        "routes": _routes,
-        "test": _test,
-        "build": _build,
-        "ai": _ai,
-        "generate": _generate,
-        "console": _console,
-        "metrics": _metrics,
-        "help": _help,
-    }
-
-    handler = commands.get(command)
-    if handler:
-        handler(cmd_args)
+    # Dispatch from the single-source-of-truth COMMANDS registry (defined at the
+    # bottom of this module). The same registry drives `_help` and the
+    # `commands --json` manifest, so dispatch, help, and discovery never drift.
+    spec = COMMANDS.get(command)
+    if spec:
+        spec["handler"](cmd_args)
     else:
         print(f"Unknown command: {command}")
         _help([])
@@ -274,53 +257,45 @@ def _env_migrate(args):
 
 
 def _help(args=None):
-    print("""
-Tina4 Python — CLI
+    """Print the human-readable command reference.
 
-Usage: tina4python <command> [options]
+    Generated from the COMMANDS and GENERATORS registries — the SAME single
+    source of truth that drives dispatch (`main`) and the `commands --json`
+    manifest — so the help text can never drift from what the CLI actually does.
+    """
+    command_rows = [
+        (f"{name} {spec.get('usage', '')}".rstrip(), spec["summary"])
+        for name, spec in COMMANDS.items()
+    ]
+    generator_rows = [
+        (f"generate {name} {spec.get('usage', '')}".rstrip(), spec["summary"])
+        for name, spec in GENERATORS.items()
+    ]
+    # Align summaries in a column; a left cell longer than the cap overflows
+    # cleanly (2-space gap) rather than pushing every other summary out.
+    pad = min(46, max(len(left) for left, _ in command_rows + generator_rows))
 
-Commands:
-  init [dir]                    Scaffold a new project
-  serve [--port P] [--no-browser] [--no-reload]  Start dev server (default: 0.0.0.0:7146)
-  migrate                      Run pending database migrations
-  migrate:create <desc>         Create a new migration file
-  migrate:rollback              Rollback last migration batch
-  migrate:status                Show migration status
-  env-migrate [path]            Rewrite .env to TINA4_-prefixed names (v3.12 migration)
-  seed                          Run database seeders
-  routes                        List all registered routes
-  test                          Run test suite
-  build                         Build distributable package
-  ai [--all]                    Install AI coding assistant context
-  console                       Start interactive REPL with framework loaded
-  metrics [--top N] [--json] [--fail-on warn|error] [--path DIR]  Rank top code-quality offenders
+    def row(left, summary):
+        gap = pad if len(left) <= pad else len(left)
+        return f"  {left:<{gap}}  {summary}"
 
-Generators:
-  generate model <Name> [--fields "name:string,price:float"]
-  generate route <name> [--model Name] [--public]   Writes secure by default; --public opens them
-  generate crud <Name> [--fields "..."] [--public]   Model + migration + routes + form + view + test
-  generate migration <description>
-  generate middleware <Name>
-  generate test <name>
-  generate form <Name> [--fields "..."]   Form template with inputs matching model fields
-  generate view <Name> [--fields "..."]   List + detail templates for viewing records
-  generate auth                           Login/register/logout routes + User model + templates
-  generate service <Name> [--every 5m | --cron "..."]   Scheduled ServiceRunner task (src/services/)
-  generate queue <topic>                  Producer + consumer worker (src/services/)
-  generate validator <Name>               Request-body Validator (src/validators/)
-  generate seeder <Model>                 FakeData + seed_orm seeder (src/seeds/)
-  generate websocket <path>               @websocket handler (src/routes/)
-  generate listener <event>               @on(event) listener (src/listeners/)
-
-Scaffolding-first: logic-shaped generators emit wiring + an AI-FILL placeholder
-(raise NotImplementedError) where the custom logic goes; CRUD-shaped ones emit
-working code. Writes are secure by default — use --public to open them.
-
-Field types: string, int, float, bool, text, datetime, blob
-Table names: singular by default (Product → product)
-
-https://tina4.com
-""")
+    lines = ["", "Tina4 Python — CLI", "", "Usage: tina4python <command> [options]", "", "Commands:"]
+    lines += [row(left, summary) for left, summary in command_rows]
+    lines += ["", "Generators:"]
+    lines += [row(left, summary) for left, summary in generator_rows]
+    lines += [
+        "",
+        "Scaffolding-first: logic-shaped generators emit wiring + an AI-FILL placeholder",
+        "(raise NotImplementedError) where the custom logic goes; CRUD-shaped ones emit",
+        "working code. Writes are secure by default — use --public to open them.",
+        "",
+        "Field types: string, int, float, bool, text, datetime, blob",
+        "Table names: singular by default (Product → product)",
+        "",
+        "https://tina4.com",
+        "",
+    ]
+    print("\n".join(lines))
 
 
 # ── Console ───────────────────────────────────────────────────────────
@@ -793,8 +768,7 @@ def _generate(args):
     single ``# your code here`` placeholder (``raise NotImplementedError``) where
     the custom logic goes, so an unfilled scaffold fails loud.
     """
-    _all = ("model, route, crud, migration, middleware, test, form, view, auth, "
-            "service, queue, validator, seeder, websocket, listener")
+    _all = ", ".join(GENERATORS)  # single source: the GENERATORS registry
     if not args:
         print("Usage: tina4python generate <what> <name> [options]")
         print(f"  Generators: {_all}")
@@ -814,27 +788,11 @@ def _generate(args):
     name = args[1] if len(args) > 1 else ""
     flags, _ = _parse_flags(args[2:] if len(args) > 2 else [])
 
-    generators = {
-        "model": _gen_model,
-        "route": _gen_route,
-        "crud": _gen_crud,
-        "migration": _gen_migration,
-        "middleware": _gen_middleware,
-        "test": _gen_test,
-        "form": _gen_form,
-        "view": _gen_view,
-        "auth": _gen_auth,
-        "service": _gen_service,
-        "queue": _gen_queue,
-        "validator": _gen_validator,
-        "seeder": _gen_seeder,
-        "websocket": _gen_websocket,
-        "listener": _gen_listener,
-    }
-
-    gen = generators.get(what)
-    if gen:
-        gen(name, flags)
+    # Dispatch from the module-level GENERATORS registry (single source of truth
+    # for the generate subcommands; also feeds `_help` and the manifest).
+    gen_spec = GENERATORS.get(what)
+    if gen_spec:
+        gen_spec["handler"](name, flags)
     else:
         print(f"Unknown generator: {what}")
         print(f"  Available: {_all}")
@@ -2132,6 +2090,114 @@ def _load_env():
     if env_path.exists():
         from tina4_python.dotenv import load_env
         load_env(str(env_path))
+
+
+# ── Self-describing command surface ───────────────────────────────────
+
+def _commands_manifest() -> dict:
+    """Build the machine-readable manifest of the CLI's command surface.
+
+    Pure data: reads the module-level COMMANDS registry and the framework
+    version — no bootstrap, no database, no migrations, no app imports. This is
+    exactly what `commands --json` serializes and what the tina4 Rust client
+    consumes to discover which commands this framework supports.
+
+    Shape::
+
+        {"framework": "python", "version": "<x.y.z>",
+         "commands": [{"name", "summary", "args"?, "subcommands"?}, ...]}
+    """
+    from tina4_python import __version__
+    commands = []
+    for command_name, spec in COMMANDS.items():
+        entry = {"name": command_name, "summary": spec["summary"]}
+        if spec.get("args"):
+            entry["args"] = list(spec["args"])
+        if spec.get("subcommands"):
+            entry["subcommands"] = list(spec["subcommands"])
+        commands.append(entry)
+    return {"framework": "python", "version": __version__, "commands": commands}
+
+
+def _commands(args=None):
+    """Emit the CLI's own command surface — the self-describing manifest.
+
+        tina4python commands           human-readable list
+        tina4python commands --json    machine-readable manifest (for the tina4 CLI)
+
+    CHEAP + side-effect-free by contract: it only prints the static COMMANDS
+    registry plus the framework version. It MUST NOT bootstrap the framework,
+    open a database, run migrations, or import app modules — the Rust client
+    calls this on `tina4 --help`, in any directory, so it must be instant and
+    safe to run anywhere.
+    """
+    args = args or []
+    manifest = _commands_manifest()
+
+    if "--json" in args:
+        import json
+        print(json.dumps(manifest, indent=2))
+        return
+
+    print(f"\nTina4 {manifest['framework']} — {manifest['version']}\n")
+    width = max(len(command["name"]) for command in manifest["commands"])
+    for command in manifest["commands"]:
+        print(f"  {command['name']:<{width}}  {command['summary']}")
+        if command.get("subcommands"):
+            print(f"  {'':<{width}}    {', '.join(command['subcommands'])}")
+    print()
+
+
+# ── Command registries — the single source of truth ───────────────────
+#
+# One entry per command drives dispatch (main / _generate), the human help
+# (_help), AND the machine-readable manifest (commands --json). Add a command
+# in ONE place and it appears everywhere — there is no second list to sync.
+#
+#   GENERATORS[name] = {"handler": fn(name, flags), "usage": str, "summary": str}
+#   COMMANDS[name]   = {"handler": fn(args), "summary": str,
+#                       "usage"?: str,          # arg/flag hint for _help (human only)
+#                       "args"?: [str],         # positional args for the manifest ("x?" = optional)
+#                       "subcommands"?: [str]}  # sub-names for the manifest (generate)
+
+GENERATORS = {
+    "model":      {"handler": _gen_model,      "usage": '<Name> [--fields "name:string,price:float"]', "summary": "ORM model + matching migration"},
+    "route":      {"handler": _gen_route,      "usage": "<name> [--model Name] [--public]",            "summary": "CRUD route file, secure by default (--public opens writes)"},
+    "crud":       {"handler": _gen_crud,       "usage": '<Name> [--fields "..."] [--public]',          "summary": "Model + migration + routes + form + view + test"},
+    "migration":  {"handler": _gen_migration,  "usage": "<description>",                               "summary": "Timestamped migration file (UP/DOWN)"},
+    "middleware": {"handler": _gen_middleware, "usage": "<Name>",                                      "summary": "Middleware with before/after hooks"},
+    "test":       {"handler": _gen_test,       "usage": "<name> [--model Name]",                       "summary": "pytest test file"},
+    "form":       {"handler": _gen_form,       "usage": '<Name> [--fields "..."]',                     "summary": "Form template with inputs matching model fields"},
+    "view":       {"handler": _gen_view,       "usage": '<Name> [--fields "..."]',                     "summary": "List + detail view templates"},
+    "auth":       {"handler": _gen_auth,       "usage": "",                                            "summary": "Login/register routes + User model + templates"},
+    "service":    {"handler": _gen_service,    "usage": '<Name> [--every 5m | --cron "..."]',          "summary": "Scheduled ServiceRunner task (src/services/)"},
+    "queue":      {"handler": _gen_queue,      "usage": "<topic>",                                     "summary": "Producer + consumer worker (src/services/)"},
+    "validator":  {"handler": _gen_validator,  "usage": "<Name>",                                      "summary": "Request-body Validator (src/validators/)"},
+    "seeder":     {"handler": _gen_seeder,     "usage": "<Model>",                                     "summary": "FakeData + seed_orm seeder (src/seeds/)"},
+    "websocket":  {"handler": _gen_websocket,  "usage": "<path>",                                      "summary": "@websocket handler (src/routes/)"},
+    "listener":   {"handler": _gen_listener,   "usage": "<event>",                                     "summary": "@on(event) listener (src/listeners/)"},
+}
+
+COMMANDS = {
+    "init":             {"handler": _init,             "usage": "[dir]",  "args": ["dir?"],        "summary": "Scaffold a new project"},
+    "serve":            {"handler": _serve,            "usage": "[--port P] [--no-browser] [--no-reload]", "summary": "Start dev server (default: 0.0.0.0:7146)"},
+    "start":            {"handler": _serve,            "summary": "Alias for serve"},
+    "migrate":          {"handler": _migrate,          "summary": "Run pending database migrations"},
+    "migrate:create":   {"handler": _migrate_create,   "usage": "<desc>", "args": ["description"], "summary": "Create a new migration file"},
+    "migrate:rollback": {"handler": _migrate_rollback, "summary": "Rollback last migration batch"},
+    "migrate:status":   {"handler": _migrate_status,   "summary": "Show migration status"},
+    "env-migrate":      {"handler": _env_migrate,      "usage": "[path]", "args": ["path?"],       "summary": "Rewrite .env to TINA4_-prefixed names (v3.12 migration)"},
+    "seed":             {"handler": _seed,             "summary": "Run database seeders"},
+    "routes":           {"handler": _routes,           "summary": "List all registered routes"},
+    "test":             {"handler": _test,             "summary": "Run test suite"},
+    "build":            {"handler": _build,            "summary": "Build distributable package"},
+    "ai":               {"handler": _ai,               "usage": "[--all]", "summary": "Install AI coding assistant context"},
+    "generate":         {"handler": _generate,         "usage": "<what> <name> [options]", "subcommands": list(GENERATORS), "summary": "Generate scaffolding (see Generators below)"},
+    "console":          {"handler": _console,          "summary": "Start interactive REPL with framework loaded"},
+    "metrics":          {"handler": _metrics,          "usage": "[--top N] [--json] [--fail-on warn|error] [--path DIR]", "summary": "Rank top code-quality offenders"},
+    "commands":         {"handler": _commands,         "usage": "[--json]", "summary": "List available commands (add --json for machine form)"},
+    "help":             {"handler": _help,             "summary": "Show this help"},
+}
 
 
 __all__ = ["main"]
