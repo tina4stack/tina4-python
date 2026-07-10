@@ -225,7 +225,7 @@ MyModel.create(data=None, **kwargs) -> MyModel     # Create + save in one call
 MyModel.all(limit=100, offset=0, include=None) -> list[MyModel]
 MyModel.select(sql, params=None, limit=20, offset=0, include=None) -> list[MyModel]
 MyModel.select_one(sql, params=None, include=None) -> MyModel | None
-MyModel.where(filter_sql, params=None, limit=20, offset=0, include=None) -> list[MyModel]
+MyModel.where(filter_sql, params=None, limit=20, offset=0, include=None, order_by=None) -> list[MyModel]
 MyModel.with_trashed(filter_sql="1=1", params=None, limit=20, offset=0) -> list[MyModel]
 MyModel.count(conditions=None, params=None) -> int
 MyModel.create_table() -> bool
