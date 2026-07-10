@@ -617,10 +617,15 @@ class TestValidatorGenerator:
         _gen_validator("CreateUser", {})                    # B4
         assert "already exists" in capsys.readouterr().out
         src = path.read_text()
-        assert "AI-FILL" in src and "# Ground:" in src      # S2
+        # Working default (not a loud stub): a starter rule + an EXTEND marker.
+        assert "EXTEND" in src                              # S2
         assert "from tina4_python.validator import Validator" in src  # S3 wiring
-        with pytest.raises(NotImplementedError):            # S1
-            mod.validate_create_user({})
+        assert 'validator.required("name")' in src
+        # S1 — runs against valid + invalid real input (the starter rule works).
+        assert mod.validate_create_user({"name": "Ada"}).is_valid()
+        assert not mod.validate_create_user({}).is_valid()
+        # Co-emitted real valid/invalid test lands next to the code.
+        assert (tmp_project / "tests" / "test_create_user.py").exists()
 
 
 class TestSeederGenerator:
@@ -635,10 +640,13 @@ class TestSeederGenerator:
         _gen_seeder("Sprocket", {})                         # B4
         assert "already exists" in capsys.readouterr().out
         src = path.read_text()
-        assert "AI-FILL" in src and "# Ground:" in src      # S2
+        # Working default (not a loud stub): zero-override seeder auto-fills.
+        assert "EXTEND" in src                              # S2
         assert "seed_orm" in src and "run" in src           # S3 wiring (run() for `tina4 seed`)
-        with pytest.raises(NotImplementedError):            # S1
-            mod.field_overrides(FakeData())
+        # S1 — field_overrides returns a real dict (auto-fill), not a raise.
+        assert mod.field_overrides(FakeData()) == {}
+        # Co-emitted real seeding test lands next to the code.
+        assert (tmp_project / "tests" / "test_sprocket_seeder.py").exists()
 
 
 class TestWebsocketGenerator:
