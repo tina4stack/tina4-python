@@ -3,10 +3,32 @@
 SQLite adapter using Python's built-in sqlite3 module.
 No external dependencies.
 """
+import datetime
 import re
 import sqlite3
 import threading
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
+
+
+# ── Explicit datetime/date adapters (Python 3.12+ deprecation) ─────────
+# Python's built-in default sqlite3 datetime/date adapters were deprecated
+# in 3.12 (`DeprecationWarning: The default datetime adapter is deprecated`)
+# and will be removed in a future release — which would break DateTimeField
+# writes on SQLite, since ORM.save() binds a real `datetime` straight through
+# to the driver. The framework owns the conversion explicitly instead of
+# relying on the soon-to-vanish built-ins.
+#
+# We store ISO-8601 text: a space separator for datetimes (matching the
+# historic default so existing rows AND the ORM read path via
+# `datetime.fromisoformat` — see orm/fields.py:Field.validate — still
+# round-trip unchanged), and plain ISO for dates. Reads come back as ISO
+# strings because connect() deliberately does NOT pass `detect_types`, so no
+# converter is registered and no round-trip parsing happens at the driver.
+#
+# `register_adapter` merely sets a process-global dict entry, so registering
+# at module import is idempotent (a re-import is a no-op) and runs once.
+sqlite3.register_adapter(datetime.datetime, lambda value: value.isoformat(sep=" "))
+sqlite3.register_adapter(datetime.date, lambda value: value.isoformat())
 
 
 class SQLiteAdapter(DatabaseAdapter):
