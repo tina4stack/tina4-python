@@ -523,3 +523,37 @@ class TestMcpEndpointMounted:
         await _api_mcp_endpoint(self._req({"jsonrpc": "2.0", "id": 1, "method": "ping"}), resp)
         _, code, _ = resp.last
         assert code == 404
+
+
+class TestDatabaseTablesTool:
+    """Regression (#164): the database_tables dev-tool must LIST tables.
+
+    Python (master) already calls db.get_tables() correctly — this test locks
+    that contract so a future drift (like the PHP getDatabase() fatal that broke
+    the tool for 3.13.14 -> 3.13.66) is caught. It invokes the real registered
+    handler against a REAL in-memory SQLite database (no mock).
+    """
+
+    def test_lists_real_tables(self):
+        from tina4_python.mcp import McpServer
+        from tina4_python.mcp.tools import register_dev_tools
+        from tina4_python.orm import bind_database
+        from tina4_python.database import Database
+
+        db = Database("sqlite:///:memory:")
+        bind_database(db)                      # the tool resolves via ORM._get_db()
+        db.execute("CREATE TABLE mcp_probe_widget (id INTEGER PRIMARY KEY, name TEXT)")
+
+        server = McpServer("/db-tables", name="DB Tables Test")
+        register_dev_tools(server)
+        resp = json.loads(server.handle_message({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "database_tables", "arguments": {}},
+        }))
+
+        assert "error" not in resp, resp
+        text = resp["result"]["content"][0]["text"]
+        assert "getDatabase" not in text, text
+        tables = json.loads(text)
+        assert isinstance(tables, list), text
+        assert "mcp_probe_widget" in tables, text
