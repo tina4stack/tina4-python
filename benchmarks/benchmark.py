@@ -43,6 +43,42 @@ PROJECT_ROOT = Path(__file__).parent.parent
 VENV_PYTHON = str(PROJECT_ROOT / ".venv" / "bin" / "python")
 RUBY = "/opt/homebrew/opt/ruby/bin/ruby"
 TMP = Path("/tmp/tina4-benchmark")
+
+# Competitor web frameworks are NOT tina4 dependencies — tina4 is zero-dependency and
+# does not pin, ship, or security-track its benchmark rivals. They are installed on
+# demand into the benchmark venv here (see benchmarks/README.md). pip name(s) per key:
+_PY_COMPETITOR_PIP = {
+    "flask": ["flask"],
+    "starlette": ["starlette", "uvicorn"],
+    "fastapi": ["fastapi", "uvicorn"],
+    "bottle": ["bottle"],
+    "django": ["django"],
+}
+
+
+def _ensure_py_competitor(key: str) -> bool:
+    """Install a Python competitor framework into the benchmark venv on demand.
+
+    Returns True if importable (already present or freshly installed), False if it
+    could not be installed (the caller then skips that framework's benchmark).
+    """
+    pkgs = _PY_COMPETITOR_PIP.get(key)
+    if not pkgs:
+        return True
+    if subprocess.run([VENV_PYTHON, "-c", f"import {key}"], capture_output=True).returncode == 0:
+        return True
+    print(f"  [setup] {key} is not a tina4 dependency — installing it for the benchmark: "
+          f"pip install {' '.join(pkgs)}")
+    installers = []
+    if shutil.which("uv"):  # this project uses uv; prefer it for the uv-managed venv
+        installers.append(["uv", "pip", "install", "--python", VENV_PYTHON, *pkgs])
+    installers.append([VENV_PYTHON, "-m", "pip", "install", *pkgs])
+    for inst in installers:
+        if subprocess.run(inst, capture_output=True, text=True).returncode == 0:
+            return True
+    print(f"  [WARN] could not install {key}; skipping it "
+          f"(run `pip install {' '.join(pkgs)}` to include it)")
+    return False
 RESULTS_DIR = PROJECT_ROOT / "benchmarks" / "results"
 
 
@@ -699,16 +735,10 @@ def _start_server(key: str, fresh: bool = False) -> bool:
             return False
         cmd = ["tina4", "serve", "--port", str(port), "--no-browser"]
         cwd = str(Path("/tmp/bench-tina4-python"))
-    elif key == "flask":
-        cmd = [VENV_PYTHON, str(TMP / "flask_bench.py")]
-    elif key == "starlette":
-        cmd = [VENV_PYTHON, str(TMP / "starlette_bench.py")]
-    elif key == "fastapi":
-        cmd = [VENV_PYTHON, str(TMP / "fastapi_bench.py")]
-    elif key == "bottle":
-        cmd = [VENV_PYTHON, str(TMP / "bottle_bench.py")]
-    elif key == "django":
-        cmd = [VENV_PYTHON, str(TMP / "django_bench.py")]
+    elif key in _PY_COMPETITOR_PIP:  # flask/starlette/fastapi/bottle/django
+        if not _ensure_py_competitor(key):
+            return False
+        cmd = [VENV_PYTHON, str(TMP / f"{key}_bench.py")]
 
     elif key == "tina4-php":
         if not _setup_tina4_project("php", fresh):

@@ -50,6 +50,13 @@ python bench_frond_cache.py
 | **Ruby** | Ruby 3.1+, `bundle install` in tina4-ruby root |
 | **Node.js** | Node.js 20+, `npm install` in tina4-nodejs root |
 
+> **Competitor frameworks are not Tina4 dependencies.** Tina4 is zero-dependency and does not pin,
+> ship, or security-track its benchmark rivals. When you benchmark the **Python** competitors
+> (Flask, Starlette, FastAPI, Bottle, Django), `benchmark.py` installs each on demand into the
+> benchmark venv the first time it's needed — or run
+> `pip install flask starlette fastapi bottle uvicorn django` yourself. (PHP/Ruby/Node competitors
+> are set up the same way via `composer` / `bundle` / `npm`.)
+
 ## Results
 
 Benchmark results are written as JSON to the `results/` folder:
