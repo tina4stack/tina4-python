@@ -8,7 +8,45 @@ Tina4 Python v3.0 — Zero-dependency, lightweight web framework.
 
 One import, everything works.
 """
-__version__ = "3.13.68"
+def _resolve_version() -> str:
+    """Resolve the package version from a single source of truth.
+
+    Derive it rather than hardcode it, so a release only has to bump
+    ``pyproject.toml`` and can never leave this constant stale (which used to
+    make the dev toolbar and ``docs._detect_version`` under-report). Mirrors how
+    Node reads package.json and PHP resolves ``App::$VERSION`` at runtime.
+
+    Order:
+      1. The repo's own ``pyproject.toml`` (a source checkout is authoritative
+         and current; installed metadata can lag an un-synced checkout). Guarded
+         by the project name so a copy vendored under another app's pyproject
+         can't hijack the version.
+      2. Installed distribution metadata (the shipped wheel has no pyproject).
+      3. A floor literal (last resort only).
+    """
+    try:
+        import pathlib
+        import tomllib
+        pyproject = pathlib.Path(__file__).resolve().parent.parent / "pyproject.toml"
+        if pyproject.exists():
+            with pyproject.open("rb") as fh:
+                project = tomllib.load(fh).get("project", {})
+            if project.get("name") == "tina4-python" and project.get("version"):
+                return project["version"]
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+        try:
+            return version("tina4-python")
+        except PackageNotFoundError:
+            pass
+    except Exception:
+        pass
+    return "3.13.56"
+
+
+__version__ = _resolve_version()
 
 # ── Route decorators ──
 from tina4_python.core.router import (  # noqa: E402, F401
