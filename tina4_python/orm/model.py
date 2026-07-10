@@ -743,7 +743,7 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def where(cls, filter_sql: str, params: list = None, limit: int = 20, offset: int = 0,
-              include: list[str] = None, with_count: bool = False):
+              include: list[str] = None, with_count: bool = False, order_by: str = None):
         """Query with WHERE clause — returns array of ORM objects.
 
         Two return shapes:
@@ -754,6 +754,11 @@ class ORM(metaclass=ORMMeta):
         The tuple form is for pagination UIs where the total count is
         needed alongside the page slice — saves a second query. Total
         count respects the same filter clause but ignores limit/offset.
+
+        Args:
+            order_by: ORDER BY clause (e.g. "name ASC"). Applied to the
+                result rows only; the ``with_count`` COUNT query never
+                carries an ORDER BY.
         """
         db = cls._get_db()
         table = cls._get_table()
@@ -761,6 +766,8 @@ class ORM(metaclass=ORMMeta):
         sql = f"SELECT * FROM {table} WHERE {filter_sql}"
         if cls.soft_delete:
             sql = f"SELECT * FROM {table} WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
+        if order_by:
+            sql += f" ORDER BY {order_by}"
 
         result = db.fetch(sql, params, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
