@@ -54,7 +54,7 @@ you relay completions. This section is the map; the detailed sections below own 
 | 2. Plan | Checklist `[ ]` + parity dashboard + Bugs + Commit log | the plan, approved |
 | 3. Delegate | A worker per task/framework; the main session stays free | workers running off the plan |
 | 4. Test-first | REAL tests (positive AND negative) before the code, in every target backend | failing tests that pin the behaviour |
-| 5. Build | Ground with `tina4_context` → reuse ladder → port the proven design → minimum code | tests green, parity held |
+| 5. Build | Ground in the source + live API index (`tina4_context` optional) → reuse ladder → port the proven design → minimum code | tests green, parity held |
 | 6. Verify | **Re-run the full suite yourself at HEAD** (no mocks); tick the item; log the commit | `[x]` + commit hash |
 | 7. Report | A ✅/❌ dashboard per framework | the status table |
 
@@ -129,24 +129,27 @@ site, or a CLAUDE.md example — and run `docs_search` to catch prose that now d
 returns nothing for a name you expected, the name does not exist in this version: fix the code or the
 doc, do not paper over it.
 
-## Tina4 Coder MCP — Ground With Context, Then Write It Yourself
+## Grounding — the source tree and live API index are the authority
 
-Tina4 exposes MCP tools on the `tina4-coder` server at `https://mcp.tina4.com` (Bearer
-token; developers register for a free token at https://profile.tina4.com). As a **maintainer**
-you write the code — framework internals AND the app-style examples that ship in docs, the
-gallery, and parity demos. Use the coder server to **ground yourself in current, idiomatic
-Tina4 patterns** before you write, not to generate the code for you:
+Before writing framework code or the app-style examples that ship in docs / the gallery /
+parity demos, ground in the two authorities that never lie and are always available:
 
-- **`tina4_context(instruction, language)`** — returns grounding context (idioms, the shapes of
-  real field objects like `IntegerField`/`ForeignKeyField`, correct `@get`/`@post` decorators,
-  current conventions) for the thing you're about to write. Call it to orient, then write the
-  code yourself and verify it against the live API (`api_method` above) and the source tree.
+1. **The source in `tina4_python/`** (and the sibling repos) — read it. It is the single source
+   of truth. Nothing outranks the code.
+2. **The live API index** (`api_search` / `api_class` / `api_method`, above) — exact current
+   signatures from the working tree.
 
-**Do NOT use `tina4_code` to generate framework or example code.** A fine-tuned generator can
-lag the working tree and emit APIs that no longer exist (the exact class of drift this skill
-exists to prevent). The source in `tina4_python/` is the only authority — `tina4_context`
-orients you toward it; it does not replace reading it. Write every line yourself so you own its
-correctness, then prove it against the code.
+**`tina4_context(instruction, language)`** (the `tina4-coder` MCP server) is an OPTIONAL
+orientation aid, not a required step - a quick way to surface idioms and the shapes of field
+objects before you dive into the source. **Never depend on it:** it is a hosted server (Bearer
+token, `https://mcp.tina4.com`) that can be unreachable, and it can lag the working tree. When it
+is up it points you at the source faster; when it is not, you lose nothing - read the source and
+query the live API index directly. If its guidance and the code ever disagree, the code wins.
+Do not let a skill or a habit make the framework's own maintenance depend on an external service.
+
+**Do NOT use `tina4_code` to generate framework or example code.** A fine-tuned generator lags
+the working tree and emits APIs that no longer exist - the exact drift this skill prevents. Write
+every line yourself so you own its correctness, then prove it against the source and the live API.
 
 ## Independent Verification & Honest Claims — Prove It, Then Qualify It
 
