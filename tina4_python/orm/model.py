@@ -183,6 +183,15 @@ class ORM(metaclass=ORMMeta):
         # Initialize relationship cache
         self._rel_cache = {}
 
+        # #165: track which fields the caller EXPLICITLY assigned (via
+        # constructor data/kwargs, _populate, or ``model.field = x``). save()
+        # uses this to OMIT an unset column from an INSERT — so a NOT NULL
+        # DEFAULT column gets its DB default instead of an explicit NULL —
+        # while still writing NULL for a field the caller set to None. The
+        # defaults seeded below go through object.__setattr__ so they are NOT
+        # counted as caller assignments.
+        self._assigned_fields = set()
+
         # Set defaults from field definitions.
         # v3.13.11 (issue #50): callable defaults are evaluated *per
         # instance* so per-row timestamps (e.g. ``default=lambda:
@@ -190,7 +199,7 @@ class ORM(metaclass=ORMMeta):
         # object reached the driver verbatim and blew up with
         # ``can't adapt type 'function'``.
         for name, field in self._fields.items():
-            setattr(self, name, field._resolve_default())
+            object.__setattr__(self, name, field._resolve_default())
 
         # Accept JSON string or dict
         if isinstance(data, str):
@@ -212,6 +221,22 @@ class ORM(metaclass=ORMMeta):
             self._populate(data)
         if kwargs:
             self._populate(kwargs)
+
+    def __setattr__(self, name, value):
+        """Set an attribute, recording explicit assignment to declared fields.
+
+        #165: ``save()`` reads ``_assigned_fields`` to tell a column the caller
+        actually assigned (write it — an explicit ``None`` becomes ``NULL``)
+        from one left at its default (OMIT from the INSERT so a
+        ``NOT NULL DEFAULT`` column gets its DB default rather than an explicit
+        ``NULL``). ``__init__`` seeds field defaults with ``object.__setattr__``,
+        so only genuine caller assignments are tracked here. Non-field attrs
+        (``last_error``, ``_rel_cache``, relationships, …) are never recorded.
+        """
+        assigned = self.__dict__.get("_assigned_fields")
+        if assigned is not None and name in type(self)._fields:
+            assigned.add(name)
+        object.__setattr__(self, name, value)
 
     def _populate(self, data: dict):
         """Set field values from a dict.
@@ -377,6 +402,11 @@ class ORM(metaclass=ORMMeta):
         pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         data = {}
+        # #165: db columns to OMIT from an INSERT — those the caller never
+        # assigned AND whose value is None. Omitting them lets the DB DEFAULT
+        # apply (e.g. NOT NULL DEFAULT '') instead of emitting an explicit NULL
+        # that violates the constraint. Unused on the UPDATE path.
+        insert_omit = set()
         for name, field in self._fields.items():
             if field.auto_increment and pk_value is None:
                 continue  # Skip auto-increment on insert
@@ -393,6 +423,13 @@ class ORM(metaclass=ORMMeta):
                 # Serialize to the column's storage form: identity for most
                 # fields, JSON string for JSONField (see Field.to_db).
                 data[db_col] = field.to_db(value)
+                # #165: a None value the caller never assigned is an UNSET
+                # column — omit it from the INSERT so the DB DEFAULT applies.
+                # A resolved ORM default (non-None) is still written; a value
+                # the caller explicitly set to None is still written as NULL
+                # (its field name is in _assigned_fields).
+                if value is None and name not in self._assigned_fields:
+                    insert_omit.add(db_col)
 
         # v3.13.11 (issue #50): pick INSERT vs UPDATE on row existence
         # for non-auto-increment PKs. Auto-increment keeps the legacy
@@ -420,7 +457,19 @@ class ORM(metaclass=ORMMeta):
                 if update_data:
                     db.update(table, update_data, f"{pk_db_col} = ?", [pk_value])
             else:
-                db.insert(table, data)
+                # #165: drop unset-None columns so the DB DEFAULT applies.
+                insert_data = {c: v for c, v in data.items() if c not in insert_omit}
+                if insert_data:
+                    db.insert(table, insert_data)
+                else:
+                    # Every insertable column was left unset — let the DB
+                    # apply ALL its column defaults rather than emitting
+                    # explicit NULLs. DEFAULT VALUES is valid on SQLite /
+                    # PostgreSQL / MSSQL / Firebird; MySQL spells it () VALUES ().
+                    if db.get_database_type() == "mysql":
+                        db.execute(f"INSERT INTO {table} () VALUES ()")
+                    else:
+                        db.execute(f"INSERT INTO {table} DEFAULT VALUES")
                 # Only adopt the engine-assigned ID for auto-increment PKs.
                 # Natural-key PKs were already set by the caller; don't
                 # overwrite them with the driver's last_id (which on PG
