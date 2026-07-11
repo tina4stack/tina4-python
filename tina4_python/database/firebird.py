@@ -8,7 +8,7 @@ Requires: pip install firebird-driver  (or pip install fdb for legacy)
 """
 import os
 import re
-from urllib.parse import urlparse, unquote
+from urllib.parse import urlparse, unquote, parse_qs
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
 
 
@@ -66,6 +66,35 @@ def _normalize_firebird_db_identifier(raw_path: str) -> str:
     # leading "/") promote it to absolute — Firebird needs absolute paths
     # and we don't know the server's CWD anyway.
     return decoded if decoded.startswith("/") else "/" + decoded
+
+
+def _resolve_firebird_charset(connection_string: str, kwarg_charset: str | None = None) -> str:
+    """Resolve the Firebird connection charset (php #160).
+
+    The adapter used to hardcode ``UTF8`` with no override, which
+    double-encodes UTF-8 bytes stored under a legacy ``NONE`` database. This
+    resolves the charset from, in precedence order:
+
+    1. the connection URL query — ``firebird://host:port/path?charset=NONE``
+    2. an explicit ``charset=`` keyword passed to :meth:`connect`
+    3. the ``TINA4_DATABASE_CHARSET`` environment variable
+    4. the ``UTF8`` default (unchanged — non-breaking for existing connections)
+
+    Pure config resolution over its inputs (URL string, kwarg, env) — no
+    connection is opened, so it is unit-testable without a live server.
+    """
+    url_charset = None
+    query = urlparse(connection_string).query
+    if query:
+        values = parse_qs(query).get("charset")
+        if values:
+            url_charset = values[0]
+    return (
+        url_charset
+        or kwarg_charset
+        or os.environ.get("TINA4_DATABASE_CHARSET")
+        or "UTF8"
+    )
 
 
 # Try modern firebird-driver first, fall back to legacy fdb
@@ -142,7 +171,11 @@ class FirebirdAdapter(DatabaseAdapter):
 
         user = parsed.username or username or "SYSDBA"
         password = parsed.password or password or "masterkey"
-        charset = kwargs.pop("charset", "UTF8")
+        # php #160: honour ?charset= in the URL and TINA4_DATABASE_CHARSET so a
+        # legacy NONE database isn't force-connected as UTF8 (double-encoding).
+        # Pop the kwarg first so it isn't also forwarded into the driver connect
+        # via **extra below (which would raise a duplicate-keyword error).
+        charset = _resolve_firebird_charset(connection_string, kwargs.pop("charset", None))
 
         # Cache for transparent reconnect — never logged, lives only in
         # adapter memory alongside the connection it owns.
