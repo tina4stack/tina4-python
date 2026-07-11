@@ -346,6 +346,72 @@ class SeedSummary(int):
         return f"SeedSummary(seeded={self.seeded}, failed={self.failed}, errors={self.errors!r})"
 
 
+def _generator_for_column(fake: "FakeData", name: str, col_type: str):
+    """Pick a FakeData generator for one column from its name + type.
+
+    The shared heuristic behind :func:`auto_field_map`, so the dev-admin
+    seeding endpoint and the MCP ``seed_table`` dev tool auto-generate
+    identical column data. Falls back to a sentence for anything unrecognised.
+    """
+    name_lower = (name or "").lower()
+    col_type = (col_type or "").upper()
+    if "email" in name_lower:
+        return fake.email
+    if "name" in name_lower and "user" in name_lower:
+        return fake.name
+    if "first" in name_lower and "name" in name_lower:
+        return fake.first_name
+    if "last" in name_lower and "name" in name_lower:
+        return fake.last_name
+    if "name" in name_lower:
+        return fake.name
+    if "phone" in name_lower or "tel" in name_lower:
+        return fake.phone
+    if "url" in name_lower or "link" in name_lower:
+        return fake.url
+    if "address" in name_lower:
+        return fake.address
+    if "date" in name_lower or "time" in name_lower or "created" in name_lower:
+        return fake.datetime_iso
+    if "desc" in name_lower or "body" in name_lower or "content" in name_lower:
+        return fake.paragraph
+    if "title" in name_lower or "subject" in name_lower:
+        return fake.sentence
+    if "active" in name_lower or "enabled" in name_lower or "done" in name_lower:
+        return fake.boolean
+    if "INT" in col_type or "SERIAL" in col_type:
+        return lambda: fake.integer(1, 10000)
+    if any(t in col_type for t in ("REAL", "FLOAT", "DOUBLE", "NUMERIC", "DECIMAL")):
+        return lambda: fake.decimal(0, 1000)
+    if "BOOL" in col_type:
+        return fake.boolean
+    return fake.sentence
+
+
+def auto_field_map(db, table: str, fake: "FakeData" = None) -> dict:
+    """Introspect ``table``'s columns and build a column->generator field_map
+    for :func:`seed_table`, skipping auto-increment / ``id`` primary keys.
+
+    This is the "seed a table I did not hand-write generators for" convenience
+    that both the dev-admin seeding endpoint and the MCP ``seed_table`` dev tool
+    need. ``seed_table`` itself stays explicit (no field_map = no rows); this
+    helper is how a caller opts into automatic generation. Returns an empty dict
+    when the table has no columns, so ``seed_table`` then seeds nothing rather
+    than crashing.
+    """
+    fake = fake or FakeData()
+    columns = db.get_columns(table) or []
+    field_map: dict[str, callable] = {}
+    for col in columns:
+        name = col.get("name", col.get("column_name", ""))
+        col_type = str(col.get("type", col.get("data_type", "")) or "").upper()
+        is_pk = col.get("primary_key", col.get("pk", False))
+        if is_pk and ("AUTO" in col_type or "SERIAL" in col_type or name.lower() == "id"):
+            continue
+        field_map[name] = _generator_for_column(fake, name, col_type)
+    return field_map
+
+
 def seed_table(db, table: str, count: int = 10,
                field_map: dict[str, callable] = None,
                overrides: dict = None, clear: bool = False,
@@ -766,4 +832,5 @@ def _generate_for_field(fake: FakeData, field_def: dict, col: str):
     return fake.word()
 
 
-__all__ = ["FakeData", "SeedSummary", "seed_table", "seed_orm", "seed_models"]
+__all__ = ["FakeData", "SeedSummary", "seed_table", "seed_orm", "seed_models",
+           "auto_field_map"]

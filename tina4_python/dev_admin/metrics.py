@@ -129,7 +129,7 @@ def quick_metrics(root: str = "src") -> dict:
     orm_count = 0
     try:
         from tina4_python.core.router import Router
-        route_count = len(Router._routes) if hasattr(Router, "_routes") else 0
+        route_count = len(Router.get_routes())
     except Exception:
         pass
     try:

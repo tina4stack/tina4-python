@@ -953,7 +953,7 @@ async def _api_seed_table(request, response):
     """Seed fake data into a database table from the admin UI."""
     try:
         from tina4_python.database import Database
-        from tina4_python.seeder import FakeData, seed_table
+        from tina4_python.seeder import FakeData, seed_table, auto_field_map
 
         body = request.body if hasattr(request, "body") and request.body else {}
         table = body.get("table", "")
@@ -985,54 +985,12 @@ async def _api_seed_table(request, response):
 
         fake = FakeData(seed=seed_val)
 
-        def _gen_for_column(col):
-            """Pick a FakeData generator for one column from its name + type."""
-            name = col.get("name", col.get("column_name", ""))
-            col_type = col.get("type", col.get("data_type", "")).upper()
-            name_lower = name.lower()
-            if "email" in name_lower:
-                return fake.email
-            if "name" in name_lower and "user" in name_lower:
-                return fake.name
-            if "first" in name_lower and "name" in name_lower:
-                return fake.first_name
-            if "last" in name_lower and "name" in name_lower:
-                return fake.last_name
-            if "name" in name_lower:
-                return fake.name
-            if "phone" in name_lower or "tel" in name_lower:
-                return fake.phone
-            if "url" in name_lower or "link" in name_lower:
-                return fake.url
-            if "address" in name_lower:
-                return fake.address
-            if "date" in name_lower or "time" in name_lower or "created" in name_lower:
-                return fake.datetime_iso
-            if "desc" in name_lower or "body" in name_lower or "content" in name_lower:
-                return fake.paragraph
-            if "title" in name_lower or "subject" in name_lower:
-                return fake.sentence
-            if "active" in name_lower or "enabled" in name_lower or "done" in name_lower:
-                return fake.boolean
-            if "INT" in col_type or "SERIAL" in col_type:
-                return lambda: fake.integer(1, 10000)
-            if any(t in col_type for t in ("REAL", "FLOAT", "DOUBLE", "NUMERIC", "DECIMAL")):
-                return lambda: fake.decimal(0, 1000)
-            if "BOOL" in col_type:
-                return fake.boolean
-            return fake.sentence
-
-        # Build a field_map skipping auto-increment / id PKs, then delegate to
-        # seed_table so this endpoint shares the exact same visible-but-resilient
-        # per-row error handling (P1/P4b) — no unhandled row failure crashes it.
-        field_map = {}
-        for col in columns:
-            name = col.get("name", col.get("column_name", ""))
-            col_type = col.get("type", col.get("data_type", "")).upper()
-            is_pk = col.get("primary_key", col.get("pk", False))
-            if is_pk and ("AUTO" in col_type or "SERIAL" in col_type or name.lower() == "id"):
-                continue
-            field_map[name] = _gen_for_column(col)
+        # Build a field_map (column -> generator, skipping auto-increment / id
+        # PKs) via the shared seeder helper, then delegate to seed_table so this
+        # endpoint shares the exact same visible-but-resilient per-row error
+        # handling (P1/P4b) — no unhandled row failure crashes it. The MCP
+        # seed_table dev tool uses the identical helper for parity.
+        field_map = auto_field_map(db, table, fake)
 
         try:
             summary = seed_table(db, table, count, field_map=field_map,

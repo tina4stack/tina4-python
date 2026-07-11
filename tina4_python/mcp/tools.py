@@ -307,7 +307,11 @@ def register_dev_tools(server):
     def swagger_spec() -> dict:
         """Return the full OpenAPI 3.0.3 JSON specification."""
         from tina4_python.swagger import Swagger
-        return Swagger.generate()
+        from tina4_python.core.router import Router
+        # Swagger.generate is an INSTANCE method that takes the route table;
+        # build the spec from the live routes (same shape AutoCrud/the dev
+        # /swagger endpoint use). Canonical call: Swagger().generate(Router.get_routes()).
+        return Swagger().generate(Router.get_routes())
 
     # ── Template Tools ──────────────────────────────────────────
 
@@ -481,15 +485,15 @@ def register_dev_tools(server):
 
     # ── Migration Tools ─────────────────────────────────────────
 
-    def migration_status() -> list:
+    def migration_status() -> dict:
         """List pending and completed migrations."""
         from tina4_python.orm.model import ORM
-        from tina4_python.migration.runner import MigrationRunner
-        db = ORM._database
+        from tina4_python.migration import status
+        db = ORM._get_db() if hasattr(ORM, "_get_db") else None
         if db is None:
             return {"error": "No database connection"}
-        runner = MigrationRunner(db)
-        return runner.status() if hasattr(runner, "status") else {"info": "Migration status not available"}
+        # status(db) == Migration(db).status(); returns {"completed": [...], "pending": [...]}.
+        return status(db)
 
     def migration_create(description: str) -> dict:
         """Create a new migration file. Refuses to create a duplicate
@@ -541,12 +545,14 @@ def register_dev_tools(server):
     def migration_run() -> dict:
         """Run all pending migrations."""
         from tina4_python.orm.model import ORM
-        from tina4_python.migration import Migration
-        db = ORM._database
+        from tina4_python.migration import migrate
+        db = ORM._get_db() if hasattr(ORM, "_get_db") else None
         if db is None:
             return {"error": "No database connection"}
-        result = Migration(db).migrate()
-        return {"result": str(result)}
+        # migrate(db) == Migration(db).migrate(); returns the list of applied
+        # migration filenames (empty when nothing was pending).
+        applied = migrate(db)
+        return {"applied": applied, "count": len(applied)}
 
     # ── Queue Tools ─────────────────────────────────────────────
 
@@ -638,13 +644,20 @@ def register_dev_tools(server):
     def seed_table(table: str, count: int = 10) -> dict:
         """Seed a table with fake data."""
         try:
-            from tina4_python.seeder import seed_table as _seed
+            from tina4_python.seeder import seed_table as _seed, auto_field_map
             from tina4_python.orm.model import ORM
-            db = ORM._database
+            db = ORM._get_db() if hasattr(ORM, "_get_db") else None
             if db is None:
                 return {"error": "No database connection"}
-            inserted = _seed(db, table, count)
-            return {"table": table, "inserted": inserted}
+            # seed_table needs an explicit column->generator field_map (no map =
+            # no rows, by design). auto_field_map introspects the table columns
+            # and builds one — the same helper the dev-admin seeding endpoint
+            # uses — so the tool actually inserts fake rows.
+            field_map = auto_field_map(db, table)
+            if not field_map:
+                return {"error": f"Table '{table}' not found or has no seedable columns"}
+            summary = _seed(db, table, count, field_map=field_map)
+            return {"table": table, "inserted": summary.seeded, "failed": summary.failed}
         except Exception as e:
             return {"error": str(e)}
 
