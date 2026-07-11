@@ -657,7 +657,7 @@ Use it as a ladder, not a reflex:
    route shape against the running project's MCP index — `api_method("Database", "fetch")`,
    `api_class("ORM")`, `api_search("...")` at `/__dev/mcp` (needs `tina4 serve` +
    `TINA4_DEBUG=true`). **The framework code is the final authority.** Do **not** use
-   `tina4_code` (the self-hosted generator) — the value is the retrieval, not a small model.
+   `tina4_code` (the self-hosted generator) — the value is the retrieval, not a small model. It failed a boot-and-verify gate that Claude grounded with `tina4_context` passed.
 
 ## Batteries included — zero dependencies
 

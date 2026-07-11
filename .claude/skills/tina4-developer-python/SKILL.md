@@ -162,7 +162,7 @@ memory:
 
 **Do NOT use `tina4_code` to generate the code** — it produces non-runnable output. Use
 `tina4_context` for the API facts, and author the routes, models, templates, and queue workers
-in your own reasoning. You still own all the planning, debugging, and non-Tina4 code as usual.
+in your own reasoning. You still own all the planning, debugging, and non-Tina4 code as usual. tina4_code is deprecated on the tools' own evidence: in a boot-and-verify gate `tina4_code` FAILED where Claude grounded with `tina4_context` PASSED, so the tools point to grounding + a strong model, not the self-hosted coder.
 
 ## Verify Against the Live API — Don't Guess
 
