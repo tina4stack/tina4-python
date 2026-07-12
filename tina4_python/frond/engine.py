@@ -545,8 +545,38 @@ def _split_outside_quotes(expr: str, sep: str) -> list[str]:
     return parts
 
 
-def _eval_expr(expr: str, context: dict):
-    """Evaluate a full expression (with ~, ternary, ??, comparisons)."""
+# Operators that bind LOOSER than a filter pipe (Twig: | is nearly the
+# tightest operator). Ordered longest-token-first so a two-char op isn't
+# masked. Ternary/inline-if are peeled off before this is consulted, but they
+# stay in the list so the check is correct if called on a raw expression.
+_LOW_PRECEDENCE_OPS = (
+    "~", "??", " if ", " and ", " or ", " not in ", " in ", " is not ", " is ",
+    "!=", "==", ">=", "<=", " + ", " - ", " * ", " // ", " / ", " % ", " ** ",
+)
+
+
+def _has_low_precedence_op(expr: str) -> bool:
+    """True when *expr* has a top-level operator that binds LOOSER than a
+    filter pipe. When present, a naive top-level split on ``|`` is wrong (the
+    pipe binds to a sub-term, not the whole expression), so the expression must
+    be routed through :func:`_eval_expr`, which resolves the pipe at the
+    correct (primary) precedence at any depth (issue #171)."""
+    return any(_find_outside_quotes(expr, op) >= 0 for op in _LOW_PRECEDENCE_OPS)
+
+
+def _eval_expr(expr: str, context: dict, apply_filters=None):
+    """Evaluate a full expression (with ~, ternary, ??, comparisons).
+
+    ``apply_filters`` is the engine's bound filter applier
+    (``Frond._apply_filters``). When supplied, a filter pipe (``x|filter``) is
+    resolved HERE — after the lower-precedence operators (``~``, comparisons,
+    arithmetic, ternary) have been split off — so ``|`` binds tighter than them
+    at any nesting depth (issue #171, Twig precedence). It is threaded through
+    every recursive call so pipes resolve inside concat operands, ternary
+    branches, parentheses, arithmetic, and function-call args. When ``None``
+    (the many internal callers that never contain a pipe) the pipe step is a
+    no-op and behaviour is exactly as before.
+    """
     expr = expr.strip()
 
     # Array literal: ["a", "b", "c"] or [1, 2, 3]
@@ -579,7 +609,7 @@ def _eval_expr(expr: str, context: dict):
                 current += ch
         if current.strip():
             items.append(current.strip())
-        return [_eval_expr(item, context) for item in items]
+        return [_eval_expr(item, context, apply_filters) for item in items]
 
     # Dict literal: {"key": "value", ...}
     if expr.startswith("{") and expr.endswith("}"):
@@ -615,8 +645,8 @@ def _eval_expr(expr: str, context: dict):
         for pair in pairs:
             colon_pos = _find_outside_quotes(pair, ":")
             if colon_pos > 0:
-                key = _eval_expr(pair[:colon_pos].strip(), context)
-                val = _eval_expr(pair[colon_pos + 1:].strip(), context)
+                key = _eval_expr(pair[:colon_pos].strip(), context, apply_filters)
+                val = _eval_expr(pair[colon_pos + 1:].strip(), context, apply_filters)
                 result[key] = val
         return result
 
@@ -642,7 +672,7 @@ def _eval_expr(expr: str, context: dict):
                 matched = False
                 break
         if matched:
-            return _eval_expr(expr[1:-1], context)
+            return _eval_expr(expr[1:-1], context, apply_filters)
 
     # Ternary: condition ? "yes" : "no" — quote-aware
     q_pos = _find_outside_quotes(expr, "?")
@@ -653,10 +683,10 @@ def _eval_expr(expr: str, context: dict):
         if c_pos >= 0:
             true_part = rest[:c_pos].strip()
             false_part = rest[c_pos + 1:].strip()
-            cond = _eval_expr(cond_part, context)
+            cond = _eval_expr(cond_part, context, apply_filters)
             if cond:
-                return _eval_expr(true_part, context)
-            return _eval_expr(false_part, context)
+                return _eval_expr(true_part, context, apply_filters)
+            return _eval_expr(false_part, context, apply_filters)
 
     # Jinja2-style inline if: value if condition else other_value — quote-aware
     if_pos = _find_outside_quotes(expr, " if ")
@@ -666,26 +696,26 @@ def _eval_expr(expr: str, context: dict):
             value_part = expr[:if_pos].strip()
             cond_part = expr[if_pos + 4:else_pos].strip()
             else_part = expr[else_pos + 6:].strip()
-            cond = _eval_expr(cond_part, context)
+            cond = _eval_expr(cond_part, context, apply_filters)
             if cond:
-                return _eval_expr(value_part, context)
-            return _eval_expr(else_part, context)
+                return _eval_expr(value_part, context, apply_filters)
+            return _eval_expr(else_part, context, apply_filters)
 
     # Null coalescing: value ?? "default"
     nc_pos = _find_outside_quotes(expr, "??")
     if nc_pos >= 0:
         left = expr[:nc_pos]
         right = expr[nc_pos + 2:]
-        val = _eval_expr(left.strip(), context)
+        val = _eval_expr(left.strip(), context, apply_filters)
         if val is None:
-            return _eval_expr(right.strip(), context)
+            return _eval_expr(right.strip(), context, apply_filters)
         return val
 
     # String concatenation with ~
     tilde_pos = _find_outside_quotes(expr, "~")
     if tilde_pos >= 0:
         parts = _split_outside_quotes(expr, "~")
-        return "".join(str(_eval_expr(p, context) or "") for p in parts)
+        return "".join(str(_eval_expr(p, context, apply_filters) or "") for p in parts)
 
     # Comparison operators for if conditions
     for op in (" not in ", " in ", " is not ", " is ", "!=", "==", ">=", "<=", ">", "<", " and ", " or ", " not "):
@@ -699,8 +729,8 @@ def _eval_expr(expr: str, context: dict):
         if pos >= 0:
             left = expr[:pos].strip()
             right = expr[pos + len(op):].strip()
-            l_val = _eval_expr(left, context)
-            r_val = _eval_expr(right, context)
+            l_val = _eval_expr(left, context, apply_filters)
+            r_val = _eval_expr(right, context, apply_filters)
             try:
                 l_num = float(l_val) if l_val is not None else 0
                 r_num = float(r_val) if r_val is not None else 0
@@ -724,6 +754,19 @@ def _eval_expr(expr: str, context: dict):
                     return l_num ** r_num
             except (ValueError, TypeError):
                 return None
+
+    # Filter pipe (Twig ``|``): the highest-precedence binary operator, so it
+    # is resolved LAST here — after ~, comparisons and arithmetic have already
+    # been split off — which makes ``|`` bind TIGHTER than all of them at any
+    # nesting depth (issue #171). Only fires when the engine threaded its bound
+    # applier in; the many internal callers pass None and skip it. A pipe inside
+    # quotes/parens is not top-level (``_parse_filter_chain`` respects both), so
+    # ``{{ (x|f) ~ y }}`` and ``{{ items|join(' ~ ') }}`` resolve correctly.
+    if apply_filters is not None:
+        var_name, pipe_filters = _parse_filter_chain(expr)
+        if pipe_filters:
+            base = _eval_expr(var_name, context, apply_filters)
+            return apply_filters(base, pipe_filters, context)
 
     # Function call: name("arg1", "arg2") or obj.method("arg1")
     fn_match = _FUNC_CALL_RE.match(expr)
@@ -764,7 +807,7 @@ def _eval_expr(expr: str, context: dict):
                         current += ch
                 if current.strip():
                     parts.append(current.strip())
-                eval_args = [_eval_expr(a, context) for a in parts]
+                eval_args = [_eval_expr(a, context, apply_filters) for a in parts]
             else:
                 eval_args = []
             return fn(*eval_args)
@@ -1139,7 +1182,7 @@ _BUILTIN_FILTERS = {
     "map": lambda v, *a: [i.get(a[0]) if isinstance(i, dict) else getattr(i, a[0], None) for i in v] if a and isinstance(v, list) else v,
     "filter": lambda v, *a: [i for i in v if i] if isinstance(v, list) else v,
     "column": lambda v, *a: [row.get(a[0]) for row in v if isinstance(row, dict)] if a and isinstance(v, list) else v,
-    "number_format": lambda v, *a: f"{float(v):,.{int(a[0]) if a else 0}f}",
+    "number_format": lambda v, *a: _number_format(v, *a),
     "date": lambda v, *a: _date_filter(v, a[0] if a else "%Y-%m-%d"),
     "truncate": lambda v, *a: (str(v)[:int(a[0])] + "...") if a and len(str(v)) > int(a[0]) else str(v),
     "wordwrap": lambda v, *a: _wordwrap(str(v), int(a[0]) if a else 75),
@@ -1156,6 +1199,46 @@ _BUILTIN_FILTERS = {
     "dump": lambda v, *a: _render_dump(v),
     "form_token": lambda v, *a: _form_token(str(v) if v else ""),
 }
+
+
+def _number_format(value, decimals=0, decimal_point=".", thousands_sep=","):
+    """Twig ``number_format(decimals, decimalPoint, thousandsSep)`` (issue #170).
+
+    Formats a number with ``decimals`` fractional digits, ``decimal_point`` as
+    the decimal separator, and ``thousands_sep`` grouping the integer part in
+    threes. The defaults reproduce the pre-3.13.72 output exactly
+    (``number_format(2)`` -> ``"1,234.50"``) so one-arg templates are
+    unchanged; passing all three enables localized formats
+    (``number_format(2, ',', '.')`` -> ``"1.234,50"``).
+
+    Python is the master implementation — PHP/Ruby/Node mirror this signature,
+    these defaults, and these outputs.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 0.0
+    try:
+        places = int(decimals)
+    except (TypeError, ValueError):
+        places = 0
+
+    fixed = f"{abs(number):.{places}f}"
+    int_part, _, frac_part = fixed.partition(".")
+
+    # Group the integer part into threes with the requested separator. Building
+    # it from scratch (rather than reformatting Python's ``,`` grouping) means
+    # the decimal and thousands separators never collide during a swap.
+    grouped = ""
+    for offset, digit in enumerate(reversed(int_part)):
+        if offset and offset % 3 == 0:
+            grouped = str(thousands_sep) + grouped
+        grouped = digit + grouped
+
+    sign = "-" if number < 0 else ""
+    if places > 0:
+        return f"{sign}{grouped}{decimal_point}{frac_part}"
+    return f"{sign}{grouped}"
 
 
 def _date_filter(value, fmt: str) -> str:
@@ -1890,22 +1973,17 @@ class Frond:
                     value = _eval_expr(fname, context)
         return value
 
-    def _eval_var_inner(self, expr: str, context: dict):
-        """Core variable evaluation: resolve expression, apply filters, escape."""
-        var_name, filters = self._cached_filter_chain(expr)
+    def _apply_filters(self, value, filters, context: dict):
+        """Apply a parsed filter list ``[(name, args), ...]`` to *value*.
 
-        # Sandbox: check variable access
-        if self._sandbox and self._allowed_vars is not None:
-            root_var = var_name.split(".")[0].split("[")[0].strip()
-            if root_var and root_var not in self._allowed_vars and root_var != "loop":
-                return ""  # Silently block
-
-        value = _eval_expr(var_name, context)
-
-        is_safe = False
+        Extracted from :meth:`_eval_var_inner` so the exact same filter logic
+        (``_Ref`` arg resolution, sandbox gate, ``first.foo`` tail paths, the
+        no-arg fast paths, registered filters) runs whether the pipe was the
+        top-level output chain OR nested inside an expression that
+        :func:`_eval_expr` resolves (issue #171). ``raw``/``safe`` are no-ops
+        here — escaping is decided once, at the output layer. Never escapes."""
         for fname, args in filters:
             if fname in ("raw", "safe"):
-                is_safe = True
                 continue
 
             # Resolve any unquoted-bareword args against the context (a quoted
@@ -1971,6 +2049,36 @@ class Frond:
             fn = self._filters.get(fname)
             if fn:
                 value = fn(value, *args)
+
+        return value
+
+    def _eval_var_inner(self, expr: str, context: dict):
+        """Core variable evaluation: resolve expression, apply filters, escape."""
+        var_name, filters = self._cached_filter_chain(expr)
+
+        # Sandbox: check variable access
+        if self._sandbox and self._allowed_vars is not None:
+            root_var = var_name.split(".")[0].split("[")[0].strip()
+            if root_var and root_var not in self._allowed_vars and root_var != "loop":
+                return ""  # Silently block
+
+        # Compound expression (a top-level ~, comparison, arithmetic or ?? sits
+        # BELOW the pipe): the naive top-level split above is wrong because the
+        # pipe binds tighter (issue #171). Re-evaluate the whole expression
+        # through _eval_expr — which resolves pipes at the correct precedence at
+        # any depth — then escape here at the output layer.
+        if filters and _has_low_precedence_op(expr):
+            value = _eval_expr(expr, context, self._apply_filters)
+            if isinstance(value, str) and not isinstance(value, SafeString):
+                return html.escape(value)
+            return value
+
+        # Pure filter chain (or a plain variable). Threading _apply_filters into
+        # the var_name eval lets a parenthesised pipe like `{{ (a|f) }}` resolve
+        # too — the old code returned empty for that.
+        value = _eval_expr(var_name, context, self._apply_filters)
+        is_safe = any(name in ("raw", "safe") for name, _ in filters)
+        value = self._apply_filters(value, filters, context)
 
         # Auto-escape HTML unless marked safe or SafeString
         if not is_safe and isinstance(value, str) and not isinstance(value, SafeString):

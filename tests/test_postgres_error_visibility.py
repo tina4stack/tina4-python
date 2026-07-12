@@ -298,3 +298,73 @@ class TestPoisonedConnectionIsHealed:
         except Exception:
             pass
         db._in_transaction = False
+
+
+# ── Issue #57: bool -> INTEGER must fail LOUD, never a phantom write ──
+
+
+class TestBoolToIntegerFailsLoud:
+    """Issue #57 — a Python ``bool`` bound to an INTEGER column must RAISE,
+    not silently drop the write.
+
+    Root cause (pre-3.13.38): ``Database.execute()`` swallowed the psycopg2
+    exception and returned ``False``. The reporter never checked the return,
+    called ``commit()``, and ended up with an empty table — a phantom success.
+    ``execute()`` was fixed to re-raise in 3.13.38 (``65ca336``); this locks
+    that contract in for the specific #57 trigger.
+
+    The bind is genuinely a type error, not a coercion: PostgreSQL has no
+    bool->int assignment cast and psycopg2 adapts ``True`` to SQL ``true``, so
+    the driver raises ``DatatypeMismatch`` (SQLSTATE 42804). SQLite is
+    dynamically typed and accepts the same bind, so this can ONLY be proven on
+    real PostgreSQL — hence it lives with the other real-PG visibility tests.
+    """
+
+    @pytest.fixture
+    def database(self):
+        from tina4_python.database import Database
+        url = f"postgresql://{PG_USER}:{PG_PASS}@{PG_HOST}:{PG_PORT}/{PG_DB}"
+        d = Database(url)
+        # Standalone writes must commit so the table persists and a phantom
+        # write would be visible — the empty-table assertion is only meaningful
+        # under autocommit (the framework default; forced here in case a strict
+        # env set TINA4_AUTOCOMMIT=false).
+        d.autocommit = True
+        d.execute("DROP TABLE IF EXISTS t4_issue57")
+        d.execute(
+            "CREATE TABLE t4_issue57 (id SERIAL PRIMARY KEY, n INTEGER NOT NULL)"
+        )
+        yield d
+        try:
+            d.execute("DROP TABLE IF EXISTS t4_issue57")
+        except Exception:
+            pass
+        try:
+            d.close()
+        except Exception:
+            pass
+
+    def test_bool_bind_raises_datatype_mismatch(self, database):
+        """execute() must re-raise the driver's DatatypeMismatch — never
+        swallow it and return False (the #57 phantom-success bug)."""
+        import psycopg2.errors
+        with pytest.raises(psycopg2.errors.DatatypeMismatch):
+            database.execute("INSERT INTO t4_issue57 (n) VALUES (?)", [True])
+
+    def test_table_stays_empty_after_failed_bool_insert(self, database):
+        """The failed write must NOT have landed — the exact symptom #57
+        reported (row count 0 despite a 'successful'-looking call)."""
+        import psycopg2.errors
+        with pytest.raises(psycopg2.errors.DatatypeMismatch):
+            database.execute("INSERT INTO t4_issue57 (n) VALUES (?)", [True])
+
+        count = database.fetch_one("SELECT count(*) AS c FROM t4_issue57")["c"]
+        assert count == 0, f"phantom write landed: {count} row(s) — #57 regressed"
+
+    def test_valid_integer_insert_lands(self, database):
+        """Positive control: a real integer commits and is visible, proving
+        the table + autocommit path work so the empty-table assertion above is
+        meaningful rather than vacuous."""
+        database.execute("INSERT INTO t4_issue57 (n) VALUES (?)", [42])
+        count = database.fetch_one("SELECT count(*) AS c FROM t4_issue57")["c"]
+        assert count == 1

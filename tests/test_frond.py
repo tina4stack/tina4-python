@@ -1603,3 +1603,116 @@ class TestTwigParityFixes:
         f.add_test("positive", lambda x: x > 0)
         assert f.render_string("{% if 5 is positive %}y{% else %}n{% endif %}", {}) == "y"
         assert f.render_string("{% if v is positive %}y{% else %}n{% endif %}", {"v": -3}) == "n"
+
+
+# ── Issue #170: number_format honours decimalPoint + thousandsSep ────
+#
+# Twig signature is number_format(decimals, decimalPoint, thousandsSep).
+# Pre-3.13.72 all four Fronds hard-coded "." and "," and dropped args 2/3,
+# so localized formats (1.234,50) were impossible. Python is the master; the
+# other three frameworks mirror these exact outputs.
+
+
+class TestNumberFormatSeparators:
+    def _r(self, src, data=None):
+        Frond.clear_registry()
+        return Frond().render_string(src, data or {})
+
+    def test_european_separators(self):
+        # decimals=2, decimalPoint=',', thousandsSep='.'  ->  1.234,50
+        assert self._r("{{ 1234.5 | number_format(2, ',', '.') }}") == "1.234,50"
+
+    def test_variable_european_separators(self):
+        assert self._r(
+            "{{ amount | number_format(2, ',', '.') }}", {"amount": 1234.5}
+        ) == "1.234,50"
+
+    def test_default_separators_unchanged(self):
+        # Back-compat: one-arg form keeps the old US output exactly.
+        assert self._r("{{ 1234.5 | number_format(2) }}") == "1,234.50"
+
+    def test_no_args_rounds_to_integer(self):
+        # Zero-decimal form still groups thousands with a comma (unchanged).
+        assert self._r("{{ 1234567 | number_format }}") == "1,234,567"
+
+    def test_negative_value_keeps_sign(self):
+        assert self._r("{{ v | number_format(2, ',', '.') }}", {"v": -1234.5}) == "-1.234,50"
+
+    def test_swapped_separators_do_not_collide(self):
+        # Space thousands + comma decimal — the two swaps must not interfere.
+        assert self._r("{{ 1234567.89 | number_format(2, ',', ' ') }}") == "1 234 567,89"
+
+
+# ── Issue #171: filter pipe | binds tighter than concat ~ ────────────
+#
+# Twig precedence: | is (nearly) the tightest operator, so
+#   amount|number_format(2) ~ ' EUR'  ==  (amount|number_format(2)) ~ ' EUR'
+# Pre-3.13.72 the output layer split the whole expression on | first, so the
+# concat glommed onto the filter segment and the raw value rendered. These are
+# the behaviour-contract outputs the PHP/Ruby/Node workers mirror.
+
+
+class TestFilterPipePrecedence:
+    def _r(self, src, data=None):
+        Frond.clear_registry()
+        return Frond().render_string(src, data or {})
+
+    def test_pipe_then_concat(self):
+        # The pipe binds to `amount`, THEN ~ appends the literal.
+        assert self._r(
+            "{{ amount|number_format(2) ~ ' EUR' }}", {"amount": 1234.5}
+        ) == "1,234.50 EUR"
+
+    def test_pipe_then_concat_localized(self):
+        assert self._r(
+            "{{ amount|number_format(2, ',', '.') ~ ' EUR' }}", {"amount": 1234.5}
+        ) == "1.234,50 EUR"
+
+    def test_ternary_true_branch_has_pipe_and_concat(self):
+        # charged is truthy -> the true branch is (amount|number_format(2)) ~ ' EUR'
+        assert self._r(
+            "{{ charged ? amount|number_format(2) ~ ' EUR' : 'free' }}",
+            {"charged": True, "amount": 1234.5},
+        ) == "1,234.50 EUR"
+
+    def test_ternary_false_branch_unaffected(self):
+        assert self._r(
+            "{{ charged ? amount|number_format(2) ~ ' EUR' : 'free' }}",
+            {"charged": False, "amount": 1234.5},
+        ) == "free"
+
+    def test_pipe_inside_parentheses(self):
+        # Was empty before the fix: the parenthesised sub-expression swallowed
+        # the pipe and resolved to nothing, so only ' EUR' rendered.
+        assert self._r(
+            "{{ (amount|number_format(2)) ~ ' EUR' }}", {"amount": 1234.5}
+        ) == "1,234.50 EUR"
+
+    def test_pipe_inside_parentheses_standalone(self):
+        # A parenthesised pipe on its own must also resolve, not blank out.
+        assert self._r("{{ (amount|number_format(2)) }}", {"amount": 1234.5}) == "1,234.50"
+
+    # ── Negative / no-regression cases ──────────────────────────
+
+    def test_filter_only_unchanged(self):
+        assert self._r("{{ amount|number_format(2) }}", {"amount": 1234.5}) == "1,234.50"
+
+    def test_concat_only_unchanged(self):
+        assert self._r("{{ 'Hello ' ~ name }}", {"name": "World"}) == "Hello World"
+
+    def test_concat_with_two_filtered_terms(self):
+        # A pipe on BOTH sides of the concat still binds tighter than ~.
+        assert self._r(
+            "{{ a|upper ~ '-' ~ b|upper }}", {"a": "left", "b": "right"}
+        ) == "LEFT-RIGHT"
+
+    def test_filter_arg_containing_tilde_is_literal(self):
+        # A ~ inside a quoted filter argument is data, not the concat operator.
+        assert self._r("{{ items|join(' ~ ') }}", {"items": ["a", "b", "c"]}) == "a ~ b ~ c"
+
+    def test_raw_filter_still_suppresses_escaping(self):
+        assert self._r("{{ html|raw }}", {"html": "<b>hi</b>"}) == "<b>hi</b>"
+
+    def test_autoescape_on_concat_result(self):
+        # The concatenated output is still HTML-escaped at the output layer.
+        assert self._r("{{ a ~ b }}", {"a": "<x>", "b": "&y"}) == "&lt;x&gt;&amp;y"
