@@ -500,6 +500,21 @@ def get_api_handlers() -> dict:
         # without shelling out from the browser.
         "/__dev/api/scaffold": ("GET", _api_scaffold_list),
         "/__dev/api/scaffold/run": ("POST", _api_scaffold_run),
+        # ── Run-chip endpoints (project-level operations) ──
+        # The dev-admin SPA's ▶ Migrate / ▶ Test / ▶ Seed chips call
+        # these. Each runs the whole-project operation via the framework's
+        # own machinery (matching the CLI), NOT by shelling out redundantly.
+        # /seed/run is distinct from /seed above (which seeds one named
+        # table); /run seeds every discovered ORM model.
+        "/__dev/api/migrate": ("POST", _api_migrate),
+        "/__dev/api/test": ("POST", _api_test),
+        "/__dev/api/seed/run": ("POST", _api_seed_run),
+        # ── Framework-grounding (mcp.tina4.com) token config ──
+        # Self-contained in Python (writes/reads the project .env
+        # directly) — does NOT depend on the Rust agent being up, unlike
+        # the Node dev-admin which proxies these to /mcp/status + /mcp/token.
+        "/__dev/api/grounding/status": ("GET", _api_grounding_status),
+        "/__dev/api/grounding/token": ("POST", _api_grounding_token),
         # ── Live Docs (per plan/v3/22-LIVE-API-RAG.md) ──
         # Thin HTTP wrappers around tina4_python.docs.Docs. Both
         # framework public API and the user's src/ surface are
@@ -3139,6 +3154,317 @@ async def _api_scaffold_run(request, response):
         return response({"ok": True, "kind": kind, "name": name, "files": files})
     except Exception as exc:
         return response({"ok": False, "error": str(exc)}, 500)
+
+
+# ─── Run-chip endpoints (migrate / test / seed-all) ────────────────
+#
+# Project-level operations the dev-admin SPA's ▶ Migrate / ▶ Test /
+# ▶ Seed chips fire. Distinct from /scaffold/run (creates one file) and
+# /seed (seeds one named table): these run the whole-project operation
+# via the framework's own in-process machinery — the same code paths
+# the CLI drives — rather than shelling out redundantly. Response shapes
+# match the shared dev-admin SPA (and the Node dev-admin reference).
+
+
+def _migration_stem(filename: str) -> str:
+    """'000001_create_users.sql' → '000001_create_users' (drop the suffix)."""
+    return Path(filename).stem
+
+
+async def _api_migrate(request, response):
+    """POST /__dev/api/migrate — apply pending migrations.
+
+    Reuses the exact runner the CLI's ``_migrate`` and the ``_api_tool``
+    'migrate' tool drive (``tina4_python.migration.Migration.migrate``),
+    but in-process so we can report the split result the SPA reads:
+
+        {applied: [...], skipped: [...], failed: [...]}
+
+    - applied: migration ids run during this call
+    - skipped: migration ids already applied before this call
+    - failed:  a migration that raised — the runner stops and rolls back
+               at the first failure, so at most one lands here
+    """
+    import re
+
+    from tina4_python.database import Database
+    from tina4_python.migration import Migration
+
+    body = request.body if hasattr(request, "body") and request.body else {}
+    mig_dir = body.get("dir", "migrations") if isinstance(body, dict) else "migrations"
+    db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
+    db = Database(db_url)
+    try:
+        mig = Migration(db, mig_dir)
+        completed_before = {m["migration_name"] for m in mig.status()["completed"]}
+        applied: list[str] = []
+        failed: list[str] = []
+        try:
+            ran = mig.migrate()  # list of applied filenames
+            applied = [_migration_stem(f) for f in ran]
+        except Exception as e:
+            # The runner rolls back + re-raises at the first failing
+            # migration. Recover what actually got applied from the
+            # tracking table, and pull the failed file out of the message
+            # ("Migration failed: <file> — <err>").
+            completed_after = {m["migration_name"] for m in mig.status()["completed"]}
+            applied = sorted(completed_after - completed_before)
+            msg = str(e)
+            match = re.search(r"Migration failed:\s*([^\s—]+)", msg)
+            failed = [_migration_stem(match.group(1))] if match else [msg]
+        skipped = sorted(completed_before)
+        MessageLog.log(
+            "migrate", f"Applied {len(applied)} migration(s)",
+            {"applied": applied, "failed": failed},
+        )
+        return response({"applied": applied, "skipped": skipped, "failed": failed})
+    finally:
+        db.close()
+
+
+async def _api_test(request, response):
+    """POST /__dev/api/test — run the project's pytest suite.
+
+    Returns ``{ok, code, output}`` where ``code`` is the pytest process
+    exit code and ``output`` is the combined stdout+stderr. A non-zero
+    exit (failing tests) is a valid, reportable result — NOT a 500 —
+    mirroring the ``_api_tool`` 'test' invocation but in the SPA's chip
+    shape.
+    """
+    import subprocess
+    import sys
+
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "tests/", "-q", "--tb=short"],
+            capture_output=True, text=True, timeout=180, cwd=os.getcwd(),
+        )
+        output = result.stdout or ""
+        if result.stderr:
+            output += ("\n" if output else "") + result.stderr
+        MessageLog.log("test", f"pytest exited {result.returncode}",
+                       {"code": result.returncode})
+        return response({
+            "ok": result.returncode == 0,
+            "code": result.returncode,
+            "output": output.strip(),
+        })
+    except subprocess.TimeoutExpired:
+        return response({"ok": False, "code": -1,
+                         "output": "Test suite timed out after 180 seconds"})
+    except Exception as e:
+        return response({"ok": False, "error": str(e)}, 500)
+
+
+def _discover_orm_models() -> list:
+    """Import ORM model modules from ``src/orm/`` (then ``src/models/`` as
+    a fallback) and return the discovered ORM subclasses.
+
+    Same directories the server discovers on startup; importing the
+    modules ensures the classes are registered as ORM subclasses even if
+    nothing has referenced them yet this process. Mirrors the import
+    strategy in ``AutoCrud.discover``.
+    """
+    import importlib
+    import importlib.util
+    import inspect
+    import sys
+
+    from tina4_python.orm import ORM
+
+    seen: set[int] = set()
+    classes: list = []
+    for models_dir in ("src/orm", "src/models"):
+        if not os.path.isdir(models_dir):
+            continue
+        abs_dir = os.path.abspath(models_dir)
+        parent = os.path.dirname(abs_dir)
+        if parent not in sys.path:
+            sys.path.insert(0, parent)
+        module_prefix = f"{os.path.basename(parent)}.{os.path.basename(abs_dir)}"
+        for filename in sorted(os.listdir(models_dir)):
+            if not filename.endswith(".py") or filename.startswith("_"):
+                continue
+            module_name = filename[:-3]
+            try:
+                mod = importlib.import_module(f"{module_prefix}.{module_name}")
+            except Exception:
+                try:
+                    spec = importlib.util.spec_from_file_location(
+                        module_name, os.path.join(abs_dir, filename))
+                    if spec is None or spec.loader is None:
+                        continue
+                    mod = importlib.util.module_from_spec(spec)
+                    sys.modules[module_name] = mod
+                    spec.loader.exec_module(mod)
+                except Exception:
+                    continue
+            for attr_name in dir(mod):
+                attr = getattr(mod, attr_name)
+                if (inspect.isclass(attr) and issubclass(attr, ORM)
+                        and attr is not ORM and id(attr) not in seen):
+                    try:
+                        has_table = bool(attr._get_table())
+                    except Exception:
+                        has_table = False
+                    if has_table:
+                        seen.add(id(attr))
+                        classes.append(attr)
+    return classes
+
+
+async def _api_seed_run(request, response):
+    """POST /__dev/api/seed/run — run the whole-project seeder.
+
+    Distinct from ``/__dev/api/seed`` (which seeds one named table): this
+    discovers every ORM model in ``src/orm/`` (``src/models/`` fallback)
+    and seeds them all via the framework's FK-ordered ``seed_models()`` —
+    the same real seeder the CLI uses. Returns ``{seeded, failed}``.
+    """
+    from tina4_python.seeder import seed_models
+
+    body = request.body if hasattr(request, "body") and request.body else {}
+    count = 10
+    if isinstance(body, dict) and body.get("count") is not None:
+        try:
+            count = int(body.get("count"))
+        except (TypeError, ValueError):
+            count = 10
+
+    try:
+        classes = _discover_orm_models()
+        if not classes:
+            return response(
+                {"seeded": 0, "failed": 0,
+                 "error": "No models found in src/orm/ or src/models/"}, 400)
+        summaries = seed_models(classes, count)
+        seeded = 0
+        failed = 0
+        for summary in summaries.values():
+            seeded += getattr(summary, "seeded", 0)
+            failed += getattr(summary, "failed", 0)
+        MessageLog.log(
+            "seed", f"Seeded {seeded} rows across {len(summaries)} model(s)",
+            {"seeded": seeded, "failed": failed},
+        )
+        return response({"seeded": seeded, "failed": failed})
+    except Exception as e:
+        return response({"seeded": 0, "failed": 0, "error": str(e)}, 500)
+
+
+# ─── Framework-grounding (mcp.tina4.com) token config ──────────────
+#
+# Self-contained: reads/writes TINA4_MCP_TOKEN in the process env and
+# the project .env directly. The Node dev-admin proxies these to the
+# Rust agent (/mcp/status, /mcp/token); Python keeps them local so the
+# token panel works with a bare `tina4 serve` — no agent required.
+
+_MCP_DEFAULT_URL = "https://mcp.tina4.com"
+
+
+def _env_file_values() -> dict:
+    """Parse the project ``.env`` into a plain dict (best-effort).
+
+    Missing file or read error → ``{}``. Strips surrounding quotes so a
+    quoted value round-trips to the same string the process env would hold.
+    """
+    values: dict = {}
+    env_path = Path(".env")
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                s = line.strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                key, _, val = s.partition("=")
+                values[key.strip()] = val.strip().strip('"').strip("'")
+        except OSError:
+            pass
+    return values
+
+
+def _resolve_env(key: str, default: str = "") -> str:
+    """Resolve an env var: process environment first, then project ``.env``."""
+    val = os.environ.get(key)
+    if val:
+        return val
+    return _env_file_values().get(key, default)
+
+
+def _upsert_env_var(key: str, value: str) -> None:
+    """Write/upsert ``KEY=value`` into the project ``.env``.
+
+    An empty ``value`` removes the key entirely (clear). Preserves
+    comments, other keys, and a trailing newline. Mirrors the .env-write
+    pattern in ``_api_connections_save``.
+    """
+    env_path = Path(".env")
+    lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.exists() else []
+    out: list[str] = []
+    found = False
+    for line in lines:
+        s = line.strip()
+        if s.startswith("#") or "=" not in s:
+            out.append(line)
+            continue
+        k = s.split("=", 1)[0].strip()
+        if k == key:
+            found = True
+            if value:
+                out.append(f"{key}={value}")
+            # empty value → drop the line (clear)
+        else:
+            out.append(line)
+    if value and not found:
+        out.append(f"{key}={value}")
+    content = "\n".join(out)
+    if content and not content.endswith("\n"):
+        content += "\n"
+    env_path.write_text(content, encoding="utf-8")
+
+
+def _grounding_snapshot() -> dict:
+    token = _resolve_env("TINA4_MCP_TOKEN", "")
+    url = _resolve_env("TINA4_MCP_URL", "") or _MCP_DEFAULT_URL
+    return {
+        "configured": bool(token),
+        "last4": token[-4:] if token else "",
+        "url": url,
+    }
+
+
+async def _api_grounding_status(request, response):
+    """GET /__dev/api/grounding/status — framework-grounding token config.
+
+    ``{configured, last4, url}``. ``configured`` = TINA4_MCP_TOKEN is set
+    (process env or project .env). ``last4`` = last 4 chars of the token
+    (or ""). ``url`` = TINA4_MCP_URL or the mcp.tina4.com default.
+    """
+    return response(_grounding_snapshot())
+
+
+async def _api_grounding_token(request, response):
+    """POST /__dev/api/grounding/token {token} — upsert TINA4_MCP_TOKEN.
+
+    Writes the token into the project ``.env`` (empty token clears it) and
+    updates the running process env so ``/status`` reflects the change
+    immediately, before any restart re-reads ``.env``. Self-contained —
+    never touches the Rust agent. Returns ``{ok, configured, last4}``.
+    """
+    body = request.body if hasattr(request, "body") and request.body else {}
+    token = str(body.get("token") or "").strip() if isinstance(body, dict) else ""
+    try:
+        _upsert_env_var("TINA4_MCP_TOKEN", token)
+    except OSError as e:
+        return response({"ok": False, "error": str(e)}, 500)
+    if token:
+        os.environ["TINA4_MCP_TOKEN"] = token
+    else:
+        os.environ.pop("TINA4_MCP_TOKEN", None)
+    MessageLog.log("grounding", "Updated TINA4_MCP_TOKEN",
+                   {"configured": bool(token)})
+    return response({"ok": True, "configured": bool(token),
+                     "last4": token[-4:] if token else ""})
 
 
 _DOCS_SINGLETON = None  # cached per-process so the framework index
