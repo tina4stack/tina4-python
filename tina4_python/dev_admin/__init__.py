@@ -2731,46 +2731,57 @@ async def _api_deps_install(request, response):
     name = body.get("name", "").strip()
     version = body.get("version", "").strip()
     registry = body.get("registry", "pypi")
+    # A dev/test dependency (pytest, etc.) goes in the manifest's dev group, not
+    # runtime deps. The install must PERSIST to the manifest — so we prefer the
+    # project's dependency manager (uv/bundle) over a bare pip/gem install.
+    dev = bool(body.get("dev"))
 
     if not name:
         return response({"error": "name required"}, 400)
 
+    import shutil
+
     try:
         if registry == "pypi":
             pkg = f"{name}>={version}" if version else name
-            result = subprocess.run(
-                ["pip", "install", pkg],
-                capture_output=True, text=True, timeout=60
-            )
+            # uv add persists to pyproject.toml AND installs into the project's
+            # venv. Fall back to pip only when uv or pyproject.toml is absent.
+            if shutil.which("uv") and Path("pyproject.toml").exists():
+                cmd = ["uv", "add", *(["--dev"] if dev else []), pkg]
+            else:
+                cmd = ["pip", "install", pkg]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode != 0:
-                return response({"error": result.stderr.strip()}, 500)
-            return response({"message": f"Installed {name} {version}".strip(), "output": result.stdout})
+                return response({"error": (result.stderr or result.stdout).strip()}, 500)
+            return response({"message": f"Installed {name} {version}".strip(), "output": result.stdout or result.stderr})
 
         elif registry == "npm":
             pkg = f"{name}@{version}" if version else name
-            result = subprocess.run(
-                ["npm", "install", pkg],
-                capture_output=True, text=True, timeout=60
-            )
+            cmd = ["npm", "install", *(["--save-dev"] if dev else []), pkg]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode != 0:
                 return response({"error": result.stderr.strip()}, 500)
             return response({"message": f"Installed {name}", "output": result.stdout})
 
         elif registry == "packagist":
             pkg = f"{name}:{version}" if version else name
-            result = subprocess.run(
-                ["composer", "require", pkg],
-                capture_output=True, text=True, timeout=60
-            )
+            cmd = ["composer", "require", *(["--dev"] if dev else []), pkg]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode != 0:
                 return response({"error": result.stderr.strip()}, 500)
             return response({"message": f"Installed {name}", "output": result.stdout})
 
         elif registry == "rubygems":
-            result = subprocess.run(
-                ["gem", "install", name, "-v", version] if version else ["gem", "install", name],
-                capture_output=True, text=True, timeout=60
-            )
+            # bundle add persists to the Gemfile. Fall back to gem install.
+            if shutil.which("bundle") and Path("Gemfile").exists():
+                cmd = ["bundle", "add", name]
+                if version:
+                    cmd += ["--version", version]
+                if dev:
+                    cmd += ["--group", "development"]
+            else:
+                cmd = ["gem", "install", name, *(["-v", version] if version else [])]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             if result.returncode != 0:
                 return response({"error": result.stderr.strip()}, 500)
             return response({"message": f"Installed {name}", "output": result.stdout})

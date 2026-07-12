@@ -513,6 +513,32 @@ def _init(args):
             encoding="utf-8",
         )
 
+    # Create pyproject.toml — a Tina4 project is a uv project. The Dockerfiles
+    # already COPY pyproject.toml + uv.lock and `uv sync`, so a fresh project
+    # MUST ship a manifest. This is also what makes `deps/install` (uv add) and
+    # `uv run pytest` work out of the box. pytest ships in the dev group so the
+    # scaffolded tests are runnable from the first commit (tests-first).
+    pyproject = target / "pyproject.toml"
+    if not pyproject.exists():
+        project_name = target.resolve().name.replace(" ", "-").lower() or "tina4-app"
+        pyproject.write_text(
+            '[project]\n'
+            f'name = "{project_name}"\n'
+            'version = "0.1.0"\n'
+            'description = "A Tina4 application"\n'
+            'requires-python = ">=3.11"\n'
+            'dependencies = [\n'
+            '    "tina4-python",\n'
+            ']\n\n'
+            '[dependency-groups]\n'
+            'dev = [\n'
+            '    "pytest",\n'
+            ']\n\n'
+            '[tool.uv]\n'
+            'package = false\n',
+            encoding="utf-8",
+        )
+
     # Create .gitignore
     gitignore = target / ".gitignore"
     if not gitignore.exists():
