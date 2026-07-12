@@ -1930,6 +1930,15 @@ class Frond:
             if fname in ("raw", "safe"):
                 continue
 
+            # Sandbox: a blocked filter is silently skipped (value passes
+            # through unchanged) — same gate as _apply_filters. _eval_var_raw
+            # is reached by a ternary condition (`x|f ? a : b`) and comparison
+            # tests, which otherwise would run a non-allow-listed filter in
+            # sandbox mode.
+            if self._sandbox and self._allowed_filters is not None:
+                if fname not in self._allowed_filters:
+                    continue
+
             # Support `{{ x | first.foo.bar }}` — filter followed by
             # property access. Split on the first structural `.`; apply
             # the filter, then traverse the path on the result via a

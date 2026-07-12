@@ -316,9 +316,12 @@ class TestGetAPIHandlers:
         #          and /threads/* prefix for the thread sidebar) + 2
         #          (/__feedback/widget.js bundle + /__feedback/api/turn
         #          customer-feedback intake) + 3 (MCP JSON-RPC endpoint:
-        #          /__dev/mcp, /__dev/mcp/message, /__dev/mcp/sse) = 79.
+        #          /__dev/mcp, /__dev/mcp/message, /__dev/mcp/sse) = 79,
+        #          + 5 dev-admin parity endpoints (grounding/status,
+        #          grounding/token grounding-token proxy; migrate, test,
+        #          seed/run scaffold run-chips) = 84.
         handlers = get_api_handlers()
-        assert len(handlers) == 79
+        assert len(handlers) == 84
 
     def test_mcp_jsonrpc_endpoint_registered(self):
         # The MCP transport surface real clients speak — must be mounted so

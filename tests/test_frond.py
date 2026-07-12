@@ -1716,3 +1716,56 @@ class TestFilterPipePrecedence:
     def test_autoescape_on_concat_result(self):
         # The concatenated output is still HTML-escaped at the output layer.
         assert self._r("{{ a ~ b }}", {"a": "<x>", "b": "&y"}) == "&lt;x&gt;&amp;y"
+
+
+class TestSandboxFilterPrecedence:
+    """A sandbox filter allow-list must gate filters reached via the #171
+    concat-pipe path (``x|f ~ y``) and via a ternary condition (``x|f ? a : b``),
+    not only the top-level output chain. A blocked filter's code must NEVER run
+    in sandbox mode. The ``spy`` filter records each invocation so the assertion
+    is the security property (did the code run?), which holds identically across
+    Python/PHP/Ruby/Node regardless of the blocked-filter output convention.
+    """
+
+    def _engine_with_spy(self):
+        Frond.clear_registry()
+        calls = []
+
+        def spy(v):
+            calls.append(v)
+            return str(v).upper() + "!"
+
+        engine = Frond()
+        engine.add_filter("spy", spy)
+        return engine, calls
+
+    def test_blocked_filter_in_concat_pipe_does_not_run(self):
+        engine, calls = self._engine_with_spy()
+        engine.sandbox(allowed_filters=["upper"])  # 'spy' is NOT allowed
+        out = engine.render_string("{{ x|spy ~ ' end' }}", {"x": "hi"})
+        engine.unsandbox()
+        assert calls == []          # spy's code never executed
+        assert "HI!" not in out     # its transform never reached the output
+
+    def test_blocked_filter_in_ternary_condition_does_not_run(self):
+        engine, calls = self._engine_with_spy()
+        engine.sandbox(allowed_filters=["upper"])  # 'spy' is NOT allowed
+        engine.render_string("{{ x|spy ? 'yes' : 'no' }}", {"x": "hi"})
+        engine.unsandbox()
+        assert calls == []          # ternary condition path is gated too
+
+    def test_allowed_filter_in_concat_pipe_runs(self):
+        engine, calls = self._engine_with_spy()
+        engine.sandbox(allowed_filters=["spy"])   # 'spy' IS allowed
+        out = engine.render_string("{{ x|spy ~ ' end' }}", {"x": "hi"})
+        engine.unsandbox()
+        assert calls == ["hi"]      # spy ran exactly once
+        assert out == "HI! end"     # transform + concat (identical across all 4)
+
+    def test_allowed_filter_in_ternary_condition_runs(self):
+        engine, calls = self._engine_with_spy()
+        engine.sandbox(allowed_filters=["spy"])   # 'spy' IS allowed
+        out = engine.render_string("{{ x|spy ? 'yes' : 'no' }}", {"x": "hi"})
+        engine.unsandbox()
+        assert calls == ["hi"]      # ternary condition ran the allowed filter
+        assert out == "yes"
