@@ -265,7 +265,7 @@ def _upgrade_v2_to_v3(db, migration_folder: str | None) -> None:
             logger.error(f"v2→v3 upgrade: failed to backfill {desc!r}: {e}")
 
     note = (
-        f" ({failed_in_v2} were marked passed=0 in v2 — review manually)"
+        f" ({failed_in_v2} were marked passed=0 in v2 and will re-apply on the next migrate)"
         if failed_in_v2
         else ""
     )
@@ -629,6 +629,32 @@ def _should_skip_create_table(db, stmt: str) -> str | None:
     return None
 
 
+def _record_applied(db, name: str, desc: str, batch: int, passed: int = 1) -> None:
+    """Write (or overwrite) the tracking row for a migration.
+
+    Deletes any existing row for this migration_name first, so a leftover
+    passed=0 row (a prior failure, or a v2 carry-over) is superseded and the
+    migration re-applies cleanly instead of colliding on the UNIQUE
+    migration_name. DELETE+INSERT is portable across every engine (no UPSERT
+    dialect variance), leaving at most one row per migration_name with the
+    latest recorded state.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    db.execute("DELETE FROM tina4_migration WHERE migration_name = ?", [name])
+    if _is_firebird(db):
+        row = db.fetch_one("SELECT GEN_ID(GEN_TINA4_MIGRATION_ID, 1) AS next_id FROM RDB$DATABASE")
+        next_id = row["next_id"] if row else 1
+        db.execute(
+            "INSERT INTO tina4_migration (id, migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, ?)",
+            [next_id, name, desc, batch, now, passed],
+        )
+    else:
+        db.execute(
+            "INSERT INTO tina4_migration (migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?)",
+            [name, desc, batch, now, passed],
+        )
+
+
 def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
     """Run all pending migrations (internal implementation).
 
@@ -688,21 +714,11 @@ def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
                     if db.execute(stmt) is False:
                         raise RuntimeError(f"Migration failed: {db.get_error() or stmt[:80]}")
 
-            # Record as passed
-            now = datetime.now(timezone.utc).isoformat()
+            # Record as passed — supersede any leftover row for this migration
+            # (a prior passed=0 failure or a v2 carry-over) so it re-applies
+            # cleanly instead of colliding on the UNIQUE migration_name.
             desc = re.sub(r"^\d+_", "", migration_name, count=1).replace("_", " ")
-            if _is_firebird(db):
-                row = db.fetch_one("SELECT GEN_ID(GEN_TINA4_MIGRATION_ID, 1) AS next_id FROM RDB$DATABASE")
-                next_id = row["next_id"] if row else 1
-                db.execute(
-                    "INSERT INTO tina4_migration (id, migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, 1)",
-                    [next_id, migration_name, desc, batch, now],
-                )
-            else:
-                db.execute(
-                    "INSERT INTO tina4_migration (migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, 1)",
-                    [migration_name, desc, batch, now],
-                )
+            _record_applied(db, migration_name, desc, batch, passed=1)
             db.commit()
             ran.append(mig_file.name)
 
@@ -912,20 +928,8 @@ class Migration:
             passed: 1 if the migration succeeded (default), 0 if it failed.
         """
         _ensure_tracking_table(self._db, self._dir)
-        now = datetime.now(timezone.utc).isoformat()
         desc = re.sub(r"^\d+_", "", name, count=1).replace("_", " ")
-        if _is_firebird(self._db):
-            row = self._db.fetch_one("SELECT GEN_ID(GEN_TINA4_MIGRATION_ID, 1) AS next_id FROM RDB$DATABASE")
-            next_id = row["next_id"] if row else 1
-            self._db.execute(
-                "INSERT INTO tina4_migration (id, migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, ?)",
-                [next_id, name, desc, batch, now, passed],
-            )
-        else:
-            self._db.execute(
-                "INSERT INTO tina4_migration (migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?)",
-                [name, desc, batch, now, passed],
-            )
+        _record_applied(self._db, name, desc, batch, passed=passed)
 
     def remove_migration_record(self, name: str) -> None:
         """Delete a migration record from the tracking table by migration ID.
