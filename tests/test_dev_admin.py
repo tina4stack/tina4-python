@@ -635,6 +635,38 @@ class TestAPIHandlers:
         assert "password" in result
 
     @pytest.mark.asyncio
+    async def test_connections_test_reports_real_table_count(
+        self, mock_req, mock_resp, tmp_path
+    ):
+        """Lock-in: the dev-dashboard connection tester must report the REAL
+        table count from db.get_tables(), not 0.
+
+        Parity regression guard mirroring MCP #164 — the same
+        POST /__dev/api/connections/test endpoint reported 0 tables in
+        PHP and Node (now fixed). Python was always correct; this test
+        pins the behaviour so the regression can't silently ship here.
+
+        NO MOCKS: drives _api_connections_test against a real on-disk
+        SQLite database with two real tables. tmp_path cleans it up.
+        """
+        db_path = str(tmp_path / "conn_test.db")
+
+        from tina4_python.database import Database
+        db = Database(f"sqlite:///{db_path}")
+        db.execute("CREATE TABLE alpha (id INTEGER PRIMARY KEY)")
+        db.execute("CREATE TABLE beta (id INTEGER PRIMARY KEY)")
+        db.commit()
+        db.close()
+
+        from tina4_python.dev_admin import _api_connections_test
+        mock_req.body = {"url": f"sqlite:///{db_path}"}
+        result = await _api_connections_test(mock_req, mock_resp)
+
+        assert result["success"] is True
+        assert result["tables"] >= 2
+        assert "SQLite" in result["version"]
+
+    @pytest.mark.asyncio
     async def test_connections_save_preserves_tina4_prefix(
         self, mock_req, mock_resp, tmp_path, monkeypatch
     ):

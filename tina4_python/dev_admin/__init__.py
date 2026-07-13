@@ -1792,7 +1792,7 @@ async def _api_connections_test(request, response):
     if not url:
         return response({"success": False, "error": "No connection URL provided"})
     try:
-        from tina4_python.Database import Database
+        from tina4_python.database import Database
         db = Database(url, username, password)
         version = ""
         table_count = 0
