@@ -164,3 +164,92 @@ class TestDirectoryTraversalPrevention:
     def test_try_static_returns_response_or_none(self):
         result = _try_static("/js/tina4.min.js")
         assert result is None or isinstance(result, Response)
+
+
+class TestStaticCacheControl:
+    """Static assets must be revalidated on every use so a redeployed file
+    reaches the browser on the next load without a manual hard refresh:
+    Cache-Control: no-cache, must-revalidate + an ETag validator (no mocks)."""
+
+    def test_static_response_sets_revalidate_cache_control_and_etag(self, tmp_path, monkeypatch):
+        from tina4_python.core.server import _try_static
+        # Real file on disk served through the real _try_static path.
+        pub = tmp_path / "pub"
+        pub.mkdir()
+        (pub / "app.js").write_text("console.log('v1')")
+        monkeypatch.setenv("TINA4_PUBLIC_DIR", str(pub))
+
+        resp = _try_static("/app.js")
+        assert resp is not None, "static file should be found"
+
+        cc = None
+        for name, value in resp._headers:
+            if str(name).lower() == "cache-control":
+                cc = value
+        assert cc == "no-cache, must-revalidate", f"cache-control={cc!r}"
+
+        # build_headers() computes an ETag validator, so a browser's
+        # If-None-Match revalidation gets a cheap 304 rather than a re-download.
+        built = resp.build_headers("")
+        etags = [v for (n, v) in built if n == b"etag"]
+        assert etags and etags[0], "static response must carry an ETag validator"
+
+        # Last-Modified is emitted too (validator parity with PHP/Ruby/Node).
+        lm = None
+        for name, value in resp._headers:
+            if str(name).lower() == "last-modified":
+                lm = value
+        assert lm and lm.endswith("GMT"), f"last-modified={lm!r}"
+
+    @pytest.mark.asyncio
+    async def test_static_304_end_to_end_via_asgi_app(self, tmp_path, monkeypatch):
+        """Real ASGI app + real file, no mocks: a static GET returns 200 with
+        Cache-Control + ETag + Last-Modified; a revalidation with If-None-Match
+        OR If-Modified-Since returns 304; a stale/mismatched validator returns 200."""
+        from tina4_python.core.server import app
+
+        pub = tmp_path / "pub"
+        pub.mkdir()
+        (pub / "s.css").write_text("body{color:red}")
+        monkeypatch.setenv("TINA4_PUBLIC_DIR", str(pub))
+
+        async def drive(extra_headers):
+            scope = {
+                "type": "http", "method": "GET", "path": "/s.css",
+                "raw_path": b"/s.css", "query_string": b"",
+                "headers": [(b"host", b"localhost")] + extra_headers,
+                "client": ("127.0.0.1", 5555), "server": ("127.0.0.1", 7145),
+                "scheme": "http",
+            }
+
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            captured = {"status": None, "headers": [], "body": b""}
+
+            async def send(msg):
+                if msg["type"] == "http.response.start":
+                    captured["status"] = msg["status"]
+                    captured["headers"] = msg.get("headers", [])
+                elif msg["type"] == "http.response.body":
+                    captured["body"] += msg.get("body", b"")
+
+            await app(scope, receive, send)
+            hdrs = {k.decode().lower(): v.decode() for (k, v) in captured["headers"]}
+            return captured["status"], hdrs, captured["body"]
+
+        status, hdrs, body = await drive([])
+        assert status == 200
+        assert hdrs.get("cache-control") == "no-cache, must-revalidate"
+        etag = hdrs.get("etag")
+        last_mod = hdrs.get("last-modified")
+        assert etag and last_mod and body
+
+        status, _, body = await drive([(b"if-none-match", etag.encode())])
+        assert status == 304 and body == b""
+
+        status, _, body = await drive([(b"if-modified-since", last_mod.encode())])
+        assert status == 304 and body == b""
+
+        status, _, body = await drive([(b"if-modified-since", b"Wed, 01 Jan 2020 00:00:00 GMT")])
+        assert status == 200 and body

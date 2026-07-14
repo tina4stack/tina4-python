@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import importlib
 import uuid
+from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 
 from tina4_python.core.request import Request
@@ -1975,6 +1976,25 @@ async def app(scope: dict, receive, send):
         await send({"type": "http.response.body", "body": b""})
         return
 
+    # If-Modified-Since -> 304, for responses carrying a Last-Modified (static
+    # assets). If-None-Match takes precedence (RFC 9110 13.1.3), so this only
+    # runs when the client sent no ETag validator.
+    if not if_none_match:
+        if_modified_since = request.headers.get("if-modified-since", "")
+        last_modified = ""
+        for name, value in headers:
+            if name == b"last-modified":
+                last_modified = value.decode()
+                break
+        if if_modified_since and last_modified:
+            try:
+                if parsedate_to_datetime(last_modified) <= parsedate_to_datetime(if_modified_since):
+                    await send({"type": "http.response.start", "status": 304, "headers": []})
+                    await send({"type": "http.response.body", "body": b""})
+                    return
+            except (TypeError, ValueError):
+                pass  # Unparseable date -> serve the body (never 304 on garbage).
+
     await send({"type": "http.response.start", "status": response.status_code, "headers": headers})
     await send({"type": "http.response.body", "body": response.content})
 
@@ -2010,6 +2030,18 @@ def _try_static(path: str) -> Response | None:
         if file_path.is_file():
             resp = Response()
             resp.file(str(file_path))
+            # Static assets may be cached but must be revalidated on every use,
+            # so a redeployed file reaches the browser on the next load without a
+            # manual hard refresh. The response already carries an ETag
+            # (build_headers) and the pipeline answers If-None-Match with a 304,
+            # so revalidation is a cheap round-trip, not a re-download. A
+            # Last-Modified is added too (pipeline honours If-Modified-Since ->
+            # 304) so the validators match the other frameworks.
+            resp.header("cache-control", "no-cache, must-revalidate")
+            resp.header(
+                "last-modified",
+                formatdate(file_path.stat().st_mtime, usegmt=True),
+            )
             return resp
     return None
 
