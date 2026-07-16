@@ -296,7 +296,11 @@ def _ensure_tracking_table(db, migration_folder: str | None = None):
     # and copy the values across so already-applied migrations are still seen as
     # applied — without this the `migration_name`-based read below finds nothing
     # and every migration re-runs. The old `migration_id` column is left in
-    # place (harmless, ignored from now on).
+    # place: it cannot be dropped portably (SQLite cannot drop a NOT NULL or a
+    # column without a full table rebuild). It is ignored on READS, but it is
+    # NOT ignorable on WRITES — it is NOT NULL on that table, so
+    # `_record_applied` must keep populating it (see there). Leaving it unwritten
+    # is what broke every migration on an upgraded database in 3.13.55-3.13.75.
     if "migration_id" in cols and "migration_name" not in cols:
         col_type = "VARCHAR(500)" if _is_firebird(db) else "TEXT"
         try:
@@ -641,18 +645,36 @@ def _record_applied(db, name: str, desc: str, batch: int, passed: int = 1) -> No
     """
     now = datetime.now(timezone.utc).isoformat()
     db.execute("DELETE FROM tina4_migration WHERE migration_name = ?", [name])
+
+    # Build the column list from the columns that ACTUALLY exist on this table,
+    # so a legacy column an earlier in-place upgrade left behind is populated
+    # rather than defaulted to NULL. A table created by v3 <= 3.13.54 carries
+    # `migration_id NOT NULL UNIQUE`; the rename upgrade adds `migration_name`
+    # beside it but cannot drop the NOT NULL portably (SQLite cannot drop it at
+    # all without a table rebuild), so this insert has to satisfy it or every
+    # migration on that database fails and none can ever apply.
+    cols = _column_names(db)
+    insert_cols = ["migration_name", "description", "batch", "executed_at", "passed"]
+    values = [name, desc, batch, now, passed]
+
+    # v3 <= 3.13.54: `migration_id` held exactly the value `migration_name` holds
+    # now, so writing `name` restores that invariant. Safe against its UNIQUE:
+    # the DELETE above removed this migration's own row first, so a re-run
+    # replaces its row instead of colliding.
+    if "migration_id" in cols:
+        insert_cols.append("migration_id")
+        values.append(name)
+
     if _is_firebird(db):
         row = db.fetch_one("SELECT GEN_ID(GEN_TINA4_MIGRATION_ID, 1) AS next_id FROM RDB$DATABASE")
-        next_id = row["next_id"] if row else 1
-        db.execute(
-            "INSERT INTO tina4_migration (id, migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?, ?)",
-            [next_id, name, desc, batch, now, passed],
-        )
-    else:
-        db.execute(
-            "INSERT INTO tina4_migration (migration_name, description, batch, executed_at, passed) VALUES (?, ?, ?, ?, ?)",
-            [name, desc, batch, now, passed],
-        )
+        insert_cols.insert(0, "id")
+        values.insert(0, row["next_id"] if row else 1)
+
+    placeholders = ", ".join("?" for _ in insert_cols)
+    db.execute(
+        f"INSERT INTO tina4_migration ({', '.join(insert_cols)}) VALUES ({placeholders})",
+        values,
+    )
 
 
 def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:

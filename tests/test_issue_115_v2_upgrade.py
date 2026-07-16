@@ -294,3 +294,98 @@ def test_old_v3_migration_id_column_renamed_to_migration_name(db, mig_dir):
 
     ran = m.migrate()
     assert ran == [], "an already-applied migration must NOT re-run after the rename upgrade"
+
+
+# ── issue #93: a PENDING migration must APPLY on a legacy (migration_id) table ─
+#
+# The test above only proves the READ side: it asserts an already-applied
+# migration does NOT re-run, so _record_applied() is never called and the
+# bookkeeping INSERT is never exercised against the legacy shape. That blind
+# spot let #93 ship: `migration_id` is NOT NULL on a v3 <= 3.13.54 table and the
+# insert never wrote it, so EVERY new migration died on a not-null violation and
+# no further migration could ever apply to that database. Fresh tables have no
+# such column, which is why CI never saw it. These pin the WRITE side.
+
+
+def _create_old_v3_table(db, with_migration_name=False):
+    """Recreate the tina4_migration table exactly as v3 <= 3.13.54 created it.
+
+    `migration_id` is NOT NULL UNIQUE there. With with_migration_name=True this
+    is the post-rename-compat shape (both columns, NOT NULL still on the old
+    one) - a database that has already booted a >= 3.13.55 framework once.
+    """
+    extra = ", migration_name VARCHAR(500)" if with_migration_name else ""
+    db.execute(
+        f"""
+        CREATE TABLE tina4_migration (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            migration_id VARCHAR(500) NOT NULL UNIQUE,
+            description VARCHAR(500),
+            batch INTEGER NOT NULL DEFAULT 1,
+            executed_at VARCHAR(50) NOT NULL,
+            passed INTEGER NOT NULL DEFAULT 1{extra}
+        )
+        """
+    )
+    db.commit()
+
+
+@pytest.mark.parametrize("with_migration_name", [False, True], ids=["old_v3", "old_v3_compat"])
+def test_issue_93_pending_migration_applies_on_legacy_migration_id_table(db, mig_dir, with_migration_name):
+    """A pending migration must apply on a table created by v3 <= 3.13.54.
+
+    Both legacy variants must work: one the new runner has never touched, and
+    one that already ran the rename compat path (both columns present, the old
+    one still NOT NULL). The fix must not live in the rename branch - that fires
+    once and would never reach the second case.
+    """
+    _create_old_v3_table(db, with_migration_name)
+    (mig_dir / "000001_smoke.sql").write_text("CREATE TABLE smoke_check (id INTEGER);")
+
+    ran = Migration(db, str(mig_dir)).migrate()
+
+    assert ran == ["000001_smoke.sql"], "the pending migration must apply, not die on migration_id NOT NULL"
+    assert db.table_exists("smoke_check"), "the migration's own DDL must have run"
+    row = db.fetch_one("SELECT migration_name, migration_id, passed FROM tina4_migration")
+    assert row["migration_name"] == "000001_smoke"
+    assert row["passed"] == 1
+    assert row["migration_id"] == "000001_smoke", (
+        "the legacy NOT NULL column must be populated, mirroring migration_name"
+    )
+
+
+def test_issue_93_legacy_table_migration_reruns_without_unique_collision(db, mig_dir):
+    """Re-recording the same migration must replace its row, not collide.
+
+    `migration_id` is UNIQUE on the legacy table, so writing it back is only safe
+    because the delete-before-insert removes this migration's own row first.
+    """
+    _create_old_v3_table(db)
+    (mig_dir / "000001_smoke.sql").write_text("CREATE TABLE smoke_check (id INTEGER);")
+    m = Migration(db, str(mig_dir))
+    m.migrate()
+
+    # Force a re-record of the same name — this is what would trip the UNIQUE.
+    m.record_migration("000001_smoke", 2, passed=0)
+    m.record_migration("000001_smoke", 3, passed=1)
+
+    rows = db.fetch("SELECT migration_name, migration_id, batch FROM tina4_migration", limit=10).records
+    assert len(rows) == 1, "at most one row per migration_name — latest state wins"
+    assert rows[0]["batch"] == 3
+    assert rows[0]["migration_id"] == "000001_smoke"
+
+
+def test_issue_93_fresh_v3_table_still_inserts_only_canonical_columns(db, mig_dir):
+    """Control: a fresh table has no migration_id, and must not gain one.
+
+    Guards the fix against over-reach — the column list is built from the table's
+    real columns, so a canonical table inserts only the six canonical ones.
+    """
+    (mig_dir / "000001_smoke.sql").write_text("CREATE TABLE smoke_check (id INTEGER);")
+
+    ran = Migration(db, str(mig_dir)).migrate()
+
+    assert ran == ["000001_smoke.sql"]
+    cols = _column_names(db)
+    assert "migration_id" not in cols, "a fresh v3 table must never grow the legacy column"
+    assert db.fetch_one("SELECT migration_name FROM tina4_migration")["migration_name"] == "000001_smoke"
