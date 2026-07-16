@@ -49,6 +49,58 @@ def background(callback, interval: float = 1.0):
     _background_tasks.append({"callback": callback, "interval": interval})
 
 
+async def background_tick_loop(callback, interval: float, executor, shutdown):
+    """Run one registered background task on its interval until shutdown.
+
+    A task NEVER overlaps itself: each run is awaited to completion before the
+    interval sleep and the next tick. That is the only sound reading of an
+    interval scheduler, and it is what makes the one-worker-per-task pool sizing
+    in `_serve` safe.
+
+    Args:
+        callback: The registered callable (sync or async, no arguments).
+        interval: Seconds to sleep between runs.
+        executor: ThreadPoolExecutor used for sync callbacks.
+        shutdown: asyncio.Event that ends the loop when set.
+    """
+    timeout = max(interval * 2, 5.0)
+    loop = asyncio.get_running_loop()
+    while not shutdown.is_set():
+        try:
+            if asyncio.iscoroutinefunction(callback):
+                # A coroutine IS cancellable, so the timeout really interrupts it.
+                await asyncio.wait_for(callback(), timeout=timeout)
+            else:
+                # Run sync callback in a thread pool — never blocks the event loop.
+                #
+                # A callable already running in a ThreadPoolExecutor CANNOT be
+                # cancelled: Future.cancel() returns False once it has started and
+                # there is no way to interrupt the thread. So this must NOT use
+                # wait_for() — that abandons the wrapper future while the thread
+                # keeps running, and the next tick then starts a SECOND copy
+                # alongside the first (silent double-execution of a slow sweep,
+                # with every later tick piling on another). Wait for the run to
+                # finish and only WARN about the overrun.
+                fut = loop.run_in_executor(executor, callback)
+                done, _pending = await asyncio.wait({fut}, timeout=timeout)
+                if not done:
+                    Log.warning(
+                        f"Background task is still running after {timeout:.1f}s. "
+                        f"The next run is deferred until it finishes (a running sync "
+                        f"task cannot be interrupted). Use non-blocking calls "
+                        f"(e.g. queue.pop() instead of queue.consume())."
+                    )
+                await fut  # never overlap; re-raises the callback's error
+        except asyncio.TimeoutError:
+            Log.warning(
+                f"Background task exceeded {timeout:.1f}s timeout and was interrupted. "
+                f"Use non-blocking calls (e.g. queue.pop() instead of queue.consume())."
+            )
+        except Exception as e:
+            Log.error(f"Background task error: {e}")
+        await asyncio.sleep(interval)
+
+
 # module_name → source-file mtime at the last (re)import. Drives the
 # changed-file detection in ``_auto_discover``: a file whose mtime is newer
 # than the recorded value is re-executed in place, so editing an existing
@@ -2743,7 +2795,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
         # Start registered background tasks as asyncio tasks.
         # Sync callbacks run in a thread pool so they CANNOT block the event loop.
-        # A timeout (2x interval, min 5s) cancels runaway tasks.
+        # max_workers is one per registered task — sound only because a task never
+        # overlaps itself (see background_tick_loop), so tasks cannot starve each
+        # other of workers.
         import concurrent.futures
         _executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=max(len(_background_tasks), 2),
@@ -2751,31 +2805,11 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         )
         bg_tasks = []
         for task_def in _background_tasks:
-            cb = task_def["callback"]
-            iv = task_def["interval"]
-
-            async def _tick_loop(_cb=cb, _iv=iv):
-                timeout = max(_iv * 2, 5.0)
-                while not shutdown.is_set():
-                    try:
-                        if asyncio.iscoroutinefunction(_cb):
-                            await asyncio.wait_for(_cb(), timeout=timeout)
-                        else:
-                            # Run sync callback in thread pool — never blocks the event loop
-                            await asyncio.wait_for(
-                                loop.run_in_executor(_executor, _cb),
-                                timeout=timeout,
-                            )
-                    except asyncio.TimeoutError:
-                        Log.warning(
-                            f"Background task exceeded {timeout:.1f}s timeout and was interrupted. "
-                            f"Use non-blocking calls (e.g. queue.pop() instead of queue.consume())."
-                        )
-                    except Exception as e:
-                        Log.error(f"Background task error: {e}")
-                    await asyncio.sleep(_iv)
-
-            bg_tasks.append(asyncio.create_task(_tick_loop()))
+            bg_tasks.append(asyncio.create_task(
+                background_tick_loop(
+                    task_def["callback"], task_def["interval"], _executor, shutdown,
+                )
+            ))
 
         await shutdown.wait()
 

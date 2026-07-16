@@ -1,6 +1,6 @@
 [project]
 name = "tina4-python"
-version = "3.13.76"
+version = "3.13.77"
 description = "Tina4 Python v3 — Zero-dependency, lightweight web framework"
 authors = [
     {name = "Andre van Zuydam", email = "andrevanzuydam@gmail.com"}
@@ -64,6 +64,9 @@ tina4python = "tina4_python.cli:main"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: a test that needs real wall-clock time to reproduce a timing bug (deselect with -m 'not slow')",
+]
 
 [tool.ruff]
 target-version = "py312"
