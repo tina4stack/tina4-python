@@ -514,23 +514,23 @@ TINA4_TOKEN_LIMIT is used to set the session time, default 60 minutes
 
 Set `TINA4_SESSION_BACKEND` to choose a backend:
 
-| Handler | Backend | Required package |
+The value is the backend NAME, not a class name. An unknown value falls back to
+the file backend without raising.
+
+| Value | Backend | Required package |
 |---------|---------|-----------------|
-| `SessionFileHandler` (default) | File system | — |
-| `SessionRedisHandler` | Redis | `redis` |
-| `SessionValkeyHandler` | Valkey | `valkey` |
-| `SessionMongoHandler` | MongoDB | `pymongo` |
+| `file` (default) | File system | none |
+| `redis` | Redis | `redis` |
+| `valkey` | Valkey | `valkey` |
+| `mongodb` | MongoDB | `pymongo` |
+| `database` | Your ORM DB | none |
 
 #### MongoDB session env vars
 
 ```bash
-TINA4_SESSION_BACKEND=SessionMongoHandler
-TINA4_SESSION_MONGO_HOST=localhost        # default
-TINA4_SESSION_MONGO_PORT=27017            # default
-TINA4_SESSION_MONGO_URI=                  # full URI (overrides host/port)
-TINA4_SESSION_MONGO_USERNAME=             # optional
-TINA4_SESSION_MONGO_PASSWORD=             # optional
-TINA4_SESSION_MONGO_DB=tina4_sessions     # default database
+TINA4_SESSION_BACKEND=mongodb                        # backend NAME, not a class name
+TINA4_SESSION_MONGO_URI=mongodb://localhost:27017     # connection URI
+TINA4_SESSION_MONGO_DB=tina4_sessions                 # default database
 TINA4_SESSION_MONGO_COLLECTION=sessions   # default collection
 TINA4_SESSION_SAMESITE=Lax               # SameSite attribute for session cookies (default: Lax)
 ```
@@ -1644,7 +1644,7 @@ TINA4_OVERRIDE_CLIENT=false       # Set to true to allow running without tina4 C
 HOST_NAME=localhost:7145
 
 # Sessions
-TINA4_SESSION_BACKEND=SessionFileHandler  # SessionFileHandler, SessionRedisHandler, SessionValkeyHandler, SessionMongoHandler
+TINA4_SESSION_BACKEND=file                # file, redis, valkey, mongodb, database (unknown value falls back to file)
 TINA4_SESSION_SAMESITE=Lax               # SameSite attribute for session cookies (default: Lax)
 
 # Swagger/OpenAPI
