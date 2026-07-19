@@ -1,6 +1,6 @@
 # Tina4 Python
 
-Version 3.13.78 - Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.79 - Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -823,7 +823,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools auto-start when MCP is a capability of the deployment. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. **Security is a two-layer gate (v3.13.40):** `is_enabled()` is a pure capability gate (explicit `TINA4_MCP` wins, else `TINA4_DEBUG`; host-independent), and `is_request_allowed(remote_ip, has_valid_token)` authorises each request on the RAW socket peer (`request.remote_ip`, never X-Forwarded-For): loopback always; a remote caller needs `TINA4_MCP_REMOTE=true` AND a token matching `TINA4_MCP_TOKEN` (fallback `TINA4_API_KEY`; sent as Authorization Bearer / X-MCP-Token / X-Api-Key; no configured token means remote is always denied). All MCP surfaces (REST shim, JSON-RPC, SSE) 404 a disallowed caller. `database_query` is SELECT/WITH-only and rejects stacked statements; the file tools are sandboxed to the project root. `is_localhost()` is informational only, not the gate
 - Tests: 3,510 passing (111 skipped, 177 modules)
-- Version: 3.13.78
+- Version: 3.13.79
 
 ## Links
 
