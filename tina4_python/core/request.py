@@ -70,8 +70,8 @@ class Request:
     """Parsed HTTP request — everything a route handler needs."""
 
     __slots__ = (
-        "method", "path", "url", "query_string", "params", "query", "headers",
-        "body", "raw_body", "cookies", "files", "ip", "remote_ip",
+        "method", "path", "url", "scheme", "query_string", "params", "query",
+        "headers", "body", "raw_body", "cookies", "files", "ip", "remote_ip",
         "content_type", "session", "_route_params", "_handler",
     )
 
@@ -79,6 +79,7 @@ class Request:
         self.method: str = "GET"
         self.path: str = "/"
         self.url: str = "/"
+        self.scheme: str = "http"       # Native connection scheme (see is_secure_scheme)
         self.query_string: str = ""
         self.params: dict = {}          # Query string + route params merged
         self.query: dict = {}           # Query string params only (separate from route params)
@@ -96,6 +97,27 @@ class Request:
                                         # before middleware runs, so before_*
                                         # middleware (e.g. CsrfMiddleware) can read
                                         # handler metadata like _noauth.
+
+    def is_secure_scheme(self) -> bool:
+        """True when the client's request scheme is https.
+
+        Proxy-aware: TLS is normally terminated at a proxy (nginx, HAProxy,
+        ALB, Cloudflare, most container deploys) which then forwards plain
+        HTTP, so the native ASGI scheme reads ``http`` on exactly the deploys
+        that ARE encrypted. ``x-forwarded-proto`` carries the scheme the
+        client actually used; the FIRST hop of a comma-separated chain
+        (``"https, http"``) is the client-facing one. Falls back to the
+        native connection scheme when no forwarded header is present.
+
+        This is the single source of truth for the URL scheme AND for the
+        Secure flag on the session cookie, so both agree instead of one
+        concluding ``https://`` while the other drops Secure (#95; mirrors
+        tina4-php ``Request::isSecureScheme()``, php#175).
+        """
+        forwarded = self.headers.get("x-forwarded-proto", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip().lower() == "https"
+        return (self.scheme or "").lower() == "https"
 
     @classmethod
     def from_scope(cls, scope: dict, body: bytes = b"") -> "Request":
@@ -117,14 +139,16 @@ class Request:
         _client = scope.get("client")
         req.remote_ip = _client[0] if _client else ""
 
+        # Native connection scheme (ASGI: "http"/"https"; TLS terminated at a
+        # proxy shows "http" here — x-forwarded-proto carries the real one).
+        req.scheme = scope.get("scheme") or "http"
+
         # Reconstruct the full absolute URL — scheme://host[:port]/path[?query].
-        # Honours x-forwarded-proto and x-forwarded-host so apps behind a proxy
-        # still see the URL the client used. Matches PHP/Ruby/Node parity.
-        scheme = (
-            req.headers.get("x-forwarded-proto")
-            or scope.get("scheme")
-            or "http"
-        )
+        # is_secure_scheme() is the single source of truth for the scheme (and
+        # for the session cookie's Secure flag): it honours x-forwarded-proto
+        # (first hop of a comma chain wins) then the native scheme, so an app
+        # behind a TLS-terminating proxy still sees https. PHP/Ruby/Node parity.
+        scheme = "https" if req.is_secure_scheme() else "http"
         host = (
             req.headers.get("x-forwarded-host")
             or req.headers.get("host")

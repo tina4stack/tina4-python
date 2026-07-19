@@ -1770,9 +1770,15 @@ def _finalize_response(
                 request.session.save()
                 sid = request.session.session_id if hasattr(request.session, 'session_id') else getattr(request.session, 'id', None)
                 if sid:
-                    ttl = int(os.environ.get("TINA4_SESSION_TTL", "3600"))
-                    samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
-                    response.header("set-cookie", f"tina4_session={sid}; Path=/; HttpOnly; SameSite={samesite}; Max-Age={ttl}")
+                    # Route through the single cookie-builder so every
+                    # TINA4_SESSION_* knob (Secure/HttpOnly/SameSite) and the
+                    # proxy-aware Secure detection actually take effect. Do NOT
+                    # hand-write a second Set-Cookie here — that bypass is what
+                    # made TINA4_SESSION_SECURE a silent no-op (#95).
+                    response.header(
+                        "set-cookie",
+                        request.session.cookie_header(request=request),
+                    )
             import random
             if random.randint(1, 100) == 1:
                 request.session.gc()

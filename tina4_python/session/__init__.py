@@ -379,7 +379,7 @@ class Session:
         result = self.flash(key)
         return result if result is not None else default
 
-    def cookie_header(self, cookie_name: str = None) -> str:
+    def cookie_header(self, cookie_name: str = None, request=None) -> str:
         """Return a Set-Cookie header value for this session.
 
         Cookie attributes are env-driven so deployments can flip security
@@ -387,9 +387,24 @@ class Session:
 
             TINA4_SESSION_NAME      Cookie name (default: tina4_session)
             TINA4_SESSION_HTTPONLY  HttpOnly flag (default: true)
-            TINA4_SESSION_SECURE    Secure flag (default: false). Set to
-                                    true only when serving over HTTPS.
+            TINA4_SESSION_SECURE    Secure flag (default: false). Forces
+                                    Secure on regardless of request scheme.
             TINA4_SESSION_SAMESITE  SameSite attribute (default: Lax)
+
+        The Secure attribute is set when ANY of the following holds:
+
+          1. TINA4_SESSION_SECURE is truthy (explicit opt-in), OR
+          2. SameSite is ``None`` — browsers reject SameSite=None without
+             Secure, OR
+          3. the request is really on https — detected proxy-aware via
+             ``request.is_secure_scheme()`` (honours x-forwarded-proto, first
+             hop of a comma chain), so a session behind a TLS-terminating
+             proxy still ships Secure (#95).
+
+        Plain HTTP with no proxy signal and no TLS stays non-Secure: a Secure
+        cookie over plain http is undeliverable and would silently break the
+        session. Pass ``request`` so the scheme can be detected; omit it and
+        only the env/SameSite signals apply.
         """
         if cookie_name is None:
             cookie_name = os.environ.get("TINA4_SESSION_NAME", "tina4_session")
@@ -398,6 +413,11 @@ class Session:
         # flag when the operator explicitly opts out.
         httponly = str(os.environ.get("TINA4_SESSION_HTTPONLY", "true")).strip().lower() in ("true", "1", "yes", "on")
         secure = str(os.environ.get("TINA4_SESSION_SECURE", "false")).strip().lower() in ("true", "1", "yes", "on")
+        secure = (
+            secure
+            or samesite.strip().lower() == "none"
+            or (request is not None and request.is_secure_scheme())
+        )
 
         parts = [f"{cookie_name}={self._session_id}", "Path=/"]
         if httponly:
