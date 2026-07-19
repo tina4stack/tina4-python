@@ -18,6 +18,21 @@ import secrets
 from pathlib import Path
 
 
+def session_cookie_name() -> str:
+    """Resolve the session cookie name — the single source of truth shared by
+    the WRITE side (``Session.cookie_header``) and the READ side
+    (``core/server._init_session``), so a cookie written under a renamed name is
+    read back on the next request.
+
+        TINA4_SESSION_NAME   Cookie name (default: ``tina4_session``)
+
+    Keeping this in one place means the default can never drift between the two
+    sides: an operator who sets ``TINA4_SESSION_NAME`` renames the cookie on both
+    the emit and the parse paths at once.
+    """
+    return os.environ.get("TINA4_SESSION_NAME", "tina4_session")
+
+
 class SessionHandler:
     """Base class for session storage backends."""
 
@@ -407,7 +422,7 @@ class Session:
         only the env/SameSite signals apply.
         """
         if cookie_name is None:
-            cookie_name = os.environ.get("TINA4_SESSION_NAME", "tina4_session")
+            cookie_name = session_cookie_name()
         samesite = os.environ.get("TINA4_SESSION_SAMESITE", "Lax")
         # Default true for HttpOnly (matches v2 behaviour) — only drop the
         # flag when the operator explicitly opts out.
@@ -441,4 +456,5 @@ class Session:
 __all__ = [
     "Session", "SessionHandler",
     "FileSessionHandler", "DatabaseSessionHandler",
+    "session_cookie_name",
 ]

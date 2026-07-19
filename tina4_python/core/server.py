@@ -1108,8 +1108,13 @@ def _init_session(request: Request) -> None:
     Session creation is skipped for WebSocket upgrade requests — they don't send
     cookies and would create orphaned session files that are never cleaned up.
     A session is only created when:
-      - A tina4_session cookie is already present (resume existing session), OR
+      - A session cookie is already present (resume existing session), OR
       - The request is a normal HTTP request (not a WebSocket upgrade)
+
+    The incoming cookie is read by the SAME configured name the write side emits
+    (``TINA4_SESSION_NAME``, default ``tina4_session``) via
+    ``session.session_cookie_name()`` — otherwise a renamed cookie would be
+    written but never read back and the session would silently never resume.
     """
     if request.session is not None:
         return
@@ -1122,12 +1127,13 @@ def _init_session(request: Request) -> None:
         return
 
     try:
-        from tina4_python.session import Session
+        from tina4_python.session import Session, session_cookie_name
         cookie_header = request.headers.get("cookie", "")
         sid_match = None
+        cookie_prefix = session_cookie_name() + "="
         for part in cookie_header.split(";"):
             part = part.strip()
-            if part.startswith("tina4_session="):
+            if part.startswith(cookie_prefix):
                 sid_match = part.split("=", 1)[1]
                 break
 
