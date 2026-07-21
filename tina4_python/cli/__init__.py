@@ -763,7 +763,8 @@ def _routes(args):
 
 def _test(args):
     """Run the test suite."""
-    subprocess.run([sys.executable, "-m", "pytest", "tests/"] + args)
+    result = subprocess.run([sys.executable, "-m", "pytest", "tests/"] + args)
+    sys.exit(result.returncode)
 
 
 def _build(args):
