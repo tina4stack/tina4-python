@@ -13,9 +13,15 @@ CLI commands for development workflow.
     tina4python test              # Run tests
     tina4python generate          # Generate scaffolding
     tina4python ai                # Detect AI tools and install context
+
+Three further commands — doctor, setup, deploy — are owned by the `tina4` client
+and reached by DELEGATION (see DELEGATED / _delegate_to_client below), so
+`tina4python doctor` behaves exactly like `tina4 doctor` without cloning the
+client's implementation into four languages.
 """
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -187,6 +193,83 @@ def _kill_process_on_port(port: int) -> bool:
     return False
 
 
+# ── Delegation to the `tina4` client ─────────────────────────────────
+#
+# `doctor`, `setup` and `deploy` are owned by the Rust `tina4` client, not by any
+# framework. `doctor` probes ALL FOUR runtimes plus package managers, ports and
+# global AI-skills currency; `setup` installs language runtimes (Homebrew /
+# Chocolatey, with UAC elevation on Windows) and scaffolds a project from
+# nothing; `deploy` writes deployment boilerplate baked into the client binary.
+# Cloning any of them into four languages would duplicate hundreds of lines per
+# language for zero new capability — and four copies would immediately drift.
+#
+# So the framework CLI DELEGATES: it resolves `tina4` on PATH, runs it with the
+# same argv, and exits with the client's exit code. All four frameworks reach the
+# SAME implementation, which is a stronger parity guarantee than four ports.
+#
+# Delegation is ALLOW-LISTED, never blind. The client forwards ITS unknown
+# commands to the framework CLI, so a framework that forwarded its unknowns back
+# would ping-pong an unknown command between two processes forever. The closed
+# DELEGATED set contains only commands the client dispatches natively, so no
+# loop is possible by construction, and a real typo still gets "Unknown command".
+
+CLIENT_BINARY = "tina4"
+
+# Internal process marker (same class as the client's own TINA4_SETUP_ELEVATED):
+# set on the child so a client that resolves back to a framework CLI is caught
+# instead of spawning forever. NOT user configuration — deliberately absent from
+# the CLI's known_vars().
+DELEGATION_GUARD_ENV = "TINA4_CLI_DELEGATED"
+
+# Exit codes. 127 is the conventional "command not found" and covers both ways
+# the client can be unreachable (absent from PATH, or the loop guard tripping).
+EXIT_CLIENT_UNAVAILABLE = 127
+EXIT_UNKNOWN_COMMAND = 1
+
+CLIENT_INSTALL_HINT = (
+    "  Install it:  curl -fsSL https://tina4.com/install.sh | sh\n"
+    "  Windows:     irm https://tina4.com/install.ps1 | iex"
+)
+
+
+def _find_client() -> str | None:
+    """Absolute path of the `tina4` client on PATH, or None if it isn't there."""
+    return shutil.which(CLIENT_BINARY)
+
+
+def _delegate_to_client(command: str, args: list) -> int:
+    """Run `tina4 <command> <args...>`, returning the client's exit code.
+
+    Returns EXIT_CLIENT_UNAVAILABLE (127) with an actionable message when the
+    client is not on PATH, or when the re-entry guard shows the resolved `tina4`
+    came back to a framework CLI (a delegation loop).
+    """
+    if os.environ.get(DELEGATION_GUARD_ENV) == command:
+        print(
+            f"  Refusing to delegate '{command}' again — the 'tina4' on your PATH\n"
+            f"  resolved back to a framework CLI instead of the tina4 client.\n\n"
+            f"  Check which 'tina4' comes first on your PATH and put the client first.",
+            file=sys.stderr,
+        )
+        return EXIT_CLIENT_UNAVAILABLE
+
+    client = _find_client()
+    if client is None:
+        print(
+            f"  '{command}' is provided by the tina4 client, which is not on your PATH.\n\n"
+            f"{CLIENT_INSTALL_HINT}\n\n"
+            f"  Then run:    {CLIENT_BINARY} {command}",
+            file=sys.stderr,
+        )
+        return EXIT_CLIENT_UNAVAILABLE
+
+    # stdio is inherited, so the client's interactive prompts (setup) and colour
+    # output work exactly as if it had been invoked directly.
+    env = dict(os.environ)
+    env[DELEGATION_GUARD_ENV] = command
+    return subprocess.run([client, command, *args], env=env).returncode
+
+
 # ── Main entry point ─────────────────────────────────────────────────
 
 def main():
@@ -205,9 +288,14 @@ def main():
     spec = COMMANDS.get(command)
     if spec:
         spec["handler"](cmd_args)
+    elif command in DELEGATED:
+        sys.exit(_delegate_to_client(command, cmd_args))
     else:
+        # A genuinely unknown command is an ERROR: exit non-zero so a typo in a
+        # script or CI step fails loudly instead of reporting success.
         print(f"Unknown command: {command}")
         _help([])
+        sys.exit(EXIT_UNKNOWN_COMMAND)
 
 
 def _env_migrate(args):
@@ -259,13 +347,18 @@ def _env_migrate(args):
 def _help(args=None):
     """Print the human-readable command reference.
 
-    Generated from the COMMANDS and GENERATORS registries — the SAME single
-    source of truth that drives dispatch (`main`) and the `commands --json`
-    manifest — so the help text can never drift from what the CLI actually does.
+    Generated from the COMMANDS, DELEGATED and GENERATORS registries — the SAME
+    single source of truth that drives dispatch (`main`) and the
+    `commands --json` manifest — so the help text can never drift from what the
+    CLI actually does.
     """
     command_rows = [
         (f"{name} {spec.get('usage', '')}".rstrip(), spec["summary"])
         for name, spec in COMMANDS.items()
+    ]
+    delegated_rows = [
+        (f"{name} {spec.get('usage', '')}".rstrip(), spec["summary"])
+        for name, spec in DELEGATED.items()
     ]
     generator_rows = [
         (f"generate {name} {spec.get('usage', '')}".rstrip(), spec["summary"])
@@ -273,7 +366,7 @@ def _help(args=None):
     ]
     # Align summaries in a column; a left cell longer than the cap overflows
     # cleanly (2-space gap) rather than pushing every other summary out.
-    pad = min(46, max(len(left) for left, _ in command_rows + generator_rows))
+    pad = min(46, max(len(left) for left, _ in command_rows + delegated_rows + generator_rows))
 
     def row(left, summary):
         gap = pad if len(left) <= pad else len(left)
@@ -281,6 +374,10 @@ def _help(args=None):
 
     lines = ["", "Tina4 Python — CLI", "", "Usage: tina4python <command> [options]", "", "Commands:"]
     lines += [row(left, summary) for left, summary in command_rows]
+    lines += ["", f"Delegated to the {CLIENT_BINARY} client (same behaviour in every framework):"]
+    lines += [row(left, summary) for left, summary in delegated_rows]
+    lines += [f"  (these run the {CLIENT_BINARY} client — install: "
+              f"curl -fsSL https://tina4.com/install.sh | sh)"]
     lines += ["", "Generators:"]
     lines += [row(left, summary) for left, summary in generator_rows]
     lines += [
@@ -2943,15 +3040,20 @@ def _queue(args):
 def _commands_manifest() -> dict:
     """Build the machine-readable manifest of the CLI's command surface.
 
-    Pure data: reads the module-level COMMANDS registry and the framework
-    version — no bootstrap, no database, no migrations, no app imports. This is
-    exactly what `commands --json` serializes and what the tina4 Rust client
-    consumes to discover which commands this framework supports.
+    Pure data: reads the module-level COMMANDS and DELEGATED registries and the
+    framework version — no bootstrap, no database, no migrations, no app imports.
+    This is exactly what `commands --json` serializes and what the tina4 Rust
+    client consumes to discover which commands this framework supports.
+
+    Commands the framework hands to the `tina4` client carry `"delegated": true`,
+    so the manifest describes the WHOLE surface the CLI accepts while still
+    saying who implements each one. The client needs no change for this: its help
+    renderer already drops manifest names that clash with its own natives.
 
     Shape::
 
         {"framework": "python", "version": "<x.y.z>",
-         "commands": [{"name", "summary", "args"?, "subcommands"?}, ...]}
+         "commands": [{"name", "summary", "args"?, "subcommands"?, "delegated"?}, ...]}
     """
     from tina4_python import __version__
     commands = []
@@ -2961,6 +3063,11 @@ def _commands_manifest() -> dict:
             entry["args"] = list(spec["args"])
         if spec.get("subcommands"):
             entry["subcommands"] = list(spec["subcommands"])
+        commands.append(entry)
+    for command_name, spec in DELEGATED.items():
+        entry = {"name": command_name, "summary": spec["summary"], "delegated": True}
+        if spec.get("args"):
+            entry["args"] = list(spec["args"])
         commands.append(entry)
     return {"framework": "python", "version": __version__, "commands": commands}
 
@@ -2988,7 +3095,8 @@ def _commands(args=None):
     print(f"\nTina4 {manifest['framework']} — {manifest['version']}\n")
     width = max(len(command["name"]) for command in manifest["commands"])
     for command in manifest["commands"]:
-        print(f"  {command['name']:<{width}}  {command['summary']}")
+        marker = f" ({CLIENT_BINARY} client)" if command.get("delegated") else ""
+        print(f"  {command['name']:<{width}}  {command['summary']}{marker}")
         if command.get("subcommands"):
             print(f"  {'':<{width}}    {', '.join(command['subcommands'])}")
     print()
@@ -3044,6 +3152,19 @@ COMMANDS = {
     "metrics":          {"handler": _metrics,          "usage": "[--top N] [--json] [--fail-on warn|error] [--path DIR]", "summary": "Rank top code-quality offenders"},
     "commands":         {"handler": _commands,         "usage": "[--json]", "summary": "List available commands (add --json for machine form)"},
     "help":             {"handler": _help,             "summary": "Show this help"},
+}
+
+# Commands the `tina4` client OWNS and this CLI reaches by delegation — see the
+# "Delegation to the `tina4` client" section above for why these are not ported.
+# There are no handlers here: `main()` runs `tina4 <name> <args...>` and exits
+# with its code. Keep this set closed and identical in all four frameworks — it
+# must contain ONLY commands the client dispatches natively, or delegation could
+# bounce back and loop. Summaries are the client's own wording, verbatim.
+DELEGATED = {
+    "doctor": {"summary": "Check installed languages and tools"},
+    "setup":  {"summary": "Guided, menu-driven setup: install everything + scaffold a ready-to-run project"},
+    "deploy": {"usage": "<docker|systemd|nginx|cpanel> [--force]", "args": ["target"],
+               "summary": "Generate deployment scaffolding (Dockerfile, systemd unit, nginx block, cPanel)"},
 }
 
 

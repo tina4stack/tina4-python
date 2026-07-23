@@ -18,7 +18,7 @@ import subprocess
 import sys
 
 from tina4_python import __version__
-from tina4_python.cli import _commands, _commands_manifest, COMMANDS, GENERATORS
+from tina4_python.cli import _commands, _commands_manifest, COMMANDS, DELEGATED, GENERATORS
 
 # The command set the tina4 client must be able to discover truthfully.
 KNOWN_COMMANDS = {"migrate", "migrate:create", "seed", "test", "routes", "generate", "commands",
@@ -60,10 +60,21 @@ class TestCommandsManifestContent:
         assert not missing, f"manifest missing commands: {missing}"
 
     def test_manifest_lists_exactly_the_dispatchable_commands(self, capsys):
-        """Anti-drift lock-in: the manifest is DERIVED from the dispatch registry,
-        so it lists exactly what `main()` can dispatch — no separate list."""
+        """Anti-drift lock-in: the manifest is DERIVED from the dispatch
+        registries, so it lists exactly what `main()` can dispatch — the native
+        COMMANDS plus the DELEGATED commands handed to the tina4 client — with no
+        separate hand-kept list."""
         names = [c["name"] for c in _manifest_from_handler(capsys)["commands"]]
-        assert names == list(COMMANDS)
+        assert names == list(COMMANDS) + list(DELEGATED)
+
+    def test_only_delegated_commands_carry_the_delegated_flag(self, capsys):
+        """The flag says WHO implements a command; a native one must never claim
+        to be delegated, and a delegated one must never be silently native."""
+        entries = {c["name"]: c for c in _manifest_from_handler(capsys)["commands"]}
+        for name in DELEGATED:
+            assert entries[name].get("delegated") is True, f"{name} not flagged"
+        for name in COMMANDS:
+            assert "delegated" not in entries[name], f"{name} wrongly flagged"
 
     def test_generate_has_subcommands_with_model_and_crud(self, capsys):
         generate = next(
