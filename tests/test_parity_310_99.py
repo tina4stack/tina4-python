@@ -129,20 +129,31 @@ class TestBackgroundRegistration:
     """Tests for background() task registration mechanism."""
 
     def test_background_registration(self):
-        """background() is callable and appends to _background_tasks."""
-        from tina4_python.core.server import background, _background_tasks
+        """background() is callable and appends to the task registry.
 
-        initial_count = len(_background_tasks)
+        The registry holds BackgroundTask handles rather than plain dicts since
+        per-task stop() landed, so this reads the entry's attributes and cleans
+        up through the handle's own stop() instead of popping the private list.
+        """
+        from tina4_python.core.server import (
+            background,
+            background_task_count,
+            _background_tasks,
+        )
+
+        initial_count = background_task_count()
 
         def my_task():
             pass
 
-        background(my_task, interval=5.0)
+        task = background(my_task, interval=5.0)
 
-        assert len(_background_tasks) == initial_count + 1
+        assert background_task_count() == initial_count + 1
         entry = _background_tasks[-1]
-        assert entry["callback"] is my_task
-        assert entry["interval"] == 5.0
+        assert entry is task
+        assert entry.callback is my_task
+        assert entry.interval == 5.0
 
-        # Clean up — remove the entry we just added
-        _background_tasks.pop()
+        # Clean up — stop() both ends the task and deregisters it.
+        assert task.stop() is True
+        assert background_task_count() == initial_count

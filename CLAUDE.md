@@ -600,7 +600,18 @@ background(check_health, interval=30.0)
 **Never use `threading.Thread` for periodic work.** Use `background()` instead — it integrates with the server lifecycle, handles errors gracefully, supports both sync and async callbacks, and cancels cleanly on shutdown.
 
 ```python
-background(callback: callable, interval: float = 1.0) -> None
+background(callback: callable, interval: float = 1.0) -> BackgroundTask
+background_task_count() -> int          # currently-REGISTERED tasks
+stop_all_background_tasks() -> int      # stop + deregister all; returns how many
+
+# The returned handle stops ONE task and DEREGISTERS it — a stopped task never
+# stays in the registry, so background_task_count() always reflects what is
+# actually running. Works before the server starts (drops the registration) and
+# while it runs (also cancels the ticking task). Idempotent: a second stop() is a
+# safe no-op returning False. Mirrors Ruby's Tina4::Background.stop_task(task)
+# and Node's handle.stop().
+task = background(check_health, interval=30.0)
+task.stop()   # -> True the first time, False thereafter
 ```
 
 ### AI Integration — AI assistant context scaffolding

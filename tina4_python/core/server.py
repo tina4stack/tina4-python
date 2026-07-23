@@ -11,6 +11,7 @@ import signal
 import asyncio
 import contextvars
 import importlib
+import threading
 import uuid
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
@@ -34,10 +35,63 @@ _ai_port_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("_ai_port_ct
 _start_time: float = 0
 
 # ── Background tasks registry ────────────────────────────────────────────
-_background_tasks: list[dict] = []
+_background_tasks: list["BackgroundTask"] = []
+# The registry is read from the event loop and written from user code (which may
+# be on another thread), and stop() is a search-then-delete — not atomic under
+# the GIL. One lock guards every mutation.
+_background_lock = threading.Lock()
 
 
-def background(callback, interval: float = 1.0):
+class BackgroundTask:
+    """Handle for one registered background task.
+
+    Returned by :func:`background`. Call :meth:`stop` to end the task AND remove
+    it from the registry — a stopped task is never left behind, so
+    :func:`background_task_count` always reports what is actually running.
+
+    Mirrors Node's ``background()`` handle (``handle.stop()``) and Ruby's
+    ``Tina4::Background.stop_task(task)``.
+    """
+
+    __slots__ = ("callback", "interval", "stopped", "_runner")
+
+    def __init__(self, callback, interval: float):
+        self.callback = callback
+        self.interval = float(interval)
+        self.stopped = False
+        # The asyncio.Task ticking this callback, once the server loop has
+        # started it. None while the task is registered but not yet running.
+        self._runner = None
+
+    def stop(self) -> bool:
+        """Stop this task and deregister it.
+
+        Works whether or not the server is running: before start it simply
+        leaves the registry, and once ticking it also cancels its runner.
+
+        Idempotent — a second call is a safe no-op.
+
+        Returns:
+            True if this call removed the task, False if it was already gone.
+        """
+        removed = False
+        with _background_lock:
+            # Identity, not equality: only THIS handle goes, never a sibling
+            # that happens to hold the same callback and interval.
+            for index, registered in enumerate(_background_tasks):
+                if registered is self:
+                    del _background_tasks[index]
+                    removed = True
+                    break
+
+        self.stopped = True
+        runner, self._runner = self._runner, None
+        if runner is not None and not runner.done():
+            runner.cancel()
+        return removed
+
+
+def background(callback, interval: float = 1.0) -> BackgroundTask:
     """Register a background task that runs periodically in the server event loop.
 
     Matches PHP's $app->background(fn, interval) pattern.
@@ -45,8 +99,59 @@ def background(callback, interval: float = 1.0):
     Args:
         callback: Function to call (sync or async, no arguments).
         interval: Seconds between invocations (default: 1.0).
+
+    Returns:
+        A BackgroundTask handle — call ``.stop()`` to end and deregister it.
     """
-    _background_tasks.append({"callback": callback, "interval": interval})
+    task = BackgroundTask(callback, interval)
+    with _background_lock:
+        _background_tasks.append(task)
+    return task
+
+
+def background_task_count() -> int:
+    """Number of REGISTERED background tasks (stopped ones are already gone)."""
+    with _background_lock:
+        return len(_background_tasks)
+
+
+def stop_all_background_tasks() -> int:
+    """Stop and deregister every background task. Returns how many were stopped.
+
+    Each task deregisters itself, so there is no blanket ``clear()``: clearing
+    would also drop a task registered while this was running, leaving it ticking
+    but invisible in the registry.
+    """
+    with _background_lock:
+        snapshot = list(_background_tasks)
+    return sum(1 for task in snapshot if task.stop())
+
+
+def _start_background_tasks(executor, shutdown) -> list:
+    """Start an asyncio runner for every registered task. Called once by _serve.
+
+    Each runner is bound to its handle so ``BackgroundTask.stop()`` can cancel a
+    task that is already ticking, not merely deregister one that never started.
+    """
+    with _background_lock:
+        # Never iterate the live list — a concurrent stop() mutates it.
+        snapshot = list(_background_tasks)
+
+    runners = []
+    for task in snapshot:
+        if task.stopped:
+            continue  # stopped between registration and server start
+        runner = asyncio.create_task(
+            background_tick_loop(task.callback, task.interval, executor, shutdown)
+        )
+        task._runner = runner
+        # A stop() that landed while the runner was being created must still win,
+        # or the task would tick on with nothing holding a reference to cancel it.
+        if task.stopped:
+            runner.cancel()
+            continue
+        runners.append(runner)
+    return runners
 
 
 async def background_tick_loop(callback, interval: float, executor, shutdown):
@@ -2812,16 +2917,10 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         # other of workers.
         import concurrent.futures
         _executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max(len(_background_tasks), 2),
+            max_workers=max(background_task_count(), 2),
             thread_name_prefix="tina4_bg",
         )
-        bg_tasks = []
-        for task_def in _background_tasks:
-            bg_tasks.append(asyncio.create_task(
-                background_tick_loop(
-                    task_def["callback"], task_def["interval"], _executor, shutdown,
-                )
-            ))
+        bg_tasks = _start_background_tasks(_executor, shutdown)
 
         await shutdown.wait()
 

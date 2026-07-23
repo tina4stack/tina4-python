@@ -101,7 +101,12 @@ from tina4_python.cache import (  # noqa: E402, F401
 from tina4_python.container import Container  # noqa: E402, F401
 
 # ── Server ──
-from tina4_python.core.server import run, background  # noqa: E402, F401
+from tina4_python.core.server import (  # noqa: E402, F401
+    run,
+    background,
+    background_task_count,
+    stop_all_background_tasks,
+)
 
 # ── HTTP Client ──
 from tina4_python.api import Api  # noqa: E402, F401
