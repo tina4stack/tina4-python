@@ -1,7 +1,9 @@
 # Tina4 Test Client — Test routes without starting a server.
 """
-Simple test client that creates mock requests, matches routes,
-executes handlers, and returns a TestResponse.
+In-process test client. Builds a real ASGI scope and dispatches it through the
+REAL Tina4 front controller (``tina4_python.core.server.app``) — the same entry
+point uvicorn/hypercorn/granian call — then wraps what the app actually sent as
+a ``TestResponse``.
 
 Usage::
 
@@ -20,23 +22,22 @@ Usage::
 """
 import json as _json
 import asyncio
-from tina4_python.core.request import Request
-from tina4_python.core.response import Response
-from tina4_python.core.router import Router
 
 
 class TestResponse:
-    """Wraps a Response object with a clean test-friendly API."""
+    """Wraps what the ASGI app sent with a clean test-friendly API."""
 
     __slots__ = ("status", "body", "headers", "content_type")
 
-    def __init__(self, response: Response):
-        self.status: int = response.status_code
-        self.body: bytes = response.content
-        self.content_type: str = response.content_type
+    def __init__(self, status: int, headers: list[tuple[bytes, bytes]], body: bytes):
+        self.status: int = status
+        self.body: bytes = body
         self.headers: dict = {}
-        for name, value in response._headers:
-            self.headers[name.lower()] = value
+        for name, value in headers:
+            key = name.decode().lower() if isinstance(name, (bytes, bytearray)) else str(name).lower()
+            val = value.decode() if isinstance(value, (bytes, bytearray)) else str(value)
+            self.headers[key] = val
+        self.content_type: str = self.headers.get("content-type", "")
 
     def json(self) -> dict | list | None:
         """Parse body as JSON."""
@@ -53,10 +54,15 @@ class TestResponse:
 
 
 class TestClient:
-    """Test routes directly without starting a server.
+    """Test the app without opening a socket.
 
-    Creates a mock Request, finds the matching route via Router.match(),
-    executes the handler, and returns a TestResponse.
+    Builds an ASGI scope and dispatches it through ``core.server.app`` — the
+    real front controller. Everything a live request gets, an in-process test
+    request gets: global + per-route middleware, the secure-by-default auth
+    gate, static files, ``/swagger``, ``/__dev``, ``/__feedback``, CORS
+    preflight, the RFC 9110 OPTIONS/405 ``Allow`` responses, HEAD
+    body-stripping, session save + cookie, ETag/304, the dev toolbar and the
+    500 handler.
     """
 
     def get(self, path: str, *, headers: dict | None = None) -> TestResponse:
@@ -86,7 +92,20 @@ class TestClient:
                  json: dict | list | None = None,
                  body: str | bytes | None = None,
                  headers: dict | None = None) -> TestResponse:
-        """Build a mock request, match the route, execute the handler."""
+        """Build an ASGI scope and dispatch it through the REAL front controller.
+
+        This used to call ``Router.match`` directly and invoke the handler
+        itself, which made everything the front controller does around route
+        matching invisible to tests: global middleware never ran, and static
+        files, ``/swagger``, ``/swagger/openapi.json``, the framework's bundled
+        assets, ``/__dev``, ``/__feedback``, CORS preflight, the RFC 9110
+        OPTIONS/405 ``Allow`` responses and HEAD body-stripping all came back as
+        a hand-built 404 ``{"error":"Not found"}`` while the live server served
+        them 200. Any test asserting framework-endpoint behaviour through
+        TestClient was asserting nothing. (feature-recount D6 — the same shape as
+        the #PY2 auth fix: the in-process test client must route through the real
+        pipeline, not a re-implementation of it.)
+        """
 
         # Build raw body bytes
         raw_body = b""
@@ -119,70 +138,72 @@ class TestClient:
         if "?" in path:
             clean_path, query_string = path.split("?", 1)
 
-        # Build ASGI scope
+        # Build ASGI scope — the same shape the dev server's HTTP bridge and
+        # uvicorn build for a real connection.
         scope = {
             "type": "http",
-            "method": method,
+            "http_version": "1.1",
+            "method": method.upper(),
+            "scheme": "http",
             "path": clean_path,
+            "raw_path": clean_path.encode(),
             "query_string": query_string.encode(),
             "headers": header_list,
             "client": ("127.0.0.1", 0),
+            "server": ("localhost", 7145),
+            "root_path": "",
         }
 
-        # Create Request from scope
-        request = Request.from_scope(scope, raw_body)
+        return self._dispatch(scope, raw_body)
 
-        # Match route
-        route, params = Router.match(method, clean_path)
+    def _dispatch(self, scope: dict, raw_body: bytes) -> TestResponse:
+        """Drive ``core.server.app`` for one request and collect what it sent."""
+        from tina4_python.core.server import app
 
-        if route is None:
-            # No route found — return 404
-            resp = Response()
-            resp.status_code = 404
-            resp.content = b'{"error":"Not found"}'
-            resp.content_type = "application/json"
-            return TestResponse(resp)
+        collected_status: list[int] = []
+        collected_headers: list[list] = []
+        collected_body = bytearray()
 
-        # Inject route params
-        request._route_params = params
-        request.merge_route_params()
+        async def receive():
+            return {"type": "http.request", "body": raw_body, "more_body": False}
 
-        # Create response callable
-        response = Response()
+        async def send(message):
+            if message["type"] == "http.response.start":
+                collected_status.append(message["status"])
+                collected_headers.append(message.get("headers", []))
+            elif message["type"] == "http.response.body":
+                chunk = message.get("body", b"") or b""
+                if isinstance(chunk, str):
+                    chunk = chunk.encode()
+                collected_body.extend(chunk)
 
-        # Route through the REAL auth gate (parity with the live server). A write
-        # to an auth-required route (POST/PUT/PATCH/DELETE by default, or any
-        # @secured() route) with no valid token / API key / formToken 401s here
-        # exactly as it would in production. The TestClient used to skip this, so
-        # a green test could hide a live 401 — the verification layer lied. A
-        # public route (GET, or a write marked @noauth()) has auth_required False,
-        # so _check_auth is a no-op and the handler runs unchanged. (#PY2)
-        from tina4_python.core.server import _check_auth
-        if _check_auth(request, response, route):
-            return TestResponse(response)
+        self._run(app(scope, receive, send))
 
-        # Execute handler (sync or async)
-        handler = route["handler"]
-        result = handler(request, response)
+        if not collected_status:
+            raise RuntimeError(
+                f"Tina4 ASGI app sent no response for "
+                f"{scope['method']} {scope['path']} — this is a framework bug"
+            )
 
-        # If handler is async, run it in an event loop
-        if asyncio.iscoroutine(result):
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
+        return TestResponse(collected_status[0], collected_headers[0], bytes(collected_body))
 
-            if loop and loop.is_running():
-                # Already in an async context — create a task
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    result = pool.submit(asyncio.run, result).result()
-            else:
-                result = asyncio.run(result)
+    @staticmethod
+    def _run(coro):
+        """Run a coroutine to completion from sync code, loop or no loop.
 
-        # The handler should have returned the response via response(...)
-        # If the handler returned a Response, use that
-        if isinstance(result, Response):
-            return TestResponse(result)
+        ``TestClient`` is deliberately synchronous so a test reads as
+        ``client.get(...)``. Under an already-running loop (an async test)
+        ``asyncio.run`` would raise, so the coroutine is driven on its own loop
+        in a worker thread.
+        """
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
 
-        return TestResponse(response)
+        if running is not None and running.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(asyncio.run, coro).result()
+
+        return asyncio.run(coro)
