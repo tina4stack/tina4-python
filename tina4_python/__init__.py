@@ -89,6 +89,9 @@ from tina4_python.auth import Auth  # noqa: E402, F401
 # ── Queue ──
 from tina4_python.queue import Queue  # noqa: E402, F401
 
+# ── MQTT (IoT) ──
+from tina4_python.mqtt import Mqtt, MqttMessage, MqttError  # noqa: E402, F401
+
 # ── Template engine ──
 from tina4_python.frond import Frond  # noqa: E402, F401
 
