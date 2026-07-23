@@ -5,13 +5,13 @@
 <h1 align="center">Tina4 Python</h1>
 
 <p align="center">
-  55 built-in features. Zero dependencies. One import, everything works.
+  97 built-in features. Zero dependencies. One import, everything works.
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/tina4-python/"><img src="https://img.shields.io/pypi/v/tina4-python?color=7b1fa2&label=PyPI" alt="PyPI"></a>
   <img src="https://img.shields.io/badge/tests-2%2C281%20passing-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/features-55-blue" alt="Features">
+  <img src="https://img.shields.io/badge/features-97-blue" alt="Features">
   <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="Zero Deps">
   <a href="https://tina4.com"><img src="https://img.shields.io/badge/docs-tina4.com-7b1fa2" alt="Docs"></a>
 </p>
@@ -694,7 +694,7 @@ Benchmarked with `wrk`: 5,000 requests, 50 concurrent, median of 3 runs:
 | Bottle | 4,355 | 0 | ~5 |
 | Django | 4,050 | 20+ | ~22 |
 
-Tina4 Python delivers competitive throughput with **zero dependencies and 55 features**. Frameworks with higher req/s have a fraction of the functionality and require dozens of third-party packages.
+Tina4 Python delivers competitive throughput with **zero dependencies and 97 features**. Frameworks with higher req/s have a fraction of the functionality and require dozens of third-party packages.
 
 **Across all 4 Tina4 implementations:**
 
@@ -710,7 +710,7 @@ Run benchmarks locally: `python benchmarks/benchmark.py --python`
 
 ## Cross-Framework Parity
 
-Tina4 ships identical features across four languages: same architecture, same conventions, same 55 features:
+Tina4 ships identical features across four languages: same architecture, same conventions, same 97 features:
 
 | | Python | PHP | Ruby | Node.js |
 |---|--------|-----|------|---------|
