@@ -382,3 +382,118 @@ class TestInterpolation:
         # not be mis-folded — it stays verbatim.
         css = compile_string(".z { height: calc(100vh - 170px); }")
         assert "calc(100vh - 170px)" in css
+
+
+# ── !default flag ──────────────────────────────────────────────
+# The `!default` flag means "assign only if this variable is not already set".
+# It is a compiler directive and must never reach the CSS: `padding: 1.5rem
+# !default` is invalid CSS and browsers drop the whole declaration. Reference
+# behaviour for every case below was measured against Dart Sass 1.101.6.
+class TestDefaultFlag:
+    def test_default_flag_never_reaches_output(self):
+        css = compile_string("$g: 1.5rem !default;\n.x { padding: $g; }")
+        assert "padding: 1.5rem" in css
+        assert "!default" not in css
+
+    def test_default_does_not_overwrite_an_already_set_variable(self):
+        # The themeing contract: a user sets $primary BEFORE the partial that
+        # declares it !default, and must keep their value.
+        css = compile_string(
+            "$primary: red;\n$primary: blue !default;\n.y { color: $primary; }"
+        )
+        assert "color: red" in css
+        assert "blue" not in css
+        assert "!default" not in css
+
+    def test_default_does_assign_an_unset_variable(self):
+        css = compile_string("$primary: blue !default;\n.y { color: $primary; }")
+        assert "color: blue" in css
+        assert "!default" not in css
+
+    def test_null_counts_as_unset(self):
+        # Sass treats a null variable as unset, so !default fills it.
+        css = compile_string("$c: null;\n$c: teal !default;\n.w { color: $c; }")
+        assert "color: teal" in css
+        assert "null" not in css
+
+    def test_first_default_wins_over_second_default(self):
+        css = compile_string(
+            "$a: 1rem !default;\n$a: 2rem !default;\n.v { margin: $a; }"
+        )
+        assert "margin: 1rem" in css
+        assert "2rem" not in css
+
+    def test_plain_declaration_after_default_does_overwrite(self):
+        # !default only guards against being overwritten; a plain assignment wins.
+        css = compile_string("$a: 1rem !default;\n$a: 2rem;\n.v { margin: $a; }")
+        assert "margin: 2rem" in css
+
+    def test_global_flag_is_also_consumed(self):
+        css = compile_string("$a: 5px !default !global;\n.i { top: $a; }")
+        assert "top: 5px" in css
+        assert "!default" not in css and "!global" not in css
+
+    def test_multiline_default_declaration_is_consumed(self):
+        # A map literal spanning lines, with the flag on the closing line — the
+        # exact shape tina4-css's _variables.scss uses.
+        scss = '$m: (\n  "a": 1,\n  "b": 2\n) !default;\n.m { z-index: 1; }'
+        css = compile_string(scss)
+        assert "!default" not in css
+        assert "$m" not in css
+
+    def test_literal_default_in_a_string_is_preserved(self):
+        # NEGATIVE guard on the strip's scope: only a *variable declaration*
+        # value is stripped. Dart Sass keeps this string verbatim; so must we.
+        css = compile_string('.s { content: "x !default y"; }')
+        assert '"x !default y"' in css
+
+    def test_default_in_a_function_argument_is_left_verbatim(self):
+        # NEGATIVE guard: `rgba(#000 !default, .1)` is a syntax error in Dart
+        # Sass and never appears in valid SCSS. We do not silently "fix" it into
+        # something Sass would never emit — it is not a variable declaration, so
+        # it is left exactly as written and stays visibly wrong.
+        css = compile_string(".z { color: rgba(#000 !default, 0.1); }")
+        assert "!default" in css
+
+    def test_hex_variable_with_default_is_usable_inside_rgba(self):
+        # The real-world case behind the 41 broken rgba() calls: the flag rode
+        # inside the stored value and corrupted every function call using it.
+        css = compile_string(
+            "$black: #000 !default;\n.z { box-shadow: 0 1px 2px rgba($black, 0.075); }"
+        )
+        assert "rgba(0, 0, 0, 0.075)" in css
+        assert "!default" not in css
+
+    def test_override_survives_an_import_of_a_real_partial(self, tmp_path):
+        # End-to-end over REAL files: set the variable, then @import a partial
+        # that declares it !default. The override must win.
+        (tmp_path / "_theme.scss").write_text(
+            "$primary: navy !default;\n$accent: gold !default;\n", encoding="utf-8"
+        )
+        (tmp_path / "main.scss").write_text(
+            '$primary: hotpink;\n@import "theme";\n'
+            ".k { color: $primary; border-color: $accent; }\n",
+            encoding="utf-8",
+        )
+        css = ScssCompiler().compile_file(str(tmp_path / "main.scss"))
+        assert "color: hotpink" in css
+        assert "border-color: gold" in css       # unset one still gets its default
+        assert "navy" not in css
+        assert "!default" not in css
+
+    def test_preset_variable_beats_a_source_default(self):
+        compiler = ScssCompiler()
+        compiler.set_variable("primary", "rebeccapurple")
+        css = compiler.compile("$primary: navy !default;\n.p { color: $primary; }")
+        assert "color: rebeccapurple" in css
+        assert "navy" not in css
+
+    def test_compile_scss_directory_strips_the_flag(self, scss_dir, output):
+        (scss_dir / "_vars.scss").write_text("$gap: 4px !default;\n", encoding="utf-8")
+        (scss_dir / "app.scss").write_text(
+            '@import "vars";\n.a { margin: $gap; }\n', encoding="utf-8"
+        )
+        css = compile_scss(str(scss_dir), output)
+        assert "margin: 4px" in css
+        assert "!default" not in css
+        assert "!default" not in Path(output).read_text(encoding="utf-8")

@@ -152,11 +152,56 @@ def _compile(scss: str) -> str:
     return css
 
 
+# Flags that may trail a variable declaration's value. `!default` means "assign
+# only if this variable is not already set" — the flag that makes a variable
+# themeable. `!global` is the scope flag. Both are compiler directives: they are
+# consumed here and must never reach the CSS, because `padding: 1.5rem !default`
+# is invalid CSS and browsers drop the whole declaration. Sass flag names are
+# case-SENSITIVE (`!DEFAULT` is an error in Dart Sass), so this deliberately
+# does not use re.IGNORECASE.
+_VARIABLE_FLAG = re.compile(r'\s*!(default|global)\s*$')
+
+
+def _strip_variable_flags(value: str) -> tuple[str, bool]:
+    """Split trailing ``!default`` / ``!global`` flags off a declaration value.
+
+    Returns ``(value_without_flags, declares_default)``.
+
+    Only ever called on the value of a ``$name: value;`` declaration, so a
+    literal ``!default`` anywhere else — inside a quoted string
+    (``content: "x !default y"``) or a function argument — is left untouched,
+    exactly as Dart Sass leaves it. A global strip would corrupt real string
+    content, and would silently turn ``rgba(#000 !default, 0.1)`` (a syntax
+    error in Dart Sass) into valid-looking CSS that Sass would never emit.
+    """
+    declares_default = False
+    while True:
+        match = _VARIABLE_FLAG.search(value)
+        if match is None:
+            return value.strip(), declares_default
+        if match.group(1) == "default":
+            declares_default = True
+        value = value[:match.start()]
+
+
 def _extract_variables(scss: str, variables: dict) -> str:
-    """Extract $variable: value; declarations."""
+    """Extract $variable: value; declarations.
+
+    Honours the SCSS ``!default`` flag: ``$x: value !default;`` assigns only when
+    ``$x`` is not already set. That is what makes a variable themeable — a user
+    who writes ``$primary: red;`` BEFORE importing a partial that declares
+    ``$primary: blue !default;`` keeps red. Declarations are visited in source
+    order, so "already set" means "set by an earlier declaration or by a preset
+    variable". A value of ``null`` counts as unset, as in Sass.
+    """
     def _store(m):
         name = m.group(1)
-        value = m.group(2).strip().rstrip(";").strip()
+        value, declares_default = _strip_variable_flags(
+            m.group(2).strip().rstrip(";").strip()
+        )
+        # !default must not overwrite a value that is already set.
+        if declares_default and variables.get(name, "null") != "null":
+            return ""
         # Resolve variable references in the value
         for var_name, var_val in variables.items():
             value = value.replace(f"${var_name}", var_val)
