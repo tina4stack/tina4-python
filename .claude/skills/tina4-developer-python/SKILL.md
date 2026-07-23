@@ -138,7 +138,7 @@ a feature.
 
 ## Before you write code — the reuse ladder
 
-Climb in order; write new code only at the last rung. Tina4 ships **54 built-in features, zero dependencies** — most "new code" is already in the box, and most of the rest can be **scaffolded**.
+Climb in order; write new code only at the last rung. Tina4 ships **97 built-in features, zero dependencies** — most "new code" is already in the box, and most of the rest can be **scaffolded**.
 
 1. **Does it need to exist?** Re-read the request and trace the actual code flow. The best change is often none.
 2. **Does Tina4 already do it?** Check built-ins first: CRUD → `auto_crud = True` (AutoCrud); DB → the ORM (`Model.all()/.where()`); Auth/JWT → `Auth`; validation → `Validator`; seed/fake data → `FakeData`/`seed_orm`; email → `Messenger`; queue → `Queue`; templates → Frond; sessions, i18n, WebSockets, GraphQL, realtime — all built in.

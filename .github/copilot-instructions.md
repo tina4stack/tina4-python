@@ -1,6 +1,6 @@
 # tina4-python Copilot Instructions
 
-Tina4 Python v3. 54 features, zero dependencies.
+Tina4 Python v3. 97 features, zero dependencies.
 
 ## Route Pattern
 
