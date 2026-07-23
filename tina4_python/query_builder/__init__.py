@@ -22,11 +22,15 @@ Usage:
 class QueryBuilder:
     """Fluent SQL query builder that produces and executes SQL statements."""
 
-    def __init__(self, table: str, db=None):
+    def __init__(self, table: str, db=None, primary_key: str = None):
         """Private-ish constructor. Use from_table() or ORM.query()."""
         self._table = table
         self._db = db
         self._columns: list[str] = ["*"]
+        # A selected column can carry bound values too (select_distance binds
+        # the reference point). SELECT is the FIRST clause to_sql() emits, so
+        # these bind before WHERE, HAVING and ORDER BY.
+        self._select_params: list = []
         self._wheres: list[tuple[str, str]] = []
         self._params: list = []
         self._joins: list[str] = []
@@ -38,24 +42,37 @@ class QueryBuilder:
         # the reference point). They are appended LAST because ORDER BY is the
         # last clause in to_sql() — placeholder order must match clause order.
         self._order_by_params: list = []
+        # The table's primary-key COLUMN, when the builder came from a model.
+        # Used as the tie-break that makes distance ordering deterministic.
+        self._primary_key: str | None = primary_key
         self._limit_val: int | None = None
         self._offset_val: int | None = None
 
     @staticmethod
-    def from_table(table_name: str, db=None) -> "QueryBuilder":
+    def from_table(table_name: str, db=None, primary_key: str = None) -> "QueryBuilder":
         """Create a QueryBuilder for a table.
 
         Args:
             table_name: The database table name.
             db: Optional database connection (Database or adapter).
+            primary_key: The table's primary-key column. ``ORM.query()`` fills
+                this in; it is what lets ``order_by_distance()`` add a stable
+                tie-break so pagination over equidistant rows cannot loop or
+                skip. Pass it yourself on a raw builder to get the same
+                guarantee.
 
         Returns:
             A new QueryBuilder instance.
         """
-        return QueryBuilder(table_name, db)
+        return QueryBuilder(table_name, db, primary_key)
 
     def select(self, *columns: str) -> "QueryBuilder":
         """Set the columns to select.
+
+        REPLACES the column list, so any values bound by a previous
+        :meth:`select_distance` are discarded with it — an orphaned bound value
+        with no placeholder left to fill would silently shift every parameter
+        after it. Call ``select()`` first, then ``select_distance()``.
 
         Args:
             *columns: Column names (default is '*').
@@ -65,6 +82,7 @@ class QueryBuilder:
         """
         if columns:
             self._columns = list(columns)
+            self._select_params = []
         return self
 
     def where(self, condition: str, params: list = None) -> "QueryBuilder":
@@ -205,7 +223,171 @@ class QueryBuilder:
         self._params.extend([location.lon, location.lat, radius])
         return self
 
-    def order_by_distance(self, column: str, point, descending: bool = False) -> "QueryBuilder":
+    def intersects(self, column: str, geometry) -> "QueryBuilder":
+        """Restrict to rows whose geometry column intersects ``geometry``.
+
+        The geofence predicate — "which devices are inside this zone?" — and
+        the general form of :meth:`bbox`. Emits
+        ``ST_Intersects(<column>, ST_GeogFromText(?))`` on PostGIS, with the
+        whole geometry bound as ONE parameter, so no coordinate is ever
+        formatted into the SQL::
+
+            zone = "POLYGON((17.5 -34.5, 19.5 -34.5, 19.5 -33, 17.5 -33, 17.5 -34.5))"
+            ChargePoint.query().intersects("location", zone).get()
+
+        Args:
+            column: The PointField's column name.
+            geometry: A ``Point``, a ``(lon, lat)`` pair, a WKT/EWKT string of
+                any geometry type (polygon, multipolygon, line...), or a GeoJSON
+                geometry / Feature dict. A GeoJSON dict is bound as JSON and
+                parsed by the engine, so there is no client-side WKT writer to
+                get wrong.
+
+        Returns:
+            self for chaining.
+
+        Raises:
+            ValueError: naming the value, when it is not a readable geometry.
+            SpatialNotSupportedError: naming the engine, when it has no spatial
+                support. Raised HERE, at the call site, not at get().
+        """
+        from tina4_python.database.adapter import SQLTranslator
+        from tina4_python.orm.point import DEFAULT_SRID, geometry_binding
+
+        bound_value, form = geometry_binding(geometry)
+        engine = self._engine()
+        self._wheres.append(
+            ("AND", SQLTranslator.intersects(engine, column, form, DEFAULT_SRID))
+        )
+        self._params.append(bound_value)
+        return self
+
+    def bbox(self, column: str, min_lon: float, min_lat: float,
+             max_lon: float, max_lat: float) -> "QueryBuilder":
+        """Restrict to rows inside the ``(min_lon, min_lat)``–``(max_lon, max_lat)`` box.
+
+        The map-viewport query. Corners are ``(lon, lat)`` like every other
+        coordinate pair in Tina4, south-west corner first::
+
+            ChargePoint.query().bbox("location", 17.5, -34.5, 19.5, -33.0).get()
+
+        All four ordinates are bound as parameters.
+
+        Args:
+            column: The PointField's column name.
+            min_lon: West edge. min_lat: South edge.
+            max_lon: East edge. max_lat: North edge.
+
+        Returns:
+            self for chaining.
+
+        Raises:
+            ValueError: if an ordinate is not a finite number, is out of the
+                WGS 84 range, or if min > max on either axis (an inside-out box
+                silently matches nothing, so it fails loud instead). A box that
+                crosses the antimeridian cannot be expressed this way — pass
+                two boxes, or use :meth:`intersects` with a polygon.
+            SpatialNotSupportedError: naming the engine, when it has no spatial
+                support.
+        """
+        import math
+
+        from tina4_python.database.adapter import SQLTranslator
+        from tina4_python.orm.point import DEFAULT_SRID
+
+        corners = {
+            "min_lon": min_lon, "min_lat": min_lat,
+            "max_lon": max_lon, "max_lat": max_lat,
+        }
+        ordinates = {}
+        for label, raw in corners.items():
+            try:
+                number = float(raw)
+            except (TypeError, ValueError) as e:
+                raise ValueError(
+                    f"bbox(): {label} must be a number, got {raw!r}"
+                ) from e
+            if not math.isfinite(number):
+                raise ValueError(f"bbox(): {label} must be finite, got {raw!r}")
+            bound = 180.0 if label.endswith("lon") else 90.0
+            if not -bound <= number <= bound:
+                raise ValueError(
+                    f"bbox(): {label} {number} is out of range for SRID "
+                    f"{DEFAULT_SRID} (-{bound:g}..{bound:g}). Corners are "
+                    f"(lon, lat) — did you pass latitude first?"
+                )
+            ordinates[label] = number
+
+        if ordinates["min_lon"] > ordinates["max_lon"]:
+            raise ValueError(
+                f"bbox(): min_lon {ordinates['min_lon']} is east of max_lon "
+                f"{ordinates['max_lon']}. An inside-out box matches nothing. A "
+                f"box crossing the antimeridian must be given as two boxes, or "
+                f"as a polygon through intersects()."
+            )
+        if ordinates["min_lat"] > ordinates["max_lat"]:
+            raise ValueError(
+                f"bbox(): min_lat {ordinates['min_lat']} is north of max_lat "
+                f"{ordinates['max_lat']}. An inside-out box matches nothing."
+            )
+
+        engine = self._engine()
+        self._wheres.append(("AND", SQLTranslator.bbox(engine, column, DEFAULT_SRID)))
+        self._params.extend([
+            ordinates["min_lon"], ordinates["min_lat"],
+            ordinates["max_lon"], ordinates["max_lat"],
+        ])
+        return self
+
+    def select_distance(self, column: str, point, alias: str = "metres") -> "QueryBuilder":
+        """Also select the distance in metres from ``point`` to each row.
+
+        "How far away is it?" — the value a list of nearby things is usually
+        rendered with. Adds ``ST_Distance(<column>, <point>) AS <alias>`` to the
+        SELECT list with the coordinates bound, so the number comes back beside
+        the row instead of needing a second round trip::
+
+            QueryBuilder.from_table("charge_point", db) \\
+                .select_distance("location", (18.42, -33.92)) \\
+                .within_distance("location", (18.42, -33.92), 5000) \\
+                .order_by_distance("location", (18.42, -33.92)) \\
+                .get()
+            # rows carry a 'metres' key
+
+        The bound coordinates go into a separate ``_select_params`` list that
+        :meth:`_all_params` puts FIRST, because SELECT is the first clause
+        ``to_sql()`` emits — placeholder order must match clause order.
+
+        Note ``count()`` is unaffected: it replaces the whole SELECT list with
+        ``COUNT(*)``, so it drops these placeholders and their values together.
+
+        Args:
+            column: The PointField's column name.
+            point: A ``Point``, ``(lon, lat)`` tuple, WKT/EWKT string, or GeoJSON dict.
+            alias: Result column name. Validated as a SQL identifier because it
+                IS interpolated; the coordinates never are.
+
+        Returns:
+            self for chaining.
+
+        Raises:
+            ValueError: on a bad point value or an alias that is not a plain
+                identifier.
+            SpatialNotSupportedError: naming the engine, when it has no spatial
+                support.
+        """
+        from tina4_python.database.adapter import SQLTranslator
+        from tina4_python.orm.point import Point
+
+        location = Point.parse(point)
+        engine = self._engine()
+        expression = SQLTranslator.distance_as(engine, column, alias, location.srid)
+        self._columns = self._columns + [expression]
+        self._select_params.extend([location.lon, location.lat])
+        return self
+
+    def order_by_distance(self, column: str, point, descending: bool = False,
+                          tie_break: str | bool = None) -> "QueryBuilder":
         """Order rows by distance from ``point`` (nearest first by default).
 
         Emits ``ORDER BY ST_Distance(<column>, ST_SetSRID(ST_MakePoint(?, ?), <srid>))``
@@ -213,10 +395,24 @@ class QueryBuilder:
 
             ChargePoint.query().order_by_distance("location", (18.42, -33.92)).limit(5).get()
 
+        **Ties break on a stable key.** Distance alone is not a total order:
+        two rows exactly the same distance away can come back in either order,
+        and PostgreSQL's sort is not stable — a plain ``UPDATE`` elsewhere in
+        the table moves rows in the heap and silently changes the result order.
+        Paging over that skips rows and repeats others. So the primary key is
+        appended as a secondary sort key whenever the builder knows it
+        (``ORM.query()`` always supplies it).
+
         Args:
             column: The PointField's column name.
             point: A ``Point``, ``(lon, lat)`` tuple, WKT/EWKT string, or GeoJSON dict.
-            descending: Furthest first when True.
+            descending: Furthest first when True (the tie-break follows the
+                same direction, so ``descending=True`` is the exact reverse).
+            tie_break: Column that breaks exact distance ties. ``None``
+                (default) uses the builder's primary key — set for every
+                ``ORM.query()``, unset for a bare ``from_table()`` unless you
+                pass ``primary_key=``. A column name overrides it; ``False``
+                switches the tie-break off and accepts engine-defined order.
 
         Returns:
             self for chaining.
@@ -232,6 +428,11 @@ class QueryBuilder:
         expression = SQLTranslator.distance(engine, column, location.srid)
         self._order_by_cols.append(f"{expression} DESC" if descending else expression)
         self._order_by_params.extend([location.lon, location.lat])
+
+        key = self._primary_key if tie_break is None else tie_break
+        if key:
+            key = SQLTranslator.identifier(key, "tie-break column")
+            self._order_by_cols.append(f"{key} DESC" if descending else key)
         return self
 
     def _engine(self) -> str:
@@ -343,6 +544,9 @@ class QueryBuilder:
             self._columns = original_columns
             self._order_by_cols = original_order
 
+        # Only WHERE and HAVING placeholders survive: replacing the SELECT list
+        # dropped any select_distance() placeholders, and clearing ORDER BY
+        # dropped its own. Binding either here would shift every value.
         all_params = self._params + self._having_params
 
         row = self._db.fetch_one(sql, all_params or None)
@@ -520,12 +724,17 @@ class QueryBuilder:
     # -- Private helpers --
 
     def _all_params(self) -> list:
-        """Bound values in clause order: WHERE, then HAVING, then ORDER BY.
+        """Bound values in clause order: SELECT, WHERE, HAVING, then ORDER BY.
 
         Must match the clause order to_sql() emits — a placeholder list out of
         step with the SQL silently binds the wrong values.
         """
-        return self._params + self._having_params + self._order_by_params
+        return (
+            self._select_params
+            + self._params
+            + self._having_params
+            + self._order_by_params
+        )
 
     def _build_where(self) -> str:
         """Build the WHERE clause from accumulated conditions."""

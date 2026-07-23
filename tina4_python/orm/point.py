@@ -48,6 +48,23 @@ _WKT_POINT = _re.compile(
 )
 _HEX = _re.compile(r"^[0-9a-fA-F]+$")
 
+# Any OGC geometry in WKT/EWKT form — the gate `geometry_binding` uses so an
+# obviously-not-a-geometry string fails HERE with a readable message instead of
+# as an opaque driver error one round trip later.
+_WKT_GEOMETRY = _re.compile(
+    r"^\s*(?:SRID\s*=\s*(?P<srid>\d+)\s*;\s*)?"
+    r"(?:POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON"
+    r"|GEOMETRYCOLLECTION|CIRCULARSTRING|COMPOUNDCURVE|CURVEPOLYGON"
+    r"|MULTICURVE|MULTISURFACE|TRIANGLE|TIN|POLYHEDRALSURFACE)"
+    r"\s*(?:Z|M|ZM)?\s*(?:\(|EMPTY\b)",
+    _re.IGNORECASE,
+)
+
+_GEOJSON_GEOMETRY_TYPES = frozenset({
+    "point", "linestring", "polygon", "multipoint", "multilinestring",
+    "multipolygon", "geometrycollection",
+})
+
 
 class Point:
     """An immutable ``(longitude, latitude)`` pair with an SRID.
@@ -310,3 +327,85 @@ class Point:
 
     def __repr__(self):
         return f"Point(lon={self._lon}, lat={self._lat}, srid={self._srid})"
+
+
+def geometry_binding(value, srid: int = DEFAULT_SRID) -> tuple[str, str]:
+    """Normalise ANY geometry into one bound value plus its encoding.
+
+    :meth:`Point.parse` is the funnel for single points; this is the funnel for
+    the general geometries the spatial predicates take — the polygon of a
+    geofence, the rectangle of a map viewport, a route line. It returns
+    ``(bound_value, form)`` where ``form`` is ``"ewkt"`` or ``"geojson"``,
+    matching :meth:`~tina4_python.database.adapter.SQLTranslator.geometry_literal`.
+
+    The geometry travels as ONE bound parameter, so no coordinate is ever
+    formatted into SQL, and the database (not a hand-rolled WKT writer) does the
+    parsing::
+
+        geometry_binding("POLYGON((17.5 -34.5, 19.5 -34.5, 19.5 -33, 17.5 -33, 17.5 -34.5))")
+        # ('SRID=4326;POLYGON((17.5 -34.5, ...))', 'ewkt')
+
+        geometry_binding({"type": "Polygon", "coordinates": [[[17.5, -34.5], ...]]})
+        # ('{"type": "Polygon", "coordinates": ...}', 'geojson')
+
+    Args:
+        value: A ``Point``, a ``(lon, lat)`` pair, a WKT/EWKT string of any
+            geometry type, or a GeoJSON geometry / Feature ``dict``.
+        srid: SRID to assume when the value does not carry one.
+
+    Returns:
+        ``(bound_value, form)``.
+
+    Raises:
+        ValueError: naming the offending value, when the shape is not a
+            geometry. Never guesses.
+    """
+    import json
+
+    if isinstance(value, Point):
+        return value.ewkt, "ewkt"
+
+    if isinstance(value, (tuple, list)):
+        return Point.parse(value, srid).ewkt, "ewkt"
+
+    if isinstance(value, dict):
+        geometry = value
+        if str(value.get("type", "")).lower() == "feature":
+            geometry = value.get("geometry") or {}
+        geometry_type = str(geometry.get("type", ""))
+        if geometry_type.lower() not in _GEOJSON_GEOMETRY_TYPES:
+            raise ValueError(
+                f"geometry_binding: GeoJSON 'type' must be one of "
+                f"{sorted(_GEOJSON_GEOMETRY_TYPES)}, got "
+                f"{geometry_type or 'nothing'!r}."
+            )
+        if geometry_type.lower() == "geometrycollection":
+            if not isinstance(geometry.get("geometries"), list):
+                raise ValueError(
+                    "geometry_binding: a GeoJSON GeometryCollection needs a "
+                    "'geometries' list."
+                )
+        elif not isinstance(geometry.get("coordinates"), (list, tuple)):
+            raise ValueError(
+                f"geometry_binding: GeoJSON 'coordinates' must be a list, got "
+                f"{geometry.get('coordinates')!r}."
+            )
+        return json.dumps(geometry), "geojson"
+
+    if isinstance(value, str):
+        text = value.strip()
+        match = _WKT_GEOMETRY.match(text)
+        if match:
+            # EWKT carries its own SRID; plain WKT gets the caller's, so the
+            # engine never has to assume one.
+            return (text if match.group("srid") else f"SRID={int(srid)};{text}"), "ewkt"
+        raise ValueError(
+            f"geometry_binding: cannot read {value!r} as a geometry. Supported: "
+            f"a (lon, lat) tuple, a Point, WKT/EWKT such as "
+            f"'POLYGON((lon lat, ...))', or a GeoJSON geometry dict."
+        )
+
+    raise ValueError(
+        f"geometry_binding: unsupported type {type(value).__name__} — expected a "
+        f"Point, a (lon, lat) tuple, a WKT/EWKT string, or a GeoJSON dict."
+    )

@@ -342,11 +342,18 @@ class ORM(metaclass=ORMMeta):
         Usage:
             results = User.query().where("active = ?", [1]).order_by("name").get()
 
+        The model's primary-key column travels with the builder so
+        ``order_by_distance()`` can break exact distance ties on it — without a
+        tie-break the row order for equidistant rows is engine-defined and
+        pagination can skip or repeat rows.
+
         Returns:
             A QueryBuilder instance bound to this model's table and database.
         """
         from tina4_python.query_builder import QueryBuilder
-        return QueryBuilder.from_table(cls._get_table(), cls._get_db())
+        return QueryBuilder.from_table(
+            cls._get_table(), cls._get_db(), cls._get_pk_column()
+        )
 
     @classmethod
     def _get_table(cls) -> str:
@@ -459,6 +466,17 @@ class ORM(metaclass=ORMMeta):
             clauses.append(f"{column} = ?")
             params.append(getattr(self, name, None))
         return " AND ".join(clauses), params
+
+    @classmethod
+    def _get_pk_column(cls) -> str:
+        """Database COLUMN name of the primary key (field_mapping aware).
+
+        ``_get_pk()`` returns the attribute name; SQL needs the column it maps
+        to. QueryBuilder uses this as the stable ORDER BY tie-break.
+        """
+        pk = cls._get_pk()
+        field = cls._fields.get(pk)
+        return cls.field_mapping.get(pk, (field.column if field else None) or pk)
 
     # ── CRUD ────────────────────────────────────────────────────
 
@@ -1072,7 +1090,28 @@ class ORM(metaclass=ORMMeta):
                                     is the safer choice on Firebird)
 
         Auto-increment primary keys use engine-appropriate syntax.
-        Returns True on success.
+
+        Returns:
+            True on success, False if the DDL failed (the cause is logged).
+
+        Raises:
+            SpatialNotSupportedError: **narrowed contract — a spatial model on
+                a non-spatial engine RAISES, it does not return False.** Every
+                other failure here is recoverable and reported as ``False``,
+                but there is no safe fallback column type for geometry: a
+                ``TEXT`` stand-in would accept writes, return rows, and be
+                silently wrong for every distance query afterwards. The
+                exception names the engine and the alternative. It is resolved
+                BEFORE the ``table_exists`` short-circuit, so the refusal never
+                depends on whether the table happens to exist yet, and it fires
+                on the engine — not on the field — so a PointField model is
+                portable source that simply cannot be deployed onto an engine
+                that would lie about it.
+
+                Mirrors (PHP / Ruby / Node) must THROW here too. Returning
+                false would collapse "this engine cannot do spatial" into the
+                same signal as "the DDL failed", and the caller would create
+                the table by hand and carry on.
         """
         from tina4_python.database.adapter import SQLTranslator
 

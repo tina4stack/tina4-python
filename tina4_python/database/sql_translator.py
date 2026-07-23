@@ -52,7 +52,7 @@ class SQLTranslator:
         )
 
     @classmethod
-    def _spatial_identifier(cls, name: str, what: str = "column") -> str:
+    def identifier(cls, name: str, what: str = "column") -> str:
         """Validate an identifier before placing it in spatial SQL."""
         if not isinstance(name, str) or not cls._IDENTIFIER.fullmatch(name):
             raise ValueError(
@@ -61,7 +61,7 @@ class SQLTranslator:
         return name
 
     @staticmethod
-    def _spatial_srid(srid) -> int:
+    def _srid(srid) -> int:
         """Coerce the interpolated SRID to an integer."""
         if isinstance(srid, bool):
             raise ValueError(f"Spatial SRID must be an integer, got {srid!r}")
@@ -77,14 +77,14 @@ class SQLTranslator:
     def point_column_type(cls, engine: str, srid: int = 4326) -> str:
         """Return PostGIS geography Point DDL."""
         cls.require_spatial(engine, "PointField")
-        return f"geography(Point,{cls._spatial_srid(srid)})"
+        return f"geography(Point,{cls._srid(srid)})"
 
     @classmethod
     def spatial_index(cls, engine: str, table: str, column: str) -> str:
         """Return idempotent PostGIS GiST-index DDL."""
         cls.require_spatial(engine, "spatial index creation")
-        table = cls._spatial_identifier(table, "table")
-        column = cls._spatial_identifier(column)
+        table = cls.identifier(table, "table")
+        column = cls.identifier(column)
         index = f"{table.replace('.', '_')}_{column}_gist"
         return f"CREATE INDEX IF NOT EXISTS {index} ON {table} USING GIST ({column})"
 
@@ -92,21 +92,56 @@ class SQLTranslator:
     def point_literal(cls, engine: str, srid: int = 4326) -> str:
         """Return a bound PostGIS point expression in longitude/latitude order."""
         cls.require_spatial(engine, "spatial predicates")
-        return f"ST_SetSRID(ST_MakePoint(?, ?), {cls._spatial_srid(srid)})::geography"
+        return f"ST_SetSRID(ST_MakePoint(?, ?), {cls._srid(srid)})::geography"
 
     @classmethod
     def within_distance(cls, engine: str, column: str, srid: int = 4326) -> str:
         """Return a bound radius predicate whose distance uses metres."""
         cls.require_spatial(engine, "within_distance()")
-        column = cls._spatial_identifier(column)
+        column = cls.identifier(column)
         return f"ST_DWithin({column}, {cls.point_literal(engine, srid)}, ?)"
 
     @classmethod
     def distance(cls, engine: str, column: str, srid: int = 4326) -> str:
         """Return a bound spheroid-distance expression in metres."""
         cls.require_spatial(engine, "order_by_distance()")
-        column = cls._spatial_identifier(column)
+        column = cls.identifier(column)
         return f"ST_Distance({column}, {cls.point_literal(engine, srid)})"
+
+    @classmethod
+    def distance_as(cls, engine: str, column: str, alias: str, srid: int = 4326) -> str:
+        """Return an aliased bound distance expression for a SELECT list."""
+        alias = cls.identifier(alias, "result alias")
+        return f"{cls.distance(engine, column, srid)} AS {alias}"
+
+    @classmethod
+    def geometry_literal(cls, engine: str, form: str = "ewkt", srid: int = 4326) -> str:
+        """Return a one-parameter PostGIS geometry expression."""
+        cls.require_spatial(engine, "spatial predicates")
+        if form == "ewkt":
+            return "ST_GeogFromText(?)"
+        if form == "geojson":
+            return f"ST_SetSRID(ST_GeomFromGeoJSON(?), {cls._srid(srid)})::geography"
+        raise ValueError(
+            f"Spatial geometry form {form!r} is not supported; use 'ewkt' or 'geojson'"
+        )
+
+    @classmethod
+    def intersects(cls, engine: str, column: str, form: str = "ewkt",
+                   srid: int = 4326) -> str:
+        """Return a bound PostGIS intersection predicate."""
+        column = cls.identifier(column)
+        return f"ST_Intersects({column}, {cls.geometry_literal(engine, form, srid)})"
+
+    @classmethod
+    def bbox(cls, engine: str, column: str, srid: int = 4326) -> str:
+        """Return a bound PostGIS bounding-box predicate."""
+        cls.require_spatial(engine, "bbox()")
+        column = cls.identifier(column)
+        return (
+            f"ST_Intersects({column}, "
+            f"ST_MakeEnvelope(?, ?, ?, ?, {cls._srid(srid)})::geography)"
+        )
 
     @staticmethod
     def limit_to_rows(sql: str) -> str:
