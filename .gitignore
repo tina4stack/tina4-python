@@ -74,15 +74,19 @@ build/
 example/.env
 example/data/*.db
 example/data/*.db-*
-example/store/data/*.db
-example/store/data/*.db-*
-example/store/data/broken/
-example/store/data/.broken/
-example/store/data/mailbox/
-example/store/data/sessions/
-example/store/.tina4/
-example/store/__pycache__/
-example/store/src/**/__pycache__/
+# The example app runs from example/, not example/store/ (which no longer
+# exists), so the old example/store/... rules below matched nothing and every
+# runtime artifact the example writes leaked into git status - 466 of them, plus
+# 6 that got committed. Anchored /logs/ missed example/logs/ for the same reason.
+example/data/broken/
+example/data/.broken/
+example/data/mailbox/
+example/data/queue/
+example/data/sessions/
+example/logs/
+example/.tina4/
+example/__pycache__/
+example/src/**/__pycache__/
 .claude/settings.local.json
 .claude/worktrees/
 /nonexistent_path/
