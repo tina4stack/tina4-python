@@ -1131,9 +1131,10 @@ class SqlCrudMixin:
 # ── SQL Translation Rules ──────────────────────────────────────
 # Reusable translation functions for common cross-engine quirks.
 
-
 # SQLTranslator moved to sql_translator.py (feature 3: the adapter module is the
 # adapter contract and nothing else). Re-exported here because the sqlite,
 # firebird, mssql and odbc adapters import it from this module, and a file move
 # is not the place to churn their imports.
-from tina4_python.database.sql_translator import SQLTranslator  # noqa: E402,F401
+from tina4_python.database.sql_translator import (  # noqa: E402,F401
+    SQLTranslator, SpatialNotSupportedError,
+)

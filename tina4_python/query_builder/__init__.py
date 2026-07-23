@@ -34,6 +34,10 @@ class QueryBuilder:
         self._havings: list[str] = []
         self._having_params: list = []
         self._order_by_cols: list[str] = []
+        # ORDER BY can carry bound values too (spatial distance ordering binds
+        # the reference point). They are appended LAST because ORDER BY is the
+        # last clause in to_sql() — placeholder order must match clause order.
+        self._order_by_params: list = []
         self._limit_val: int | None = None
         self._offset_val: int | None = None
 
@@ -158,6 +162,86 @@ class QueryBuilder:
         self._order_by_cols.append(expression)
         return self
 
+    # ── Spatial predicates ──────────────────────────────────────────
+    # These never write PostGIS SQL here. Every fragment comes from the
+    # SQLTranslator dialect seam (tina4_python/database/adapter.py), so adding
+    # MySQL or MSSQL spatial later touches that file and not this one. Point
+    # coordinates and the radius are ALWAYS bound as parameters — no user value
+    # is ever formatted into the SQL string.
+
+    def within_distance(self, column: str, point, metres: float) -> "QueryBuilder":
+        """Restrict to rows whose point column is within ``metres`` of ``point``.
+
+        Emits ``ST_DWithin(<column>, ST_SetSRID(ST_MakePoint(?, ?), <srid>)::geography, ?)``
+        on PostGIS — an index-using predicate, not a distance filter, so the GiST
+        index created by ``create_table()`` actually gets used.
+
+            ChargePoint.query().within_distance("location", (18.42, -33.92), 5000).get()
+
+        Args:
+            column: The PointField's column name.
+            point: A ``Point``, ``(lon, lat)`` tuple, WKT/EWKT string, or GeoJSON
+                dict — the same shapes ``PointField`` accepts.
+            metres: Radius in metres (the column is ``geography``, so distances
+                are metres on the spheroid — no projection needed).
+
+        Returns:
+            self for chaining.
+
+        Raises:
+            SpatialNotSupportedError: naming the engine, when it has no spatial
+                support. Raised HERE, at the call site, rather than at get() —
+                so the traceback points at the query you wrote.
+        """
+        from tina4_python.database.adapter import SQLTranslator
+        from tina4_python.orm.point import Point
+
+        location = Point.parse(point)
+        radius = float(metres)
+        engine = self._engine()
+        self._wheres.append(
+            ("AND", SQLTranslator.within_distance(engine, column, location.srid))
+        )
+        self._params.extend([location.lon, location.lat, radius])
+        return self
+
+    def order_by_distance(self, column: str, point, descending: bool = False) -> "QueryBuilder":
+        """Order rows by distance from ``point`` (nearest first by default).
+
+        Emits ``ORDER BY ST_Distance(<column>, ST_SetSRID(ST_MakePoint(?, ?), <srid>))``
+        on PostGIS, with the coordinates bound as parameters.
+
+            ChargePoint.query().order_by_distance("location", (18.42, -33.92)).limit(5).get()
+
+        Args:
+            column: The PointField's column name.
+            point: A ``Point``, ``(lon, lat)`` tuple, WKT/EWKT string, or GeoJSON dict.
+            descending: Furthest first when True.
+
+        Returns:
+            self for chaining.
+
+        Raises:
+            SpatialNotSupportedError: naming the engine, when it has no spatial support.
+        """
+        from tina4_python.database.adapter import SQLTranslator
+        from tina4_python.orm.point import Point
+
+        location = Point.parse(point)
+        engine = self._engine()
+        expression = SQLTranslator.distance(engine, column, location.srid)
+        self._order_by_cols.append(f"{expression} DESC" if descending else expression)
+        self._order_by_params.extend([location.lon, location.lat])
+        return self
+
+    def _engine(self) -> str:
+        """Resolve the engine name for dialect selection (needs a connection)."""
+        self._ensure_db()
+        try:
+            return self._db.get_database_type() or ""
+        except AttributeError:
+            return ""
+
     def limit(self, count: int, offset: int = None) -> "QueryBuilder":
         """Set LIMIT and optional OFFSET.
 
@@ -213,7 +297,7 @@ class QueryBuilder:
         """
         self._ensure_db()
         sql = self.to_sql()
-        all_params = self._params + self._having_params
+        all_params = self._all_params()
 
         return self._db.fetch(
             sql,
@@ -230,23 +314,34 @@ class QueryBuilder:
         """
         self._ensure_db()
         sql = self.to_sql()
-        all_params = self._params + self._having_params
+        all_params = self._all_params()
 
         return self._db.fetch_one(sql, all_params or None)
 
     def count(self) -> int:
         """Execute the query and return the row count.
 
+        ORDER BY is dropped for the count: it cannot change ``COUNT(*)``, and
+        PostgreSQL/MSSQL reject a non-aggregated ORDER BY expression alongside
+        an aggregate — so ``.order_by(...).count()`` used to fail on those
+        engines. Dropping it also lets ``.order_by_distance(...).count()`` work.
+
         Returns:
             Number of matching rows.
         """
         self._ensure_db()
 
-        # Build a count query by replacing columns
-        original = self._columns
+        # Build a count query by replacing columns, without the ORDER BY clause
+        # (and therefore without its bound parameters).
+        original_columns = self._columns
+        original_order = self._order_by_cols
         self._columns = ["COUNT(*) as cnt"]
-        sql = self.to_sql()
-        self._columns = original
+        self._order_by_cols = []
+        try:
+            sql = self.to_sql()
+        finally:
+            self._columns = original_columns
+            self._order_by_cols = original_order
 
         all_params = self._params + self._having_params
 
@@ -423,6 +518,14 @@ class QueryBuilder:
         return merged
 
     # -- Private helpers --
+
+    def _all_params(self) -> list:
+        """Bound values in clause order: WHERE, then HAVING, then ORDER BY.
+
+        Must match the clause order to_sql() emits — a placeholder list out of
+        step with the SQL silently binds the wrong values.
+        """
+        return self._params + self._having_params + self._order_by_params
 
     def _build_where(self) -> str:
         """Build the WHERE clause from accumulated conditions."""

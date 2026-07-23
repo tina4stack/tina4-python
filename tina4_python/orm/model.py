@@ -186,6 +186,12 @@ class ORMMeta(type):
 
         namespace["_fields"] = fields
         namespace["_relationships"] = relationships
+        # Spatial (PointField) attribute names, resolved once at class creation.
+        # to_dict() and create_table() branch on this, so a model with no
+        # geometry pays a single falsy check and nothing else.
+        namespace["_spatial_fields"] = tuple(
+            key for key, f in fields.items() if getattr(f, "kind", None) == "PointField"
+        )
         cls = super().__new__(mcs, name, bases, namespace)
 
         # Auto-register for CRUD if flagged
@@ -217,6 +223,9 @@ class ORM(metaclass=ORMMeta):
     auto_crud: bool = False  # Set True to auto-register CRUD routes
     _db: str | object | None = None  # Per-model database override
     _fields: dict[str, Field] = {}
+    # PointField attribute names on this model, filled by ORMMeta. Empty for
+    # every non-spatial model, which is what keeps the spatial branches free.
+    _spatial_fields: tuple[str, ...] = ()
     # Last save() failure cause (validation message or DB error). None when
     # the most recent save() succeeded. Mirrors db.get_error() so a caller
     # that checks ``if not model.save():`` can still recover the real cause
@@ -1116,6 +1125,22 @@ class ORM(metaclass=ORMMeta):
         else:
             json_sql = "TEXT"
 
+        # PointField -> the engine's spatial type via the SQLTranslator dialect
+        # seam (``geography(Point,<srid>)`` on PostGIS). Resolved BEFORE the
+        # table_exists short-circuit so a spatial model on a non-spatial engine
+        # ALWAYS raises SpatialNotSupportedError naming that engine — a wrong
+        # column type is never created, and the error does not depend on whether
+        # the table happens to exist yet. This is the loud-not-silent contract:
+        # unlike the other type mappings there is no safe fallback for geometry.
+        point_sql: dict[str, str] = {}
+        for name, field_obj in cls._fields.items():
+            if getattr(field_obj, "kind", None) != "PointField":
+                continue
+            col_name = cls.field_mapping.get(name, field_obj.column or name)
+            point_sql[col_name] = SQLTranslator.point_column_type(
+                engine, getattr(field_obj, "srid", 4326)
+            )
+
         # Don't recreate if table already exists
         if db.table_exists(table):
             return True
@@ -1151,6 +1176,8 @@ class ORM(metaclass=ORMMeta):
                 sql_type = "BLOB"
             elif kind == "JSONField":
                 sql_type = json_sql
+            elif kind == "PointField":
+                sql_type = point_sql[col_name]
             else:
                 # Fallback based on field_type
                 ft = field_obj.field_type
@@ -1240,6 +1267,16 @@ class ORM(metaclass=ORMMeta):
         # it propagate out of create_table().
         try:
             db.execute(sql)
+            # A spatial predicate without a spatial index is a full table scan,
+            # so the index ships WITH the column rather than as a thing the
+            # developer must remember. IF NOT EXISTS keeps it idempotent.
+            for name, field_obj in cls._fields.items():
+                if getattr(field_obj, "kind", None) != "PointField":
+                    continue
+                if not getattr(field_obj, "spatial_index", True):
+                    continue
+                col_name = cls.field_mapping.get(name, field_obj.column or name)
+                db.execute(SQLTranslator.spatial_index(engine, table, col_name))
             db.commit()
         except Exception as e:
             from tina4_python.debug import Log
@@ -1593,6 +1630,16 @@ class ORM(metaclass=ORMMeta):
         else:
             result = {name: getattr(self, name) for name in self._fields}
 
+        # Spatial fields serialise as GeoJSON geometry, so to_dict() / to_json()
+        # / response() all emit map-ready output from one place. `_spatial_fields`
+        # is empty for every non-spatial model, so this costs one falsy check.
+        if self._spatial_fields:
+            for name in self._spatial_fields:
+                key = snake_to_camel(name) if case == "camel" else name
+                point = result.get(key)
+                if point is not None:
+                    result[key] = point.geojson
+
         if include:
             # Group includes: top-level and nested
             top_level = {}
@@ -1639,6 +1686,57 @@ class ORM(metaclass=ORMMeta):
         """Convert to a list of values (alias for to_array)."""
         return self.to_array()
 
+    def to_feature(self, geometry_field: str = None, include: list[str] = None) -> dict:
+        """Convert to an RFC 7946 GeoJSON ``Feature``.
+
+        The model's point field becomes the feature ``geometry``; every other
+        field becomes a ``properties`` entry, with the primary key also lifted to
+        the feature ``id`` (where GIS clients look for it).
+
+            ChargePoint.find(1).to_feature()
+            # {"type": "Feature", "id": 1,
+            #  "geometry": {"type": "Point", "coordinates": [18.4241, -33.9249]},
+            #  "properties": {"name": "V&A"}}
+
+        Args:
+            geometry_field: Which PointField to use as the geometry. Required
+                only when the model declares more than one.
+            include: Relationships to include in ``properties`` (as for
+                :meth:`to_dict`).
+
+        Raises:
+            ValueError: if the model has no PointField, if ``geometry_field`` is
+                not one, or if it is ambiguous with several point fields.
+        """
+        if not self._spatial_fields:
+            raise ValueError(
+                f"{type(self).__name__}.to_feature(): the model has no PointField, "
+                f"so it has no geometry. Add a PointField, or use to_dict()."
+            )
+        if geometry_field is None:
+            if len(self._spatial_fields) > 1:
+                raise ValueError(
+                    f"{type(self).__name__}.to_feature(): the model has several "
+                    f"point fields {list(self._spatial_fields)} — pass "
+                    f"geometry_field= to choose one."
+                )
+            geometry_field = self._spatial_fields[0]
+        elif geometry_field not in self._spatial_fields:
+            raise ValueError(
+                f"{type(self).__name__}.to_feature(): {geometry_field!r} is not a "
+                f"PointField on this model. Point fields: "
+                f"{list(self._spatial_fields)}."
+            )
+
+        properties = self.to_dict(include=include)
+        geometry = properties.pop(geometry_field, None)
+        feature = {"type": "Feature", "geometry": geometry, "properties": properties}
+        pk = self._get_pk()
+        pk_value = properties.get(pk)
+        if pk_value is not None:
+            feature["id"] = pk_value
+        return feature
+
     def to_json(self, include: list[str] = None) -> str:
         """Convert to JSON string."""
         import json
@@ -1656,3 +1754,59 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_val = getattr(self, pk, None)
         return f"<{self.__class__.__name__} {pk}={pk_val}>"
+
+
+def feature_collection(models, geometry_field: str = None, include: list[str] = None) -> dict:
+    """Wrap models with a PointField into an RFC 7946 ``FeatureCollection``.
+
+    This is the shape a map front end (Leaflet, MapLibre, OpenLayers, tina4-js on
+    a map) consumes directly, so a route becomes a one-liner::
+
+        from tina4_python.orm import feature_collection
+
+        @get("/api/charge-points.geojson")
+        async def charge_points(request, response):
+            return response(feature_collection(ChargePoint.all()))
+
+    ``response()`` then serialises the returned dict as JSON exactly as it does
+    any other dict — nothing new on the response path.
+
+    It is deliberately **explicit** rather than an automatic transform of
+    ``response(list_of_models)``: a list of models always serialises to a JSON
+    array, and silently switching that to a FeatureCollection because a field
+    type is present would be exactly the kind of magic Tina4 avoids.
+
+    Args:
+        models: An ORM instance or an iterable of them — e.g. ``Model.all()``,
+            ``Model.where(...)``, ``Model.select(...)``.
+        geometry_field: Which PointField supplies the geometry (only needed when
+            a model declares more than one).
+        include: Relationships to include in each feature's ``properties``.
+
+    Returns:
+        ``{"type": "FeatureCollection", "features": [...]}`` — an empty
+        ``features`` list for empty input, never None.
+
+    Raises:
+        TypeError: naming what it got, if any element is not an ORM model
+            (``QueryBuilder.get()`` returns raw row dicts, which carry no field
+            definitions and therefore no geometry — use ``Model.where()`` /
+            ``Model.select()`` for GeoJSON output).
+    """
+    if models is None:
+        rows = []
+    elif isinstance(models, ORM):
+        rows = [models]
+    else:
+        rows = models
+    features = []
+    for row in rows:
+        if not isinstance(row, ORM):
+            raise TypeError(
+                f"feature_collection(): expected ORM model instances, got "
+                f"{type(row).__name__}. Pass Model.all() / Model.where(...) / a "
+                f"list of models — a raw row dict has no field definitions, so "
+                f"there is no geometry field to find."
+            )
+        features.append(row.to_feature(geometry_field=geometry_field, include=include))
+    return {"type": "FeatureCollection", "features": features}

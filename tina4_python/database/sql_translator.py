@@ -16,12 +16,97 @@ by engine; moving it here would flatten that override.
 import re
 
 
+class SpatialNotSupportedError(NotImplementedError):
+    """The selected database engine cannot honor the GIS contract."""
+
+
 class SQLTranslator:
     """Cross-engine SQL translator.
 
     Each database adapter calls the rules it needs. Rules are composable
     and stateless — just string transforms.
     """
+
+    SPATIAL_ENGINES = ("postgres", "postgresql")
+    _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
+
+    @classmethod
+    def supports_spatial(cls, engine: str) -> bool:
+        """Return whether Tina4 has a spatial provider for ``engine``."""
+        name = (engine or "").lower()
+        name = cls.ENGINE_ALIASES.get(name, name)
+        return name in cls.SPATIAL_ENGINES
+
+    @classmethod
+    def require_spatial(cls, engine: str, feature: str) -> str:
+        """Return the normalized spatial engine or fail with an actionable error."""
+        name = (engine or "unknown").lower()
+        name = cls.ENGINE_ALIASES.get(name, name)
+        if cls.supports_spatial(name):
+            return name
+        raise SpatialNotSupportedError(
+            f"{feature} is not supported on the '{name}' database engine. "
+            "Tina4 GIS support is PostGIS-first: use PostgreSQL with the "
+            "PostGIS extension (CREATE EXTENSION postgis). Tina4 will not "
+            "replace a spatial query with an approximate latitude/longitude query."
+        )
+
+    @classmethod
+    def _spatial_identifier(cls, name: str, what: str = "column") -> str:
+        """Validate an identifier before placing it in spatial SQL."""
+        if not isinstance(name, str) or not cls._IDENTIFIER.fullmatch(name):
+            raise ValueError(
+                f"Spatial {what} name {name!r} is not a valid SQL identifier"
+            )
+        return name
+
+    @staticmethod
+    def _spatial_srid(srid) -> int:
+        """Coerce the interpolated SRID to an integer."""
+        if isinstance(srid, bool):
+            raise ValueError(f"Spatial SRID must be an integer, got {srid!r}")
+        try:
+            value = int(srid)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"Spatial SRID must be an integer, got {srid!r}") from error
+        if value <= 0:
+            raise ValueError(f"Spatial SRID must be positive, got {value}")
+        return value
+
+    @classmethod
+    def point_column_type(cls, engine: str, srid: int = 4326) -> str:
+        """Return PostGIS geography Point DDL."""
+        cls.require_spatial(engine, "PointField")
+        return f"geography(Point,{cls._spatial_srid(srid)})"
+
+    @classmethod
+    def spatial_index(cls, engine: str, table: str, column: str) -> str:
+        """Return idempotent PostGIS GiST-index DDL."""
+        cls.require_spatial(engine, "spatial index creation")
+        table = cls._spatial_identifier(table, "table")
+        column = cls._spatial_identifier(column)
+        index = f"{table.replace('.', '_')}_{column}_gist"
+        return f"CREATE INDEX IF NOT EXISTS {index} ON {table} USING GIST ({column})"
+
+    @classmethod
+    def point_literal(cls, engine: str, srid: int = 4326) -> str:
+        """Return a bound PostGIS point expression in longitude/latitude order."""
+        cls.require_spatial(engine, "spatial predicates")
+        return f"ST_SetSRID(ST_MakePoint(?, ?), {cls._spatial_srid(srid)})::geography"
+
+    @classmethod
+    def within_distance(cls, engine: str, column: str, srid: int = 4326) -> str:
+        """Return a bound radius predicate whose distance uses metres."""
+        cls.require_spatial(engine, "within_distance()")
+        column = cls._spatial_identifier(column)
+        return f"ST_DWithin({column}, {cls.point_literal(engine, srid)}, ?)"
+
+    @classmethod
+    def distance(cls, engine: str, column: str, srid: int = 4326) -> str:
+        """Return a bound spheroid-distance expression in metres."""
+        cls.require_spatial(engine, "order_by_distance()")
+        column = cls._spatial_identifier(column)
+        return f"ST_Distance({column}, {cls.point_literal(engine, srid)})"
 
     @staticmethod
     def limit_to_rows(sql: str) -> str:
