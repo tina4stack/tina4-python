@@ -1,6 +1,6 @@
 # Tina4 Python — Conventions
 
-v3.10.40 — 97 built-in features, zero dependencies.
+v3.13.82 — 98 built-in features, zero dependencies.
 
 ## Rules
 

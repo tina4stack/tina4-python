@@ -1,6 +1,6 @@
 # Tina4 Python — Agent Instructions
 
-v3.10.40. 97 built-in features, zero dependencies. Python 3.12+.
+v3.13.82. 98 built-in features, zero dependencies. Python 3.12+.
 
 ## Framework
 

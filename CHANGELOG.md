@@ -12,7 +12,14 @@ UNRELEASED work. When a version ships, its notes go to the release notes above.
 
 ## Unreleased
 
-Nothing pending on `v3`. The current release is 3.13.81.
+### Added
+
+- **MQTT 3.1.1 client** (`Mqtt` / `MqttMessage`), zero-dependency (stdlib `socket`/`struct`/`ssl`),
+  verified against a real broker with no mocks. Publish/subscribe/consume, QoS 0/1, retained, Last
+  Will, per-client TLS, QoS 2 refused loudly. Takes the family to **98 built-in features**.
+
+3.13.82 is prepared on `v3` and not yet tagged; its full notes ship in the release notes linked
+above when it is tagged. The current tagged release is 3.13.81.
 
 In-flight on a feature branch, not yet merged to `v3`:
 
