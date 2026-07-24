@@ -711,3 +711,44 @@ class TestRobustness:
         _gen_validator("Once", {})
         assert (tmp_project / "src" / "validators" / "once.py").read_text() == original
         assert "already exists" in capsys.readouterr().out
+
+
+# ── SQL reserved words must never become table names ──────────────────
+
+class TestReservedTableNames:
+    """`CREATE TABLE order (...)` is a syntax error on every engine, and the
+    ORM interpolates table names unquoted, so a resource called Order used to
+    generate a table that could never be created."""
+
+    def test_reserved_name_is_pluralised(self):
+        assert _to_table("Order") == "orders"
+        assert _to_table("Group") == "groups"
+        assert _to_table("User") == "users"
+        assert _to_table("Index") == "indexes"
+        # Non-reserved names stay singular — no behaviour change.
+        assert _to_table("Product") == "product"
+        assert _to_table("Customer") == "customer"
+
+    def test_model_and_migration_agree_on_the_escaped_name(self, tmp_project):
+        _gen_model("Order", {"fields": "total:float,status:string"})
+        model_src = (tmp_project / "src" / "orm" / "Order.py").read_text()
+        assert 'table_name = "orders"' in model_src
+
+        migration = next((tmp_project / "migrations").glob("*create_orders.sql"))
+        ddl = migration.read_text()
+        assert "orders" in ddl
+        # The bare reserved word must not appear as the CREATE TABLE target.
+        assert "CREATE TABLE IF NOT EXISTS order " not in ddl
+
+    def test_generated_ddl_actually_executes(self, tmp_project):
+        """The real regression: run the emitted DDL against SQLite."""
+        import sqlite3
+        _gen_model("Order", {"fields": "total:float,status:string"})
+        migration = next((tmp_project / "migrations").glob("*create_orders.sql"))
+        conn = sqlite3.connect(":memory:")
+        for stmt in migration.read_text().split(";"):
+            if stmt.strip():
+                conn.execute(stmt)          # raised "near \"order\": syntax error" before
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
+        assert {"id", "total", "status"} <= cols
+        conn.close()

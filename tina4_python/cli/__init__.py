@@ -54,9 +54,45 @@ def _to_snake(name: str) -> str:
     return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
 
 
+# Table names that collide with SQL reserved words. `CREATE TABLE order (...)`
+# is a syntax error on every engine, and the ORM interpolates table names into
+# SQL unquoted (and hands the raw name to driver insert/update/delete), so the
+# safe fix is to never GENERATE one. The plural form is not reserved and reads
+# naturally as a table name.
+SQL_RESERVED_TABLE_NAMES = {
+    "order", "group", "user", "table", "select", "from", "where", "index",
+    "key", "values", "column", "constraint", "check", "default", "primary",
+    "foreign", "references", "unique", "join", "union", "having", "limit",
+    "offset", "desc", "asc", "case", "when", "then", "else", "end", "and",
+    "or", "not", "null", "insert", "update", "delete", "create", "drop",
+    "alter", "grant", "revoke", "commit", "rollback", "view", "trigger",
+    "procedure", "function", "database", "schema", "session", "set", "into",
+    "as", "on", "by", "inner", "outer", "left", "right", "full", "natural",
+    "using", "with", "distinct", "between", "exists", "like", "in", "is",
+    "all", "any", "cross", "add", "row", "rows", "range", "current", "to",
+}
+
+
+def _pluralize_table(name: str) -> str:
+    """Simple English plural, used to escape a reserved table name."""
+    if name.endswith("y") and not name.endswith(("ay", "ey", "iy", "oy", "uy")):
+        return name[:-1] + "ies"
+    if name.endswith(("s", "x", "z", "ch", "sh")):
+        return name + "es"
+    return name + "s"
+
+
 def _to_table(name: str) -> str:
-    """Class name → singular table name: Product → product."""
-    return _to_snake(name)
+    """Class name → singular table name: Product → product.
+
+    A name colliding with a SQL reserved word is pluralised instead
+    (Order → orders). Every generator routes through here, so the model's
+    ``table_name``, the migration DDL, the routes and the tests all agree.
+    """
+    table = _to_snake(name)
+    if table in SQL_RESERVED_TABLE_NAMES:
+        return _pluralize_table(table)
+    return table
 
 
 def _parse_fields(fields_str: str) -> list[tuple[str, str]]:
