@@ -48,14 +48,24 @@ def _resolve_version() -> str:
 
 __version__ = _resolve_version()
 
-# ── Route decorators ──
+# ══════════════════════════════════════════════════════════════════════════
+# LAZY FEATURE LOADING (PEP 562 module __getattr__)
+# ══════════════════════════════════════════════════════════════════════════
+# A batteries-included framework should not pay to import all ~98 features on
+# every boot. Only the CORE surface below is imported eagerly; every optional
+# subsystem is registered in _LAZY and imported on FIRST reference via
+# ``__getattr__``. An app that never touches GraphQL/WSDL/MQTT/Messenger never
+# loads those modules — so a production runtime's footprint matches the app.
+# ``from tina4_python import GraphQL`` still works: the miss routes through
+# ``__getattr__``, which imports the module, caches the name in globals(), and
+# returns it (so later access skips the hook). See plan/v3/feature-preload-manifest.md.
+
+# ── CORE (always eager) — every app needs these to boot + serve ──
 from tina4_python.core.router import (  # noqa: E402, F401
     get, post, put, patch, delete, any_method,
     noauth, secured, cached, middleware, template,
     Router, RouteGroup,
 )
-
-# ── HTTP Constants ──
 from tina4_python.core.constants import (  # noqa: E402, F401
     HTTP_OK, HTTP_CREATED, HTTP_ACCEPTED, HTTP_NO_CONTENT,
     HTTP_MOVED, HTTP_REDIRECT, HTTP_NOT_MODIFIED,
@@ -66,76 +76,115 @@ from tina4_python.core.constants import (  # noqa: E402, F401
     APPLICATION_JSON, APPLICATION_XML, APPLICATION_FORM,
     APPLICATION_OCTET, TEXT_HTML, TEXT_PLAIN, TEXT_CSV, TEXT_XML,
 )
-
-# ── Database ──
-from tina4_python.database import Database  # noqa: E402, F401
-
-# ── ORM ──
-from tina4_python.orm import (  # noqa: E402, F401
-    ORM, bind_database, Field,
-    IntegerField, StringField, BooleanField, FloatField,
-    DateTimeField, TextField, BlobField, NumericField, JSONField,
-    ForeignKeyField,
-    IntField, StrField, BoolField,  # short aliases
-    has_many, has_one, belongs_to,  # relationship descriptors
+from tina4_python.core.server import (  # noqa: E402, F401
+    run, background, background_task_count, stop_all_background_tasks,
 )
-
-# ── Env (typed env-var helpers) ──
+from tina4_python.core.events import on, emit, once, off  # noqa: E402, F401
 from tina4_python.env import Env  # noqa: E402, F401
 
-# ── Auth ──
-from tina4_python.auth import Auth  # noqa: E402, F401
+# ── OPTIONAL (lazy) — public name -> (submodule, attribute) ──
+_LAZY: dict[str, tuple[str, str]] = {
+    # Database + ORM
+    "Database": ("tina4_python.database", "Database"),
+    "ORM": ("tina4_python.orm", "ORM"),
+    "bind_database": ("tina4_python.orm", "bind_database"),
+    "Field": ("tina4_python.orm", "Field"),
+    "IntegerField": ("tina4_python.orm", "IntegerField"),
+    "StringField": ("tina4_python.orm", "StringField"),
+    "BooleanField": ("tina4_python.orm", "BooleanField"),
+    "FloatField": ("tina4_python.orm", "FloatField"),
+    "DateTimeField": ("tina4_python.orm", "DateTimeField"),
+    "TextField": ("tina4_python.orm", "TextField"),
+    "BlobField": ("tina4_python.orm", "BlobField"),
+    "NumericField": ("tina4_python.orm", "NumericField"),
+    "JSONField": ("tina4_python.orm", "JSONField"),
+    "ForeignKeyField": ("tina4_python.orm", "ForeignKeyField"),
+    "IntField": ("tina4_python.orm", "IntField"),
+    "StrField": ("tina4_python.orm", "StrField"),
+    "BoolField": ("tina4_python.orm", "BoolField"),
+    "has_many": ("tina4_python.orm", "has_many"),
+    "has_one": ("tina4_python.orm", "has_one"),
+    "belongs_to": ("tina4_python.orm", "belongs_to"),
+    # Auth
+    "Auth": ("tina4_python.auth", "Auth"),
+    # Queue
+    "Queue": ("tina4_python.queue", "Queue"),
+    # MQTT
+    "Mqtt": ("tina4_python.mqtt", "Mqtt"),
+    "MqttMessage": ("tina4_python.mqtt", "MqttMessage"),
+    "MqttError": ("tina4_python.mqtt", "MqttError"),
+    # Template engine
+    "Frond": ("tina4_python.frond", "Frond"),
+    # Response cache
+    "ResponseCache": ("tina4_python.cache", "ResponseCache"),
+    "cache_stats": ("tina4_python.cache", "cache_stats"),
+    "clear_cache": ("tina4_python.cache", "clear_cache"),
+    # DI container
+    "Container": ("tina4_python.container", "Container"),
+    # HTTP client
+    "Api": ("tina4_python.api", "Api"),
+    # SOAP / WSDL
+    "WSDL": ("tina4_python.wsdl", "WSDL"),
+    "wsdl_operation": ("tina4_python.wsdl", "wsdl_operation"),
+    # GraphQL
+    "GraphQL": ("tina4_python.graphql", "GraphQL"),
+    # Auto-CRUD
+    "AutoCrud": ("tina4_python.crud", "AutoCrud"),
+    # Email
+    "Messenger": ("tina4_python.messenger", "Messenger"),
+    # Realtime / WebRTC
+    "realtime": ("tina4_python.realtime", "realtime"),
+    "RtcMediaBackend": ("tina4_python.realtime", "RtcMediaBackend"),
+    "MeshBackend": ("tina4_python.realtime", "MeshBackend"),
+    "StorageBackend": ("tina4_python.realtime.storage", "StorageBackend"),
+    "LocalStorage": ("tina4_python.realtime.storage", "LocalStorage"),
+    "S3Storage": ("tina4_python.realtime.storage", "S3Storage"),
+    # Inline testing
+    "tests": ("tina4_python.Testing", "tests"),
+    "assert_equal_inline": ("tina4_python.Testing", "assert_equal"),
+}
 
-# ── Queue ──
-from tina4_python.queue import Queue  # noqa: E402, F401
 
-# ── MQTT (IoT) ──
-from tina4_python.mqtt import Mqtt, MqttMessage, MqttError  # noqa: E402, F401
+def __getattr__(name: str):  # noqa: N807  (PEP 562 module-level hook)
+    """Import an optional subsystem on first reference, then cache it."""
+    spec = _LAZY.get(name)
+    if spec is None:
+        raise AttributeError(f"module 'tina4_python' has no attribute {name!r}")
+    import importlib
+    module_path, attr = spec
+    value = getattr(importlib.import_module(module_path), attr)
+    globals()[name] = value  # cache — subsequent access skips this hook
+    return value
 
-# ── Template engine ──
-from tina4_python.frond import Frond  # noqa: E402, F401
 
-# ── Response Cache ──
-from tina4_python.cache import (  # noqa: E402, F401
-    ResponseCache, cache_stats, clear_cache,
-)
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
 
-# ── DI Container ──
-from tina4_python.container import Container  # noqa: E402, F401
 
-# ── Server ──
-from tina4_python.core.server import (  # noqa: E402, F401
-    run,
-    background,
-    background_task_count,
-    stop_all_background_tasks,
-)
+def _preload_from_manifest() -> None:
+    """Eager-warm the subsystems an app actually uses, from a generated
+    ``.tina4/preload.json`` (see plan/v3/feature-preload-manifest.md). No manifest,
+    or dev mode, means everything stays lazy — this is pure pre-warm, never a gate.
+    The lazy ``__getattr__`` above is what guarantees unused features never load.
+    """
+    import os
+    if os.environ.get("TINA4_DEBUG", "").lower() in ("true", "1", "yes", "on"):
+        return  # dev: leave everything lazy on-demand
+    try:
+        import json
+        import pathlib
+        manifest = pathlib.Path.cwd() / ".tina4" / "preload.json"
+        if not manifest.exists():
+            return
+        data = json.loads(manifest.read_text())
+        import importlib
+        for feature in data.get("features", []):
+            try:
+                importlib.import_module(f"tina4_python.{feature}")
+            except Exception:  # noqa: BLE001 — a bad manifest entry must not break boot
+                pass
+    except Exception:  # noqa: BLE001
+        pass
 
-# ── HTTP Client ──
-from tina4_python.api import Api  # noqa: E402, F401
 
-# ── SOAP / WSDL ──
-from tina4_python.wsdl import WSDL, wsdl_operation  # noqa: E402, F401
-
-# ── GraphQL ──
-from tina4_python.graphql import GraphQL  # noqa: E402, F401
-
-# ── Auto-CRUD scaffolder ──
-from tina4_python.crud import AutoCrud  # noqa: E402, F401
-
-# ── Events (decoupled communication) ──
-from tina4_python.core.events import on, emit, once, off  # noqa: E402, F401
-
-# ── Email (Messenger) ──
-from tina4_python.messenger import Messenger  # noqa: E402, F401
-
-# ── Real-time collaboration (WebRTC signalling + chat + files control plane) ──
-from tina4_python.realtime import realtime, RtcMediaBackend, MeshBackend  # noqa: E402, F401
-from tina4_python.realtime.storage import (  # noqa: E402, F401
-    StorageBackend, LocalStorage, S3Storage,
-)
-
-# ── Inline testing (@tests + assertions for inline test cases) ──
-# Class-based xUnit testing lives in tina4_python.test (a separate module).
-# Keep both surfaces re-exported so users can write either style.
-from tina4_python.Testing import tests, assert_equal as assert_equal_inline  # noqa: E402, F401
+_preload_from_manifest()
