@@ -120,12 +120,27 @@ TPL_DATA = {
 
 
 def _template_tina4(n):
+    """Render via the FILE path, which is what an app actually uses.
+
+    This called render_string() inside the loop while Flask, Starlette and Django
+    all built their Template once outside it -- so Tina4 was timed compiling on
+    every iteration and the others were not. render("file.twig") is Frond's
+    per-request call and is the honest counterpart to Jinja2's tpl.render().
+
+    (Measured separately: render_string with an IDENTICAL source runs at 0.99x the
+    speed of a brand-new source, i.e. Frond has no compiled-template cache, so
+    this change is about comparing like with like, not about hiding a cost.)
+    """
+    import os
     import tempfile
     from tina4_python.frond import Frond
     with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "bench.twig"), "w") as fh:
+            fh.write(TPL_JINJA)
         engine = Frond(template_dir=tmp)
+        engine.render("bench.twig", TPL_DATA)      # warm, outside the timed loop
         for _ in range(n):
-            engine.render_string(TPL_JINJA, TPL_DATA)
+            engine.render("bench.twig", TPL_DATA)
 
 
 def _template_flask(n):
@@ -160,58 +175,88 @@ def _dummy_handler():
     pass
 
 
+# Every routing benchmark builds its 100-route table ONCE, outside the timed
+# loop, then matches n times.
+#
+# It used to rebuild all 100 routes on every iteration, which measured app and
+# route-table CONSTRUCTION, not routing. That is why Flask scored 62 ops/sec
+# against Tina4's 1,143 -- constructing a Flask app 1,000 times is expensive and
+# has nothing to do with how fast it routes a request. A server builds its route
+# table once at boot and matches on every request, so matching is the thing worth
+# comparing.
+
 def _routing_tina4(n):
     from tina4_python.core import router as router_mod
-    for _ in range(n):
-        # Save and reset global route list
-        saved = router_mod._routes[:]
-        router_mod._routes.clear()
+    saved = router_mod._routes[:]
+    router_mod._routes.clear()
+    try:
         for i in range(100):
             router_mod.Router.add("GET", f"/api/resource{i}/{{id}}", _dummy_handler)
-        router_mod.Router.match("GET", "/api/resource50/123")
+        for _ in range(n):
+            router_mod.Router.match("GET", "/api/resource50/123")
+    finally:
+        # Restore the global route list even if the benchmark raises, otherwise a
+        # failure here silently corrupts every later benchmark in the process.
         router_mod._routes[:] = saved
 
 
 def _routing_flask(n):
     from flask import Flask
+    app = Flask(__name__)
+    for i in range(100):
+        app.add_url_rule(f"/api/resource{i}/<int:id>", f"r{i}", _dummy_handler)
+    adapter = app.url_map.bind("")
     for _ in range(n):
-        app = Flask(__name__)
-        for i in range(100):
-            app.add_url_rule(f"/api/resource{i}/<int:id>", f"r{i}", _dummy_handler)
-        with app.test_request_context("/api/resource50/123"):
-            adapter = app.url_map.bind("")
-            adapter.match("/api/resource50/123")
+        adapter.match("/api/resource50/123")
 
 
 def _routing_starlette(n):
+    # NOTE: do NOT import starlette.testclient here. It was imported and never
+    # used, and it hard-requires httpx -- so the whole benchmark raised
+    # RuntimeError("...requires the httpx package") and reported ERROR. The
+    # scope-matching below needs nothing but starlette.routing.
     from starlette.routing import Route, Router
-    from starlette.testclient import TestClient
 
     async def _handler(request):
         from starlette.responses import PlainTextResponse
         return PlainTextResponse("ok")
 
+    routes = [Route(f"/api/resource{i}/{{id:int}}", _handler) for i in range(100)]
+    router = Router(routes=routes)
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/resource50/123",
+        "query_string": b"",
+        "headers": [],
+    }
     for _ in range(n):
-        routes = [Route(f"/api/resource{i}/{{id:int}}", _handler) for i in range(100)]
-        router = Router(routes=routes)
-        # Scope-based match
-        scope = {"type": "http", "method": "GET", "path": "/api/resource50/123", "query_string": b"", "headers": []}
         for route in router.routes:
-            match, child_scope = route.matches(scope)
+            match, _child_scope = route.matches(scope)
             if match:
                 break
 
 
 def _routing_django(n):
-    from django.urls import path, resolve
-    from django.urls.resolvers import URLResolver, URLPattern
+    import django
+    from django.conf import settings
+    from django.urls import path
+    from django.urls.resolvers import URLResolver, RegexPattern
+
+    # Django refuses to build patterns without configured settings.
+    if not settings.configured:
+        settings.configure(DEBUG=False, ALLOWED_HOSTS=["*"], ROOT_URLCONF=None)
+        django.setup()
 
     def _view(request, id):
         pass
 
+    patterns = [path(f"api/resource{i}/<int:id>/", _view, name=f"r{i}") for i in range(100)]
+    # URLResolver's first argument is a PATTERN object, not a string. Passing ""
+    # raised AttributeError("'str' object has no attribute 'match'") and reported
+    # ERROR. RegexPattern(r"^/") is the prefix resolver Django itself uses.
+    resolver = URLResolver(RegexPattern(r"^/"), patterns)
     for _ in range(n):
-        patterns = [path(f"api/resource{i}/<int:id>/", _view, name=f"r{i}") for i in range(100)]
-        resolver = URLResolver("", patterns)
         resolver.resolve("/api/resource50/123/")
 
 
