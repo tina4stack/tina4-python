@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import socket
+import ssl
 
 import pytest
 
@@ -50,11 +51,40 @@ def _reachable(url: str) -> bool:
         return False
 
 
+def _ca_verifies(url: str, ca_file: str | None) -> bool:
+    """Does this CA actually VERIFY the broker's certificate?
+
+    The guard used to accept any CA file that merely EXISTS. A stale
+    ``$TMPDIR/tina4-mqtt-infra/certs/ca.crt`` left behind by an earlier
+    ``mqtt-infra.sh`` run therefore made these examples RUN and then fail on a
+    certificate mismatch -- six red tests in every framework caused purely by
+    the environment, with an error that reads like a code regression.
+
+    A CA that cannot validate the broker is functionally the same as no CA, so
+    prove it with a real handshake and skip when it does not hold. This is
+    self-healing: regenerate the certs and the examples run again.
+    """
+    if not ca_file:
+        return False
+    p = Mqtt.parse_url(url)
+    try:
+        context = ssl.create_default_context(cafile=ca_file)
+        with socket.create_connection((p["host"], p["port"]), timeout=3) as raw:
+            with context.wrap_socket(raw, server_hostname=p["host"]):
+                return True
+    except (ssl.SSLError, OSError, ValueError):
+        return False
+
+
 CA = _ca_file()
 auth_broker = pytest.mark.skipif(not _reachable(AUTH_URL), reason=f"auth broker not reachable at {AUTH_URL}")
 tls_broker = pytest.mark.skipif(
-    not _reachable(TLS_URL) or not CA,
-    reason=f"TLS broker not reachable at {TLS_URL} or CA not set (TINA4_TEST_MQTT_CA_FILE)",
+    not _reachable(TLS_URL) or not _ca_verifies(TLS_URL, CA),
+    reason=(
+        f"TLS broker not reachable at {TLS_URL}, or no CA is configured, or the "
+        f"configured CA does not verify the broker's certificate "
+        f"(stale certs -- re-run mqtt-infra.sh, or set TINA4_TEST_MQTT_CA_FILE)"
+    ),
 )
 
 

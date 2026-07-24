@@ -2182,6 +2182,20 @@ def _try_static(path: str) -> Response | None:
     serves at the matching URL — no custom ``@get("/")`` route needed.
     """
     clean = path.lstrip("/")
+
+    # The framework ships the Swagger UI as STATIC assets under
+    # tina4_python/public/swagger/. Static serving is independent of the gated
+    # /swagger routes, so without this check the UI stays reachable in production
+    # via '/swagger/', '/swagger/index.html' or '/swagger/oauth2-redirect.html'
+    # even when swagger is disabled -- silently bypassing TINA4_SWAGGER_ENABLED /
+    # TINA4_DEBUG. (A bare '/swagger' already 404s because index resolution below
+    # only fires for '' or a trailing slash, which is why this leak hid.)
+    # Checked BEFORE index resolution so the trailing-slash form is caught too.
+    if clean == "swagger" or clean.startswith("swagger/"):
+        from tina4_python.swagger import is_enabled as _swagger_enabled
+        if not _swagger_enabled():
+            return None
+
     # Index resolution: '/' or '/foo/' -> append 'index.html' so SPA builds
     # in src/public/ Just Work without a custom root route.
     if clean == "" or clean.endswith("/"):
@@ -2419,6 +2433,33 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
     return host, port
 
 
+def banner_surface_lines(
+    port: int, *, swagger_enabled: bool, dev_admin_enabled: bool
+) -> tuple[str, str]:
+    """Build the startup banner's optional surface lines (issue #99).
+
+    Only advertise a surface that is actually REACHABLE. In production, or with
+    ``TINA4_DEBUG`` off, ``/swagger`` and ``/__dev`` return 404 -- printing them
+    anyway both misleads an operator into believing a dev surface is exposed and
+    sends a developer to a dead link.
+
+    Kept as a pure function of (port, two booleans) so the contract is unit
+    testable without booting a server and grepping stdout. Parity: PHP
+    ``App::bannerSurfaceLines``, Ruby ``Tina4.banner_surface_lines``, Node
+    ``bannerSurfaceLines``.
+
+    :return: ``(swagger_line, dashboard_line)`` -- each either empty, or a
+             newline followed by the banner row, ready to interpolate.
+    """
+    swagger_line = (
+        f"\n  Swagger:   http://localhost:{port}/swagger" if swagger_enabled else ""
+    )
+    dashboard_line = (
+        f"\n  Dashboard: http://localhost:{port}/__dev" if dev_admin_enabled else ""
+    )
+    return swagger_line, dashboard_line
+
+
 def _print_banner(host: str, port: int, server_name: str = "asyncio", ai_port: int | None = None):
     """Print the Tina4 Slant ASCII banner to stdout (not through the logger)."""
     from tina4_python.dotenv import is_truthy
@@ -2433,6 +2474,12 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio", ai_port: i
 
     ai_port_line = f"\n  Test Port: http://{display}:{ai_port} (stable — no hot-reload)" if ai_port else ""
 
+    # Only advertise a surface that is actually reachable (issue #99).
+    from tina4_python.swagger import is_enabled as _swagger_enabled
+    swagger_line, dashboard_line = banner_surface_lines(
+        port, swagger_enabled=_swagger_enabled(), dev_admin_enabled=is_debug
+    )
+
     banner = f"""{color}
   ______ _             __ __
  /_  __/(_)___  ____ _/ // /
@@ -2442,9 +2489,7 @@ def _print_banner(host: str, port: int, server_name: str = "asyncio", ai_port: i
 {reset}
   Tina4 Python v{__version__} — The Intelligent Native Application 4ramework
 
-  Server:    http://{display}:{port} ({server_name})
-  Swagger:   http://localhost:{port}/swagger
-  Dashboard: http://localhost:{port}/__dev
+  Server:    http://{display}:{port} ({server_name}){swagger_line}{dashboard_line}
   Debug:     {"ON" if is_debug else "OFF"} (Log level: {log_level}){ai_port_line}
 """
     print(banner)
