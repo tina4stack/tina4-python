@@ -664,6 +664,14 @@ class Database:
             return result
         return self._fetch_one_direct(sql, params)
 
+    def quote_identifier(self, name: str) -> str:
+        """Quote a table/column name for THIS connection's dialect.
+
+        Exposed so the ORM can build SQL that survives a reserved-word name
+        (``table_name = "order"``) without knowing which driver is bound.
+        """
+        return self._get_adapter().quote_identifier(name)
+
     def insert(self, table: str, data: dict | list) -> DatabaseResult:
         if self._cache_enabled:
             self._cache_invalidate()

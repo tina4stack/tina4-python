@@ -304,6 +304,25 @@ class ORM(metaclass=ORMMeta):
         return name
 
     @classmethod
+    def _get_table_sql(cls) -> str:
+        """Table name QUOTED for the bound dialect — use this in SQL.
+
+        ``_get_table()`` stays the raw name (needed for metadata lookups like
+        ``table_exists``); this is what goes into a statement, so a reserved
+        word such as ``table_name = "order"`` works instead of being a syntax
+        error. Falls back to the raw name when no database is bound yet.
+        """
+        table = cls._get_table()
+        try:
+            db = cls._get_db()
+            quote = getattr(db, "quote_identifier", None)
+            if quote:
+                return quote(table)
+        except Exception:  # noqa: BLE001 — quoting must never break a query
+            pass
+        return table
+
+    @classmethod
     def _get_db(cls):
         """Get the bound database for this model.
 
@@ -399,6 +418,7 @@ class ORM(metaclass=ORMMeta):
         pk_value = getattr(self, pk, None)
         pk_field = self._fields[pk]
         table = self._get_table()
+        table_sql = self._get_table_sql()
         pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         data = {}
@@ -467,9 +487,9 @@ class ORM(metaclass=ORMMeta):
                     # explicit NULLs. DEFAULT VALUES is valid on SQLite /
                     # PostgreSQL / MSSQL / Firebird; MySQL spells it () VALUES ().
                     if db.get_database_type() == "mysql":
-                        db.execute(f"INSERT INTO {table} () VALUES ()")
+                        db.execute(f"INSERT INTO {table_sql} () VALUES ()")
                     else:
-                        db.execute(f"INSERT INTO {table} DEFAULT VALUES")
+                        db.execute(f"INSERT INTO {table_sql} DEFAULT VALUES")
                 # Only adopt the engine-assigned ID for auto-increment PKs.
                 # Natural-key PKs were already set by the caller; don't
                 # overwrite them with the driver's last_id (which on PG
@@ -533,6 +553,7 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
+        table_sql = self._get_table_sql()
         pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         if pk_value is None:
@@ -557,6 +578,7 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
+        table_sql = self._get_table_sql()
         pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         if pk_value is None:
@@ -580,6 +602,7 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
+        table_sql = self._get_table_sql()
         pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         db.start_transaction()
@@ -626,9 +649,10 @@ class ORM(metaclass=ORMMeta):
         """
         pk = cls._get_pk()
         table = cls._get_table()
+        table_sql = cls._get_table_sql()
         pk_col = cls.field_mapping.get(pk, cls._fields[pk].column)
 
-        sql = f"SELECT * FROM {table} WHERE {pk_col} = ?"
+        sql = f"SELECT * FROM {table_sql} WHERE {pk_col} = ?"
         if cls.soft_delete:
             sql += " AND (is_deleted = 0 OR is_deleted IS NULL)"
 
@@ -669,6 +693,7 @@ class ORM(metaclass=ORMMeta):
 
         db = cls._get_db()
         table = cls._get_table()
+        table_sql = cls._get_table_sql()
         conditions = []
         params = []
 
@@ -681,7 +706,7 @@ class ORM(metaclass=ORMMeta):
         if cls.soft_delete:
             conditions.append("(is_deleted = 0 OR is_deleted IS NULL)")
 
-        sql = f"SELECT * FROM {table}"
+        sql = f"SELECT * FROM {table_sql}"
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
         if order_by:
@@ -701,6 +726,7 @@ class ORM(metaclass=ORMMeta):
         """
         db = self._get_db()
         table = self._get_table()
+        table_sql = self._get_table_sql()
 
         if filter is None:
             # No args — use the primary key value already set
@@ -709,10 +735,10 @@ class ORM(metaclass=ORMMeta):
             if pk_value is None:
                 return False
             pk_col = self.field_mapping.get(pk, self._fields[pk].column)
-            sql = f"SELECT * FROM {table} WHERE {pk_col} = ?"
+            sql = f"SELECT * FROM {table_sql} WHERE {pk_col} = ?"
             params = [pk_value]
         else:
-            sql = f"SELECT * FROM {table} WHERE {filter}"
+            sql = f"SELECT * FROM {table_sql} WHERE {filter}"
 
         cls = type(self)
         result = cls.select_one(sql, params, include=include)
@@ -749,8 +775,9 @@ class ORM(metaclass=ORMMeta):
         """
         db = cls._get_db()
         table = cls._get_table()
+        table_sql = cls._get_table_sql()
 
-        sql = f"SELECT * FROM {table}"
+        sql = f"SELECT * FROM {table_sql}"
         if cls.soft_delete:
             sql += " WHERE (is_deleted = 0 OR is_deleted IS NULL)"
         if order_by:
@@ -775,7 +802,8 @@ class ORM(metaclass=ORMMeta):
         db = cls._get_db()
         if not sql:
             table = cls._get_table()
-            sql = f"SELECT * FROM {table}"
+            table_sql = cls._get_table_sql()
+            sql = f"SELECT * FROM {table_sql}"
             if cls.soft_delete:
                 sql += " WHERE is_deleted = 0 OR is_deleted IS NULL"
         result = db.fetch(sql, params, limit=limit, offset=offset)
@@ -811,10 +839,11 @@ class ORM(metaclass=ORMMeta):
         """
         db = cls._get_db()
         table = cls._get_table()
+        table_sql = cls._get_table_sql()
 
-        sql = f"SELECT * FROM {table} WHERE {filter_sql}"
+        sql = f"SELECT * FROM {table_sql} WHERE {filter_sql}"
         if cls.soft_delete:
-            sql = f"SELECT * FROM {table} WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
+            sql = f"SELECT * FROM {table_sql} WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
         if order_by:
             sql += f" ORDER BY {order_by}"
 
@@ -824,10 +853,10 @@ class ORM(metaclass=ORMMeta):
             cls._eager_load(instances, include)
 
         if with_count:
-            count_sql = f"SELECT COUNT(*) AS n FROM {table} WHERE {filter_sql}"
+            count_sql = f"SELECT COUNT(*) AS n FROM {table_sql} WHERE {filter_sql}"
             if cls.soft_delete:
                 count_sql = (
-                    f"SELECT COUNT(*) AS n FROM {table} "
+                    f"SELECT COUNT(*) AS n FROM {table_sql} "
                     f"WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
                 )
             count_row = db.fetch_one(count_sql, params)
@@ -841,7 +870,8 @@ class ORM(metaclass=ORMMeta):
         """Query including soft-deleted records."""
         db = cls._get_db()
         table = cls._get_table()
-        sql = f"SELECT * FROM {table} WHERE {filter_sql}"
+        table_sql = cls._get_table_sql()
+        sql = f"SELECT * FROM {table_sql} WHERE {filter_sql}"
         result = db.fetch(sql, params, limit=limit, offset=offset)
         return [cls(row) for row in result.records]
 
@@ -850,6 +880,7 @@ class ORM(metaclass=ORMMeta):
         """Count records matching conditions (respects soft delete)."""
         db = cls._get_db()
         table = cls._get_table()
+        table_sql = cls._get_table_sql()
 
         where_parts = []
         if cls.soft_delete:
@@ -857,7 +888,7 @@ class ORM(metaclass=ORMMeta):
         if conditions:
             where_parts.append(f"({conditions})")
 
-        sql = f"SELECT COUNT(*) as cnt FROM {table}"
+        sql = f"SELECT COUNT(*) as cnt FROM {table_sql}"
         if where_parts:
             sql += f" WHERE {' AND '.join(where_parts)}"
 
@@ -897,6 +928,7 @@ class ORM(metaclass=ORMMeta):
 
         db = cls._get_db()
         table = cls._get_table()
+        table_sql = cls._get_table_sql()
         engine = (db.get_database_type() or "").lower()
 
         # v3.13.11: BooleanField now uses each engine's native type
@@ -1014,7 +1046,7 @@ class ORM(metaclass=ORMMeta):
 
             col_defs.append(" ".join(parts))
 
-        sql = f"CREATE TABLE IF NOT EXISTS {table} ({', '.join(col_defs)})"
+        sql = f"CREATE TABLE IF NOT EXISTS {table_sql} ({', '.join(col_defs)})"
 
         # Translate auto-increment syntax for the current engine
         engine = db.get_database_type()
@@ -1118,8 +1150,9 @@ class ORM(metaclass=ORMMeta):
         pk_value = getattr(self, pk)
         fk = foreign_key or f"{self.__class__.__name__.lower()}_id"
         table = related_class._get_table()
+        table_sql = related_class._get_table_sql()
 
-        sql = f"SELECT * FROM {table} WHERE {fk} = ?"
+        sql = f"SELECT * FROM {table_sql} WHERE {fk} = ?"
         row = self._get_db().fetch_one(sql, [pk_value])
         return related_class(row) if row else None
 
@@ -1129,8 +1162,9 @@ class ORM(metaclass=ORMMeta):
         pk_value = getattr(self, pk)
         fk = foreign_key or f"{self.__class__.__name__.lower()}_id"
         table = related_class._get_table()
+        table_sql = related_class._get_table_sql()
 
-        sql = f"SELECT * FROM {table} WHERE {fk} = ?"
+        sql = f"SELECT * FROM {table_sql} WHERE {fk} = ?"
         result = self._get_db().fetch(sql, [pk_value], limit=limit, offset=offset)
         return [related_class(row) for row in result.records]
 
@@ -1185,8 +1219,9 @@ class ORM(metaclass=ORMMeta):
 
                 fk = descriptor.foreign_key or f"{cls.__name__.lower()}_id"
                 table = related_cls._get_table()
+                table_sql = related_cls._get_table_sql()
                 placeholders = ",".join("?" for _ in pk_values)
-                sql = f"SELECT * FROM {table} WHERE {fk} IN ({placeholders})"
+                sql = f"SELECT * FROM {table_sql} WHERE {fk} IN ({placeholders})"
                 result = db.fetch(sql, pk_values, limit=len(pk_values) * 1000, offset=0)
                 related_records = [related_cls(row) for row in result.records]
 
@@ -1221,9 +1256,10 @@ class ORM(metaclass=ORMMeta):
 
                 related_pk = related_cls._get_pk()
                 table = related_cls._get_table()
+                table_sql = related_cls._get_table_sql()
                 placeholders = ",".join("?" for _ in fk_values)
                 pk_col = related_cls.field_mapping.get(related_pk, related_cls._fields[related_pk].column)
-                sql = f"SELECT * FROM {table} WHERE {pk_col} IN ({placeholders})"
+                sql = f"SELECT * FROM {table_sql} WHERE {pk_col} IN ({placeholders})"
                 result = db.fetch(sql, fk_values, limit=len(fk_values) * 10, offset=0)
                 related_records = [related_cls(row) for row in result.records]
 

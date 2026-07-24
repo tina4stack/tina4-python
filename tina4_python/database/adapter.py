@@ -479,6 +479,35 @@ class DatabaseAdapter:
         """Execute a read query and return a single row or None."""
         raise NotImplementedError
 
+    #: Identifier quoting for this dialect. ANSI double quotes work on SQLite,
+    #: PostgreSQL and Firebird; MySQL and SQL Server override this.
+    IDENTIFIER_QUOTE = ('"', '"')
+
+    def quote_identifier(self, name: str) -> str:
+        """Quote a table/column name so a SQL reserved word can be used.
+
+        ``CREATE TABLE order (...)`` / ``SELECT * FROM order`` are syntax errors
+        on every engine; quoting makes ``order``, ``group``, ``user`` etc. usable
+        as names. Idempotent (an already-quoted name is returned unchanged) and
+        dot-aware (``schema.table`` quotes each part).
+
+        A raw expression is never quoted — ``*``, ``COUNT(*)`` and anything that
+        isn't a plain identifier are passed through untouched, so existing
+        hand-written SQL keeps working.
+        """
+        if not name:
+            return name
+        open_q, close_q = self.IDENTIFIER_QUOTE
+        name = name.strip()
+        if name.startswith(open_q) and name.endswith(close_q):
+            return name
+        if "." in name:
+            return ".".join(self.quote_identifier(p) for p in name.split("."))
+        # Only quote a plain identifier — leave expressions/wildcards alone.
+        if not name.replace("_", "").replace("$", "").isalnum():
+            return name
+        return f"{open_q}{name.replace(close_q, close_q * 2)}{close_q}"
+
     def insert(self, table: str, data: dict | list) -> DatabaseResult:
         """Insert one or more rows.
 
@@ -492,9 +521,9 @@ class DatabaseAdapter:
                 return DatabaseResult()
             # All dicts must have the same keys
             keys = list(data[0].keys())
-            columns = ", ".join(keys)
+            columns = ", ".join(self.quote_identifier(k) for k in keys)
             placeholders = ", ".join(["?"] * len(keys))
-            sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+            sql = f"INSERT INTO {self.quote_identifier(table)} ({columns}) VALUES ({placeholders})"
             params_list = [list(row[k] for k in keys) for row in data]
             return self.execute_many(sql, params_list)
         raise NotImplementedError
@@ -526,7 +555,7 @@ class DatabaseAdapter:
 
         if isinstance(filter_sql, dict):
             # Build WHERE from dict
-            where_parts = [f"{k} = ?" for k in filter_sql.keys()]
+            where_parts = [f"{self.quote_identifier(k)} = ?" for k in filter_sql.keys()]
             where_sql = " AND ".join(where_parts)
             return self.delete(table, where_sql, list(filter_sql.values()))
 

@@ -375,15 +375,15 @@ class FirebirdAdapter(DatabaseAdapter):
         return row
 
     def insert(self, table: str, data: dict) -> DatabaseResult:
-        columns = ", ".join(data.keys())
+        columns = ", ".join(self.quote_identifier(c) for c in data.keys())
         placeholders = ", ".join(["?"] * len(data))
-        sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+        sql = f"INSERT INTO {self.quote_identifier(table)} ({columns}) VALUES ({placeholders})"
         return self.execute(sql, list(data.values()))
 
     def update(self, table: str, data: dict,
                filter_sql: str = "", params: list = None) -> DatabaseResult:
-        set_clause = ", ".join(f"{k} = ?" for k in data.keys())
-        sql = f"UPDATE {table} SET {set_clause}"
+        set_clause = ", ".join(f"{self.quote_identifier(k)} = ?" for k in data.keys())
+        sql = f"UPDATE {self.quote_identifier(table)} SET {set_clause}"
         all_params = list(data.values())
 
         if filter_sql:
@@ -394,7 +394,7 @@ class FirebirdAdapter(DatabaseAdapter):
 
     def delete(self, table: str,
                filter_sql: str = "", params: list = None) -> DatabaseResult:
-        sql = f"DELETE FROM {table}"
+        sql = f"DELETE FROM {self.quote_identifier(table)}"
         if filter_sql:
             sql += f" WHERE {filter_sql}"
         return self.execute(sql, params or [])

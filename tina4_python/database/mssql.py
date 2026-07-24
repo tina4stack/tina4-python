@@ -12,6 +12,9 @@ from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTr
 
 
 class MSSQLAdapter(DatabaseAdapter):
+    #: SQL Server uses bracketed identifiers.
+    IDENTIFIER_QUOTE = ("[", "]")
+
     """Microsoft SQL Server database driver using pymssql."""
 
     def __init__(self):
@@ -173,15 +176,15 @@ class MSSQLAdapter(DatabaseAdapter):
         # 'keys'`` because this override only handled the single-dict case.)
         if isinstance(data, list):
             return super().insert(table, data)
-        columns = ", ".join(data.keys())
+        columns = ", ".join(self.quote_identifier(c) for c in data.keys())
         placeholders = ", ".join(["%s"] * len(data))
-        sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+        sql = f"INSERT INTO {self.quote_identifier(table)} ({columns}) VALUES ({placeholders})"
         return self.execute(sql, list(data.values()))
 
     def update(self, table: str, data: dict,
                filter_sql: str = "", params: list = None) -> DatabaseResult:
         set_clause = ", ".join(f"{k} = %s" for k in data.keys())
-        sql = f"UPDATE {table} SET {set_clause}"
+        sql = f"UPDATE {self.quote_identifier(table)} SET {set_clause}"
         all_params = list(data.values())
 
         if filter_sql:
@@ -193,7 +196,7 @@ class MSSQLAdapter(DatabaseAdapter):
 
     def delete(self, table: str,
                filter_sql: str = "", params: list = None) -> DatabaseResult:
-        sql = f"DELETE FROM {table}"
+        sql = f"DELETE FROM {self.quote_identifier(table)}"
         if filter_sql:
             translated_filter = SQLTranslator.placeholder_style(filter_sql, "%s")
             sql += f" WHERE {translated_filter}"
