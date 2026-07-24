@@ -20,7 +20,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-ITERATIONS = 1_000
+# 1,000 was too few to measure anything reliably: the cheap operations here run in
+# a microsecond or two, so a 1,000-iteration run finished in ~1.5ms and was
+# swamped by import cost and scheduler noise. 50,000 puts every row into tens of
+# milliseconds, where the numbers are stable and repeatable.
+ITERATIONS = 50_000
 REPORT_PATH = Path(__file__).resolve().parent / "comparison_report.json"
 
 
@@ -49,7 +53,23 @@ def _ensure_installed():
 # Helpers
 # ---------------------------------------------------------------------------
 def _timeit(fn, iterations=ITERATIONS):
-    """Run *fn* for *iterations* and return (total_seconds, ops_per_sec)."""
+    """Run *fn* for *iterations* and return (total_seconds, ops_per_sec).
+
+    The warm-up call is not optional. Every benchmark below does its
+    `from framework import thing` INSIDE the function, so the first entry pays a
+    real module import -- and at the old 1,000 iterations the actual work was
+    ~1.5ms against a ~10ms cold import, meaning the table was ranking import cost
+    rather than the operation.
+
+    That produced a flatly inverted result: JSON serialization reported Tina4 at
+    83,808 ops/sec and Django at 271,168, while measuring the same two calls with
+    imports already warm gives Tina4 676,264 and Django 216,807 -- Tina4 three
+    times FASTER, not three times slower.
+
+    So: run once untimed (paying imports, lazy init and any first-call caching),
+    then time the real loop.
+    """
+    fn(1)
     start = time.perf_counter()
     fn(iterations)
     elapsed = time.perf_counter() - start
@@ -230,10 +250,19 @@ def _routing_starlette(n):
         "query_string": b"",
         "headers": [],
     }
+    # `if match:` is WRONG here. Match is an IntEnum (NONE=0, PARTIAL=1, FULL=2)
+    # but bool(Match.NONE) is True, not False -- enum members are truthy
+    # regardless of value unless __bool__ is defined. So the loop broke on the
+    # FIRST route every time, doing one matches() call per op instead of 51, and
+    # reported 4,869,892 ops/sec: the speed of a single non-match, not of routing
+    # through a 100-route table.
+    #
+    # Compare against Match.FULL explicitly.
+    from starlette.routing import Match
     for _ in range(n):
         for route in router.routes:
             match, _child_scope = route.matches(scope)
-            if match:
+            if match == Match.FULL:
                 break
 
 
