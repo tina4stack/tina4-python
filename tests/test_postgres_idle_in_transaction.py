@@ -47,11 +47,19 @@ def _ensure_psycopg2(monkeypatch):
 
 
 class FakeCursor:
-    """Minimal psycopg2-cursor stand-in. Returns a count dict for the
-    COUNT(*) probe in fetch(), and the supplied rows otherwise."""
+    """Minimal psycopg2-cursor stand-in that models BOTH real cursor modes.
 
-    def __init__(self, rows):
+    fetch() now opens a PLAIN cursor (psycopg2 default -> tuple rows) and
+    hydrates dicts from cursor.description, while fetch_one() still opens a
+    RealDictCursor (dict rows). A faithful fake therefore has to honour
+    cursor_factory: dict_mode=True yields dict rows and a {"cnt": N} probe
+    result (RealDictCursor); dict_mode=False yields tuple rows and a (N,) probe
+    result (plain cursor), exactly as real psycopg2 does. Tests still supply
+    rows as dicts; the fake derives the tuple/description shape from them."""
+
+    def __init__(self, rows, dict_mode):
         self._rows = rows
+        self._dict_mode = dict_mode
         self._last_sql = ""
 
     def execute(self, sql, params=None):
@@ -59,14 +67,22 @@ class FakeCursor:
 
     def fetchone(self):
         if "_count_subquery" in self._last_sql:
-            return {"cnt": len(self._rows)}
-        return self._rows[0] if self._rows else None
+            # plain cursor -> scalar tuple; RealDictCursor -> {"cnt": N}
+            return {"cnt": len(self._rows)} if self._dict_mode else (len(self._rows),)
+        if not self._rows:
+            return None
+        row = self._rows[0]
+        return row if self._dict_mode else tuple(row.values())
 
     def fetchall(self):
-        return self._rows
+        if self._dict_mode:
+            return self._rows
+        return [tuple(row.values()) for row in self._rows]
 
     @property
     def description(self):
+        if self._rows:
+            return [(key,) for key in self._rows[0].keys()]
         return [("col",)]
 
 
@@ -88,7 +104,9 @@ class FakeConn:
         self.info = FakeInfo()
 
     def cursor(self, cursor_factory=None):
-        return FakeCursor(self._rows)
+        # cursor_factory None => plain (tuple) cursor, as fetch() now uses;
+        # a factory => RealDictCursor (dict), as fetch_one() uses.
+        return FakeCursor(self._rows, dict_mode=cursor_factory is not None)
 
     def rollback(self):
         self.rollbacks += 1
