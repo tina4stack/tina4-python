@@ -14,12 +14,8 @@ UNRELEASED work. When a version ships, its notes go to the release notes above.
 
 ### Added
 
-- **MQTT 3.1.1 client** (`Mqtt` / `MqttMessage`), zero-dependency (stdlib `socket`/`struct`/`ssl`),
-  verified against a real broker with no mocks. Publish/subscribe/consume, QoS 0/1, retained, Last
-  Will, per-client TLS, QoS 2 refused loudly. Takes the family to **98 built-in features**.
-
-3.13.83 is prepared on `v3` and not yet tagged; its full notes ship in the release notes linked
-above when it is tagged. The current tagged release is 3.13.82.
+3.13.84 is prepared on `v3` and not yet tagged; its full notes ship in the release notes
+linked above when it is tagged. The current tagged release is 3.13.83.
 
 In-flight on a feature branch, not yet merged to `v3`:
 
@@ -34,19 +30,21 @@ In-flight on a feature branch, not yet merged to `v3`:
 
 ### Fixed
 
-- **Security: the bundled Swagger UI static assets now honour the swagger gate.** `/swagger`,
-  `/swagger/`, `/swagger/index.html` and `/swagger/oauth2-redirect.html` were served from the
-  framework's own public directory BEFORE route matching (with directory-index resolution turning
-  `/swagger` into `swagger/index.html`), so a production server with `TINA4_SWAGGER_ENABLED=false`
-  still served the whole UI while `/swagger/openapi.json` correctly 404'd. Static serving now checks
-  the gate before it resolves an index. Bite-verified lock-in test. (python#97)
-- **The startup banner advertises only a surface that answers.** The `Swagger:` and `Dashboard:`
-  rows printed unconditionally, so a production log claimed a dev surface was exposed and a
-  developer following the link hit a 404. Each row is now built by one pure helper of
-  (port, swagger_enabled, dev_admin_enabled), unit tested rather than inferred from stdout.
-  (python#99)
-- **MQTT TLS tests verify the CA before trusting it.** A stale CA file in the shared temp directory
-  made six TLS tests FAIL instead of skip, in all four frameworks, pointing at correct TLS code.
-  The suites now confirm the CA actually validates the broker certificate before treating the TLS
-  environment as present. (python#98)
-
+- **`tina4 deploy docker` produced images that could not start.** Of the eight
+  Dockerfile generators in the stack (four templates in the `tina4` CLI plus one
+  in each framework's own CLI), exactly one was correct. Python named
+  `python -m tina4_python.cli`, a package with no `__main__.py`, so the container
+  died on startup; PHP ran `php index.php <addr>`, but `App::run(?host, port)`
+  never reads argv so the address was dropped and production never engaged;
+  Node named a path that exists only inside the tina4-nodejs monorepo and
+  depended on tsx, which `npm ci --omit=dev` strips. Every generator now names a
+  published entry point and requests production. Verified by scaffolding,
+  generating, building and running a container for all four languages.
+- **`serve` no longer kills PID 1.** The port-reclaim step read `lsof -ti`
+  without validating it. Where lsof prints a different shape, a non-numeric field
+  coerced to 0 or 1 -- and signalling PID 0 hits every process in the caller's
+  own process group. In a container the server IS PID 1, so it killed itself
+  (Node logged "Killed existing process on port 7148 (PID: 1 ...)" then exited
+  143; PHP logged the same attempt and survived by luck). Reclaiming is now
+  skipped inside a container, only all-digit PIDs are accepted, and PID 0, PID 1
+  and the current process are never signalled.

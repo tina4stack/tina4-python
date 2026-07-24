@@ -170,24 +170,85 @@ def _parse_every(every: str) -> int:
         return 60
 
 
+def _in_container() -> bool:
+    """True when this process is running inside a container.
+
+    Reclaiming a port makes sense on a dev machine, where a previous
+    ``tina4 serve`` may still hold it. Inside a container the server IS the
+    container, so there is never a stale sibling to reclaim from -- and trying
+    is actively dangerous (see ``_kill_process_on_port``).
+    """
+    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
+        return True
+    try:
+        with open("/proc/1/cgroup", "r", encoding="utf-8", errors="replace") as fh:
+            blob = fh.read()
+        return "docker" in blob or "containerd" in blob or "kubepods" in blob
+    except OSError:
+        return False
+
+
+def selectable_pids(lsof_output: str, me: int, my_group: int | None = None) -> list[int]:
+    """The PIDs from ``lsof -ti`` output that are safe to signal.
+
+    Pure so the safety rule can be tested directly. An unvalidated parse is a
+    footgun with real teeth: when ``lsof`` is present but prints a different
+    shape than ``-ti`` implies, a non-numeric field coerces to 0, and
+    signalling PID 0 sends the signal to EVERY process in the caller's own
+    process group -- the server kills itself. That is exactly what happened in
+    a container, where the log read "Killed existing process on port 7148
+    (PID: 1 ...)" and the container exited 143.
+
+    So: accept only all-digit tokens, and never PID 0 (our process group),
+    PID 1 (init), ourselves, or our own process group.
+    """
+    pids = []
+    for token in lsof_output.split():
+        if not token.isdigit():
+            continue              # never coerce junk into a PID
+        pid = int(token)
+        if pid <= 1 or pid == me:
+            continue              # 0 = our process group, 1 = init, me = suicide
+        if my_group is not None and pid == my_group:
+            continue
+        if pid not in pids:
+            pids.append(pid)
+    return pids
+
+
 def _kill_process_on_port(port: int) -> bool:
-    """Kill any process listening on the given port. Returns True if killed."""
+    """Kill any process listening on the given port. Returns True if killed.
+
+    Skipped entirely in a container, where the server IS the container and
+    there is no stale sibling to reclaim from. The PID safety rule lives in
+    :func:`selectable_pids`.
+    """
+    if _in_container():
+        return False
     try:
         result = subprocess.run(
             ["lsof", "-ti", f":{port}"],
             capture_output=True, text=True, timeout=5,
         )
-        if result.returncode == 0 and result.stdout.strip():
-            pids = result.stdout.strip().split("\n")
-            for pid in pids:
-                try:
-                    os.kill(int(pid), signal.SIGTERM)
-                except (ProcessLookupError, PermissionError):
-                    pass
-            import time
-            time.sleep(0.5)
-            print(f"  ⚠ Killed existing process on port {port} (PID: {', '.join(pids)})")
-            return True
+        if result.returncode != 0 or not result.stdout.strip():
+            return False
+
+        me = os.getpid()
+        my_group = os.getpgrp() if hasattr(os, "getpgrp") else None
+        killed = []
+        for pid in selectable_pids(result.stdout, me, my_group):
+            try:
+                os.kill(pid, signal.SIGTERM)
+                killed.append(str(pid))
+            except (ProcessLookupError, PermissionError):
+                pass
+
+        if not killed:
+            return False
+        import time
+        time.sleep(0.5)
+        print(f"  ⚠ Killed existing process on port {port} (PID: {', '.join(killed)})")
+        return True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
     return False
@@ -663,7 +724,8 @@ def _init(args):
             'FROM python:3.13-slim\nWORKDIR /app\n'
             'COPY --from=build /app .\nCOPY --from=build /usr/local/bin/uv /usr/local/bin/uv\n'
             'ENV PATH="/app/.venv/bin:$PATH"\nENV HOST=0.0.0.0\nENV PORT=7146\n'
-            'EXPOSE 7146\nCMD ["python", "app.py"]\n',
+            'ENV TINA4_OVERRIDE_CLIENT=true\nENV TINA4_DEBUG=false\n'
+            'EXPOSE 7146\nCMD ["tina4python", "serve", "--production"]\n',
             encoding="utf-8",
         )
 
