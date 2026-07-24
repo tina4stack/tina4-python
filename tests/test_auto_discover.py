@@ -399,3 +399,95 @@ def test_genuinely_edited_module_still_reloads_after_transitive_load(project):
     assert sys.modules["src.routes.zzz_state2"].VALUE == "v2", (
         "a genuine edit to a transitively-loaded module did not hot-reload"
     )
+
+
+# ── Stale routes after a rename/removal (hot-reload correctness) ──────
+
+def test_renamed_route_does_not_leave_the_old_path_serving(project):
+    """Renaming a route's path must retire the OLD path.
+
+    Re-import only OVERWRITES an identical (method, path), so before the
+    per-module purge the old endpoint kept answering with its stale handler —
+    you "remove" a route and it still responds.
+    """
+    path = _write_route(project, "probe", """
+        from tina4_python.core.router import get
+        @get("/api/probe")
+        async def probe(request, response):
+            return response({"version": "ONE"})
+    """)
+    _server._auto_discover("src")
+    assert [r["path"] for r in Router.get_routes()] == ["/api/probe"]
+
+    # Rename the path inside the same file, then re-discover.
+    os.utime(path, None)
+    path.write_text(textwrap.dedent("""
+        from tina4_python.core.router import get
+        @get("/api/probe-renamed")
+        async def probe(request, response):
+            return response({"version": "TWO"})
+    """))
+    os.utime(path, (path.stat().st_atime, path.stat().st_mtime + 10))
+    _server._auto_discover("src")
+
+    paths = [r["path"] for r in Router.get_routes()]
+    assert "/api/probe-renamed" in paths, paths
+    assert "/api/probe" not in paths, f"stale route survived the rename: {paths}"
+
+
+def test_deleted_handler_is_retired_on_reload(project):
+    """A handler removed from the file must stop being served."""
+    path = _write_route(project, "pair", """
+        from tina4_python.core.router import get
+        @get("/api/keep")
+        async def keep(request, response):
+            return response({})
+        @get("/api/drop")
+        async def drop(request, response):
+            return response({})
+    """)
+    _server._auto_discover("src")
+    assert {"/api/keep", "/api/drop"} <= set(r["path"] for r in Router.get_routes())
+
+    path.write_text(textwrap.dedent("""
+        from tina4_python.core.router import get
+        @get("/api/keep")
+        async def keep(request, response):
+            return response({})
+    """))
+    os.utime(path, (path.stat().st_atime, path.stat().st_mtime + 10))
+    _server._auto_discover("src")
+
+    paths = set(r["path"] for r in Router.get_routes())
+    assert "/api/keep" in paths
+    assert "/api/drop" not in paths, f"deleted handler still registered: {paths}"
+
+
+def test_unchanged_modules_keep_their_routes(project):
+    """The purge is scoped to the CHANGED module — a sibling keeps its routes."""
+    _write_route(project, "alpha", """
+        from tina4_python.core.router import get
+        @get("/api/alpha")
+        async def alpha(request, response):
+            return response({})
+    """)
+    beta = _write_route(project, "beta", """
+        from tina4_python.core.router import get
+        @get("/api/beta")
+        async def beta(request, response):
+            return response({"v": 1})
+    """)
+    _server._auto_discover("src")
+
+    beta.write_text(textwrap.dedent("""
+        from tina4_python.core.router import get
+        @get("/api/beta")
+        async def beta(request, response):
+            return response({"v": 2})
+    """))
+    os.utime(beta, (beta.stat().st_atime, beta.stat().st_mtime + 10))
+    _server._auto_discover("src")
+
+    paths = set(r["path"] for r in Router.get_routes())
+    assert "/api/alpha" in paths, f"untouched module lost its route: {paths}"
+    assert "/api/beta" in paths

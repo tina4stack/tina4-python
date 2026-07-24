@@ -301,10 +301,20 @@ def _auto_discover(root_dir: str = "src"):
                 # tina4_python.* / third-party module would break shared
                 # singletons and class identity — never do that here.
                 if module_name == root_pkg or module_name.startswith(root_pkg + "."):
+                    # Purge this module's OLD routes first. Re-importing only
+                    # OVERWRITES an identical (method, path), so a renamed or
+                    # deleted endpoint would otherwise keep serving its stale
+                    # handler until a full restart. The decorators below
+                    # re-register whatever the file declares NOW.
+                    from tina4_python.core.router import Router
+                    dropped = Router.remove_routes_for_module(module_name)
                     del sys.modules[module_name]
                     importlib.import_module(module_name)
                     _discovered_mtimes[module_name] = current_mtime
-                    Log.info(f"Reloaded changed module: {module_name}")
+                    Log.info(
+                        f"Reloaded changed module: {module_name}"
+                        + (f" (dropped {dropped} stale route(s))" if dropped else "")
+                    )
                 else:
                     # Out-of-scope module changed — record mtime so we don't
                     # keep re-evaluating it, but do not re-import it.

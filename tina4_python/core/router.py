@@ -341,6 +341,11 @@ class Router:
             "param_names": param_names,
             "param_types": param_types,
             "handler": handler,
+            # Which module registered this route. Lets dev hot-reload purge a
+            # changed module's OLD routes before re-importing it — otherwise a
+            # renamed or deleted endpoint keeps serving its stale handler,
+            # because replace-semantics only match an identical (method, path).
+            "module": getattr(handler, "__module__", ""),
             "middleware": effective_middleware,
             "auth_required": auth_required,
             "cached": options.get("cached", False),
@@ -451,6 +456,25 @@ class Router:
     def list_routes() -> list[dict]:
         """Return all registered routes (debug-friendly)."""
         return _routes
+
+    @staticmethod
+    def remove_routes_for_module(module_name: str) -> int:
+        """Drop every route registered by ``module_name``. Returns the count.
+
+        Used by dev hot-reload BEFORE re-importing a changed module: its
+        decorators then re-register whatever the file currently declares. Without
+        this, replace-semantics only overwrite an identical (method, path), so a
+        renamed or deleted endpoint would keep serving its stale handler until a
+        full restart — you "remove" a route and it still answers.
+        """
+        if not module_name:
+            return 0
+        removed = 0
+        for registry in (_routes, _ws_routes):
+            keep = [r for r in registry if r.get("module") != module_name]
+            removed += len(registry) - len(keep)
+            registry[:] = keep
+        return removed
 
     @staticmethod
     def clear():
