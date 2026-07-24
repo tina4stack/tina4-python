@@ -14,8 +14,8 @@ UNRELEASED work. When a version ships, its notes go to the release notes above.
 
 ### Added
 
-3.13.84 is prepared on `v3` and not yet tagged; its full notes ship in the release notes
-linked above when it is tagged. The current tagged release is 3.13.83.
+3.13.85 is prepared on `v3` and not yet tagged; its full notes ship in the release notes
+linked above when it is tagged. The current tagged release is 3.13.84.
 
 In-flight on a feature branch, not yet merged to `v3`:
 

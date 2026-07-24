@@ -78,6 +78,22 @@ class TestFrameworkPublicFiles:
     def test_dev_admin_js_exists(self):
         assert (_PUBLIC_DIR / "js" / "tina4-dev-admin.min.js").is_file()
 
+    def test_dev_admin_js_has_no_unminified_duplicate(self):
+        """Exactly one dev-admin bundle ships.
+
+        The package carried tina4-dev-admin.js AND tina4-dev-admin.min.js as
+        BYTE-IDENTICAL copies -- roughly 940K of dead weight in every install,
+        referenced by nothing (the server, the SPA shell and the static route all
+        name the .min.js). Copying the bundle back under a second name would
+        silently double it again, so assert the duplicate stays gone.
+
+        Parity: PHP src/public/js, Ruby lib/tina4/public/js, Node
+        packages/core/public/js each ship the .min.js alone.
+        """
+        js_dir = _PUBLIC_DIR / "js"
+        assert (js_dir / "tina4-dev-admin.min.js").is_file()
+        assert not (js_dir / "tina4-dev-admin.js").exists()
+
 
 class TestStaticFileSerialization:
 
