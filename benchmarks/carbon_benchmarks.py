@@ -17,58 +17,76 @@ import sys
 import os
 import time
 import json
+import shutil
 import tempfile
 from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Nominal count, still used by --single (carbonah needs a fixed amount of work,
+# not a fixed duration).
 ITERATIONS = 1000
+
+# Timed runs continue until this much wall-clock has elapsed...
+MIN_SECONDS = 0.25
+
+# ...but never fewer than this many iterations, however fast the operation.
+MIN_ITERATIONS = 200
 
 
 def bench_json():
     """1. JSON serialization — raw overhead."""
     from tina4_python.core.response import Response
-    for _ in range(ITERATIONS):
-        r = Response()
-        r.json({"message": "Hello, World!", "status": "ok"})
+    payload = {"message": "Hello, World!", "status": "ok"}
+    return lambda: Response().json(payload), None
 
 
 def bench_db_single():
     """2. Single database query."""
     from tina4_python.database import Database
-    with tempfile.TemporaryDirectory() as tmp:
-        db = Database(f"sqlite:///{tmp}/bench.db")
-        db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
-        db.execute("INSERT INTO users VALUES (1, 'Alice', 'alice@test.com')")
-        db.commit()
-        for _ in range(ITERATIONS):
-            db.fetch_one("SELECT * FROM users WHERE id = ?", [1])
+    tmp = tempfile.mkdtemp()
+    db = Database(f"sqlite:///{tmp}/bench.db")
+    db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT)")
+    db.execute("INSERT INTO users VALUES (1, 'Alice', 'alice@test.com')")
+    db.commit()
+
+    def teardown():
         db.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    return lambda: db.fetch_one("SELECT * FROM users WHERE id = ?", [1]), teardown
 
 
 def bench_db_multi():
     """3. Multiple database queries."""
     from tina4_python.database import Database
-    with tempfile.TemporaryDirectory() as tmp:
-        db = Database(f"sqlite:///{tmp}/bench.db")
-        db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, price REAL)")
-        for i in range(100):
-            db.execute("INSERT INTO items VALUES (?, ?, ?)", [i, f"Item {i}", i * 1.5])
-        db.commit()
-        for _ in range(ITERATIONS):
-            db.fetch("SELECT * FROM items WHERE price > ?", [50.0], limit=20)
-            db.fetch_one("SELECT COUNT(*) as cnt FROM items")
-            db.fetch("SELECT * FROM items ORDER BY price DESC", limit=5)
+    tmp = tempfile.mkdtemp()
+    db = Database(f"sqlite:///{tmp}/bench.db")
+    db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, price REAL)")
+    for i in range(100):
+        db.execute("INSERT INTO items VALUES (?, ?, ?)", [i, f"Item {i}", i * 1.5])
+    db.commit()
+
+    def op():
+        db.fetch("SELECT * FROM items WHERE price > ?", [50.0], limit=20)
+        db.fetch_one("SELECT COUNT(*) as cnt FROM items")
+        db.fetch("SELECT * FROM items ORDER BY price DESC", limit=5)
+
+    def teardown():
         db.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    return op, teardown
 
 
 def bench_template():
     """4. Template rendering."""
+    import os
     from tina4_python.frond import Frond
-    with tempfile.TemporaryDirectory() as tmp:
-        engine = Frond(template_dir=tmp)
-        tpl = """<!DOCTYPE html>
+    tmp = tempfile.mkdtemp()
+    engine = Frond(template_dir=tmp)
+    tpl = """<!DOCTYPE html>
 <html>
 <head><title>{{ title }}</title></head>
 <body>
@@ -83,15 +101,25 @@ def bench_template():
 {% endif %}
 </body>
 </html>"""
-        data = {
-            "title": "Benchmark Page",
-            "heading": "Product List",
-            "items": [{"name": f"Product {i}", "price": i * 9.99} for i in range(20)],
-            "show_footer": True,
-            "footer_text": "This is a footer with some text that may be truncated for display purposes.",
-        }
-        for _ in range(ITERATIONS):
-            engine.render_string(tpl, data)
+    data = {
+        "title": "Benchmark Page",
+        "heading": "Product List",
+        "items": [{"name": f"Product {i}", "price": i * 9.99} for i in range(20)],
+        "show_footer": True,
+        "footer_text": "This is a footer with some text that may be truncated for display purposes.",
+    }
+    # render() from a FILE, not render_string(). render_string recompiles on every
+    # call (Frond has no compiled-template cache -- measured: an identical source
+    # runs at 0.99x the speed of a brand-new one), so timing it measured
+    # compile+render. render("bench.twig") is the per-request call a real app makes
+    # and the honest counterpart to Jinja2's tpl.render().
+    with open(os.path.join(tmp, "bench.twig"), "w") as fh:
+        fh.write(tpl)
+
+    def teardown():
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    return lambda: engine.render("bench.twig", data), teardown
 
 
 def bench_json_large():
@@ -107,54 +135,65 @@ def bench_json_large():
         ],
         "meta": {"total": 100, "page": 1, "per_page": 100},
     }
-    for _ in range(ITERATIONS):
-        r = Response()
-        r.json(payload)
+    return lambda: Response().json(payload), None
 
 
 def bench_plaintext():
     """6. Plaintext response."""
     from tina4_python.core.response import Response
-    for _ in range(ITERATIONS):
-        r = Response()
-        r.html("Hello, World!")
+    return lambda: Response().html("Hello, World!"), None
 
 
 def bench_crud():
     """7. Full CRUD cycle."""
     from tina4_python.database import Database
-    with tempfile.TemporaryDirectory() as tmp:
-        db = Database(f"sqlite:///{tmp}/bench.db")
-        db.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, done INTEGER DEFAULT 0)")
+    tmp = tempfile.mkdtemp()
+    db = Database(f"sqlite:///{tmp}/bench.db")
+    db.execute("CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, done INTEGER DEFAULT 0)")
+    db.commit()
+
+    def op():
+        """ONE full create/read/update/delete cycle.
+
+        This used to run ITERATIONS // 10 == 100 cycles inside a single timed
+        call while the reported rate divided by ITERATIONS == 1000, so the
+        number was 10x too high and made CRUD look like one of the cheapest
+        categories when it is the most expensive.
+        """
+        result = db.insert("tasks", {"title": "Benchmark task", "done": 0})
+        task_id = result.last_id
+        db.fetch_one("SELECT * FROM tasks WHERE id = ?", [task_id])
+        db.update("tasks", {"done": 1}, "id = ?", [task_id])
+        db.delete("tasks", "id = ?", [task_id])
         db.commit()
-        for _ in range(ITERATIONS // 10):  # 100 full cycles
-            # Create
-            result = db.insert("tasks", {"title": "Benchmark task", "done": 0})
-            task_id = result.last_id
-            # Read
-            db.fetch_one("SELECT * FROM tasks WHERE id = ?", [task_id])
-            # Update
-            db.update("tasks", {"done": 1}, "id = ?", [task_id])
-            # Delete
-            db.delete("tasks", "id = ?", [task_id])
-            db.commit()
+
+    def teardown():
         db.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    return op, teardown
 
 
 def bench_paginated():
     """8. Paginated query with count."""
     from tina4_python.database import Database
-    with tempfile.TemporaryDirectory() as tmp:
-        db = Database(f"sqlite:///{tmp}/bench.db")
-        db.execute("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, category TEXT, price REAL)")
-        for i in range(500):
-            db.execute("INSERT INTO products VALUES (?, ?, ?, ?)",
-                       [i, f"Product {i}", f"Cat {i % 10}", i * 2.5])
-        db.commit()
-        for _ in range(ITERATIONS):
-            result = db.fetch("SELECT * FROM products WHERE category = ?", ["Cat 3"], limit=20, offset=0)
-            result.to_paginate(page=1, per_page=20)
+    tmp = tempfile.mkdtemp()
+    db = Database(f"sqlite:///{tmp}/bench.db")
+    db.execute("CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT, category TEXT, price REAL)")
+    for i in range(500):
+        db.execute("INSERT INTO products VALUES (?, ?, ?, ?)",
+                   [i, f"Product {i}", f"Cat {i % 10}", i * 2.5])
+    db.commit()
+
+    def op():
+        result = db.fetch("SELECT * FROM products WHERE category = ?", ["Cat 3"], limit=20, offset=0)
+        result.to_paginate(page=1, per_page=20)
+
+    def teardown():
         db.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    return op, teardown
 
 
 def bench_startup():
@@ -168,36 +207,44 @@ def bench_startup():
     eager-import cost went unnoticed for so long. `--startup` below measures the
     real thing by spawning fresh interpreters.
     """
-    # Simulate what happens at app startup
-    from tina4_python.core.router import Router
-    from tina4_python.core.response import Response
-    from tina4_python.core.request import Request
-    from tina4_python.core.middleware import CorsMiddleware, RateLimiter
-    from tina4_python.core.cache import Cache
-    from tina4_python.frond import Frond
-    from tina4_python.auth import Auth
-    from tina4_python.session import Session
-    from tina4_python.swagger import Swagger
-    from tina4_python.queue import Queue
-    from tina4_python.api import Api
-    from tina4_python.seeder import FakeData
-    from tina4_python.i18n import I18n
-    from tina4_python.graphql import GraphQL
-    from tina4_python.wsdl import WSDL
-    from tina4_python.websocket import WebSocketServer, WebSocketManager
-    from tina4_python.messenger import Messenger
-    from tina4_python.scss import compile_string
-    from tina4_python.ai import detect_ai, generate_context
-    from tina4_python.dev_admin import MessageLog, RequestInspector, BrokenTracker
+    def op():
+        # Simulate what happens at app startup: import the package surface an app
+        # touches, then construct the components. The imports MUST stay inside the
+        # timed region -- they are the thing being measured. Caveat: in a full-suite
+        # run the earlier benchmarks have already populated sys.modules, so this
+        # reports near-zero. The honest number comes from `--startup`, which spawns
+        # fresh interpreters.
+        from tina4_python.core.router import Router
+        from tina4_python.core.response import Response
+        from tina4_python.core.request import Request
+        from tina4_python.core.middleware import CorsMiddleware, RateLimiter
+        from tina4_python.core.cache import Cache
+        from tina4_python.frond import Frond
+        from tina4_python.auth import Auth
+        from tina4_python.session import Session
+        from tina4_python.swagger import Swagger
+        from tina4_python.queue import Queue
+        from tina4_python.api import Api
+        from tina4_python.seeder import FakeData
+        from tina4_python.i18n import I18n
+        from tina4_python.graphql import GraphQL
+        from tina4_python.wsdl import WSDL
+        from tina4_python.websocket import WebSocketServer, WebSocketManager
+        from tina4_python.messenger import Messenger
+        from tina4_python.scss import compile_string
+        from tina4_python.ai import detect_ai, generate_context
+        from tina4_python.dev_admin import MessageLog, RequestInspector, BrokenTracker
 
-    # Initialize components (lightweight)
-    CorsMiddleware()
-    RateLimiter()
-    Cache()
-    Auth(secret="bench-secret")
-    Swagger()
-    GraphQL()
-    WebSocketManager()
+        # Initialize components (lightweight)
+        CorsMiddleware()
+        RateLimiter()
+        Cache()
+        Auth(secret="bench-secret")
+        Swagger()
+        GraphQL()
+        WebSocketManager()
+
+    return op, None
 
 
 # ── Runner ─────────────────────────────────────────────────────
@@ -216,15 +263,86 @@ BENCHMARKS = {
 
 
 def run_benchmark(name: str):
-    """Run a single benchmark and report timing."""
+    """Run one benchmark: setup and teardown OUTSIDE the clock.
+
+    This used to time the whole bench function, so each benchmark's own setup sat
+    inside the measurement. Measured in the PHP twin, the equivalent db_single
+    setup (temp dir + sqlite file + CREATE TABLE + INSERT + commit) cost 11.20ms
+    against 4.26ms of actual reads -- 72% of the reported number was setup,
+    understating read throughput 87x. Same class of bug as compare_frameworks.py
+    timing its own imports.
+
+    Duration-based rather than a fixed count: these categories span five orders of
+    magnitude, so 1,000 iterations is a few ms of noise for plaintext and seconds
+    for templates. n is printed so a suspiciously small sample is visible.
+    """
     label, fn = BENCHMARKS[name]
-    start = time.perf_counter()
-    fn()
-    elapsed = time.perf_counter() - start
+    op, teardown = fn()
+
+    # Startup is one-shot: looping it would time sys.modules dict lookups, which
+    # is precisely the bug this suite already had.
     if name == "startup":
-        print(f"  {label:<25} {elapsed:.3f}s  (1 run, in-process)")
-    else:
-        print(f"  {label:<25} {elapsed:.3f}s  ({ITERATIONS / elapsed:,.0f} ops/sec)")
+        start = time.perf_counter()
+        op()
+        elapsed = time.perf_counter() - start
+        if teardown:
+            teardown()
+        print(f"  {label:<25} {'-':>13} {'-':>13}   1 run, in-process ({elapsed:.3f}s)")
+        return elapsed
+
+    # Warm-up doubles as batch-size calibration. It must be a LOOP, not one call:
+    # the first op runs cold (imports resolved, caches empty, JIT-less first pass)
+    # and reading a single cold op put every batch size at 2, which defeats the
+    # amortisation below.
+    # TWO passes, keep the second: one pass still pays the cold costs (first-call
+    # imports, lazily-built caches). Measured in the PHP twin a single 64-op pass
+    # read JSON at ~50us/op against a real ~375ns, inflating the estimate 130x and
+    # collapsing the batch back to 1 -- the very thing the batching exists to avoid.
+    CALIBRATION_OPS = 64
+    for _ in range(2):
+        t0 = time.perf_counter()
+        for _ in range(CALIBRATION_OPS):
+            op()
+        one = max((time.perf_counter() - t0) / CALIBRATION_OPS, 1e-9)
+
+    # Sample in BATCHES sized so a batch costs >= ~50us. Two reasons:
+    #  1. A mean alone hides a fat tail. Measured here, the CRUD cycle has a
+    #     ~108us median but ONE op per run costs ~711ms (a SQLite flush), which
+    #     drags mean throughput from ~9,300 to ~1,350 ops/sec -- a mean-only line
+    #     understates CRUD 7x. p50 next to the mean makes that gap visible.
+    #  2. Timing every single op would distort the very benchmarks that are
+    #     fastest: plaintext runs at ~170ns/op, where two perf_counter() reads are
+    #     the same order as the work. Batching amortises the clock reads to <0.2%,
+    #     so the mean stays honest while p50 still catches a spike (a 711ms stall
+    #     inside one batch still dwarfs the median batch).
+    batch = min(max(int(5e-5 / one), 1), 10_000)
+
+    batches = []
+    iterations = 0
+    start = time.perf_counter()
+    while True:
+        b0 = time.perf_counter()
+        for _ in range(batch):
+            op()
+        batches.append((time.perf_counter() - b0) / batch)
+        iterations += batch
+        if iterations >= MIN_ITERATIONS and (time.perf_counter() - start) >= MIN_SECONDS:
+            break
+    elapsed = time.perf_counter() - start
+
+    if teardown:
+        teardown()
+
+    # p50 is the HEADLINE, mean is secondary. Across repeat runs on the same host
+    # the mean for JSON Hello World swung 215k -> 630k ops/sec (3x) while p50 held
+    # at 774k-792k: the mean absorbs scheduler/GC/flush stalls, p50 does not. A
+    # figure that moves 3x run-to-run cannot support a "faster than X" claim, so
+    # the stable statistic leads and the gap to the mean shows the tail.
+    p50 = sorted(batches)[len(batches) // 2]
+    print(
+        f"  {label:<25} {1 / p50:>13,.0f} {iterations / elapsed:>13,.0f}   "
+        f"{iterations:,}x{batch}"
+    )
     return elapsed
 
 
@@ -358,16 +476,27 @@ if __name__ == "__main__":
     if "--single" in args:
         i = args.index("--single")
         run_only = args[i + 1]
-        BENCHMARKS[run_only][1]()
+        # Benchmarks return (op, teardown); carbonah needs a FIXED amount of work
+        # rather than a fixed duration, so run the op ITERATIONS times.
+        op, teardown = BENCHMARKS[run_only][1]()
+        if run_only == "startup":
+            op()
+        else:
+            for _ in range(ITERATIONS):
+                op()
+        if teardown:
+            teardown()
         sys.exit(0)
 
     want_carbon = "--carbon" in args
     want_startup = "--startup" in args
     selected = [a for a in args if not a.startswith("--")] or list(BENCHMARKS.keys())
 
-    print(f"\nTina4 v3 Carbon Benchmarks — {ITERATIONS} iterations per test\n")
-    print(f"  {'Benchmark':<25} {'Time':<10} {'Throughput'}")
-    print("  " + "-" * 55)
+    print(
+        f"\nTina4 v3 Carbon Benchmarks — >={MIN_SECONDS}s / >={MIN_ITERATIONS} iterations per test\n"
+    )
+    print(f"  {'Benchmark':<25} {'p50 ops/sec':>13} {'mean ops/sec':>13}   {'samples'}")
+    print("  " + "-" * 72)
 
     total = 0
     for name in selected:
