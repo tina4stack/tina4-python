@@ -787,6 +787,8 @@ def _init(args):
     print(f"\nProject scaffolded at {target.resolve()}")
     print("  Run: tina4python serve")
     print("  Run: tina4python ai        (detect & install AI tool context)")
+    print("  Then: open the dev admin at /__dev, paste your Tina4 MCP key,")
+    print("        and describe what to build. See https://tina4.com/build-with-ai")
 
 
 # ── Serve ─────────────────────────────────────────────────────────────
