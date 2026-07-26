@@ -1865,6 +1865,35 @@ class Frond:
         only have tokens in hand (include, template inheritance)."""
         return self._render_nodes(parse(tokens), context)
 
+    @staticmethod
+    def _to_output(value) -> str:
+        """Coerce a rendered value to its output string.
+
+        THE cross-framework output contract. MUST stay identical to the compiled
+        path's copy in ``compiler._tostr`` -- both paths have to render the same
+        bytes. Change one, change both.
+
+        A boolean renders lowercase ``true``/``false``: Frond is a template
+        language, not Python, and lowercase is the form usable directly in HTML and
+        JavaScript (``data-active="{{ flag }}"`` -> ``data-active="true"``).
+
+        Breaking in 3.13.87: this used to emit Python's ``True``/``False``. The four
+        frameworks had drifted to four different answers -- Python ``True``/``False``
+        (Jinja2-faithful), PHP ``1``/``''`` (Twig-faithful, ``false`` rendering as an
+        EMPTY STRING), Ruby inconsistent between a comparison and a bare variable,
+        Node ``true``/``false``. All four now agree; a 72-expression corpus locks it.
+
+        ``is True`` / ``is False`` identity checks are deliberate: ``1 == True`` in
+        Python, and an integer 1 must still render as ``1``.
+        """
+        if value is None:
+            return ""
+        if value is True:
+            return "true"
+        if value is False:
+            return "false"
+        return str(value)
+
     def _render_nodes(self, nodes: list, context: dict) -> str:
         """Render a list of AST nodes to a string.
 
@@ -1899,7 +1928,7 @@ class Frond:
 
             if kind == "output":
                 result = self._eval_var(node.expr, context)
-                output.append(str(result) if result is not None else "")
+                output.append(self._to_output(result))
 
             elif kind == "if":
                 output.append(self._handle_if(node, context))
