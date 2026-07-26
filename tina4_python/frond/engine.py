@@ -662,7 +662,20 @@ def _expr_descriptor(expr: str, has_filters: bool):
     if tilde_pos >= 0:
         return ("concat", _split_outside_quotes(expr, "~"))
 
-    # Comparison operators for if conditions
+    # Comparison / logical operators -> _eval_comparison, the SAME evaluator
+    # {% if %} uses, so a condition means the same thing in a condition and in
+    # an output expression.
+    #
+    # A LEADING unary ``not`` needs its own check: every operator in the tuple
+    # below is matched WITH surrounding spaces, so ``not x`` (nothing to its
+    # left) matched none of them, fell through to the ``_resolve`` tail, and was
+    # looked up as a variable literally named "not x" -- found nothing, rendered
+    # EMPTY. ``{% if not x %}`` and ``x and not y`` always worked; only the
+    # standalone ``{{ not x }}`` was dropped, and before booleans rendered
+    # lowercase a dropped expression and ``False -> ''`` looked identical, which
+    # is why it survived. Fixed in 3.13.87 alongside the boolean contract.
+    if expr.startswith("not "):
+        return ("comparison",)
     for op in (" not in ", " in ", " is not ", " is ", "!=", "==", ">=", "<=", ">", "<", " and ", " or ", " not "):
         if _find_outside_quotes(expr, op) >= 0:
             return ("comparison",)
