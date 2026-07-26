@@ -1913,7 +1913,7 @@ async def dashboard(request, response):
 ## v3 Features Summary
 
 - **98 built-in features**, zero third-party dependencies
-- **2,899 tests** passing across all modules
+- **3,887 tests** passing across all modules
 - **Production server auto-detect**: `tina4python serve --production` auto-installs uvicorn
 - **`tina4python generate`**: model, route, migration, middleware scaffolding
 - **Database**: 5 engines (SQLite, PostgreSQL, MySQL, MSSQL, Firebird), DB query caching — request-scoped auto cache **off by default — opt-in via `TINA4_AUTO_CACHING=true`** (TTL `TINA4_AUTO_CACHING_TTL=5`s) dedupes identical reads within a request and flushes on writes; it ships OFF because a request-scoped cache can return pre-write state in a read-after-write (`SELECT MAX(id)` before an `INSERT` → duplicate keys), so opt in per read-heavy endpoint. Persistent cross-request cache also opt-in via `TINA4_DB_CACHE=true` (TTL `TINA4_DB_CACHE_TTL=30`s) routed through the unified backend set via `TINA4_DB_CACHE_BACKEND` (memory/file/redis/valkey/memcached/mongodb/database) + `TINA4_DB_CACHE_URL` so instances share one cache with global write-invalidation; `cache_stats()` reports `mode` (request/persistent/off) and `backend`, `cache_clear()`
