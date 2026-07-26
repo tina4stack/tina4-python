@@ -23,10 +23,19 @@ Design (behaviour-safe by construction):
   dotted paths / filters / ternary — all handled inside ``_eval_var``),
   ``if/elif/elseif/else``, ``for`` (+ loop vars + for-else), ``set``, comments,
   and ``{% raw %}`` (which the tokenizer has already turned into literal text).
-  ANY other construct (extends/block, include, macro, from/import, cache,
-  spaceless, autoescape, live), any whitespace-control marker, or a malformed
-  tag makes :func:`compile_template` return ``None`` so the caller falls back to
-  the interpreter for that whole template. A codegen/compile error also returns
+* Whitespace control (``{{- -}}`` / ``{%- -%}``) is compiled too. The trims are
+  structural (a pure function of the token positions, never of render data), so
+  :func:`_apply_whitespace_control` bakes them into the neighbouring TEXT tokens
+  at compile time — mirroring the interpreter's pre-pass verbatim — and codegen
+  proceeds. The ONE whitespace case that stays render-dependent is a
+  strip-before (``{{- `` / ``{%- ``) whose left neighbour is not a literal TEXT
+  token (a value / block / comment output, mid-body): there the interpreter
+  right-strips the live output buffer, so that single case still falls back
+  (see the strip-before gate in :func:`_emit_body`).
+* ANY other construct (extends/block, include, macro, from/import, cache,
+  spaceless, autoescape, live) or a malformed tag makes
+  :func:`compile_template` return ``None`` so the caller falls back to the
+  interpreter for that whole template. A codegen/compile error also returns
   ``None``. A render is therefore never broken by the compiler.
 """
 
@@ -46,6 +55,47 @@ def _pad(indent: int) -> str:
     return "    " * indent
 
 
+def _apply_whitespace_control(tokens, eng):
+    """Bake the interpreter's STRUCTURAL whitespace trims into the TEXT tokens at
+    compile time so a whitespace-controlled template compiles instead of falling
+    back, with compiled text literals BYTE-IDENTICAL to the interpreter's.
+
+    This mirrors, verbatim, the pre-pass at the top of ``Frond._render_tokens``
+    (``engine.py`` lines 1947-1954): for every ``{{- }}`` / ``{%- %}`` marker it
+    right-strips the immediately-preceding TEXT token (strip-before) and
+    left-strips the immediately-following TEXT token (strip-after). Those trims
+    are a pure function of the token positions — never of render data — so
+    applying them once here reproduces the interpreter exactly. Idempotent
+    (``rstrip``/``lstrip``), matching the interpreter re-running this pass on
+    every recursive ``_render_tokens`` call.
+
+    Two interpreter trims are NOT baked here and are handled elsewhere so the
+    compiled output stays byte-identical:
+
+    * The opening-block ``-%}`` also left-strips the TEXT token that FOLLOWS the
+      matching end tag (``engine.py`` line 2049) — baked in ``_emit_if`` /
+      ``_emit_for`` where the end index is known.
+    * The runtime right-strip of the live output buffer for a strip-before
+      marker (``engine.py`` lines 1971-1972 / 1983-1984) — reproduced for the
+      safe cases by this pass (the left neighbour is a TEXT literal, so the
+      buffer tail is already trimmed) and refused for the render-dependent case
+      by the strip-before gate in :func:`_emit_body`.
+
+    Operates on the list in place (the caller passes a copy) and returns it.
+    """
+    strip_tag = eng._strip_tag
+    TEXT, VAR, BLOCK = eng.TEXT, eng.VAR, eng.BLOCK
+    for idx in range(len(tokens)):
+        ttype, raw = tokens[idx]
+        if ttype in (VAR, BLOCK):
+            _, strip_b, strip_a = strip_tag(raw)
+            if strip_b and idx > 0 and tokens[idx - 1][0] == TEXT:
+                tokens[idx - 1] = (TEXT, tokens[idx - 1][1].rstrip())
+            if strip_a and idx + 1 < len(tokens) and tokens[idx + 1][0] == TEXT:
+                tokens[idx + 1] = (TEXT, tokens[idx + 1][1].lstrip())
+    return tokens
+
+
 def compile_template(tokens):
     """Compile a token list to ``_rendered(engine, ctx) -> str``.
 
@@ -58,6 +108,12 @@ def compile_template(tokens):
     from tina4_python.frond import engine as _engine
 
     try:
+        # Bake the structural whitespace trims into a COPY of the token list (the
+        # caller's list stays pristine for the interpreter fallback, which runs
+        # its own idempotent pre-pass). Elements are immutable tuples, so the
+        # shallow copy is enough — the pass replaces list entries, never mutating
+        # the originals.
+        tokens = _apply_whitespace_control(list(tokens), _engine)
         lines = ["def _rendered(engine, ctx):", "    _b = []", "    _ap = _b.append"]
         _emit_body(tokens, "ctx", 1, lines, {"n": 0}, _engine)
         lines.append('    return "".join(_b)')
@@ -108,8 +164,14 @@ def _emit_body(tokens, ctxvar, indent, out, state, eng):
 
         elif ttype == VAR:
             content, strip_b, strip_a = strip_tag(raw)
-            if strip_b or strip_a:
-                raise _Unsupported  # whitespace control — fall back
+            # strip_a and the TEXT-adjacent part of strip_b are already baked into
+            # the neighbouring TEXT tokens by _apply_whitespace_control. The only
+            # strip_b the pre-pass cannot bake is one whose left neighbour is NOT
+            # a literal TEXT token (a value/block/comment output mid-body, or a
+            # body-start marker): there the interpreter right-strips the LIVE
+            # output buffer, which is render-dependent — fall back for that case.
+            if strip_b and not (i == 0 or tokens[i - 1][0] == TEXT):
+                raise _Unsupported
             out.append(
                 _pad(indent)
                 + "_ap(_tostr(engine._eval_var(" + repr(content) + ", " + ctxvar + ")))"
@@ -118,10 +180,15 @@ def _emit_body(tokens, ctxvar, indent, out, state, eng):
 
         elif ttype == BLOCK:
             content, strip_b, strip_a = strip_tag(raw)
-            if strip_b or strip_a:
-                raise _Unsupported  # whitespace control — fall back
             parts = content.split()
             tag = parts[0] if parts else ""
+
+            # Same strip-before gate as VAR: the pre-pass baked the TEXT-adjacent
+            # trims and _emit_if/_emit_for bake the opening-tag -%} that trims
+            # past the end tag; only a strip_b whose left neighbour is not a
+            # literal TEXT token stays render-dependent and must fall back.
+            if strip_b and not (i == 0 or tokens[i - 1][0] == TEXT):
+                raise _Unsupported
 
             if tag == "if":
                 i = _emit_if(tokens, i, ctxvar, indent, out, state, eng)
@@ -221,6 +288,15 @@ def _emit_if(tokens, start, ctxvar, indent, out, state, eng):
         if len(out) == body_start:
             out.append(_pad(indent + 1) + "pass")
         first = False
+
+    # An opening `{% if ... -%}` also left-strips the TEXT token that FOLLOWS the
+    # matching endif: engine.py line 2049 applies the OPENING tag's strip_after
+    # once the block is consumed, ON TOP of the pre-pass trim of the first body
+    # token. Bake it structurally (end_i is the index past endif) so compiled ==
+    # interpreted.
+    _, _, strip_a = eng._strip_tag(tokens[start][1])
+    if strip_a and end_i < len(tokens) and tokens[end_i][0] == eng.TEXT:
+        tokens[end_i] = (eng.TEXT, tokens[end_i][1].lstrip())
 
     return end_i
 
@@ -345,5 +421,11 @@ def _emit_for(tokens, start, ctxvar, indent, out, state, eng):
     _emit_body(body_tokens, lc, indent + 2, out, state, eng)
     if len(out) == body_start:
         out.append(_pad(indent + 2) + "pass")
+
+    # An opening `{% for ... -%}` left-strips the TEXT token after endfor too
+    # (engine.py line 2049), mirroring the if case above.
+    _, _, strip_a = eng._strip_tag(tokens[start][1])
+    if strip_a and end_i < len(tokens) and tokens[end_i][0] == eng.TEXT:
+        tokens[end_i] = (eng.TEXT, tokens[end_i][1].lstrip())
 
     return end_i
