@@ -13,6 +13,15 @@ from tina4_python.frond import engine as E
 from tina4_python.frond.compiler import compile_template
 
 
+def _compile(source):
+    """Compile `source` the way the engine does: tokenize -> parse -> compile.
+
+    The compiler consumes the AST the parser produces, never a raw token list —
+    structure is decided once, by the parser.
+    """
+    return compile_template(E.parse(E._tokenize(source)))
+
+
 def _interpret(source, data):
     """Render `source` through the pure interpreter (never the compiler)."""
     eng = Frond()
@@ -89,7 +98,7 @@ FALLBACK = [
 class TestCompiledMatchesInterpreted:
     @pytest.mark.parametrize("source,data", COMPILABLE)
     def test_byte_identical(self, source, data):
-        assert compile_template(E._tokenize(source)) is not None, "expected this template to compile"
+        assert _compile(source) is not None, "expected this template to compile"
         assert _compiled(source, data) == _interpret(source, data)
 
 
@@ -97,7 +106,7 @@ class TestFallback:
     @pytest.mark.parametrize("source,data", FALLBACK)
     def test_falls_back_but_correct(self, source, data):
         # compile_template refuses the template (returns None)...
-        assert compile_template(E._tokenize(source)) is None, "expected this template to fall back"
+        assert _compile(source) is None, "expected this template to fall back"
         # ...and the engine still renders it correctly via the interpreter.
         assert _compiled(source, data) == _interpret(source, data)
 
@@ -105,7 +114,7 @@ class TestFallback:
         # Template inheritance is handled above the token walk; the compiler
         # must refuse it so the extends machinery runs on the interpreter path.
         src = '{% extends "base.twig" %}{% block c %}hi{% endblock %}'
-        assert compile_template(E._tokenize(src)) is None
+        assert _compile(src) is None
 
 
 class TestCompiledPathIsUsed:
@@ -156,7 +165,7 @@ class TestCompileErrorsNeverBreakRender:
         # A malformed for (no `in`) is not compiled; the render must not raise.
         src = "{% for %}{{ x }}{% endfor %}after"
         # compile refuses it; the engine falls back to the interpreter.
-        assert compile_template(E._tokenize(src)) is None
+        assert _compile(src) is None
         assert _compiled(src, {"x": "z"}) == _interpret(src, {"x": "z"})
 
 
@@ -201,7 +210,7 @@ class TestWhitespaceControlCompiles:
     @pytest.mark.parametrize("source,data", WHITESPACE)
     def test_compiles_and_byte_identical(self, source, data):
         # (a) it now COMPILES (callable, not the None fall-back)...
-        assert compile_template(E._tokenize(source)) is not None, \
+        assert _compile(source) is not None, \
             "whitespace-controlled template should compile, not fall back"
         # (b) ...and the compiled render is byte-identical to the interpreter.
         assert _compiled(source, data) == _interpret(source, data)
@@ -221,7 +230,7 @@ class TestWhitespaceControlCompiles:
         # a value output. Must fall back AND render correctly.
         src = "{{ n }}{{- x }}"
         data = {"n": "hi   ", "x": "X"}
-        assert compile_template(E._tokenize(src)) is None
+        assert _compile(src) is None
         assert _compiled(src, data) == _interpret(src, data) == "hiX"
 
     def test_plain_template_unaffected(self):
@@ -229,5 +238,5 @@ class TestWhitespaceControlCompiles:
         # and still compile byte-identically (guards against over-trimming).
         src = "  hi  {{ x }}  \n  bye  "
         data = {"x": "X"}
-        assert compile_template(E._tokenize(src)) is not None
+        assert _compile(src) is not None
         assert _compiled(src, data) == _interpret(src, data) == "  hi  X  \n  bye  "

@@ -1,8 +1,13 @@
-# Tina4 Frond Engine — Lexer, parser, and runtime.
+# Tina4 Frond Engine — the runtime (expression evaluation, filters, rendering).
 """
 Zero-dependency twig-like template engine.
 Supports: variables, filters, if/elseif/else/endif, for/else/endfor,
 extends/block, include, macro, set, comments, whitespace control, tests.
+
+The lexer and the parser live in :mod:`tina4_python.frond.parser`, which turns
+source into tokens and tokens into an AST. This module consumes that AST: it
+owns expression evaluation, the filter set, and rendering. Structure is never
+re-derived here — see the parser's module docstring for why.
 """
 import os
 import re
@@ -16,6 +21,15 @@ from pathlib import Path
 from datetime import datetime
 
 from tina4_python.auth import Auth as _FrondAuth, _resolve_secret
+# Lexer + parser primitives, re-exported because this module is their historic
+# home and callers still reach for them here (``engine._tokenize``,
+# ``engine.TEXT``). The four token types are kept as a COMPLETE set even though
+# this module only reads TEXT and BLOCK: half a set is a worse surface than a
+# whole one, so do not prune VAR/COMMENT as dead code.
+from tina4_python.frond.parser import (  # noqa: F401
+    TEXT, VAR, BLOCK, COMMENT,
+    _tokenize, _strip_tag, parse, collect_macro_nodes,
+)
 
 
 class SafeString(str):
@@ -83,28 +97,9 @@ class _LoopContext(dict):
 # ── Lexer ───────────────────────────────────────────────────────
 
 # Token types
-TEXT = "TEXT"
-VAR = "VAR"          # {{ ... }}
-BLOCK = "BLOCK"      # {% ... %}
-COMMENT = "COMMENT"  # {# ... #}
-
 # Sentinel distinguishing "not yet compiled" from a cached None (= compiled and
 # found unsupported, use the interpreter) in Frond._compiled_fn.
 _COMPILE_UNSET = object()
-
-# Regex to split template into tokens
-_TOKEN_RE = re.compile(
-    r"(\{%-?\s*.*?\s*-?%\})"   # Block tags
-    r"|(\{\{-?\s*.*?\s*-?\}\})"  # Variable tags
-    r"|(\{#.*?#\})",            # Comments
-    re.DOTALL,
-)
-
-# Regex to extract {% raw %}...{% endraw %} blocks before tokenizing
-_RAW_BLOCK_RE = re.compile(
-    r"\{%-?\s*raw\s*-?%\}(.*?)\{%-?\s*endraw\s*-?%\}",
-    re.DOTALL,
-)
 
 # ── Pre-compiled regexes for hot-path operations ───────────────
 _METHOD_CALL_RE = re.compile(r"^(\w+)\s*\((.*)?\)$", re.DOTALL)
@@ -118,7 +113,6 @@ _IN_RE = re.compile(r"^(.+?)\s+in\s+(.+)$")
 _DIVISIBLE_BY_RE = re.compile(r"\s*by\s*\(\s*(\d+)\s*\)")
 _FILTER_ARGS_RE = re.compile(r"(\w+)\s*\((.*)\)$", re.DOTALL)
 _FILTER_CMP_RE = re.compile(r"(\w+)\s*(!=|==|>=|<=|>|<)\s*(.+)")
-_FOR_RE = re.compile(r"for\s+(\w+)(?:\s*,\s*(\w+))?\s+in\s+(.+)")
 _SET_RE = re.compile(r"set\s+(\w+)\s*=\s*(.+)", re.DOTALL)
 _INCLUDE_RE = re.compile(r'include\s+["\'](.+?)["\'](?:\s+with\s+(.+))?')
 _LIVE_RE = re.compile(r'live\s+["\'](?P<name>[^"\']+)["\'](?P<rest>.*)$', re.DOTALL)
@@ -143,81 +137,6 @@ _BLOCK_RE = re.compile(
     r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}(.*?)\{%[-\s]*endblock\s*[-]?%\}",
     re.DOTALL,
 )
-
-
-def _tokenize(source: str) -> list[tuple[str, str]]:
-    """Split template source into (type, value) tokens.
-
-    Before splitting on {{ }}/{% %} patterns, extract {% raw %}...{% endraw %}
-    blocks and replace them with placeholder TEXT tokens so their content is
-    output literally (not parsed).
-    """
-    # 1. Extract raw blocks and replace with placeholders
-    raw_blocks: list[str] = []
-
-    def _replace_raw(m: re.Match) -> str:
-        idx = len(raw_blocks)
-        raw_blocks.append(m.group(1))
-        return f"\x00RAW_{idx}\x00"
-
-    source = _RAW_BLOCK_RE.sub(_replace_raw, source)
-
-    # 2. Normal tokenization
-    tokens = []
-    pos = 0
-    for m in _TOKEN_RE.finditer(source):
-        start = m.start()
-        if start > pos:
-            tokens.append((TEXT, source[pos:start]))
-
-        raw = m.group()
-        if raw.startswith("{#"):
-            tokens.append((COMMENT, raw))
-        elif raw.startswith("{{"):
-            tokens.append((VAR, raw))
-        elif raw.startswith("{%"):
-            tokens.append((BLOCK, raw))
-        pos = m.end()
-
-    if pos < len(source):
-        tokens.append((TEXT, source[pos:]))
-
-    # 3. Restore raw block placeholders as literal TEXT
-    if raw_blocks:
-        restored = []
-        for ttype, value in tokens:
-            if ttype == TEXT and "\x00RAW_" in value:
-                for idx, content in enumerate(raw_blocks):
-                    value = value.replace(f"\x00RAW_{idx}\x00", content)
-            restored.append((ttype, value))
-        tokens = restored
-
-    return tokens
-
-
-def _strip_tag(raw: str) -> tuple[str, bool, bool]:
-    """Extract content from a tag and detect whitespace control.
-
-    Returns (content, strip_before, strip_after).
-    """
-    strip_before = False
-    strip_after = False
-
-    if raw.startswith("{{"):
-        inner = raw[2:-2]
-    elif raw.startswith("{%"):
-        inner = raw[2:-2]
-    else:
-        inner = raw[2:-2]
-
-    if inner.startswith("-"):
-        strip_before = True
-        inner = inner[1:]
-    if inner.endswith("-"):
-        strip_after = True
-        inner = inner[:-1]
-
-    return inner.strip(), strip_before, strip_after
 
 
 # ── Ternary helpers ────────────────────────────────────────────
@@ -1553,9 +1472,12 @@ class Frond:
         self._allowed_vars: set[str] | None = None
         # Fragment cache (key → (html, expires_at))
         self._fragment_cache: dict[str, tuple[str, float]] = {}
-        # Token pre-compilation cache
-        self._compiled: dict[str, tuple[list, float]] = {}  # {template_name: (tokens, expires_at)}
-        self._compiled_strings: dict[str, list] = {}  # {md5_hash: tokens}
+        # Token + AST pre-compilation cache. The AST is cached ALONGSIDE the
+        # tokens (mirroring PHP's {'tokens', 'ast'}) so a template is tokenized
+        # and parsed once: the tokens stay for the extends path, which
+        # reconstructs source from them, and the AST is what actually renders.
+        self._compiled: dict[str, tuple[list, list, float]] = {}  # {name: (tokens, ast, expires_at)}
+        self._compiled_strings: dict[str, tuple[list, list]] = {}  # {md5_hash: (tokens, ast)}
         # AOT-compiled render functions (ADR-0001): {compile_key: callable | None}.
         # The value is the compiled ``_rendered(engine, ctx)`` callable, or None
         # when the template used a construct the compiler falls back on (cached
@@ -1678,43 +1600,43 @@ class Frond:
             # the expiry; otherwise the cache is permanent (legacy behaviour).
             cached = self._compiled.get(template)
             if cached is not None:
-                tokens_cached, expires_at = cached
+                tokens_cached, ast_cached, expires_at = cached
                 if self._cache_ttl <= 0 or time.time() < expires_at:
-                    return self._execute_cached(tokens_cached, context, template,
-                                                compile_key=template)
+                    return self._execute_cached(tokens_cached, ast_cached, context,
+                                                template, compile_key=template)
 
-        # Dev mode (or expired entry): re-read and re-tokenize.
+        # Dev mode (or expired entry): re-read, re-tokenize and re-parse.
         # mtime-based invalidation doesn't catch changes to included/extended
         # templates (parent or partial changes don't update the caller's mtime).
         source = path.read_text(encoding="utf-8")
         tokens = _tokenize(source)
+        ast = parse(tokens)
         if not debug_mode:
             expires_at = (time.time() + self._cache_ttl) if self._cache_ttl > 0 else 0
-            self._compiled[template] = (tokens, expires_at)
+            self._compiled[template] = (tokens, ast, expires_at)
             # Prod: the compiled fn is stable per template name (files don't
             # change under a running prod worker), so key it by name.
-            return self._execute_with_source(source, tokens, context, template,
+            return self._execute_with_source(source, tokens, ast, context, template,
                                              compile_key=template)
         # Dev: the source is re-read every render, so key the compiled fn by a
         # hash of THIS source. An edit produces a new hash and recompiles —
         # dev visibility (hot-reload) stays intact, and the compiled path is
         # still exercised so it never silently drifts from the interpreter.
         dev_key = "dev:" + hashlib.md5(source.encode()).hexdigest()
-        return self._execute_with_source(source, tokens, context, template,
+        return self._execute_with_source(source, tokens, ast, context, template,
                                          compile_key=dev_key)
 
     def render_string(self, source: str, data: dict = None) -> str:
-        """Render a template string directly. Uses token caching for performance."""
+        """Render a template string directly. Uses token+AST caching."""
         context = {**self._globals, **(data or {})}
 
         key = hashlib.md5(source.encode()).hexdigest()
-        cached_tokens = self._compiled_strings.get(key)
-        if cached_tokens is not None:
-            return self._execute_cached(cached_tokens, context, compile_key=key)
-
-        tokens = _tokenize(source)
-        self._compiled_strings[key] = tokens
-        return self._execute_cached(tokens, context, compile_key=key)
+        cached = self._compiled_strings.get(key)
+        if cached is None:
+            tokens = _tokenize(source)
+            cached = (tokens, parse(tokens))
+            self._compiled_strings[key] = cached
+        return self._execute_cached(cached[0], cached[1], context, compile_key=key)
 
     def clear_cache(self):
         """Clear all compiled template caches."""
@@ -1737,17 +1659,17 @@ class Frond:
             raise FileNotFoundError(f"Template not found: {path}")
         return path.read_text(encoding="utf-8")
 
-    def _get_compiled(self, compile_key: str, tokens: list):
+    def _get_compiled(self, compile_key: str, ast: list):
         """Return the AOT-compiled ``_rendered(engine, ctx)`` for this template,
         or ``None`` to signal the caller should use the interpreter.
 
-        Compiles once per key and caches the result (a ``None`` fallback too, so
-        an unsupported template is not re-analysed on every render). Never
-        returns a compiled fn in sandbox mode — the sandbox tag/filter/var gates
-        are enforced on the interpreter path, so a sandboxed engine always
-        interprets. ``compile_template`` itself never raises (it returns ``None``
-        on any unsupported construct or codegen/compile error), so a render is
-        never broken by the compiler.
+        Compiles the AST once per key and caches the result (a ``None`` fallback
+        too, so an unsupported template is not re-analysed on every render).
+        Never returns a compiled fn in sandbox mode — the sandbox
+        tag/filter/var gates are enforced on the interpreter path, so a
+        sandboxed engine always interprets. ``compile_template`` itself never
+        raises (it returns ``None`` on any unsupported construct or
+        codegen/compile error), so a render is never broken by the compiler.
         """
         if compile_key is None or self._sandbox:
             return None
@@ -1755,16 +1677,17 @@ class Frond:
         if cached is not _COMPILE_UNSET:
             return cached
         from tina4_python.frond.compiler import compile_template
-        fn = compile_template(tokens)
+        fn = compile_template(ast)
         self._compiled_fn[compile_key] = fn
         return fn
 
-    def _execute_cached(self, tokens: list, context: dict, template: str = None,
-                        compile_key: str = None) -> str:
-        """Execute pre-tokenized template against context.
+    def _execute_cached(self, tokens: list, ast: list, context: dict,
+                        template: str = None, compile_key: str = None) -> str:
+        """Execute a pre-parsed template against context.
 
         Checks for extends in tokens; if found, falls back to source-based
-        execution (extends requires re-reading parent template). Otherwise
+        execution (extends requires re-reading parent template — the tokens are
+        pristine, so the source reconstruction below is exact). Otherwise
         prefers the AOT-compiled render fn when the template compiled.
         """
         # Check if first non-text token is an extends block
@@ -1781,14 +1704,14 @@ class Frond:
                     source = "".join(val for _, val in tokens)
                     return self._execute(source, context)
             break
-        compiled = self._get_compiled(compile_key, tokens)
+        compiled = self._get_compiled(compile_key, ast)
         if compiled is not None:
             return compiled(self, context)
-        return self._render_tokens(tokens, context)
+        return self._render_nodes(ast, context)
 
-    def _execute_with_source(self, source: str, tokens: list, context: dict, template: str = None,
-                             compile_key: str = None) -> str:
-        """Execute with both source and pre-tokenized tokens available."""
+    def _execute_with_source(self, source: str, tokens: list, ast: list, context: dict,
+                             template: str = None, compile_key: str = None) -> str:
+        """Execute with the source, its tokens and its AST all available."""
         # Handle extends first
         extends_match = _EXTENDS_RE.match(source.lstrip())
         if extends_match:
@@ -1797,10 +1720,10 @@ class Frond:
             child_blocks = self._extract_blocks(source)
             return self._render_with_blocks(parent_source, context, child_blocks)
 
-        compiled = self._get_compiled(compile_key, tokens)
+        compiled = self._get_compiled(compile_key, ast)
         if compiled is not None:
             return compiled(self, context)
-        return self._render_tokens(tokens, context)
+        return self._render_nodes(ast, context)
 
     def _execute(self, source: str, context: dict) -> str:
         """Execute template source against context."""
@@ -1937,119 +1860,84 @@ class Frond:
         return self._render_tokens(_tokenize(result), context)
 
     def _render_tokens(self, tokens: list, context: dict) -> str:
-        """Render a list of tokens to string."""
-        # Whitespace control pre-pass: every {{- / -}} and {%- / -%} marker
-        # trims its neighbouring TEXT token. Doing this up-front over the whole
-        # token list (not per-handler) means the markers on closing tags
-        # (endif/endfor) and the body boundaries are honoured too — a block tag
-        # consumes its own end tag during dispatch, so the inline pass below
-        # never sees it. Idempotent, so recursion into block bodies is safe.
-        for _idx in range(len(tokens)):
-            _tt, _raw = tokens[_idx]
-            if _tt in (VAR, BLOCK):
-                _, _sb, _sa = _strip_tag(_raw)
-                if _sb and _idx > 0 and tokens[_idx - 1][0] == TEXT:
-                    tokens[_idx - 1] = (TEXT, tokens[_idx - 1][1].rstrip())
-                if _sa and _idx + 1 < len(tokens) and tokens[_idx + 1][0] == TEXT:
-                    tokens[_idx + 1] = (TEXT, tokens[_idx + 1][1].lstrip())
+        """Parse a token list and render it — the entry point for the paths that
+        only have tokens in hand (include, template inheritance)."""
+        return self._render_nodes(parse(tokens), context)
 
+    def _render_nodes(self, nodes: list, context: dict) -> str:
+        """Render a list of AST nodes to a string.
+
+        The interpreter half of the parse/render split. It walks a tree the
+        parser already grouped, so there is no structure to re-derive here: no
+        whitespace pre-pass (baked into the TEXT nodes), no branch or body
+        collection (owned by ``parser._parse_if`` / ``_parse_for``), no tag
+        keyword re-splitting per render.
+
+        ``strip_before`` is the one whitespace case that survives to render
+        time: the parser sets it only when the thing to right-strip is rendered
+        output rather than a literal TEXT node. Each block's body renders into
+        its OWN buffer and lands in the parent as a single element, so a
+        strip-before after a block trims that block's whole output — as it
+        always did.
+        """
         output = []
-        i = 0
 
-        while i < len(tokens):
-            ttype, raw = tokens[i]
+        for node in nodes:
+            kind = node.kind
 
-            if ttype == TEXT:
-                output.append(raw)
-                i += 1
+            # Literal text and comments carry no whitespace markers of their
+            # own, so they short-circuit ahead of the single strip site below.
+            if kind == "text":
+                output.append(node.text)
+                continue
+            if kind == "comment":
+                continue
 
-            elif ttype == COMMENT:
-                i += 1
+            if node.strip_before and output:
+                output[-1] = output[-1].rstrip()
 
-            elif ttype == VAR:
-                content, strip_b, strip_a = _strip_tag(raw)
-                if strip_b and output:
-                    output[-1] = output[-1].rstrip()
-
-                result = self._eval_var(content, context)
+            if kind == "output":
+                result = self._eval_var(node.expr, context)
                 output.append(str(result) if result is not None else "")
 
-                if strip_a and i + 1 < len(tokens) and tokens[i + 1][0] == TEXT:
-                    tokens[i + 1] = (TEXT, tokens[i + 1][1].lstrip())
-                i += 1
+            elif kind == "if":
+                output.append(self._handle_if(node, context))
 
-            elif ttype == BLOCK:
-                content, strip_b, strip_a = _strip_tag(raw)
-                if strip_b and output:
-                    output[-1] = output[-1].rstrip()
+            elif kind == "for":
+                output.append(self._handle_for(node, context))
 
-                tag = content.split()[0] if content.split() else ""
+            elif kind == "set":
+                self._handle_set(node.content, context)
 
-                if tag == "if":
-                    result, skip = self._handle_if(tokens, i, context)
-                    output.append(result)
-                    i = skip
+            elif kind == "include":
+                # Sandbox: check tag
+                if not (self._sandbox and self._allowed_tags is not None
+                        and "include" not in self._allowed_tags):
+                    output.append(self._handle_include(node.content, context))
 
-                elif tag == "for":
-                    result, skip = self._handle_for(tokens, i, context)
-                    output.append(result)
-                    i = skip
+            elif kind == "macro":
+                self._handle_macro(node, context)
 
-                elif tag == "set":
-                    self._handle_set(content, context)
-                    i += 1
+            elif kind == "from_import":
+                self._handle_from_import(node.content, context)
 
-                elif tag == "include":
-                    # Sandbox: check tag
-                    if self._sandbox and self._allowed_tags is not None and "include" not in self._allowed_tags:
-                        i += 1
-                    else:
-                        result = self._handle_include(content, context)
-                        output.append(result)
-                        i += 1
+            elif kind == "import_as":
+                self._handle_import_as(node.content, context)
 
-                elif tag == "macro":
-                    skip = self._handle_macro(tokens, i, context)
-                    i = skip
+            elif kind == "cache":
+                output.append(self._handle_cache(node, context))
 
-                elif tag == "from":
-                    self._handle_from_import(content, context)
-                    i += 1
+            elif kind == "spaceless":
+                output.append(self._handle_spaceless(node, context))
 
-                elif tag == "import":
-                    self._handle_import_as(content, context)
-                    i += 1
+            elif kind == "autoescape":
+                output.append(self._handle_autoescape(node, context))
 
-                elif tag == "cache":
-                    result, skip = self._handle_cache(tokens, i, context)
-                    output.append(result)
-                    i = skip
+            elif kind == "live":
+                output.append(self._handle_live(node, context))
 
-                elif tag == "spaceless":
-                    result, skip = self._handle_spaceless(tokens, i, context)
-                    output.append(result)
-                    i = skip
-
-                elif tag == "autoescape":
-                    result, skip = self._handle_autoescape(tokens, i, context)
-                    output.append(result)
-                    i = skip
-
-                elif tag == "live":
-                    result, skip = self._handle_live(tokens, i, context)
-                    output.append(result)
-                    i = skip
-
-                elif tag in ("block", "endblock", "extends"):
-                    i += 1  # Already handled
-
-                else:
-                    i += 1
-
-                if strip_a and i < len(tokens) and tokens[i][0] == TEXT:
-                    tokens[i] = (TEXT, tokens[i][1].lstrip())
-            else:
-                i += 1
+            # else: an extends / block / endblock marker or a stray terminator —
+            # no output of its own, and its strip is already applied above.
 
         return "".join(output)
 
@@ -2264,117 +2152,39 @@ class Frond:
 
         return value
 
-    def _handle_if(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
-        """Handle {% if %}...{% elseif %}...{% else %}...{% endif %}."""
-        content, _, _ = _strip_tag(tokens[start][1])
-        condition_expr = content[3:].strip()  # Remove 'if '
+    def _handle_if(self, node, context: dict) -> str:
+        """Render an :class:`~tina4_python.frond.parser.IfNode`.
 
-        # Collect branches: [(condition, tokens), ...]
-        branches = []
-        current_tokens = []
-        current_cond = condition_expr
-        depth = 0
-        i = start + 1
-
-        while i < len(tokens):
-            ttype, raw = tokens[i]
-            if ttype == BLOCK:
-                tag_content, _, _ = _strip_tag(raw)
-                tag = tag_content.split()[0] if tag_content.split() else ""
-
-                if tag == "if":
-                    depth += 1
-                    current_tokens.append(tokens[i])
-                elif tag == "endif" and depth > 0:
-                    depth -= 1
-                    current_tokens.append(tokens[i])
-                elif tag == "endif" and depth == 0:
-                    branches.append((current_cond, current_tokens))
-                    i += 1
-                    break
-                elif tag in ("elseif", "elif") and depth == 0:
-                    branches.append((current_cond, current_tokens))
-                    current_cond = tag_content[len(tag):].strip()
-                    current_tokens = []
-                elif tag == "else" and depth == 0:
-                    branches.append((current_cond, current_tokens))
-                    current_cond = None  # else branch
-                    current_tokens = []
-                else:
-                    current_tokens.append(tokens[i])
-            else:
-                current_tokens.append(tokens[i])
-            i += 1
-
-        # Evaluate branches — pass _eval_var_raw so filters in conditions work
-        # e.g. {% if items|length > 0 %}
-        for cond, branch_tokens in branches:
+        The branches arrive already grouped by the parser, so all this does is
+        pick the first one whose condition holds. ``_eval_var_raw`` is passed in
+        so filters work inside a condition, e.g. {% if items|length > 0 %}.
+        """
+        for cond, body in node.branches:
             if cond is None or _eval_comparison(cond, context, self._eval_var_raw):
-                return self._render_tokens(list(branch_tokens), context), i
+                return self._render_nodes(body, context)
+        return ""
 
-        return "", i
+    def _handle_for(self, node, context: dict) -> str:
+        """Render a :class:`~tina4_python.frond.parser.ForNode`.
 
-    def _handle_for(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
-        """Handle {% for item in items %}...{% else %}...{% endfor %}."""
-        content, _, _ = _strip_tag(tokens[start][1])
-        # Parse: for key, value in expr  OR  for item in expr
-        for_match = _FOR_RE.match(content)
-        if not for_match:
-            return "", start + 1
-
-        var1 = for_match.group(1)
-        var2 = for_match.group(2)
-        iterable_expr = for_match.group(3).strip()
-
-        # Collect body and else tokens
-        body_tokens = []
-        else_tokens = []
-        in_else = False
-        for_depth = 0
-        if_depth = 0
-        i = start + 1
-
-        while i < len(tokens):
-            ttype, raw = tokens[i]
-            if ttype == BLOCK:
-                tag_content, _, _ = _strip_tag(raw)
-                tag = tag_content.split()[0] if tag_content.split() else ""
-
-                if tag == "for":
-                    for_depth += 1
-                    (else_tokens if in_else else body_tokens).append(tokens[i])
-                elif tag == "endfor" and for_depth > 0:
-                    for_depth -= 1
-                    (else_tokens if in_else else body_tokens).append(tokens[i])
-                elif tag == "endfor" and for_depth == 0:
-                    i += 1
-                    break
-                elif tag == "if":
-                    if_depth += 1
-                    (else_tokens if in_else else body_tokens).append(tokens[i])
-                elif tag == "endif":
-                    if_depth -= 1
-                    (else_tokens if in_else else body_tokens).append(tokens[i])
-                elif tag == "else" and for_depth == 0 and if_depth == 0:
-                    in_else = True
-                else:
-                    (else_tokens if in_else else body_tokens).append(tokens[i])
-            else:
-                (else_tokens if in_else else body_tokens).append(tokens[i])
-            i += 1
-
-        # Evaluate iterable
-        iterable = _eval_expr(iterable_expr, context)
+        Header, body and else-body all come from the parser; this is the loop
+        bookkeeping only.
+        """
+        var1 = node.key_var
+        var2 = node.value_var
+        iterable = _eval_expr(node.iterable, context)
 
         if not iterable:
-            if else_tokens:
-                return self._render_tokens(list(else_tokens), context), i
-            return "", i
+            if node.else_body:
+                return self._render_nodes(node.else_body, context)
+            return ""
 
         # Iterate
         output = []
+        body = node.body
         items = list(iterable.items()) if isinstance(iterable, dict) else list(iterable)
         total = len(items)
+        is_dict = isinstance(iterable, dict)
 
         for idx, item in enumerate(items):
             loop_ctx = _LoopContext(context)
@@ -2390,7 +2200,7 @@ class Frond:
                 "odd": (idx + 1) % 2 != 0,
             }
 
-            if isinstance(iterable, dict):
+            if is_dict:
                 key, value = item
                 if var2:
                     loop_ctx[var1] = key
@@ -2404,9 +2214,9 @@ class Frond:
                 else:
                     loop_ctx[var1] = item
 
-            output.append(self._render_tokens(list(body_tokens), loop_ctx))
+            output.append(self._render_nodes(body, loop_ctx))
 
-        return "".join(output), i
+        return "".join(output)
 
     def _handle_set(self, content: str, context: dict):
         """Handle {% set name = expr %}.
@@ -2473,105 +2283,66 @@ class Frond:
                 params.append((p, None))
         return params
 
-    def _handle_macro(self, tokens: list, start: int, context: dict) -> int:
-        """Handle {% macro name(args) %}...{% endmacro %}. Registers as context callable."""
-        content, _, _ = _strip_tag(tokens[start][1])
-        m = _MACRO_RE.match(content)
-        if not m:
-            # Skip to endmacro
-            i = start + 1
-            while i < len(tokens):
-                if tokens[i][0] == BLOCK and "endmacro" in tokens[i][1]:
-                    return i + 1
-                i += 1
-            return i
+    def _macro_callable(self, params: list, body: list, context: dict):
+        """Build the callable a macro registers.
 
-        macro_name = m.group(1)
-        parsed_params = self._parse_macro_params(m.group(2))
-
-        # Collect body tokens
-        body_tokens = []
-        i = start + 1
-        while i < len(tokens):
-            if tokens[i][0] == BLOCK and "endmacro" in tokens[i][1]:
-                i += 1
-                break
-            body_tokens.append(tokens[i])
-            i += 1
-
-        # Register macro as a callable in context
+        ``context`` is the dict the macro body renders against: the LIVE render
+        context for an inline {% macro %} (so a later {% set %} is visible), or a
+        snapshot for an imported one (an imported macro must not see the
+        importer's later state). One implementation for all three registration
+        sites — inline, {% from %} import, {% import %} as.
+        """
         engine = self
 
-        def macro_fn(*args, _params=parsed_params, _body=list(body_tokens)):
+        def macro_fn(*args):
             macro_ctx = dict(context)
-            for pi, (pname, pdefault) in enumerate(_params):
+            for pi, (pname, pdefault) in enumerate(params):
                 if pi < len(args):
                     macro_ctx[pname] = args[pi]
                 else:
                     macro_ctx[pname] = pdefault
-            return SafeString(engine._render_tokens(list(_body), macro_ctx))
+            return SafeString(engine._render_nodes(body, macro_ctx))
 
-        context[macro_name] = macro_fn
-        return i
+        return macro_fn
+
+    def _handle_macro(self, node, context: dict) -> None:
+        """Register a {% macro name(args) %} body as a callable in the context.
+
+        A header the regex rejects registers nothing: the parser grouped the body
+        regardless, so a malformed macro stays as silent as it always was.
+        """
+        m = _MACRO_RE.match(node.content)
+        if not m:
+            return
+        context[m.group(1)] = self._macro_callable(
+            self._parse_macro_params(m.group(2)), node.body, context)
+
+    def _macros_in_file(self, filename: str) -> list:
+        """Every macro node defined in another template file, in source order."""
+        return collect_macro_nodes(parse(_tokenize(self._load(filename))))
 
     def _handle_from_import(self, content: str, context: dict):
         """Handle {% from "file" import macro1, macro2 %}.
 
         Loads the given template file, parses it for macro definitions,
         and registers the named macros as callables in the current context.
+        Each macro captures the context as it stands when IT is registered, so
+        a later macro in the file can call an earlier one.
         """
         m = _FROM_IMPORT_RE.match(content)
         if not m:
             return
 
-        filename = m.group(1)
         names = [n.strip() for n in m.group(2).split(",") if n.strip()]
 
-        # Load and tokenize the macro file
-        source = self._load(filename)
-        tokens = _tokenize(source)
-
-        # Walk tokens to find macro definitions
-        i = 0
-        while i < len(tokens):
-            ttype, raw = tokens[i]
-            if ttype == BLOCK:
-                tag_content, _, _ = _strip_tag(raw)
-                tag = tag_content.split()[0] if tag_content.split() else ""
-                if tag == "macro":
-                    macro_m = _MACRO_RE.match(tag_content)
-                    if macro_m and macro_m.group(1) in names:
-                        macro_name = macro_m.group(1)
-                        parsed_params = self._parse_macro_params(macro_m.group(2))
-
-                        # Collect body tokens until endmacro
-                        body_tokens = []
-                        i += 1
-                        while i < len(tokens):
-                            if tokens[i][0] == BLOCK and "endmacro" in tokens[i][1]:
-                                i += 1
-                                break
-                            body_tokens.append(tokens[i])
-                            i += 1
-
-                        # Register as callable
-                        engine = self
-                        captured_body = list(body_tokens)
-                        captured_params = list(parsed_params)
-                        captured_context = dict(context)
-
-                        def macro_fn(*args, _params=captured_params, _body=captured_body, _ctx=captured_context):
-                            macro_ctx = dict(_ctx)
-                            for pi, (pname, pdefault) in enumerate(_params):
-                                if pi < len(args):
-                                    macro_ctx[pname] = args[pi]
-                                else:
-                                    macro_ctx[pname] = pdefault
-                            return SafeString(engine._render_tokens(list(_body), macro_ctx))
-
-                        context[macro_name] = macro_fn
-                        continue
-            i += 1
+        for macro_node in self._macros_in_file(m.group(1)):
+            macro_m = _MACRO_RE.match(macro_node.content)
+            if macro_m and macro_m.group(1) in names:
+                context[macro_m.group(1)] = self._macro_callable(
+                    self._parse_macro_params(macro_m.group(2)),
+                    macro_node.body,
+                    dict(context),
+                )
 
     def _handle_import_as(self, content: str, context: dict):
         """Handle {% import "file" as alias %}.
@@ -2583,61 +2354,20 @@ class Frond:
         if not m:
             return
 
-        filename = m.group(1)
-        alias = m.group(2)
-
-        # Load and tokenize the macro file
-        source = self._load(filename)
-        tokens = _tokenize(source)
-
-        # Collect all macro definitions
         macros = {}
-        i = 0
-        while i < len(tokens):
-            ttype, raw = tokens[i]
-            if ttype == BLOCK:
-                tag_content, _, _ = _strip_tag(raw)
-                tag = tag_content.split()[0] if tag_content.split() else ""
-                if tag == "macro":
-                    macro_m = _MACRO_RE.match(tag_content)
-                    if macro_m:
-                        macro_name = macro_m.group(1)
-                        parsed_params = self._parse_macro_params(macro_m.group(2))
-
-                        body_tokens = []
-                        i += 1
-                        while i < len(tokens):
-                            if tokens[i][0] == BLOCK and "endmacro" in tokens[i][1]:
-                                i += 1
-                                break
-                            body_tokens.append(tokens[i])
-                            i += 1
-
-                        engine = self
-                        captured_body = list(body_tokens)
-                        captured_params = list(parsed_params)
-                        captured_context = dict(context)
-
-                        def make_fn(_params, _body, _ctx):
-                            def fn(*args):
-                                macro_ctx = dict(_ctx)
-                                for pi, (pname, pdefault) in enumerate(_params):
-                                    if pi < len(args):
-                                        macro_ctx[pname] = args[pi]
-                                    else:
-                                        macro_ctx[pname] = pdefault
-                                return SafeString(engine._render_tokens(list(_body), macro_ctx))
-                            return fn
-
-                        macros[macro_name] = make_fn(captured_params, captured_body, captured_context)
-                        continue
-            i += 1
+        for macro_node in self._macros_in_file(m.group(1)):
+            macro_m = _MACRO_RE.match(macro_node.content)
+            if macro_m:
+                macros[macro_m.group(1)] = self._macro_callable(
+                    self._parse_macro_params(macro_m.group(2)),
+                    macro_node.body,
+                    dict(context),
+                )
 
         # Create a namespace object so alias.macro_name() works
-        namespace = type("MacroNamespace", (), macros)()
-        context[alias] = namespace
+        context[m.group(2)] = type("MacroNamespace", (), macros)()
 
-    def _handle_cache(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
+    def _handle_cache(self, node, context: dict) -> str:
         """Handle {% cache "key" ttl %}...{% endcache %}.
 
         Fragment caching — caches the rendered block content.
@@ -2647,64 +2377,24 @@ class Frond:
                 <div>Expensive content here</div>
             {% endcache %}
         """
-        import time
-
-        content, _, _ = _strip_tag(tokens[start][1])
         # Parse: cache "key" ttl  OR  cache "key"
-        m = _CACHE_RE.match(content)
+        m = _CACHE_RE.match(node.content)
         cache_key = m.group(1) if m else "default"
         ttl = int(m.group(2)) if m and m.group(2) else 60
 
-        # Check cache
+        # Check cache — a live entry means the body is never rendered
         cached = self._fragment_cache.get(cache_key)
         if cached:
             html_content, expires_at = cached
             if time.time() < expires_at:
-                # Skip to endcache
-                i = start + 1
-                depth = 0
-                while i < len(tokens):
-                    if tokens[i][0] == BLOCK:
-                        tag_content, _, _ = _strip_tag(tokens[i][1])
-                        tag = tag_content.split()[0] if tag_content.split() else ""
-                        if tag == "cache":
-                            depth += 1
-                        elif tag == "endcache":
-                            if depth == 0:
-                                return html_content, i + 1
-                            depth -= 1
-                    i += 1
-                return html_content, i
-
-        # Collect body tokens
-        body_tokens = []
-        i = start + 1
-        depth = 0
-        while i < len(tokens):
-            if tokens[i][0] == BLOCK:
-                tag_content, _, _ = _strip_tag(tokens[i][1])
-                tag = tag_content.split()[0] if tag_content.split() else ""
-                if tag == "cache":
-                    depth += 1
-                    body_tokens.append(tokens[i])
-                elif tag == "endcache":
-                    if depth == 0:
-                        i += 1
-                        break
-                    depth -= 1
-                    body_tokens.append(tokens[i])
-                else:
-                    body_tokens.append(tokens[i])
-            else:
-                body_tokens.append(tokens[i])
-            i += 1
+                return html_content
 
         # Render and cache
-        rendered = self._render_tokens(list(body_tokens), context)
+        rendered = self._render_nodes(node.body, context)
         self._fragment_cache[cache_key] = (rendered, time.time() + ttl)
-        return rendered, i
+        return rendered
 
-    def _handle_live(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
+    def _handle_live(self, node, context: dict) -> str:
         """Handle {% live "name" poll N | sse | ws "path" [src "url"] %}...{% endlive %}.
 
         Server-rendered live region. The body renders once for first paint, is
@@ -2712,7 +2402,7 @@ class Frond:
         @live_source provider) can re-render it, and is wrapped in a marker
         element that frond.js wires to the chosen transport (poll / sse / ws).
         """
-        content, _, _ = _strip_tag(tokens[start][1])
+        content = node.content
         m = _LIVE_RE.match(content)
         if not m:
             raise ValueError('live: expected {% live "name" poll N | sse | ws "path" %}')
@@ -2744,25 +2434,14 @@ class Frond:
         else:
             raise ValueError(f'live: unknown transport "{mode}" (use poll N, sse, or ws "path")')
 
-        # Collect body tokens up to {% endlive %}. Nested live is unsupported.
-        body_tokens = []
-        i = start + 1
-        while i < len(tokens):
-            if tokens[i][0] == BLOCK:
-                tag_content, _, _ = _strip_tag(tokens[i][1])
-                tag = tag_content.split()[0] if tag_content.split() else ""
-                if tag == "live":
-                    raise ValueError("live: nested live blocks are not supported")
-                if tag == "endlive":
-                    i += 1
-                    break
-                body_tokens.append(tokens[i])
-            else:
-                body_tokens.append(tokens[i])
-            i += 1
+        # Nested live is unsupported. The parser recorded it rather than raising,
+        # so the error still surfaces here at render time — a live block inside a
+        # branch that never renders stays as silent as it always was.
+        if node.nested:
+            raise ValueError("live: nested live blocks are not supported")
 
         # Register the body source so the auto endpoint can re-render it.
-        Frond._class_live_fragments[name] = "".join(raw for (_t, raw) in body_tokens)
+        Frond._class_live_fragments[name] = node.body_source
 
         endpoint = src or ("/__frond/live/" + name)
         attrs = [f'data-frond-live="{_live_attr(name)}"', f'id="live-{_live_attr(name)}"']
@@ -2775,8 +2454,8 @@ class Frond:
             Frond._class_live_ws_paths[name] = ws_path
             attrs += ['data-mode="ws"', f'data-ws="{_live_attr(ws_path)}"']
 
-        first_paint = self._render_tokens(list(body_tokens), context)
-        return f'<div {" ".join(attrs)}>{first_paint}</div>', i
+        first_paint = self._render_nodes(node.body, context)
+        return f'<div {" ".join(attrs)}>{first_paint}</div>'
 
     @classmethod
     def render_live(cls, name: str, data: dict = None):
@@ -2791,71 +2470,25 @@ class Frond:
             return None
         return cls().render_string(source, data or {})
 
-    def _handle_spaceless(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
+    def _handle_spaceless(self, node, context: dict) -> str:
         """Handle {% spaceless %}...{% endspaceless %}.
 
         Removes whitespace between HTML tags in the rendered content.
         """
-        body_tokens = []
-        i = start + 1
-        depth = 0
-        while i < len(tokens):
-            if tokens[i][0] == BLOCK:
-                tag_content, _, _ = _strip_tag(tokens[i][1])
-                tag = tag_content.split()[0] if tag_content.split() else ""
-                if tag == "spaceless":
-                    depth += 1
-                    body_tokens.append(tokens[i])
-                elif tag == "endspaceless":
-                    if depth == 0:
-                        i += 1
-                        break
-                    depth -= 1
-                    body_tokens.append(tokens[i])
-                else:
-                    body_tokens.append(tokens[i])
-            else:
-                body_tokens.append(tokens[i])
-            i += 1
-
-        rendered = self._render_tokens(list(body_tokens), context)
+        rendered = self._render_nodes(node.body, context)
         # Collapse whitespace between > and <
-        rendered = _SPACELESS_RE.sub("><", rendered)
-        return rendered, i
+        return _SPACELESS_RE.sub("><", rendered)
 
-    def _handle_autoescape(self, tokens: list, start: int, context: dict) -> tuple[str, int]:
+    def _handle_autoescape(self, node, context: dict) -> str:
         """Handle {% autoescape false %}...{% endautoescape %}.
 
         When autoescape is false, variables inside the block skip HTML escaping.
         """
-        content, _, _ = _strip_tag(tokens[start][1])
         # Parse: autoescape false|true
-        mode_match = _AUTOESCAPE_RE.match(content)
+        mode_match = _AUTOESCAPE_RE.match(node.content)
         auto_escape_on = True
         if mode_match and mode_match.group(1) == "false":
             auto_escape_on = False
-
-        body_tokens = []
-        i = start + 1
-        depth = 0
-        while i < len(tokens):
-            if tokens[i][0] == BLOCK:
-                tag_content, _, _ = _strip_tag(tokens[i][1])
-                tag = tag_content.split()[0] if tag_content.split() else ""
-                if tag == "autoescape":
-                    depth += 1
-                    body_tokens.append(tokens[i])
-                elif tag == "endautoescape":
-                    if depth == 0:
-                        i += 1
-                        break
-                    depth -= 1
-                    body_tokens.append(tokens[i])
-                else:
-                    body_tokens.append(tokens[i])
-            else:
-                body_tokens.append(tokens[i])
-            i += 1
 
         if not auto_escape_on:
             # Render with a temporary engine that has auto-escape disabled
@@ -2891,9 +2524,9 @@ class Frond:
                 return value
 
             self._eval_var = _no_escape_eval_var
-            rendered = self._render_tokens(list(body_tokens), context)
+            rendered = self._render_nodes(node.body, context)
             self._eval_var = original_eval_var
         else:
-            rendered = self._render_tokens(list(body_tokens), context)
+            rendered = self._render_nodes(node.body, context)
 
-        return rendered, i
+        return rendered
