@@ -88,6 +88,10 @@ VAR = "VAR"          # {{ ... }}
 BLOCK = "BLOCK"      # {% ... %}
 COMMENT = "COMMENT"  # {# ... #}
 
+# Sentinel distinguishing "not yet compiled" from a cached None (= compiled and
+# found unsupported, use the interpreter) in Frond._compiled_fn.
+_COMPILE_UNSET = object()
+
 # Regex to split template into tokens
 _TOKEN_RE = re.compile(
     r"(\{%-?\s*.*?\s*-?%\})"   # Block tags
@@ -1462,6 +1466,13 @@ class Frond:
         # Token pre-compilation cache
         self._compiled: dict[str, tuple[list, float]] = {}  # {template_name: (tokens, expires_at)}
         self._compiled_strings: dict[str, list] = {}  # {md5_hash: tokens}
+        # AOT-compiled render functions (ADR-0001): {compile_key: callable | None}.
+        # The value is the compiled ``_rendered(engine, ctx)`` callable, or None
+        # when the template used a construct the compiler falls back on (cached
+        # so we do not re-attempt a compile that already returned None). Keyed
+        # the same way the token cache is (template name in prod, md5 for
+        # strings, a source hash in dev so an edit recompiles).
+        self._compiled_fn: dict[str, object] = {}
         # Filter chain cache: expr → (var_name, [(filter_name, [args])])
         self._filter_chain_cache: dict[str, tuple[str, list]] = {}
         # Compile-cache TTL — TINA4_TEMPLATE_CACHE_TTL in seconds.
@@ -1579,7 +1590,8 @@ class Frond:
             if cached is not None:
                 tokens_cached, expires_at = cached
                 if self._cache_ttl <= 0 or time.time() < expires_at:
-                    return self._execute_cached(tokens_cached, context, template)
+                    return self._execute_cached(tokens_cached, context, template,
+                                                compile_key=template)
 
         # Dev mode (or expired entry): re-read and re-tokenize.
         # mtime-based invalidation doesn't catch changes to included/extended
@@ -1589,7 +1601,17 @@ class Frond:
         if not debug_mode:
             expires_at = (time.time() + self._cache_ttl) if self._cache_ttl > 0 else 0
             self._compiled[template] = (tokens, expires_at)
-        return self._execute_with_source(source, tokens, context, template)
+            # Prod: the compiled fn is stable per template name (files don't
+            # change under a running prod worker), so key it by name.
+            return self._execute_with_source(source, tokens, context, template,
+                                             compile_key=template)
+        # Dev: the source is re-read every render, so key the compiled fn by a
+        # hash of THIS source. An edit produces a new hash and recompiles —
+        # dev visibility (hot-reload) stays intact, and the compiled path is
+        # still exercised so it never silently drifts from the interpreter.
+        dev_key = "dev:" + hashlib.md5(source.encode()).hexdigest()
+        return self._execute_with_source(source, tokens, context, template,
+                                         compile_key=dev_key)
 
     def render_string(self, source: str, data: dict = None) -> str:
         """Render a template string directly. Uses token caching for performance."""
@@ -1598,16 +1620,17 @@ class Frond:
         key = hashlib.md5(source.encode()).hexdigest()
         cached_tokens = self._compiled_strings.get(key)
         if cached_tokens is not None:
-            return self._execute_cached(cached_tokens, context)
+            return self._execute_cached(cached_tokens, context, compile_key=key)
 
         tokens = _tokenize(source)
         self._compiled_strings[key] = tokens
-        return self._execute_cached(tokens, context)
+        return self._execute_cached(tokens, context, compile_key=key)
 
     def clear_cache(self):
         """Clear all compiled template caches."""
         self._compiled.clear()
         self._compiled_strings.clear()
+        self._compiled_fn.clear()
         self._filter_chain_cache.clear()
 
     def render_dump(self, v) -> str:
@@ -1624,11 +1647,35 @@ class Frond:
             raise FileNotFoundError(f"Template not found: {path}")
         return path.read_text(encoding="utf-8")
 
-    def _execute_cached(self, tokens: list, context: dict, template: str = None) -> str:
+    def _get_compiled(self, compile_key: str, tokens: list):
+        """Return the AOT-compiled ``_rendered(engine, ctx)`` for this template,
+        or ``None`` to signal the caller should use the interpreter.
+
+        Compiles once per key and caches the result (a ``None`` fallback too, so
+        an unsupported template is not re-analysed on every render). Never
+        returns a compiled fn in sandbox mode — the sandbox tag/filter/var gates
+        are enforced on the interpreter path, so a sandboxed engine always
+        interprets. ``compile_template`` itself never raises (it returns ``None``
+        on any unsupported construct or codegen/compile error), so a render is
+        never broken by the compiler.
+        """
+        if compile_key is None or self._sandbox:
+            return None
+        cached = self._compiled_fn.get(compile_key, _COMPILE_UNSET)
+        if cached is not _COMPILE_UNSET:
+            return cached
+        from tina4_python.frond.compiler import compile_template
+        fn = compile_template(tokens)
+        self._compiled_fn[compile_key] = fn
+        return fn
+
+    def _execute_cached(self, tokens: list, context: dict, template: str = None,
+                        compile_key: str = None) -> str:
         """Execute pre-tokenized template against context.
 
         Checks for extends in tokens; if found, falls back to source-based
-        execution (extends requires re-reading parent template).
+        execution (extends requires re-reading parent template). Otherwise
+        prefers the AOT-compiled render fn when the template compiled.
         """
         # Check if first non-text token is an extends block
         for ttype, raw in tokens:
@@ -1644,9 +1691,13 @@ class Frond:
                     source = "".join(val for _, val in tokens)
                     return self._execute(source, context)
             break
+        compiled = self._get_compiled(compile_key, tokens)
+        if compiled is not None:
+            return compiled(self, context)
         return self._render_tokens(tokens, context)
 
-    def _execute_with_source(self, source: str, tokens: list, context: dict, template: str = None) -> str:
+    def _execute_with_source(self, source: str, tokens: list, context: dict, template: str = None,
+                             compile_key: str = None) -> str:
         """Execute with both source and pre-tokenized tokens available."""
         # Handle extends first
         extends_match = _EXTENDS_RE.match(source.lstrip())
@@ -1656,6 +1707,9 @@ class Frond:
             child_blocks = self._extract_blocks(source)
             return self._render_with_blocks(parent_source, context, child_blocks)
 
+        compiled = self._get_compiled(compile_key, tokens)
+        if compiled is not None:
+            return compiled(self, context)
         return self._render_tokens(tokens, context)
 
     def _execute(self, source: str, context: dict) -> str:
