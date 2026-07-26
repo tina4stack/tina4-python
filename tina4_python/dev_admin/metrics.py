@@ -323,7 +323,14 @@ def full_analysis(root: str = "src") -> dict:
         "total_functions": len(all_functions),
         "avg_complexity": round(avg_cc, 2),
         "avg_maintainability": round(avg_mi, 1),
+        # Display-only: the top-15 for the "most complex functions" report.
+        # Do NOT source offenders / --fail-on from this — capping here silently
+        # hides the 16th+ over-threshold function from the gate. offenders()
+        # reads "all_functions" (below) instead.
         "most_complex_functions": all_functions[:15],
+        # Full, uncapped, complexity-sorted list — offenders()/--fail-on use this
+        # so no function over the complexity threshold ever escapes the gate.
+        "all_functions": all_functions,
         "file_metrics": file_metrics,
         "violations": violations,
         "dependency_graph": import_graph,
@@ -369,8 +376,10 @@ def offenders(root: str = "src", top: int = 20) -> dict:
 
     items: list[dict] = []
 
-    # Function-level: cyclomatic complexity.
-    for fn in analysis.get("most_complex_functions", []):
+    # Function-level: cyclomatic complexity. Use the FULL function list (not the
+    # display-capped most_complex_functions[:15]) so a 16th+ over-threshold
+    # function is never silently dropped from the offenders list or --fail-on.
+    for fn in analysis.get("all_functions", analysis.get("most_complex_functions", [])):
         cc = fn["complexity"]
         if cc > 10:
             items.append({
