@@ -19,6 +19,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
+from types import SimpleNamespace
 
 from tina4_python.auth import Auth as _FrondAuth, _resolve_secret
 # Lexer + parser primitives, re-exported because this module is their historic
@@ -2364,8 +2365,17 @@ class Frond:
                     dict(context),
                 )
 
-        # Create a namespace object so alias.macro_name() works
-        context[m.group(2)] = type("MacroNamespace", (), macros)()
+        # A namespace object so alias.macro_name(args) works.
+        #
+        # MUST NOT be a class built with type("...", (), macros): a plain function
+        # stored as a CLASS attribute is a descriptor, so alias.macro_name returns a
+        # BOUND method and the namespace instance is injected as the first positional
+        # argument -- shifting every real argument one place right and dropping the
+        # last one. SimpleNamespace holds the functions as INSTANCE attributes, so
+        # attribute access hands back the function itself, unbound. This keeps
+        # {% import as %} byte-identical to {% from import %}, which never had the
+        # bug because it registers the callables straight into the context.
+        context[m.group(2)] = SimpleNamespace(**macros)
 
     def _handle_cache(self, node, context: dict) -> str:
         """Handle {% cache "key" ttl %}...{% endcache %}.
