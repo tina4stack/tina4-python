@@ -45,6 +45,81 @@ RUBY = "/opt/homebrew/opt/ruby/bin/ruby"
 TMP = Path("/tmp/tina4-benchmark")
 RESULTS_DIR = PROJECT_ROOT / "benchmarks" / "results"
 
+# ── Template engine results (the category this suite used to omit) ─────
+#
+# This suite measures `json` and `list` only, so for years the published numbers
+# said nothing about template rendering -- the one axis where Frond competes
+# directly with Twig, Jinja2, ERB and Nunjucks. Each repo's own
+# `bench_templates.*` measures that (with an output-equivalence gate, so the
+# engines are proven to render the same page before anything is timed) and writes
+# `benchmarks/template_comparison.json`. This module COLLECTS those files rather
+# than re-measuring: the language-native harness is the only thing that can load a
+# PHP or Ruby engine, and duplicating it here would mean two definitions of the
+# same benchmark drifting apart.
+#
+# The four repos are siblings on disk, which is the only assumption made. A
+# missing file is reported as not-measured, never silently omitted -- a benchmark
+# that quietly drops a category is how this gap survived in the first place.
+SIBLING_ROOT = PROJECT_ROOT.parent
+TEMPLATE_RESULT_PATHS = {
+    "python": PROJECT_ROOT / "benchmarks" / "template_comparison.json",
+    "php": SIBLING_ROOT / "tina4-php" / "benchmarks" / "template_comparison.json",
+    "ruby": SIBLING_ROOT / "tina4-ruby" / "benchmarks" / "template_comparison.json",
+    "nodejs": SIBLING_ROOT / "tina4-nodejs" / "benchmarks" / "template_comparison.json",
+}
+
+
+def _collect_template_results() -> dict:
+    """Gather each language's template-engine comparison into one block.
+
+    Returns a dict keyed by language. Every entry carries the engines measured, the
+    runtime string, and -- crucially -- whether the output-equivalence gate passed,
+    so a consumer can tell a verified comparison from an unverified one. A language
+    whose harness has not been run yet gets an explicit
+    ``{"measured": False, "reason": ...}`` rather than being left out.
+    """
+    collected = {}
+    for lang, path in TEMPLATE_RESULT_PATHS.items():
+        if not path.is_file():
+            collected[lang] = {
+                "measured": False,
+                "reason": f"no template_comparison.json at {path}; run that repo's bench_templates",
+            }
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            collected[lang] = {"measured": False, "reason": f"unreadable ({exc})"}
+            continue
+
+        engines = payload.get("results", {})
+        frond_key = next((k for k in engines if k.startswith("Frond")), None)
+        entry = {
+            "measured": True,
+            "runtime": payload.get("runtime", "unknown"),
+            "output_equivalence": payload.get("output_equivalence", "UNVERIFIED"),
+            "engines": {
+                name: round(m.get("p50_ops_sec", 0)) for name, m in engines.items()
+            },
+        }
+        if "aot_compile_layer" in payload:
+            entry["aot_compile_layer"] = payload["aot_compile_layer"]
+
+        # The headline number: how far Frond is off the fastest rival. Stated as a
+        # ratio because absolute renders/sec are not comparable across languages,
+        # but "beaten by 3.7x" and "beaten by 55x" are.
+        if frond_key:
+            frond_p50 = engines[frond_key].get("p50_ops_sec", 0)
+            rivals = {k: v.get("p50_ops_sec", 0) for k, v in engines.items() if k != frond_key}
+            if frond_p50 > 0 and rivals:
+                best_name = max(rivals, key=lambda k: rivals[k])
+                best = rivals[best_name]
+                entry["fastest_rival"] = best_name
+                entry["frond_slower_by"] = round(best / frond_p50, 2) if best > frond_p50 else None
+                entry["frond_faster_by"] = round(frond_p50 / best, 2) if frond_p50 >= best else None
+        collected[lang] = entry
+    return collected
+
 
 # ── Framework Definitions ─────────────────────────────────────
 
@@ -993,11 +1068,20 @@ def _save_per_language_results(results: list[BenchResult], runs: int, requests: 
         "config": {"runs": runs, "requests": requests, "concurrency": concurrency, "warmup": WARMUP_REQUESTS},
     }
 
+    templates = _collect_template_results()
+
     for lang in ["python", "php", "ruby", "nodejs"]:
         lang_results = [r for r in results if r.language == lang]
         if not lang_results:
             continue
-        report = {**meta, "results": [asdict(r) for r in lang_results]}
+        report = {
+            **meta,
+            "results": [asdict(r) for r in lang_results],
+            # Templates travel WITH the per-language file so a consumer reading only
+            # php.json still sees the category. Omitting it here is what let the
+            # published numbers stay silent about template rendering.
+            "templates": templates.get(lang, {"measured": False, "reason": "not collected"}),
+        }
         out = RESULTS_DIR / f"{lang}.json"
         out.write_text(json.dumps(report, indent=2))
         print(f"  Saved {lang} results to: {out}")
@@ -1336,7 +1420,69 @@ def main():
     parser.add_argument("--output", type=str, default="", help="Save JSON report to file (in addition to per-language files)")
     parser.add_argument("--db", action="store_true", help="Run database benchmarks (SQLite, 1000 iterations)")
     parser.add_argument("--fresh", action="store_true", help="Force recreate temporary projects (Laravel, Symfony, Rails, etc.)")
+    parser.add_argument(
+        "--templates-only",
+        action="store_true",
+        help="Refresh ONLY the template-engine block from each repo's template_comparison.json "
+             "and merge it into the existing reports. Starts no servers and does not touch the "
+             "json/list numbers.",
+    )
     args = parser.parse_args()
+
+    # --templates-only exists because the full suite starts Laravel, Django, Rails and
+    # friends, which takes minutes and can fail on an unrelated toolchain. Refreshing
+    # the template block must not require any of that, or it will go stale again --
+    # which is exactly how the published numbers ended up four months old.
+    if args.templates_only:
+        templates = _collect_template_results()
+
+        # Every repo carries its own copy of these artifacts (the php/ruby/node copies
+        # are distributed, not separately generated -- which is why three of them held
+        # byte-identical copies of one months-old run). Updating only this repo would
+        # leave the template category missing from three of the four published reports,
+        # so walk all four.
+        candidate_dirs = [PROJECT_ROOT / "benchmarks"] + [
+            SIBLING_ROOT / repo / "benchmarks"
+            for repo in ("tina4-php", "tina4-ruby", "tina4-nodejs")
+        ]
+        targets = []
+        for bench_dir in candidate_dirs:
+            if not bench_dir.is_dir():
+                continue
+            targets.append(bench_dir / "benchmark_results.json")
+            results_sub = bench_dir / "results"
+            if results_sub.is_dir():
+                targets.extend(sorted(results_sub.glob("*.json")))
+
+        for path in targets:
+            if not path.is_file():
+                print(f"  skip (absent): {path}")
+                continue
+            payload = json.loads(path.read_text())
+            # A per-language file gets only its own language; a combined file gets all.
+            if path.parent.name == "results":
+                lang = path.stem
+                payload["templates"] = templates.get(lang, {"measured": False, "reason": "not collected"})
+            else:
+                payload["templates"] = templates
+            path.write_text(json.dumps(payload, indent=2) + "\n")
+            print(f"  merged template results into: {path}")
+
+        print("\n  Template engine comparison (p50 renders/sec, output-equivalence verified)")
+        for lang, entry in templates.items():
+            if not entry.get("measured"):
+                print(f"    {lang:<8} NOT MEASURED -- {entry.get('reason')}")
+                continue
+            engines = ", ".join(f"{n} {v:,}" for n, v in entry["engines"].items())
+            verdict = (
+                f"Frond {entry['frond_slower_by']}x SLOWER than {entry['fastest_rival']}"
+                if entry.get("frond_slower_by")
+                else f"Frond {entry.get('frond_faster_by')}x faster than {entry.get('fastest_rival')}"
+            )
+            print(f"    {lang:<8} {engines}")
+            print(f"    {'':<8} -> {verdict}  (equivalence: {entry['output_equivalence']})")
+        print()
+        return
 
     # Determine which frameworks to test
     languages = set()
@@ -1406,6 +1552,7 @@ def main():
             "machine": f"{platform.machine()} {platform.system()}",
             "config": {"runs": args.runs, "requests": args.requests, "concurrency": args.concurrency, "warmup": WARMUP_REQUESTS},
             "results": [asdict(r) for r in results],
+            "templates": _collect_template_results(),
         }
         Path(output_path).write_text(json.dumps(report, indent=2))
         print(f"  Combined results saved to: {output_path}")

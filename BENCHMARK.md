@@ -21,6 +21,40 @@ Real HTTP benchmarks — identical JSON endpoint, development servers.
 
 ---
 
+## 1b. Template rendering, Frond vs Jinja2 and Mako
+
+**Date:** 2026-07-27 | **Machine:** Apple Silicon (ARM64), macOS | **Python:** 3.13.5 | **Tool:** `benchmarks/bench_templates.py` (p50 over batched samples, min 0.25s / 200 iterations)
+
+This category used to be missing, and its absence flattered us. Sections 1 and 2 above
+measure request throughput and feature count, where Tina4 competes well. Neither says
+anything about template rendering, the one axis where Frond competes head-on with the
+engines it replaced. Here are the numbers.
+
+Same page (20-row product list: loop, index, even/odd class, uppercase, 2-decimal
+money, conditional footer). **Every engine's output is compared and proven identical
+before anything is timed**; a mismatch aborts the run. Each template is compiled ONCE
+outside the clock, so this is steady-state render throughput, not compilation.
+
+| Engine | Renders/s (p50) | Renders/s (mean) | Deps |
+|--------|:---------------:|:----------------:|:----:|
+| Mako | **89,662** | 79,358 | 1 |
+| Jinja2 | **34,934** | 32,879 | 1 |
+| **Frond (Tina4)** | **2,414** | 2,072 | **0** |
+
+**Key takeaway, stated plainly: Frond is 14.5x slower than Jinja2 and 37x slower than
+Mako on identical output.** This is the widest gap after Ruby, and it is Frond's fastest
+path, the harness reports that the AOT compiler (`tina4_python/frond/compiler.py`)
+engaged for this template, so this is not the interpreter fallback. Jinja2 compiles a
+template to Python bytecode and lets CPython run it; Frond walks a tree and calls back
+into engine primitives per hole.
+
+What Frond does buy is the zero in the Deps column, and the fact that the same template
+syntax renders in all four Tina4 languages. That is a real trade, but it is a trade -
+not a win. Closing this gap is tracked as the ahead-of-time compile layer (ADR-0001).
+
+Reproduce: `uv run python benchmarks/bench_templates.py`
+
+
 ## 2. Feature Comparison (38 features)
 
 Ships with core install, no extra packages needed.
