@@ -23,6 +23,18 @@ _last_scan_root: str = ""
 # ── Quick Metrics ──────────────────────────────────────────────
 
 
+def _is_code_line(line: str) -> bool:
+    """True for a line that counts toward LOC: not blank, not a comment.
+
+    The single definition of the rule. It used to be restated at each file-level
+    call site while function LOC ignored it entirely and returned a raw line
+    span, so `loc` meant two different things in one payload - see
+    _function_loc.
+    """
+    stripped = line.strip()
+    return bool(stripped) and not stripped.startswith("#")
+
+
 def _resolve_root(root: str = "src") -> str:
     """Pick the right directory to scan.
 
@@ -39,6 +51,23 @@ def _resolve_root(root: str = "src") -> str:
     framework_dir = str(Path(tina4_python.__file__).parent)
     _last_scan_root = framework_dir
     return framework_dir
+
+
+def resolve_scan_target(root: str = "src") -> tuple[str, str]:
+    """Return (directory to scan, scan_mode) for any metrics producer.
+
+    The CLI engine is language-agnostic and cannot know which directory holds a
+    framework package, so root resolution and the "framework" label stay here -
+    shared by this module and the engine adapter so the two never disagree about
+    what was measured.
+    """
+    resolved = _resolve_root(root)
+    framework_dir = str(Path(__import__("tina4_python").__file__).parent)
+    resolved_path = Path(resolved)
+    scanning_framework = (
+        resolved_path == Path(framework_dir) or str(resolved_path).startswith(framework_dir)
+    )
+    return resolved, "framework" if scanning_framework else "project"
 
 
 def quick_metrics(root: str = "src") -> dict:
@@ -224,7 +253,7 @@ def full_analysis(root: str = "src") -> dict:
         except ValueError:
             rel_path = (str(f.relative_to(root_path.parent)) if root_path.parent != f else f.name).replace("\\", "/")
         lines = source.splitlines()
-        loc = sum(1 for l in lines if l.strip() and not l.strip().startswith("#"))
+        loc = sum(1 for l in lines if _is_code_line(l))
 
         # Extract imports for coupling analysis
         imports = _extract_imports(tree, rel_path)
@@ -491,7 +520,7 @@ def file_detail(file_path: str) -> dict:
 
     functions.sort(key=lambda x: x["complexity"], reverse=True)
 
-    loc = sum(1 for l in lines if l.strip() and not l.strip().startswith("#"))
+    loc = sum(1 for l in lines if _is_code_line(l))
     classes = sum(1 for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
     imports = _extract_imports(tree, file_path)
 
@@ -526,13 +555,37 @@ def file_detail(file_path: str) -> dict:
 # ── AST Helpers ────────────────────────────────────────────────
 
 
+def _own_body_nodes(node: ast.AST):
+    """Yield the nodes belonging to this function's OWN body.
+
+    Nested function and class definitions are skipped: they are reported as
+    functions in their own right, so counting their decision points here too
+    would charge one branch to two different functions. That over-count grew
+    with nesting depth - an IIFE-style wrapper or a registrar that defines
+    twenty inner handlers absorbed the entire file's complexity and sat at the
+    top of the offenders list while the real hot spots hid below it.
+
+    A lambda is NOT skipped. Lambdas are never listed as separate functions, so
+    their decision points would simply vanish; they stay with the function that
+    encloses them.
+    """
+    stack = list(ast.iter_child_nodes(node))
+    while stack:
+        child = stack.pop()
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        yield child
+        stack.extend(ast.iter_child_nodes(child))
+
+
 def _cyclomatic_complexity(node: ast.AST) -> int:
     """Calculate cyclomatic complexity for a function/method node.
 
     CC = 1 + number of decision points (if/elif/for/while/except/and/or/assert)
+    in the function's own body. Nested functions are measured separately.
     """
     cc = 1
-    for child in ast.walk(node):
+    for child in _own_body_nodes(node):
         if isinstance(child, (ast.If, ast.IfExp)):
             cc += 1
         elif isinstance(child, ast.For):
@@ -553,9 +606,18 @@ def _cyclomatic_complexity(node: ast.AST) -> int:
 
 
 def _function_loc(node: ast.AST, lines: list) -> int:
-    """Count lines of code in a function."""
+    """Count lines of CODE in a function, by the same rule as file-level LOC.
+
+    This returned `end_lineno - lineno + 1` - a raw line span - while the
+    docstring claimed lines of code and every file-level LOC excluded blanks and
+    comments. So a function's LOC and its file's LOC were different units sitting
+    side by side in the dashboard, and the maintainability index (which divides
+    by LOC) penalised a well-commented function for its comments.
+    """
     if hasattr(node, "end_lineno") and node.end_lineno:
-        return node.end_lineno - node.lineno + 1
+        span = lines[node.lineno - 1:node.end_lineno]
+        # Floor of 1: a one-line body must never report 0.
+        return max(1, sum(1 for l in span if _is_code_line(l)))
     # Fallback: count indented lines
     start = node.lineno - 1
     count = 1

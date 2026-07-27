@@ -2041,9 +2041,19 @@ async def _api_metrics(request, response):
 
 
 async def _api_metrics_full(request, response):
-    """Full analysis — AST-based, cached 60s."""
-    from tina4_python.dev_admin.metrics import full_analysis
-    return response(full_analysis())
+    """Full analysis — from the tina4 CLI metrics engine, else the local module.
+
+    The engine (ADR-0002) resolves imports to real file paths, so it is the only
+    source with usable coupling data. It returns None when it is absent or too
+    old to emit a field the dashboard renders, and we fall back rather than
+    serve a payload with holes in it.
+    """
+    from tina4_python.dev_admin.metrics import full_analysis, resolve_scan_target
+    from tina4_python.dev_admin.metrics_engine import engine_analysis
+
+    root, scan_mode = resolve_scan_target()
+    from_engine = engine_analysis(root, scan_mode)
+    return response(from_engine if from_engine is not None else full_analysis())
 
 
 async def _api_metrics_file(request, response):
