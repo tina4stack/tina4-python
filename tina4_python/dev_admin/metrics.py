@@ -23,6 +23,18 @@ _last_scan_root: str = ""
 # ── Quick Metrics ──────────────────────────────────────────────
 
 
+def _is_code_line(line: str) -> bool:
+    """True for a line that counts toward LOC: not blank, not a comment.
+
+    The single definition of the rule. It used to be restated at each file-level
+    call site while function LOC ignored it entirely and returned a raw line
+    span, so `loc` meant two different things in one payload - see
+    _function_loc.
+    """
+    stripped = line.strip()
+    return bool(stripped) and not stripped.startswith("#")
+
+
 def _resolve_root(root: str = "src") -> str:
     """Pick the right directory to scan.
 
@@ -241,7 +253,7 @@ def full_analysis(root: str = "src") -> dict:
         except ValueError:
             rel_path = (str(f.relative_to(root_path.parent)) if root_path.parent != f else f.name).replace("\\", "/")
         lines = source.splitlines()
-        loc = sum(1 for l in lines if l.strip() and not l.strip().startswith("#"))
+        loc = sum(1 for l in lines if _is_code_line(l))
 
         # Extract imports for coupling analysis
         imports = _extract_imports(tree, rel_path)
@@ -508,7 +520,7 @@ def file_detail(file_path: str) -> dict:
 
     functions.sort(key=lambda x: x["complexity"], reverse=True)
 
-    loc = sum(1 for l in lines if l.strip() and not l.strip().startswith("#"))
+    loc = sum(1 for l in lines if _is_code_line(l))
     classes = sum(1 for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
     imports = _extract_imports(tree, file_path)
 
@@ -594,9 +606,18 @@ def _cyclomatic_complexity(node: ast.AST) -> int:
 
 
 def _function_loc(node: ast.AST, lines: list) -> int:
-    """Count lines of code in a function."""
+    """Count lines of CODE in a function, by the same rule as file-level LOC.
+
+    This returned `end_lineno - lineno + 1` - a raw line span - while the
+    docstring claimed lines of code and every file-level LOC excluded blanks and
+    comments. So a function's LOC and its file's LOC were different units sitting
+    side by side in the dashboard, and the maintainability index (which divides
+    by LOC) penalised a well-commented function for its comments.
+    """
     if hasattr(node, "end_lineno") and node.end_lineno:
-        return node.end_lineno - node.lineno + 1
+        span = lines[node.lineno - 1:node.end_lineno]
+        # Floor of 1: a one-line body must never report 0.
+        return max(1, sum(1 for l in span if _is_code_line(l)))
     # Fallback: count indented lines
     start = node.lineno - 1
     count = 1

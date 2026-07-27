@@ -1,4 +1,8 @@
-"""Nested functions are measured once, not charged to every enclosing function.
+"""Function-level metrics report the right units.
+
+Two corrections locked in here, both mirrored in PHP, Ruby, Node and the Rust
+engine: nested functions are measured once, and function LOC counts code lines
+by the same rule as file LOC.
 
 A function's complexity used to be measured over its whole span, so a branch
 inside a nested function landed on that function AND every function around it.
@@ -119,3 +123,45 @@ class TestNestedComplexityIsNotDoubleCounted:
         metrics = result["file_metrics"][0]
         # 1 (outer) + 2 (inner), with nothing counted twice.
         assert metrics["complexity"] == 3
+
+
+class TestFunctionLocCountsCodeLines:
+    """Function LOC used to be `end_lineno - lineno + 1` - a raw line span - while
+    every file-level LOC excluded blanks and comments. So `loc` meant two
+    different things in one payload, and the dashboard sized its bubbles in one
+    unit while printing the function table in the other.
+    """
+
+    def test_blank_lines_and_comments_do_not_count(self, tmp_path):
+        (tmp_path / "sample.py").write_text(
+            "def with_comments(x):\n"
+            "\n"
+            "    # a comment\n"
+            "\n"
+            "    if x:\n"
+            "        return 1\n"
+            "    return 2\n"
+        )
+        result = full_analysis(str(tmp_path))
+        fn = result["all_functions"][0]
+        # The span is 7 lines; the code lines are def + if + return + return = 4.
+        assert fn["loc"] == 4, f"expected code lines, got {fn['loc']}"
+
+    def test_a_function_never_reports_zero(self, tmp_path):
+        (tmp_path / "sample.py").write_text("def f():\n    return 1\n")
+        result = full_analysis(str(tmp_path))
+        assert result["all_functions"][0]["loc"] == 2
+
+    def test_function_loc_uses_the_same_rule_as_file_loc(self, tmp_path):
+        """A file that is one single function: its LOC and the function's LOC must
+        agree, which is only true if both count the same thing."""
+        (tmp_path / "sample.py").write_text(
+            "def only(x):\n"
+            "    # comment\n"
+            "\n"
+            "    return x\n"
+        )
+        result = full_analysis(str(tmp_path))
+        file_loc = result["file_metrics"][0]["loc"]
+        fn_loc = result["all_functions"][0]["loc"]
+        assert fn_loc == file_loc == 2, f"function {fn_loc} vs file {file_loc}"
