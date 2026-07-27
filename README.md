@@ -710,7 +710,7 @@ Run benchmarks locally: `python benchmarks/benchmark.py --python`
 
 ## Cross-Framework Parity
 
-Tina4 ships identical features across four languages: same architecture, same conventions, same 97 features:
+Tina4 ships identical features across four languages: same architecture, same conventions, same 98 features:
 
 | | Python | PHP | Ruby | Node.js |
 |---|--------|-----|------|---------|

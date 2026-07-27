@@ -17,7 +17,7 @@ Real HTTP benchmarks — identical JSON endpoint, development servers.
 | Bottle 0.13 | 3,165 | 1,105 | wsgiref | 0 |
 | Django 6.0 | 2,333 | 2,150 | runserver | 20 |
 
-**Key takeaway:** Tina4 Python delivers 9,761 req/s with 38 features and 0 dependencies — competitive with Starlette (12,914) and FastAPI (10,071), while shipping 38 features vs their 6 and 8 respectively, all with zero dependencies.
+**Key takeaway:** Tina4 Python delivers 9,761 req/s with 98 features and 0 dependencies — competitive with Starlette (12,914) and FastAPI (10,071), while shipping 98 features vs their 6 and 8 respectively, all with zero dependencies.
 
 ---
 
@@ -55,9 +55,12 @@ not a win. Closing this gap is tracked as the ahead-of-time compile layer (ADR-0
 Reproduce: `uv run python benchmarks/bench_templates.py`
 
 
-## 2. Feature Comparison (38 features)
+## 2. Feature Comparison (42 of 98 built-in features)
 
-Ships with core install, no extra packages needed.
+Tina4 ships **98 built-in features**. The table below compares the subset that has a
+meaningful equivalent in the competing frameworks, so it is a like-for-like comparison
+rather than the full inventory. Everything listed ships with the core install, with no
+extra packages needed.
 
 | Feature | Tina4 | Flask | FastAPI | Django | Starlette | Bottle |
 |---------|:-----:|:-----:|:-------:|:------:|:---------:|:------:|
@@ -111,29 +114,37 @@ Ships with core install, no extra packages needed.
 
 | Framework | Features | Deps | JSON req/s |
 |-----------|:-------:|:----:|:---------:|
-| **Tina4** | **38/38** | **0** | **9,761** |
-| Django | 22/38 | 20 | 5,685 |
-| FastAPI | 8/38 | 12 | 10,071 |
-| Flask | 7/38 | 6 | 4,842 |
-| Starlette | 6/38 | 4 | 12,914 |
-| Bottle | 5/38 | 0 | 1,258 |
+| **Tina4** | **42/42** | **0** | **9,761** |
+| Django | 22/42 | 20 | 5,685 |
+| FastAPI | 8/42 | 12 | 10,071 |
+| Flask | 7/42 | 6 | 4,842 |
+| Starlette | 6/42 | 4 | 12,914 |
+| Bottle | 5/42 | 0 | 1,258 |
 
 ---
 
 ## 3. Deployment Size
 
-| Framework | Install Size | Dependencies |
-|-----------|:----------:|:------------:|
-| **Tina4 Python** | **2.4 MB** | **0** |
-| Starlette | 3.5 MB | 4 |
-| FastAPI | 4.8 MB | 12 |
-| Flask | 4.2 MB | 6 |
-| Django | 25 MB | 20 |
-| Bottle | 0.3 MB | 0 |
+**Measured 2026-07-27** on macOS (Apple Silicon) by installing each package for real.
+Nothing in this table is estimated. The command that produced it is named below.
 
-Zero dependencies means core size **is** deployment size. No `site-packages` explosion.
+Command: `uv pip install <pkg>` into a bare venv, then `du -sh site-packages`.
 
----
+| Framework | Install Size | Third-party packages |
+|-----------|:----------:|:--------------------:|
+| bottle | **1 MB** | 1 |
+| starlette | 2 MB | 3 |
+| flask | 3 MB | 7 |
+| **Tina4 Python** | **3.6 MB** | **0** |
+| fastapi | 9 MB | 10 |
+| django | 32 MB | 3 |
+
+**Correction.** This table claimed 2.4 MB for Tina4 Python. Measured, it is **3.6 MB**,
+which places it above Bottle, Starlette and Flask rather than below them.
+
+The zero in the third-party column is real and verified: a fresh install pulls in **no**
+other top-level packages, against FastAPI's 10 and Flask's 7. That is the claim worth
+making. "Smallest install" is not.
 
 ## 4. CO2 / Carbonah
 
@@ -152,7 +163,7 @@ Formula: `Energy(kWh) = (15W × seconds_for_5000_requests) / 3,600,000` | `CO2(g
 
 *CO2 calculated at world average 475g CO2/kWh. Lower req/s = longer to serve 5000 requests = more energy.*
 
-Tina4 uses **7.8x less energy** than Bottle and **2.0x less** than Flask per request, while shipping 38 features with 0 dependencies.
+Tina4 uses **7.8x less energy** than Bottle and **2.0x less** than Flask per request, while shipping 98 features with 0 dependencies.
 
 ### Tina4 Test Suite Emissions
 
