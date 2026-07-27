@@ -148,10 +148,24 @@ class TestNodeShapes:
         assert nodes[0].template == 'extends "b.twig"'
         assert nodes[1].name == "c"
 
-    def test_unknown_tag_and_stray_terminator_are_skip_nodes(self):
-        assert _kinds(_ast("{% wibble %}")) == ["skip"]
+    def test_stray_terminator_and_empty_tag_are_skip_nodes(self):
+        """A stray terminator and an empty tag still parse to a no-op node.
+
+        3.13.89 made an UNKNOWN tag raise (it used to leak its body), but these
+        two keep the old skip-node behaviour on purpose: neither has a body, so
+        neither can expose content that was meant to be gated.
+        """
         assert _kinds(_ast("{% endif %}")) == ["skip"]
         assert _kinds(_ast("{%  %}")) == ["skip"]
+
+    def test_an_unknown_tag_raises_at_parse_time(self):
+        """3.13.89: {% wibble %} is a typo, and a typo must not parse.
+
+        The NEGATIVE case of the test above. It used to produce a skip node,
+        which meant a mistyped guard rendered its body unconditionally.
+        """
+        with pytest.raises(ValueError, match='unknown tag "wibble"'):
+            _ast("{% wibble %}")
 
 
 class TestParserOwnsStructureAlone:
@@ -340,8 +354,19 @@ class TestMalformedTemplatesBehaveAsBefore:
         assert Frond().render_string("a {% endif %} b", {}) == "a  b"
         assert Frond().render_string("a {% endfor %} b", {}) == "a  b"
 
-    def test_unknown_tag_renders_nothing(self):
-        assert Frond().render_string("a {% wibble x %} b", {}) == "a  b"
+    def test_unknown_tag_raises_instead_of_rendering_nothing(self):
+        """3.13.89 (Breaking): an unknown tag is an error, not a silent skip.
+
+        Rendering nothing was the SAFE half of the old behaviour; the unsafe half
+        was that a BLOCK-shaped typo still rendered its body. Both are gone --
+        the template now fails loudly and names the tag.
+        """
+        with pytest.raises(ValueError, match='unknown tag "wibble"'):
+            Frond().render_string("a {% wibble x %} b", {})
+        # Negative case: an unknown BLOCK tag must not leak the content between
+        # it and its terminator. That was the security-shaped half.
+        with pytest.raises(ValueError, match='unknown tag "iff"'):
+            Frond().render_string("{% iff admin %}SECRET{% endiff %}", {"admin": False})
 
     def test_malformed_macro_registers_nothing_and_skips_its_body(self):
         assert Frond().render_string("{% macro %}body{% endmacro %}AFTER", {}) == "AFTER"

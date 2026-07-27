@@ -77,7 +77,7 @@ EXPECTED = dict(_load(FIXTURES / "frond_expression_expected.txt"))
 def test_corpus_and_answer_key_line_up():
     """Guard the guard: a corpus entry with no expected value would otherwise
     pass by never being asserted."""
-    assert len(CORPUS) == 79
+    assert len(CORPUS) == 82
     assert {label for label, _ in CORPUS} == set(EXPECTED)
 
 
@@ -194,6 +194,77 @@ def test_json_encode_never_emits_a_non_finite_literal(tmp_path):
     for bad in ("Infinity", "NaN", "false", "=>"):
         assert bad not in engine.render_string("{{ v|json_encode }}", {"v": {"b": inf}})
     assert engine.render_string("{{ v|json_encode }}", {"v": inf}) != ""
+
+
+def test_block_set_captures_its_body_instead_of_printing_it():
+    """{% set name %}...{% endset %} binds the rendered body (3.13.89).
+
+    Core syntax in BOTH reference engines, and broken identically in all four
+    frameworks until now: the body rendered inline where it stood and the
+    variable was never assigned.
+    """
+    engine = Frond()
+    ctx = {"n": "Andre"}
+    assert engine.render_string("{% set g %}Hi {{ n }}{% endset %}[{{ g }}]", dict(ctx)) == "[Hi Andre]"
+    # Negative case: the old bug printed the body first and left the variable
+    # empty. Neither may happen -- the body must not appear before the "[".
+    out = engine.render_string("{% set g %}Hi {{ n }}{% endset %}[{{ g }}]", dict(ctx))
+    assert not out.startswith("Hi")
+    assert "[]" not in out
+    # A loop inside the body renders into the capture, not to the page.
+    assert engine.render_string(
+        "{% set g %}{% for i in [1,2] %}{{ i }}{% endfor %}{% endset %}[{{ g }}]", {}
+    ) == "[12]"
+    # Nesting: the inner endset must not close the outer block.
+    assert engine.render_string(
+        "{% set a %}A{% set b %}B{% endset %}{{ b }}{% endset %}[{{ a }}]", {}
+    ) == "[AB]"
+
+
+def test_block_set_capture_is_safe_and_the_inline_form_still_works():
+    """The capture is already-escaped output, so it is not escaped again.
+
+    Twig and Jinja2 both mark a captured block safe. A value interpolated INTO
+    the body is still escaped on the way in -- the escaping happens once, in the
+    right place.
+    """
+    engine = Frond()
+    # Escaped once on the way in, not twice on the way out.
+    assert engine.render_string(
+        "{% set g %}{{ h }}{% endset %}[{{ g }}]", {"h": "<b>&x</b>"}
+    ) == "[&lt;b&gt;&amp;x&lt;/b&gt;]"
+    # Literal markup in the body is template text and stays as written.
+    assert engine.render_string("{% set g %}<b>hi</b>{% endset %}[{{ g }}]", {}) == "[<b>hi</b>]"
+    # Negative case: the inline assignment form is untouched, including an "="
+    # inside a quoted value -- that must NOT be read as the block form.
+    assert engine.render_string('{% set g = "x" %}[{{ g }}]', {}) == "[x]"
+    assert engine.render_string('{% set g = "a = b" %}[{{ g }}]', {}) == "[a = b]"
+
+
+def test_an_unknown_tag_raises_instead_of_leaking_its_body():
+    """A typo'd tag must fail loudly, not render the content it was gating.
+
+    THE security-shaped one. {% iff user.is_admin %}...{% endiff %} used to
+    render the admin block UNCONDITIONALLY: the unknown tag emitted nothing and
+    its body was parsed as ordinary content, so a reviewer read a guard that was
+    not there. Twig and Jinja2 both raise on an unknown tag. There is no
+    user-extension point for tags, so an unknown name is always a mistake.
+    """
+    engine = Frond()
+    with pytest.raises(ValueError, match='unknown tag "iff"'):
+        engine.render_string("{% iff admin %}SECRET{% endiff %}", {"admin": False})
+    with pytest.raises(ValueError, match='unknown tag "frobnicate"'):
+        engine.render_string("{% frobnicate 42 %}", {})
+    # Negative case 1: every real tag still parses.
+    assert engine.render_string(
+        "{% if 1 %}x{% endif %}{% for i in [1] %}{{ i }}{% endfor %}"
+        "{% raw %}{{ q }}{% endraw %}{% spaceless %} a {% endspaceless %}"
+        "{% autoescape true %}y{% endautoescape %}", {}
+    ) == "x1{{ q }} a y"
+    # Negative case 2: a STRAY terminator is not an unknown tag. It stays a
+    # silent no-op -- it was always one, and unlike an unknown tag it cannot
+    # expose gated content.
+    assert engine.render_string("A{% endif %}B", {}) == "AB"
 
 
 def test_json_encode_and_to_json_and_tojson_are_one_behaviour():
