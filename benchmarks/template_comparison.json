@@ -1,0 +1,33 @@
+{
+  "language": "python",
+  "runtime": "Python 3.13.5",
+  "page": {
+    "items": 20,
+    "engines": [
+      "Frond (Tina4)",
+      "Jinja2",
+      "Mako"
+    ]
+  },
+  "output_equivalence": "verified",
+  "results": {
+    "Frond (Tina4)": {
+      "p50_ops_sec": 2414.4907063886676,
+      "mean_ops_sec": 2071.9727172105613,
+      "iterations": 519,
+      "batches": 519
+    },
+    "Jinja2": {
+      "p50_ops_sec": 34934.480440202206,
+      "mean_ops_sec": 32879.27123506331,
+      "iterations": 8180,
+      "batches": 8180
+    },
+    "Mako": {
+      "p50_ops_sec": 89662.16824745138,
+      "mean_ops_sec": 79358.4305547154,
+      "iterations": 19770,
+      "batches": 6590
+    }
+  }
+}
