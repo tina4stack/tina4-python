@@ -196,19 +196,51 @@ def _resolve_secret(secret: str = None) -> str:
     return env_secret
 
 
+# Supported JWT algorithms. HMAC only — the whole family is in hashlib, so this
+# stays zero-dependency. The header's "alg" is now always the one we actually sign
+# with (python#105): the digest is looked up here rather than hardcoded.
+_HMAC_ALGORITHMS = {
+    "HS256": hashlib.sha256,
+    "HS384": hashlib.sha384,
+    "HS512": hashlib.sha512,
+}
+
+# Seconds of clock skew tolerated on the "nbf" (not-before) claim. Without this a
+# token minted on one host and validated on another a second behind is rejected
+# for no real reason; RFC 7519 explicitly allows "a small leeway".
+_JWT_LEEWAY_SECONDS = 60
+
+
+def _resolve_algorithm(algorithm: str = None) -> str:
+    """Pick the JWT algorithm: explicit arg, else TINA4_JWT_ALGORITHM, else HS256.
+
+    Raises ValueError naming the supported set when asked for one we cannot sign
+    (python#106 — the env var was registered in the CLI's known_vars and then
+    silently ignored, so a user could set HS512 and still get HS256 tokens).
+    """
+    chosen = (algorithm or os.environ.get("TINA4_JWT_ALGORITHM") or "HS256").strip()
+    if chosen not in _HMAC_ALGORITHMS:
+        raise ValueError(
+            f"Unsupported JWT algorithm {chosen!r}. Tina4 signs with "
+            f"{', '.join(sorted(_HMAC_ALGORITHMS))} (HMAC only, zero-dependency). "
+            f"Set TINA4_JWT_ALGORITHM to one of those."
+        )
+    return chosen
+
+
 class Auth:
     """JWT authentication and password hashing — zero dependencies."""
 
-    def __init__(self, secret: str = None, algorithm: str = "HS256",
+    def __init__(self, secret: str = None, algorithm: str = None,
                  expires_in: int = None):
         """
         Args:
             secret:     Signing secret (falls back to the TINA4_SECRET env var).
-            algorithm:  JWT algorithm (default HS256).
+            algorithm:  JWT algorithm (falls back to TINA4_JWT_ALGORITHM, then HS256).
             expires_in: Token lifetime in seconds (default 3600).
         """
         self.secret = secret if secret is not None else _resolve_secret()
-        self.algorithm = algorithm
+        self.algorithm = _resolve_algorithm(algorithm)
         # JWT expiry env var:
         # - TINA4_TOKEN_EXPIRES_IN (preferred — matches docs and the
         #   form-token expiry env var used by Frond)
@@ -275,13 +307,29 @@ class Auth:
                 return None
 
             h, p, sig = parts
+
+            # Pin the algorithm to OUR configured one instead of trusting the
+            # token's header. A token asking to be verified as anything else --
+            # "none", a weaker HMAC, or an RSA alg we do not implement -- is
+            # rejected before any signature work. Matches the Ruby check.
+            header = json.loads(_b64url_decode(h))
+            if header.get("alg") != self.algorithm:
+                return None
+
             expected = self._sign(f"{h}.{p}")
             if not hmac.compare_digest(sig, expected):
                 return None
 
             payload = json.loads(_b64url_decode(p))
 
-            if "exp" in payload and time.time() > payload["exp"]:
+            now = time.time()
+            if "exp" in payload and now > payload["exp"]:
+                return None
+
+            # "nbf" (not-before): a post-dated token is not valid yet. Was
+            # honoured only by Ruby, so Python/PHP/Node accepted tokens their
+            # issuer had explicitly marked as not-yet-usable (python#107).
+            if "nbf" in payload and now + _JWT_LEEWAY_SECONDS < payload["nbf"]:
                 return None
 
             return payload
@@ -314,8 +362,10 @@ class Auth:
         return self.get_token(payload, expires_in=expires_in)
 
     def _sign(self, message: str) -> str:
+        # Digest comes from the configured algorithm, so the "alg" we advertise in
+        # the header is the one that actually produced this signature.
         sig = hmac.new(
-            self.secret.encode(), message.encode(), hashlib.sha256
+            self.secret.encode(), message.encode(), _HMAC_ALGORITHMS[self.algorithm]
         ).digest()
         return _b64url_encode(sig)
 
@@ -424,16 +474,24 @@ class Auth:
     # ── Request Auth Helper ───────────────────────────────────────
 
     @_DualMethod
-    def authenticate_request(self, headers: dict, secret: str = None, algorithm: str = "HS256") -> dict | None:
+    def authenticate_request(self, headers: dict, secret: str = None, algorithm: str = None) -> dict | None:
         """Extract and validate auth from request headers.
 
         Args:
             secret:    Override signing secret (default: self.secret / TINA4_SECRET env var).
-            algorithm: JWT algorithm override (default: "HS256").
+            algorithm: JWT algorithm override (default: self.algorithm / TINA4_JWT_ALGORITHM).
 
         Checks: Bearer JWT, Bearer API key, Basic auth.
         Returns payload dict on success, None on failure.
         """
+        # Both overrides used to be accepted and then dropped on the floor: the
+        # body called self.valid_token(), so a caller passing secret= or
+        # algorithm= silently got this instance's values instead. Honour them.
+        if secret is not None or algorithm is not None:
+            return Auth(secret=secret if secret is not None else self.secret,
+                        algorithm=algorithm or self.algorithm,
+                        expires_in=self.expires_in).authenticate_request(headers)
+
         auth_header = headers.get("authorization", "")
 
         if auth_header.startswith("Bearer "):
@@ -497,10 +555,10 @@ def refresh_token(token: str, expires_in: int = 60) -> str | None:
     return Auth.refresh_token_static(token, expires_in=expires_in)
 
 
-def authenticate_request(headers: dict, secret: str = None, algorithm: str = "HS256") -> dict | None:
+def authenticate_request(headers: dict, secret: str = None, algorithm: str = None) -> dict | None:
     """Validate auth from request headers — reads TINA4_SECRET from env."""
-    if secret is not None:
-        return Auth(secret=secret).authenticate_request(headers, algorithm=algorithm)
+    if secret is not None or algorithm is not None:
+        return Auth(secret=secret, algorithm=algorithm).authenticate_request(headers)
     return Auth.authenticate_request_static(headers)
 
 
