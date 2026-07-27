@@ -14,8 +14,9 @@ from tina4_python.cli import (
     _gen_test, _gen_form, _gen_view, _gen_auth, _gen_crud,
     _gen_service, _gen_queue, _gen_validator, _gen_seeder,
     _gen_websocket, _gen_listener, _ai_fill, _extend, _parse_every,
-    FIELD_TYPE_MAP,
+    FIELD_TYPE_MAP, DEFAULT_FIELDS,
 )
+import tina4_python.cli as cli_module
 
 
 @pytest.fixture
@@ -293,6 +294,52 @@ class TestGenerateForm:
         _gen_form("Product", {"fields": "name:string"})
         content = (tmp_project / "src" / "templates" / "forms" / "product.twig").read_text()
         assert "item.id" in content  # edit/create detection
+
+    def test_form_without_fields_uses_the_shared_default(self, tmp_project):
+        """No --fields: the form's inputs must come from DEFAULT_FIELDS.
+
+        _gen_form was the one generator the #101 fix missed: it kept its own
+        inline [("name", "string")] fallback instead of routing through
+        _fields_or_default. Same output today, but change DEFAULT_FIELDS and the
+        form would render an input the model has no column for -> the POST 500s.
+        """
+        _gen_form("Todo", {})
+        content = (tmp_project / "src" / "templates" / "forms" / "todo.twig").read_text()
+        for fname, _ftype in DEFAULT_FIELDS:
+            assert f'name="{fname}"' in content, \
+                f"form omits the default field {fname!r}:\n{content}"
+
+    def test_form_matches_the_models_own_fields(self, tmp_project):
+        """The form and the model must agree — both derive from one default."""
+        _gen_model("Todo", {})
+        _gen_form("Todo", {})
+        model_src = (tmp_project / "src" / "orm" / "Todo.py").read_text()
+        form_src = (tmp_project / "src" / "templates" / "forms" / "todo.twig").read_text()
+        tree = ast.parse(model_src)
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Todo")
+        declared = {t.id for stmt in cls.body if isinstance(stmt, ast.Assign)
+                    for t in stmt.targets
+                    if isinstance(t, ast.Name) and not t.id.startswith("_")
+                    and t.id not in ("table_name", "id", "created_at")}
+        for field in declared:
+            assert f'name="{field}"' in form_src, \
+                f"model declares {field!r} but the form has no input for it:\n{form_src}"
+
+    def test_the_default_field_literal_is_defined_exactly_once(self):
+        """Source invariant: ONE definition of the default, no restatements.
+
+        This is the test that actually catches the regression. The behaviour is
+        identical while the default happens to be `name`, so only a
+        single-definition check proves a generator is not carrying its own copy.
+        Before the fix this file held two: DEFAULT_FIELDS and _gen_form's inline
+        fallback.
+        """
+        src = Path(cli_module.__file__).read_text()
+        occurrences = src.count('("name", "string")')
+        assert occurrences == 1, (
+            f"the default field literal appears {occurrences} times; it must be "
+            "defined once in DEFAULT_FIELDS and referenced everywhere else"
+        )
 
 
 # ── View generator ────────────────────────────────────────────────────
