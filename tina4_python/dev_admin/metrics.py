@@ -543,13 +543,37 @@ def file_detail(file_path: str) -> dict:
 # ── AST Helpers ────────────────────────────────────────────────
 
 
+def _own_body_nodes(node: ast.AST):
+    """Yield the nodes belonging to this function's OWN body.
+
+    Nested function and class definitions are skipped: they are reported as
+    functions in their own right, so counting their decision points here too
+    would charge one branch to two different functions. That over-count grew
+    with nesting depth - an IIFE-style wrapper or a registrar that defines
+    twenty inner handlers absorbed the entire file's complexity and sat at the
+    top of the offenders list while the real hot spots hid below it.
+
+    A lambda is NOT skipped. Lambdas are never listed as separate functions, so
+    their decision points would simply vanish; they stay with the function that
+    encloses them.
+    """
+    stack = list(ast.iter_child_nodes(node))
+    while stack:
+        child = stack.pop()
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        yield child
+        stack.extend(ast.iter_child_nodes(child))
+
+
 def _cyclomatic_complexity(node: ast.AST) -> int:
     """Calculate cyclomatic complexity for a function/method node.
 
     CC = 1 + number of decision points (if/elif/for/while/except/and/or/assert)
+    in the function's own body. Nested functions are measured separately.
     """
     cc = 1
-    for child in ast.walk(node):
+    for child in _own_body_nodes(node):
         if isinstance(child, (ast.If, ast.IfExp)):
             cc += 1
         elif isinstance(child, ast.For):
