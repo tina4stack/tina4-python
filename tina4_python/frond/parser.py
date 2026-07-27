@@ -224,6 +224,21 @@ class SetNode:
 
 
 @dataclass(slots=True)
+class SetBlockNode:
+    """{% set name %}...{% endset %} — capture the rendered body into ``name``.
+
+    Core syntax in BOTH reference engines (Twig and Jinja2) and broken in all
+    four Tina4 frameworks until 3.13.89: the body rendered inline where it stood
+    and the variable was never assigned, so ``{% set g %}hi{% endset %}[{{ g }}]``
+    printed ``hi[]`` instead of ``[hi]``.
+    """
+    kind = "set_block"
+    name: str = ""
+    body: list = field(default_factory=list)
+    strip_before: bool = False
+
+
+@dataclass(slots=True)
 class IncludeNode:
     """{% include "file" [with {...}] [ignore missing] %}."""
     kind = "include"
@@ -462,6 +477,28 @@ def _needs_live_strip(tokens: list, index: int, strip_before: bool) -> bool:
     return strip_before and index > 0 and tokens[index - 1][0] != TEXT
 
 
+# Every tag that OPENS a construct. An unknown tag is a typo, and 3.13.89 makes
+# it raise rather than render its body: a mistyped guard -- {% iff is_admin %}
+# instead of {% if is_admin %} -- used to render the gated content
+# UNCONDITIONALLY, so a reviewer saw a guard that was not there. Twig and Jinja2
+# both raise on an unknown tag; Frond now does too. There is no user-extension
+# point for tags in any of the four frameworks, so an unknown name is always a
+# mistake, never a plugin.
+_KNOWN_TAGS = frozenset({
+    "autoescape", "block", "cache", "extends", "for", "from", "if", "import",
+    "include", "live", "macro", "raw", "set", "spaceless",
+})
+
+# Terminators and branch keywords. These reach _parse_block only when stray
+# (their own collector consumes them in the normal case), and a stray one keeps
+# the old render-nothing behaviour -- see the comment at the raise.
+_TERMINATORS = frozenset({
+    "elif", "else", "elseif", "endautoescape", "endblock", "endcache",
+    "endfor", "endif", "endlive", "endmacro", "endraw", "endset",
+    "endspaceless",
+})
+
+
 def _parse_block(content: str, strip_before: bool, strip_after: bool,
                  tokens: list, i: int):
     """Build the node for the BLOCK token at ``i``. Returns (node, next_index);
@@ -477,6 +514,16 @@ def _parse_block(content: str, strip_before: bool, strip_after: bool,
         return _parse_for(content, strip_before, strip_after, tokens, i)
 
     if tag == "set":
+        # An assignment has an ``=``; without one this is the BLOCK form,
+        # {% set name %}...{% endset %}, which captures its rendered body.
+        # A bare ``in`` test is exact here, not a shortcut: the block form's tag
+        # content is only ever ``set <name>``, so an ``=`` anywhere -- even
+        # inside a quoted value like {% set msg = "a = b" %} -- means assignment.
+        if "=" not in content:
+            body, end = _collect_body(tokens, i, "set", "endset")
+            _bake_strip_after_end(tokens, strip_after, end)
+            name = parts[1] if len(parts) > 1 else ""
+            return SetBlockNode(name, _parse_nodes(body), strip_before), end
         return SetNode(content, strip_before), i + 1
 
     if tag == "include":
@@ -525,8 +572,18 @@ def _parse_block(content: str, strip_before: bool, strip_after: bool,
     if tag in ("block", "endblock"):
         return BlockMarkerNode(parts[1] if len(parts) > 1 else "", strip_before), i + 1
 
-    # A stray terminator or an unknown tag: no output, advance one token.
-    return SkipNode(strip_before), i + 1
+    if tag == "" or tag in _TERMINATORS:
+        # An empty tag ({%  %}, or a bare whitespace-control {%- -%}) and a
+        # stray terminator (an {% endif %} with no {% if %}): no output,
+        # advance one token. Malformed, but it has always rendered nothing, and
+        # nothing is the safe answer -- unlike an unknown tag it cannot expose
+        # content that was meant to be gated.
+        return SkipNode(strip_before), i + 1
+
+    raise ValueError(
+        f'Frond: unknown tag "{tag}" -- known tags are: '
+        + ", ".join(sorted(_KNOWN_TAGS))
+    )
 
 
 def _parse_if(content: str, strip_before: bool, strip_after: bool,

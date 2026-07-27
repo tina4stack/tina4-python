@@ -2030,6 +2030,17 @@ class Frond:
             elif kind == "set":
                 self._handle_set(node.content, context)
 
+            elif kind == "set_block":
+                # {% set name %}...{% endset %} -- render the body and bind it,
+                # emitting nothing here. The captured value is a SafeString
+                # because it is template output that has already been escaped
+                # on the way in; re-escaping it at {{ name }} would double-encode
+                # every entity. Twig and Jinja2 both mark the capture safe.
+                if node.name:
+                    context[node.name] = SafeString(
+                        self._render_nodes(node.body, context)
+                    )
+
             elif kind == "include":
                 # Sandbox: check tag
                 if not (self._sandbox and self._allowed_tags is not None
