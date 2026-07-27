@@ -66,3 +66,114 @@ def pytest_runtest_makereport(item, call):
             + reason.strip()
             + "\nProvision the service / install the client, or unset TINA4_REQUIRE_SERVICES."
         )
+
+
+# ── Real child-server boot (shared by every test that spawns one) ─────────
+#
+# Four test files each carried their own copy of this, and each copy had the
+# same race: _free_port() binds port 0, reads the number, CLOSES the socket, and
+# only then does the child bind it. Anything on the machine can take the port in
+# that gap, and a full suite boots a lot of servers. The child then dies with
+# "address already in use" and the assertion said only "child server never bound
+# the port" - the captured output was thrown away, so a lost race and a genuine
+# server crash looked identical.
+#
+# boot_child_server() retries ONLY the lost race, which it identifies from the
+# child's own output. Every other failure stops immediately and reports what the
+# child printed, so a real bug still fails fast and legibly.
+
+import socket as _socket
+import subprocess as _subprocess
+import sys as _sys
+import time as _time
+
+_ADDR_IN_USE = ("address already in use", "address in use", "eaddrinuse",
+                "errno 48", "errno 98", "oserror: [errno 48]", "oserror: [errno 98]")
+
+
+def free_port() -> int:
+    """A port that was free a moment ago. Inherently racy: use boot_child_server."""
+    with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def port_open(port: int, timeout: float = 0.5) -> bool:
+    try:
+        with _socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _child_output(proc) -> str:
+    """Whatever the child printed, without hanging if it is still alive."""
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except _subprocess.TimeoutExpired:
+                proc.kill()
+        out = proc.stdout.read() if proc.stdout else b""
+        return out.decode(errors="replace").strip() if isinstance(out, bytes) else str(out).strip()
+    except Exception as exc:  # never let diagnostics mask the real failure
+        return f"(could not read child output: {exc})"
+
+
+def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
+                      boot_timeout: float = 25.0):
+    """Start a REAL child server and wait until it answers on its port.
+
+    write_app(project_dir, port) writes app.py (and anything else) for that port.
+    Returns (proc, port); the caller terminates proc in a finally block.
+    """
+    from pathlib import Path as _Path
+    repo_root = _Path(__file__).resolve().parent.parent
+    failures = []
+
+    for attempt in range(1, attempts + 1):
+        port = free_port()
+        proj = tmp_path / f"srv_{port}"
+        (proj / "src" / "routes").mkdir(parents=True, exist_ok=True)
+        write_app(proj, port)
+
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(repo_root),
+            "TINA4_OVERRIDE_CLIENT": "true",
+            "TINA4_NO_BROWSER": "true",
+            "TINA4_SUPPRESS": "true",
+            "TINA4_NO_AI_PORT": "true",
+            "PORT": str(port),
+        }
+        env.pop("TINA4_SESSION_NAME", None)
+        if extra_env:
+            env.update(extra_env(port) if callable(extra_env) else extra_env)
+
+        proc = _subprocess.Popen(
+            [_sys.executable, "app.py"], cwd=str(proj), env=env,
+            stdout=_subprocess.PIPE, stderr=_subprocess.STDOUT,
+        )
+
+        deadline = _time.time() + boot_timeout
+        died = False
+        while _time.time() < deadline:
+            if port_open(port):
+                return proc, port
+            if proc.poll() is not None:
+                died = True
+                break
+            _time.sleep(0.05)
+
+        out = _child_output(proc)
+        why = "exited during startup" if died else f"never bound port {port} in {boot_timeout}s"
+        failures.append(f"attempt {attempt}/{attempts} (port {port}): {why}\n{out}")
+
+        # Retry only the port race. Anything else is a real failure: report it now.
+        if not any(marker in out.lower() for marker in _ADDR_IN_USE):
+            break
+
+    raise AssertionError(
+        "child server never became ready:\n\n" + "\n\n".join(failures)
+    )
