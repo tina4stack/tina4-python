@@ -24,12 +24,10 @@ in-process dispatch pipeline) emitted.
 """
 
 import http.client
-import os
-import socket
 import subprocess
-import sys
-import time
 from pathlib import Path
+
+from conftest import boot_child_server
 
 import pytest
 
@@ -42,65 +40,35 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # ── real child-server helpers (mirror test_server_parity.py) ───────────────
 
-def _free_port() -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def _port_open(port: int, timeout: float = 0.5) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
-            return True
-    except OSError:
-        return False
-
-
 def _boot_session_server(tmp_path: Path, extra_env: dict | None = None):
-    """Start a REAL child server exposing GET /session/touch, which writes to
-    the session so the framework emits the Set-Cookie. Returns (proc, port).
+    """Start a REAL child server exposing GET /session/touch, which writes to the
+    session so the framework emits the Set-Cookie. Returns (proc, port).
 
-    Caller must terminate proc in a finally block.
+    Boots through the shared conftest helper, which retries a lost port race and
+    reports the child's own output on a real failure. Caller terminates proc.
     """
-    port = _free_port()
-    proj = tmp_path / f"srv_{port}"
-    (proj / "src" / "routes").mkdir(parents=True)
-    (proj / "app.py").write_text(
-        "from tina4_python import get\n"
-        "from tina4_python.core.server import start\n\n"
-        "@get('/session/touch')\n"
-        "async def touch(request, response):\n"
-        "    request.session.set('hit', '1')\n"
-        "    return response('ok')\n\n"
-        f"start(port={port}, no_browser=True, no_reload=True)\n"
-    )
-    env = {
-        **os.environ,
-        "PYTHONPATH": str(REPO_ROOT),
-        "TINA4_OVERRIDE_CLIENT": "true",
-        "TINA4_NO_BROWSER": "true",
-        "TINA4_SUPPRESS": "true",
-        "TINA4_NO_AI_PORT": "true",
-        "TINA4_SESSION_PATH": str(proj / "sessions"),
-        "PORT": str(port),
-    }
+    def write_app(proj: Path, port: int) -> None:
+        (proj / "app.py").write_text(
+            "from tina4_python import get\n"
+            "from tina4_python.core.server import start\n\n"
+            "@get('/session/touch')\n"
+            "async def touch(request, response):\n"
+            "    request.session.set('hit', '1')\n"
+            "    return response('ok')\n\n"
+            f"start(port={port}, no_browser=True, no_reload=True)\n"
+        )
+
+    def env_for(port: int) -> dict:
+        env = {"TINA4_SESSION_PATH": str(tmp_path / f"srv_{port}" / "sessions")}
+        if extra_env:
+            env.update(extra_env)
+        return env
+
     # Never let the outer test env force Secure unless a case asks for it.
-    env.pop("TINA4_SESSION_SECURE", None)
-    env.pop("TINA4_SESSION_SAMESITE", None)
-    if extra_env:
-        env.update(extra_env)
-    proc = subprocess.Popen(
-        [sys.executable, "app.py"], cwd=str(proj), env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    return boot_child_server(
+        tmp_path, write_app, extra_env=env_for,
+        unset_env=("TINA4_SESSION_SECURE", "TINA4_SESSION_SAMESITE"),
     )
-    deadline = time.time() + 25
-    while time.time() < deadline and not _port_open(port):
-        assert proc.poll() is None, "server exited during startup"
-        time.sleep(0.2)
-    assert _port_open(port), "child server never bound the port"
-    return proc, port
 
 
 def _set_cookie_for(port: int, forwarded_proto: str | None = None,

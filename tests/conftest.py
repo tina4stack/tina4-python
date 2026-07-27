@@ -122,12 +122,19 @@ def _child_output(proc) -> str:
 
 
 def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
-                      boot_timeout: float = 25.0):
-    """Start a REAL child server and wait until it answers on its port.
+                      boot_timeout: float = 25.0, unset_env=(), ready=None):
+    """Start a REAL child server and wait until it is ready.
 
     write_app(project_dir, port) writes app.py (and anything else) for that port.
+    unset_env names variables the outer environment must not leak into the child.
+    ready(port) -> bool decides readiness; the default is "the port accepts a
+    connection". A caller whose readiness is really about CONTENT (the dev-reload
+    test must know which version is being served before it edits anything) passes
+    its own check rather than settling for an open socket.
+
     Returns (proc, port); the caller terminates proc in a finally block.
     """
+    is_ready = ready or port_open
     from pathlib import Path as _Path
     repo_root = _Path(__file__).resolve().parent.parent
     failures = []
@@ -147,7 +154,8 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
             "TINA4_NO_AI_PORT": "true",
             "PORT": str(port),
         }
-        env.pop("TINA4_SESSION_NAME", None)
+        for name in unset_env:
+            env.pop(name, None)
         if extra_env:
             env.update(extra_env(port) if callable(extra_env) else extra_env)
 
@@ -159,7 +167,7 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
         deadline = _time.time() + boot_timeout
         died = False
         while _time.time() < deadline:
-            if port_open(port):
+            if is_ready(port):
                 return proc, port
             if proc.poll() is not None:
                 died = True
@@ -167,7 +175,7 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
             _time.sleep(0.05)
 
         out = _child_output(proc)
-        why = "exited during startup" if died else f"never bound port {port} in {boot_timeout}s"
+        why = "exited during startup" if died else f"never became ready on port {port} in {boot_timeout}s"
         failures.append(f"attempt {attempt}/{attempts} (port {port}): {why}\n{out}")
 
         # Retry only the port race. Anything else is a real failure: report it now.

@@ -58,7 +58,9 @@ def _boot_counter_server(tmp_path: Path, extra_env: dict | None = None):
             env.update(extra_env)
         return env
 
-    return boot_child_server(tmp_path, write_app, extra_env=env_for)
+    # Never let the outer test env decide the cookie name.
+    return boot_child_server(tmp_path, write_app, extra_env=env_for,
+                             unset_env=("TINA4_SESSION_NAME",))
 
 
 def _count(port: int, cookie: str | None = None, timeout: float = 5.0):

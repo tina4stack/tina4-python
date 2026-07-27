@@ -22,6 +22,8 @@ import sys
 import time
 from pathlib import Path
 
+from conftest import boot_child_server
+
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -121,14 +123,6 @@ async def test_dev_reload_ws_route_registered():
 
 # ── Integration: live server, real WebSocket round-trip ─────────────────────
 
-def _free_port():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
 async def _ws_recv_one(host, port, path, timeout):
     """Connect a raw RFC 6455 client, return (connected, first_text_payload)."""
     reader, writer = await asyncio.open_connection(host, port)
@@ -181,48 +175,39 @@ def _http_get(host, port, path):
 
 async def test_live_ws_reload_roundtrip(tmp_path):
     """End-to-end: edit a route, POST reload, browser WS receives it; no respawn."""
-    # Scaffold a throwaway project that imports the framework under test.
-    proj = tmp_path / "app"
-    routes = proj / "src" / "routes"
-    routes.mkdir(parents=True)
-    (proj / ".env").write_text(
-        "TINA4_DEBUG=true\nTINA4_LOG_LEVEL=ERROR\nTINA4_OVERRIDE_CLIENT=true\n"
-    )
-    (proj / "app.py").write_text("from tina4_python.core import run\nrun()\n")
-    index = routes / "index.py"
-    index.write_text(
-        "from tina4_python import get\n\n\n"
-        "@get('/')\nasync def home(request, response):\n"
-        "    return response('<h1>Version 1</h1>')\n"
-    )
+    # Scaffold a throwaway project that imports the framework under test. The
+    # shared boot helper owns the project directory (it retries a lost port race
+    # with a fresh one), so the paths this test later EDITS are captured here.
+    proj: Path | None = None
+    index: Path | None = None
 
-    port = _free_port()
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
-    env["TINA4_NO_BROWSER"] = "true"
-    env["TINA4_SUPPRESS"] = "true"
-    env["TINA4_NO_AI_PORT"] = "true"  # don't also claim port+1000
-    env["PORT"] = str(port)
+    def write_app(project: Path, port: int) -> None:
+        nonlocal proj, index
+        proj = project
+        (project / ".env").write_text(
+            "TINA4_DEBUG=true\nTINA4_LOG_LEVEL=ERROR\nTINA4_OVERRIDE_CLIENT=true\n"
+        )
+        (project / "app.py").write_text("from tina4_python.core import run\nrun()\n")
+        index = project / "src" / "routes" / "index.py"
+        index.write_text(
+            "from tina4_python import get\n\n\n"
+            "@get('/')\nasync def home(request, response):\n"
+            "    return response('<h1>Version 1</h1>')\n"
+        )
 
-    proc = subprocess.Popen(
-        [sys.executable, "app.py"],
-        cwd=str(proj), env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    def serving_version_1(port: int) -> bool:
+        """Readiness is about CONTENT here, not just an open socket: the test
+        must know version 1 is being served before it edits the route."""
+        try:
+            status, body = _http_get("127.0.0.1", port, "/")
+            return status == 200 and "Version 1" in body
+        except OSError:
+            return False
+
+    proc, port = boot_child_server(
+        tmp_path, write_app, boot_timeout=20, ready=serving_version_1
     )
     try:
-        # Wait for the server to accept connections.
-        deadline = time.time() + 20
-        ready = False
-        while time.time() < deadline:
-            try:
-                status, body = _http_get("127.0.0.1", port, "/")
-                if status == 200 and "Version 1" in body:
-                    ready = True
-                    break
-            except OSError:
-                pass
-            await asyncio.sleep(0.2)
-        assert ready, "server did not start serving Version 1"
         assert proc.poll() is None, "server process exited during startup"
         pid_before = proc.pid
 

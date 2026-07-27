@@ -11,10 +11,11 @@ in-process without killing the test runner).
 
 import socket
 import subprocess
-import sys
 import time
 import http.client
 from pathlib import Path
+
+from conftest import boot_child_server, port_open as _port_open
 
 import pytest
 
@@ -31,14 +32,6 @@ def _make_request(method: str, path: str, headers: dict | None = None) -> Reques
     req.path = path
     req.headers = headers or {}
     return req
-
-
-def _free_port() -> int:
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
 
 
 async def test_handle_dispatches_a_real_request():
@@ -81,45 +74,28 @@ def _port_open(port: int, timeout: float = 0.5) -> bool:
 def test_start_serves_a_real_route_then_stop_releases_the_port(tmp_path):
     """start() binds the port and serves a real request; stop() shuts the
     listener down and releases the port - exercised in a real child server."""
-    port = _free_port()
-    proj = tmp_path / "srv"
-    (proj / "src" / "routes").mkdir(parents=True)
-    # A real app: register routes, then start() the server (a thin wrapper around
-    # run()). /__parity/shutdown calls stop() on a short delay so the response is
-    # flushed before SIGTERM lands.
-    (proj / "app.py").write_text(
-        "import threading, time\n"
-        "from tina4_python import get\n"
-        "from tina4_python.core.server import start, stop\n\n"
-        "@get('/__parity/ping')\n"
-        "async def ping(request, response):\n"
-        "    return response('pong')\n\n"
-        "@get('/__parity/shutdown')\n"
-        "async def shutdown(request, response):\n"
-        "    threading.Thread(target=lambda: (time.sleep(0.3), stop()), daemon=True).start()\n"
-        "    return response('stopping')\n\n"
-        f"start(port={port}, no_browser=True, no_reload=True)\n"
-    )
-    env = {
-        **__import__("os").environ,
-        "PYTHONPATH": str(REPO_ROOT),
-        "TINA4_OVERRIDE_CLIENT": "true",
-        "TINA4_NO_BROWSER": "true",
-        "TINA4_SUPPRESS": "true",
-        "TINA4_NO_AI_PORT": "true",
-        "PORT": str(port),
-    }
-    proc = subprocess.Popen(
-        [sys.executable, "app.py"], cwd=str(proj), env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-    )
+    def write_app(proj: Path, port: int) -> None:
+        # A real app: register routes, then start() the server (a thin wrapper
+        # around run()). /__parity/shutdown calls stop() on a short delay so the
+        # response is flushed before SIGTERM lands.
+        (proj / "app.py").write_text(
+            "import threading, time\n"
+            "from tina4_python import get\n"
+            "from tina4_python.core.server import start, stop\n\n"
+            "@get('/__parity/ping')\n"
+            "async def ping(request, response):\n"
+            "    return response('pong')\n\n"
+            "@get('/__parity/shutdown')\n"
+            "async def shutdown(request, response):\n"
+            "    threading.Thread(target=lambda: (time.sleep(0.3), stop()), daemon=True).start()\n"
+            "    return response('stopping')\n\n"
+            f"start(port={port}, no_browser=True, no_reload=True)\n"
+        )
+
+    # Shared helper: retries a lost port race, reports the child's own output on
+    # any real failure.
+    proc, port = boot_child_server(tmp_path, write_app)
     try:
-        # Wait for start() to bind + serve.
-        deadline = time.time() + 25
-        while time.time() < deadline and not _port_open(port):
-            assert proc.poll() is None, "server exited during startup"
-            time.sleep(0.2)
-        assert _port_open(port), "start() never bound the port"
 
         # start() serves a real route over a real loopback connection.
         status, body = _http_get(port, "/__parity/ping")
