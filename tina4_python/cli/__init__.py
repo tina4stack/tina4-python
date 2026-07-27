@@ -1766,7 +1766,9 @@ def _sample_literal(field_type: str) -> str:
 
 def _emit_model_test(model: str, table: str, fields: list) -> None:
     """model → real SQLite roundtrip (create / read back / missing → None)."""
-    fields = fields or [("name", "string")]
+    # Reuse the single DEFAULT_FIELDS constant rather than re-stating the literal,
+    # so the co-emitted test can never describe a shape the model does not have.
+    fields = fields or list(DEFAULT_FIELDS)
     payload = ", ".join(f'"{fname}": {_sample_literal(ftype)}' for fname, ftype in fields)
     # Assert a STRING field round-trips (type-safe); else just the id round-trips
     # (avoids datetime/bool/float equality pitfalls on the read-back).
@@ -2615,7 +2617,7 @@ def _gen_form(name: str, flags: dict = None):
     tina4python generate form Product --fields "name:string,price:float"
     """
     flags = flags or {}
-    fields = _parse_fields(flags.get("fields", ""))
+    fields = _fields_or_default(flags.get("fields", ""))
     table = _to_table(name)
     route_name = table + "s"
 
@@ -2637,7 +2639,7 @@ def _gen_form(name: str, flags: dict = None):
 
     # Build form fields
     field_html = ""
-    for fname, ftype in (fields or [("name", "string")]):
+    for fname, ftype in fields:
         itype = input_types.get(ftype, "text")
         label = fname.replace("_", " ").title()
         step = ' step="0.01"' if ftype in ("float", "numeric", "decimal") else ""
