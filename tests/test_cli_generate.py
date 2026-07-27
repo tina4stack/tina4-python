@@ -752,3 +752,78 @@ class TestReservedTableNames:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(orders)")}
         assert {"id", "total", "status"} <= cols
         conn.close()
+
+
+class TestGeneratedMigrationMatchesModel:
+    """Regression: `generate model/crud` WITHOUT --fields used to write a model
+    declaring `name` while its migration created only id + created_at, so the
+    first write died with "table x has no column named name" (a 500 surfacing as
+    an unrelated AttributeError, because the route did not check create()).
+
+    The default field set now lives in one place (_fields_or_default) and flows
+    into the model, the migration, the template and the test alike.
+    """
+
+    def _up_sql(self, project: Path) -> str:
+        ups = [m for m in (project / "migrations").glob("*.sql")
+               if not m.name.endswith(".down.sql")]
+        assert ups, "no UP migration was generated"
+        return ups[0].read_text()
+
+    def _model_fields(self, project: Path, model: str) -> set[str]:
+        """Field names declared on the generated ORM model, via a real AST parse."""
+        tree = ast.parse((project / "src" / "orm" / f"{model}.py").read_text())
+        cls = next(n for n in tree.body
+                   if isinstance(n, ast.ClassDef) and n.name == model)
+        return {t.id for stmt in cls.body if isinstance(stmt, ast.Assign)
+                for t in stmt.targets
+                if isinstance(t, ast.Name) and not t.id.startswith("_")
+                and t.id != "table_name"}
+
+    def test_model_without_fields_migration_has_every_declared_column(self, tmp_project):
+        """No --fields: the default `name` column must reach the migration."""
+        _gen_model("Todo", {})
+        declared = self._model_fields(tmp_project, "Todo")
+        up = self._up_sql(tmp_project)
+        assert "name" in declared, "model should declare the default name field"
+        for field in declared:
+            assert field in up, f"model declares {field!r} but the migration omits it:\n{up}"
+
+    def test_crud_without_fields_migration_has_every_declared_column(self, tmp_project):
+        """Same contract through `generate crud`, the path llms.txt recommends."""
+        _gen_crud("Todo", {})
+        declared = self._model_fields(tmp_project, "Todo")
+        up = self._up_sql(tmp_project)
+        for field in declared:
+            assert field in up, f"model declares {field!r} but the migration omits it:\n{up}"
+
+    def test_explicit_fields_still_all_reach_the_migration(self, tmp_project):
+        """Positive control: the --fields path must not regress."""
+        _gen_model("Product", {"fields": "title:string,price:float,in_stock:bool"})
+        up = self._up_sql(tmp_project)
+        for field in ("title", "price", "in_stock"):
+            assert field in up, f"{field!r} missing from migration:\n{up}"
+
+    def test_generated_schema_accepts_a_row_using_the_models_fields(self, tmp_project):
+        """End-to-end against REAL sqlite: run the generated DDL, then insert a
+        row using the model's own field names. This is what actually broke."""
+        import sqlite3
+        _gen_model("Todo", {})
+        declared = self._model_fields(tmp_project, "Todo") - {"id", "created_at"}
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(self._up_sql(tmp_project))
+        cols = ", ".join(sorted(declared))
+        placeholders = ", ".join("?" for _ in declared)
+        conn.execute(f"INSERT INTO todo ({cols}) VALUES ({placeholders})",
+                     ["x" for _ in declared])
+        assert conn.execute("SELECT COUNT(*) FROM todo").fetchone()[0] == 1
+        conn.close()
+
+    def test_create_route_checks_result_before_to_dict(self, tmp_project):
+        """The 500 was masked as AttributeError because the generated route did
+        item.to_dict() without checking create() (which returns False, never raises)."""
+        _gen_crud("Todo", {})
+        route = (tmp_project / "src" / "routes" / "todos.py").read_text()
+        assert "is False" in route, "generated route must check create()/save() result"
+        assert route.index("is False") < route.index("to_dict(), 201"), \
+            "the guard must come before to_dict()"

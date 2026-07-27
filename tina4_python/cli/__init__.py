@@ -110,6 +110,21 @@ def _parse_fields(fields_str: str) -> list[tuple[str, str]]:
     return result
 
 
+# Called without --fields, the generators fall back to a single `name` string
+# column. That default MUST be materialised here, in one place, and then flow
+# into the model, the migration, the template and the test alike. It used to
+# live only inside the model template, so `generate model X` / `generate crud X`
+# wrote a model declaring `name` while the migration - built from the parsed
+# field list, which was empty - created only id + created_at. The first write
+# then failed with "table x has no column named name".
+DEFAULT_FIELDS: list[tuple[str, str]] = [("name", "string")]
+
+
+def _fields_or_default(fields_str: str) -> list[tuple[str, str]]:
+    """Parsed --fields, or the default single `name` column when none given."""
+    return _parse_fields(fields_str) or list(DEFAULT_FIELDS)
+
+
 def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
     """Parse --key value and --flag from args. Returns (flags, positional)."""
     # Boolean-only flags that never take a value argument
@@ -1083,7 +1098,7 @@ def _gen_model(name: str, flags: dict, *, emit_test: bool = True):
     SQLite roundtrip test. Composite generators (crud/auth) pass emit_test=False
     and emit their own broader test instead.
     """
-    fields = _parse_fields(flags.get("fields", ""))
+    fields = _fields_or_default(flags.get("fields", ""))
     table = _to_table(name)
 
     # Determine which ORM field types we need to import
@@ -1091,20 +1106,15 @@ def _gen_model(name: str, flags: dict, *, emit_test: bool = True):
     for _, ftype in fields:
         info = FIELD_TYPE_MAP.get(ftype, FIELD_TYPE_MAP["string"])
         used_types.add(info["orm"])
-    if not fields:
-        used_types.add("StringField")
     used_types.add("DateTimeField")  # for created_at
 
     imports = ", ".join(sorted(used_types))
 
     # Build field lines
     field_lines = [f"    id = IntegerField(primary_key=True, auto_increment=True)"]
-    if fields:
-        for fname, ftype in fields:
-            info = FIELD_TYPE_MAP.get(ftype, FIELD_TYPE_MAP["string"])
-            field_lines.append(f"    {fname} = {info['orm']}()")
-    else:
-        field_lines.append("    name = StringField()")
+    for fname, ftype in fields:
+        info = FIELD_TYPE_MAP.get(ftype, FIELD_TYPE_MAP["string"])
+        field_lines.append(f"    {fname} = {info['orm']}()")
     field_lines.append("    created_at = DateTimeField()")
 
     # Write model file
@@ -1227,6 +1237,8 @@ async def get_{singular}(request, response):
 async def create_{singular}(request, response):
     """Create a new {singular}. {write_doc}"""
 {ext_create}    item = {model}.create(request.body)
+    if item is False:
+        return response({{"error": "Could not create {singular}"}}, 400)
     return response(item.to_dict(), 201)
 
 
@@ -1241,7 +1253,8 @@ async def update_{singular}(request, response):
 {ext_update}    for key, value in request.body.items():
         if hasattr(item, key) and key != "id":
             setattr(item, key, value)
-    item.save()
+    if item.save() is False:
+        return response({{"error": "Could not update {singular}"}}, 400)
     return response(item.to_dict())
 
 
@@ -1359,7 +1372,7 @@ def _gen_crud(name: str, flags: dict):
 
     tina4python generate crud Product --fields "name:string,price:float"
     """
-    fields = _parse_fields(flags.get("fields", ""))
+    fields = _fields_or_default(flags.get("fields", ""))
     table = _to_table(name)
     route_name = table + "s"  # routes are plural
 
@@ -1381,7 +1394,7 @@ def _gen_crud(name: str, flags: dict):
     template_path = template_dir / f"{route_name}.twig"
     if not template_path.exists():
         # Build column headers from fields
-        cols = [f for f, _ in fields] if fields else ["name"]
+        cols = [f for f, _ in fields]
         th = "\n                ".join(f"<th>{c.replace('_', ' ').title()}</th>" for c in cols)
         td = "\n                ".join(f"<td>{{{{ item.{c} }}}}</td>" for c in cols)
 
@@ -2685,14 +2698,14 @@ def _gen_view(name: str, flags: dict = None):
     tina4python generate view Product --fields "name:string,price:float"
     """
     flags = flags or {}
-    fields = _parse_fields(flags.get("fields", ""))
+    fields = _fields_or_default(flags.get("fields", ""))
     table = _to_table(name)
     route_name = table + "s"
 
     target = Path("src/templates/pages")
     target.mkdir(parents=True, exist_ok=True)
 
-    cols = [f for f, _ in fields] if fields else ["name"]
+    cols = [f for f, _ in fields]
 
     # List view
     list_path = target / f"{route_name}.twig"
