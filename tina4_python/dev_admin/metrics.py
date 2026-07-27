@@ -41,6 +41,23 @@ def _resolve_root(root: str = "src") -> str:
     return framework_dir
 
 
+def resolve_scan_target(root: str = "src") -> tuple[str, str]:
+    """Return (directory to scan, scan_mode) for any metrics producer.
+
+    The CLI engine is language-agnostic and cannot know which directory holds a
+    framework package, so root resolution and the "framework" label stay here -
+    shared by this module and the engine adapter so the two never disagree about
+    what was measured.
+    """
+    resolved = _resolve_root(root)
+    framework_dir = str(Path(__import__("tina4_python").__file__).parent)
+    resolved_path = Path(resolved)
+    scanning_framework = (
+        resolved_path == Path(framework_dir) or str(resolved_path).startswith(framework_dir)
+    )
+    return resolved, "framework" if scanning_framework else "project"
+
+
 def quick_metrics(root: str = "src") -> dict:
     """Scan project files and return instant metrics."""
     root = _resolve_root(root)
