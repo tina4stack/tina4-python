@@ -51,6 +51,10 @@ CONTEXT = {
     "list": ["a", "b", "c"],
     "map": {"a": 1, "b": 2},
     "html": "<b>&x</b>",
+    # Non-finite floats: the tina4-php#184 payload. JSON has no Infinity or
+    # NaN, so both must serialize as null in every framework.
+    "inf_val": float("inf"),
+    "nan_map": {"v": float("nan")},
 }
 
 
@@ -73,7 +77,7 @@ EXPECTED = dict(_load(FIXTURES / "frond_expression_expected.txt"))
 def test_corpus_and_answer_key_line_up():
     """Guard the guard: a corpus entry with no expected value would otherwise
     pass by never being asserted."""
-    assert len(CORPUS) == 72
+    assert len(CORPUS) == 79
     assert {label for label, _ in CORPUS} == set(EXPECTED)
 
 
@@ -147,15 +151,59 @@ def test_not_operator_in_a_standalone_output_expression():
     assert engine.render_string('{{ "not a var" }}', ctx) == "not a var"
 
 
-def test_json_encode_is_html_escaped_with_raw_as_the_opt_out():
-    """``|json_encode`` escapes; ``|json_encode|raw`` does not.
+def test_json_encode_emits_json_that_is_valid_in_a_script_block():
+    """``|json_encode`` output must parse as JSON AND run as JavaScript.
 
-    Python, Ruby and Node always escaped here; PHP alone returned raw JSON, and
-    raw JSON dropped into an HTML attribute is an injection vector. PHP was
-    changed to match the other three in 3.13.87. The ``<script>`` use case is
-    served by an explicit ``|raw`` at the call site.
+    3.13.88 reverts 3.13.87's HTML-escaping of this filter. Entity-encoding the
+    payload produced ``{&quot;a&quot;:1}``, which is a SyntaxError inside
+    ``<script>`` -- it broke the filter's primary use in all four frameworks at
+    once. The safe form escapes only the characters that are dangerous in HTML,
+    as JSON ``\\uXXXX`` escapes, which keeps the result valid JSON, valid
+    JavaScript, unable to terminate a ``</script>``, and safe in a single-quoted
+    attribute. Same model as Jinja2's ``tojson``.
     """
     engine = Frond()
-    ctx = {"data": {"a": 1}}
-    assert engine.render_string("{{ data|json_encode }}", ctx) == "{&quot;a&quot;:1}"
-    assert engine.render_string("{{ data|json_encode|raw }}", ctx) == '{"a":1}'
+    assert engine.render_string("{{ data|json_encode }}", {"data": {"a": 1}}) == '{"a":1}'
+    # Negative case: the escaped characters must be \uXXXX, never HTML entities,
+    # and </script> must not survive intact.
+    out = engine.render_string("{{ data|json_encode }}", {"data": {"x": "</script>&'"}})
+    assert out == '{"x":"\\u003c/script\\u003e\\u0026\\u0027"}'
+    assert "&quot;" not in out and "</script>" not in out
+    # |raw is now a no-op rather than the required opt-out.
+    assert engine.render_string("{{ data|json_encode|raw }}", {"data": {"a": 1}}) == '{"a":1}'
+
+
+def test_json_encode_never_emits_a_non_finite_literal(tmp_path):
+    """tina4-php#184 (justin-k-bruce): a non-finite value must become ``null``.
+
+    The four frameworks each failed differently -- Python wrote a bare
+    ``Infinity`` (not JSON), PHP's json_encode returned false (empty output),
+    Ruby fell back to inspect output. Node was the only one already correct.
+    ``null`` is what ``JSON.stringify`` has always produced and the only answer
+    the JSON grammar allows.
+    """
+    engine = Frond()
+    inf, nan = float("inf"), float("nan")
+    assert engine.render_string("{{ v|json_encode }}", {"v": inf}) == "null"
+    assert engine.render_string("{{ v|json_encode }}", {"v": -inf}) == "null"
+    assert engine.render_string("{{ v|json_encode }}", {"v": nan}) == "null"
+    assert engine.render_string("{{ v|json_encode }}", {"v": {"a": 1, "b": inf}}) == '{"a":1,"b":null}'
+    assert engine.render_string("{{ v|json_encode }}", {"v": [1, nan]}) == "[1,null]"
+    # Negative case: none of the old failure outputs may appear, and the result
+    # must never be empty -- an empty payload is a silent, invisible failure.
+    for bad in ("Infinity", "NaN", "false", "=>"):
+        assert bad not in engine.render_string("{{ v|json_encode }}", {"v": {"b": inf}})
+    assert engine.render_string("{{ v|json_encode }}", {"v": inf}) != ""
+
+
+def test_json_encode_and_to_json_and_tojson_are_one_behaviour():
+    """The three spellings must not drift apart -- they share one serializer."""
+    engine = Frond()
+    ctx = {"v": {"a": 1, "u": "a/b", "n": "caf\u00e9", "bad": float("inf")}}
+    out = engine.render_string("{{ v|json_encode }}", ctx)
+    assert out == engine.render_string("{{ v|to_json }}", ctx)
+    assert out == engine.render_string("{{ v|tojson }}", ctx)
+    # Slashes stay unescaped and non-ASCII stays raw -- PHP alone used to write
+    # "a\\/b", and Python alone used to write "caf\\u00e9".
+    assert '"u":"a/b"' in out
+    assert "caf\u00e9" in out
