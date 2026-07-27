@@ -14,6 +14,7 @@ import re
 import html
 import hashlib
 import json
+import math
 import secrets
 import time
 from functools import lru_cache
@@ -1187,6 +1188,83 @@ def _dict_replace(s: str, mapping: dict) -> str:
 
 
 # Built-in filters
+def _json_safe(value) -> "SafeString":
+    """Serialize to JSON that is valid JSON, valid JavaScript, and safe in HTML.
+
+    THE cross-framework contract for ``json_encode`` / ``to_json`` / ``tojson``.
+    Keep the four implementations byte-identical; ``frond_expression_corpus.txt``
+    locks it.
+
+    Three things this must never do, each of which was a real bug:
+
+    1. **Never emit a non-finite literal.** ``json.dumps`` writes bare
+       ``Infinity``/``NaN`` by default. Neither is JSON -- ``JSON.parse`` throws
+       -- so the payload only survives when inlined straight into a ``<script>``.
+       The JSON spec has no infinity, so a non-finite number serializes as
+       ``null``, which is what ``JSON.stringify`` has always done. Reported as
+       tina4-php#184 by justin-k-bruce, who found it in production: two ``INF``
+       sort keys in a 657-row grid blanked the whole screen.
+    2. **Never emit nothing.** A serializer that fails must not collapse to an
+       empty string (or, worse, to something that still parses and means
+       something else). ``var ROWS = ;`` is at least a loud SyntaxError;
+       ``var ROWS = false;`` is valid JS carrying wrong data. Same fail-loud
+       contract the DB layer got: no swallow-to-empty.
+    3. **Never HTML-escape it.** Entity-encoding JSON produces
+       ``{&quot;a&quot;:1}``, which is a SyntaxError inside ``<script>`` -- it
+       breaks the filter's primary use. Instead escape only the characters that
+       are dangerous in HTML, as JSON ``\\uXXXX`` escapes, which keeps the output
+       valid JSON AND valid JS: ``</script>`` cannot terminate the block, and the
+       result is safe inside a single-quoted attribute. This is exactly what
+       Jinja2's ``tojson`` does, and it is why the result is marked SafeString.
+
+    U+2028 and U+2029 join that escape set. Both are legal inside a JSON string
+    and both were illegal inside a JavaScript string literal before ES2019, so an
+    unescaped one turns a valid payload into a SyntaxError on an older engine.
+
+    ``ensure_ascii=False`` keeps non-ASCII text as itself. PHP, Ruby and Node all
+    emit raw UTF-8; Python was the only one escaping to ``\\uXXXX``, so the four
+    disagreed byte-for-byte on any accented character. Raw wins on ADR-0004 -- it
+    is shorter, readable, and still valid JSON.
+
+    The sanitising walk runs ONLY on the failure path, so a well-formed payload
+    pays nothing beyond the escape pass.
+    """
+    try:
+        # allow_nan=False turns a non-finite into a raised ValueError instead of
+        # a bare Infinity token, so the happy path stays a single dumps() call.
+        text = json.dumps(
+            value, separators=(",", ":"), allow_nan=False, ensure_ascii=False, default=str
+        )
+    except (ValueError, TypeError):
+        text = json.dumps(
+            _json_sanitize(value), separators=(",", ":"), ensure_ascii=False, default=str
+        )
+    return SafeString(
+        text.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("'", "\\u0027")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def _json_sanitize(value):
+    """Replace anything json.dumps refuses with a JSON-representable stand-in.
+
+    Only reached when the happy path raised. Non-finite floats become ``None``
+    (the JSON spec has no Infinity/NaN); anything else unencodable is left for
+    ``default=str`` to stringify.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_sanitize(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_sanitize(v) for v in value]
+    return value
+
+
 _BUILTIN_FILTERS = {
     "upper": lambda v, *a: str(v).upper(),
     "lower": lambda v, *a: str(v).lower(),
@@ -1220,9 +1298,9 @@ _BUILTIN_FILTERS = {
     "int": lambda v, *a: int(v) if v else 0,
     "float": lambda v, *a: float(v) if v else 0.0,
     "string": lambda v, *a: str(v),
-    "json_encode": lambda v, *a: json.dumps(v, separators=(",", ":")),
-    "to_json": lambda v, *a: SafeString(json.dumps(v, default=str, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")),
-    "tojson": lambda v, *a: SafeString(json.dumps(v, default=str, separators=(",", ":")).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")),
+    "json_encode": lambda v, *a: _json_safe(v),
+    "to_json": lambda v, *a: _json_safe(v),
+    "tojson": lambda v, *a: _json_safe(v),
     "js_escape": lambda v, *a: SafeString(str(v).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")),
     "json_decode": lambda v, *a: json.loads(v) if isinstance(v, str) else v,
     "keys": lambda v, *a: list(v.keys()) if isinstance(v, dict) else [],
