@@ -17,10 +17,21 @@ COPY pyproject.toml README.md ./
 COPY tina4_python/ tina4_python/
 RUN pip install --no-cache-dir --prefix=/install .
 
-# Strip unused stdlib, caches, dist-info
+# Strip unused stdlib and caches.
+#
+# DO NOT prune dist-info from /install/lib. That line used to be here and it cost
+# the framework its version: __init__.py resolves __version__ from pyproject.toml
+# (absent in an installed package), then importlib.metadata.version(), then a
+# floor literal. Deleting the dist-info directory removes the ONLY metadata the
+# second path can read, so importlib raised PackageNotFoundError and every image
+# fell through to the literal -- the published tina4-python:3.13.92 served
+# "version": "3.13.56" on /health, 36 releases stale.
+#
+# It bought nothing. tina4-python has zero runtime dependencies, so /install/lib
+# holds one package and one dist-info: about 20 KB of an image that measures 41 MB
+# on amd64. Trading correct version reporting for 0.05% of the image is a bad deal.
 RUN set -e; \
     find /usr/local/lib/python3.13 /install/lib -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null; \
-    find /install/lib -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null; \
     rm -rf /usr/local/lib/python3.13/test \
            /usr/local/lib/python3.13/tkinter \
            /usr/local/lib/python3.13/idlelib \

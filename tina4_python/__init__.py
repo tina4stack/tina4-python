@@ -43,7 +43,15 @@ def _resolve_version() -> str:
             pass
     except Exception:
         pass
-    return "3.13.56"
+    # Floor literal, reached only when BOTH lookups above miss. That is not
+    # theoretical: the Docker build used to prune dist-info from the installed
+    # package, so path 2 raised PackageNotFoundError and the published
+    # tina4-python:3.13.92 image served this literal on /health -- then reading
+    # "3.13.56", 36 releases stale, because nothing kept it current.
+    #
+    # test_version_constant.py now asserts this literal equals the pyproject
+    # version, so the release bump cannot leave it behind again.
+    return "3.13.92"
 
 
 __version__ = _resolve_version()
