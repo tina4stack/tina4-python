@@ -1,14 +1,14 @@
-# tina4stack/tina4-python:v3
+# docker.io/tina4stack/tina4-python
 # Base image for Tina4 Python apps
 #
 # Usage in your project:
-#   FROM tina4stack/tina4-python:v3
+#   FROM docker.io/tina4stack/tina4-python:3.13.92
 #   COPY . .
 #   CMD ["python", "app.py"]
 #
 # Build:
-#   docker build -t tina4stack/tina4-python:v3 .
-#   docker push tina4stack/tina4-python:v3
+#   docker build -t docker.io/tina4stack/tina4-python:3.13.92 .
+#   docker push docker.io/tina4stack/tina4-python:3.13.92
 
 FROM python:3.13-alpine3.23 AS builder
 RUN apk add --no-cache build-base libffi-dev
