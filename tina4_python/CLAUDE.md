@@ -794,11 +794,18 @@ db.insert("users", {"name": "Alice", "email": "alice@example.com"})
 # Insert multiple
 db.insert("users", [{"name": "Bob"}, {"name": "Eve"}])
 
-# Update (by primary key — default "id")
+# Update (the primary key in the data IS the filter — introspected, not assumed)
 db.update("users", {"id": 1, "name": "Alice Updated"})
 
-# Delete
+# Update many rows — the filter must be explicit
+db.update("users", {"active": 0}, "last_login < ?", ["2025-01-01"])
+
+# Delete (dict filter or string + params, both accepted)
 db.delete("users", {"id": 1})
+db.delete("users", "age < ?", [18])
+
+# Empty a table — explicit, never accidental
+db.truncate("users")
 
 # Raw query
 result = db.fetch("SELECT * FROM users WHERE age > ?", [18])

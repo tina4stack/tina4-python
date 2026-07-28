@@ -165,8 +165,10 @@ db.fetch_one(sql, params=None) -> dict | None
 db.execute(sql, params=None) -> True | DatabaseResult  # True for writes, DatabaseResult for RETURNING/CALL/EXEC; RAISES on SQL error (never returns False — cause on get_error()). Wrap in try/except, don't test the return.
 db.execute_many(sql, params=None) -> DatabaseResult
 db.insert(table_name, data: dict | list) -> DatabaseResult
-db.update(table_name, data: dict) -> DatabaseResult
-db.delete(table_name, data: dict) -> DatabaseResult
+db.update(table_name, data: dict, filter=None, params=None) -> DatabaseResult
+db.delete(table_name, filter: dict | str | list, params=None) -> DatabaseResult
+db.truncate(table_name) -> DatabaseResult   # remove every row, explicitly
+db.primary_key(table_name) -> str | None    # introspected PK column (cached)
 db.get_last_id() -> int | str | None  # Last insert ID from execute/insert
 db.get_error() -> str | None          # Last execute() error message
 db.start_transaction()

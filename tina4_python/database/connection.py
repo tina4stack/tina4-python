@@ -188,6 +188,7 @@ class Database:
         self._connect_kwargs = kwargs  # Extra kwargs passed through to adapter.connect()
         self.last_error = None  # Last execute() error message
         self._last_id = None   # Last insert ID from execute/insert
+        self._pk_cache = {}    # table -> primary-key column name (or None)
 
         if self.pool_size > 0:
             # Pooled mode — create a ConnectionPool with lazy adapter creation
@@ -681,19 +682,112 @@ class Database:
             self._last_id = result.last_id
         return result
 
+    def primary_key(self, table: str) -> str | None:
+        """The table's primary-key column, introspected once and cached.
+
+        Uses the cross-engine ``get_columns()`` contract (v3.13.14, #48), which
+        reports ``primary_key`` per column on every adapter. Returns None when the
+        table has no primary key or cannot be introspected.
+        """
+        if table not in self._pk_cache:
+            try:
+                columns = self._get_adapter().get_columns(table)
+                self._pk_cache[table] = next(
+                    (c["name"] for c in columns if c.get("primary_key")), None
+                )
+            except Exception:  # noqa: BLE001 - a missing table is not an error here
+                self._pk_cache[table] = None
+        return self._pk_cache[table]
+
+    def _as_where(self, filter_sql, params):
+        """Normalise a filter to ``(sql, params)``, accepting a dict or a string.
+
+        The declared type on ``delete`` has always been ``str | dict | list``, but
+        only the base adapter honoured the dict and every engine overrides it, so a
+        dict landed in the SQL string verbatim. Normalising here makes the declared
+        type true for every engine at once.
+        """
+        if isinstance(filter_sql, dict):
+            if not filter_sql:
+                return "", []
+            where = " AND ".join(
+                f"{self.quote_identifier(k)} = ?" for k in filter_sql
+            )
+            return where, list(filter_sql.values())
+        return filter_sql, params or []
+
     def update(self, table: str, data: dict,
-               filter_sql: str = "", params: list = None) -> DatabaseResult:
+               filter_sql: str | dict = "", params: list = None) -> DatabaseResult:
+        """Update rows. A write with no filter is an error, not a full-table write.
+
+        With no explicit filter, the primary key is taken out of ``data`` and used
+        as the WHERE clause. With neither a filter nor a primary key in ``data``,
+        this raises rather than overwriting every row (audit feature 4, P1).
+        """
+        filter_sql, params = self._as_where(filter_sql, params)
+
+        if not filter_sql:
+            pk = self.primary_key(table)
+            if pk is None or pk not in data:
+                raise ValueError(
+                    f"update requires a filter or a primary key in the data; "
+                    f"pass filter explicitly to update multiple rows "
+                    f"(table={table!r}, primary key={pk!r}). "
+                    f"To empty a table use truncate({table!r})."
+                )
+            data = dict(data)
+            pk_value = data.pop(pk)
+            if not data:
+                raise ValueError(
+                    f"update was given only the primary key {pk!r} and no columns "
+                    f"to set (table={table!r})"
+                )
+            filter_sql = f"{self.quote_identifier(pk)} = ?"
+            params = [pk_value]
+
         if self._cache_enabled:
             self._cache_invalidate()
-        adapter = self._get_adapter()
-        return adapter.update(table, data, filter_sql, params)
+        result = self._get_adapter().update(table, data, filter_sql, params)
+        return self._without_last_id(result)
 
     def delete(self, table: str,
                filter_sql: str | dict | list = "", params: list = None) -> DatabaseResult:
+        """Delete rows. A filterless delete raises; use ``truncate()`` to empty."""
+        if isinstance(filter_sql, list):
+            total = 0
+            for row_filter in filter_sql:
+                total += self.delete(table, row_filter).affected_rows
+            return DatabaseResult(affected_rows=total)
+
+        filter_sql, params = self._as_where(filter_sql, params)
+        if not filter_sql:
+            raise ValueError(
+                f"delete requires a filter (table={table!r}). "
+                f"To remove every row use truncate({table!r})."
+            )
+
         if self._cache_enabled:
             self._cache_invalidate()
-        adapter = self._get_adapter()
-        return adapter.delete(table, filter_sql, params)
+        result = self._get_adapter().delete(table, filter_sql, params)
+        return self._without_last_id(result)
+
+    def truncate(self, table: str) -> DatabaseResult:
+        """Remove every row. The explicit spelling of a whole-table delete."""
+        if self._cache_enabled:
+            self._cache_invalidate()
+        result = self._get_adapter().delete(table, "1 = 1", [])
+        return self._without_last_id(result)
+
+    @staticmethod
+    def _without_last_id(result: DatabaseResult) -> DatabaseResult:
+        """``last_id`` is insert-only, per the documented contract.
+
+        PHP already does this via ``writeResult($adapter, withLastId: false)``;
+        Python reported the connection's last insert id on an UPDATE.
+        """
+        if result is not None and getattr(result, "last_id", None) is not None:
+            result.last_id = None
+        return result
 
     def start_transaction(self):
         """Begin a transaction. Pins the adapter to this thread for the
