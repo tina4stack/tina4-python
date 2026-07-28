@@ -682,21 +682,25 @@ class Database:
             self._last_id = result.last_id
         return result
 
-    def primary_key(self, table: str) -> str | None:
-        """The table's primary-key column, introspected once and cached.
+    def primary_key(self, table: str) -> list[str]:
+        """The table's primary-key columns, introspected once and cached.
+
+        Returns a LIST because a primary key may span several columns. A
+        composite key is still one primary key; it just has more than one
+        column. Returns ``[]`` when the table has no primary key or cannot be
+        introspected.
 
         Uses the cross-engine ``get_columns()`` contract (v3.13.14, #48), which
-        reports ``primary_key`` per column on every adapter. Returns None when the
-        table has no primary key or cannot be introspected.
+        reports ``primary_key`` per column on every adapter.
         """
         if table not in self._pk_cache:
             try:
                 columns = self._get_adapter().get_columns(table)
-                self._pk_cache[table] = next(
-                    (c["name"] for c in columns if c.get("primary_key")), None
-                )
+                self._pk_cache[table] = [
+                    c["name"] for c in columns if c.get("primary_key")
+                ]
             except Exception:  # noqa: BLE001 - a missing table is not an error here
-                self._pk_cache[table] = None
+                self._pk_cache[table] = []
         return self._pk_cache[table]
 
     def _as_where(self, filter_sql, params):
@@ -727,23 +731,30 @@ class Database:
         filter_sql, params = self._as_where(filter_sql, params)
 
         if not filter_sql:
-            pk = self.primary_key(table)
-            if pk is None or pk not in data:
+            pk_columns = self.primary_key(table)
+            missing = [c for c in pk_columns if c not in data]
+            if not pk_columns or missing:
                 raise ValueError(
-                    f"update requires a filter or a primary key in the data; "
-                    f"pass filter explicitly to update multiple rows "
-                    f"(table={table!r}, primary key={pk!r}). "
+                    f"update requires a filter or the complete primary key in the "
+                    f"data; pass filter explicitly to update multiple rows "
+                    f"(table={table!r}, primary key={pk_columns!r}, "
+                    f"missing from data={missing!r}). "
                     f"To empty a table use truncate({table!r})."
                 )
+            # Every primary-key column becomes part of the WHERE clause. A
+            # composite key that used only its first column would match every
+            # row sharing that value - the data-loss bug this method exists to
+            # prevent, reintroduced.
             data = dict(data)
-            pk_value = data.pop(pk)
+            params = [data.pop(c) for c in pk_columns]
             if not data:
                 raise ValueError(
-                    f"update was given only the primary key {pk!r} and no columns "
-                    f"to set (table={table!r})"
+                    f"update was given only the primary key {pk_columns!r} and no "
+                    f"columns to set (table={table!r})"
                 )
-            filter_sql = f"{self.quote_identifier(pk)} = ?"
-            params = [pk_value]
+            filter_sql = " AND ".join(
+                f"{self.quote_identifier(c)} = ?" for c in pk_columns
+            )
 
         if self._cache_enabled:
             self._cache_invalidate()

@@ -125,3 +125,71 @@ def test_negative_update_and_delete_do_not_report_a_last_id(db):
     assert updated.last_id is None, "update reported a last_id"
     deleted = db.delete("t", {"id": 2})
     assert deleted.last_id is None, "delete reported a last_id"
+
+
+# --- composite primary keys ------------------------------------------------
+# A PK resolver that returns only the FIRST primary-key column reintroduces the
+# whole data-loss bug for composite-key tables: WHERE order_id = 1 matches every
+# row in that order. Owner-reported pain point, so it gets its own pairs.
+
+@pytest.fixture
+def composite(tmp_path):
+    """order_items keyed on (order_id, product_id) - three rows, two orders."""
+    database = Database(f"sqlite:///{tmp_path}/composite.db")
+    database.execute(
+        "CREATE TABLE order_items ("
+        " order_id INTEGER, product_id INTEGER, qty INTEGER,"
+        " PRIMARY KEY (order_id, product_id))"
+    )
+    database.insert("order_items", {"order_id": 1, "product_id": 5, "qty": 1})
+    database.insert("order_items", {"order_id": 1, "product_id": 6, "qty": 2})
+    database.insert("order_items", {"order_id": 2, "product_id": 5, "qty": 3})
+    return database
+
+
+def items(database):
+    return [
+        dict(r)
+        for r in database.fetch(
+            "SELECT * FROM order_items ORDER BY order_id, product_id"
+        ).records
+    ]
+
+
+def test_primary_key_returns_every_key_column(composite):
+    assert composite.primary_key("order_items") == ["order_id", "product_id"]
+
+
+def test_negative_primary_key_never_returns_only_the_first_key_column(composite):
+    pk = composite.primary_key("order_items")
+    assert len(pk) == 2, (
+        f"a composite primary key collapsed to {pk!r} - a WHERE built from this "
+        f"would match every row sharing the first column"
+    )
+
+
+def test_a_composite_keyed_update_touches_exactly_one_row(composite):
+    composite.update("order_items", {"order_id": 1, "product_id": 5, "qty": 99})
+    assert items(composite) == [
+        {"order_id": 1, "product_id": 5, "qty": 99},
+        {"order_id": 1, "product_id": 6, "qty": 2},
+        {"order_id": 2, "product_id": 5, "qty": 3},
+    ], "a composite-keyed update did not isolate one row"
+
+
+def test_negative_a_partial_composite_key_raises_rather_than_matching_many(composite):
+    """Only half the key given: must raise, never fall back to the half it has."""
+    before = items(composite)
+    with pytest.raises(ValueError, match="primary key"):
+        composite.update("order_items", {"order_id": 1, "qty": 42})
+    assert items(composite) == before, (
+        "a partial composite key modified rows - it matched on the first column"
+    )
+
+
+def test_delete_accepts_a_full_composite_key(composite):
+    composite.delete("order_items", {"order_id": 1, "product_id": 5})
+    assert items(composite) == [
+        {"order_id": 1, "product_id": 6, "qty": 2},
+        {"order_id": 2, "product_id": 5, "qty": 3},
+    ]
