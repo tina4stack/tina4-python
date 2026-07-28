@@ -207,8 +207,11 @@ class TestDevMailboxRoundTrip:
         messenger = create_messenger(
             from_address="bot@example.com", from_name="Bot"
         )
-        # Dev mode swaps send() for a local capture and exposes the mailbox.
+        # Capture mode exposes the mailbox. It does NOT swap send() any more --
+        # send() branches internally, so the object keeps one send with one
+        # signature (that swap was how the plain-text body ended up filed as a CC).
         assert isinstance(messenger.dev_mailbox, DevMailbox)
+        assert messenger.send.__func__ is Messenger.send
 
         send_result = messenger.send(
             to="dest@example.com",
@@ -233,10 +236,18 @@ class TestDevMailboxRoundTrip:
         assert listing[0]["id"] == msg_id
 
     def test_prod_mode_does_not_intercept_send(self, monkeypatch):
-        """Outside dev mode there is no DevMailbox and send() is the real SMTP path."""
+        """A CONFIGURED messenger has no DevMailbox and send() is the real SMTP path.
+
+        Updated with the 3.13.94 gate: capture follows whether sending is POSSIBLE,
+        not TINA4_DEBUG. Clearing debug alone no longer describes production -- with
+        no TINA4_MAIL_HOST there is nowhere to send and capturing is the right
+        answer, so the configured host is what makes this the real path.
+        """
         monkeypatch.setenv("TINA4_DEBUG", "false")
+        monkeypatch.delenv("TINA4_MAIL_CAPTURE", raising=False)
+        monkeypatch.setenv("TINA4_MAIL_HOST", "smtp.example.com")
         messenger = create_messenger()
-        # No local mailbox attached, and send is the bound method, not dev_send.
+        # No local mailbox attached, and send is the class's own method.
         assert not hasattr(messenger, "dev_mailbox")
         assert messenger.send.__func__ is Messenger.send
 

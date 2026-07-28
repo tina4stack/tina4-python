@@ -106,6 +106,11 @@ class Messenger:
                  encryption: str = None, use_tls: bool = None,
                  imap_host: str = None, imap_port: int = None):
         # SMTP (send) — priority: constructor > .env > sensible default
+        # Whether a host was actually CONFIGURED, which is not the same as
+        # self.host being set: self.host falls back to "localhost", so it is never
+        # empty and cannot answer "can this messenger send?". The dev-capture gate
+        # needs that answer, so record it here while the real inputs are in scope.
+        self._smtp_configured = bool(host or os.environ.get("TINA4_MAIL_HOST"))
         self.host = host or os.environ.get("TINA4_MAIL_HOST", "localhost")
         self.port = port or int(os.environ.get("TINA4_MAIL_PORT", "587"))
         self.username = username or os.environ.get("TINA4_MAIL_USERNAME", "")
@@ -141,6 +146,37 @@ class Messenger:
         """Add a default header to all outgoing emails."""
         self._default_headers[name] = value
 
+    def _should_capture(self) -> bool:
+        """Should send() capture to a local mailbox instead of talking to SMTP?
+
+        Availability decides, not verbosity. With no SMTP host configured sending
+        is impossible, so simulate it into a folder rather than failing -- that is
+        what makes a laptop with no mail server usable. ``TINA4_MAIL_CAPTURE``
+        forces capture even when a host IS configured, for anyone who wants
+        "never send real mail from this box".
+
+        ``TINA4_DEBUG`` deliberately does NOT gate this. Debug must still be able
+        to send: tying capture to it means nobody can test a real send from a dev
+        box, which is the common case.
+        """
+        from tina4_python.dotenv import is_truthy
+        if is_truthy(os.environ.get("TINA4_MAIL_CAPTURE", "")):
+            return True
+        return not self._smtp_configured
+
+    def _dev_mailbox(self) -> "DevMailbox":
+        """The local mailbox, created on first capture and reused after.
+
+        Attached lazily so a messenger that never captures never grows the
+        attribute -- callers test ``hasattr(messenger, "dev_mailbox")`` to ask
+        "is this a capturing messenger?".
+        """
+        mailbox = getattr(self, "dev_mailbox", None)
+        if mailbox is None:
+            mailbox = DevMailbox()
+            self.dev_mailbox = mailbox
+        return mailbox
+
     def send(self, to: str | list[str], subject: str, body: str,
              html: bool = False, text: str = None,
              cc: str | list[str] = None,
@@ -166,6 +202,21 @@ class Messenger:
         to_list = [to] if isinstance(to, str) else list(to)
         cc_list = [cc] if isinstance(cc, str) else list(cc or [])
         bcc_list = [bcc] if isinstance(bcc, str) else list(bcc or [])
+
+        # Dev capture is a BRANCH here, not a method swapped onto the instance.
+        # The swap was the cause of tina4-nodejs#42 in Python: dev_send declared
+        # (to, subject, body, html, cc, ...) while this method declares
+        # (to, subject, body, html, text, cc, ...), so one name meant two
+        # signatures -- send(to, subj, body, True, "plain text") filed the
+        # plain-text body as a CC RECIPIENT and reported success, and
+        # send(text=...) raised TypeError on a dev messenger.
+        if self._should_capture():
+            return self._dev_mailbox().capture(
+                to, subject, body, html, text,
+                cc=cc_list, bcc=bcc_list, reply_to=reply_to,
+                from_address=self.from_address, from_name=self.from_name,
+                attachments=attachments,
+            )
 
         has_attachments = bool(attachments)
         has_text_alt = text is not None and html
@@ -728,24 +779,44 @@ class DevMailbox:
         self._inbox_dir.mkdir(exist_ok=True)
 
     def capture(self, to: str | list[str], subject: str, body: str,
-                html: bool = False, cc: list[str] = None,
-                bcc: list[str] = None, reply_to: str = None,
+                html: bool = False, text: str = None,
+                cc: str | list[str] = None,
+                bcc: str | list[str] = None, reply_to: str = None,
                 from_address: str = "", from_name: str = "",
                 attachments: list = None) -> dict:
-        """Capture a message to the local outbox (instead of sending via SMTP)."""
+        """Capture a message to the local outbox (instead of sending via SMTP).
+
+        The parameter order MATCHES ``Messenger.send`` on purpose. It did not
+        before: send's 5th positional was ``text`` and capture's was ``cc``, so the
+        same call meant different things depending on which door it came through --
+        that mismatch IS tina4-nodejs#42.
+
+        BREAKING: ``text`` is now the 5th positional. A caller passing ``cc``
+        positionally must switch to the keyword form. Aligning the two signatures
+        is the fix; leaving them apart would preserve the bug.
+
+        cc/bcc are normalised HERE, at the boundary, so a message is well formed
+        however it arrived. Normalising in one caller only (which is what Python
+        did -- in dev_send, never in capture) means a direct caller stores a
+        malformed message and is told it succeeded, and a dev mailbox that accepts
+        a broken message defeats its own purpose.
+        """
         msg_id = f"{int(time.time() * 1000)}_{id(subject) & 0xFFFF:04x}"
         to_list = [to] if isinstance(to, str) else list(to)
+        cc_list = [cc] if isinstance(cc, str) else list(cc or [])
+        bcc_list = [bcc] if isinstance(bcc, str) else list(bcc or [])
 
         message = {
             "id": msg_id,
             "type": "outbox",
             "from": f"{from_name} <{from_address}>" if from_name else from_address,
             "to": to_list,
-            "cc": cc or [],
-            "bcc": bcc or [],
+            "cc": cc_list,
+            "bcc": bcc_list,
             "reply_to": reply_to or "",
             "subject": subject,
             "body": body,
+            "text": text,
             "html": html,
             "attachments": [
                 a if isinstance(a, str) else a.get("filename", "attachment")
@@ -909,31 +980,22 @@ def _is_dev_mode() -> bool:
 def create_messenger(**kwargs) -> Messenger:
     """Factory that returns a Messenger configured for the current environment.
 
-    In dev mode (TINA4_DEBUG=true), email sending is intercepted
-    by DevMailbox — no SMTP connection needed. The original Messenger.send()
-    is replaced with a local capture.
+    Returns ONE concrete type, always. When sending is impossible (no SMTP host
+    configured) or suppressed (``TINA4_MAIL_CAPTURE``), ``send()`` captures to a
+    local ``DevMailbox`` instead -- decided by a branch inside ``send()``, so the
+    object you get back has one ``send`` with one signature either way.
+
+    It no longer replaces ``send`` on the instance. That swap installed a function
+    with a DIFFERENT signature than ``Messenger.send`` under the same name, which
+    is how the documented call ``send(to, subj, body, True, "plain text")`` came to
+    file the plain-text body as a CC recipient and report success.
     """
     messenger = Messenger(**kwargs)
 
-    if _is_dev_mode():
-        mailbox = DevMailbox()
-        # Monkey-patch send to capture locally
-        _original_send = messenger.send
-
-        def dev_send(to, subject, body, html=False, cc=None, bcc=None,
-                     reply_to=None, attachments=None, headers=None):
-            return mailbox.capture(
-                to=to, subject=subject, body=body, html=html,
-                cc=[cc] if isinstance(cc, str) else (cc or []),
-                bcc=[bcc] if isinstance(bcc, str) else (bcc or []),
-                reply_to=reply_to,
-                from_address=messenger.from_address,
-                from_name=messenger.from_name,
-                attachments=attachments,
-            )
-
-        messenger.send = dev_send
-        messenger.dev_mailbox = mailbox
+    # Attach the mailbox eagerly when this messenger will capture, so callers can
+    # inspect it (and the dev admin panel can list it) before the first send.
+    if messenger._should_capture():
+        messenger.dev_mailbox = DevMailbox()
 
     return messenger
 

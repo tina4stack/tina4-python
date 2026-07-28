@@ -172,9 +172,38 @@ class TestCreateMessenger:
         assert messenger.dev_mailbox.count()["outbox"] == 1
 
     def test_prod_mode_uses_real_send(self, monkeypatch):
+        """A CONFIGURED messenger sends; it does not capture.
+
+        Updated with the 3.13.94 gate: capture is decided by whether sending is
+        possible, not by TINA4_DEBUG. This test previously only cleared
+        TINA4_DEBUG, which no longer says anything about production -- with no
+        TINA4_MAIL_HOST there is nowhere to send, so capturing is correct. What
+        makes this production is the configured host.
+        """
         monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        monkeypatch.delenv("TINA4_MAIL_CAPTURE", raising=False)
+        monkeypatch.setenv("TINA4_MAIL_HOST", "smtp.example.com")
         messenger = create_messenger()
         assert not hasattr(messenger, "dev_mailbox")
+
+    def test_debug_with_smtp_configured_still_sends(self, monkeypatch):
+        """Debug must NOT swallow mail. A dev box with a real SMTP host is
+        expected to be able to send, so TINA4_DEBUG alone never forces capture."""
+        monkeypatch.setenv("TINA4_DEBUG", "true")
+        monkeypatch.delenv("TINA4_MAIL_CAPTURE", raising=False)
+        monkeypatch.setenv("TINA4_MAIL_HOST", "smtp.example.com")
+        messenger = create_messenger()
+        assert not hasattr(messenger, "dev_mailbox"), (
+            "TINA4_DEBUG forced capture even though SMTP was configured - debug "
+            "must still be able to send real mail"
+        )
+
+    def test_capture_can_be_forced_with_smtp_configured(self, monkeypatch):
+        """The opt-in escape hatch for 'never send real mail from this box'."""
+        monkeypatch.setenv("TINA4_MAIL_HOST", "smtp.example.com")
+        monkeypatch.setenv("TINA4_MAIL_CAPTURE", "true")
+        messenger = create_messenger()
+        assert hasattr(messenger, "dev_mailbox")
 
     def test_dev_mailbox_html_capture(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TINA4_DEBUG", "true")
