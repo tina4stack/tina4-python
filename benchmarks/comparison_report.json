@@ -1,0 +1,89 @@
+{
+  "iterations": 50000,
+  "results": [
+    {
+      "benchmark": "JSON serialization",
+      "frameworks": {
+        "Tina4": {
+          "time_s": 0.06,
+          "ops_per_sec": 833874.2
+        },
+        "Flask": {
+          "time_s": 0.1605,
+          "ops_per_sec": 311489.7
+        },
+        "Starlette": {
+          "time_s": 0.0746,
+          "ops_per_sec": 669897.8
+        },
+        "Django": {
+          "time_s": 0.1751,
+          "ops_per_sec": 285604.8
+        }
+      }
+    },
+    {
+      "benchmark": "Template rendering",
+      "frameworks": {
+        "Tina4": {
+          "time_s": 15.0882,
+          "ops_per_sec": 3313.8
+        },
+        "Flask": {
+          "time_s": 0.9701,
+          "ops_per_sec": 51539.5
+        },
+        "Starlette": {
+          "time_s": 1.0571,
+          "ops_per_sec": 47300.7
+        },
+        "Django": {
+          "time_s": 6.0843,
+          "ops_per_sec": 8217.8
+        }
+      }
+    },
+    {
+      "benchmark": "URL routing (100 routes)",
+      "frameworks": {
+        "Tina4": {
+          "time_s": 0.2384,
+          "ops_per_sec": 209747.3
+        },
+        "Flask": {
+          "time_s": 0.1506,
+          "ops_per_sec": 332063.5
+        },
+        "Starlette": {
+          "time_s": 0.431,
+          "ops_per_sec": 115997.4
+        },
+        "Django": {
+          "time_s": 0.4679,
+          "ops_per_sec": 106851.3
+        }
+      }
+    },
+    {
+      "benchmark": "Plaintext response",
+      "frameworks": {
+        "Tina4": {
+          "time_s": 0.0066,
+          "ops_per_sec": 7614986.2
+        },
+        "Flask": {
+          "time_s": 0.111,
+          "ops_per_sec": 450610.1
+        },
+        "Starlette": {
+          "time_s": 0.0241,
+          "ops_per_sec": 2074961.5
+        },
+        "Django": {
+          "time_s": 0.1181,
+          "ops_per_sec": 423539.2
+        }
+      }
+    }
+  ]
+}

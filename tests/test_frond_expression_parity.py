@@ -77,7 +77,7 @@ EXPECTED = dict(_load(FIXTURES / "frond_expression_expected.txt"))
 def test_corpus_and_answer_key_line_up():
     """Guard the guard: a corpus entry with no expected value would otherwise
     pass by never being asserted."""
-    assert len(CORPUS) == 82
+    assert len(CORPUS) == 84
     assert {label for label, _ in CORPUS} == set(EXPECTED)
 
 
