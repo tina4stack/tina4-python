@@ -103,7 +103,36 @@ def test_negative_no_tag_can_disable_escaping_inside_a_sandbox():
         assert "<script>" not in out, f"{tpl} disabled escaping: {out!r}"
 
 
-# --- pair 5: what must NOT change ---------------------------------------
+# --- pair 5: escape is revocable too ------------------------------------
+# Python is immune to this BY CONSTRUCTION and these tests exist to keep it that
+# way. The ``escape`` filter returns a ``SafeString`` (engine.py), so escaping is
+# marked by a value the filter produces only when it actually RUNS -- deny it and
+# no SafeString exists, so the value is still auto-escaped. Ruby does the same;
+# PHP prepends a RAW_MARKER. Node instead set a flag from the filter NAME and
+# therefore DID emit live markup for a denied ``escape`` (fixed in 1eb1c4a).
+# Anyone who later "simplifies" escape to return a plain str reopens that hole in
+# this framework, so pin it.
+
+def test_negative_a_denied_escape_filter_never_produces_unescaped_output():
+    out = denied().render_string("{{ x|escape }}", {"x": XSS})
+    assert "<script>" not in out, (
+        f"a DENIED escape filter produced live markup: {out!r}. Escaping must be "
+        f"conferred by RUNNING the filter, never by its name."
+    )
+
+
+def test_negative_a_denied_e_filter_never_produces_unescaped_output():
+    out = denied().render_string("{{ x|e }}", {"x": XSS})
+    assert "<script>" not in out, f"a DENIED e filter produced live markup: {out!r}"
+
+
+def test_an_allowed_escape_filter_escapes_exactly_once():
+    """The guard must not cost the allowed path."""
+    e = Frond().sandbox(allowed_filters=["escape"], allowed_tags=["if"], allowed_vars=["x"])
+    assert e.render_string("{{ x|escape }}", {"x": XSS}) == ESCAPED
+
+
+# --- pair 6: what must NOT change ---------------------------------------
 # The ordinary gates were byte-identical across all four frameworks and are
 # correct. Guard them so the fix cannot alter them.
 
