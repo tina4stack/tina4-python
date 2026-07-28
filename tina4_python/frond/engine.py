@@ -1626,10 +1626,56 @@ class Frond:
             )
         """
         self._sandbox = True
-        self._allowed_filters = set(allowed_filters) if allowed_filters else None
-        self._allowed_tags = set(allowed_tags) if allowed_tags else None
-        self._allowed_vars = set(allowed_vars) if allowed_vars else None
+        # `is not None`, NOT truthiness: an EMPTY list means "permit nothing",
+        # while None means "permit everything". Testing truthiness collapsed the
+        # two, so a caller that computed an allow-list and got an empty result
+        # silently opened the sandbox instead of closing it.
+        self._allowed_filters = set(allowed_filters) if allowed_filters is not None else None
+        self._allowed_tags = set(allowed_tags) if allowed_tags is not None else None
+        self._allowed_vars = set(allowed_vars) if allowed_vars is not None else None
         return self
+
+    def _filter_permitted(self, fname: str) -> bool:
+        """Is this filter permitted to run under the current sandbox?
+
+        The single source of truth for "may this filter run", so the escaping
+        decision and the filter loop can never disagree.
+        """
+        if not self._sandbox or self._allowed_filters is None:
+            return True
+        return fname in self._allowed_filters
+
+    #: Node kinds that are TAGS a template author writes, mapped to the name
+    #: they type. Kinds absent from this map are structure (text, output,
+    #: comment, extends/block markers) and are never gated - blocking those
+    #: would stop the template rendering at all rather than restrict it.
+    _GATEABLE_TAGS = {
+        "if": "if",
+        "for": "for",
+        "set": "set",
+        "set_block": "set",
+        "include": "include",
+        "macro": "macro",
+        "from_import": "from",
+        "import_as": "import",
+        "cache": "cache",
+        "spaceless": "spaceless",
+        "autoescape": "autoescape",
+        "live": "live",
+    }
+
+    def _tag_permitted(self, kind: str) -> bool:
+        """Is this tag permitted under the current sandbox?
+
+        One gate for every tag, so the allow-list governs the whole tag
+        vocabulary instead of whichever names somebody remembered to check.
+        """
+        if not self._sandbox or self._allowed_tags is None:
+            return True
+        tag = self._GATEABLE_TAGS.get(kind)
+        if tag is None:
+            return True  # structural node, not an author-written tag
+        return tag in self._allowed_tags
 
     def unsandbox(self):
         """Disable sandbox mode."""
@@ -2017,6 +2063,14 @@ class Frond:
             if node.strip_before and output:
                 output[-1] = output[-1].rstrip()
 
+            # Sandbox: ONE tag gate, here at dispatch, so every tag is gated by
+            # construction and a tag added later is gated the day it is added.
+            # This replaced a single per-name conditional that covered `include`
+            # only, which let `{% autoescape false %}` turn escaping OFF from
+            # inside a sandbox that had not allowed it (audit feature 38, P1b).
+            if not self._tag_permitted(kind):
+                continue
+
             if kind == "output":
                 result = self._eval_var(node.expr, context)
                 output.append(self._to_output(result))
@@ -2042,10 +2096,9 @@ class Frond:
                     )
 
             elif kind == "include":
-                # Sandbox: check tag
-                if not (self._sandbox and self._allowed_tags is not None
-                        and "include" not in self._allowed_tags):
-                    output.append(self._handle_include(node.content, context))
+                # The sandbox tag gate now runs once at dispatch (above), so the
+                # per-name conditional that used to live here is gone.
+                output.append(self._handle_include(node.content, context))
 
             elif kind == "macro":
                 self._handle_macro(node, context)
@@ -2275,7 +2328,14 @@ class Frond:
         # the var_name eval lets a parenthesised pipe like `{{ (a|f) }}` resolve
         # too — the old code returned empty for that.
         value = _eval_expr(var_name, context, self._apply_filters)
-        is_safe = any(name in ("raw", "safe") for name, _ in filters)
+        # `raw`/`safe` suppress escaping only if the sandbox PERMITS them to run.
+        # Reading the filter name straight out of the parsed source meant a
+        # sandbox that DENIED raw still marked the value safe, so denying raw
+        # produced byte-identical output to allowing it (audit feature 38, P1).
+        is_safe = any(
+            name in ("raw", "safe") and self._filter_permitted(name)
+            for name, _ in filters
+        )
         value = self._apply_filters(value, filters, context)
 
         # Auto-escape HTML unless marked safe or SafeString
