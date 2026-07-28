@@ -27,6 +27,20 @@ class KafkaConnector:
     Methods: enqueue, dequeue, acknowledge, reject, size, clear, dead_letter, close.
     """
 
+    # Lowest Produce/Fetch versions Kafka 4.x still accepts.
+    #
+    # Kafka 4.0 removed message formats v0/v1, and with them Produce v0-v2 and
+    # Fetch v0-v3. A request at a removed version is NOT answered with an error
+    # code -- the broker logs UnsupportedVersionException and closes the socket, so
+    # the client only sees EOF. These are the first versions carrying RecordBatch
+    # v2, which _encode_record_batch/_decode_first_record speak.
+    #
+    # This path only runs when confluent-kafka is ABSENT (see __init__), which is
+    # why the bug hid for so long: CI installs confluent-kafka, so the raw path was
+    # never exercised and its tests passed without touching this code.
+    PRODUCE_VERSION = 3
+    FETCH_VERSION = 4
+
     def __init__(self, **config):
         self._brokers = config.get(
             "brokers", os.environ.get("TINA4_KAFKA_BROKERS", "localhost:9092")
@@ -299,109 +313,278 @@ class KafkaConnector:
         self._send_request(header + body)
         self._read_response()
 
+    # ── Record format v2 primitives ──────────────────────────────────
+
+    _CRC32C_TABLE = None
+
+    @classmethod
+    def _crc32c(cls, data: bytes) -> int:
+        """CRC32C (Castagnoli) -- what record format v2 requires.
+
+        zlib.crc32 is CRC-32/ISO-HDLC, a DIFFERENT polynomial: using it produces a
+        batch the encoder happily builds and the broker silently rejects. The
+        stdlib has no CRC32C, and Tina4 is zero-dependency, so the table is built
+        once here (verified against the spec vector: crc32c(b"123456789") ==
+        0xE3069283).
+        """
+        if cls._CRC32C_TABLE is None:
+            poly = 0x82F63B78  # reversed Castagnoli polynomial
+            table = []
+            for i in range(256):
+                crc = i
+                for _ in range(8):
+                    crc = (crc >> 1) ^ (poly if crc & 1 else 0)
+                table.append(crc)
+            cls._CRC32C_TABLE = table
+
+        table = cls._CRC32C_TABLE
+        crc = 0xFFFFFFFF
+        for b in data:
+            crc = table[(crc ^ b) & 0xFF] ^ (crc >> 8)
+        return crc ^ 0xFFFFFFFF
+
+    @staticmethod
+    def _varint(value: int) -> bytes:
+        """Zigzag LEB128 -- how record format v2 encodes lengths and deltas."""
+        u = (value << 1) ^ (value >> 63)  # zigzag; >> is arithmetic in Python
+        out = bytearray()
+        while True:
+            byte = u & 0x7F
+            u >>= 7
+            if u:
+                out.append(byte | 0x80)
+            else:
+                out.append(byte)
+                return bytes(out)
+
+    @staticmethod
+    def _read_varint(buf: bytes, pos: int) -> tuple[int, int]:
+        """Read one zigzag LEB128 varint. Returns (value, new_pos)."""
+        result = 0
+        shift = 0
+        while pos < len(buf):
+            b = buf[pos]
+            pos += 1
+            result |= (b & 0x7F) << shift
+            if not (b & 0x80):
+                break
+            shift += 7
+        return (result >> 1) ^ -(result & 1), pos
+
+    def _encode_record_batch(self, key: bytes, value: bytes) -> bytes:
+        """Encode one record as a RecordBatch v2.
+
+        Kafka 4.x REMOVED message formats v0/v1 and with them Produce v0-v2 and
+        Fetch v0-v3. A removed version is not answered with an error code: the
+        broker logs
+          UnsupportedVersionException: Received request for api with key 0
+          (Produce) and unsupported version 0
+        and CLOSES THE SOCKET, so the client only sees EOF. (kafka-broker-api-
+        versions.sh still advertises "Produce(0): 0 to 13" -- the advertised range
+        and the handler disagree; trust the broker log.)
+        """
+        timestamp = int(time.time() * 1000)
+
+        record_body = (
+            struct.pack("!B", 0)               # attributes (unused, must be 0)
+            + self._varint(0)                  # timestampDelta
+            + self._varint(0)                  # offsetDelta
+            + self._varint(len(key)) + key
+            + self._varint(len(value)) + value
+            + self._varint(0)                  # header count
+        )
+        record = self._varint(len(record_body)) + record_body
+
+        after_crc = (
+            struct.pack("!H", 0)               # attributes (no compression)
+            + struct.pack("!i", 0)             # lastOffsetDelta (1 record => 0)
+            + struct.pack("!q", timestamp)     # baseTimestamp
+            + struct.pack("!q", timestamp)     # maxTimestamp
+            + struct.pack("!q", -1)            # producerId (not idempotent)
+            + struct.pack("!h", -1)            # producerEpoch
+            + struct.pack("!i", -1)            # baseSequence
+            + struct.pack("!i", 1)             # record count
+            + record
+        )
+
+        after_length = (
+            struct.pack("!i", -1)              # partitionLeaderEpoch
+            + struct.pack("!B", 2)             # magic = 2 (record format v2)
+            + struct.pack("!I", self._crc32c(after_crc))
+            + after_crc
+        )
+
+        return struct.pack("!q", 0) + struct.pack("!i", len(after_length)) + after_length
+
     def _send_produce(self, topic: str, key: str, value: str):
-        header = self._request_header(0, 0)
+        """Send a ProduceRequest v3 -- the lowest version Kafka 4.x still accepts.
 
-        key_bytes = key.encode("utf-8")
-        value_bytes = value.encode("utf-8")
+        Topic auto-creation is ASYNCHRONOUS, so a brand-new topic answers
+        UNKNOWN_TOPIC_OR_PARTITION (3) or LEADER_NOT_AVAILABLE (5) on the first
+        produce. Both are retriable. This matters: the previous implementation
+        never read the error code, so it reported SUCCESS on that race and
+        silently dropped the message.
+        """
+        retriable = (3, 5)
+        for attempt in range(1, 11):
+            error_code = self._produce_once(topic, key, value)
+            if error_code == 0:
+                return
+            if error_code not in retriable or attempt == 10:
+                raise RuntimeError(
+                    f"Kafka rejected the produce for topic {topic}: "
+                    f"error code {error_code}"
+                    + (f" after {attempt} attempts" if attempt > 1 else "")
+                )
+            self._known_topics.discard(topic)
+            self._ensure_topic_metadata(topic)
+            time.sleep(0.2)
 
-        # MessageSet format v0
-        message = (
-            struct.pack("!B", 0)  # magic byte
-            + struct.pack("!B", 0)  # attributes
-            + self._kafka_bytes(key_bytes)
-            + self._kafka_bytes(value_bytes)
-        )
-        crc = zlib.crc32(message) & 0xFFFFFFFF
-        full_message = struct.pack("!I", crc) + message
-
-        # MessageSet: offset(8) + message size(4) + message
-        message_set = struct.pack("!Q", 0) + struct.pack("!I", len(full_message)) + full_message
-
-        body = (
-            struct.pack("!H", 1)  # required acks = 1
-            + struct.pack("!I", 5000)  # timeout ms
-            + struct.pack("!I", 1)  # 1 topic
-            + self._kafka_string(topic)
-            + struct.pack("!I", 1)  # 1 partition
-            + struct.pack("!I", 0)  # partition 0
-            + struct.pack("!I", len(message_set))
-            + message_set
-        )
-
-        self._send_request(header + body)
-        self._read_response()
-
-    def _send_fetch(self, topic: str, offset: int) -> dict | None:
-        header = self._request_header(1, 0)
+    def _produce_once(self, topic: str, key: str, value: str) -> int:
+        """One ProduceRequest v3 round trip. Returns the partition error code."""
+        header = self._request_header(0, self.PRODUCE_VERSION)
+        batch = self._encode_record_batch(key.encode("utf-8"), value.encode("utf-8"))
 
         body = (
-            struct.pack("!i", -1)  # replica id
-            + struct.pack("!I", 5000)  # max wait ms
-            + struct.pack("!I", 1)  # min bytes
-            + struct.pack("!I", 1)  # 1 topic
+            struct.pack("!h", -1)              # transactional_id = null (v3+)
+            + struct.pack("!H", 1)             # acks = 1
+            + struct.pack("!I", 5000)          # timeout ms
+            + struct.pack("!I", 1)             # 1 topic
             + self._kafka_string(topic)
-            + struct.pack("!I", 1)  # 1 partition
-            + struct.pack("!I", 0)  # partition 0
-            + struct.pack("!Q", offset)  # fetch offset
-            + struct.pack("!I", 1048576)  # max bytes (1MB)
+            + struct.pack("!I", 1)             # 1 partition
+            + struct.pack("!I", 0)             # partition 0
+            + struct.pack("!I", len(batch))    # records as BYTES
+            + batch
         )
 
         self._send_request(header + body)
         response = self._read_response()
 
-        # Parse FetchResponse
-        pos = 4  # number of topics
+        pos = 4                                                   # topic array count
+        name_len = struct.unpack("!H", response[pos:pos + 2])[0]
+        pos += 2 + name_len
+        pos += 4                                                  # partition array count
+        pos += 4                                                  # partition index
+        return struct.unpack("!H", response[pos:pos + 2])[0]
+
+    def _decode_first_record(self, records: bytes) -> tuple[bytes, int] | None:
+        """Pull the FIRST record out of a RecordBatch v2 blob.
+
+        Returns (value_bytes, absolute_offset), or None when the blob holds no
+        usable record: an empty batch, or a control batch (transaction markers,
+        which carry no user payload).
+        """
+        if len(records) < 61:          # a v2 batch header alone is 61 bytes
+            return None
+
+        base_offset = struct.unpack("!q", records[0:8])[0]
+        magic = records[16]
+        if magic != 2:
+            raise RuntimeError(
+                f"Unexpected Kafka record format v{magic}; this client speaks v2 only"
+            )
+
+        attributes = struct.unpack("!H", records[21:23])[0]
+        if attributes & 0x20:
+            return None                # control batch: no user records
+        if attributes & 0x07:
+            raise RuntimeError(
+                "Kafka returned a COMPRESSED record batch; this client does not "
+                "decompress. Set compression.type=producer or none on the topic."
+            )
+
+        count = struct.unpack("!i", records[57:61])[0]
+        if count == 0:
+            return None
+
+        pos = 61                       # first record starts after the header
+        _, pos = self._read_varint(records, pos)     # record length
+        pos += 1                                     # record attributes
+        _, pos = self._read_varint(records, pos)     # timestampDelta
+        offset_delta, pos = self._read_varint(records, pos)
+
+        key_len, pos = self._read_varint(records, pos)
+        if key_len > 0:
+            pos += key_len
+
+        value_len, pos = self._read_varint(records, pos)
+        if value_len <= 0:
+            return None                # null or empty value
+
+        return records[pos:pos + value_len], base_offset + offset_delta
+
+    def _send_fetch(self, topic: str, offset: int) -> dict | None:
+        """Send a FetchRequest v4 (Kafka 4.x dropped v0-v3) and decode the first
+        record out of the returned RecordBatch v2."""
+        header = self._request_header(1, self.FETCH_VERSION)
+
+        body = (
+            struct.pack("!i", -1)              # replica id (ordinary consumer)
+            + struct.pack("!I", 5000)          # max wait ms
+            + struct.pack("!I", 1)             # min bytes
+            + struct.pack("!I", 52428800)      # max bytes (50MB) -- v3+
+            + struct.pack("!B", 0)             # isolation: read_uncommitted -- v4+
+            + struct.pack("!I", 1)             # 1 topic
+            + self._kafka_string(topic)
+            + struct.pack("!I", 1)             # 1 partition
+            + struct.pack("!I", 0)             # partition 0
+            + struct.pack("!Q", offset)        # fetch offset
+            + struct.pack("!I", 1048576)       # partition max bytes
+        )
+
+        self._send_request(header + body)
+        response = self._read_response()
+
+        pos = 4                                                   # throttle_time_ms
+        pos += 4                                                  # topic array count
         if pos + 2 > len(response):
             return None
-        topic_name_len = struct.unpack("!H", response[pos:pos + 2])[0]
-        pos += 2 + topic_name_len
-        pos += 4  # partition count
-        pos += 4  # partition id
+        name_len = struct.unpack("!H", response[pos:pos + 2])[0]
+        pos += 2 + name_len
+        pos += 4                                                  # partition array count
+        pos += 4                                                  # partition index
 
         if pos + 2 > len(response):
             return None
         error_code = struct.unpack("!H", response[pos:pos + 2])[0]
         pos += 2
-        pos += 8  # high watermark
+        pos += 8                                                  # high watermark
+        pos += 8                                                  # last stable offset -- v4+
+
+        # aborted_transactions: nullable array, -1 (0xFFFFFFFF) means null.
+        if pos + 4 > len(response):
+            return None
+        aborted = struct.unpack("!I", response[pos:pos + 4])[0]
+        pos += 4
+        if aborted != 0xFFFFFFFF:
+            pos += aborted * 16                                   # producer_id + first_offset
 
         if pos + 4 > len(response):
             return None
-        message_set_size = struct.unpack("!I", response[pos:pos + 4])[0]
+        records_size = struct.unpack("!I", response[pos:pos + 4])[0]
         pos += 4
 
-        if message_set_size == 0 or error_code != 0:
+        # UNKNOWN_TOPIC_OR_PARTITION (3) and LEADER_NOT_AVAILABLE (5) mean "nothing
+        # to read here yet", not a failure: a consumer that starts before its
+        # producer, or right after auto-creation (which is asynchronous), sees them
+        # routinely. dequeue() is documented to return None when there is no
+        # message, and the confluent path returns None for exactly this case -- so
+        # raising here made the SAME public method behave differently depending on
+        # which client library happened to be installed. Any OTHER code is a real
+        # protocol/authorisation failure and still raises loudly.
+        if error_code in (3, 5):
+            return None
+        if error_code != 0:
+            raise RuntimeError(
+                f"Kafka rejected the fetch for topic {topic}: error code {error_code}"
+            )
+        if records_size in (0, 0xFFFFFFFF) or pos + records_size > len(response):
             return None
 
-        # Parse first message from MessageSet
-        if pos + 12 > len(response):
+        decoded = self._decode_first_record(response[pos:pos + records_size])
+        if decoded is None:
             return None
-        msg_offset = struct.unpack("!Q", response[pos:pos + 8])[0]
-        pos += 8
-        pos += 4  # msg_size
-
-        # Skip CRC(4) + magic(1) + attributes(1)
-        pos += 6
-
-        # Key
-        if pos + 4 > len(response):
-            return None
-        key_len = struct.unpack("!I", response[pos:pos + 4])[0]
-        pos += 4
-        if key_len > 0 and key_len != 0xFFFFFFFF:
-            pos += key_len
-
-        # Value
-        if pos + 4 > len(response):
-            return None
-        value_len = struct.unpack("!I", response[pos:pos + 4])[0]
-        pos += 4
-        if value_len <= 0 or value_len == 0xFFFFFFFF:
-            return None
-
-        if pos + value_len > len(response):
-            return None
-        value = response[pos:pos + value_len]
+        value, msg_offset = decoded
 
         try:
             message = json.loads(value.decode("utf-8"))

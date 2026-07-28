@@ -719,6 +719,219 @@ class TestKafkaConnectorLive:
             consumer.close()
 
 
+# ── Kafka RecordBatch v2 wire format (pure functions, no dependency) ──
+
+
+class TestKafkaRecordBatchV2:
+    """Lock in the wire-level invariants of the hand-rolled RecordBatch v2 encoder.
+
+    The bug these pin down: the client spoke Produce v0 / Fetch v0, which Kafka 4.x
+    REMOVED along with message formats v0/v1. A removed version is not answered
+    with an error code -- the broker logs
+
+        UnsupportedVersionException: Received request for api with key 0 (Produce)
+        and unsupported version 0
+
+    and CLOSES THE SOCKET. The client saw a bare EOF, so the symptom ("Failed to
+    read Kafka response length") named neither the cause nor the fix. A plain
+    "does produce work" test is not enough; these assert the byte-level facts that
+    make it work, so a regression shows up here instead of as a mystery disconnect.
+
+    The encoder is a pure function over its inputs -- no socket, no broker, no
+    double -- so this class needs no live service. The real round trip is
+    TestKafkaRawPathLive below.
+    """
+
+    def _connector(self):
+        from tina4_python.queue_backends.kafka_backend import KafkaConnector
+        return KafkaConnector(brokers="127.0.0.1:9092")
+
+    # ── API versions: the actual bug ─────────────────────────────
+
+    def test_produce_and_fetch_versions_are_not_the_removed_ones(self):
+        # NEGATIVE: a regression here does not fail loudly, it makes the broker
+        # hang up mid-conversation -- so it has to be asserted, not assumed.
+        from tina4_python.queue_backends.kafka_backend import KafkaConnector
+
+        assert KafkaConnector.PRODUCE_VERSION >= 3, (
+            "Produce v0-v2 carry message format v0/v1, which Kafka 4.x REMOVED; "
+            "a broker answers those by closing the socket, not by erroring"
+        )
+        assert KafkaConnector.FETCH_VERSION >= 4, (
+            "Fetch v0-v3 went with the old message formats; Kafka 4.3 advertises "
+            "Fetch(1): 4 to 18"
+        )
+
+    # ── CRC32C, not CRC32 ────────────────────────────────────────
+
+    def test_crc32c_is_castagnoli_not_iso_hdlc(self):
+        # NEGATIVE: record format v2 needs CRC32C (Castagnoli, poly 0x82F63B78),
+        # NOT the CRC32 that format v0 used and that zlib.crc32 computes. Swapping
+        # them builds a batch the encoder accepts and the broker silently rejects,
+        # so pin the algorithm to its published vectors.
+        import zlib
+
+        crc32c = self._connector()._crc32c
+        assert crc32c(b"123456789") == 0xE3069283, "published CRC32C check value"
+        assert crc32c(b"") == 0
+        assert crc32c(b"123456789") != zlib.crc32(b"123456789"), (
+            "zlib.crc32 is ISO-HDLC and must never be used for a v2 batch"
+        )
+
+    # ── Varints ──────────────────────────────────────────────────
+
+    def test_varint_matches_the_zigzag_vectors(self):
+        # POSITIVE: zigzag LEB128 against the published vectors. -1 (the null
+        # key/value sentinel) must cost ONE byte; get zigzag wrong and it costs
+        # ten, which shifts every field that follows it.
+        varint = self._connector()._varint
+        vectors = {
+            0: "00", -1: "01", 1: "02", -2: "03",
+            2: "04", 63: "7e", 64: "8001", -64: "7f",
+        }
+        for value, expected in vectors.items():
+            assert varint(value).hex() == expected, f"varint({value})"
+
+    def test_varint_round_trips(self):
+        # POSITIVE: encode/decode agree across the int32 range and the sentinel,
+        # and the reader reports the exact byte count it consumed.
+        conn = self._connector()
+        for value in (0, -1, 1, -2, 300, -300, 65535, -65535, 2147483647, -2147483648):
+            buf = conn._varint(value)
+            decoded, pos = conn._read_varint(buf, 0)
+            assert decoded == value, f"round-trip {value}"
+            assert pos == len(buf), f"consumed every byte for {value}"
+
+    # ── Batch layout ─────────────────────────────────────────────
+
+    def test_record_batch_header_layout(self):
+        # POSITIVE: the header fields land at the offsets the spec fixes them at
+        # -- the same offsets _decode_first_record reads back. An encoder change
+        # that shifts them fails here rather than at the broker.
+        import struct
+
+        batch = self._connector()._encode_record_batch(b"k1", b'{"v":1}')
+
+        assert len(batch) > 61, "a v2 batch header alone is 61 bytes"
+        assert struct.unpack("!q", batch[0:8])[0] == 0, "baseOffset"
+        assert struct.unpack("!i", batch[8:12])[0] == len(batch) - 12, (
+            "batchLength counts everything after itself"
+        )
+        assert batch[16] == 2, "magic byte MUST be 2 (record format v2)"
+        assert struct.unpack("!H", batch[21:23])[0] == 0, "attributes: no compression"
+        assert struct.unpack("!i", batch[57:61])[0] == 1, "record count"
+
+    def test_record_batch_crc_covers_everything_after_it(self):
+        # NEGATIVE: a wrong CRC range (or a wrong algorithm) still produces four
+        # plausible bytes. Recompute over the region the spec defines -- attributes
+        # to the end -- and compare, so only a correct CRC passes.
+        import struct
+
+        conn = self._connector()
+        batch = conn._encode_record_batch(b"k1", b'{"v":1}')
+
+        stored = struct.unpack("!I", batch[17:21])[0]
+        assert stored == conn._crc32c(batch[21:]), (
+            "the stored CRC32C must match a recomputation over attributes..end"
+        )
+
+    def test_encode_then_decode_returns_the_same_value(self):
+        # POSITIVE: the payload survives its own encoder/decoder pair.
+        conn = self._connector()
+        batch = conn._encode_record_batch(b"thekey", b'{"hello":"world"}')
+        decoded = conn._decode_first_record(batch)
+
+        assert decoded is not None, "a freshly encoded batch must decode"
+        value, offset = decoded
+        assert value == b'{"hello":"world"}'
+        assert offset == 0, "baseOffset 0 + offsetDelta 0"
+
+
+# ── Live Kafka over the RAW hand-rolled path (real broker, no confluent) ──
+
+
+@pytest.mark.skipif(not _kafka_reachable(), reason="Kafka not reachable")
+class TestKafkaRawPathLive:
+    """Round-trip a real message over the zero-dependency socket implementation.
+
+    This class exists because TestKafkaConnectorLive above proves nothing about
+    this code: confluent-kafka is installed in CI, so the constructor always
+    picks the librdkafka path and the hand-rolled protocol NEVER RUNS. That blind
+    spot is how the Produce-v0 break reached users -- the suite was green the
+    whole time. Here the connector is switched onto its own raw path, so the
+    frames on the wire are the ones this file builds.
+
+    Not a mock: nothing is substituted for anything. `_use_confluent` is the flag
+    the constructor itself sets from an import probe, and flipping it selects a
+    code path -- the broker is a real Kafka, the socket is a real socket, and the
+    bytes are the real protocol. Deliberately NOT skipped when confluent-kafka is
+    present; that is the whole point.
+    """
+
+    def _raw_connector(self):
+        from tina4_python.queue_backends.kafka_backend import KafkaConnector
+        conn = KafkaConnector(brokers=_KAFKA_BROKER)
+        conn._use_confluent = False
+        conn._confluent = None
+        conn.connect()
+        assert conn._socket is not None, "the raw path must own a real socket"
+        return conn
+
+    def test_raw_enqueue_dequeue_roundtrip(self):
+        topic = "tina4_raw_" + secrets.token_hex(8)
+        payload = {"type": "click", "value": 42, "proof": secrets.token_hex(4)}
+
+        producer = self._raw_connector()
+        try:
+            msg_id = producer.enqueue(topic, dict(payload))
+            assert isinstance(msg_id, str) and msg_id
+        finally:
+            producer.close()
+
+        consumer = self._raw_connector()
+        try:
+            msg = consumer.dequeue(topic)
+            assert msg is not None, (
+                "the raw path produced and then failed to read its own message back"
+            )
+            assert msg["type"] == "click"
+            assert msg["value"] == 42
+            assert msg["proof"] == payload["proof"]
+            assert msg["id"] == msg_id
+        finally:
+            consumer.close()
+
+    def test_raw_dequeue_advances_the_offset(self):
+        # POSITIVE: two messages come back in order and the second read does not
+        # re-deliver the first -- the fetch offset really moves.
+        topic = "tina4_raw_" + secrets.token_hex(8)
+
+        producer = self._raw_connector()
+        try:
+            producer.enqueue(topic, {"seq": 1})
+            producer.enqueue(topic, {"seq": 2})
+        finally:
+            producer.close()
+
+        consumer = self._raw_connector()
+        try:
+            first = consumer.dequeue(topic)
+            second = consumer.dequeue(topic)
+            assert first is not None and second is not None
+            assert first["seq"] == 1
+            assert second["seq"] == 2, "offset did not advance past the first record"
+        finally:
+            consumer.close()
+
+    def test_raw_dequeue_on_an_empty_topic_returns_none(self):
+        # NEGATIVE: an empty topic yields None, not a hang and not a stray record.
+        consumer = self._raw_connector()
+        try:
+            assert consumer.dequeue("tina4_raw_empty_" + secrets.token_hex(8)) is None
+        finally:
+            consumer.close()
+
+
 # ── Backend Resolution ───────────────────────────────────────────
 
 
