@@ -12,10 +12,28 @@ UNRELEASED work. When a version ships, its notes go to the release notes above.
 
 ## Unreleased
 
+### Changed
+
+- **Breaking: every ORM read path that takes a `limit` now defaults to 100 rows.**
+  `select()`, `where()`, `with_trashed()`, `cached()` and a `scope()`-generated method
+  defaulted to 20; they now default to 100. `all()`, `find()` and `db.fetch()` already
+  capped at 100 and are unchanged. The family disagreed with itself before this: two
+  methods differing only in how you spell the filter returned a fifth as many rows.
+  Pagination is a default, so every read path that advertises a limit now uses the same
+  number.
+
+  Migration: pass the limit explicitly wherever you relied on the old 20, for example
+  `Product.select(sql, limit=20)`. Code that already passes a limit is unaffected.
+
+  `QueryBuilder.get()` and `fetch_all()` are deliberately UNCHANGED and stay uncapped.
+  Neither takes a `limit`, so a cap there can only ever be silent, and that silent
+  `LIMIT 100` was the data-loss-on-read footgun removed in 3.13.39. The rule: a path
+  that advertises `limit` caps at 100, a path without one never caps.
+
 ### Added
 
-3.13.85 is prepared on `v3` and not yet tagged; its full notes ship in the release notes
-linked above when it is tagged. The current tagged release is 3.13.84.
+The current tagged release is 3.13.94; everything in this section sits on `v3` untagged.
+Its notes ship in the release notes linked above when it is tagged.
 
 In-flight on a feature branch, not yet merged to `v3`:
 
