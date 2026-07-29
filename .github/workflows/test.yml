@@ -175,3 +175,97 @@ jobs:
       - name: Report results
         if: always()
         run: echo "Test run completed with exit code $?"
+
+  # Firebird 5.0.2 in its own job. The main `test` job above deliberately does
+  # NOT provision Firebird (TINA4_REQUIRE_SERVICES excludes it), which is right
+  # for that already-heavy multi-service runner. The consequence was that Python
+  # was the ONLY framework with no Firebird CI at all - PHP, Ruby and Node each
+  # already run one - so the live Firebird tests only ever ran by hand. Two real
+  # bugs (identifier folding, primary_key hardcoded false) reached production
+  # through exactly that gap. This job stands up a REAL Firebird, installs
+  # firebird-driver against libfbclient, and RUNS the live tests. NO-SILENT-SKIP
+  # guards fail the job if the tests report pending/skipped instead of passing -
+  # an unset URL, an unreachable server or a missing driver would otherwise leave
+  # them green. This is the Python twin of Ruby's `fb`-gem guard and PHP's
+  # `php -m | grep interbase` teeth.
+  firebird:
+    runs-on: ubuntu-latest
+    env:
+      # Classic double-slash absolute-path form (the adapter's documented shape).
+      TINA4_TEST_FIREBIRD_URL: firebird://SYSDBA:masterkey@localhost:3050//var/lib/firebird/data/test.fdb
+      TINA4_TEST_FIREBIRD_USER: SYSDBA
+      TINA4_TEST_FIREBIRD_PASS: masterkey
+    steps:
+      - uses: actions/checkout@v4
+
+      # A plain container, not a `services:` block - GitHub's health-check cannot
+      # wait for Firebird's first-boot database creation cleanly. FAIL the job if
+      # it never accepts a query, so the coverage has teeth.
+      - name: Start Firebird 5.0.2
+        run: |
+          docker run -d --name tina4-firebird -p 3050:3050 \
+            -e FIREBIRD_ROOT_PASSWORD=masterkey \
+            -e FIREBIRD_DATABASE=test.fdb \
+            firebirdsql/firebird:5.0.2
+          echo "Waiting for Firebird to accept connections on :3050 ..."
+          for i in $(seq 1 30); do
+            if docker exec tina4-firebird /opt/firebird/bin/isql -user SYSDBA -password masterkey \
+                 /var/lib/firebird/data/test.fdb -q -o /dev/null <<<'SELECT 1 FROM RDB$DATABASE;' 2>/dev/null; then
+              echo "Firebird ready after ${i} attempt(s)"; exit 0
+            fi
+            sleep 2
+          done
+          echo "Firebird did not become ready in time"; docker logs tina4-firebird | tail -40; exit 1
+
+      # libfbclient: firebird-driver loads libfbclient.so.2 through ctypes at
+      # runtime, so the client library must be present or every connect fails.
+      - name: Install Firebird client library (libfbclient)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends firebird-dev
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (incl. firebird-driver)
+        run: pip install uv && uv sync && uv pip install firebird-driver
+
+      # PROVE the driver imports AND finds libfbclient. An ImportError or a
+      # missing client library here FAILS the job - it must never degrade the
+      # live tests to a green skip.
+      - name: Verify firebird-driver loads (no-silent-skip guard)
+        run: |
+          uv run python -c "import firebird.driver as d; print('firebird-driver', d.__name__, 'imported OK')"
+
+      # The identifier-folding + primary-key regression file: 6 pure-logic cases
+      # plus 4 live ones. Assert all 10 RAN and none skipped, so a broken URL or
+      # driver cannot hide behind pytest's green skip.
+      - name: Run Firebird identifier + primary-key tests (no-silent-skip guard)
+        run: |
+          set -o pipefail
+          out=$(uv run pytest tests/test_firebird_identifier_and_pk.py -v 2>&1 | tee /dev/stderr)
+          printf '%s\n' "$out" | grep -qE "10 passed" || {
+            echo "::error::test_firebird_identifier_and_pk did not report '10 passed' - its live cases did not run."; exit 1; }
+          if printf '%s\n' "$out" | grep -qE "[1-9][0-9]* skipped"; then
+            echo "::error::test_firebird_identifier_and_pk had skipped tests - the live-Firebird coverage did not run."; exit 1
+          fi
+          echo "test_firebird_identifier_and_pk RAN all 10 cases against live Firebird (0 skipped)."
+
+      # The driver-level live class in the shared driver suite. Its gate imports
+      # firebird-driver first (the adapter's own preference order), so with the
+      # driver installed and the server up it must RUN, not skip.
+      - name: Run live Firebird driver tests (no-silent-skip guard)
+        run: |
+          set -o pipefail
+          out=$(uv run pytest "tests/test_database_drivers.py::TestFirebirdLive" -v 2>&1 | tee /dev/stderr)
+          printf '%s\n' "$out" | grep -qE "1 passed" || {
+            echo "::error::TestFirebirdLive did not report '1 passed' - it skipped instead of running."; exit 1; }
+          if printf '%s\n' "$out" | grep -qE "[1-9][0-9]* skipped"; then
+            echo "::error::TestFirebirdLive skipped - the live driver path did not run."; exit 1
+          fi
+          echo "TestFirebirdLive RAN against live Firebird (0 skipped)."
+
+      - name: Stop Firebird
+        if: always()
+        run: docker rm -f tina4-firebird || true

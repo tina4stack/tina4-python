@@ -541,12 +541,23 @@ def _has_pymssql():
         return False
 
 
-def _has_fdb():
+def _has_firebird_driver():
+    """Either Firebird driver the adapter accepts, in its own preference order.
+
+    The adapter tries `firebird.driver` FIRST and only falls back to legacy
+    `fdb`. This gate used to import `fdb` alone, so the live Firebird class
+    skipped green on any host that had the MODERN driver installed - which is
+    what `pyproject.toml`'s `firebird` extra actually installs.
+    """
     try:
-        import fdb
+        import firebird.driver  # noqa: F401
         return True
     except ImportError:
-        return False
+        try:
+            import fdb  # noqa: F401
+            return True
+        except ImportError:
+            return False
 
 
 @pytest.mark.skipif(
@@ -742,7 +753,10 @@ class TestMSSQLLive:
         assert db.get_database_type() == "mssql"
 
 
-@pytest.mark.skipif(not _has_fdb(), reason="fdb not installed")
+@pytest.mark.skipif(
+    not _has_firebird_driver(),
+    reason="neither firebird-driver nor fdb installed",
+)
 class TestFirebirdLive:
     """Live Firebird tests — require a running Firebird instance.
 
