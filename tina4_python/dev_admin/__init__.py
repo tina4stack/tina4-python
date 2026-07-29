@@ -2041,37 +2041,38 @@ async def _api_metrics(request, response):
 
 
 async def _api_metrics_full(request, response):
-    """Full analysis — from the tina4 CLI metrics engine, else the local module.
+    """Full analysis from the native engine (ADR-0002).
 
-    The engine (ADR-0002) resolves imports to real file paths, so it is the only
-    source with usable coupling data. It returns None when it is absent or too
-    old to emit a field the dashboard renders, and we fall back rather than
-    serve a payload with holes in it.
+    One engine for every language, so a number here is comparable with the same
+    number in PHP, Ruby or Node. There is no local fallback: a second
+    implementation is what made the four frameworks' numbers incomparable, so a
+    missing or stale CLI returns 503 naming the fix instead of quietly serving
+    different arithmetic.
     """
-    from tina4_python.dev_admin.metrics import full_analysis, resolve_scan_target
-    from tina4_python.dev_admin.metrics_engine import engine_analysis
+    from tina4_python.dev_admin.metrics import full_analysis, MetricsEngineError
 
-    root, scan_mode = resolve_scan_target()
-    from_engine = engine_analysis(root, scan_mode)
-    return response(from_engine if from_engine is not None else full_analysis())
+    try:
+        return response(full_analysis())
+    except MetricsEngineError as exc:
+        return response({"error": str(exc), "engine": "tina4-cli"}, 503)
 
 
 async def _api_metrics_file(request, response):
     """Per-file detail metrics."""
-    from tina4_python.dev_admin.metrics import file_detail
+    from tina4_python.dev_admin.metrics import file_detail, MetricsEngineError
+
     path = request.params.get("path", "")
     if not path:
         return response({"error": "Missing path parameter"}, 400)
-    # Graceful 404 when the caller points at a directory / missing file
-    # (instead of a 500 from AST parsing). Matches the PHP contract.
     try:
-        from pathlib import Path as _P
-        p = _P(path)
-        if p.exists() and p.is_dir():
-            return response({"error": f"Not a file: {path}"}, 404)
         return response(file_detail(path))
-    except Exception as exc:
-        return response({"error": str(exc)}, 500)
+    except MetricsEngineError as exc:
+        message = str(exc)
+        # A bad path is the caller's mistake (404); anything else is the engine
+        # being absent or stale (503). Same split as the /metrics/full contract.
+        if "no such file" in message or "not a file" in message:
+            return response({"error": message}, 404)
+        return response({"error": message, "engine": "tina4-cli"}, 503)
 
 
 async def _api_graphql_schema(request, response):

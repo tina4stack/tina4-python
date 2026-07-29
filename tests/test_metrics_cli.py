@@ -169,7 +169,10 @@ class TestOffendersPositive:
     def test_ranked_error_before_warn_before_info(self, in_dir):
         _write_bad_project(in_dir)
         offenders = _m.offenders("src", top=50)["offenders"]
-        rank = [_m._SEVERITY_RANK[o["severity"]] for o in offenders]
+        # Rank locally: the engine returns severity STRINGS and owns the order.
+        # _SEVERITY_RANK was a private constant of the deleted analyzer.
+        _rank = {"error": 2, "warn": 1, "info": 0}
+        rank = [_rank[o["severity"]] for o in offenders]
         assert rank == sorted(rank, reverse=True), "must be severity-descending"
         # First item is the error-severity complexity offender.
         assert offenders[0]["severity"] == "error"

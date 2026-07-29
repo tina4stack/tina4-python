@@ -47,4 +47,12 @@ def test_display_report_still_caps_most_complex_at_15(tmp_path):
     )
     analysis = m.full_analysis(str(tmp_path))
     assert len(analysis["most_complex_functions"]) == 15   # display cap intact
-    assert len(analysis["all_functions"]) == 18            # full list exposed for offenders
+    # The uncapped list is no longer republished on full_analysis. The engine ranks
+    # offenders itself and its own --fail-on gate reads that same list, so the CLI
+    # and the dashboard cannot disagree about what counts as an offender.
+    # total_offenders is the honest proof nothing was dropped at the display cap.
+    result = m.offenders(str(tmp_path), top=100)
+    assert result["summary"]["total_offenders"] >= 18, (
+        "every over-threshold function must reach the gate, not just the top 15"
+    )
+    assert len(result["offenders"]) >= 18

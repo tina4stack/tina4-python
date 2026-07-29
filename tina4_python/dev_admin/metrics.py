@@ -1,17 +1,29 @@
-# Tina4 Code Metrics — AST-based static analysis for the dev dashboard.
+# Tina4 Code Metrics — one engine, per ADR-0002.
 """
-Two-tier analysis:
-  1. Quick metrics (instant): LOC, file counts, class/function counts
-  2. Full analysis (on-demand, cached): cyclomatic complexity, maintainability
-     index, coupling, Halstead metrics, violations
+Two tiers, two different jobs:
 
-Zero dependencies — uses Python's built-in `ast` module.
+  1. Quick metrics (instant): a FILE CENSUS. Line, file and template counts by
+     glob. No code is parsed. It stays in-process because the dashboard calls it
+     on every load and the native engine takes ~1s on a 100-file tree.
+  2. Full analysis, offenders and per-file detail: the NATIVE ENGINE
+     (`tina4 metrics --json`). One tree-sitter implementation covering every
+     language, so a number measured in Python is comparable with the same number
+     measured in PHP, Ruby or Node.
+
+The hand-rolled AST analyzer that used to live here is GONE (672 lines). It
+duplicated the engine and, because each framework had its own, the four
+frameworks reported numbers that could not be compared - which silently
+undermined every cross-framework comparison built on them.
+
+There is NO FALLBACK. A missing or broken CLI RAISES MetricsEngineError naming
+the fix. Degrading to a second implementation is what produced incomparable
+numbers in the first place; a loud failure is honest where a quiet substitution
+is not.
 """
-import ast
+import json
 import os
-import math
-import time
-import hashlib
+import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -193,675 +205,171 @@ def quick_metrics(root: str = "src") -> dict:
     }
 
 
-# ── Full Analysis (AST-based) ─────────────────────────────────
-
-# Cache for full analysis
-_full_cache: dict = {"hash": "", "data": None, "time": 0}
-_CACHE_TTL = 60  # seconds
+# ── The native engine (ADR-0002) ──────────────────────────────
 
 
-def _files_hash(root: str = "src") -> str:
-    """Hash of all file mtimes for cache invalidation."""
-    h = hashlib.md5()
-    root_path = Path(root)
-    if root_path.exists():
-        for f in sorted(root_path.rglob("*.py")):
-            try:
-                h.update(f"{f}:{f.stat().st_mtime}".encode())
-            except OSError:
-                pass
-    return h.hexdigest()
+class MetricsEngineError(RuntimeError):
+    """The native metrics engine could not produce a payload.
+
+    Raised instead of falling back to a second implementation: two engines is
+    exactly the condition that made the four frameworks' numbers incomparable.
+    """
+
+
+_TIMEOUT_SECONDS = 60
+
+_INSTALL_HINT = (
+    "the tina4 CLI provides the metrics engine (ADR-0002). Install it with\n"
+    "  curl -fsSL https://tina4.com/install.sh | sh\n"
+    "or see https://tina4.com/cli"
+)
+
+# Fields the dashboard renders. Checking for the DATA is honest where checking a
+# version string is not: a user may run any CLI build, and the payload is what
+# tells us what that build can actually do.
+_SUMMARY_KEYS = ("files_analyzed", "total_functions", "avg_complexity", "avg_maintainability")
+_FILE_KEYS = ("path", "loc", "avg_complexity", "maintainability", "has_tests")
+_FUNCTION_KEYS = ("name", "file", "line", "complexity", "loc")
+
+
+def engine_path() -> str | None:
+    """Absolute path to the tina4 CLI binary, or None when it is not installed."""
+    return shutil.which("tina4")
+
+
+def _run_engine(path: str) -> dict:
+    """Run `tina4 metrics --json` over path and return the raw payload.
+
+    Raises MetricsEngineError with the actual cause: a caller that cannot get
+    metrics needs to know whether the binary is missing, the run failed, or the
+    output was unreadable.
+    """
+    binary = engine_path()
+    if binary is None:
+        raise MetricsEngineError(f"tina4 not found on PATH - {_INSTALL_HINT}")
+
+    try:
+        proc = subprocess.run(
+            [binary, "metrics", "--path", str(path), "--json"],
+            capture_output=True,
+            text=True,
+            timeout=_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise MetricsEngineError(
+            f"tina4 metrics timed out after {_TIMEOUT_SECONDS}s on {path}"
+        ) from exc
+    except OSError as exc:
+        raise MetricsEngineError(f"could not run {binary}: {exc}") from exc
+
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        first = detail[0] if detail else f"exit code {proc.returncode}"
+        raise MetricsEngineError(f"tina4 metrics failed on {path}: {first}")
+
+    if not proc.stdout.strip():
+        raise MetricsEngineError(f"tina4 metrics produced no output for {path}")
+
+    try:
+        payload = json.loads(proc.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise MetricsEngineError(f"tina4 metrics returned unreadable JSON: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise MetricsEngineError("tina4 metrics returned a non-object payload")
+    return payload
+
+
+def _require(payload: dict, key: str, kind: type):
+    """Pull a key out of the payload or raise naming what the engine is missing."""
+    value = payload.get(key)
+    if not isinstance(value, kind):
+        raise MetricsEngineError(
+            f"engine payload has no usable '{key}' - the installed tina4 CLI predates "
+            f"a field the dashboard renders. Update it: {_INSTALL_HINT}"
+        )
+    return value
 
 
 def full_analysis(root: str = "src") -> dict:
-    """Deep AST-based analysis. Cached for 60 seconds.
+    """Full code analysis from the native engine, shaped for the dashboard."""
+    resolved, scan_mode = resolve_scan_target(root)
+    payload = _run_engine(resolved)
 
-    If src/ has no Python files, scans the framework itself
-    so the bubble chart is never empty.
-    """
-    global _full_cache
-    root = _resolve_root(root)
+    summary = _require(payload, "summary", dict)
+    file_metrics = _require(payload, "file_metrics", list)
+    functions = _require(payload, "most_complex_functions", list)
 
-    current_hash = _files_hash(root)
-    now = time.time()
+    missing = [k for k in _SUMMARY_KEYS if k not in summary]
+    if missing:
+        raise MetricsEngineError(
+            f"engine summary is missing {', '.join(missing)} - update the CLI: {_INSTALL_HINT}"
+        )
+    if file_metrics and (absent := [k for k in _FILE_KEYS if k not in file_metrics[0]]):
+        raise MetricsEngineError(f"engine file_metrics is missing {', '.join(absent)}")
+    if functions and (absent := [k for k in _FUNCTION_KEYS if k not in functions[0]]):
+        raise MetricsEngineError(f"engine function metrics are missing {', '.join(absent)}")
 
-    if (_full_cache["hash"] == current_hash and
-            _full_cache["data"] is not None and
-            now - _full_cache["time"] < _CACHE_TTL):
-        return _full_cache["data"]
-
-    root_path = Path(root)
-    if not root_path.exists():
-        return {"error": f"Directory not found: {root}"}
-
-    py_files = list(root_path.rglob("*.py"))
-
-    all_functions = []
-    file_metrics = []
-    import_graph = {}  # file -> [imported files]
-    reverse_graph = {}  # file -> [files that import it]
-
-    for f in py_files:
-        try:
-            source = f.read_text(encoding="utf-8", errors="replace")
-            tree = ast.parse(source, filename=str(f))
-        except (SyntaxError, OSError):
-            continue
-
-        try:
-            rel_path = str(f.relative_to(root_path)).replace("\\", "/")
-        except ValueError:
-            rel_path = (str(f.relative_to(root_path.parent)) if root_path.parent != f else f.name).replace("\\", "/")
-        lines = source.splitlines()
-        loc = sum(1 for l in lines if _is_code_line(l))
-
-        # Extract imports for coupling analysis
-        imports = _extract_imports(tree, rel_path)
-        import_graph[rel_path] = imports
-
-        for imp in imports:
-            if imp not in reverse_graph:
-                reverse_graph[imp] = []
-            reverse_graph[imp].append(rel_path)
-
-        # Analyze functions/methods
-        file_complexity = 0
-        file_functions = []
-        file_halstead = {"operators": 0, "operands": 0, "unique_operators": set(), "unique_operands": set()}
-
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                cc = _cyclomatic_complexity(node)
-                func_loc = _function_loc(node, lines)
-                func_name = node.name
-                # Include class name if it's a method
-                parent = _get_parent_class(tree, node)
-                if parent:
-                    func_name = f"{parent}.{node.name}"
-
-                func_info = {
-                    "name": func_name,
-                    "file": rel_path,
-                    "line": node.lineno,
-                    "complexity": cc,
-                    "loc": func_loc,
-                }
-                all_functions.append(func_info)
-                file_functions.append(func_info)
-                file_complexity += cc
-
-            # Halstead: count operators and operands
-            _count_halstead(node, file_halstead)
-
-        # Halstead volume
-        n1 = len(file_halstead["unique_operators"])
-        n2 = len(file_halstead["unique_operands"])
-        N1 = file_halstead["operators"]
-        N2 = file_halstead["operands"]
-        vocabulary = n1 + n2
-        length = N1 + N2
-        volume = length * math.log2(vocabulary) if vocabulary > 0 else 0
-
-        # Maintainability index
-        avg_cc = file_complexity / len(file_functions) if file_functions else 0
-        mi = _maintainability_index(volume, avg_cc, loc)
-
-        # Coupling
-        ce = len(imports)  # efferent
-        ca = len(reverse_graph.get(rel_path, []))  # afferent
-        instability = ce / (ca + ce) if (ca + ce) > 0 else 0.0
-
-        # Test coverage detection (file-based matching)
-        has_tests = _has_matching_test(rel_path)
-
-        file_metrics.append({
-            "path": rel_path,
-            "loc": loc,
-            "complexity": file_complexity,
-            "avg_complexity": round(avg_cc, 2),
-            "functions": len(file_functions),
-            "maintainability": round(mi, 1),
-            "halstead_volume": round(volume, 1),
-            "coupling_afferent": ca,
-            "coupling_efferent": ce,
-            "instability": round(instability, 3),
-            "has_tests": has_tests,
-            "dep_count": ce,
-        })
-
-    # Sort by complexity descending
-    all_functions.sort(key=lambda x: x["complexity"], reverse=True)
-    file_metrics.sort(key=lambda x: x["maintainability"])
-
-    # Violations
-    violations = _detect_violations(all_functions, file_metrics)
-
-    # Overall averages
-    total_cc = sum(f["complexity"] for f in all_functions) if all_functions else 0
-    avg_cc = total_cc / len(all_functions) if all_functions else 0
-    total_mi = sum(f["maintainability"] for f in file_metrics) if file_metrics else 0
-    avg_mi = total_mi / len(file_metrics) if file_metrics else 0
-
-    # Detect if we're scanning framework or project
-    import tina4_python
-    framework_dir = str(Path(tina4_python.__file__).parent)
-    scanning_framework = root_path == Path(framework_dir) or str(root_path).startswith(framework_dir)
-
-    result = {
-        "files_analyzed": len(file_metrics),
-        "total_functions": len(all_functions),
-        "avg_complexity": round(avg_cc, 2),
-        "avg_maintainability": round(avg_mi, 1),
-        # Display-only: the top-15 for the "most complex functions" report.
-        # Do NOT source offenders / --fail-on from this — capping here silently
-        # hides the 16th+ over-threshold function from the gate. offenders()
-        # reads "all_functions" (below) instead.
-        "most_complex_functions": all_functions[:15],
-        # Full, uncapped, complexity-sorted list — offenders()/--fail-on use this
-        # so no function over the complexity threshold ever escapes the gate.
-        "all_functions": all_functions,
-        "file_metrics": file_metrics,
-        "violations": violations,
-        "dependency_graph": import_graph,
-        "scan_mode": "framework" if scanning_framework else "project",
-        "scan_root": str(root_path),
-    }
-
-    _full_cache = {"hash": current_hash, "data": result, "time": now}
+    result = {key: summary[key] for key in _SUMMARY_KEYS}
+    result["file_metrics"] = file_metrics
+    # Display cap only. offenders() reads the engine's own uncapped list, so a
+    # 16th over-threshold function is never hidden from the gate.
+    result["most_complex_functions"] = functions[:15]
+    result["dependency_graph"] = payload.get("dependency_graph") or {}
+    # The framework owns these two: the engine always reports "project" because
+    # it cannot know which directory is a framework package.
+    result["scan_mode"] = scan_mode
+    result["scan_root"] = str(Path(resolved).resolve())
+    result["engine"] = "tina4-cli"
     return result
 
 
-# ── Top Offenders (CLI + dashboard) ───────────────────────────
-
-# Severity ranking for sorting (higher = more severe).
-_SEVERITY_RANK = {"error": 2, "warn": 1, "info": 0}
-
-
 def offenders(root: str = "src", top: int = 20) -> dict:
-    """Rank the worst code-quality issues into a single "top offenders" list.
+    """Top code-health offenders from the native engine.
 
-    Reuses ``full_analysis()`` (does NOT re-analyze). Each offender is a dict:
-        {"file", "line", "kind", "severity", "score", "detail"}
-
-    Rules (one offender per matching condition):
-      - function complexity > 10  → kind "complexity"
-            severity "error" if >20 else "warn"; score = complexity
-      - file loc > 500            → kind "large_file" (warn); score = loc/100
-      - file functions > 20       → kind "too_many_functions" (warn); score = functions/4
-      - file maintainability < 40 → kind "low_maintainability"
-            severity "error" if <20 else "warn"; score = (50 - mi)
-      - file has_tests is False   → kind "untested" (info); score = loc/100
-
-    Sorted by (severity rank, score) DESCENDING and truncated to ``top``.
-
-    Returns ``{"offenders": [...], "summary": {...}}`` where summary carries the
-    headline numbers the CLI prints (files_analyzed, total_functions,
-    avg_complexity, avg_maintainability, scan_mode, scan_root, and the total
-    offender count before truncation).
+    The engine ranks and severity-tags them, and its own --fail-on gate reads
+    the same list, so the CLI and the dashboard can never disagree about what
+    counts as an offender.
     """
-    analysis = full_analysis(root)
-    if "error" in analysis:
-        return {"offenders": [], "summary": {"error": analysis["error"]}}
+    resolved, scan_mode = resolve_scan_target(root)
+    payload = _run_engine(resolved)
 
-    items: list[dict] = []
-
-    # Function-level: cyclomatic complexity. Use the FULL function list (not the
-    # display-capped most_complex_functions[:15]) so a 16th+ over-threshold
-    # function is never silently dropped from the offenders list or --fail-on.
-    for fn in analysis.get("all_functions", analysis.get("most_complex_functions", [])):
-        cc = fn["complexity"]
-        if cc > 10:
-            items.append({
-                "file": fn["file"],
-                "line": fn["line"],
-                "kind": "complexity",
-                "severity": "error" if cc > 20 else "warn",
-                "score": float(cc),
-                "detail": f"{fn['name']} — cyclomatic complexity {cc}",
-            })
-
-    # File-level rules.
-    for fm in analysis.get("file_metrics", []):
-        path = fm["path"]
-        loc = fm["loc"]
-        funcs = fm["functions"]
-        mi = fm["maintainability"]
-
-        if loc > 500:
-            items.append({
-                "file": path,
-                "line": 1,
-                "kind": "large_file",
-                "severity": "warn",
-                "score": loc / 100,
-                "detail": f"{loc} LOC (max 500)",
-            })
-
-        if funcs > 20:
-            items.append({
-                "file": path,
-                "line": 1,
-                "kind": "too_many_functions",
-                "severity": "warn",
-                "score": funcs / 4,
-                "detail": f"{funcs} functions (max 20)",
-            })
-
-        if mi < 40:
-            items.append({
-                "file": path,
-                "line": 1,
-                "kind": "low_maintainability",
-                "severity": "error" if mi < 20 else "warn",
-                "score": 50 - mi,
-                "detail": f"maintainability index {mi} (min 40)",
-            })
-
-        if fm["has_tests"] is False:
-            items.append({
-                "file": path,
-                "line": 1,
-                "kind": "untested",
-                "severity": "info",
-                "score": loc / 100,
-                "detail": "no referencing test",
-            })
-
-    items.sort(key=lambda o: (_SEVERITY_RANK[o["severity"]], o["score"]), reverse=True)
-
-    summary = {
-        "files_analyzed": analysis["files_analyzed"],
-        "total_functions": analysis["total_functions"],
-        "avg_complexity": analysis["avg_complexity"],
-        "avg_maintainability": analysis["avg_maintainability"],
-        "scan_mode": analysis["scan_mode"],
-        "scan_root": analysis["scan_root"],
-        "total_offenders": len(items),
-    }
-
-    return {"offenders": items[:top], "summary": summary}
+    found = _require(payload, "offenders", list)
+    summary = dict(_require(payload, "summary", dict))
+    summary["scan_mode"] = scan_mode
+    summary["scan_root"] = str(Path(resolved).resolve())
+    summary["engine"] = "tina4-cli"
+    summary.setdefault("total_offenders", len(found))
+    return {"offenders": found[:top], "summary": summary}
 
 
 def file_detail(file_path: str) -> dict:
-    """Detailed metrics for a single file."""
-    p = Path(file_path)
-    if not p.exists() and _last_scan_root:
-        # Try resolving relative to the last scan root (framework mode)
-        candidate = Path(_last_scan_root) / file_path
-        if candidate.exists():
-            p = candidate
-            file_path = str(p)
-    if not p.exists():
-        return {"error": f"File not found: {file_path}"}
+    """Per-file metrics from the native engine.
 
-    try:
-        source = p.read_text(encoding="utf-8", errors="replace")
-        tree = ast.parse(source, filename=file_path)
-    except SyntaxError as e:
-        return {"error": f"Syntax error: {e}"}
-
-    lines = source.splitlines()
-    functions = []
-
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            cc = _cyclomatic_complexity(node)
-            func_loc = _function_loc(node, lines)
-            parent = _get_parent_class(tree, node)
-            name = f"{parent}.{node.name}" if parent else node.name
-
-            functions.append({
-                "name": name,
-                "line": node.lineno,
-                "complexity": cc,
-                "loc": func_loc,
-                "args": [a.arg for a in node.args.args if a.arg != "self"],
-            })
-
-    functions.sort(key=lambda x: x["complexity"], reverse=True)
-
-    loc = sum(1 for l in lines if _is_code_line(l))
-    classes = sum(1 for n in ast.walk(tree) if isinstance(n, ast.ClassDef))
-    imports = _extract_imports(tree, file_path)
-
-    # Detect empty methods/functions (body is only `pass` or a docstring)
-    warnings = []
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            body = node.body
-            # Strip leading docstring
-            effective = body[1:] if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) else body
-            if not effective or all(isinstance(s, ast.Pass) for s in effective):
-                parent = _get_parent_class(tree, node)
-                name = f"{parent}.{node.name}" if parent else node.name
-                warnings.append({"type": "empty_method", "message": f"Method '{name}' appears to be empty", "line": node.lineno})
-        elif isinstance(node, ast.ClassDef):
-            body = node.body
-            effective = body[1:] if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) else body
-            if not effective or all(isinstance(s, ast.Pass) for s in effective):
-                warnings.append({"type": "empty_class", "message": f"Class '{node.name}' appears to be empty", "line": node.lineno})
-
-    return {
-        "path": file_path,
-        "loc": loc,
-        "total_lines": len(lines),
-        "classes": classes,
-        "functions": functions,
-        "imports": imports,
-        "warnings": warnings,
-    }
-
-
-# ── AST Helpers ────────────────────────────────────────────────
-
-
-def _own_body_nodes(node: ast.AST):
-    """Yield the nodes belonging to this function's OWN body.
-
-    Nested function and class definitions are skipped: they are reported as
-    functions in their own right, so counting their decision points here too
-    would charge one branch to two different functions. That over-count grew
-    with nesting depth - an IIFE-style wrapper or a registrar that defines
-    twenty inner handlers absorbed the entire file's complexity and sat at the
-    top of the offenders list while the real hot spots hid below it.
-
-    A lambda is NOT skipped. Lambdas are never listed as separate functions, so
-    their decision points would simply vanish; they stay with the function that
-    encloses them.
+    The engine accepts a single file for --path, so one code path serves both
+    the whole-tree scan and one file.
     """
-    stack = list(ast.iter_child_nodes(node))
-    while stack:
-        child = stack.pop()
-        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            continue
-        yield child
-        stack.extend(ast.iter_child_nodes(child))
+    if not file_path:
+        raise MetricsEngineError("file_detail needs a path")
 
+    target = Path(file_path)
+    if not target.exists():
+        # Try it relative to whatever quick_metrics last resolved, so the
+        # dashboard can pass a path taken straight out of file_metrics.
+        if _last_scan_root:
+            candidate = Path(_last_scan_root) / file_path
+            if candidate.exists():
+                target = candidate
+    if not target.exists():
+        raise MetricsEngineError(f"no such file: {file_path}")
+    if target.is_dir():
+        raise MetricsEngineError(f"not a file: {file_path}")
 
-def _cyclomatic_complexity(node: ast.AST) -> int:
-    """Calculate cyclomatic complexity for a function/method node.
+    payload = _run_engine(str(target))
+    file_metrics = _require(payload, "file_metrics", list)
+    if not file_metrics:
+        raise MetricsEngineError(f"engine reported no metrics for {file_path}")
 
-    CC = 1 + number of decision points (if/elif/for/while/except/and/or/assert)
-    in the function's own body. Nested functions are measured separately.
-    """
-    cc = 1
-    for child in _own_body_nodes(node):
-        if isinstance(child, (ast.If, ast.IfExp)):
-            cc += 1
-        elif isinstance(child, ast.For):
-            cc += 1
-        elif isinstance(child, ast.While):
-            cc += 1
-        elif isinstance(child, ast.ExceptHandler):
-            cc += 1
-        elif isinstance(child, ast.Assert):
-            cc += 1
-        elif isinstance(child, ast.BoolOp):
-            # Each 'and'/'or' adds a decision point
-            cc += len(child.values) - 1
-        elif isinstance(child, ast.comprehension):
-            cc += 1
-            cc += len(child.ifs)
-    return cc
-
-
-def _function_loc(node: ast.AST, lines: list) -> int:
-    """Count lines of CODE in a function, by the same rule as file-level LOC.
-
-    This returned `end_lineno - lineno + 1` - a raw line span - while the
-    docstring claimed lines of code and every file-level LOC excluded blanks and
-    comments. So a function's LOC and its file's LOC were different units sitting
-    side by side in the dashboard, and the maintainability index (which divides
-    by LOC) penalised a well-commented function for its comments.
-    """
-    if hasattr(node, "end_lineno") and node.end_lineno:
-        span = lines[node.lineno - 1:node.end_lineno]
-        # Floor of 1: a one-line body must never report 0.
-        return max(1, sum(1 for l in span if _is_code_line(l)))
-    # Fallback: count indented lines
-    start = node.lineno - 1
-    count = 1
-    if start + 1 < len(lines):
-        base_indent = len(lines[start]) - len(lines[start].lstrip())
-        for i in range(start + 1, len(lines)):
-            line = lines[i]
-            if line.strip() and (len(line) - len(line.lstrip())) > base_indent:
-                count += 1
-            elif line.strip():
-                break
-    return count
-
-
-def _get_parent_class(tree: ast.AST, target_node: ast.AST) -> str | None:
-    """Find the parent class of a method node."""
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            for child in ast.walk(node):
-                if child is target_node:
-                    return node.name
-    return None
-
-
-def _extract_imports(tree: ast.AST, file_path: str) -> list:
-    """Extract import targets from an AST."""
-    imports = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imports.append(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imports.append(node.module)
-    return imports
-
-
-def _count_halstead(node: ast.AST, stats: dict):
-    """Count Halstead operators and operands from AST nodes."""
-    # Operators: binary ops, unary ops, comparisons, boolops, augmented assigns
-    if isinstance(node, ast.BinOp):
-        op_name = type(node.op).__name__
-        stats["operators"] += 1
-        stats["unique_operators"].add(op_name)
-    elif isinstance(node, ast.UnaryOp):
-        op_name = type(node.op).__name__
-        stats["operators"] += 1
-        stats["unique_operators"].add(op_name)
-    elif isinstance(node, ast.Compare):
-        for op in node.ops:
-            op_name = type(op).__name__
-            stats["operators"] += 1
-            stats["unique_operators"].add(op_name)
-    elif isinstance(node, ast.BoolOp):
-        op_name = type(node.op).__name__
-        stats["operators"] += 1
-        stats["unique_operators"].add(op_name)
-    elif isinstance(node, ast.AugAssign):
-        op_name = type(node.op).__name__
-        stats["operators"] += 1
-        stats["unique_operators"].add(f"Aug{op_name}")
-
-    # Operands: names, constants
-    if isinstance(node, ast.Name):
-        stats["operands"] += 1
-        stats["unique_operands"].add(node.id)
-    elif isinstance(node, ast.Constant):
-        stats["operands"] += 1
-        stats["unique_operands"].add(str(node.value)[:50])
-
-
-def _has_matching_test(rel_path: str) -> bool:
-    """Check whether a source file has a test that actually exercises it.
-
-    PRECISE detection (a bare word-mention is NOT enough — that over-reported
-    badly: `sqlite.py` looked "tested" because some test merely said "sqlite"):
-
-    1. Filename — a dedicated `test_<module>.py` / `<module>_test.py` /
-       `<module>_spec.py` for THIS exact module (NOT the parent directory — one
-       `test_database.py` must not mark every file under `database/` tested).
-    2. Import — a test file that actually IMPORTS this module: its dotted path
-       (`import a.b.sqlite` / `from a.b.sqlite import …`) or
-       `from a.b import sqlite`. A symbol genuinely defined in this file
-       (top-level class/def) referenced by a test also counts.
-
-    Returns True only on a real, file-specific signal — so the "untested"
-    offenders surfaced by `tina4 metrics` and the dashboard "T" badge are
-    trustworthy. (If you wire real coverage data later, prefer it over this.)
-    """
-    import re
-
-    p = Path(rel_path)
-    module = p.stem  # "sqlite" from ".../database/sqlite.py"
-    if module == "__init__":
-        module = p.parent.name  # a package: use the package name
-
-    # Dotted module path: ".../database/sqlite.py" -> "...database.sqlite";
-    # for an __init__.py the package itself: ".../database/__init__.py" -> "...database"
-    parts = list(p.with_suffix("").parts)
-    if parts and parts[-1] == "__init__":
-        parts = parts[:-1]
-    dotted_path = ".".join(parts)
-    parent_dotted = ".".join(parts[:-1]) if len(parts) > 1 else ""
-
-    # Classes DEFINED in this file (top-level) — a test referencing one of them
-    # genuinely exercises this file. Classes only (PascalCase, distinctive);
-    # module-level function names like get/connect/run are too generic to trust.
-    defined_symbols: set[str] = set()
-    src_file = Path(_last_scan_root) / rel_path if _last_scan_root else p
-    try:
-        src = src_file.read_text(encoding="utf-8", errors="ignore")
-        for n in ast.walk(ast.parse(src)):
-            if isinstance(n, ast.ClassDef) and not n.name.startswith("_") and len(n.name) > 2:
-                defined_symbols.add(n.name)
-    except (OSError, SyntaxError):
-        pass
-
-    # Search CWD and (in framework-fallback mode) the repo root that owns tests/.
-    search_roots = [Path(".")]
-    if _last_scan_root:
-        scan_root = Path(_last_scan_root)
-        for _ in range(5):
-            if any((scan_root / d).exists() for d in ("tests", "test", "spec")):
-                search_roots.append(scan_root)
-                break
-            if scan_root.parent == scan_root:
-                break
-            scan_root = scan_root.parent
-
-    test_dirs = [Path("tests"), Path("test"), Path("spec")]
-
-    # Stage 1: a dedicated test FILE named for THIS module (no parent-dir blanket).
-    for root in search_roots:
-        for td in test_dirs:
-            rtd = root / td
-            if any((rtd / name).exists() for name in (
-                f"test_{module}.py", f"test_{module}s.py",
-                f"{module}_test.py", f"{module}_spec.py",
-            )):
-                return True
-
-    # Stage 2: a test that actually IMPORTS this module (precise), or references
-    # a symbol defined in it. NO bare word-of-the-module-name match.
-    # The scan root is the package/`src` dir, so dotted_path is RELATIVE to it
-    # ("core.server"), but tests import via the FULL package path
-    # ("import tina4_python.core.server" / "from src.orm.model import …"). Allow
-    # an optional leading package qualifier `(?:\w+\.)*` so the relative path
-    # matches as a suffix — without it, every file a test imports by its full
-    # module path was mislabelled "untested" (the T badge / offenders bug).
-    patterns = []
-    if dotted_path:
-        patterns.append(re.compile(rf'\b(?:import|from)\s+(?:\w+\.)*{re.escape(dotted_path)}\b'))
-    if parent_dotted:
-        patterns.append(re.compile(
-            rf'\bfrom\s+(?:\w+\.)*{re.escape(parent_dotted)}\s+import\b[^\n]*\b{re.escape(module)}\b'))
-    if defined_symbols:
-        sym_alt = "|".join(re.escape(s) for s in defined_symbols)
-        patterns.append(re.compile(rf'\b(?:{sym_alt})\b'))
-
-    if not patterns:
-        return False
-
-    for root in search_roots:
-        for td in test_dirs:
-            rtd = root / td
-            if not rtd.is_dir():
-                continue
-            for test_file in rtd.rglob("*.py"):
-                try:
-                    content = test_file.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
-                if any(pat.search(content) for pat in patterns):
-                    return True
-    return False
-
-
-def _maintainability_index(halstead_volume: float, avg_cc: float, loc: int) -> float:
-    """Calculate Maintainability Index (0-100 scale).
-
-    MI = max(0, (171 - 5.2 * ln(V) - 0.23 * CC - 16.2 * ln(LOC)) * 100 / 171)
-    """
-    if loc <= 0:
-        return 100.0
-    v = max(halstead_volume, 1)
-    mi = 171 - 5.2 * math.log(v) - 0.23 * avg_cc - 16.2 * math.log(loc)
-    return max(0.0, min(100.0, mi * 100 / 171))
-
-
-def _detect_violations(functions: list, file_metrics: list) -> list:
-    """Detect code quality violations."""
-    violations = []
-
-    for f in functions:
-        if f["complexity"] > 20:
-            violations.append({
-                "type": "error",
-                "rule": "high_complexity",
-                "message": f"{f['name']} has cyclomatic complexity {f['complexity']} (max 20)",
-                "file": f["file"],
-                "line": f["line"],
-            })
-        elif f["complexity"] > 10:
-            violations.append({
-                "type": "warning",
-                "rule": "moderate_complexity",
-                "message": f"{f['name']} has cyclomatic complexity {f['complexity']} (recommended max 10)",
-                "file": f["file"],
-                "line": f["line"],
-            })
-
-    for fm in file_metrics:
-        if fm["loc"] > 500:
-            violations.append({
-                "type": "warning",
-                "rule": "large_file",
-                "message": f"{fm['path']} has {fm['loc']} LOC (recommended max 500)",
-                "file": fm["path"],
-                "line": 1,
-            })
-        if fm["functions"] > 20:
-            violations.append({
-                "type": "warning",
-                "rule": "too_many_functions",
-                "message": f"{fm['path']} has {fm['functions']} functions (recommended max 20)",
-                "file": fm["path"],
-                "line": 1,
-            })
-        if fm["maintainability"] < 20:
-            violations.append({
-                "type": "error",
-                "rule": "low_maintainability",
-                "message": f"{fm['path']} has maintainability index {fm['maintainability']} (min 20)",
-                "file": fm["path"],
-                "line": 1,
-            })
-        elif fm["maintainability"] < 40:
-            violations.append({
-                "type": "warning",
-                "rule": "moderate_maintainability",
-                "message": f"{fm['path']} has maintainability index {fm['maintainability']} (recommended min 40)",
-                "file": fm["path"],
-                "line": 1,
-            })
-
-    violations.sort(key=lambda v: (0 if v["type"] == "error" else 1, v["file"]))
-    return violations
+    detail = dict(file_metrics[0])
+    detail["engine"] = "tina4-cli"
+    return detail

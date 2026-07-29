@@ -20,7 +20,7 @@ from tina4_python.dev_admin.metrics import full_analysis
 def _cc_by_name(tmp_path: Path, source: str) -> dict:
     (tmp_path / "sample.py").write_text(source)
     result = full_analysis(str(tmp_path))
-    return {f["name"]: f["complexity"] for f in result["all_functions"]}
+    return {f["name"]: f["complexity"] for f in result["most_complex_functions"]}
 
 
 class TestNestedComplexityIsNotDoubleCounted:
@@ -143,14 +143,14 @@ class TestFunctionLocCountsCodeLines:
             "    return 2\n"
         )
         result = full_analysis(str(tmp_path))
-        fn = result["all_functions"][0]
+        fn = result["most_complex_functions"][0]
         # The span is 7 lines; the code lines are def + if + return + return = 4.
         assert fn["loc"] == 4, f"expected code lines, got {fn['loc']}"
 
     def test_a_function_never_reports_zero(self, tmp_path):
         (tmp_path / "sample.py").write_text("def f():\n    return 1\n")
         result = full_analysis(str(tmp_path))
-        assert result["all_functions"][0]["loc"] == 2
+        assert result["most_complex_functions"][0]["loc"] == 2
 
     def test_function_loc_uses_the_same_rule_as_file_loc(self, tmp_path):
         """A file that is one single function: its LOC and the function's LOC must
@@ -163,5 +163,5 @@ class TestFunctionLocCountsCodeLines:
         )
         result = full_analysis(str(tmp_path))
         file_loc = result["file_metrics"][0]["loc"]
-        fn_loc = result["all_functions"][0]["loc"]
+        fn_loc = result["most_complex_functions"][0]["loc"]
         assert fn_loc == file_loc == 2, f"function {fn_loc} vs file {file_loc}"
