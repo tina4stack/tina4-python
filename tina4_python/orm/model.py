@@ -790,7 +790,7 @@ class ORM(metaclass=ORMMeta):
         return instances
 
     @classmethod
-    def select(cls, sql: str = None, params: list = None, limit: int = 20, offset: int = 0,
+    def select(cls, sql: str = None, params: list = None, limit: int = 100, offset: int = 0,
                include: list[str] = None) -> list[Self]:
         """SQL-first query — returns array of ORM objects.
 
@@ -798,6 +798,11 @@ class ORM(metaclass=ORMMeta):
         ``Product.select(limit=20)`` works as the scaffolder's CRUD-list
         route expects. Same soft-delete filter as ``where()`` is applied
         when ``cls.soft_delete`` is True.
+
+        The default ``limit`` is 100, the one row cap the whole family shares
+        (``all``/``find``/``where``/``with_trashed``/``cached``/``scope``/
+        ``db.fetch``). Pagination is a default, not an opt-in: pass a bigger
+        ``limit`` to reach past it.
         """
         db = cls._get_db()
         if not sql:
@@ -819,7 +824,7 @@ class ORM(metaclass=ORMMeta):
         return instances[0] if instances else None
 
     @classmethod
-    def where(cls, filter_sql: str, params: list = None, limit: int = 20, offset: int = 0,
+    def where(cls, filter_sql: str, params: list = None, limit: int = 100, offset: int = 0,
               include: list[str] = None, with_count: bool = False, order_by: str = None):
         """Query with WHERE clause — returns array of ORM objects.
 
@@ -866,7 +871,7 @@ class ORM(metaclass=ORMMeta):
         return instances
 
     @classmethod
-    def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 20, offset: int = 0) -> list[Self]:
+    def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 100, offset: int = 0) -> list[Self]:
         """Query including soft-deleted records."""
         db = cls._get_db()
         table = cls._get_table()
@@ -1070,7 +1075,7 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def cached(cls, sql: str, params: list = None, ttl: int = 60,
-               limit: int = 20, offset: int = 0, include: list = None) -> list[Self]:
+               limit: int = 100, offset: int = 0, include: list = None) -> list[Self]:
         """SQL query with result caching. Returns array of ORM objects."""
         cache_key = f"{cls.__name__}:{Cache.query_key(sql, params)}:{limit}:{offset}"
         cached = _query_cache.get(cache_key)
@@ -1280,7 +1285,7 @@ class ORM(metaclass=ORMMeta):
             User.scope("active", "active = ?", [1])
             users, count = User.active()
         """
-        def scope_method(limit: int = 20, offset: int = 0):
+        def scope_method(limit: int = 100, offset: int = 0):
             return cls.where(filter_sql, params, limit=limit, offset=offset)
 
         setattr(cls, name, staticmethod(scope_method))

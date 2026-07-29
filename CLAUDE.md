@@ -225,15 +225,15 @@ MyModel.find_or_fail(pk_value) -> MyModel          # Raises ValueError if not fo
 MyModel.exists(pk_value) -> bool                   # True if record with that PK exists
 MyModel.create(data=None, **kwargs) -> MyModel     # Create + save in one call
 MyModel.all(limit=100, offset=0, include=None) -> list[MyModel]
-MyModel.select(sql, params=None, limit=20, offset=0, include=None) -> list[MyModel]
+MyModel.select(sql, params=None, limit=100, offset=0, include=None) -> list[MyModel]
 MyModel.select_one(sql, params=None, include=None) -> MyModel | None
-MyModel.where(filter_sql, params=None, limit=20, offset=0, include=None, order_by=None) -> list[MyModel]
-MyModel.with_trashed(filter_sql="1=1", params=None, limit=20, offset=0) -> list[MyModel]
+MyModel.where(filter_sql, params=None, limit=100, offset=0, include=None, order_by=None) -> list[MyModel]
+MyModel.with_trashed(filter_sql="1=1", params=None, limit=100, offset=0) -> list[MyModel]
 MyModel.count(conditions=None, params=None) -> int
 MyModel.create_table() -> bool
 MyModel.query() -> QueryBuilder
 MyModel.scope(name, filter_sql, params=None)  # Registers a reusable named method on the class
-MyModel.cached(sql, params=None, ttl=60, limit=20, offset=0) -> list[MyModel]
+MyModel.cached(sql, params=None, ttl=60, limit=100, offset=0) -> list[MyModel]
 
 bind_database(db: Database, name: str = None) -> None
 ```
