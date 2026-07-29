@@ -431,6 +431,35 @@ class FirebirdAdapter(DatabaseAdapter):
         )
         return [r["rdb$relation_name"].strip() for r in result.records]
 
+    def quote_identifier(self, name: str) -> str:
+        """Quote an identifier the way Firebird actually stores it: UPPERCASE.
+
+        Firebird folds an UNQUOTED identifier to upper case, and treats a QUOTED
+        one as case-sensitive. So `CREATE TABLE probe_t (...)` stores `PROBE_T`,
+        and the base implementation's `"probe_t"` then matches nothing:
+
+            INSERT INTO "probe_t" ...  ->  Table unknown - probe_t
+
+        That broke insert/update/delete/truncate against every table created the
+        conventional (unquoted) way -- verified against a live Firebird 5.0.4.
+
+        A name the caller has ALREADY quoted is passed through untouched, which is
+        the escape hatch for a genuinely case-sensitive lower-case table created
+        as `CREATE TABLE "orders"`.
+        """
+        if not name:
+            return name
+        open_q, close_q = self.IDENTIFIER_QUOTE
+        name = name.strip()
+        if name.startswith(open_q) and name.endswith(close_q):
+            return name
+        if "." in name:
+            return ".".join(self.quote_identifier(part) for part in name.split("."))
+        # Leave expressions and wildcards alone, exactly like the base class.
+        if not name.replace("_", "").replace("$", "").isalnum():
+            return name
+        return f"{open_q}{name.upper().replace(close_q, close_q * 2)}{close_q}"
+
     def get_columns(self, table: str) -> list[dict]:
         sql = (
             "SELECT RF.RDB$FIELD_NAME, F.RDB$FIELD_TYPE, RF.RDB$NULL_FLAG, "
@@ -441,6 +470,27 @@ class FirebirdAdapter(DatabaseAdapter):
             "ORDER BY RF.RDB$FIELD_POSITION"
         )
         result = self.fetch(sql, [table.upper()], limit=10000)
+
+        # The primary key comes from the constraint catalogue. This used to be
+        # hardcoded False for every column, so primary_key() always reported []
+        # on Firebird -- which silently broke anything that introspects the key,
+        # including the filterless-write guard that takes the PK out of `data`.
+        pk_sql = (
+            "SELECT SG.RDB$FIELD_NAME FROM RDB$INDEX_SEGMENTS SG "
+            "JOIN RDB$RELATION_CONSTRAINTS RC ON SG.RDB$INDEX_NAME = RC.RDB$INDEX_NAME "
+            "WHERE RC.RDB$CONSTRAINT_TYPE = 'PRIMARY KEY' "
+            "AND RC.RDB$RELATION_NAME = ? "
+            "ORDER BY SG.RDB$FIELD_POSITION"
+        )
+        pk_names: set[str] = set()
+        try:
+            pk_rows = self.fetch(pk_sql, [table.upper()], limit=10000)
+            for row in pk_rows.records:
+                value = row.get("rdb$field_name")
+                if value:
+                    pk_names.add(value.strip().upper())
+        except Exception:  # noqa: BLE001 - no PK is not an error
+            pk_names = set()
         # Map Firebird field type codes to names
         type_map = {
             7: "SMALLINT", 8: "INTEGER", 10: "FLOAT", 12: "DATE",
@@ -453,7 +503,8 @@ class FirebirdAdapter(DatabaseAdapter):
                 "type": type_map.get(r.get("rdb$field_type"), str(r.get("rdb$field_type", ""))),
                 "nullable": r.get("rdb$null_flag") is None,
                 "default": r.get("rdb$default_source"),
-                "primary_key": False,
+                "primary_key": (r["rdb$field_name"].strip().upper()
+                                if r["rdb$field_name"] else "") in pk_names,
             }
             for r in result.records
         ]
