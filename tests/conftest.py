@@ -18,6 +18,12 @@ _SERVICE_KEYWORDS = (
     "rabbit", "amqp",
     "kafka",            # also matches "rdkafka" / "confluent-kafka"
     "mqtt", "mosquitto",  # Mosquitto (+ EMQX) for the MQTT tests
+    # GreenMail (real SMTP 3025 / IMAP 3143) for the Messenger round-trip tests.
+    # test_messenger.py has ALWAYS claimed in a comment that its "GreenMail
+    # SMTP/IMAP not reachable" skip was upgraded here -- it was not, because no
+    # mail keyword existed in this tuple, so every one of those live tests could
+    # skip green in CI forever behind a comment saying it could not.
+    "greenmail", "smtp", "imap",
 )
 _UNAVAILABLE_HINTS = (
     "not reachable", "unreachable", "not running", "not set",
