@@ -20,40 +20,47 @@ import pytest
 FIXTURE = Path(__file__).parent / "fixtures" / "adapter_contract.json"
 CONTRACT = json.loads(FIXTURE.read_text(encoding="utf-8"))
 
+# The REDESIGNED contract: five small contracts, 14 methods. It replaced a
+# 20-method list assembled from PHP's and Node's interfaces - see the plan for
+# why that list was wrong in a way none of the four frameworks showed alone.
+METHODS = [m["name"] for c in CONTRACT["contracts"].values() for m in c["methods"]]
+
 # Contract name -> the spellings Python accepts. snake_case is idiomatic here,
 # and `connect` for `open` is the existing name, not a divergence to fix.
 SPELLINGS = {
     "open": ("open", "connect"),
     "close": ("close",),
+    "getDatabaseType": ("get_database_type",),
     "execute": ("execute",),
-    "executeMany": ("execute_many",),
     "fetch": ("fetch",),
-    "fetchOne": ("fetch_one",),
-    "insert": ("insert",),
-    "update": ("update",),
-    "delete": ("delete",),
     "startTransaction": ("start_transaction",),
     "commit": ("commit",),
     "rollback": ("rollback",),
+    "autocommit": ("autocommit",),
     "getTables": ("get_tables",),
     "getColumns": ("get_columns",),
     "tableExists": ("table_exists",),
-    "createTable": ("create_table",),
-    "addColumn": ("add_column",),
     "lastInsertId": ("last_insert_id", "get_last_id"),
     "error": ("error", "get_error", "last_error"),
-    "autocommit": ("autocommit",),
 }
 
 # FLOORS, measured 2026-07-30. Raise one when you implement a method; never
 # lower one. A drop here means an adapter lost a method it used to have.
+# Measured against the REDESIGNED 14-method contract. Python already implements
+# almost all of it, because the redesign kept only what genuinely differs per
+# engine - which is what these adapters were already doing.
+# All six are 12/14, missing the same two: lastInsertId and error. Under the OLD
+# 20-method list they read 15/20 and the gap looked like six scattered holes;
+# against a contract of only what genuinely differs per engine, the real gap is
+# two methods, identical everywhere. That is the redesign paying for itself
+# before a line of adapter code moves.
 FLOORS = {
-    "SQLiteAdapter": 15,
-    "PostgreSQLAdapter": 15,
-    "MySQLAdapter": 15,
-    "MSSQLAdapter": 15,
-    "FirebirdAdapter": 15,
-    "ODBCAdapter": 15,
+    "SQLiteAdapter": 12,
+    "PostgreSQLAdapter": 12,
+    "MySQLAdapter": 12,
+    "MSSQLAdapter": 12,
+    "FirebirdAdapter": 12,
+    "ODBCAdapter": 12,
 }
 
 
@@ -87,8 +94,21 @@ def _implemented(cls):
 ADAPTERS = _adapters()
 
 
-def test_the_fixture_declares_twenty_methods():
-    assert len(CONTRACT["methods"]) == 20
+def test_the_fixture_declares_five_contracts_and_fourteen_methods():
+    assert len(CONTRACT["contracts"]) == 5
+    assert len(METHODS) == 14
+
+
+def test_crud_and_ddl_are_not_on_the_adapter():
+    """The redesign's central claim, pinned.
+
+    insert/update/delete/createTable/addColumn are composable above the adapter
+    and were duplicated per adapter in three of four frameworks. If one reappears
+    in the contract, the 4.3x comes back with it.
+    """
+    for gone in ("insert", "update", "delete", "createTable", "addColumn", "executeMany", "fetchOne", "query"):
+        assert gone not in METHODS, f"{gone} is back on the adapter contract"
+        assert gone in CONTRACT["not_on_the_adapter"], f"{gone} left the contract without a recorded reason"
 
 
 def test_every_adapter_module_was_found():
