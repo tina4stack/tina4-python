@@ -193,6 +193,106 @@ def test_memcached_backend():
     _ttl_expiry(b)
 
 
+@pytest.mark.skipif(not _reachable("localhost", 11211), reason="memcached not running")
+def test_negative_memcached_size_ignores_another_tenants_keys():
+    """Regression: `size` reported the WHOLE SERVER's item count.
+
+    Memcached was the only backend of the seven that leaked: it read the global
+    `curr_items` from `stats`, so `cache_stats()["size"]` counted every key
+    written by every other application sharing that server. Every other backend
+    is scoped - memory counts its own dict, redis/valkey scan their own prefix,
+    file counts its own directory, mongo its own collection, database its own
+    table.
+
+    It also made this file's own `_roundtrip` intermittently fail in a full-suite
+    run with `assert 7 == 0`, because something else in the suite had keys in the
+    same memcached. That is the symptom; the leaked public API is the bug.
+
+    NO MOCK: a second REAL client writes to the same REAL server, which is
+    exactly the shared-tenant situation being asserted about.
+    """
+    b = _create_backend(backend="memcached", url="memcached://localhost:11211")
+    b.clear()
+    assert b.stats()["size"] == 0
+
+    # A DIFFERENT tenant writes to the same server, outside this backend.
+    sock = socket.create_connection(("localhost", 11211), timeout=3)
+    try:
+        for i in range(6):
+            sock.sendall(b"set other:tenant:%d 0 60 5\r\nhello\r\n" % i)
+            sock.recv(100)
+    finally:
+        sock.close()
+
+    assert b.stats()["size"] == 0, "size must count OUR entries, not the server's"
+
+    b.set("mine", {"a": 1}, 60)
+    assert b.stats()["size"] == 1, "our own entry must be counted"
+
+    # An expired entry stops counting without a round-trip: the TTL we set is
+    # the TTL we account for.
+    b.set("brief", {"a": 1}, 1)
+    assert b.stats()["size"] == 2
+    time.sleep(2)
+    assert b.stats()["size"] == 1, "an expired entry must drop out of the count"
+
+    b.clear()
+    assert b.stats()["size"] == 0
+
+
+@pytest.mark.skipif(not _reachable("localhost", 11211), reason="memcached not running")
+def test_negative_memcached_clear_does_not_wipe_another_tenants_keys():
+    """Regression: `clear()` sent `flush_all` and wiped the WHOLE server.
+
+    cache_clear() is public API. On memcached it destroyed every key on the
+    instance, including every other application sharing it - no other backend
+    does that; each clears only what it owns. A shared memcached is the normal
+    deployment, so this was data loss for anyone else on the box.
+
+    NO MOCK: a second REAL client writes to the same REAL server, and the
+    assertion is that its keys SURVIVE our clear().
+    """
+    b = _create_backend(backend="memcached", url="memcached://localhost:11211")
+    b.clear()
+    b.set("ours", {"a": 1}, 60)
+
+    # A DIFFERENT tenant's key, written outside this backend.
+    sock = socket.create_connection(("localhost", 11211), timeout=3)
+    try:
+        sock.sendall(b"set other:survivor 0 60 5\r\nhello\r\n")
+        sock.recv(100)
+    finally:
+        sock.close()
+
+    b.clear()
+
+    # Ours is gone...
+    assert b.get("ours") is None
+    assert b.stats()["size"] == 0
+
+    # ...and theirs is untouched.
+    sock = socket.create_connection(("localhost", 11211), timeout=3)
+    try:
+        sock.sendall(b"get other:survivor\r\n")
+        resp = b""
+        while b"END\r\n" not in resp:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            resp += chunk
+    finally:
+        sock.close()
+    assert b"hello" in resp, "clear() destroyed another tenant's key"
+
+    # tidy up after ourselves
+    sock = socket.create_connection(("localhost", 11211), timeout=3)
+    try:
+        sock.sendall(b"delete other:survivor\r\n")
+        sock.recv(100)
+    finally:
+        sock.close()
+
+
 @pytest.mark.skipif(not _reachable("localhost", 27017), reason="mongodb not running")
 def test_mongodb_backend():
     pytest.importorskip("pymongo")

@@ -453,6 +453,11 @@ class _MemcachedBackend(_CacheBackend):
         self._prefix = "tina4:cache:"
         self._hits = 0
         self._misses = 0
+        # Keys THIS backend wrote, with the moment each expires (0 = no expiry).
+        # Memcached has no KEYS/prefix scan, so a scoped count cannot be read
+        # back from the server - see stats() for why the global counter it does
+        # expose is the wrong answer.
+        self._own: dict[str, float] = {}
         self._available = self._command(b"version\r\n", b"\r\n").startswith(b"VERSION")
 
     def is_available(self) -> bool:
@@ -495,28 +500,58 @@ class _MemcachedBackend(_CacheBackend):
     def set(self, key: str, value, ttl: int):
         data = json.dumps(value, default=str).encode()
         exptime = ttl if ttl > 0 else 0
-        payload = f"set {self._mc_key(key)} 0 {exptime} {len(data)}\r\n".encode() + data + b"\r\n"
+        mc_key = self._mc_key(key)
+        payload = f"set {mc_key} 0 {exptime} {len(data)}\r\n".encode() + data + b"\r\n"
         self._command(payload, b"\r\n")
+        self._own[mc_key] = (time.time() + exptime) if exptime > 0 else 0.0
 
     def delete(self, key: str) -> bool:
-        resp = self._command(f"delete {self._mc_key(key)}\r\n".encode(), b"\r\n")
+        mc_key = self._mc_key(key)
+        resp = self._command(f"delete {mc_key}\r\n".encode(), b"\r\n")
+        self._own.pop(mc_key, None)
         return resp.startswith(b"DELETED")
 
     def clear(self):
+        """Remove OUR entries, not the whole server's.
+
+        This used to send `flush_all`, which wipes EVERY key on the memcached
+        instance - including every other application sharing it. cache_clear()
+        is public API, so calling it destroyed other tenants' data. No other
+        backend does that: they each clear only what they own.
+
+        Now that the backend tracks the keys it wrote, it deletes exactly those.
+        A key it never wrote is not its to remove.
+        """
         self._hits = 0
         self._misses = 0
-        self._command(b"flush_all\r\n", b"\r\n")
+        for mc_key in list(self._own):
+            self._command(f"delete {mc_key}\r\n".encode(), b"\r\n")
+        self._own.clear()
 
     def stats(self) -> dict:
-        size = 0
-        resp = self._command(b"stats\r\n", b"END\r\n")
-        for line in resp.split(b"\r\n"):
-            if line.startswith(b"STAT curr_items "):
-                try:
-                    size = int(line.split()[2])
-                except (ValueError, IndexError):
-                    pass
-        return {"hits": self._hits, "misses": self._misses, "size": size, "backend": "memcached"}
+        """Report OUR entries, not the whole server's.
+
+        This used to read memcached's `curr_items`, which is a GLOBAL counter:
+        it includes every key written by every other tenant of that server. On a
+        shared memcached (the normal deployment) `size` was therefore reporting
+        somebody else's data, and every other backend here is scoped - memory
+        counts its own dict, redis/valkey scan their own prefix, file counts its
+        own directory, mongo its own collection, database its own table.
+        Memcached was the only one leaking.
+
+        It cannot be fixed by asking the server: memcached has no KEYS or
+        prefix-scan command. So the count comes from our own write log, filtered
+        by the TTLs we set. That is exact for the keys this process wrote; a key
+        EVICTED early under memory pressure is invisible to us and would be
+        over-counted, which is a far smaller and more honest error than counting
+        another application's keys.
+        """
+        now = time.time()
+        live = [k for k, expires in self._own.items() if expires == 0.0 or expires > now]
+        # Drop the expired ones so the log cannot grow without bound.
+        if len(live) != len(self._own):
+            self._own = {k: self._own[k] for k in live}
+        return {"hits": self._hits, "misses": self._misses, "size": len(live), "backend": "memcached"}
 
     def name(self) -> str:
         return "memcached"
