@@ -14,7 +14,60 @@ Usage:
     env_vars = all_env()                 # Get all env vars as dict
 """
 import os
+import re
+import sys
 from pathlib import Path
+
+_VALID_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_REFERENCE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _warn(message: str) -> None:
+    """Emit a parse warning. dotenv loads before the logger exists, so stderr."""
+    print(f"[tina4] {message}", file=sys.stderr)
+
+
+def _interpolate(value: str, env_file, line_num: int, warned_refs: set) -> str:
+    """Expand ${VAR} against already-loaded keys plus the real environment.
+
+    An unresolved name stays LITERAL and is warned about once per name, so a typo
+    is visible without breaking the load.
+    """
+    def replace(match):
+        name = match.group(1)
+        if name in os.environ:
+            return os.environ[name]
+        if name not in warned_refs:
+            warned_refs.add(name)
+            _warn(f"{env_file}:{line_num}: ${{{name}}} is not set, left as-is")
+        return match.group(0)
+
+    return _REFERENCE.sub(replace, value)
+
+
+def _parse_value(value: str, env_file, line_num: int, warned_refs: set) -> str:
+    """Quoting decides escapes AND interpolation, in that order.
+
+    The rules are the cross-framework behaviour table (feature 1 of the feature
+    audit): identical in Python, PHP, Ruby and Node, driven off one committed
+    fixture.
+    """
+    # A fully single-quoted value is verbatim: no escapes, no interpolation.
+    # Shell semantics, and the documented way to keep a literal ${...}.
+    if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+        return value[1:-1]
+
+    # A double-quoted value keeps its interior verbatim (a `#` inside stays a
+    # `#`), minus the quotes, with escape processing.
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        inner = value[1:-1].replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
+        return _interpolate(inner, env_file, line_num, warned_refs)
+
+    # An unquoted value is truncated at the first SPACE-HASH, then trimmed.
+    comment_idx = value.find(" #")
+    if comment_idx != -1:
+        value = value[:comment_idx]
+    return _interpolate(value.rstrip(), env_file, line_num, warned_refs)
 
 
 def load_env(file_path: str = None, override: bool = False) -> dict:
@@ -47,6 +100,7 @@ def load_env(file_path: str = None, override: bool = False) -> dict:
     if not env_file.is_file():
         return loaded
 
+    warned_refs = set()
     for line_num, raw_line in enumerate(env_file.read_text(encoding="utf-8").splitlines(), 1):
         line = raw_line.strip()
 
@@ -58,27 +112,21 @@ def load_env(file_path: str = None, override: bool = False) -> dict:
         if line.startswith("export "):
             line = line[7:].strip()
 
-        # Split on first "="
+        # Split on first "=". A line with no "=" sets nothing, so say so rather
+        # than dropping it in silence.
         if "=" not in line:
+            _warn(f"{env_file}:{line_num}: no '=' in {line!r}, line skipped")
             continue
 
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip()
 
-        if not key:
+        if not _VALID_KEY.match(key):
+            _warn(f"{env_file}:{line_num}: invalid key {key!r}, line skipped")
             continue
 
-        # Remove surrounding quotes
-        if len(value) >= 2:
-            if (value[0] == '"' and value[-1] == '"') or \
-               (value[0] == "'" and value[-1] == "'"):
-                value = value[1:-1]
-            else:
-                # Remove inline comments (only for unquoted values)
-                comment_idx = value.find(" #")
-                if comment_idx != -1:
-                    value = value[:comment_idx].rstrip()
+        value = _parse_value(value, env_file, line_num, warned_refs)
 
         loaded[key] = value
 
