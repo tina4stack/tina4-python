@@ -27,16 +27,29 @@ def _engines():
     green SQLite-only run is the least informative possible result, so the run
     reports which engines it actually covered.
     """
-    found = [("sqlite", None)]
-    for name, var in (
-        ("postgres", "TINA4_TEST_PG_URL"),
-        ("mysql", "TINA4_TEST_MYSQL_URL"),
-        ("mssql", "TINA4_TEST_MSSQL_URL"),
-        ("firebird", "TINA4_TEST_FIREBIRD_URL"),
+    found = [("sqlite", (None, None, None))]
+    for name, prefix in (
+        ("postgres", "TINA4_TEST_PG"),
+        ("mysql", "TINA4_TEST_MYSQL"),
+        ("mssql", "TINA4_TEST_MSSQL"),
+        # Firebird is deliberately last and is NOT in the .99 default set: the
+        # suite HANGS against it rather than failing, so it has to be opted into
+        # knowingly. Left running it would look like a slow suite instead of a
+        # blocked one. Tracked as its own item; do not add it to a CI matrix
+        # until the hang is understood.
+        ("firebird", "TINA4_TEST_FIREBIRD"),
     ):
-        url = (os.environ.get(var) or "").strip()
-        if url:
-            found.append((name, url))
+        url = (os.environ.get(f"{prefix}_URL") or "").strip()
+        if not url:
+            continue
+        # PER-ENGINE credentials, falling back to the global pair. Without this
+        # the engines cannot run in ONE invocation: MSSQL's login is not MySQL's,
+        # so a single TINA4_DATABASE_USERNAME can only ever satisfy some of them
+        # and the rest fail at connect - which reads like a broken suite rather
+        # than a credential problem.
+        user = os.environ.get(f"{prefix}_USERNAME") or os.environ.get("TINA4_DATABASE_USERNAME") or ""
+        password = os.environ.get(f"{prefix}_PASSWORD") or os.environ.get("TINA4_DATABASE_PASSWORD") or ""
+        found.append((name, (url, user, password)))
     return found
 
 
@@ -56,8 +69,12 @@ def test_the_run_records_which_engines_it_covered():
 @pytest.fixture(params=ENGINES, ids=[n for n, _ in ENGINES])
 def db(request, tmp_path):
     """A real two-row table, so a full-table write is visible as collateral damage."""
-    _, url = request.param
-    database = Database(url or f"sqlite:///{tmp_path}/contract.db")
+    _, (url, user, password) = request.param
+    database = (
+        Database(f"sqlite:///{tmp_path}/contract.db")
+        if url is None
+        else Database(url, username=user, password=password)
+    )
     try:
         database.execute("DROP TABLE t")
     except Exception:
