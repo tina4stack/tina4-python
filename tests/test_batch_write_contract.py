@@ -180,6 +180,43 @@ def test_an_engine_alias_resolves_to_the_same_cap_as_its_canonical_name(alias, c
         SQLTranslator.build_batch_inserts(sql, rows, canonical)
 
 
+def test_a_collapsed_batch_still_reports_the_LAST_rows_id_on_mysql():
+    """Regression: collapsing a batch silently changed last_id on MySQL.
+
+    MySQL's LAST_INSERT_ID() reports the FIRST generated id of a multi-row
+    INSERT, not the last (verified live: a 3-row insert into a fresh table
+    reports 1 while MAX(id) is 3). A row-at-a-time batch reported the LAST row's
+    id simply because the last statement inserted the last row, so the collapse
+    quietly redefined the contract - caught by tests/test_batch_insert.py, which
+    asserts last_id is the real id of the final inserted row.
+    """
+    # 3 rows in the chunk, MySQL reported the first id (1) -> the last is 3.
+    assert SQLTranslator.batch_last_id(1, 3, "mysql") == 3
+    assert SQLTranslator.batch_last_id(10, 5, "mariadb") == 14   # alias resolves too
+
+
+@pytest.mark.parametrize("engine", ["sqlite", "postgres", "postgresql", "mssql"])
+def test_negative_engines_that_already_report_the_last_id_are_left_alone(engine):
+    """Only the engines that need it are adjusted.
+
+    SQLite (last_insert_rowid), PostgreSQL (lastval) and MSSQL already report
+    the LAST id. Adding the offset there would push last_id PAST the real row.
+    """
+    assert SQLTranslator.batch_last_id(7, 3, engine) == 7
+
+
+def test_negative_a_single_row_chunk_never_shifts_the_id():
+    """first + 1 - 1 == first: a one-row chunk must be untouched everywhere."""
+    for engine in ("mysql", "sqlite", "postgres", "mssql"):
+        assert SQLTranslator.batch_last_id(42, 1, engine) == 42
+
+
+def test_negative_a_non_numeric_last_id_is_passed_through_unchanged():
+    """A UUID/ULID primary key has no arithmetic successor."""
+    assert SQLTranslator.batch_last_id("018f-2b7c-uuid", 3, "mysql") == "018f-2b7c-uuid"
+    assert SQLTranslator.batch_last_id(None, 3, "mysql") is None
+
+
 def test_negative_postgresql_spelled_in_full_still_collapses():
     """The exact value Python's own adapter returns.
 

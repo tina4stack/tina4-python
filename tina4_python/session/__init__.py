@@ -209,6 +209,9 @@ class Session:
         elif backend in ("mongodb", "mongo"):
             from tina4_python.session_handlers import MongoDBSessionHandler
             return MongoDBSessionHandler()
+        elif backend in ("memcached", "memcache"):
+            from tina4_python.session_handlers import MemcachedSessionHandler
+            return MemcachedSessionHandler()
         elif backend in ("database", "db"):
             # Resolve the same connection the ORM uses (global bound db, then
             # TINA4_DATABASE_URL). DatabaseSessionHandler "uses whatever DB is
