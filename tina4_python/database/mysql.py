@@ -68,7 +68,16 @@ class MySQLAdapter(DatabaseAdapter):
         cursor.execute(sql, params or [])
 
         records = []
+        # MySQL reports the FIRST generated id of a MULTI-ROW INSERT, not the
+        # last (verified live: a 3-row insert into a fresh table reports 1 while
+        # MAX(id) is 3). Every other engine reports the last, and callers -
+        # get_last_id(), ORM.save(), the batch DatabaseResult - all expect the
+        # last. The ids in one statement are consecutive, so normalise here,
+        # where both the first id and the row count are known; doing it further
+        # up would leave get_last_id() disagreeing with the returned result.
         last_id = cursor.lastrowid
+        if last_id:
+            last_id = int(last_id) + max(int(cursor.rowcount or 1), 1) - 1
 
         if returning_cols and last_id:
             table = self._extract_table(sql)

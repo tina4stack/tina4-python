@@ -375,27 +375,18 @@ class DatabaseAdapter:
         batched = SQLTranslator.build_batch_inserts(sql, rows, self.get_database_type())
         try:
             if batched:
-                columns = len(rows[0]) if rows else 1
                 for chunk_sql, chunk_params in batched:
                     result = self.execute(chunk_sql, chunk_params)
                     # The collapse must be invisible: affected_rows is the total
                     # ROW count, never the number of statements run.
                     total_affected += result.affected_rows
+                    # last_id stays the LAST inserted row's id. MySQL reports the
+                    # FIRST id of a multi-row INSERT; its ADAPTER normalises that
+                    # at write time (the only place that knows both the first id
+                    # and the row count), so get_last_id() and this result always
+                    # agree. Normalising here instead would double-apply.
                     if result.last_id is not None:
-                        # last_id must stay the LAST inserted row's id. MySQL's
-                        # LAST_INSERT_ID() reports the FIRST id of a multi-row
-                        # INSERT (documented, and verified live: a 3-row insert
-                        # into a fresh table reports 1 while MAX(id) is 3), so a
-                        # collapsed batch would silently start reporting the
-                        # first id instead of the last. The ids in one statement
-                        # are consecutive, so the last is first + rows - 1.
-                        # SQLite/PostgreSQL/MSSQL already report the last and are
-                        # left alone.
-                        last_id = SQLTranslator.batch_last_id(
-                            result.last_id,
-                            len(chunk_params) // max(columns, 1),
-                            self.get_database_type(),
-                        )
+                        last_id = result.last_id
             else:
                 for params in rows:
                     result = self.execute(sql, params)
