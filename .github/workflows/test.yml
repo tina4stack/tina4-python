@@ -182,7 +182,14 @@ jobs:
           echo "TINA4_TEST_MQTT_CA_FILE=$RUNNER_TEMP/tina4-mqtt-infra/certs/ca.crt" >> "$GITHUB_ENV"
 
       - name: Install dependencies
-        run: pip install uv && uv sync && uv pip install pymongo confluent-kafka pika psycopg2-binary mysql-connector-python pymssql redis
+        # `--extra test` is the DECLARED client set (pyproject
+        # [project.optional-dependencies].test). It replaces an ad-hoc
+        # `uv pip install pymongo confluent-kafka pika ...` list that lived only
+        # here, so no framework consumer could reproduce the test environment --
+        # and confluent-kafka / pika were in no extra at all. Installing via the
+        # extra means CI exercises the same declaration everyone else uses, so it
+        # cannot drift from reality unnoticed.
+        run: pip install uv && uv sync --extra test
 
       # The MSSQL image boots with no user database; create tina4_test once the
       # server is healthy (the live MSSQL tests connect to it).

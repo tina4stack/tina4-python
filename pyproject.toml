@@ -25,6 +25,10 @@ odbc = ["pyodbc>=5.0"]
 redis = ["redis>=5.0"]
 memcache = ["pymemcache>=4.0"]
 
+# Queue backends — install what you need
+kafka = ["confluent-kafka>=2.0"]
+rabbitmq = ["pika>=1.3"]
+
 # All database drivers
 all-db = [
     "psycopg2-binary>=2.9",
@@ -33,6 +37,33 @@ all-db = [
     "firebird-driver>=1.10",
     "pymongo>=4.0",
     "pyodbc>=5.0",
+]
+
+# Every client the TEST SUITE needs against live services.
+#
+# These were installed ad hoc by CI (`uv pip install pymongo confluent-kafka
+# pika ...`) and declared nowhere, so a fresh host had no way to know what the
+# suite requires. confluent-kafka and pika in particular were in NO extra: the
+# lab host's first full-suite run failed with three "confluent-kafka not
+# installed" errors, correctly raised by the TINA4_REQUIRE_SERVICES gate, and
+# `uv sync --all-extras` could not have fixed it because the dependency was not
+# expressed anywhere. One declared extra means `uv sync --extra test` is
+# reproducible on any machine.
+#
+# Includes firebird-driver even though the Firebird CI job installs it on its
+# own: `uv sync --extra X` PRUNES anything outside the named extras, so a test
+# extra that omitted it would silently uninstall it on a host that had it.
+test = [
+    "psycopg2-binary>=2.9",
+    "mysql-connector-python>=9.0",
+    "pymssql>=2.3",
+    "firebird-driver>=1.10",
+    "pymongo>=4.0",
+    "pyodbc>=5.0",
+    "redis>=5.0",
+    "pymemcache>=4.0",
+    "confluent-kafka>=2.0",
+    "pika>=1.3",
 ]
 
 [dependency-groups]

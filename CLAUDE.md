@@ -7,6 +7,14 @@ Version 3.13.94 - Lightweight Python web framework. See https://tina4.com for fu
 - Package manager: `uv`
 - Python: >=3.12
 - Install: `uv sync`
+- Install for the FULL test suite: `uv sync --extra test` — the declared client set
+  for every live service the suite touches (PostgreSQL, MySQL, MSSQL, Firebird,
+  MongoDB, ODBC, Redis, Memcached, **Kafka via confluent-kafka, RabbitMQ via
+  pika**). Use this on any machine that runs the real-service tests. Note
+  `uv sync --extra X` PRUNES packages outside the named extras, so prefer
+  `--extra test` over `--all-extras` when you want exactly the test set. `pyodbc`
+  additionally needs the SYSTEM unixODBC library (`libodbc.so.2`, e.g.
+  `apt-get install unixodbc`) — the wheel installs without it but cannot import.
 - Run all tests: `.venv/bin/python -m pytest tests/`
 - Run single test: `.venv/bin/python -m pytest tests/test_file.py::TestClass::test_method`
 - Coverage: `.venv/bin/python -m pytest tests/ --cov=tina4_python`

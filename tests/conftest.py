@@ -14,8 +14,10 @@ _SERVICE_KEYWORDS = (
     "mysql",            # also matches "mysql-connector-python"
     "mssql", "sqlserver", "pymssql",
     "redis", "valkey", "memcached",
+    "pymemcache",       # the memcached CLIENT: "memcached" does not match it
     "mongo",            # also matches "pymongo"
     "rabbit", "amqp",
+    "pika",             # the RabbitMQ CLIENT: "rabbit"/"amqp" do not match it
     "kafka",            # also matches "rdkafka" / "confluent-kafka"
     "mqtt", "mosquitto",  # Mosquitto (+ EMQX) for the MQTT tests
     # GreenMail (real SMTP 3025 / IMAP 3143) for the Messenger round-trip tests.
@@ -25,6 +27,18 @@ _SERVICE_KEYWORDS = (
     # skip green in CI forever behind a comment saying it could not.
     "greenmail", "smtp", "imap",
 )
+# A keyword must match the text the test ACTUALLY skips with, and tests skip on
+# the CLIENT LIBRARY name as often as the service name. Where the two differ and
+# the service name is not a substring of the client's, BOTH belong above:
+# "pika not installed" and "pymemcache not installed" matched nothing and passed
+# green, which is how six live RabbitMQ tests sat silently skipping on a host
+# that had every service running. ("kafka" happens to be a substring of
+# "confluent-kafka" and "psycopg2"/"pymssql" are listed explicitly, so those were
+# already covered -- the gap was only where neither held.)
+#
+# pyodbc is deliberately NOT here. There is no ODBC service in the lab or in CI,
+# so -- exactly like Firebird -- an ODBC skip is a genuinely-unprovisioned skip
+# and must stay green. Add it the day an ODBC service is provisioned.
 _UNAVAILABLE_HINTS = (
     "not reachable", "unreachable", "not running", "not set",
     "not installed", "could not connect", "not available", "refused",
