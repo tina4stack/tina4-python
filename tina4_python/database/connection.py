@@ -15,6 +15,7 @@ import threading
 import time
 import weakref
 from urllib.parse import urlparse
+from tina4_python.database.database_url import DatabaseUrl
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
 
 
@@ -271,14 +272,20 @@ class Database:
         )
 
     def _create_adapter(self) -> DatabaseAdapter:
-        """Select adapter based on URL scheme."""
-        parsed = urlparse(self.url)
-        scheme = parsed.scheme.lower()
+        """Select adapter based on the URL's canonical engine.
 
-        # Handle sqlite: URLs — see _connection_path for the slash rule
-        # (three slashes = relative to cwd, four = absolute).
-        if scheme.startswith("sqlite"):
-            scheme = "sqlite"
+        The engine comes from DatabaseUrl, which resolves aliases once
+        (`postgresql`/`pgsql` -> `postgres`, `sqlserver` -> `mssql`,
+        `sqlite3` -> `sqlite`), so this no longer re-derives the scheme with its
+        own urlparse call and its own startswith("sqlite") special case.
+        """
+        try:
+            scheme = DatabaseUrl(self.url).engine
+        except ValueError:
+            # DatabaseUrl rejects the scheme before we can look it up. From the
+            # facade's point of view that is the same failure, so keep the
+            # message callers already handle.
+            scheme = (urlparse(self.url).scheme or "").lower()
 
         if scheme not in _DRIVERS:
             available = ", ".join(_DRIVERS.keys())
