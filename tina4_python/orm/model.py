@@ -360,11 +360,45 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def _get_pk(cls) -> str:
-        """Get primary key field name."""
+        """The FIRST primary-key field name (or "id").
+
+        Kept for the auto-increment paths, which are single-column by
+        definition. Anything that ADDRESSES a row must use :meth:`_get_pks`:
+        keying on one column of a composite key matches every row sharing that
+        column's value, which is the data-loss shape feature 4 removed from the
+        raw write path below this layer.
+        """
         for name, field in cls._fields.items():
             if field.primary_key:
                 return name
         return "id"
+
+    @classmethod
+    def _get_pks(cls) -> list[str]:
+        """EVERY primary-key field name, in declaration order.
+
+        A key may span several columns. Returns ["id"] when a model declares no
+        primary key, matching the previous fallback.
+        """
+        keys = [name for name, field in cls._fields.items() if field.primary_key]
+        return keys or ["id"]
+
+    def _pk_where(self) -> tuple[str, list]:
+        """A WHERE clause naming EVERY primary-key column, and its params.
+
+        Addressing a row by one column of a composite key matches every row
+        sharing that value. Feature 4 removed that from the raw write path; this
+        is the same rule for the ORM above it.
+        """
+        cls = type(self)
+        clauses, params = [], []
+        for name in cls._get_pks():
+            if name not in cls._fields:
+                continue
+            column = cls.field_mapping.get(name, cls._fields[name].column)
+            clauses.append(f"{column} = ?")
+            params.append(getattr(self, name, None))
+        return " AND ".join(clauses), params
 
     # ── CRUD ────────────────────────────────────────────────────
 
@@ -459,11 +493,23 @@ class ORM(metaclass=ORMMeta):
             if pk_field.auto_increment:
                 is_update = True
             else:
-                # Natural-key model — check if the row already exists.
-                # type(self).exists() handles soft-delete + scope filters
-                # the same way the rest of the ORM does.
+                # Natural-key model — check if THIS row already exists.
+                #
+                # This asked exists(pk_value), which tests only the FIRST key
+                # column. On a composite key that is true for any row sharing
+                # that column, so inserting a genuinely new row was decided to
+                # be an UPDATE and silently OVERWROTE a different row: saving
+                # (acme, a2) rewrote (acme, a1). The check has to name the whole
+                # key, exactly like the write that follows it.
                 try:
-                    is_update = type(self).exists(pk_value)
+                    where, where_params = self._pk_where()
+                    if where:
+                        found = db.fetch_one(
+                            f"SELECT 1 AS present FROM {table_sql} WHERE {where}", where_params
+                        )
+                        is_update = found is not None
+                    else:
+                        is_update = type(self).exists(pk_value)
                 except Exception:
                     # If we can't tell (e.g. table doesn't exist yet),
                     # fall back to INSERT — the user will see the real
@@ -473,9 +519,15 @@ class ORM(metaclass=ORMMeta):
         db.start_transaction()
         try:
             if is_update:
-                update_data = {k: v for k, v in data.items() if k != pk_db_col}
-                if update_data:
-                    db.update(table, update_data, f"{pk_db_col} = ?", [pk_value])
+                pk_columns = {
+                    self.field_mapping.get(n, self._fields[n].column)
+                    for n in self._get_pks()
+                    if n in self._fields
+                }
+                update_data = {k: v for k, v in data.items() if k not in pk_columns}
+                where, where_params = self._pk_where()
+                if update_data and where:
+                    db.update(table, update_data, where, where_params)
             else:
                 # #165: drop unset-None columns so the DB DEFAULT applies.
                 insert_data = {c: v for c, v in data.items() if c not in insert_omit}
@@ -562,10 +614,12 @@ class ORM(metaclass=ORMMeta):
         db.start_transaction()
         try:
             if self.soft_delete:
-                db.update(table, {"is_deleted": 1}, f"{pk_db_col} = ?", [pk_value])
+                where, where_params = self._pk_where()
+                db.update(table, {"is_deleted": 1}, where, where_params)
                 self.is_deleted = 1
             else:
-                db.delete(table, f"{pk_db_col} = ?", [pk_value])
+                where, where_params = self._pk_where()
+                db.delete(table, where, where_params)
             db.commit()
         except Exception:
             db.rollback()
@@ -586,7 +640,8 @@ class ORM(metaclass=ORMMeta):
 
         db.start_transaction()
         try:
-            db.delete(table, f"{pk_db_col} = ?", [pk_value])
+            where, where_params = self._pk_where()
+            db.delete(table, where, where_params)
             db.commit()
         except Exception:
             db.rollback()
@@ -607,7 +662,8 @@ class ORM(metaclass=ORMMeta):
 
         db.start_transaction()
         try:
-            db.update(table, {"is_deleted": 0}, f"{pk_db_col} = ?", [pk_value])
+            where, where_params = self._pk_where()
+            db.update(table, {"is_deleted": 0}, where, where_params)
             self.is_deleted = 0
             db.commit()
         except Exception:
@@ -1022,7 +1078,10 @@ class ORM(metaclass=ORMMeta):
 
             parts = [col_name, sql_type]
 
-            if field_obj.primary_key:
+            # A COMPOSITE key is declared once, at table level (below). Emitting
+            # an inline PRIMARY KEY per column is invalid DDL - SQLite,
+            # PostgreSQL and MySQL all reject two of them in one table.
+            if field_obj.primary_key and len(cls._get_pks()) == 1:
                 parts.append("PRIMARY KEY")
             if field_obj.auto_increment:
                 parts.append("AUTOINCREMENT")
@@ -1050,6 +1109,15 @@ class ORM(metaclass=ORMMeta):
                     parts.append(f"DEFAULT {default_val}")
 
             col_defs.append(" ".join(parts))
+
+        # A COMPOSITE key is declared ONCE, at table level. Per-column inline
+        # PRIMARY KEY (above) is suppressed when the key spans more than one
+        # column, because two inline primary keys is invalid DDL on every engine.
+        pks = cls._get_pks()
+        if len(pks) > 1:
+            pk_cols = [cls.field_mapping.get(k, cls._fields[k].column) for k in pks if k in cls._fields]
+            if pk_cols:
+                col_defs.append(f"PRIMARY KEY ({', '.join(pk_cols)})")
 
         sql = f"CREATE TABLE IF NOT EXISTS {table_sql} ({', '.join(col_defs)})"
 
