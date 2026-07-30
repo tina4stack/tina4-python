@@ -12,17 +12,79 @@ Real SQLite files under pytest's tmp_path. No mocks - SQLite is free to stand up
 
 import pytest
 
+import os
+
 from tina4_python.database import Database
 
 
-@pytest.fixture
-def db(tmp_path):
+def _engines():
+    """Every engine this run can reach.
+
+    Feature 3 needs this suite to gate moving insert/update/delete out of six
+    adapters and into one builder. SQLite ALONE PROVES NOTHING for that: the
+    whole reason per-adapter SQL exists is that placeholder style, RETURNING
+    support and identifier quoting differ exactly where the engine differs. A
+    green SQLite-only run is the least informative possible result, so the run
+    reports which engines it actually covered.
+    """
+    found = [("sqlite", None)]
+    for name, var in (
+        ("postgres", "TINA4_TEST_PG_URL"),
+        ("mysql", "TINA4_TEST_MYSQL_URL"),
+        ("mssql", "TINA4_TEST_MSSQL_URL"),
+        ("firebird", "TINA4_TEST_FIREBIRD_URL"),
+    ):
+        url = (os.environ.get(var) or "").strip()
+        if url:
+            found.append((name, url))
+    return found
+
+
+ENGINES = _engines()
+
+
+def test_the_run_records_which_engines_it_covered():
+    """Not a gate - the record.
+
+    A reader must be able to see whether this contract was checked against real
+    engines or only against the one that shares nothing with them.
+    """
+    print(f"\nwrite-path contract covered: {', '.join(n for n, _ in ENGINES)}")
+    assert ENGINES
+
+
+@pytest.fixture(params=ENGINES, ids=[n for n, _ in ENGINES])
+def db(request, tmp_path):
     """A real two-row table, so a full-table write is visible as collateral damage."""
-    database = Database(f"sqlite:///{tmp_path}/contract.db")
-    database.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
-    database.insert("t", {"id": 1, "name": "one"})
-    database.insert("t", {"id": 2, "name": "two"})
-    return database
+    _, url = request.param
+    database = Database(url or f"sqlite:///{tmp_path}/contract.db")
+    try:
+        database.execute("DROP TABLE t")
+    except Exception:
+        pass
+    # AUTOINCREMENT is SQLite's spelling; SQLTranslator rewrites it per engine
+    # (SERIAL on Postgres, AUTO_INCREMENT on MySQL, IDENTITY(1,1) on MSSQL).
+    # Writing the DDL by hand is how this suite stayed SQLite-only: `INTEGER
+    # PRIMARY KEY` self-increments on SQLite and is a plain NOT NULL column
+    # everywhere else, so test_insert_reports_a_last_id passed on SQLite and
+    # failed with a null-violation on the first real engine it met.
+    from tina4_python.database.sql_translator import SQLTranslator
+    ddl = "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(80))"
+    database.execute(SQLTranslator.auto_increment_syntax(ddl, database.get_database_type()))
+    # Seed WITHOUT explicit ids so the engine's sequence stays in step with the
+    # rows. Seeding id=1,2 by hand and then letting the sequence generate the
+    # next one collides on Postgres (the sequence still starts at 1) - the rows
+    # exist, so it is a UniqueViolation rather than anything the framework did.
+    # SQLite hides this because its implicit rowid follows the max.
+    database.insert("t", {"name": "one"})
+    database.insert("t", {"name": "two"})
+    database.commit()
+    yield database
+    try:
+        database.execute("DROP TABLE t")
+        database.commit()
+    except Exception:
+        pass
 
 
 def rows(database):
