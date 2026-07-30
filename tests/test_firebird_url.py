@@ -72,8 +72,43 @@ class TestFirebirdUrlNormalize:
 # ── End-to-end against a live Firebird container ─────────────────────────
 
 
-FIREBIRD_HOST = "localhost"
-FIREBIRD_PORT = 53050
+def _live_firebird_target() -> tuple[str, int, str]:
+    """Resolve the live-Firebird host, port and database path.
+
+    Reads TINA4_TEST_FIREBIRD_URL -- the SAME variable the rest of this suite and
+    the Ruby / Node suites already use -- so one export points every framework at
+    the same container.
+
+    These three values were hardcoded to localhost:53050 and
+    /firebird/data/tina4.fdb. Nothing publishes 53050 on the lab host (Firebird is
+    on 3050), so the reachability gate below could NEVER open: the three live
+    tests skipped green on every machine, which is indistinguishable from
+    "environment not set up" and is exactly how a permanently dead test stays
+    invisible. The literals stay as the fallback, so a host that really does
+    publish 53050 with that database path behaves precisely as before.
+    """
+    import os as _os
+    from urllib.parse import urlparse
+
+    url = _os.environ.get("TINA4_TEST_FIREBIRD_URL", "").strip()
+    if not url:
+        return "localhost", 53050, "/firebird/data/tina4.fdb"
+
+    parsed = urlparse(url)
+    path = parsed.path or ""
+    # `@host:port//abs/path` is the absolute-path spelling; collapse the doubled
+    # leading slash so this is a plain absolute path again. The tests below
+    # re-add it for the double-slash case and strip it for the single-slash one.
+    if path.startswith("//"):
+        path = path[1:]
+    return (
+        parsed.hostname or "localhost",
+        parsed.port or 3050,
+        path or "/firebird/data/tina4.fdb",
+    )
+
+
+FIREBIRD_HOST, FIREBIRD_PORT, LIVE_DB_PATH_DEFAULT = _live_firebird_target()
 
 
 def _firebird_reachable() -> bool:
@@ -89,7 +124,63 @@ pytestmark_live = pytest.mark.skipif(
     reason=f"Firebird not reachable at {FIREBIRD_HOST}:{FIREBIRD_PORT}",
 )
 
-LIVE_DB_PATH = "/firebird/data/tina4.fdb"
+LIVE_DB_PATH = LIVE_DB_PATH_DEFAULT
+
+
+class TestLiveFirebirdTargetResolution:
+    """The gate's own coordinates are resolved, not hardcoded.
+
+    A pure function over a real environment variable -- no doubles. Without these
+    the port could silently drift back to a value nothing publishes and the live
+    tests would resume skipping green, which is the failure this fix exists to
+    end.
+    """
+
+    @staticmethod
+    def _with_url(value):
+        """Set (or clear) TINA4_TEST_FIREBIRD_URL and resolve, then restore."""
+        import os as _os
+
+        key = "TINA4_TEST_FIREBIRD_URL"
+        previous = _os.environ.get(key)
+        try:
+            if value is None:
+                _os.environ.pop(key, None)
+            else:
+                _os.environ[key] = value
+            return _live_firebird_target()
+        finally:
+            if previous is None:
+                _os.environ.pop(key, None)
+            else:
+                _os.environ[key] = previous
+
+    def test_unset_falls_back_to_the_historic_literals(self):
+        assert self._with_url(None) == ("localhost", 53050, "/firebird/data/tina4.fdb")
+
+    def test_blank_is_treated_as_unset(self):
+        assert self._with_url("   ") == ("localhost", 53050, "/firebird/data/tina4.fdb")
+
+    def test_absolute_double_slash_form_is_parsed(self):
+        host, port, path = self._with_url(
+            "firebird://SYSDBA:masterkey@db.example:3050//var/lib/firebird/data/x.fdb"
+        )
+        assert (host, port) == ("db.example", 3050)
+        # One leading slash, not two -- the callers re-add the second for the
+        # double-slash spelling and strip it for the single-slash one.
+        assert path == "/var/lib/firebird/data/x.fdb"
+
+    def test_single_slash_form_is_parsed(self):
+        assert self._with_url("firebird://SYSDBA:masterkey@h:3050/rel.fdb") == (
+            "h",
+            3050,
+            "/rel.fdb",
+        )
+
+    def test_omitted_port_defaults_to_3050_not_53050(self):
+        # THE REGRESSION GUARD: 53050 must never come back as a parsed default.
+        _, port, _ = self._with_url("firebird://SYSDBA:masterkey@h//data/x.fdb")
+        assert port == 3050
 
 
 @pytestmark_live
