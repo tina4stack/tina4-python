@@ -33,6 +33,63 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
+# The logger must never be surprised by what it is handed, and must never be
+# the reason a request dies. Anything can arrive as a message: a dict from a
+# handler, a bytes payload off a socket, a 10MB string. Every framework coerces
+# to text the same way (feature 2 of the feature audit).
+_STDOUT_MAX_CHARS = 2000
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _coerce_message(message) -> str:
+    """Turn anything into a single safe line of text.
+
+    A str passes through. Bytes are decoded when they are valid UTF-8 and
+    described when they are not - dumping raw bytes at a terminal garbles it and
+    can emit escape sequences. Anything else is JSON, because a dict rendered as
+    text is the whole reason the caller logged it; a value JSON cannot represent
+    falls back to repr rather than raising. Logging a dict used to raise
+    TypeError from str.join and take the request down with it.
+    """
+    if isinstance(message, str):
+        text = message
+    elif isinstance(message, (bytes, bytearray, memoryview)):
+        raw = bytes(message)
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return f"<binary {len(raw)} bytes>"
+    else:
+        try:
+            # Compact separators so the rendered line is byte-identical to the
+            # other three (PHP/Ruby/Node all emit {"a":1}, not {"a": 1}).
+            text = json.dumps(message, default=str, separators=(",", ":"))
+        except (TypeError, ValueError):
+            text = repr(message)
+    return _CONTROL_CHARS.sub("", text)
+
+
+def _truncate_for_stdout(line: str) -> str:
+    """Cap a console line. The file keeps the whole thing; a terminal does not."""
+    if len(line) <= _STDOUT_MAX_CHARS:
+        return line
+    return f"{line[:_STDOUT_MAX_CHARS]}... (truncated, {len(line)} chars)"
+
+
+def _target_is_file(path: str) -> bool:
+    """Is this target a FILE PATH or a DIRECTORY?
+
+    An existing directory is always a directory, extension or not. Otherwise a
+    basename with an extension (app.log, app.txt) is a file and anything else is
+    a directory to create, so the path need not exist yet. Identical rule in all
+    four frameworks (feature 2 of the feature audit).
+    """
+    if os.path.isdir(path):
+        return False
+    base = os.path.basename(path)
+    return "." in base and not base.startswith(".")
+
+
 # Request ID context (set per-request by middleware)
 _request_id_var = threading.local()
 
@@ -259,8 +316,37 @@ class Log:
             keep = 5
 
         # ── File path resolution ─────────────────────────────────
+        # `log_dir` accepts a DIRECTORY or a FILE PATH. Passing a file path used
+        # to create a DIRECTORY with that name (logs/app.log/tina4.log), which is
+        # never what anyone means (feature 2 of the feature audit). Identical
+        # rule in all four: an existing directory is a directory; otherwise a
+        # basename with an extension is a file.
         log_file = os.environ.get("TINA4_LOG_FILE", "")
         log_dir_env = os.environ.get("TINA4_LOG_DIR", log_dir)
+        if not log_file and _target_is_file(log_dir_env):
+            log_file = log_dir_env
+            log_dir_env = os.path.dirname(log_dir_env) or "."
+
+        # TINA4_LOG_APPEND — append (default) or overwrite on startup.
+        #
+        # APPEND IS THE DEFAULT: a log you can lose by restarting the process is
+        # not a log. Set it false for one file per run (a short CLI, a test
+        # fixture, a container shipping logs elsewhere); the file is truncated
+        # once here at configure time, never per line.
+        append_env = os.environ.get("TINA4_LOG_APPEND")
+        cls._append = append_env is None or append_env.strip().lower() in (
+            "1", "true", "yes", "on", "y", "t"
+        )
+        if not cls._append:
+            target_dir = Path(log_dir_env)
+            names = [os.path.basename(log_file)] if log_file else ["tina4.log", "error.log"]
+            for name in names:
+                path = Path(log_file) if log_file and os.path.isabs(log_file) else target_dir / name
+                try:
+                    if path.exists():
+                        path.write_text("", encoding="utf-8")
+                except OSError:
+                    pass
 
         # Close any previous writer so reconfigure during tests doesn't
         # leak file handles.
@@ -382,8 +468,15 @@ class Log:
                 entry["context"] = {k: v for k, v in kwargs.items()}
             return json.dumps(entry, default=str)
 
-        # Human-readable for development
-        level_str = level.upper().ljust(7)
+        # Human-readable for development.
+        #
+        # Pad to 8, not 7: CRITICAL is eight characters, so a 7-wide column was
+        # broken by our own highest level -- every other line aligned and the one
+        # that matters most did not. 8 is the only width that fits every level
+        # name. This is the cross-framework format table (feature 2 of the
+        # feature audit); all four pad to 8 so a log-shipping regex or column
+        # split tuned on one framework is not off by one on another.
+        level_str = level.upper().ljust(8)
         parts = [timestamp, f"[{level_str}]"]
         if request_id:
             parts.append(f"[{request_id}]")
@@ -401,7 +494,12 @@ class Log:
         return cls._format_line(level, message, **kwargs)
 
     @classmethod
-    def _log(cls, level: str, message: str, **kwargs):
+    def _log(cls, level: str, message, **kwargs):
+        # Coerce FIRST: a dict, a bytes payload or anything else must become
+        # text before formatting, or the logger raises and takes the caller with
+        # it. See _coerce_message.
+        message = _coerce_message(message)
+
         # File always gets ALL levels (no filtering for file output)
         line = cls._format_line(level, message, **kwargs)
 
@@ -416,7 +514,9 @@ class Log:
         if cls._stdout_enabled and cls._should_log(level):
             color = "" if cls._is_production else cls.COLORS.get(level, "")
             reset = "" if cls._is_production else cls.RESET
-            print(f"{color}{line}{reset}", flush=True)
+            # Truncate on the CONSOLE only. The file keeps the full line so a
+            # consumer parsing it loses nothing; a terminal does not need 10MB.
+            print(f"{color}{_truncate_for_stdout(line)}{reset}", flush=True)
 
         # Always write ALL levels to the main file (raw log, no filtering)
         if cls._writer:
