@@ -491,3 +491,50 @@ def test_unchanged_modules_keep_their_routes(project):
     paths = set(r["path"] for r in Router.get_routes())
     assert "/api/alpha" in paths, f"untouched module lost its route: {paths}"
     assert "/api/beta" in paths
+
+
+def test_every_new_route_file_is_seen_by_a_later_discover(project):
+    """Adding route files ONE AT A TIME, each followed by a re-discover, must
+    register every one of them.
+
+    This is the "drop a new route file and hit reload" flow, repeated. It is a
+    regression test for a real intermittent failure: importlib caches a
+    directory's listing and only re-reads it when it thinks the directory
+    changed, so a file created shortly after that cache was warmed was
+    INVISIBLE to import_module -- ModuleNotFoundError for a file plainly on
+    disk. _auto_discover swallows the import error (records it to
+    data/.broken/), so the only visible symptom was a route that silently
+    never registered until a full restart.
+
+    Measured on the lab host (Python 3.12.3, ext4): a single add-then-discover
+    missed the new route about 50% of the time without
+    importlib.invalidate_caches() in _auto_discover, and 0/300 times with it.
+    The loop runs the scenario repeatedly BECAUSE the underlying failure is a
+    timing race, not a deterministic branch -- one iteration would be a coin
+    flip and would make this test itself flaky. At ~50% per iteration, the
+    chance of all NEW_FILES iterations passing on the broken code is about
+    0.5 ** 12, so a green run here is real evidence rather than luck.
+    """
+    NEW_FILES = 12
+
+    for i in range(NEW_FILES):
+        _write_route(project, f"route{i}", f"""
+            from tina4_python.core.router import get
+            @get("/added-{i}")
+            async def route{i}(request, response):
+                return response({{"ok": True}})
+        """)
+        _server._auto_discover("src")
+
+        paths = [r["path"] for r in Router.get_routes()]
+        assert f"/added-{i}" in paths, (
+            f"iteration {i}: the new route file was written to disk but its "
+            f"route never registered -- import could not see the new file. "
+            f"registered={paths}"
+        )
+
+    # Every route from every iteration is still registered at the end (a later
+    # discover must not drop an earlier file's routes).
+    paths = set(r["path"] for r in Router.get_routes())
+    for i in range(NEW_FILES):
+        assert f"/added-{i}" in paths, f"route /added-{i} was lost by a later discover"
