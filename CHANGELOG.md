@@ -12,6 +12,36 @@ UNRELEASED work. When a version ships, its notes go to the release notes above.
 
 ## Unreleased
 
+### Breaking: global middleware now runs before the auth gate
+
+Dispatch order is now identical in all four frameworks:
+
+```
+pre-match globals -> match -> post-match globals -> auth gate -> route middleware -> handler
+```
+
+Python (and Ruby) previously ran the auth gate FIRST, so a global middleware
+never saw a rejected request. That made a global rate limiter unable to throttle
+a brute-force login, and dropped every 401 from an access log. Node and PHP
+already ran the globals first; every mainstream framework does the same (Django
+ships `CsrfViewMiddleware` ahead of `AuthenticationMiddleware` and enforces auth
+in a view decorator after all `MIDDLEWARE`; Laravel runs the `web` group before
+the `auth` route middleware; ASP.NET puts `UseAuthorization` last before the
+endpoint). See ADR-0012.
+
+**Migration:** a global middleware (registered via `Middleware.use` /
+`Router.use`) now runs on requests that are about to be rejected, including
+401s. If yours assumes an authenticated request, check for it - `request.user`
+is only populated after the gate. A middleware that must NOT see rejected
+requests should be attached to the route instead of registered globally; route
+middleware still runs after the gate.
+
+Also fixed: the pre-match pass re-ran the post-match set, so every post-match
+middleware fired TWICE per request (once before matching, once after). A
+middleware that increments a counter or charges a rate-limit bucket was
+double-counting. Locked by `test_a_pre_match_global_does_not_run_twice`.
+
+
 ### Changed
 
 - **Breaking: the metrics payload is now the native engine's shape.** `full_analysis` no

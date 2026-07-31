@@ -1558,7 +1558,7 @@ def _middleware_500(response: Response, mw_inst, method_name: str, error: Except
     })
 
 
-def _effective_middleware(route: dict) -> list:
+def _effective_middleware(route: dict, include_globals: bool = True) -> list:
     """Resolve the middleware that actually runs for a route.
 
     Global middleware (registered via ``Middleware.use`` / ``Router.use``) runs
@@ -1574,7 +1574,14 @@ def _effective_middleware(route: dict) -> list:
     seen = set()
     # POST-match globals only: anything flagged ``pre_match`` already ran in
     # handle() before the route was looked up, and must not run twice.
-    for mw in list(Middleware.post_match_middleware()) + list(route.get("middleware", [])):
+    #
+    # ``include_globals=False`` selects the route's OWN middleware only. The
+    # dispatcher needs both halves separately because the auth gate sits
+    # between them, and the pre-match pass passes its own list here - without
+    # the switch that pass would prepend the post-match globals and run them a
+    # second time.
+    _globals = list(Middleware.post_match_middleware()) if include_globals else []
+    for mw in _globals + list(route.get("middleware", [])):
         key = mw if isinstance(mw, type) else type(mw)
         if key not in seen:
             seen.add(key)
@@ -1582,7 +1589,7 @@ def _effective_middleware(route: dict) -> list:
     return resolved
 
 
-def _run_before_middleware(request: Request, response: Response, route: dict) -> tuple[Request, Response, bool]:
+def _run_before_middleware(request: Request, response: Response, route: dict, include_globals: bool = True) -> tuple[Request, Response, bool]:
     """Run class-based before_* middleware methods. Returns (request, response, skip_handler).
 
     Function-style ``async def mw(req, resp, next_handler)`` middleware is
@@ -1598,7 +1605,7 @@ def _run_before_middleware(request: Request, response: Response, route: dict) ->
     before_* that sets status >= 400 also short-circuits the handler.
     """
     skip = False
-    for _mw_cls in _effective_middleware(route):
+    for _mw_cls in _effective_middleware(route, include_globals):
         if _is_function_middleware(_mw_cls):
             continue  # Handled by the continuation wrapper instead
         _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
@@ -1620,7 +1627,7 @@ def _run_before_middleware(request: Request, response: Response, route: dict) ->
     return request, response, skip
 
 
-def _run_after_middleware(request: Request, response: Response, route: dict) -> tuple[Request, Response]:
+def _run_after_middleware(request: Request, response: Response, route: dict, include_globals: bool = True) -> tuple[Request, Response]:
     """Run class-based after_* middleware methods.
 
     Function-style middleware that wraps the handler (with next_handler)
@@ -1638,7 +1645,7 @@ def _run_after_middleware(request: Request, response: Response, route: dict) -> 
     Resilience (M2): each after_* call is wrapped — a method that THROWS is
     logged and converted to a clean 500; remaining after_* still run.
     """
-    for _mw_cls in _effective_middleware(route):
+    for _mw_cls in _effective_middleware(route, include_globals):
         if _is_function_middleware(_mw_cls):
             continue
         _mw_inst = _mw_cls() if isinstance(_mw_cls, type) else _mw_cls
@@ -2019,11 +2026,12 @@ async def handle(request: Request) -> Response:
     from tina4_python.core.middleware import Middleware as _Mw
     _pre = _Mw.pre_match_middleware()
     if _pre:
+        _pre_route = {"middleware": _pre, "handler": None}
         request, response, _skip = _run_before_middleware(
-            request, response, {"middleware": _pre, "handler": None}
+            request, response, _pre_route, include_globals=False
         )
         if _skip:
-            _run_after_middleware(request, response, {"middleware": _pre, "handler": None})
+            _run_after_middleware(request, response, _pre_route, include_globals=False)
             return response
 
     # Route matching and dispatch
@@ -2036,9 +2044,32 @@ async def handle(request: Request) -> Response:
         # (e.g. CsrfMiddleware) can read handler metadata such as _noauth.
         request._handler = route.get("handler")
         try:
-            skip = _check_auth(request, response, route)
+            # Order: POST-MATCH globals -> auth gate -> the route's OWN
+            # middleware -> handler.
+            #
+            # The globals run BEFORE the gate so a rate limiter can throttle a
+            # brute-force login and an access log records the 401 - neither is
+            # possible if they only run on authenticated requests. That is what
+            # every mainstream framework does: Django ships CsrfViewMiddleware
+            # ahead of AuthenticationMiddleware and enforces auth in a view
+            # decorator after all MIDDLEWARE, Laravel runs the `web` group
+            # before the `auth` route middleware, ASP.NET puts UseAuthorization
+            # last before the endpoint. Python and Ruby ran the gate first;
+            # Node and PHP did not. Aligned on the mainstream answer (ADR-0012).
+            #
+            # The route's OWN middleware stays AFTER the gate, so middleware
+            # attached to a secured route never processes an unauthenticated
+            # request - `->middleware(['auth', ...])` ordering in Laravel,
+            # `@login_required` as the outermost decorator in Django.
+            request, response, skip = _run_before_middleware(
+                request, response, {"middleware": [], "handler": route.get("handler")}
+            )
             if not skip:
-                request, response, skip = _run_before_middleware(request, response, route)
+                skip = _check_auth(request, response, route)
+            if not skip:
+                request, response, skip = _run_before_middleware(
+                    request, response, route, include_globals=False
+                )
             if not skip:
                 response = await _invoke_handler_with_middleware(request, response, route, params)
             request, response = _run_after_middleware(request, response, route)

@@ -51,6 +51,8 @@ class PlainStamp:
 
     @staticmethod
     def before_plain(request, response):
+        # It MUST stamp, or the negative cases below pass vacuously.
+        response.add_header("X-Ran-After-Match", "yes")
         return request, response
 
 
@@ -132,3 +134,76 @@ def test_a_normal_request_is_unaffected():
 
     response = _call("GET", "/hello")
     assert response.status_code == 200
+
+
+# ── The order: post-match globals -> auth gate -> route middleware ──
+#
+# Decided 2026-07-31 (ADR-0012) against how the mainstream frameworks build the
+# same pipeline, not against internal precedent. Python and Ruby ran the gate
+# first; Node and PHP did not. Django ships CsrfViewMiddleware ahead of
+# AuthenticationMiddleware and enforces auth in a view decorator after all
+# MIDDLEWARE; Laravel runs the `web` group before the `auth` route middleware;
+# ASP.NET puts UseAuthorization last before the endpoint.
+#
+# BREAKING for Python and Ruby: a global middleware now runs on requests it
+# previously never saw (401s), so one written assuming an authenticated request
+# must check for itself.
+
+
+def test_post_match_middleware_runs_on_a_401():
+    """
+    POSITIVE, and the behaviour change itself.
+
+    A global middleware has to see rejected requests or it cannot throttle a
+    brute-force login, and an access log silently drops every 401. Before this
+    change Python returned the 401 without ever running the middleware.
+    """
+    Middleware.use(PlainStamp)
+
+    response = _call("POST", "/secured")
+    assert response.status_code == 401
+    assert _header(response, "x-ran-after-match") == "yes", (
+        "a global middleware did not run on a 401 - the auth gate is still "
+        "ahead of the global pass"
+    )
+
+
+def test_post_match_middleware_does_not_run_when_no_route_matched():
+    """
+    NEGATIVE, and the case that actually discriminates the two groups.
+
+    A post-match middleware CANNOT run when nothing matched. That - not the
+    401, which both groups now survive by design - is the real difference.
+    """
+    Middleware.use(PlainStamp)
+
+    response = _call("GET", "/no/such/route")
+    assert response.status_code == 404
+    assert _header(response, "x-ran-after-match") is None, (
+        "a post-match middleware ran with no matched route"
+    )
+
+
+def test_a_pre_match_global_does_not_run_twice():
+    """
+    NEGATIVE: the pre-match pass must not also drag in the post-match set.
+
+    _run_before_middleware resolves through _effective_middleware, which
+    PREPENDS the post-match globals. Passing the pre-match list to it without
+    include_globals=False ran every post-match middleware a second time - once
+    before matching and once after. A middleware that increments a counter or
+    charges a rate-limit bucket would have double-counted every request.
+    """
+    calls = []
+
+    class CountingPost:
+        @staticmethod
+        def before_count(request, response):
+            calls.append(1)
+            return request, response
+
+    Middleware.use(PreMatchStamp)
+    Middleware.use(CountingPost)
+
+    _call("GET", "/hello")
+    assert len(calls) == 1, f"post-match middleware ran {len(calls)} times, expected 1"
