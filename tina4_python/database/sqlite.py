@@ -209,38 +209,6 @@ class SQLiteAdapter(DatabaseAdapter):
         row = cursor.fetchone()
         return dict(row) if row else None
 
-    def insert(self, table: str, data: dict | list) -> DatabaseResult:
-        # A list of dicts is a batch insert — delegate to the base class, which
-        # builds one parameterised INSERT and runs it per row via execute_many.
-        # (Database.insert / the docs advertise ``data: dict | list``; without
-        # this branch a list crashed with ``'list' object has no attribute
-        # 'keys'`` because this override only handled the single-dict case.)
-        if isinstance(data, list):
-            return super().insert(table, data)
-        columns = ", ".join(self.quote_identifier(c) for c in data.keys())
-        placeholders = ", ".join(["?"] * len(data))
-        sql = f"INSERT INTO {self.quote_identifier(table)} ({columns}) VALUES ({placeholders})"
-        return self.execute(sql, list(data.values()))
-
-    def update(self, table: str, data: dict,
-               filter_sql: str = "", params: list = None) -> DatabaseResult:
-        set_clause = ", ".join(f"{self.quote_identifier(k)} = ?" for k in data.keys())
-        sql = f"UPDATE {self.quote_identifier(table)} SET {set_clause}"
-        all_params = list(data.values())
-
-        if filter_sql:
-            sql += f" WHERE {filter_sql}"
-            all_params += params or []
-
-        return self.execute(sql, all_params)
-
-    def delete(self, table: str,
-               filter_sql: str = "", params: list = None) -> DatabaseResult:
-        sql = f"DELETE FROM {self.quote_identifier(table)}"
-        if filter_sql:
-            sql += f" WHERE {filter_sql}"
-        return self.execute(sql, params or [])
-
     def start_transaction(self):
         self._conn.execute("BEGIN")
         self._in_transaction = True

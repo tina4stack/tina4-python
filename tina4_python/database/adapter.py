@@ -530,6 +530,26 @@ class DatabaseAdapter:
             return name
         return f"{open_q}{name.replace(close_q, close_q * 2)}{close_q}"
 
+    #: The engine's parameter marker. Overridden to ``"%s"`` by PostgreSQL,
+    #: MySQL and MSSQL; everything else uses the default.
+    PARAM_MARKER = "?"
+
+    #: Appended to a single-row INSERT. Only PostgreSQL wants ``RETURNING *``;
+    #: it is the one genuinely engine-specific part of building an INSERT.
+    INSERT_RETURNING = ""
+
+    def _marked_filter(self, filter_sql: str) -> str:
+        """Rewrite a caller's ``?`` placeholders into this engine's marker.
+
+        A caller writes ``"id = ?"`` regardless of engine - that is the
+        documented cross-framework filter form. Engines whose marker IS ``?``
+        need no rewrite, and running the translator over them anyway would be
+        work that can only introduce bugs.
+        """
+        if self.PARAM_MARKER == "?":
+            return filter_sql
+        return SQLTranslator.placeholder_style(filter_sql, self.PARAM_MARKER)
+
     def insert(self, table: str, data: dict | list) -> DatabaseResult:
         """Insert one or more rows.
 
@@ -537,6 +557,12 @@ class DatabaseAdapter:
             table: Table name.
             data: A dict (single row) or a list of dicts (multiple rows).
                   List of dicts uses execute_many internally for efficiency.
+
+        Building an INSERT is not engine-specific work. This used to be
+        reimplemented in all six SQL adapters, identical except for the
+        parameter marker and PostgreSQL's RETURNING - both of which are now
+        seams above. MongoDB still overrides it, because it does not build SQL
+        at all.
         """
         if isinstance(data, list):
             if not data:
@@ -544,16 +570,39 @@ class DatabaseAdapter:
             # All dicts must have the same keys
             keys = list(data[0].keys())
             columns = ", ".join(self.quote_identifier(k) for k in keys)
-            placeholders = ", ".join(["?"] * len(keys))
+            placeholders = ", ".join([self.PARAM_MARKER] * len(keys))
             sql = f"INSERT INTO {self.quote_identifier(table)} ({columns}) VALUES ({placeholders})"
             params_list = [list(row[k] for k in keys) for row in data]
             return self.execute_many(sql, params_list)
-        raise NotImplementedError
+
+        columns = ", ".join(self.quote_identifier(c) for c in data.keys())
+        placeholders = ", ".join([self.PARAM_MARKER] * len(data))
+        sql = (
+            f"INSERT INTO {self.quote_identifier(table)} "
+            f"({columns}) VALUES ({placeholders}){self.INSERT_RETURNING}"
+        )
+        return self.execute(sql, list(data.values()))
 
     def update(self, table: str, data: dict,
                filter_sql: str = "", params: list = None) -> DatabaseResult:
-        """Update rows matching the filter."""
-        raise NotImplementedError
+        """Update rows matching the filter.
+
+        The SET column names are QUOTED. SQLite already quoted them while
+        PostgreSQL, MySQL and MSSQL did not, so a column named after a reserved
+        word worked on one engine and failed on three. Quoting is what every
+        INSERT in this file already does.
+        """
+        set_clause = ", ".join(
+            f"{self.quote_identifier(k)} = {self.PARAM_MARKER}" for k in data.keys()
+        )
+        sql = f"UPDATE {self.quote_identifier(table)} SET {set_clause}"
+        all_params = list(data.values())
+
+        if filter_sql:
+            sql += f" WHERE {self._marked_filter(filter_sql)}"
+            all_params += params or []
+
+        return self.execute(sql, all_params)
 
     def delete(self, table: str,
                filter_sql: str | dict | list = "", params: list = None) -> DatabaseResult:
@@ -576,12 +625,17 @@ class DatabaseAdapter:
             return DatabaseResult(affected_rows=total_affected)
 
         if isinstance(filter_sql, dict):
-            # Build WHERE from dict
+            # Build WHERE from dict. Emits "?" deliberately: the string branch
+            # below runs it through _marked_filter, so translating here too
+            # would double-translate on a "%s" engine.
             where_parts = [f"{self.quote_identifier(k)} = ?" for k in filter_sql.keys()]
             where_sql = " AND ".join(where_parts)
             return self.delete(table, where_sql, list(filter_sql.values()))
 
-        raise NotImplementedError
+        sql = f"DELETE FROM {self.quote_identifier(table)}"
+        if filter_sql:
+            sql += f" WHERE {self._marked_filter(filter_sql)}"
+        return self.execute(sql, params or [])
 
     def start_transaction(self):
         """Begin a transaction."""
