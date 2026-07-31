@@ -126,6 +126,22 @@ def port_open(port: int, timeout: float = 0.5) -> bool:
         return False
 
 
+def read_child_log(proc) -> str:
+    """Whatever the child printed so far, WITHOUT touching the process.
+
+    Only works for a child booted with ``log_dir=`` (its output went to a file).
+    A PIPE child has to be reaped before its pipe can be drained, which is what
+    :func:`_child_output` does; this one is safe to call on a live server.
+    """
+    log_path = getattr(proc, "tina4_log_path", None)
+    if log_path is None:
+        return "(child was booted without log_dir — output is on a pipe)"
+    try:
+        return log_path.read_text(errors="replace").strip()
+    except OSError as exc:  # never let diagnostics mask the real failure
+        return f"(could not read child log {log_path}: {exc})"
+
+
 def _child_output(proc) -> str:
     """Whatever the child printed, without hanging if it is still alive."""
     try:
@@ -135,6 +151,8 @@ def _child_output(proc) -> str:
                 proc.wait(timeout=5)
             except _subprocess.TimeoutExpired:
                 proc.kill()
+        if getattr(proc, "tina4_log_path", None) is not None:
+            return read_child_log(proc)
         out = proc.stdout.read() if proc.stdout else b""
         return out.decode(errors="replace").strip() if isinstance(out, bytes) else str(out).strip()
     except Exception as exc:  # never let diagnostics mask the real failure
@@ -142,7 +160,8 @@ def _child_output(proc) -> str:
 
 
 def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
-                      boot_timeout: float = 25.0, unset_env=(), ready=None):
+                      boot_timeout: float = 25.0, unset_env=(), ready=None,
+                      log_dir=None, new_session: bool = False):
     """Start a REAL child server and wait until it is ready.
 
     write_app(project_dir, port) writes app.py (and anything else) for that port.
@@ -151,6 +170,16 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
     connection". A caller whose readiness is really about CONTENT (the dev-reload
     test must know which version is being served before it edits anything) passes
     its own check rather than settling for an open socket.
+
+    log_dir sends the child's stdout+stderr to a FILE instead of a pipe, and
+    records it as ``proc.tina4_log_path``. Use it whenever the test needs to read
+    what the server logged while it is still alive, or whenever the child may
+    outlive a readiness check — a pipe nobody drains fills at 64KB and wedges the
+    child mid-write.
+
+    new_session puts the child in its own session/process group (pgid == pid), so
+    a test can ``os.killpg(proc.pid, ...)`` without signalling the pytest runner
+    that spawned it. Required for any test that signals the server.
 
     Returns (proc, port); the caller terminates proc in a finally block.
     """
@@ -179,10 +208,26 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
         if extra_env:
             env.update(extra_env(port) if callable(extra_env) else extra_env)
 
-        proc = _subprocess.Popen(
-            [_sys.executable, "app.py"], cwd=str(proj), env=env,
-            stdout=_subprocess.PIPE, stderr=_subprocess.STDOUT,
-        )
+        log_path = None
+        if log_dir is not None:
+            log_path = _Path(log_dir)
+            log_path.mkdir(parents=True, exist_ok=True)
+            log_path = log_path / f"server_{port}.log"
+
+        # A file the child owns outright beats a pipe: nothing has to drain it,
+        # so the server can log all day without blocking, and the test can read
+        # it while the server is still running.
+        sink = open(log_path, "wb") if log_path is not None else None
+        try:
+            proc = _subprocess.Popen(
+                [_sys.executable, "app.py"], cwd=str(proj), env=env,
+                stdout=sink or _subprocess.PIPE, stderr=_subprocess.STDOUT,
+                start_new_session=new_session,
+            )
+        finally:
+            if sink is not None:
+                sink.close()  # the child kept its own dup of the fd
+        proc.tina4_log_path = log_path
 
         deadline = _time.time() + boot_timeout
         died = False

@@ -131,6 +131,75 @@ def stop_all_background_tasks() -> int:
     return sum(1 for task in snapshot if task.stop())
 
 
+# ── Graceful shutdown ────────────────────────────────────────────────────
+# 30 seconds matches Kubernetes' default terminationGracePeriodSeconds and
+# gunicorn's graceful_timeout, so the drain finishes before the orchestrator
+# escalates to SIGKILL. Same env var and same default in all four frameworks.
+DEFAULT_SHUTDOWN_TIMEOUT = 30.0
+
+
+def _resolve_shutdown_timeout() -> float:
+    """Seconds to spend draining in-flight work on shutdown.
+
+    Read from TINA4_SHUTDOWN_TIMEOUT. A value that is not a positive number
+    warns and falls back to the default — NEVER a silent 0, which would look
+    like a graceful drain while actually cutting every in-flight request.
+    """
+    raw = os.environ.get("TINA4_SHUTDOWN_TIMEOUT", "").strip()
+    if not raw:
+        return DEFAULT_SHUTDOWN_TIMEOUT
+    try:
+        seconds = float(raw)
+    except ValueError:
+        seconds = 0.0
+    if seconds <= 0:
+        Log.warning(
+            f"TINA4_SHUTDOWN_TIMEOUT={raw!r} is not a positive number of seconds — "
+            f"draining for the {DEFAULT_SHUTDOWN_TIMEOUT:g}s default instead"
+        )
+        return DEFAULT_SHUTDOWN_TIMEOUT
+    return seconds
+
+
+def _shutdown_timeout_whole_seconds() -> int:
+    """TINA4_SHUTDOWN_TIMEOUT for a server whose own option is int-typed.
+
+    uvicorn's ``timeout_graceful_shutdown`` is an int. Rounding a positive
+    sub-second timeout down to 0 would mean "no grace at all" — the silent zero
+    this feature exists to prevent — so the floor is 1 second.
+    """
+    return max(1, round(_resolve_shutdown_timeout()))
+
+
+def _close_bound_databases() -> int:
+    """Close every ORM-bound database connection. Returns how many were closed.
+
+    Shutdown must hand the connections back rather than let the OS reap them —
+    a pooled server that never closes leaves the DB counting phantom clients
+    until its own idle timeout. Mirrors Ruby's ``Tina4::Shutdown``. A close
+    failure is logged and never fatal: the process is going away regardless.
+    """
+    from tina4_python.orm import model as orm_model
+
+    unique = []
+    for db in [orm_model._database, *orm_model._databases.values()]:
+        # Identity, not equality — a Database has no __eq__ and two handles to
+        # the same file are still two connections to close.
+        if db is not None and not any(db is seen for seen in unique):
+            unique.append(db)
+
+    closed = 0
+    for db in unique:
+        try:
+            db.close()
+            closed += 1
+        except Exception as exc:  # noqa: BLE001 — shutdown must not fail here
+            Log.error(f"Error closing database on shutdown: {exc}")
+    if closed:
+        Log.info(f"Database connections closed ({closed})")
+    return closed
+
+
 def _start_background_tasks(executor, shutdown) -> list:
     """Start an asyncio runner for every registered task. Called once by _serve.
 
@@ -924,7 +993,7 @@ function deployGallery(name, tryUrl) {{
 
 
 # ── WebSocket support ──────────────────────────────────────────
-from tina4_python.websocket import WebSocketConnection, WebSocketManager
+from tina4_python.websocket import CLOSE_GOING_AWAY, WebSocketConnection, WebSocketManager
 
 _ws_manager = WebSocketManager()
 
@@ -2448,15 +2517,30 @@ async def handle(request: Request) -> Response:
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
     if scope["type"] == "lifespan":
-        msg = await receive()
-        if msg["type"] == "lifespan.startup":
-            import time
-            global _start_time
-            _start_time = time.time()
-            await send({"type": "lifespan.startup.complete"})
-        elif msg["type"] == "lifespan.shutdown":
-            await send({"type": "lifespan.shutdown.complete"})
-        return
+        # ASGI lifespan is ONE call carrying BOTH events, so this has to loop.
+        # It used to return after the first message, which made the shutdown
+        # branch below unreachable: the app coroutine had already finished by
+        # the time the server sent lifespan.shutdown.
+        while True:
+            msg = await receive()
+            if msg["type"] == "lifespan.startup":
+                import time
+                global _start_time
+                _start_time = time.time()
+                await send({"type": "lifespan.startup.complete"})
+            elif msg["type"] == "lifespan.shutdown":
+                # The only shutdown hook that fires on the production path.
+                # uvicorn restores the default signal handlers and RE-RAISES the
+                # signal as its run() returns, so the process dies inside the
+                # starter and nothing after it ever executes — a `finally` there
+                # is unreachable. uvicorn drains requests and closes sockets
+                # itself; the ORM-bound connections are the part only Tina4
+                # knows about, so this is where they get closed.
+                _close_bound_databases()
+                await send({"type": "lifespan.shutdown.complete"})
+                return
+            else:
+                return
 
     if scope["type"] == "websocket":
         await _handle_asgi_websocket(scope, receive, send)
@@ -2698,7 +2782,8 @@ def _find_production_server():
     try:
         import uvicorn
         def _start_uvicorn(host, port, asgi_app):
-            uvicorn.run(asgi_app, host=host, port=port, log_level="info")
+            uvicorn.run(asgi_app, host=host, port=port, log_level="info",
+                        timeout_graceful_shutdown=_shutdown_timeout_whole_seconds())
         return "uvicorn", _start_uvicorn
     except ImportError:
         pass
@@ -2709,6 +2794,7 @@ def _find_production_server():
             import asyncio
             cfg = hypercorn.config.Config()
             cfg.bind = [f"{host}:{port}"]
+            cfg.graceful_timeout = _resolve_shutdown_timeout()
             asyncio.run(hypercorn.asyncio.serve(asgi_app, cfg))
         return "hypercorn", _start_hypercorn
     except ImportError:
@@ -2717,6 +2803,11 @@ def _find_production_server():
         import granian
         def _start_granian(host, port, asgi_app):
             from granian import Granian
+            Log.warning(
+                "granian has no request-drain deadline, so TINA4_SHUTDOWN_TIMEOUT "
+                "is NOT honoured on this path (workers_kill_timeout is when to kill "
+                "a worker, not how long to drain)"
+            )
             g = Granian("tina4_python.core.server:app", address=host, port=port, interface="asgi")
             g.serve()
         return "granian", _start_granian
@@ -3170,8 +3261,14 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     if is_debug:
         _register_dev_reload_ws()
 
+    # TINA4_DEFAULT_WEBSERVER=TRUE pins Tina4's own built-in webserver, so an
+    # operator (or CI) can exercise it deterministically without also turning on
+    # debug mode and everything that comes with it. Unset/FALSE is unchanged:
+    # a production ASGI server is used when one is installed.
+    use_builtin_webserver = is_truthy(os.environ.get("TINA4_DEFAULT_WEBSERVER", ""))
+
     prod = None
-    if not is_debug:
+    if not is_debug and not use_builtin_webserver:
         prod = _find_production_server()
 
     server_name = prod[0] if prod else "asyncio"
@@ -3201,6 +3298,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     if prod:
         name, starter = prod
         Log.info(f"Production server: {name}")
+        # Databases are closed from the ASGI lifespan.shutdown handler in app(),
+        # NOT here: uvicorn re-raises the signal as it returns, so the process
+        # dies inside starter() and any cleanup after this call is unreachable.
         try:
             starter(host, port, app)
         except KeyboardInterrupt:
@@ -3376,15 +3476,48 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
         await shutdown.wait()
 
-        # Cancel background tasks
+        # 1. Stop accepting FIRST. A connection that arrives after the signal
+        #    must get a clean CONNECTION REFUSED — not a 503, not a TCP reset.
+        live_servers = [s for s in (ai_server, server) if s is not None]
+        for live_server in live_servers:
+            live_server.close()
+
+        # 2. Stop background work.
         for t in bg_tasks:
             t.cancel()
 
-        if ai_server:
-            ai_server.close()
-            await ai_server.wait_closed()
-        server.close()
-        await server.wait_closed()
+        # 3. Drain what is already in flight, BOUNDED. wait_closed() on its own
+        #    waits forever, so one wedged handler (or one idle WebSocket) used to
+        #    hold the process open past any orchestrator's grace period.
+        timeout_seconds = _resolve_shutdown_timeout()
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                # A live WebSocket never drains by itself — tell it we are going
+                # away (RFC 6455 close code 1001) so the client reconnects
+                # elsewhere instead of seeing the socket vanish. A dead peer
+                # must not turn a clean exit 0 into a crash on the way out.
+                try:
+                    await _ws_manager.disconnect_all(
+                        code=CLOSE_GOING_AWAY, reason="server shutting down")
+                except Exception as exc:  # noqa: BLE001 — never fail the exit
+                    Log.error(f"Error closing WebSocket connections on shutdown: {exc}")
+                for live_server in live_servers:
+                    await live_server.wait_closed()
+        except TimeoutError:
+            Log.warning(
+                f"TINA4_SHUTDOWN_TIMEOUT={timeout_seconds:g}s reached with work still "
+                f"in flight — forcing the remaining connections closed"
+            )
+            for live_server in live_servers:
+                # Python 3.13+. On 3.12 the tasks are cancelled by asyncio.run's
+                # own teardown instead, which still gets us out.
+                abort_clients = getattr(live_server, "abort_clients", None)
+                if abort_clients is not None:
+                    abort_clients()
+
+        # 4. Release the resources the OS would otherwise reap for us.
+        _close_bound_databases()
+        _executor.shutdown(wait=False, cancel_futures=True)
         Log.info("Server stopped.")
 
     try:

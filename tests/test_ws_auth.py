@@ -103,8 +103,8 @@ class TestSecuredWsRoute:
 class TestNativeServerUpgrade:
     """Real socket-pair integration for the built-in webserver's WS upgrade.
 
-    Regression for the gap the realtime chat demo surfaced: the native
-    (TINA4_DEFAULT_WEBSERVER) upgrade path imported ws_authorized but never
+    Regression for the gap the realtime chat demo surfaced: the built-in
+    webserver's upgrade path imported ws_authorized but never
     called it — so a @secured WS route was unauthenticated, conn.auth was never
     set, and the `bearer` subprotocol was not echoed (which makes a browser fail
     the handshake). No mocks: a real socketpair carries the real handshake.
