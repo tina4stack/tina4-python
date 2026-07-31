@@ -49,6 +49,37 @@ def call(method, path, query=b"", headers=None):
     return asyncio.run(handle(Request.from_scope(scope, b"")))
 
 
+def drive_asgi(method, path, headers=None):
+    """Drive the REAL ASGI app end to end and return (status, headers).
+
+    ``handle()`` returns a Response; it does NOT build the wire headers or make
+    the conditional-request decision. Both live in ``app()``, which computes the
+    ETag via ``build_headers`` and answers If-None-Match / If-Modified-Since
+    with a 304 before sending. A test that stops at ``handle()`` therefore
+    cannot see a 304 at all - and reading one into that is how this suite
+    briefly recorded a Python "gap" that does not exist.
+    """
+    from tina4_python.core.server import app
+
+    sent = []
+    scope = {
+        "type": "http", "method": method, "path": path, "query_string": b"",
+        "headers": [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()],
+        "client": ("127.0.0.1", 1),
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(app(scope, receive, send))
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    wire = {k.decode().lower(): v.decode() for k, v in start.get("headers", [])}
+    return start["status"], wire
+
+
 def header(response, name):
     return next((v for k, v in response._headers if k.lower() == name.lower()), None)
 
@@ -122,35 +153,28 @@ def test_dispatch_trailing_slash_redirects_301_preserving_query():
         assert result.status_code in (200, 404)
 
 
-# ── 6. A static asset is served, and answers a conditional cheaply ──
+# ── 6. A static asset answers a conditional request cheaply ─────
+#
+# Driven through the REAL ASGI app, not handle(): the ETag and the 304
+# decision are built in app(), so handle() is simply below the layer that
+# implements this. Measured through the right layer, Python behaves exactly
+# like Ruby, PHP and Node - 200 with validators, then 304.
 
 def test_dispatch_static_asset_returns_304_on_matching_validator(_workspace):
     (_workspace / "src" / "public" / "char.css").write_text("body { color: red; }")
 
-    result = call("GET", "/char.css")
-    assert result.status_code == 200, "the static asset was not served at all"
+    status, wire = drive_asgi("GET", "/char.css")
+    assert status == 200, "the static asset was not served at all"
+    assert wire.get("etag"), "static assets no longer carry an ETag"
+    assert wire.get("last-modified"), "static assets no longer carry a Last-Modified"
 
-    # CHARACTERISATION OF A GAP, not of correct behaviour.
-    #
-    # Measured 2026-07-31: Python emits `Last-Modified` AND
-    # `Cache-Control: no-cache, must-revalidate` - it tells the client to
-    # revalidate - then IGNORES the resulting `If-Modified-Since` and re-sends
-    # the whole body with a 200. Ruby answers the same request with a 304.
-    #
-    # So every "cached" static asset costs a full transfer on every request.
-    # This is a step-4 parity finding to be fixed in step 6 with its own
-    # positive/negative pair, NOT silently inside the extraction. The
-    # assertion is deliberately pinned to the CURRENT value so that a fix
-    # fails here and has to be a decision.
-    validator = header(result, "last-modified")
-    assert validator is not None, "static assets no longer carry a validator at all"
+    etag_status, _ = drive_asgi("GET", "/char.css", {"if-none-match": wire["etag"]})
+    assert etag_status == 304, "If-None-Match was not answered with a 304"
 
-    again = call("GET", "/char.css", headers={"if-modified-since": validator})
-    assert again.status_code == 200, (
-        "Python now answers a conditional request with 304. That is the DESIRED "
-        "end state, but it must arrive via the step-6 fix with its own test "
-        "pair, not as a side effect of the pipeline extraction."
-    )
+    # If-None-Match takes precedence (RFC 9110 13.1.3), so this proves the
+    # Last-Modified path independently.
+    lm_status, _ = drive_asgi("GET", "/char.css", {"if-modified-since": wire["last-modified"]})
+    assert lm_status == 304, "If-Modified-Since was not answered with a 304"
 
 
 # ── 7. HEAD behaves like GET on a template route ─────────────────
