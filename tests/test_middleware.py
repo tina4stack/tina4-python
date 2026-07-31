@@ -36,18 +36,32 @@ class MockResponse:
 class TestCorsMiddleware:
     """Positive tests for CORS middleware."""
 
-    def test_default_allows_all_origins(self):
+    def test_default_allows_no_origins(self, monkeypatch):
+        # BREAKING (ADR-0014): the default was "*"; it is now deny.
+        monkeypatch.delenv("TINA4_CORS_ORIGINS", raising=False)
         cors = CorsMiddleware()
-        assert cors.allowed_origin("https://example.com") == "*"
+        assert cors.allowed_origin("https://example.com") == ""
+
+    def test_explicit_wildcard_allows_all_origins(self):
+        os.environ["TINA4_CORS_ORIGINS"] = "*"
+        try:
+            cors = CorsMiddleware()
+            assert cors.allowed_origin("https://example.com") == "*"
+        finally:
+            del os.environ["TINA4_CORS_ORIGINS"]
 
     def test_apply_sets_cors_headers(self):
-        cors = CorsMiddleware()
-        req = MockRequest(headers={"origin": "https://example.com"})
-        resp = MockResponse()
-        cors.apply(req, resp)
-        assert resp._headers["access-control-allow-origin"] == "*"
-        assert "GET" in resp._headers["access-control-allow-methods"]
-        assert "Content-Type" in resp._headers["access-control-allow-headers"]
+        os.environ["TINA4_CORS_ORIGINS"] = "*"   # was the old default
+        try:
+            cors = CorsMiddleware()
+            req = MockRequest(headers={"origin": "https://example.com"})
+            resp = MockResponse()
+            cors.apply(req, resp)
+            assert resp._headers["access-control-allow-origin"] == "*"
+            assert "GET" in resp._headers["access-control-allow-methods"]
+            assert "Content-Type" in resp._headers["access-control-allow-headers"]
+        finally:
+            del os.environ["TINA4_CORS_ORIGINS"]
 
     def test_specific_origin_allowed(self):
         os.environ["TINA4_CORS_ORIGINS"] = "https://app.com,https://admin.com"
@@ -85,6 +99,7 @@ class TestCorsMiddleware:
 
     def test_custom_max_age(self):
         os.environ["TINA4_CORS_MAX_AGE"] = "3600"
+        os.environ["TINA4_CORS_ORIGINS"] = "*"   # was the old default
         try:
             cors = CorsMiddleware()
             req = MockRequest(headers={"origin": "https://app.com"})
@@ -93,6 +108,7 @@ class TestCorsMiddleware:
             assert resp._headers["access-control-max-age"] == "3600"
         finally:
             del os.environ["TINA4_CORS_MAX_AGE"]
+            del os.environ["TINA4_CORS_ORIGINS"]
 
 
 class TestCorsMiddlewareNegative:
@@ -107,12 +123,13 @@ class TestCorsMiddlewareNegative:
             del os.environ["TINA4_CORS_ORIGINS"]
 
     def test_no_origin_header(self):
+        # BREAKING (ADR-0014): this used to assert "*" because the default was
+        # allow-all. Unconfigured now emits nothing at all.
         cors = CorsMiddleware()
         req = MockRequest(headers={})
         resp = MockResponse()
         cors.apply(req, resp)
-        # Still sets * since default is allow all
-        assert resp._headers["access-control-allow-origin"] == "*"
+        assert "access-control-allow-origin" not in resp._headers
 
     def test_not_preflight_without_request_method(self):
         cors = CorsMiddleware()
