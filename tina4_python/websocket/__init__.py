@@ -636,11 +636,17 @@ class WebSocketManager:
             await ws.close()
             self.remove(ws)
 
-    async def disconnect_all(self, path: str = None):
-        """Force disconnect all connections (optionally filtered by path)."""
+    async def disconnect_all(self, path: str = None,
+                            code: int = CLOSE_NORMAL, reason: str = ""):
+        """Force disconnect all connections (optionally filtered by path).
+
+        *code* is the RFC 6455 close code the peer is given. Shutdown passes
+        CLOSE_GOING_AWAY (1001) so a client knows the server is leaving and can
+        reconnect elsewhere, rather than reading a bare 1000 as "we are done".
+        """
         targets = self.get_by_path(path) if path else list(self._connections.values())
         for ws in targets:
-            await ws.close()
+            await ws.close(code, reason)
             self.remove(ws)
 
     async def reap_idle(self, timeout: float) -> int:
