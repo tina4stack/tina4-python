@@ -2325,11 +2325,22 @@ async def handle(request: Request) -> Response:
             return answered
 
     await _stage_dispatch_route(ctx)
-    _stage_head_strip(ctx)
 
-    return _finalize_response(
+    ctx.response = _finalize_response(
         ctx.request, ctx.response, ctx.route, ctx.request_id, ctx.is_dev, ctx.req_start
     )
+
+    # LAST, after _finalize_response. That is where the dev toolbar and the
+    # feedback widget are injected, and stripping BEFORE them left a HEAD
+    # response carrying 8.5KB of toolbar markup in dev mode - the body was
+    # removed and then put back. A run without TINA4_DEBUG could not see it.
+    #
+    # Running it last also makes Content-Length right: it reports the body
+    # AFTER injection, which is exactly what the equivalent GET would send
+    # (RFC 9110 s9.3.2 SHOULD - same headers as the GET).
+    _stage_head_strip(ctx)
+
+    return ctx.response
 
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
