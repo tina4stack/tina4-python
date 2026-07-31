@@ -1540,24 +1540,6 @@ def _middleware_method_names(mw_inst, prefix: str) -> list:
     return Middleware._discover_methods(mw_inst, prefix)
 
 
-def _middleware_500(response: Response, mw_inst, method_name: str, error: Exception) -> Response:
-    """Log a throwing middleware method and produce a deterministic 500.
-
-    A middleware that raises must never crash the worker or leak an
-    unhandled exception. We LOG it (so it's visible, never silent) and
-    return a clean 500 — the same outcome across all four frameworks,
-    whose dispatchers wrap the before/after invocation the same way.
-    """
-    Log.error(
-        f"Middleware {type(mw_inst).__name__}.{method_name} raised "
-        f"{type(error).__name__}: {error}"
-    )
-    return response.status(500).json({
-        "error": "Internal Server Error",
-        "status": 500,
-    })
-
-
 def _effective_middleware(route: dict, include_globals: bool = True) -> list:
     """Resolve the middleware that actually runs for a route.
 
@@ -1600,10 +1582,22 @@ def _run_before_middleware(request: Request, response: Response, route: dict, in
     order of ``route["middleware"]``); within a class, ``before_*`` methods
     run in DEFINITION order, not ``dir()`` alphabetical order.
 
+    Return-value contract: exactly the table in
+    ``Middleware.apply_hook_result`` — a Response object short-circuits and
+    BECOMES the response at any status, a ``(request, response)`` pair rebinds
+    and continues, ``False`` short-circuits (403 if the response is still
+    default), ``None`` continues. One implementation, shared with the
+    ``Middleware`` orchestrator, so the two public entry points cannot drift.
+
+    Also retained: a LEGACY COMPAT path where a response status >= 400
+    short-circuits even when the hook returned ``None``. It stays because real
+    middleware takes that shape, but it is NOT the main mechanism — a status
+    test cannot express a 3xx redirect.
+
     Resilience (M2): each method call is wrapped — a method that THROWS is
-    logged and converted to a clean 500, and the handler is skipped. A
-    before_* that sets status >= 400 also short-circuits the handler.
+    logged and converted to a clean 500, and the handler is skipped.
     """
+    from tina4_python.core.middleware import Middleware
     skip = False
     for _mw_cls in _effective_middleware(route, include_globals):
         if _is_function_middleware(_mw_cls):
@@ -1614,11 +1608,13 @@ def _run_before_middleware(request: Request, response: Response, route: dict, in
             try:
                 _mw_result = _mw_method(request, response)
             except Exception as _err:
-                response = _middleware_500(response, _mw_inst, _attr_name, _err)
+                response = Middleware.middleware_500(response, _mw_inst, _attr_name, _err)
                 skip = True
                 break
-            if _mw_result is not None:
-                request, response = _mw_result
+            request, response, skip = Middleware.apply_hook_result(_mw_result, request, response)
+            if skip:
+                break
+            # Legacy compat path — see the docstring.
             if response.status_code >= 400:
                 skip = True
                 break
@@ -1640,11 +1636,17 @@ def _run_after_middleware(request: Request, response: Response, route: dict, inc
     4xx short-circuit rule (M2): after_* ALWAYS run, even when a before_*
     short-circuited with status >= 400 (the handler was skipped). This lets
     after-middleware add headers / logging on error responses too. All four
-    frameworks follow this same rule.
+    frameworks follow this same rule. There is deliberately no >= 400 legacy
+    path here — that would stop the after chain on every error response.
+
+    Return-value contract: the same ``Middleware.apply_hook_result`` table as
+    the before pass. An after hook that returns a Response object or ``False``
+    short-circuits the remaining after hooks.
 
     Resilience (M2): each after_* call is wrapped — a method that THROWS is
     logged and converted to a clean 500; remaining after_* still run.
     """
+    from tina4_python.core.middleware import Middleware
     for _mw_cls in _effective_middleware(route, include_globals):
         if _is_function_middleware(_mw_cls):
             continue
@@ -1654,10 +1656,13 @@ def _run_after_middleware(request: Request, response: Response, route: dict, inc
             try:
                 _mw_result = _mw_method(request, response)
             except Exception as _err:
-                response = _middleware_500(response, _mw_inst, _attr_name, _err)
+                response = Middleware.middleware_500(response, _mw_inst, _attr_name, _err)
                 continue
-            if _mw_result is not None:
-                request, response = _mw_result
+            request, response, _short_circuit = Middleware.apply_hook_result(
+                _mw_result, request, response
+            )
+            if _short_circuit:
+                return request, response
     return request, response
 
 

@@ -12,6 +12,49 @@ UNRELEASED work. When a version ships, its notes go to the release notes above.
 
 ## Unreleased
 
+### Breaking: one return-value contract for every middleware hook
+
+What a `before_*` / `after_*` hook RETURNS now decides what happens next, the
+same way for every hook, at every scope (global and per-route), through both
+public entry points (`Middleware.run_before` / `run_after` and the dispatcher in
+`core.server`):
+
+| the hook returns | what happens |
+|---|---|
+| a `Response` object | SHORT-CIRCUIT. That object IS the response, at ANY status. |
+| `(request, response)` | rebind both, continue |
+| `False` | SHORT-CIRCUIT. Send the response as set; a still-default/empty response becomes a 403. |
+| `None` | continue |
+
+The `Response`-object rule is PRIMARY. The retained legacy path - a response
+status >= 400 short-circuits even when the hook returned `None` - stays because
+real middleware takes that shape (Rails decides on response state), but it can
+only ever express an error. A hook that wants to redirect has no 4xx to set, so
+before this change `return response.redirect("/login")` from a `before_*` hook
+could not stop the handler at all.
+
+Two of these returns were not merely unsupported, they were CRASHES. The
+dispatcher did `request, response = result` for any non-`None` return, so
+`return False` raised `TypeError: cannot unpack non-iterable bool object` and
+returning a `Response` raised `TypeError: cannot unpack non-iterable Response
+object` - a middleware saying "deny" produced a 500. The orchestrator had the
+opposite bug: it silently IGNORED both, so the chain ran on and the handler
+executed anyway.
+
+`Middleware.run_before` / `run_after` also gained the exception gate the other
+three frameworks' orchestrators already had: a hook that raises is logged via
+`Log.error` and becomes the canonical clean 500
+(`{"error": "Internal Server Error", "status": 500}`) instead of escaping to the
+caller. A throwing BEFORE hook short-circuits; a throwing AFTER hook is logged
+and the remaining after hooks still run.
+
+**Migration:** a hook that returned a bare `Response` object or `False` used to
+crash (dispatcher) or be ignored (orchestrator); it now short-circuits. If you
+have an `after_*` hook that returns a bare `response` instead of the
+`(request, response)` pair, it will now stop the remaining after hooks - return
+the pair to keep them running.
+
+
 ### CORS preflight responses now carry `Allow`
 
 A CORS preflight (`OPTIONS` with an `Origin`) returned 204 with the

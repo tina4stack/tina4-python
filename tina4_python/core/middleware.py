@@ -5,8 +5,21 @@ Standardized middleware orchestrator and built-in middleware.
 Middleware classes follow a simple convention:
     - Static methods named ``before_*`` run BEFORE the route handler
     - Static methods named ``after_*`` run AFTER the route handler
-    - Each method receives ``(request, response)`` and returns ``(request, response)``
-    - If a before method sets the response status to >= 400, the chain short-circuits
+    - Each method receives ``(request, response)``
+
+What a hook RETURNS decides what happens next. One table, every hook
+(``before_*`` and ``after_*``), every scope (global and per-route), and both
+public entry points (this orchestrator and the dispatcher in ``core.server``):
+
+    ==========================  ==============================================
+    a Response object           SHORT-CIRCUIT. That object IS the response,
+                                at ANY status.
+    the (request, response)     rebind both, continue
+    tuple
+    False                       SHORT-CIRCUIT. Send the response as set; a
+                                still-default/empty response becomes a 403.
+    None                        continue
+    ==========================  ==============================================
 
 Usage::
 
@@ -24,6 +37,7 @@ import logging
 import threading
 
 from tina4_python.core.rate_limiter import RateLimiter  # noqa: F401 — re-export for backward compat
+from tina4_python.core.response import Response
 
 
 class Middleware:
@@ -89,18 +103,82 @@ class Middleware:
         """Clear all globally registered middleware (primarily for tests)."""
         cls._global_middleware = []
 
+    @staticmethod
+    def apply_hook_result(result, request, response):
+        """Interpret what a ``before_*`` / ``after_*`` hook returned.
+
+        THE contract, in one place, so both public entry points - this
+        orchestrator and ``core.server``'s dispatcher - can never drift apart:
+
+        * a ``Response`` object -> SHORT-CIRCUIT, and that object IS the
+          response, at ANY status. This is the PRIMARY rule and the only one
+          that can express a 302 redirect.
+        * a ``(request, response)`` pair -> rebind both, continue.
+        * ``False`` -> SHORT-CIRCUIT. Send the response as the hook left it; if
+          it is still default and empty, make it a 403 - a hook that says "no"
+          without saying anything else means Forbidden, not 200.
+        * ``None`` (or anything else) -> continue.
+
+        Returns ``(request, response, short_circuit)``.
+        """
+        if isinstance(result, Response):
+            return request, result, True
+        if isinstance(result, (tuple, list)) and len(result) >= 2:
+            return result[0], result[1], False
+        if result is False:
+            if response.status_code == 200 and not response.content:
+                response.status(403).json({"error": "Forbidden", "status": 403})
+            return request, response, True
+        return request, response, False
+
+    @staticmethod
+    def middleware_500(response, middleware, method_name: str, error: Exception):
+        """Log a throwing middleware method and produce the deterministic 500.
+
+        A middleware that raises must never crash the worker or leak an
+        unhandled exception past the pipeline. We LOG it (so it is visible,
+        never silent) and return a clean 500 with the canonical body shape
+        ``{"error": "Internal Server Error", "status": 500}`` - identical
+        output in all four frameworks. ``middleware`` may be a class or an
+        instance; both entry points share this one implementation.
+        """
+        from tina4_python.debug import Log
+        klass = middleware if isinstance(middleware, type) else type(middleware)
+        Log.error(
+            f"Middleware {klass.__name__}.{method_name} raised "
+            f"{type(error).__name__}: {error}"
+        )
+        return response.status(500).json({
+            "error": "Internal Server Error",
+            "status": 500,
+        })
+
     @classmethod
     def run_before(cls, middleware_classes, request, response):
         """Run every ``before_*`` static method on the given classes.
 
-        Short-circuits if the response status becomes >= 400.
+        Obeys the return-value contract in ``apply_hook_result``. A hook that
+        RAISES is logged and becomes a clean 500, and short-circuits - the
+        remaining hooks do not run.
+
+        Also retained: a LEGACY COMPAT path where a response status >= 400
+        short-circuits even when the hook returned ``None``. Real middleware
+        takes that shape (Rails decides on response state), so it stays - but
+        it is NOT the main mechanism, because a status test cannot express a
+        3xx redirect. The Response-object rule above is.
+
         Returns ``(request, response)``.
         """
         for mw_class in middleware_classes:
             for method_name in cls._discover_methods(mw_class, "before_"):
-                result = getattr(mw_class, method_name)(request, response)
-                if isinstance(result, tuple) and len(result) >= 2:
-                    request, response = result[0], result[1]
+                try:
+                    result = getattr(mw_class, method_name)(request, response)
+                except Exception as error:
+                    return request, cls.middleware_500(response, mw_class, method_name, error)
+                request, response, short_circuit = cls.apply_hook_result(result, request, response)
+                if short_circuit:
+                    return request, response
+                # Legacy compat path — see the docstring.
                 status = getattr(response, "status_code", None) or getattr(response, "status", 0)
                 if isinstance(status, int) and status >= 400:
                     return request, response
@@ -108,12 +186,26 @@ class Middleware:
 
     @classmethod
     def run_after(cls, middleware_classes, request, response):
-        """Run every ``after_*`` static method on the given classes."""
+        """Run every ``after_*`` static method on the given classes.
+
+        Same return-value contract as ``run_before``. The one difference is how
+        a THROW is handled: an after hook that raises is logged and becomes a
+        clean 500, but the REMAINING after hooks still run - they add headers
+        and logging that an error response needs just as much as a success.
+
+        There is no >= 400 legacy path here: the handler has already run, and a
+        4xx response must not stop the after chain.
+        """
         for mw_class in middleware_classes:
             for method_name in cls._discover_methods(mw_class, "after_"):
-                result = getattr(mw_class, method_name)(request, response)
-                if isinstance(result, tuple) and len(result) >= 2:
-                    request, response = result[0], result[1]
+                try:
+                    result = getattr(mw_class, method_name)(request, response)
+                except Exception as error:
+                    response = cls.middleware_500(response, mw_class, method_name, error)
+                    continue
+                request, response, short_circuit = cls.apply_hook_result(result, request, response)
+                if short_circuit:
+                    return request, response
         return request, response
 
     @staticmethod
@@ -146,12 +238,16 @@ class CorsMiddleware:
 
     @staticmethod
     def before_cors(request, response):
-        """Inject CORS headers on every request (class-based middleware convention)."""
-        instance = CorsMiddleware()
-        if instance.is_preflight(request):
-            instance.apply(request, response)
-            return request, response
-        instance.apply(request, response)
+        """Inject CORS headers on every request (class-based middleware convention).
+
+        No preflight branch here on purpose: ``server._stage_cors_preflight``
+        answers a preflight (204 + policy headers + ``Allow``) and returns
+        before the middleware chain runs, so this hook only ever sees a real
+        request. The branch that used to test ``is_preflight`` here ran the
+        exact same two lines as the fall-through - it was superseded when the
+        preflight moved into the dispatcher stage.
+        """
+        CorsMiddleware().apply(request, response)
         return request, response
 
     def __init__(self):
