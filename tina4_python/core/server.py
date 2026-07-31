@@ -2144,6 +2144,19 @@ _PRE_MATCH_STAGES = (
 _DEV_EXTRA_PATHS = {"/ai/api/chat", "/ai", "/vision", "/embed", "/image", "/rag"}
 
 
+
+def _Mw_pre() -> list:
+    """The pre-match global middleware, for the after pass.
+
+    A tiny indirection so the dispatch stage does not import Middleware at
+    module scope - the rest of this file resolves it lazily too, to keep the
+    import graph acyclic.
+    """
+    from tina4_python.core.middleware import Middleware
+
+    return Middleware.pre_match_middleware()
+
+
 async def _stage_dispatch_route(ctx: DispatchContext) -> None:
     """Match a route and run it, or fall through to 405 / 404.
 
@@ -2188,7 +2201,35 @@ async def _stage_dispatch_route(ctx: DispatchContext) -> None:
             ctx.response = await _invoke_handler_with_middleware(
                 ctx.request, ctx.response, route, params
             )
-        ctx.request, ctx.response = _run_after_middleware(ctx.request, ctx.response, route)
+        # The AFTER pass runs over EVERY global middleware - both phases - plus
+        # the route's own, not just the post-match group.
+        #
+        # The response phase must cover everything the request phase entered.
+        # Running only the post-match group meant a ``pre_match`` middleware's
+        # after_* NEVER ran on a successful request: measured 0 runs in 5
+        # requests. An acquire/release pair leaked one slot per request,
+        # unbounded; a timer started in before_* was never stopped; an access
+        # log saw the request and never the response - the very hole ADR-0012
+        # moved the globals ahead of the auth gate to close.
+        #
+        # Worse, it inverted: the pre-match after_* DID run when the pre-match
+        # pass short-circuited, so it fired on the error path and not the happy
+        # one.
+        #
+        # Django unwinds its single MIDDLEWARE list in reverse, Laravel runs the
+        # response/terminate phase for global, group AND route middleware, Rails
+        # runs every declared after_action. Ruby and PHP already did this.
+        # Splitting the BEFORE pass by dependency (ADR-0012) says nothing about
+        # the after pass: an after hook adds headers or logging and needs no
+        # route metadata either way.
+        #
+        # No double-run: when the pre-match pass short-circuits, handle()
+        # returns before ever reaching this.
+        _after_route = {
+            "middleware": list(_Mw_pre()) + list(route.get("middleware", [])),
+            "handler": route.get("handler"),
+        }
+        ctx.request, ctx.response = _run_after_middleware(ctx.request, ctx.response, _after_route)
     except Exception as e:
         ctx.response = _handle_route_error(
             e, ctx.request, ctx.response, ctx.request_id, ctx.is_dev
