@@ -216,6 +216,7 @@ jobs:
           uv run pytest tests/ -v \
             --ignore=tests/test_metrics_cli.py \
             --ignore=tests/test_metrics_collector.py \
+            --ignore=tests/test_metrics_dispatch_pipeline.py \
             --ignore=tests/test_metrics_engine.py \
             --ignore=tests/test_metrics_nested_complexity.py \
             --ignore=tests/test_metrics_offender_cap.py

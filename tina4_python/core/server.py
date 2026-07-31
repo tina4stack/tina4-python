@@ -1858,93 +1858,6 @@ def _request_logging_enabled(is_dev: bool) -> bool:
     return is_dev
 
 
-def _finalize_response(
-    request: Request, response: Response, route: dict | None,
-    request_id: str, is_dev: bool, req_start: float,
-) -> Response:
-    """Apply CORS, dev toolbar, request inspector, and session cookie."""
-    _cors.apply(request, response)
-
-    # Dev toolbar injection
-    if is_dev and response.content_type and "text/html" in response.content_type:
-        if not request.path.startswith("/__dev"):
-            try:
-                from tina4_python.dev_admin import render_dev_toolbar
-                matched_pattern = route["path"] if route else "-"
-                toolbar = render_dev_toolbar(
-                    request.method, request.path, matched_pattern,
-                    request_id, len(Router.get_routes()),
-                ).encode()
-                content_body = response.content
-                if b"</body>" in content_body:
-                    content_body = content_body.replace(b"</body>", toolbar + b"\n</body>", 1)
-                else:
-                    content_body = content_body + toolbar
-                response.content = content_body
-            except Exception:
-                pass
-
-    # Request inspector
-    if is_dev:
-        try:
-            import time as _time
-            from tina4_python.dev_admin import RequestInspector
-            duration = (_time.perf_counter() - req_start) * 1000
-            RequestInspector.capture(
-                request.method, request.path, response.status_code, duration,
-                body_size=len(response.content) if response.content else 0,
-                ip=request.ip,
-            )
-        except Exception:
-            pass
-
-    # Request log line (v3.13.14). The dev dashboard's RequestInspector above
-    # only feeds the /__dev UI — it never reached stdout, so `tina4 serve`
-    # printed the startup banner then went silent even as requests flowed.
-    # Emit a per-request line through the Tina4 Log so it lands on stdout
-    # (docker logs / k8s) like every other log. On by default in dev; opt-in
-    # in production via TINA4_LOG_REQUESTS to avoid per-request overhead.
-    if _request_logging_enabled(is_dev):
-        try:
-            import time as _time
-            elapsed_ms = round((_time.perf_counter() - req_start) * 1000, 3)
-            Log.info(
-                f"{request.method} {request.path} -> {response.status_code} ({elapsed_ms}ms)"
-            )
-        except Exception:
-            pass
-
-    # Session save + cookie.
-    # Skip saving if this was a brand-new session that the route never wrote to —
-    # that prevents empty orphaned session files accumulating on disk.
-    if request.session is not None:
-        try:
-            is_new_and_empty = (
-                getattr(request.session, '_is_new', False)
-                and not request.session.all()
-            )
-            if not is_new_and_empty:
-                request.session.save()
-                sid = request.session.session_id if hasattr(request.session, 'session_id') else getattr(request.session, 'id', None)
-                if sid:
-                    # Route through the single cookie-builder so every
-                    # TINA4_SESSION_* knob (Secure/HttpOnly/SameSite) and the
-                    # proxy-aware Secure detection actually take effect. Do NOT
-                    # hand-write a second Set-Cookie here — that bypass is what
-                    # made TINA4_SESSION_SECURE a silent no-op (#95).
-                    response.header(
-                        "set-cookie",
-                        request.session.cookie_header(request=request),
-                    )
-            import random
-            if random.randint(1, 100) == 1:
-                request.session.gc()
-        except Exception:
-            pass
-
-    return response
-
-
 # ── The dispatch pipeline ────────────────────────────────────────────
 #
 # ``handle`` was one 190-line function at cyclomatic complexity 27 against a
@@ -2178,7 +2091,9 @@ async def _stage_dispatch_route(ctx: DispatchContext) -> None:
     ctx.route = route
 
     if not route:
-        _stage_method_not_allowed(ctx) or _stage_not_found(ctx)
+        # Nothing claimed the path. The fallback chain is NOT called from here -
+        # it is _FALLBACK_STAGES, walked by handle(). Ordering lives in the
+        # lists, never in a call from one stage to another.
         return None
 
     ctx.request._route_params = params
@@ -2268,9 +2183,127 @@ def _stage_method_not_allowed(ctx: DispatchContext) -> bool:
 
 
 def _stage_not_found(ctx: DispatchContext) -> bool:
-    """Nothing claimed the path: static, template, then 404."""
+    """Nothing claimed the path: static, template, then 404.
+
+    Terminal - it always answers, so it is last in ``_FALLBACK_STAGES``.
+    """
     ctx.response = _handle_no_route(ctx.request, ctx.response, ctx.request_id)
     return True
+
+
+def _stage_apply_cors(ctx: DispatchContext) -> None:
+    """Apply the CORS policy headers to the finished response."""
+    _cors.apply(ctx.request, ctx.response)
+    return None
+
+
+def _stage_dev_toolbar_inject(ctx: DispatchContext) -> None:
+    """Inject the dev toolbar into an HTML response, in dev mode only.
+
+    Best-effort: a toolbar that fails to render must never break the response
+    it was decorating, so the whole thing is guarded.
+    """
+    if not ctx.is_dev or not ctx.response.content_type:
+        return None
+    if "text/html" not in ctx.response.content_type:
+        return None
+    if ctx.request.path.startswith("/__dev"):
+        return None
+
+    try:
+        from tina4_python.dev_admin import render_dev_toolbar
+        toolbar = render_dev_toolbar(
+            ctx.request.method, ctx.request.path,
+            ctx.route["path"] if ctx.route else "-",
+            ctx.request_id, len(Router.get_routes()),
+        ).encode()
+        body = ctx.response.content
+        ctx.response.content = (
+            body.replace(b"</body>", toolbar + b"\n</body>", 1)
+            if b"</body>" in body else body + toolbar
+        )
+    except Exception:
+        pass
+    return None
+
+
+def _stage_dev_inspector_capture(ctx: DispatchContext) -> None:
+    """Record the request for the /__dev dashboard, in dev mode only.
+
+    Runs AFTER the toolbar injection so ``body_size`` reports what actually
+    went on the wire, not the pre-injection body.
+    """
+    if not ctx.is_dev:
+        return None
+    try:
+        import time as _time
+        from tina4_python.dev_admin import RequestInspector
+        RequestInspector.capture(
+            ctx.request.method, ctx.request.path, ctx.response.status_code,
+            (_time.perf_counter() - ctx.req_start) * 1000,
+            body_size=len(ctx.response.content) if ctx.response.content else 0,
+            ip=ctx.request.ip,
+        )
+    except Exception:
+        pass
+    return None
+
+
+def _stage_request_log(ctx: DispatchContext) -> None:
+    """Emit the per-request log line (v3.13.14).
+
+    The dev dashboard's RequestInspector above only feeds the /__dev UI - it
+    never reached stdout, so ``tina4 serve`` printed the startup banner then
+    went silent even as requests flowed. This lands on stdout (docker logs /
+    k8s) like every other log. On by default in dev; opt in in production via
+    TINA4_LOG_REQUESTS, to avoid the per-request overhead.
+    """
+    if not _request_logging_enabled(ctx.is_dev):
+        return None
+    try:
+        import time as _time
+        elapsed_ms = round((_time.perf_counter() - ctx.req_start) * 1000, 3)
+        Log.info(
+            f"{ctx.request.method} {ctx.request.path} -> "
+            f"{ctx.response.status_code} ({elapsed_ms}ms)"
+        )
+    except Exception:
+        pass
+    return None
+
+
+def _stage_session_save(ctx: DispatchContext) -> None:
+    """Persist the session and set its cookie.
+
+    A brand-new session the route never wrote to is NOT saved - that is what
+    stops empty orphaned session files accumulating on disk.
+    """
+    if ctx.request.session is None:
+        return None
+    session = ctx.request.session
+    try:
+        if not (getattr(session, "_is_new", False) and not session.all()):
+            session.save()
+            sid = getattr(session, "session_id", None) or getattr(session, "id", None)
+            if sid:
+                # Route through the single cookie-builder so every
+                # TINA4_SESSION_* knob (Secure/HttpOnly/SameSite) and the
+                # proxy-aware Secure detection actually take effect. Do NOT
+                # hand-write a second Set-Cookie here - that bypass is what made
+                # TINA4_SESSION_SECURE a silent no-op (#95).
+                ctx.response.header(
+                    "set-cookie", session.cookie_header(request=ctx.request)
+                )
+        # Probabilistic GC (~1% of requests). INSIDE the try and AFTER the save,
+        # exactly as before: a session that failed to save does not then get
+        # garbage collected. It runs for a new-and-empty session too, which is
+        # why it sits outside the save branch rather than in it.
+        import random
+        if random.randint(1, 100) == 1:
+            session.gc()
+    except Exception:
+        pass
+    return None
 
 
 def _stage_head_strip(ctx: DispatchContext) -> None:
@@ -2297,6 +2330,39 @@ def _stage_head_strip(ctx: DispatchContext) -> None:
     return None
 
 
+#: Match a route and run it. ``_stage_dispatch_route`` leaves ``ctx.route``
+#: None when nothing claimed the path, and the fallback chain below answers.
+_POST_MATCH_STAGES = (
+    _stage_dispatch_route,
+)
+
+#: Walked ONLY when no route matched, in order, until one answers True.
+#: ADR-0010 (routes beat files) is why this runs AFTER matching: a file dropped
+#: into src/public/ by a build step must never shadow a reviewed route.
+_FALLBACK_STAGES = (
+    _stage_method_not_allowed,
+    _stage_not_found,
+)
+
+#: Run over the finished Response on the way out, in order.
+#:
+#: Order is BEHAVIOUR: the inspector runs AFTER the toolbar injection so its
+#: body_size reports what went on the wire, and ``_stage_head_strip`` is LAST
+#: because the toolbar injection would otherwise put 8.5KB of markup back into
+#: an already-stripped HEAD response - the body removed and then restored. A
+#: run without TINA4_DEBUG could not see that. Stripping last also makes
+#: Content-Length report the body AFTER injection, which is exactly what the
+#: equivalent GET would send (RFC 9110 s9.3.2).
+_RESPONSE_STAGES = (
+    _stage_apply_cors,
+    _stage_dev_toolbar_inject,
+    _stage_dev_inspector_capture,
+    _stage_request_log,
+    _stage_session_save,
+    _stage_head_strip,
+)
+
+
 async def handle(request: Request) -> Response:
     """Dispatch a pre-built Request through the Tina4 router and return a Response.
 
@@ -2304,9 +2370,10 @@ async def handle(request: Request) -> Response:
     dev toolbar injection, and session saving. The caller is responsible
     for sending the response over the wire. Useful for testing and embedding.
 
-    Every branch this used to hold now lives in a named stage - see
-    ``_PRE_MATCH_STAGES``. The only control flow left here is "walk the list,
-    stop when a stage answers".
+    Every branch this used to hold now lives in a named stage. The only control
+    flow left here is "walk a list, stop when a stage answers" - four times,
+    over ``_PRE_MATCH_STAGES``, ``_POST_MATCH_STAGES``, ``_FALLBACK_STAGES``
+    and ``_RESPONSE_STAGES``.
     """
     request_id = request.headers.get("x-request-id", str(uuid.uuid4())[:8])
     set_request_id(request_id)
@@ -2324,21 +2391,16 @@ async def handle(request: Request) -> Response:
             # exactly as they did when each was a bare `return`.
             return answered
 
-    await _stage_dispatch_route(ctx)
+    for stage in _POST_MATCH_STAGES:
+        await stage(ctx)
 
-    ctx.response = _finalize_response(
-        ctx.request, ctx.response, ctx.route, ctx.request_id, ctx.is_dev, ctx.req_start
-    )
+    if ctx.route is None:
+        for stage in _FALLBACK_STAGES:
+            if stage(ctx):
+                break
 
-    # LAST, after _finalize_response. That is where the dev toolbar and the
-    # feedback widget are injected, and stripping BEFORE them left a HEAD
-    # response carrying 8.5KB of toolbar markup in dev mode - the body was
-    # removed and then put back. A run without TINA4_DEBUG could not see it.
-    #
-    # Running it last also makes Content-Length right: it reports the body
-    # AFTER injection, which is exactly what the equivalent GET would send
-    # (RFC 9110 s9.3.2 SHOULD - same headers as the GET).
-    _stage_head_strip(ctx)
+    for stage in _RESPONSE_STAGES:
+        stage(ctx)
 
     return ctx.response
 
