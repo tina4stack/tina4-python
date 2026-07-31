@@ -339,6 +339,17 @@ class Database:
         #   sqlite://rel/app.db    → "rel/app.db"    (two-slash legacy = relative)
         #   sqlite:app.db          → "app.db"        (relative)
         url = self.url
+        # `sqlite3:` is a documented alias for `sqlite:`. Normalise it FIRST or
+        # none of the prefixes below match and `stripped` keeps the whole URL,
+        # so the database file is literally named "sqlite3:app.db". That is not
+        # merely ugly: a colon is an illegal filename character on Windows, so
+        # the documented alias is unusable there.
+        #
+        # DatabaseUrl._parse_sqlite already normalises it. This function
+        # duplicates that strip instead of calling it, which is exactly how the
+        # two drifted. Collapsing them is filed as follow-on work.
+        if url.startswith("sqlite3:"):
+            url = "sqlite:" + url[len("sqlite3:"):]
         if url.startswith("sqlite:///"):
             stripped = url[len("sqlite:///"):]
         elif url.startswith("sqlite://"):
