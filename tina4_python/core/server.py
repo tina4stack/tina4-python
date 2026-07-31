@@ -479,7 +479,7 @@ async def _health_handler(request: Request, response: Response) -> Response:
     as diagnostics for the dev dashboard; they no longer set the status code.
 
     Dependency health (database, cache, queue) belongs on a READINESS endpoint,
-    which withdraws traffic WITHOUT a restart. See ADR-0014.
+    which withdraws traffic WITHOUT a restart. See ADR-0016.
 
     The body is exactly four keys, identical in all four frameworks. It used to
     also carry ``errors`` and ``latest_error`` read from ``data/.broken``. Once

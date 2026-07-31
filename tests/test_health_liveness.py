@@ -25,7 +25,7 @@ written, and the dev dashboard and the MCP tools still read it; the probe just
 stopped carrying it.
 
 Readiness (dependency probes, 503 to withdraw traffic without a restart) is a
-separate endpoint, specified in ADR-0014 and scheduled separately.
+separate endpoint, specified in ADR-0016 and scheduled separately.
 
 No mocks: a REAL child server over a REAL loopback socket, and the failure is
 induced by a REAL route that really raises.

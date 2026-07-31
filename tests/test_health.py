@@ -67,7 +67,7 @@ class TestHealthEndpoint:
 
         This asserted ``status == "error"`` until feature 8. A recorded route
         error is not a reason to restart the container, so it no longer moves
-        the status. See tests/test_health_liveness.py and ADR-0014.
+        the status. See tests/test_health_liveness.py and ADR-0016.
         """
         error_data = {"error": "Something broke", "timestamp": "2025-01-01T00:00:00Z"}
         (broken_dir / "test.broken").write_text(json.dumps(error_data))
