@@ -201,7 +201,15 @@ def test_dispatch_template_path_renders_for_get_and_head(_workspace):
 # must change only via a decided fix with its own test pair - never as a silent
 # side effect of the extraction.
 
-def test_dispatch_cors_headers_present_on_401():
+def test_dispatch_cors_headers_present_on_401(monkeypatch):
+    # ADR-0018 made the CORS default deny, so this test now declares the policy
+    # it used to inherit. The GUARANTEE under test is unchanged: when CORS is
+    # configured, its headers must survive a short-circuited 401.
+    monkeypatch.setenv("TINA4_CORS_ORIGINS", "https://example.com")
+    import tina4_python.core.server as _server
+    from tina4_python.core.middleware import CorsMiddleware as _Cors
+    _server._cors = _Cors()
+
     @route_post("/needs-auth")
     async def _secret(request, response):
         return response("secret")

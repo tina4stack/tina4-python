@@ -248,7 +248,10 @@ class TestAuthJWT:
 
 
 class TestMiddleware:
-    def test_cors_before_and_after(self):
+    def test_cors_before_and_after(self, monkeypatch):
+        # ADR-0018 made the CORS default deny; this asserts what apply()
+        # EMITS, so it declares the wildcard policy it used to inherit.
+        monkeypatch.setenv("TINA4_CORS_ORIGINS", "*")
         cors = CorsMiddleware()
 
         class Req:
@@ -931,7 +934,10 @@ class TestMiddlewareAdvanced:
         assert allowed is True
         assert info["remaining"] >= 0
 
-    def test_cors_options_preflight(self):
+    def test_cors_options_preflight(self, monkeypatch):
+        # ADR-0018 made the CORS default deny; this asserts what apply()
+        # EMITS, so it declares the wildcard policy it used to inherit.
+        monkeypatch.setenv("TINA4_CORS_ORIGINS", "*")
         cors = CorsMiddleware()
 
         class Req:

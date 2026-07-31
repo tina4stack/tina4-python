@@ -1717,7 +1717,7 @@ anywhere (the production on/off switch, wired for real in 3.13.40).
 
 ## CORS
 
-Built-in — all origins allowed by default. CORS headers and OPTIONS pre-flight are handled automatically.
+Built-in, and it DENIES by default (ADR-0018). Set `TINA4_CORS_ORIGINS` to the origins you want to allow (comma-separated), or `*` for any. With it unset no `Access-Control-Allow-Origin` is sent and the browser blocks the cross-origin request. `TINA4_CORS_CREDENTIALS=true` is never sent alongside a `*` origin (the Fetch Standard forbids the pair). OPTIONS pre-flight is handled automatically.
 
 ## SCSS Workflow
 

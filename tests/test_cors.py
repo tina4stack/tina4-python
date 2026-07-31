@@ -19,9 +19,12 @@ def clean_env(monkeypatch):
 
 class TestCorsDefaults:
 
-    def test_default_origins_is_wildcard(self, clean_env):
+    def test_default_origins_is_deny(self, clean_env):
+        # BREAKING (ADR-0018): the default was "*" (allow every origin). It is
+        # now empty = deny, and "*" must be asked for explicitly.
         cors = CorsMiddleware()
-        assert cors.origins == "*"
+        assert cors.origins == ""
+        assert cors.is_configured() is False
 
     def test_default_methods_includes_common_verbs(self, clean_env):
         cors = CorsMiddleware()
@@ -81,7 +84,14 @@ class TestCorsEnvConfig:
 
 class TestAllowedOrigin:
 
-    def test_wildcard_returns_star(self, clean_env):
+    def test_unconfigured_returns_no_origin(self, clean_env):
+        # BREAKING (ADR-0018): with no policy configured nothing is allowed.
+        cors = CorsMiddleware()
+        assert cors.allowed_origin("https://anything.com") == ""
+
+    def test_explicit_wildcard_returns_star(self, monkeypatch):
+        # The capability is unchanged — only the DEFAULT moved.
+        monkeypatch.setenv("TINA4_CORS_ORIGINS", "*")
         cors = CorsMiddleware()
         assert cors.allowed_origin("https://anything.com") == "*"
 
@@ -103,6 +113,13 @@ class TestAllowedOrigin:
 
 
 class TestApply:
+    """Unchanged assertions. These exercise what apply() EMITS for an allowed
+    origin, which ADR-0018 did not touch — so each now declares the wildcard
+    policy it previously inherited from the old permissive default."""
+
+    @pytest.fixture(autouse=True)
+    def _allow_all(self, clean_env, monkeypatch):
+        monkeypatch.setenv("TINA4_CORS_ORIGINS", "*")
 
     def test_apply_sets_allow_origin(self, clean_env):
         cors = CorsMiddleware()

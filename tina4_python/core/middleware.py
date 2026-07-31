@@ -233,8 +233,55 @@ class Middleware:
         return names
 
 
+_CORS_DENY_WARNED: set = set()
+
+
+def _cors_warn_once(key: str, message: str) -> None:
+    """Log an actionable CORS warning at most once per distinct key per process.
+
+    A rejected cross-origin request is otherwise invisible: the browser reports
+    a generic CORS failure and the server log says nothing, so the operator has
+    to read the framework source to discover which env var to set. Warning on
+    EVERY rejected request would flood the log under a scripted probe, so each
+    distinct key warns once.
+    """
+    if key in _CORS_DENY_WARNED:
+        return
+    _CORS_DENY_WARNED.add(key)
+    try:
+        from tina4_python.debug import Log
+        Log.warning(message)
+    except Exception:  # pragma: no cover — logging must never break a request
+        logging.getLogger("tina4").warning(message)
+
+
 class CorsMiddleware:
-    """CORS handler — reads config from env, injects headers."""
+    """CORS handler — reads config from env, injects headers.
+
+    Deny by default (ADR-0018). With ``TINA4_CORS_ORIGINS`` unset, NO
+    ``Access-Control-Allow-Origin`` is emitted and the browser's own CORS check
+    blocks the cross-origin request. ``*`` still works, but has to be asked for.
+
+    Credentials and the wildcard are mutually exclusive. The Fetch Standard's
+    CORS check treats ``*`` as a literal (not a wildcard) once the request's
+    credentials mode is "include", so ``ACAO: *`` plus
+    ``Access-Control-Allow-Credentials: true`` is rejected by every browser.
+    Emitting it is a framework bug, so the wildcard wins and credentials are
+    dropped with a warning rather than shipping a pair no browser accepts.
+
+    ``Vary: Origin`` is emitted whenever the ACAO value is COMPUTED from the
+    request's Origin — i.e. whenever an allow-list is configured, match or miss.
+    RFC 9110 s12.5.5: a Vary field name list tells cache recipients they "MUST
+    NOT use this response to satisfy a later request unless the later request
+    has the same values for the listed header fields". Without it a shared cache
+    can hand one origin's ACAO (or a miss's lack of one) to a different origin.
+    A constant ``*`` genuinely does not vary, so it is NOT sent there — that
+    would fragment a CDN's cache per-origin for a response identical to all.
+
+    Access-Control-Allow-Methods / -Allow-Headers are static configured lists
+    here; they are never derived from the request's Access-Control-Request-*
+    headers, so those field names do NOT belong in Vary.
+    """
 
     @staticmethod
     def before_cors(request, response):
@@ -251,7 +298,8 @@ class CorsMiddleware:
         return request, response
 
     def __init__(self):
-        self.origins = os.environ.get("TINA4_CORS_ORIGINS", "*")
+        # Default is EMPTY, not "*" — deny by default (ADR-0018).
+        self.origins = os.environ.get("TINA4_CORS_ORIGINS", "")
         self.methods = os.environ.get(
             "TINA4_CORS_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS"
         )
@@ -264,29 +312,96 @@ class CorsMiddleware:
             "TINA4_CORS_CREDENTIALS", "false"
         ).lower() in ("true", "1", "yes")
 
+    @property
+    def allowed_origins(self) -> list:
+        """The configured origins, split and emptied of blanks."""
+        return [o.strip() for o in self.origins.split(",") if o.strip()]
+
+    def is_configured(self) -> bool:
+        """True when an operator has actually declared a CORS policy."""
+        return bool(self.allowed_origins)
+
     def allowed_origin(self, request_origin: str) -> str:
-        """Return the origin to set in Access-Control-Allow-Origin."""
-        if self.origins == "*":
+        """Return the origin to set in Access-Control-Allow-Origin ("" = none)."""
+        allowed = self.allowed_origins
+        if not allowed:
+            return ""
+        if "*" in allowed:
             return "*"
-        allowed = [o.strip() for o in self.origins.split(",")]
-        if request_origin in allowed:
+        if request_origin and request_origin in allowed:
             return request_origin
         return ""
 
     def apply(self, request, response):
         """Inject CORS headers into the response."""
-        origin = request.headers.get("origin", "")
-        allowed = self.allowed_origin(origin)
+        request_origin = request.headers.get("origin", "")
+        allowed = self.allowed_origins
 
-        if allowed:
-            response.header("access-control-allow-origin", allowed)
-            response.header("access-control-allow-methods", self.methods)
-            response.header("access-control-allow-headers", self.headers)
-            response.header("access-control-max-age", self.max_age)
-            if self.credentials and allowed != "*":
+        if not allowed:
+            if request_origin:
+                _cors_warn_once(
+                    "unconfigured",
+                    f"CORS: refused cross-origin request from {request_origin} — no policy is "
+                    f"configured. Set TINA4_CORS_ORIGINS to the origins you want to allow, e.g. "
+                    f"TINA4_CORS_ORIGINS=https://app.example.com (or '*' to allow any origin)."
+                )
+            return response
+
+        is_wildcard = "*" in allowed
+        # An allow-list decision reads the request Origin, so the response
+        # varies by it — on a MISS too, or a cache can serve the no-ACAO
+        # response to an origin that should have been allowed.
+        if not is_wildcard:
+            self._vary_origin(response)
+
+        origin = self.allowed_origin(request_origin)
+        if not origin:
+            if request_origin:
+                _cors_warn_once(
+                    f"denied:{request_origin}",
+                    f"CORS: origin {request_origin} is not in TINA4_CORS_ORIGINS "
+                    f"({self.origins}) — the browser will block this response."
+                )
+            return response
+
+        response.header("access-control-allow-origin", origin)
+        response.header("access-control-allow-methods", self.methods)
+        response.header("access-control-allow-headers", self.headers)
+        response.header("access-control-max-age", self.max_age)
+
+        if self.credentials:
+            if origin == "*":
+                _cors_warn_once(
+                    "wildcard-credentials",
+                    "CORS: TINA4_CORS_CREDENTIALS is true but TINA4_CORS_ORIGINS is '*'. "
+                    "The Fetch Standard forbids Access-Control-Allow-Origin: * with "
+                    "credentials, so credentials are NOT being sent. List the exact "
+                    "origins instead, e.g. TINA4_CORS_ORIGINS=https://app.example.com."
+                )
+            else:
                 response.header("access-control-allow-credentials", "true")
 
         return response
+
+    @staticmethod
+    def _vary_origin(response) -> None:
+        """Add Origin to Vary without clobbering an existing Vary value.
+
+        The real Response keeps ``_headers`` as a list of pairs. Anything else
+        just gets a plain header() call - a CORS header is never worth raising
+        out of the middleware chain over.
+        """
+        headers = getattr(response, "_headers", None)
+        if not isinstance(headers, list):
+            response.header("vary", "Origin")
+            return
+        for index, (name, value) in enumerate(headers):
+            if name.lower() == "vary":
+                parts = [p.strip() for p in value.split(",") if p.strip()]
+                if not any(p.lower() == "origin" for p in parts):
+                    headers[index] = (name, ", ".join(parts + ["Origin"]))
+                return
+        response.header("vary", "Origin")
 
     def is_preflight(self, request) -> bool:
         """Check if this is an OPTIONS preflight request."""

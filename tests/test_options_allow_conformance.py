@@ -36,9 +36,16 @@ PREFLIGHT = {"origin": "https://example.com", "access-control-request-method": "
 
 
 @pytest.fixture(autouse=True)
-def _routes():
+def _routes(monkeypatch):
     Router.clear()
     Middleware._global_middleware = []
+    # ADR-0018 made the CORS default deny. This suite is about the CORS POLICY
+    # headers on a preflight, so it has to declare a policy - it used to
+    # inherit one from the old permissive default. No assertion changed.
+    monkeypatch.setenv("TINA4_CORS_ORIGINS", "*")
+    import tina4_python.core.server as _server
+    from tina4_python.core.middleware import CorsMiddleware as _Cors
+    _server._cors = _Cors()
 
     @route_get("/only-get")
     async def _g(request, response):
@@ -51,6 +58,8 @@ def _routes():
     yield
     Router.clear()
     Middleware._global_middleware = []
+    monkeypatch.delenv("TINA4_CORS_ORIGINS", raising=False)
+    _server._cors = _Cors()
 
 
 def _options(headers=None):

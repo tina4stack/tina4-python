@@ -57,6 +57,8 @@ class TestCorsHeadersDefault:
 
     def test_env_override_is_emitted_on_allowed_origin(self, monkeypatch):
         monkeypatch.setenv("TINA4_CORS_HEADERS", "X-Custom-Header")
+        # ADR-0018: a policy must now be declared for anything to be emitted.
+        monkeypatch.setenv("TINA4_CORS_ORIGINS", "https://app.example.com")
 
         from tina4_python.core.middleware import CorsMiddleware
 
