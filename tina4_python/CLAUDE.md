@@ -1649,7 +1649,8 @@ TINA4_DATABASE_PASSWORD=                 # DB password
 TINA4_DEBUG=true                  # Enable dev mode (toolbar, live reload, error overlay)
 TINA4_LOG_LEVEL=INFO              # Log verbosity: ALL, DEBUG, INFO, WARNING, ERROR, CRITICAL (default: INFO)
 TINA4_LOCALE=en                   # Language for framework messages (en, fr, af, zh, ja, es)
-TINA4_DEFAULT_WEBSERVER=FALSE     # Set to TRUE to use Tina4's built-in webserver instead of ASGI
+TINA4_DEFAULT_WEBSERVER=FALSE     # TRUE pins Tina4's built-in asyncio webserver even when a production ASGI server (uvicorn/hypercorn/granian) is installed. Unset/FALSE: a production server is used when one is importable and TINA4_DEBUG is off
+TINA4_SHUTDOWN_TIMEOUT=30         # Seconds to drain in-flight requests on SIGTERM/SIGINT (default 30). Honoured on the built-in server, and mapped onto uvicorn's timeout_graceful_shutdown / hypercorn's graceful_timeout. granian has no drain deadline, so it is not honoured there (logged at startup). A non-positive or unparseable value warns and uses 30
 TINA4_OVERRIDE_CLIENT=false       # Set to true to allow running without tina4 CLI (e.g. Docker)
 HOST_NAME=localhost:7145
 

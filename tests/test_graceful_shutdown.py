@@ -38,6 +38,8 @@ import pytest
 
 from conftest import boot_child_server, read_child_log
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 # A request slow enough that a signal always lands mid-flight, but short enough
 # that the whole file stays quick. The drain therefore takes ~SLOW_SECONDS minus
 # SIGNAL_AFTER_SECONDS.
@@ -63,6 +65,20 @@ def _app_source(port: int, *, background_task: bool = False,
     sleep it cannot return early on EINTR and fake a drain that never happened.
     """
     lines = [
+        # The child runs from a tmp dir with a venv on sys.path that ALSO has
+        # tina4_python installed. A Ruby probe on this project once silently
+        # loaded the installed gem instead of the worktree copy and "proved" a
+        # fix that was never running, so the child says out loud which copy it
+        # imported and refuses to serve the wrong one.
+        "import pathlib, sys",
+        "import tina4_python",
+        f"_expected = {str(REPO_ROOT)!r}",
+        "_loaded = str(pathlib.Path(tina4_python.__file__).resolve())",
+        "print(f'TINA4_IMPORT={_loaded}', flush=True)",
+        "if not _loaded.startswith(_expected):",
+        "    print(f'FATAL: tina4_python came from {_loaded}, not {_expected}', flush=True)",
+        "    sys.exit(97)",
+        "",
         "import asyncio",
         "from tina4_python import get",
         "from tina4_python.core.server import start",
@@ -139,6 +155,57 @@ def _boot(tmp_path: Path, *, extra_env=None, **app_options):
         new_session=True,
         # The drain bound is under test — never let the outer environment set it.
         unset_env=("TINA4_SHUTDOWN_TIMEOUT",),
+    )
+
+
+def _boot_production(tmp_path: Path, *, extra_env=None, **app_options):
+    """Start a REAL child served by the PRODUCTION ASGI server (uvicorn).
+
+    TINA4_DEBUG stays OFF, which is exactly what makes run() hand the socket to
+    the production server — the path where Tina4's own shutdown code does NOT
+    run and only the pieces uvicorn cannot know about are ours.
+    """
+    env = {}
+    if extra_env:
+        env.update(extra_env)
+
+    def write_app(proj: Path, port: int) -> None:
+        (proj / "app.py").write_text(_app_source(port, **app_options))
+
+    return boot_child_server(
+        tmp_path, write_app,
+        extra_env=env,
+        log_dir=tmp_path / "logs",
+        new_session=True,
+        # Never let the outer environment decide the drain bound, and never let a
+        # stray TINA4_DEBUG/TINA4_DEFAULT_WEBSERVER divert us off the production
+        # path this helper exists to exercise.
+        unset_env=("TINA4_SHUTDOWN_TIMEOUT", "TINA4_DEBUG", "TINA4_DEFAULT_WEBSERVER"),
+    )
+
+
+def _require_uvicorn():
+    """Skip LOUDLY, naming what is missing — never pass a production-path case
+    silently on a machine that cannot run one."""
+    try:
+        import uvicorn  # noqa: F401
+    except ImportError:
+        pytest.skip(
+            "uvicorn is NOT installed, so run() cannot reach the production ASGI "
+            "path and this case proves nothing. Install it with "
+            "`uv sync` (it is in the dev dependency-group) and re-run."
+        )
+
+
+def _assert_served_by(log: str, expected: str):
+    """run() logs which server took the socket. Pin it, so a case never quietly
+    measures the built-in server when it meant to measure uvicorn (or back)."""
+    assert f"TINA4_IMPORT={REPO_ROOT}" in log, (
+        f"the child did not confirm it imported the worktree's tina4_python; "
+        f"log was:\n{log}"
+    )
+    assert expected in log, (
+        f"expected the child to be served by {expected!r}; log was:\n{log}"
     )
 
 
@@ -545,3 +612,170 @@ def test_invalid_shutdown_timeout_falls_back_to_30_seconds(monkeypatch):
         assert _resolve_shutdown_timeout() == DEFAULT_SHUTDOWN_TIMEOUT, (
             f"TINA4_SHUTDOWN_TIMEOUT={bad!r} must fall back to 30s, never 0"
         )
+
+
+# ── the PRODUCTION path (uvicorn owns the socket) ─────────────────────────
+#
+# run() hands the socket to the first importable production ASGI server
+# whenever TINA4_DEBUG is off, and RETURNS — so everything the built-in server
+# does on shutdown is unreachable there. The contract's OUTCOMES still hold;
+# the MECHANISM splits by owner:
+#
+#   uvicorn's job  — draining in-flight requests, and the drain DEADLINE, which
+#                    TINA4_SHUTDOWN_TIMEOUT is mapped onto rather than wrapped.
+#   Tina4's job    — closing the ORM-bound databases, which only Tina4 knows
+#                    exist.
+#
+# Every case below boots a REAL child under uvicorn and sends it a REAL signal.
+
+def test_production_path_is_actually_uvicorn(tmp_path):
+    """With TINA4_DEBUG off and uvicorn installed, uvicorn owns the socket."""
+    _require_uvicorn()
+    proc = None
+    try:
+        proc, port = _boot_production(tmp_path)
+        os.kill(proc.pid, signal.SIGTERM)
+        _wait_for_exit(proc, timeout=20)
+
+        log = read_child_log(proc)
+        _assert_served_by(log, "Production server: uvicorn")
+        assert "Development server: asyncio" not in log, (
+            f"this case must exercise uvicorn, not the built-in server:\n{log}"
+        )
+        # uvicorn drained cleanly — its own log says so — and THEN deliberately
+        # re-raised the signal against the restored default handler
+        # (Server.capture_signals), so the process reports "died by SIGTERM"
+        # to its supervisor. That is a documented uvicorn design decision, not
+        # a Tina4 failure, and it is why the exit-code-0 clause of the contract
+        # holds on the built-in server but NOT here. Pinned so the divergence
+        # is visible rather than discovered in production.
+        assert "Application shutdown complete" in log, (
+            f"uvicorn did not complete its own graceful shutdown:\n{log}"
+        )
+        assert proc.returncode == -signal.SIGTERM, (
+            f"expected uvicorn's re-raised SIGTERM ({-signal.SIGTERM}); "
+            f"got {proc.returncode}\n{log}"
+        )
+    finally:
+        _reap(proc)
+
+
+def test_production_path_closes_bound_databases(tmp_path):
+    """P0: uvicorn cannot know about ORM-bound connections, so Tina4 closes them."""
+    _require_uvicorn()
+    proc = None
+    try:
+        db_path = tmp_path / "prod.db"
+        proc, port = _boot_production(tmp_path, database=f"sqlite:///{db_path}")
+        os.kill(proc.pid, signal.SIGTERM)
+        _wait_for_exit(proc, timeout=20)
+
+        log = read_child_log(proc)
+        _assert_served_by(log, "Production server: uvicorn")
+        assert "Database connections closed" in log, (
+            f"the production path leaked its ORM-bound connections — uvicorn "
+            f"drains sockets but has no idea they exist; log was:\n{log}"
+        )
+        assert proc.returncode == -signal.SIGTERM  # uvicorn re-raises; see above
+    finally:
+        _reap(proc)
+
+
+def test_production_path_honours_tina4_shutdown_timeout(tmp_path):
+    """TINA4_SHUTDOWN_TIMEOUT means the same thing under uvicorn as it does
+    on the built-in server — it is mapped onto uvicorn's own deadline."""
+    _require_uvicorn()
+    proc = None
+    try:
+        proc, port = _boot_production(tmp_path, extra_env={"TINA4_SHUTDOWN_TIMEOUT": "1"})
+        sock = _begin_request(port, "/very-slow")
+        time.sleep(SIGNAL_AFTER_SECONDS)
+        os.kill(proc.pid, signal.SIGTERM)
+
+        elapsed = _wait_for_exit(proc, timeout=VERY_SLOW_SECONDS + 15.0)
+        _read_all(sock)  # cut short on purpose — that is what a bound means
+
+        log = read_child_log(proc)
+        _assert_served_by(log, "Production server: uvicorn")
+        assert elapsed < VERY_SLOW_SECONDS - 1.0, (
+            f"TINA4_SHUTDOWN_TIMEOUT=1 must bound the drain on the production "
+            f"path too, but shutdown took {elapsed:.2f}s against a "
+            f"{VERY_SLOW_SECONDS}s handler — the var is a lie here\n{log}"
+        )
+        assert proc.returncode == -signal.SIGTERM  # uvicorn re-raises; see above
+    finally:
+        _reap(proc)
+
+
+def test_shutdown_timeout_whole_seconds_never_floors_to_zero(monkeypatch):
+    """uvicorn's knob is int-typed; a sub-second timeout must not become 0."""
+    from tina4_python.core.server import _shutdown_timeout_whole_seconds
+
+    monkeypatch.delenv("TINA4_SHUTDOWN_TIMEOUT", raising=False)
+    assert _shutdown_timeout_whole_seconds() == 30
+
+    monkeypatch.setenv("TINA4_SHUTDOWN_TIMEOUT", "5")
+    assert _shutdown_timeout_whole_seconds() == 5
+
+    # int() would truncate every one of these to 0 — "no grace at all" wearing
+    # the costume of a graceful shutdown.
+    for tiny in ("0.4", "0.5", "0.9"):
+        monkeypatch.setenv("TINA4_SHUTDOWN_TIMEOUT", tiny)
+        assert _shutdown_timeout_whole_seconds() >= 1, (
+            f"TINA4_SHUTDOWN_TIMEOUT={tiny} floored to 0 seconds of grace"
+        )
+
+
+# ── TINA4_DEFAULT_WEBSERVER ───────────────────────────────────────────────
+
+def test_tina4_default_webserver_pins_the_builtin_server(tmp_path):
+    """TINA4_DEFAULT_WEBSERVER=TRUE uses the built-in server even with uvicorn
+    installed, and without having to turn debug mode on to get it."""
+    _require_uvicorn()
+    proc = None
+    try:
+        proc, port = _boot_production(
+            tmp_path, extra_env={"TINA4_DEFAULT_WEBSERVER": "TRUE"})
+        os.kill(proc.pid, signal.SIGTERM)
+        _wait_for_exit(proc, timeout=20)
+
+        log = read_child_log(proc)
+        _assert_served_by(log, "Development server: asyncio")
+        assert "Production server: uvicorn" not in log, (
+            f"TINA4_DEFAULT_WEBSERVER=TRUE must pin the built-in server, but "
+            f"uvicorn took the socket anyway:\n{log}"
+        )
+        assert proc.returncode == 0
+    finally:
+        _reap(proc)
+
+
+def test_tina4_default_webserver_unset_is_unchanged(tmp_path):
+    """Unset is non-breaking: the production server still wins, as before."""
+    _require_uvicorn()
+    proc = None
+    try:
+        proc, port = _boot_production(tmp_path)
+        os.kill(proc.pid, signal.SIGTERM)
+        _wait_for_exit(proc, timeout=20)
+
+        log = read_child_log(proc)
+        _assert_served_by(log, "Production server: uvicorn")
+    finally:
+        _reap(proc)
+
+
+def test_tina4_default_webserver_false_is_unchanged(tmp_path):
+    """FALSE means the documented default, not "pin the built-in server"."""
+    _require_uvicorn()
+    proc = None
+    try:
+        proc, port = _boot_production(
+            tmp_path, extra_env={"TINA4_DEFAULT_WEBSERVER": "FALSE"})
+        os.kill(proc.pid, signal.SIGTERM)
+        _wait_for_exit(proc, timeout=20)
+
+        log = read_child_log(proc)
+        _assert_served_by(log, "Production server: uvicorn")
+    finally:
+        _reap(proc)

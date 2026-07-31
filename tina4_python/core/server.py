@@ -157,6 +157,16 @@ def _resolve_shutdown_timeout() -> float:
     return seconds
 
 
+def _shutdown_timeout_whole_seconds() -> int:
+    """TINA4_SHUTDOWN_TIMEOUT for a server whose own option is int-typed.
+
+    uvicorn's ``timeout_graceful_shutdown`` is an int. Rounding a positive
+    sub-second timeout down to 0 would mean "no grace at all" — the silent zero
+    this feature exists to prevent — so the floor is 1 second.
+    """
+    return max(1, round(_resolve_shutdown_timeout()))
+
+
 def _close_bound_databases() -> int:
     """Close every ORM-bound database connection. Returns how many were closed.
 
@@ -2466,15 +2476,30 @@ async def handle(request: Request) -> Response:
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
     if scope["type"] == "lifespan":
-        msg = await receive()
-        if msg["type"] == "lifespan.startup":
-            import time
-            global _start_time
-            _start_time = time.time()
-            await send({"type": "lifespan.startup.complete"})
-        elif msg["type"] == "lifespan.shutdown":
-            await send({"type": "lifespan.shutdown.complete"})
-        return
+        # ASGI lifespan is ONE call carrying BOTH events, so this has to loop.
+        # It used to return after the first message, which made the shutdown
+        # branch below unreachable: the app coroutine had already finished by
+        # the time the server sent lifespan.shutdown.
+        while True:
+            msg = await receive()
+            if msg["type"] == "lifespan.startup":
+                import time
+                global _start_time
+                _start_time = time.time()
+                await send({"type": "lifespan.startup.complete"})
+            elif msg["type"] == "lifespan.shutdown":
+                # The only shutdown hook that fires on the production path.
+                # uvicorn restores the default signal handlers and RE-RAISES the
+                # signal as its run() returns, so the process dies inside the
+                # starter and nothing after it ever executes — a `finally` there
+                # is unreachable. uvicorn drains requests and closes sockets
+                # itself; the ORM-bound connections are the part only Tina4
+                # knows about, so this is where they get closed.
+                _close_bound_databases()
+                await send({"type": "lifespan.shutdown.complete"})
+                return
+            else:
+                return
 
     if scope["type"] == "websocket":
         await _handle_asgi_websocket(scope, receive, send)
@@ -2716,7 +2741,8 @@ def _find_production_server():
     try:
         import uvicorn
         def _start_uvicorn(host, port, asgi_app):
-            uvicorn.run(asgi_app, host=host, port=port, log_level="info")
+            uvicorn.run(asgi_app, host=host, port=port, log_level="info",
+                        timeout_graceful_shutdown=_shutdown_timeout_whole_seconds())
         return "uvicorn", _start_uvicorn
     except ImportError:
         pass
@@ -2727,6 +2753,7 @@ def _find_production_server():
             import asyncio
             cfg = hypercorn.config.Config()
             cfg.bind = [f"{host}:{port}"]
+            cfg.graceful_timeout = _resolve_shutdown_timeout()
             asyncio.run(hypercorn.asyncio.serve(asgi_app, cfg))
         return "hypercorn", _start_hypercorn
     except ImportError:
@@ -2735,6 +2762,11 @@ def _find_production_server():
         import granian
         def _start_granian(host, port, asgi_app):
             from granian import Granian
+            Log.warning(
+                "granian has no request-drain deadline, so TINA4_SHUTDOWN_TIMEOUT "
+                "is NOT honoured on this path (workers_kill_timeout is when to kill "
+                "a worker, not how long to drain)"
+            )
             g = Granian("tina4_python.core.server:app", address=host, port=port, interface="asgi")
             g.serve()
         return "granian", _start_granian
@@ -3188,8 +3220,14 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     if is_debug:
         _register_dev_reload_ws()
 
+    # TINA4_DEFAULT_WEBSERVER=TRUE pins Tina4's own built-in webserver, so an
+    # operator (or CI) can exercise it deterministically without also turning on
+    # debug mode and everything that comes with it. Unset/FALSE is unchanged:
+    # a production ASGI server is used when one is installed.
+    use_builtin_webserver = is_truthy(os.environ.get("TINA4_DEFAULT_WEBSERVER", ""))
+
     prod = None
-    if not is_debug:
+    if not is_debug and not use_builtin_webserver:
         prod = _find_production_server()
 
     server_name = prod[0] if prod else "asyncio"
@@ -3219,6 +3257,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     if prod:
         name, starter = prod
         Log.info(f"Production server: {name}")
+        # Databases are closed from the ASGI lifespan.shutdown handler in app(),
+        # NOT here: uvicorn re-raises the signal as it returns, so the process
+        # dies inside starter() and any cleanup after this call is unreachable.
         try:
             starter(host, port, app)
         except KeyboardInterrupt:
