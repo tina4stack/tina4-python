@@ -58,6 +58,33 @@ class Middleware:
         return list(cls._global_middleware)
 
     @classmethod
+    def pre_match_middleware(cls) -> list:
+        """Global middleware that runs BEFORE route matching.
+
+        A middleware opts in with ``pre_match = True``. Everything else stays
+        where it has always run - after matching - so this is additive and no
+        existing middleware changes behaviour.
+
+        The two groups need opposite things. CORS must run before matching so
+        its headers survive a short-circuited 401/403; a browser shown a 401
+        without them reports a CORS error and the real status never reaches the
+        developer. CSRF must run AFTER, because it reads the matched route's
+        metadata (``request._handler`` / ``_noauth``) to honour a route marked
+        ``@noauth`` - PHP shipped exactly that bypass as dead code once,
+        because the metadata was not assigned yet.
+
+        NOT named ``before_match`` - hook discovery treats every ``before_*``
+        attribute as a middleware hook and would call the flag itself with
+        (request, response).
+        """
+        return [m for m in cls._global_middleware if getattr(m, "pre_match", False) is True]
+
+    @classmethod
+    def post_match_middleware(cls) -> list:
+        """Global middleware that runs after matching. This is the default."""
+        return [m for m in cls._global_middleware if getattr(m, "pre_match", False) is not True]
+
+    @classmethod
     def reset(cls) -> None:
         """Clear all globally registered middleware (primarily for tests)."""
         cls._global_middleware = []

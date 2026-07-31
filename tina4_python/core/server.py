@@ -1572,7 +1572,9 @@ def _effective_middleware(route: dict) -> list:
     from tina4_python.core.middleware import Middleware
     resolved = []
     seen = set()
-    for mw in list(Middleware.get_global()) + list(route.get("middleware", [])):
+    # POST-match globals only: anything flagged ``pre_match`` already ran in
+    # handle() before the route was looked up, and must not run twice.
+    for mw in list(Middleware.post_match_middleware()) + list(route.get("middleware", [])):
         key = mw if isinstance(mw, type) else type(mw)
         if key not in seen:
             seen.add(key)
@@ -2010,6 +2012,19 @@ async def handle(request: Request) -> Response:
         _Db.reset_request_caches()
     except Exception:
         pass
+
+    # PRE-MATCH global middleware: runs before a route is even looked up, so
+    # CORS and anything else that must survive a short-circuit can set headers
+    # that outlive a 401/403. Opt in with ``pre_match = True``.
+    from tina4_python.core.middleware import Middleware as _Mw
+    _pre = _Mw.pre_match_middleware()
+    if _pre:
+        request, response, _skip = _run_before_middleware(
+            request, response, {"middleware": _pre, "handler": None}
+        )
+        if _skip:
+            _run_after_middleware(request, response, {"middleware": _pre, "handler": None})
+            return response
 
     # Route matching and dispatch
     route, params = Router.match(request.method, request.path)
