@@ -1,34 +1,65 @@
-"""Write-path contract: a write with no filter is an error, not a full-table operation.
+"""The write-path contract (feature 3/4 of the feature audit).
 
-Audit feature 4 (plan/v3/features/004-sqlite-adapter.md), P1.
+``tests/fixtures/write_path_contract.json`` is byte-identical in all four
+frameworks and is the shared answer key: the same cases, the same seeds, the
+same expectations, executed identically in python, php, ruby and node.
 
-The bug these lock in: `db.update(table, data)` with no explicit filter builds
-`UPDATE table SET ...` with NO WHERE clause, so it overwrites EVERY row and
-reports success. Verified in Python, PHP and Ruby; Node silently changes nothing
-instead. Nothing logs, nothing raises, and the only signal is affected_rows.
+The bug these lock in: ``db.update(table, data)`` with no explicit filter used
+to build ``UPDATE table SET ...`` with NO WHERE clause, so it overwrote EVERY
+row and reported success. A write with no filter is now an error.
 
-Real SQLite files under pytest's tmp_path. No mocks - SQLite is free to stand up.
+The fixture used to be ORPHANED - nothing read it, and the four runners were
+hand-written independently. They drifted to 17/16/15/14 cases with different
+names, and the case ``a_string_filter_with_params_works_the_same_as_a_hash_filter``
+was executed by NONE of them while exactly that shape shipped broken in four
+Node adapters. Every case now runs in every framework, from this one file.
+
+RUN IT AGAINST EVERY LIVE ENGINE. SQLite alone proves nothing: the whole reason
+per-adapter write SQL exists is that placeholder style, RETURNING support and
+identifier quoting differ exactly where the engine differs. No mocks - a
+database is a real dependency and CI provisions it.
 """
+
+import json
+import os
+from pathlib import Path
 
 import pytest
 
-import os
-
 from tina4_python.database import Database
+
+FIXTURE = Path(__file__).parent / "fixtures" / "write_path_contract.json"
+CONTRACT = json.loads(FIXTURE.read_text(encoding="utf-8"))
+
+TABLE = CONTRACT["table"]["name"]
+COMPOSITE_TABLE = CONTRACT["composite_table"]["name"]
+
+# Cases and errors are one flat list keyed by name: both halves are contract
+# cases, they only differ in whether the expectation is a raise.
+ALL_CASES = {c["name"]: c for c in CONTRACT["cases"] + CONTRACT["errors"]}
+
+# Every op the dispatcher below implements. A fixture case naming an op that is
+# not here fails loudly rather than being silently skipped - the orphan guard.
+IMPLEMENTED_OPS = {
+    "insert", "insert_batch", "update", "delete", "truncate", "primary_key",
+    "transaction_rollback", "transaction_commit", "execute_raw",
+}
 
 
 def _engines():
     """Every engine this run can reach.
 
-    Feature 3 needs this suite to gate moving insert/update/delete out of six
-    adapters and into one builder. SQLite ALONE PROVES NOTHING for that: the
-    whole reason per-adapter SQL exists is that placeholder style, RETURNING
-    support and identifier quoting differ exactly where the engine differs. A
-    green SQLite-only run is the least informative possible result, so the run
+    ``TINA4_TEST_WRITE_PATH_URL`` is the shared spelling all four runners
+    accept, so one CI invocation drives the identical suite everywhere. The
+    per-engine ``TINA4_TEST_<ENGINE>_URL`` pairs are Python's own extra: they
+    let a single local invocation cover several engines at once.
+
+    SQLite is always included and always insufficient on its own, so the run
     reports which engines it actually covered.
     """
     found = [("sqlite", (None, None, None))]
     for name, prefix in (
+        ("write_path", "TINA4_TEST_WRITE_PATH"),
         ("postgres", "TINA4_TEST_PG"),
         ("mysql", "TINA4_TEST_MYSQL"),
         ("mssql", "TINA4_TEST_MSSQL"),
@@ -56,6 +87,193 @@ def _engines():
 ENGINES = _engines()
 
 
+class ContractConnection:
+    """One engine under test, plus the ability to open a SECOND connection.
+
+    ``visible_after_reconnect`` is the whole reason the second connection
+    exists: a write that is only visible on the connection that made it is not
+    durable, and reading it back on the same handle cannot tell the difference.
+    """
+
+    def __init__(self, url, username, password):
+        self._url = url
+        self._username = username
+        self._password = password
+        self.database = self.connect()
+
+    def connect(self):
+        return Database(self._url, username=self._username, password=self._password)
+
+
+@pytest.fixture(scope="module", params=ENGINES, ids=[name for name, _ in ENGINES])
+def contract(request, tmp_path_factory):
+    """Both contract tables on a real engine, created once per engine."""
+    _, (url, username, password) = request.param
+    if url is None:
+        url = f"sqlite:///{tmp_path_factory.mktemp('writepath')}/contract.db"
+        username = password = ""
+
+    connection = ContractConnection(url, username, password)
+    database = connection.database
+
+    for table in (TABLE, COMPOSITE_TABLE):
+        try:
+            database.execute(f"DROP TABLE {table}")
+        except Exception:  # noqa: BLE001 - first run against this engine
+            pass
+    # The DDL lives in the shared fixture so all four frameworks create
+    # literally the same table. Ids come from the case data, not a sequence -
+    # an identity column would fight the explicit ids the cases name.
+    database.execute(CONTRACT["table"]["ddl"])
+    database.execute(CONTRACT["composite_table"]["ddl"])
+    database.commit()
+
+    yield connection
+
+    for table in (TABLE, COMPOSITE_TABLE):
+        try:
+            database.execute(f"DROP TABLE {table}")
+            database.commit()
+        except Exception:  # noqa: BLE001 - teardown must never mask a failure
+            pass
+
+
+def _table_for(case):
+    return COMPOSITE_TABLE if case.get("table") == "composite" else TABLE
+
+
+def _rows(database, table):
+    """Every row in the table. The limit is explicit - fetch() defaults to 10."""
+    return [dict(r) for r in database.fetch(f"SELECT * FROM {table}", limit=1000).records]
+
+
+def _same(actual, expected):
+    """Engine-tolerant value comparison.
+
+    Engines disagree on the Python type of an INTEGER column (int, Decimal,
+    str on some ODBC paths). This contract is about WHICH rows a write touched,
+    not about type mapping, which the adapter contract owns.
+    """
+    return actual == expected or str(actual) == str(expected)
+
+
+def _reset(database):
+    """Both tables empty. Raw DELETE, never truncate() - that is under test."""
+    for table in (TABLE, COMPOSITE_TABLE):
+        database.execute(f"DELETE FROM {table}")
+    database.commit()
+
+
+def _seed(database, case, table):
+    for row in case.get("seed", []):
+        database.insert(table, dict(row))
+    database.commit()
+
+
+def _run_op(database, case, table):
+    """Execute the case's declared op. Returns whatever the op returns."""
+    op = case["op"]
+    data = case.get("data")
+
+    if op in ("insert", "insert_batch"):
+        return database.insert(table, data if op == "insert_batch" else dict(data))
+
+    if op == "update":
+        if "filter_sql" in case:
+            return database.update(table, dict(data), case["filter_sql"], list(case["filter_params"]))
+        if "filter" in case:
+            return database.update(table, dict(data), dict(case["filter"]))
+        return database.update(table, dict(data))
+
+    if op == "delete":
+        if "filter_sql" in case:
+            return database.delete(table, case["filter_sql"], list(case["filter_params"]))
+        if "filter" in case:
+            return database.delete(table, dict(case["filter"]))
+        return database.delete(table)
+
+    if op == "truncate":
+        return database.truncate(table)
+
+    if op == "primary_key":
+        return database.primary_key(table)
+
+    if op in ("transaction_rollback", "transaction_commit"):
+        database.start_transaction()
+        database.insert(table, dict(data))
+        if op == "transaction_commit":
+            database.commit()
+        else:
+            database.rollback()
+        return None
+
+    if op == "execute_raw":
+        return database.execute(case["sql"])
+
+    raise AssertionError(f"unimplemented op {op!r} in case {case['name']!r}")
+
+
+def _check_expectations(connection, case, table, result):
+    """Every expectation the fixture declares, checked by name."""
+    name = case["name"]
+    expect = case.get("expect", {})
+    database = connection.database
+
+    if "affected_rows" in expect:
+        assert result.affected_rows == expect["affected_rows"], (
+            f"{name}: expected affected_rows {expect['affected_rows']}, "
+            f"got {result.affected_rows}"
+        )
+
+    rows = _rows(database, table) if ("rows_after" in expect or "unchanged" in expect) else []
+
+    if "rows_after" in expect:
+        assert len(rows) == expect["rows_after"], (
+            f"{name}: expected {expect['rows_after']} row(s) after, got {len(rows)}: {rows}"
+        )
+
+    for matcher in expect.get("unchanged", []):
+        matched = [r for r in rows if all(_same(r.get(k), v) for k, v in matcher.items())]
+        assert len(matched) == 1, (
+            f"{name}: expected exactly one row matching {matcher}, found "
+            f"{len(matched)} in {rows}"
+        )
+
+    if "primary_key" in expect:
+        assert list(result) == expect["primary_key"], (
+            f"{name}: expected primary key {expect['primary_key']}, got {result!r}"
+        )
+
+    if expect.get("last_id_is_null"):
+        assert result.last_id is None, (
+            f"{name}: last_id is insert-only, but this write reported {result.last_id!r}"
+        )
+
+    if "last_id_is_not_stale" in expect:
+        stale = expect["last_id_is_not_stale"]
+        reported = result.last_id
+        # None / 0 / "" all mean "this engine cannot report one", which the
+        # contract allows. A stale value is the failure being pinned.
+        if reported not in (None, 0, ""):
+            assert not _same(reported, stale), (
+                f"{name}: last_id came back as the EARLIER row's id ({stale!r}) - "
+                f"the adapter is reporting a stale id rather than null"
+            )
+
+    if expect.get("visible_after_reconnect"):
+        other = connection.connect()
+        try:
+            assert len(_rows(other, table)) == expect.get("rows_after", 1), (
+                f"{name}: the write is not visible on a second connection - "
+                f"it was never durable"
+            )
+        finally:
+            try:
+                other.close()
+            except Exception:  # noqa: BLE001 - some adapters have no close()
+                pass
+
+
 def test_the_run_records_which_engines_it_covered():
     """Not a gate - the record.
 
@@ -66,209 +284,41 @@ def test_the_run_records_which_engines_it_covered():
     assert ENGINES
 
 
-@pytest.fixture(params=ENGINES, ids=[n for n, _ in ENGINES])
-def db(request, tmp_path):
-    """A real two-row table, so a full-table write is visible as collateral damage."""
-    _, (url, user, password) = request.param
-    database = (
-        Database(f"sqlite:///{tmp_path}/contract.db")
-        if url is None
-        else Database(url, username=user, password=password)
-    )
-    try:
-        database.execute("DROP TABLE t")
-    except Exception:
-        pass
-    # AUTOINCREMENT is SQLite's spelling; SQLTranslator rewrites it per engine
-    # (SERIAL on Postgres, AUTO_INCREMENT on MySQL, IDENTITY(1,1) on MSSQL).
-    # Writing the DDL by hand is how this suite stayed SQLite-only: `INTEGER
-    # PRIMARY KEY` self-increments on SQLite and is a plain NOT NULL column
-    # everywhere else, so test_insert_reports_a_last_id passed on SQLite and
-    # failed with a null-violation on the first real engine it met.
-    from tina4_python.database.sql_translator import SQLTranslator
-    ddl = "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR(80))"
-    database.execute(SQLTranslator.auto_increment_syntax(ddl, database.get_database_type()))
-    # Seed WITHOUT explicit ids so the engine's sequence stays in step with the
-    # rows. Seeding id=1,2 by hand and then letting the sequence generate the
-    # next one collides on Postgres (the sequence still starts at 1) - the rows
-    # exist, so it is a UniqueViolation rather than anything the framework did.
-    # SQLite hides this because its implicit rowid follows the max.
-    database.insert("t", {"name": "one"})
-    database.insert("t", {"name": "two"})
-    database.commit()
-    yield database
-    try:
-        database.execute("DROP TABLE t")
-        database.commit()
-    except Exception:
-        pass
+def test_the_runner_implements_every_op_the_shared_fixture_uses():
+    """The orphan guard.
 
-
-def rows(database):
-    return [dict(r) for r in database.fetch("SELECT * FROM t ORDER BY id").records]
-
-
-# --- pair 1: keyed update ---------------------------------------------------
-
-def test_update_with_a_primary_key_in_data_updates_only_that_row(db):
-    """A PK in the data IS the filter. Row 2 must not be touched."""
-    db.update("t", {"id": 1, "name": "CHANGED"})
-    assert rows(db) == [
-        {"id": 1, "name": "CHANGED"},
-        {"id": 2, "name": "two"},
-    ], "the primary key in data was not used as the WHERE clause"
-
-
-def test_negative_update_without_a_filter_or_primary_key_raises(db):
-    """THE P1. No filter and no PK must raise, never touch every row.
-
-    Today this returns affected=2 and overwrites the whole table.
+    A case naming an op the dispatcher does not implement must FAIL, never be
+    quietly skipped. Silent skipping is how the fixture went unread for its
+    whole life while the runners drifted apart.
     """
-    before = rows(db)
-    with pytest.raises(ValueError, match="filter"):
-        db.update("t", {"name": "NOPK"})
-    assert rows(db) == before, (
-        "a filterless update modified rows - this is the data-loss bug. "
-        f"before={before} after={rows(db)}"
+    declared = {c["op"] for c in ALL_CASES.values()}
+    assert declared <= IMPLEMENTED_OPS, (
+        f"the shared fixture declares op(s) this runner cannot execute: "
+        f"{sorted(declared - IMPLEMENTED_OPS)}"
     )
 
 
-# --- pair 2: no silent no-op ----------------------------------------------
+@pytest.mark.parametrize("name", sorted(ALL_CASES))
+def test_case_from_the_shared_fixture(contract, name):
+    """Every case in the shared fixture, checked against the same answer key."""
+    case = ALL_CASES[name]
+    table = _table_for(case)
+    database = contract.database
 
-def test_update_reports_the_rows_it_changed(db):
-    result = db.update("t", {"name": "X"}, "id = ?", [1])
-    assert result.affected_rows == 1
+    _reset(database)
+    _seed(database, case, table)
 
+    if case.get("expect_raises"):
+        with pytest.raises(Exception):  # noqa: B017 - the framework's own type varies by op
+            _run_op(database, case, table)
+        # The write must not have landed. This is the data-loss property.
+        _check_expectations(contract, case, table, None)
+        if case.get("expect_error_recorded"):
+            assert database.get_error(), (
+                f"{name}: the statement raised but get_error() was empty - "
+                f"the cause has to stay readable after the raise"
+            )
+        return
 
-def test_negative_update_never_reports_zero_when_a_matching_row_exists(db):
-    """Node's failure mode: affected=0 with a row that plainly matches."""
-    result = db.update("t", {"id": 2, "name": "TWO"})
-    assert result.affected_rows != 0, (
-        "update reported zero affected rows while a matching row existed - "
-        "a caller who does not check affected_rows believes the write landed"
-    )
-
-
-# --- pair 3: delete filter forms -----------------------------------------
-
-def test_delete_accepts_a_key_value_filter(db):
-    """The form tina4-python/CLAUDE.md documents as THE calling form."""
-    db.delete("t", {"id": 2})
-    assert rows(db) == [{"id": 1, "name": "one"}]
-
-
-def test_delete_accepts_a_string_filter_with_params(db):
-    db.delete("t", "id = ?", [2])
-    assert rows(db) == [{"id": 1, "name": "one"}]
-
-
-def test_negative_delete_does_not_raise_on_a_key_value_filter(db):
-    """The declared type is `str | dict | list`; the dict must not reach the SQL.
-
-    Today: OperationalError 'unrecognized token: "{"' - the annotation promises
-    what the code refuses.
-    """
-    try:
-        db.delete("t", {"id": 2})
-    except Exception as exc:  # noqa: BLE001 - the point is that NOTHING raises
-        pytest.fail(
-            f"a declared filter type raised: {type(exc).__name__}: {exc}"
-        )
-
-
-# --- pair 4: no accidental truncate --------------------------------------
-
-def test_truncate_removes_every_row(db):
-    """Emptying a table is a real thing to want. It must be spelled out."""
-    db.truncate("t")
-    assert rows(db) == []
-
-
-def test_negative_delete_without_a_filter_raises(db):
-    before = rows(db)
-    with pytest.raises(ValueError, match="filter"):
-        db.delete("t")
-    assert rows(db) == before, "a filterless delete removed rows"
-
-
-# --- pair 5: write result contract ---------------------------------------
-
-def test_insert_reports_a_last_id(db):
-    result = db.insert("t", {"name": "three"})
-    assert result.last_id is not None
-
-
-def test_negative_update_and_delete_do_not_report_a_last_id(db):
-    """last_id is insert-only, per Python's own docs. PHP already does this."""
-    updated = db.update("t", {"id": 1, "name": "CHANGED"})
-    assert updated.last_id is None, "update reported a last_id"
-    deleted = db.delete("t", {"id": 2})
-    assert deleted.last_id is None, "delete reported a last_id"
-
-
-# --- composite primary keys ------------------------------------------------
-# A PK resolver that returns only the FIRST primary-key column reintroduces the
-# whole data-loss bug for composite-key tables: WHERE order_id = 1 matches every
-# row in that order. Owner-reported pain point, so it gets its own pairs.
-
-@pytest.fixture
-def composite(tmp_path):
-    """order_items keyed on (order_id, product_id) - three rows, two orders."""
-    database = Database(f"sqlite:///{tmp_path}/composite.db")
-    database.execute(
-        "CREATE TABLE order_items ("
-        " order_id INTEGER, product_id INTEGER, qty INTEGER,"
-        " PRIMARY KEY (order_id, product_id))"
-    )
-    database.insert("order_items", {"order_id": 1, "product_id": 5, "qty": 1})
-    database.insert("order_items", {"order_id": 1, "product_id": 6, "qty": 2})
-    database.insert("order_items", {"order_id": 2, "product_id": 5, "qty": 3})
-    return database
-
-
-def items(database):
-    return [
-        dict(r)
-        for r in database.fetch(
-            "SELECT * FROM order_items ORDER BY order_id, product_id"
-        ).records
-    ]
-
-
-def test_primary_key_returns_every_key_column(composite):
-    assert composite.primary_key("order_items") == ["order_id", "product_id"]
-
-
-def test_negative_primary_key_never_returns_only_the_first_key_column(composite):
-    pk = composite.primary_key("order_items")
-    assert len(pk) == 2, (
-        f"a composite primary key collapsed to {pk!r} - a WHERE built from this "
-        f"would match every row sharing the first column"
-    )
-
-
-def test_a_composite_keyed_update_touches_exactly_one_row(composite):
-    composite.update("order_items", {"order_id": 1, "product_id": 5, "qty": 99})
-    assert items(composite) == [
-        {"order_id": 1, "product_id": 5, "qty": 99},
-        {"order_id": 1, "product_id": 6, "qty": 2},
-        {"order_id": 2, "product_id": 5, "qty": 3},
-    ], "a composite-keyed update did not isolate one row"
-
-
-def test_negative_a_partial_composite_key_raises_rather_than_matching_many(composite):
-    """Only half the key given: must raise, never fall back to the half it has."""
-    before = items(composite)
-    with pytest.raises(ValueError, match="primary key"):
-        composite.update("order_items", {"order_id": 1, "qty": 42})
-    assert items(composite) == before, (
-        "a partial composite key modified rows - it matched on the first column"
-    )
-
-
-def test_delete_accepts_a_full_composite_key(composite):
-    composite.delete("order_items", {"order_id": 1, "product_id": 5})
-    assert items(composite) == [
-        {"order_id": 1, "product_id": 6, "qty": 2},
-        {"order_id": 2, "product_id": 5, "qty": 3},
-    ]
+    result = _run_op(database, case, table)
+    _check_expectations(contract, case, table, result)

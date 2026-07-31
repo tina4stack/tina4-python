@@ -206,8 +206,23 @@ class MSSQLAdapter(DatabaseAdapter):
         return self.execute(sql, all_params)
 
     def start_transaction(self):
-        cursor = self._conn.cursor()
-        cursor.execute("BEGIN TRANSACTION")
+        """Begin a transaction.
+
+        Do NOT issue a raw "BEGIN TRANSACTION". pymssql is connected with
+        ``autocommit=False``, so the driver ALREADY holds an open transaction -
+        a raw BEGIN nests a second one and @@TRANCOUNT becomes 2. ``commit()``
+        below calls the driver's commit, which emits ONE ``COMMIT``, taking
+        @@TRANCOUNT 2 -> 1: the transaction stays open and keeps its locks
+        while the connection goes idle. The write is visible on its own
+        connection, so nothing looks wrong locally, but every OTHER connection
+        that touches those rows blocks indefinitely (observed as a sleeping
+        session with open_transaction_count = 2 blocking a SELECT on LCK_M_S).
+        PHP, Ruby and Node all keep BEGIN/COMMIT balanced; Python was the
+        outlier.
+
+        Suppressing the per-statement autocommit in ``execute()`` is what makes
+        the following statements one transaction - no SQL is needed here.
+        """
         self._in_transaction = True
 
     def commit(self):
