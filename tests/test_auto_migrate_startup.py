@@ -159,8 +159,8 @@ def test_failure_is_non_breaking(project):
 # committed schema change), so the no-mock guarantee holds for a server engine too.
 PG_HOST = os.environ.get("TINA4_TEST_PG_HOST", "localhost")
 PG_PORT = int(os.environ.get("TINA4_TEST_PG_PORT", "55432"))
-PG_USER = os.environ.get("TINA4_TEST_PG_USER", "tina4")
-PG_PASS = os.environ.get("TINA4_TEST_PG_PASS", "tina4")
+PG_USER = os.environ.get("TINA4_TEST_PG_USERNAME", "tina4")
+PG_PASS = os.environ.get("TINA4_TEST_PG_PASSWORD", "tina4")
 PG_DB = os.environ.get("TINA4_TEST_PG_DB", "tina4_py")
 
 

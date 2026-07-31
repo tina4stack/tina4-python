@@ -117,8 +117,8 @@ def test_sqlite_batch_insert_list_of_dicts():
 _PG = dict(
     host=os.environ.get("TINA4_TEST_PG_HOST", "localhost"),
     port=int(os.environ.get("TINA4_TEST_PG_PORT", "55432")),
-    user=os.environ.get("TINA4_TEST_PG_USER", "tina4"),
-    pwd=os.environ.get("TINA4_TEST_PG_PASS", "tina4"),
+    user=os.environ.get("TINA4_TEST_PG_USERNAME", "tina4"),
+    pwd=os.environ.get("TINA4_TEST_PG_PASSWORD", "tina4"),
     db=os.environ.get("TINA4_TEST_PG_DB", "tina4_py"),
 )
 
@@ -151,8 +151,8 @@ def test_postgres_batch_insert_list_of_dicts():
 # TINA4_TEST_MYSQL_URL, which CI does not set, so the gate failed the run.
 _MYSQL_HOST = os.environ.get("TINA4_TEST_MYSQL_HOST", "localhost")
 _MYSQL_PORT = int(os.environ.get("TINA4_TEST_MYSQL_PORT", "3306"))
-_MYSQL_USER = os.environ.get("TINA4_TEST_MYSQL_USER", "root")
-_MYSQL_PASS = os.environ.get("TINA4_TEST_MYSQL_PASS", "")
+_MYSQL_USER = os.environ.get("TINA4_TEST_MYSQL_USERNAME", "root")
+_MYSQL_PASS = os.environ.get("TINA4_TEST_MYSQL_PASSWORD", "")
 _MYSQL_DB = os.environ.get("TINA4_TEST_MYSQL_DB", "tina4_test")
 
 
@@ -185,8 +185,8 @@ def test_mysql_batch_insert_list_of_dicts():
 
 _MSSQL_HOST = os.environ.get("TINA4_TEST_MSSQL_HOST", "localhost")
 _MSSQL_PORT = int(os.environ.get("TINA4_TEST_MSSQL_PORT", "1433"))
-_MSSQL_USER = os.environ.get("TINA4_TEST_MSSQL_USER", "sa")
-_MSSQL_PASS = os.environ.get("TINA4_TEST_MSSQL_PASS", "")
+_MSSQL_USER = os.environ.get("TINA4_TEST_MSSQL_USERNAME", "sa")
+_MSSQL_PASS = os.environ.get("TINA4_TEST_MSSQL_PASSWORD", "")
 _MSSQL_DB = os.environ.get("TINA4_TEST_MSSQL_DB", "tina4_test")
 
 

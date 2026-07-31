@@ -55,7 +55,7 @@ def _pg_url():
     if not host:
         return None
     port = os.environ.get("TINA4_TEST_PG_PORT", "5432")
-    user = os.environ.get("TINA4_TEST_PG_USER", "tina4")
+    user = os.environ.get("TINA4_TEST_PG_USERNAME", "tina4")
     pwd = os.environ.get("TINA4_TEST_PG_PASSWORD", "tina4")
     name = os.environ.get("TINA4_TEST_PG_DB", "tina4_py")
     return f"postgresql://{user}:{pwd}@{host}:{port}/{name}"

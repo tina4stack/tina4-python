@@ -84,8 +84,8 @@ jobs:
       # Enable the real-service integration tests (they skip when unset).
       TINA4_TEST_PG_HOST: localhost
       TINA4_TEST_PG_PORT: '55432'
-      TINA4_TEST_PG_USER: tina4
-      TINA4_TEST_PG_PASS: tina4
+      TINA4_TEST_PG_USERNAME: tina4
+      TINA4_TEST_PG_PASSWORD: tina4
       TINA4_TEST_PG_DB: tina4_py
       TINA4_TEST_POSTGRES_URL: postgres://tina4:tina4@localhost:55432/tina4_py
       TINA4_TEST_MONGO_URL: mongodb://localhost:27017
@@ -106,13 +106,13 @@ jobs:
       # MySQL/MSSQL live tests default to these host/port values.
       TINA4_TEST_MYSQL_HOST: localhost
       TINA4_TEST_MYSQL_PORT: '3306'
-      TINA4_TEST_MYSQL_USER: tina4
-      TINA4_TEST_MYSQL_PASS: tina4
+      TINA4_TEST_MYSQL_USERNAME: tina4
+      TINA4_TEST_MYSQL_PASSWORD: tina4
       TINA4_TEST_MYSQL_DB: tina4_test
       TINA4_TEST_MSSQL_HOST: localhost
       TINA4_TEST_MSSQL_PORT: '1433'
-      TINA4_TEST_MSSQL_USER: sa
-      TINA4_TEST_MSSQL_PASS: 'TinaSQL123!Secure'
+      TINA4_TEST_MSSQL_USERNAME: sa
+      TINA4_TEST_MSSQL_PASSWORD: 'TinaSQL123!Secure'
       TINA4_TEST_MSSQL_DB: tina4_test
       # Turn a missing provisioned service into a hard failure (no green skips).
       TINA4_REQUIRE_SERVICES: '1'
@@ -241,8 +241,8 @@ jobs:
     env:
       # Classic double-slash absolute-path form (the adapter's documented shape).
       TINA4_TEST_FIREBIRD_URL: firebird://SYSDBA:masterkey@localhost:3050//var/lib/firebird/data/test.fdb
-      TINA4_TEST_FIREBIRD_USER: SYSDBA
-      TINA4_TEST_FIREBIRD_PASS: masterkey
+      TINA4_TEST_FIREBIRD_USERNAME: SYSDBA
+      TINA4_TEST_FIREBIRD_PASSWORD: masterkey
     steps:
       - uses: actions/checkout@v4
 

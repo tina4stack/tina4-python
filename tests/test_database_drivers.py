@@ -24,8 +24,8 @@ from tina4_python.database.connection import _DRIVERS
 
 PG_HOST = os.environ.get("TINA4_TEST_PG_HOST", "localhost")
 PG_PORT = int(os.environ.get("TINA4_TEST_PG_PORT", "55432"))
-PG_USER = os.environ.get("TINA4_TEST_PG_USER", "tina4")
-PG_PASS = os.environ.get("TINA4_TEST_PG_PASS", "tina4")
+PG_USER = os.environ.get("TINA4_TEST_PG_USERNAME", "tina4")
+PG_PASS = os.environ.get("TINA4_TEST_PG_PASSWORD", "tina4")
 PG_DB = os.environ.get("TINA4_TEST_PG_DB", "tina4")
 
 
@@ -48,14 +48,14 @@ def _pg_url() -> str:
 # (MySQL is in the provisioned keyword list since 3.13.44).
 MYSQL_HOST = os.environ.get("TINA4_TEST_MYSQL_HOST", "localhost")
 MYSQL_PORT = int(os.environ.get("TINA4_TEST_MYSQL_PORT", "3306"))
-MYSQL_USER = os.environ.get("TINA4_TEST_MYSQL_USER", "tina4")
-MYSQL_PASS = os.environ.get("TINA4_TEST_MYSQL_PASS", "tina4")
+MYSQL_USER = os.environ.get("TINA4_TEST_MYSQL_USERNAME", "tina4")
+MYSQL_PASS = os.environ.get("TINA4_TEST_MYSQL_PASSWORD", "tina4")
 MYSQL_DB = os.environ.get("TINA4_TEST_MYSQL_DB", "tina4_test")
 
 MSSQL_HOST = os.environ.get("TINA4_TEST_MSSQL_HOST", "localhost")
 MSSQL_PORT = int(os.environ.get("TINA4_TEST_MSSQL_PORT", "1433"))
-MSSQL_USER = os.environ.get("TINA4_TEST_MSSQL_USER", "sa")
-MSSQL_PASS = os.environ.get("TINA4_TEST_MSSQL_PASS", "TinaSQL123!Secure")
+MSSQL_USER = os.environ.get("TINA4_TEST_MSSQL_USERNAME", "sa")
+MSSQL_PASS = os.environ.get("TINA4_TEST_MSSQL_PASSWORD", "TinaSQL123!Secure")
 MSSQL_DB = os.environ.get("TINA4_TEST_MSSQL_DB", "tina4_test")
 
 
