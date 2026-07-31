@@ -202,7 +202,7 @@ def test_dispatch_template_path_renders_for_get_and_head(_workspace):
 # side effect of the extraction.
 
 def test_dispatch_cors_headers_present_on_401(monkeypatch):
-    # ADR-0014 made the CORS default deny, so this test now declares the policy
+    # ADR-0018 made the CORS default deny, so this test now declares the policy
     # it used to inherit. The GUARANTEE under test is unchanged: when CORS is
     # configured, its headers must survive a short-circuited 401.
     monkeypatch.setenv("TINA4_CORS_ORIGINS", "https://example.com")

@@ -1,6 +1,6 @@
 # CORS policy conformance — deny by default, no wildcard+credentials, Vary: Origin.
 """
-Feature 10 (CORS middleware) conformance suite. See ADR-0014.
+Feature 10 (CORS middleware) conformance suite. See ADR-0018.
 
 Three rules, each pinned positive AND negative, driven through the REAL
 dispatcher (``tina4_python.core.server.handle``) with real ASGI scopes.

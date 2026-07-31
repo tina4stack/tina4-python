@@ -20,7 +20,7 @@ def clean_env(monkeypatch):
 class TestCorsDefaults:
 
     def test_default_origins_is_deny(self, clean_env):
-        # BREAKING (ADR-0014): the default was "*" (allow every origin). It is
+        # BREAKING (ADR-0018): the default was "*" (allow every origin). It is
         # now empty = deny, and "*" must be asked for explicitly.
         cors = CorsMiddleware()
         assert cors.origins == ""
@@ -85,7 +85,7 @@ class TestCorsEnvConfig:
 class TestAllowedOrigin:
 
     def test_unconfigured_returns_no_origin(self, clean_env):
-        # BREAKING (ADR-0014): with no policy configured nothing is allowed.
+        # BREAKING (ADR-0018): with no policy configured nothing is allowed.
         cors = CorsMiddleware()
         assert cors.allowed_origin("https://anything.com") == ""
 
@@ -114,7 +114,7 @@ class TestAllowedOrigin:
 
 class TestApply:
     """Unchanged assertions. These exercise what apply() EMITS for an allowed
-    origin, which ADR-0014 did not touch — so each now declares the wildcard
+    origin, which ADR-0018 did not touch — so each now declares the wildcard
     policy it previously inherited from the old permissive default."""
 
     @pytest.fixture(autouse=True)

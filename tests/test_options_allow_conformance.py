@@ -39,7 +39,7 @@ PREFLIGHT = {"origin": "https://example.com", "access-control-request-method": "
 def _routes(monkeypatch):
     Router.clear()
     Middleware._global_middleware = []
-    # ADR-0014 made the CORS default deny. This suite is about the CORS POLICY
+    # ADR-0018 made the CORS default deny. This suite is about the CORS POLICY
     # headers on a preflight, so it has to declare a policy - it used to
     # inherit one from the old permissive default. No assertion changed.
     monkeypatch.setenv("TINA4_CORS_ORIGINS", "*")

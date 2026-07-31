@@ -37,7 +37,7 @@ class TestCorsMiddleware:
     """Positive tests for CORS middleware."""
 
     def test_default_allows_no_origins(self, monkeypatch):
-        # BREAKING (ADR-0014): the default was "*"; it is now deny.
+        # BREAKING (ADR-0018): the default was "*"; it is now deny.
         monkeypatch.delenv("TINA4_CORS_ORIGINS", raising=False)
         cors = CorsMiddleware()
         assert cors.allowed_origin("https://example.com") == ""
@@ -123,7 +123,7 @@ class TestCorsMiddlewareNegative:
             del os.environ["TINA4_CORS_ORIGINS"]
 
     def test_no_origin_header(self):
-        # BREAKING (ADR-0014): this used to assert "*" because the default was
+        # BREAKING (ADR-0018): this used to assert "*" because the default was
         # allow-all. Unconfigured now emits nothing at all.
         cors = CorsMiddleware()
         req = MockRequest(headers={})

@@ -166,7 +166,7 @@ def _cors_warn_once(key: str, message: str) -> None:
 class CorsMiddleware:
     """CORS handler — reads config from env, injects headers.
 
-    Deny by default (ADR-0014). With ``TINA4_CORS_ORIGINS`` unset, NO
+    Deny by default (ADR-0018). With ``TINA4_CORS_ORIGINS`` unset, NO
     ``Access-Control-Allow-Origin`` is emitted and the browser's own CORS check
     blocks the cross-origin request. ``*`` still works, but has to be asked for.
 
@@ -199,7 +199,7 @@ class CorsMiddleware:
         return request, response
 
     def __init__(self):
-        # Default is EMPTY, not "*" — deny by default (ADR-0014).
+        # Default is EMPTY, not "*" — deny by default (ADR-0018).
         self.origins = os.environ.get("TINA4_CORS_ORIGINS", "")
         self.methods = os.environ.get(
             "TINA4_CORS_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS"
