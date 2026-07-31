@@ -49,7 +49,7 @@ class TestHealthEndpoint:
         resp = Response()
         result = await _health_handler(req, resp)
         body = json.loads(result.content)
-        assert body["framework"] == "tina4py"
+        assert body["framework"] == "tina4-python"
 
     @pytest.mark.asyncio
     async def test_response_has_uptime(self, broken_dir):
@@ -57,8 +57,8 @@ class TestHealthEndpoint:
         resp = Response()
         result = await _health_handler(req, resp)
         body = json.loads(result.content)
-        assert "uptime_seconds" in body
-        assert isinstance(body["uptime_seconds"], int)
+        assert "uptime" in body
+        assert isinstance(body["uptime"], float)
 
     @pytest.mark.asyncio
     async def test_response_has_errors_count(self, broken_dir):
@@ -69,22 +69,31 @@ class TestHealthEndpoint:
         assert body["errors"] == 0
 
     @pytest.mark.asyncio
-    async def test_broken_file_sets_error_status(self, broken_dir):
+    async def test_broken_file_does_not_set_error_status(self, broken_dir):
+        """Liveness reports the PROCESS, not the app's error history.
+
+        This asserted ``status == "error"`` until feature 8. A recorded route
+        error is not a reason to restart the container, so it no longer moves
+        the status. See tests/test_health_liveness.py and ADR-0014.
+        """
         error_data = {"error": "Something broke", "timestamp": "2025-01-01T00:00:00Z"}
         (broken_dir / "test.broken").write_text(json.dumps(error_data))
         req = Request()
         resp = Response()
         result = await _health_handler(req, resp)
         body = json.loads(result.content)
-        assert body["status"] == "error"
+        assert body["status"] == "ok"
 
     @pytest.mark.asyncio
-    async def test_broken_file_returns_503(self, broken_dir):
+    async def test_broken_file_returns_200(self, broken_dir):
+        """Was 503. One unhandled route error used to flip liveness to 503 for
+        the life of the process AND across restarts (nothing cleared the
+        sentinel), which is a CrashLoopBackOff from a single bad request."""
         (broken_dir / "crash.broken").write_text(json.dumps({"error": "crash"}))
         req = Request()
         resp = Response()
         result = await _health_handler(req, resp)
-        assert result.status_code == 503
+        assert result.status_code == 200
 
     @pytest.mark.asyncio
     async def test_broken_file_includes_error_count(self, broken_dir):
@@ -113,7 +122,8 @@ class TestHealthEndpoint:
         resp = Response()
         result = await _health_handler(req, resp)
         body = json.loads(result.content)
-        assert body["status"] == "error"
+        assert body["status"] == "ok"
+        # The diagnostic survives even though it no longer moves the status.
         assert "latest_error" in body
         assert "file" in body["latest_error"]
 
