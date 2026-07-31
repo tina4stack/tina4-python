@@ -194,10 +194,47 @@ class Session:
             os.environ.get("TINA4_SESSION_STRICT", "false")
         ).strip().lower() in ("true", "1", "yes", "on")
 
+    #: Every accepted TINA4_SESSION_BACKEND value, aliases included. Byte-identical
+    #: membership in all four frameworks; this tuple is the one place it is written
+    #: in Python, so the dispatch below and the error message can never disagree.
+    VALID_BACKENDS = (
+        "file", "filesystem",
+        "redis",
+        "valkey",
+        "mongodb", "mongo",
+        "memcached", "memcache",
+        "database", "db",
+    )
+
+    #: The canonical name of each backend, for the error message. Listing every
+    #: alias would make the message longer without making it clearer.
+    CANONICAL_BACKENDS = ("file", "redis", "valkey", "mongodb", "memcached", "database")
+
     @staticmethod
     def _resolve_handler() -> SessionHandler:
-        """Auto-select session handler from TINA4_SESSION_BACKEND env var."""
+        """
+        Auto-select session handler from TINA4_SESSION_BACKEND env var.
+
+        An UNRECOGNISED name raises ValueError. It used to fall through to the
+        file handler silently, which is the worst possible answer: a typo in
+        TINA4_SESSION_BACKEND ("redsi", "Redis" before normalisation was uniform)
+        wrote sessions to local disk while the operator believed they were in
+        Redis. Nothing logged, nothing failed, and the symptom appeared later as
+        users being logged out whenever a request landed on another instance.
+
+        A BLANK value still means file. An env var set to "" is a SET variable,
+        so it never reaches os.environ.get's default; treating blank as an error
+        would break every deployment that clears the var to take the default.
+        """
         backend = os.environ.get("TINA4_SESSION_BACKEND", "file").lower().strip()
+        if not backend:
+            return FileSessionHandler()
+        if backend not in Session.VALID_BACKENDS:
+            raise ValueError(
+                f'Unknown session backend "{backend}". '
+                f'Valid backends: {", ".join(Session.CANONICAL_BACKENDS)}. '
+                "Leave TINA4_SESSION_BACKEND unset for the file default."
+            )
         if backend in ("file", "filesystem"):
             return FileSessionHandler()
         elif backend in ("redis",):
@@ -218,8 +255,14 @@ class Session:
             # connected" — so reuse the single ORM resolver rather than guess.
             from tina4_python.orm.model import ORM
             return DatabaseSessionHandler(ORM._get_db())
-        else:
-            return FileSessionHandler()
+        # No else. The membership check above already rejected everything that is
+        # not in VALID_BACKENDS, so a silent file fallback here would only be able
+        # to hide a name that IS valid but has no branch - which is a bug in this
+        # method, not a user's typo, and must not be swallowed.
+        raise ValueError(
+            f'Session backend "{backend}" is listed in VALID_BACKENDS but has no '
+            "handler branch. This is a framework bug, not a configuration error."
+        )
 
     @property
     def session_id(self) -> str | None:

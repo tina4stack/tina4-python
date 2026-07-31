@@ -514,8 +514,11 @@ TINA4_TOKEN_LIMIT is used to set the session time, default 60 minutes
 
 Set `TINA4_SESSION_BACKEND` to choose a backend:
 
-The value is the backend NAME, not a class name. An unknown value falls back to
-the file backend without raising.
+The value is the backend NAME, not a class name, and it is normalised (trimmed and
+lowercased), so " Redis " resolves. An UNRECOGNISED value raises `ValueError` at
+startup, naming the bad value and the valid ones -- it used to fall back to the
+file backend silently, which turned a typo into sessions quietly written to local
+disk. Unset or blank still means file.
 
 | Value | Backend | Required package |
 |---------|---------|-----------------|
@@ -1651,7 +1654,7 @@ TINA4_OVERRIDE_CLIENT=false       # Set to true to allow running without tina4 C
 HOST_NAME=localhost:7145
 
 # Sessions
-TINA4_SESSION_BACKEND=file                # file, redis, valkey, mongodb, database (unknown value falls back to file)
+TINA4_SESSION_BACKEND=file                # file, redis, valkey, mongodb, memcached, database (an unknown value RAISES; unset/blank = file)
 TINA4_SESSION_SAMESITE=Lax               # SameSite attribute for session cookies (default: Lax)
 
 # Swagger/OpenAPI

@@ -176,7 +176,9 @@ db.insert(table_name, data: dict | list) -> DatabaseResult
 db.update(table_name, data: dict, filter=None, params=None) -> DatabaseResult
 db.delete(table_name, filter: dict | str | list, params=None) -> DatabaseResult
 db.truncate(table_name) -> DatabaseResult   # remove every row, explicitly
-db.primary_key(table_name) -> str | None    # introspected PK column (cached)
+db.primary_key(table_name) -> list[str]     # introspected PK columns (cached); [] if none
+                                            # A LIST — a key may span several columns, and
+                                            # EVERY one goes into a keyed write's WHERE.
 db.get_last_id() -> int | str | None  # Last insert ID from execute/insert
 db.get_error() -> str | None          # Last execute() error message
 db.start_transaction()
@@ -325,7 +327,9 @@ session.cookie_header(name="tina4_session") -> str  # Set-Cookie header value
 session.gc()                                # Garbage collection
 ```
 
-Backends: file (default), redis, valkey, mongodb, database. Set via `TINA4_SESSION_BACKEND` env var.
+Backends: file (default), redis, valkey, mongodb, memcached, database. Set via `TINA4_SESSION_BACKEND` env var.
+
+**An unrecognised backend name RAISES at startup**, naming the bad value and the valid ones. It used to fall through to the file backend silently, so a typo in `TINA4_SESSION_BACKEND` produced a running app writing sessions to local disk while the operator believed they were in Redis. The name is normalised (trimmed + lowercased), so ` Redis ` resolves; unset or blank still means file. Aliases: `filesystem`, `mongo`, `memcache`, `db`.
 
 **Backend-failure policy (all 4 frameworks): log-loud + degrade.** If a backend (Redis/Valkey/Mongo/DB) becomes unreachable mid-request, the session layer logs an error and degrades rather than crashing the whole app or losing data silently: a read failure yields an empty session (the request still serves), and `save()` returns `False` (best-effort, dirty flag retained for retry) — both are logged via `Log.error`. A genuinely empty session (no data yet) is NOT an error and is never logged. Set `TINA4_SESSION_STRICT=true` to re-raise instead (the same escape hatch as the `strict` flag on events/seeding) when a failed persist should surface loudly. Call `session.regenerate()` right after a successful login or privilege change to defeat session fixation.
 
