@@ -1945,15 +1945,328 @@ def _finalize_response(
     return response
 
 
+# ── The dispatch pipeline ────────────────────────────────────────────
+#
+# ``handle`` was one 190-line function at cyclomatic complexity 27 against a
+# ceiling of 10, on the path of every request. Its concerns are named and
+# ordered as DATA below, so the pipeline can be read, tested and compared
+# across the four frameworks without reading an implementation.
+#
+# Two groups, because the function genuinely has two:
+#
+#   _PRE_MATCH_STAGES   run in order until one RETURNS a Response. That
+#                       response is sent AS IS - it does NOT go through the
+#                       HEAD strip or ``_finalize_response``. That is existing
+#                       behaviour, not a new shortcut: every one of these
+#                       branches used a bare ``return`` today.
+#   then                match -> dispatch -> HEAD strip -> finalize.
+#
+# Ordering is BEHAVIOUR, not taste: the CORS preflight answers before rate
+# limiting (a browser preflight must not be throttled into a CORS error), dev
+# routes beat the router, and the pre-match middleware runs before matching so
+# its headers outlive a 401 (ADR-0012).
+#
+# Same shape as tina4-ruby/lib/tina4/dispatch_pipeline.rb and
+# tina4-nodejs/packages/core/src/dispatchPipeline.ts.
+class DispatchContext:
+    """Per-request state shared between stages.
+
+    Exists so a stage can be called with nothing but a context - the
+    alternative is stages reading each other's locals, which is the coupling
+    the extraction removes. ``request`` and ``response`` are REBOUND by
+    middleware, so they live here rather than being passed by value.
+    """
+
+    __slots__ = ("request", "response", "request_id", "is_dev", "req_start", "route")
+
+    def __init__(self, request: Request, response: Response, request_id: str):
+        self.request = request
+        self.response = response
+        self.request_id = request_id
+        self.is_dev = False
+        self.req_start = 0.0
+        self.route = None
+
+
+async def _stage_cors_preflight(ctx: DispatchContext) -> Response | None:
+    """Answer a CORS preflight.
+
+    The response also carries the resource's REAL method set as ``Allow``
+    (RFC 9110 s9.3.7): a preflight IS an OPTIONS response, so it answers the
+    same question a bare OPTIONS does, on top of the CORS policy headers.
+
+    This is CONFORMANCE, not a deviation. The frameworks' own OPTIONS handlers
+    already do it - Django's ``View.options()`` sets Allow from
+    ``_allowed_methods()``, Express's router auto-answers OPTIONS with Allow.
+    The add-on CORS libraries (cors npm, django-cors-headers, rack-cors,
+    stack-cors, ASP.NET CORS) omit it, but that is a LAYERING artifact: each
+    sits ahead of the framework, so short-circuiting the preflight also skips
+    the framework's OPTIONS handler and the header it would have produced.
+    Tina4 owns both paths in one dispatcher. See ADR-0013.
+
+    ``Allow`` and ``Access-Control-Allow-Methods`` are NOT interchangeable:
+    Allow is what the resource supports, ACAM is what the CORS policy permits
+    cross-origin. A policy allowing DELETE on a GET-only route still 405s. An
+    unknown path yields "" - the same shape the bare-OPTIONS branch uses - so a
+    client can tell "nothing here" from "not told".
+    """
+    if not _cors.is_preflight(ctx.request):
+        return None
+
+    _cors.apply(ctx.request, ctx.response)
+    ctx.response.header("Allow", ", ".join(Router.methods_allowed_for_path(ctx.request.path)))
+    ctx.response.status(204)
+    return ctx.response
+
+
+async def _stage_rate_limit(ctx: DispatchContext) -> Response | None:
+    """Reject the request when it is over the configured rate limit."""
+    return _handle_rate_limit(ctx.request, ctx.response)
+
+
+async def _stage_start_timer(ctx: DispatchContext) -> None:
+    """Start the request clock and resolve dev mode, for the stages that need them.
+
+    Deliberately AFTER the preflight and rate-limit stages: neither of those
+    reaches ``_finalize_response``, so neither is timed today.
+    """
+    import time as _time
+    from tina4_python.dotenv import is_truthy
+
+    ctx.req_start = _time.perf_counter()
+    ctx.is_dev = is_truthy(os.environ.get("TINA4_DEBUG", ""))
+    return None
+
+
+async def _stage_trailing_slash_redirect(ctx: DispatchContext) -> Response | None:
+    """301 ``/foo/`` to ``/foo`` when TINA4_TRAILING_SLASH_REDIRECT is on.
+
+    The root ``/`` is skipped so the homepage still works. Cross-framework
+    parity v3.12.4.
+    """
+    from tina4_python.dotenv import is_truthy
+
+    if not is_truthy(os.environ.get("TINA4_TRAILING_SLASH_REDIRECT", "")):
+        return None
+    if len(ctx.request.path) <= 1 or not ctx.request.path.endswith("/"):
+        return None
+
+    canonical = ctx.request.path.rstrip("/") or "/"
+    return ctx.response.status(301).header("location", canonical)
+
+
+async def _stage_dev_admin(ctx: DispatchContext) -> Response | None:
+    """Dev admin, service-health probes and the feedback widget's routes.
+
+    Also catches /ai/api/chat (the SPA's ollama proxy) and the bare
+    /ai /vision /embed /image /rag probes that drive the "SERVICES" dots in the
+    dev-admin UI. The /__feedback/* routes live OUTSIDE /__dev because the
+    widget is for whitelisted END USERS of the shipped app - they should not
+    see any /__dev URL in their network tab.
+    """
+    if not ctx.is_dev:
+        return None
+
+    path = ctx.request.path
+    if not (path.startswith("/__dev") or path.startswith("/__feedback")
+            or path in _DEV_EXTRA_PATHS):
+        return None
+
+    return await _handle_dev_admin(ctx.request, ctx.response)
+
+
+async def _stage_swagger(ctx: DispatchContext) -> Response | None:
+    """Swagger UI and the OpenAPI document.
+
+    ``_handle_swagger`` self-gates on ``swagger.is_enabled()``
+    (TINA4_SWAGGER_ENABLED, else TINA4_DEBUG), so it is called on any GET: that
+    honours an explicit prod-enable AND an explicit dev-disable, both of which
+    the old ``_is_dev``-only gate silently ignored.
+    """
+    if ctx.request.method != "GET":
+        return None
+    return _handle_swagger(ctx.request, ctx.response)
+
+
+async def _stage_reset_request_caches(ctx: DispatchContext) -> None:
+    """Clear the request-scoped query cache.
+
+    Identical SELECTs are deduped within this request but never served across
+    requests (zero cross-request staleness). No-op when TINA4_DB_CACHE=true
+    (persistent mode) or when caching is disabled.
+    """
+    try:
+        from tina4_python.database.connection import Database as _Db
+        _Db.reset_request_caches()
+    except Exception:
+        pass
+    return None
+
+
+async def _stage_global_middleware_pre(ctx: DispatchContext) -> Response | None:
+    """PRE-MATCH global middleware.
+
+    Runs before a route is even looked up, so CORS and anything else that must
+    survive a short-circuit can set headers that outlive a 401/403. Opt in with
+    ``pre_match = True``.
+    """
+    from tina4_python.core.middleware import Middleware as _Mw
+
+    pre = _Mw.pre_match_middleware()
+    if not pre:
+        return None
+
+    pre_route = {"middleware": pre, "handler": None}
+    ctx.request, ctx.response, skip = _run_before_middleware(
+        ctx.request, ctx.response, pre_route, include_globals=False
+    )
+    if not skip:
+        return None
+
+    _run_after_middleware(ctx.request, ctx.response, pre_route, include_globals=False)
+    return ctx.response
+
+
+#: Stages that run before route matching, in order. The first to return a
+#: Response answers the request AS IS - no HEAD strip, no finalize.
+_PRE_MATCH_STAGES = (
+    _stage_cors_preflight,
+    _stage_rate_limit,
+    _stage_start_timer,
+    _stage_trailing_slash_redirect,
+    _stage_dev_admin,
+    _stage_swagger,
+    _stage_reset_request_caches,
+    _stage_global_middleware_pre,
+)
+
+#: Dev-admin paths that live outside /__dev.
+_DEV_EXTRA_PATHS = {"/ai/api/chat", "/ai", "/vision", "/embed", "/image", "/rag"}
+
+
+async def _stage_dispatch_route(ctx: DispatchContext) -> None:
+    """Match a route and run it, or fall through to 405 / 404.
+
+    Order inside a matched route, and it is BEHAVIOUR (ADR-0012):
+    POST-MATCH globals -> auth gate -> the route's OWN middleware -> handler.
+
+    The globals run BEFORE the gate so a rate limiter can throttle a
+    brute-force login and an access log records the 401 - neither is possible
+    if they only run on authenticated requests. That is what every mainstream
+    framework does: Django ships CsrfViewMiddleware ahead of
+    AuthenticationMiddleware and enforces auth in a view decorator after all
+    MIDDLEWARE, Laravel runs the `web` group before the `auth` route
+    middleware, ASP.NET puts UseAuthorization last before the endpoint.
+
+    The route's OWN middleware stays AFTER the gate, so middleware attached to
+    a secured route never processes an unauthenticated request.
+    """
+    route, params = Router.match(ctx.request.method, ctx.request.path)
+    ctx.route = route
+
+    if not route:
+        _stage_method_not_allowed(ctx) or _stage_not_found(ctx)
+        return None
+
+    ctx.request._route_params = params
+    ctx.request.merge_route_params()
+    # Expose the matched handler so before_* middleware (e.g. CsrfMiddleware)
+    # can read handler metadata such as _noauth.
+    ctx.request._handler = route.get("handler")
+
+    try:
+        ctx.request, ctx.response, skip = _run_before_middleware(
+            ctx.request, ctx.response, {"middleware": [], "handler": route.get("handler")}
+        )
+        if not skip:
+            skip = _check_auth(ctx.request, ctx.response, route)
+        if not skip:
+            ctx.request, ctx.response, skip = _run_before_middleware(
+                ctx.request, ctx.response, route, include_globals=False
+            )
+        if not skip:
+            ctx.response = await _invoke_handler_with_middleware(
+                ctx.request, ctx.response, route, params
+            )
+        ctx.request, ctx.response = _run_after_middleware(ctx.request, ctx.response, route)
+    except Exception as e:
+        ctx.response = _handle_route_error(
+            e, ctx.request, ctx.response, ctx.request_id, ctx.is_dev
+        )
+    return None
+
+
+def _stage_method_not_allowed(ctx: DispatchContext) -> bool:
+    """RFC 9110 conformance, before falling through to 404 / static / template.
+
+    Checks whether the PATH is known to the router under any OTHER method:
+      - OPTIONS -> 204 No Content with Allow listing the methods (s9.3.7)
+      - any other method (PUT on a GET-only route, TRACE, CONNECT) -> 405 with
+        the Allow header (s15.5.6 + s10.2.1)
+
+    Returns True when it answered, so ``_stage_not_found`` is skipped.
+    """
+    allowed = Router.methods_allowed_for_path(ctx.request.path)
+    if not allowed:
+        return False
+
+    allow_header = ", ".join(allowed)
+    ctx.response.header("Allow", allow_header)
+    if ctx.request.method.upper() == "OPTIONS":
+        ctx.response.status(204)
+        return True
+
+    ctx.response.status(405).json({
+        "error": "Method Not Allowed",
+        "path": ctx.request.path,
+        "method": ctx.request.method,
+        "allow": allowed,
+        "status": 405,
+    })
+    return True
+
+
+def _stage_not_found(ctx: DispatchContext) -> bool:
+    """Nothing claimed the path: static, template, then 404."""
+    ctx.response = _handle_no_route(ctx.request, ctx.response, ctx.request_id)
+    return True
+
+
+def _stage_head_strip(ctx: DispatchContext) -> None:
+    """RFC 9110 s9.3.2: a HEAD response MUST NOT include content.
+
+    Strips the body unconditionally - even for an explicit ``Router.head()``
+    handler that accidentally returned one - and records what Content-Length
+    the GET would have sent, because cache validators, link checkers and
+    monitoring probes size their estimates from it.
+
+    Python strips LATE, at the single return point; Node wraps write/end EARLY
+    because it streams and has no single exit. ADR-0011 keeps the OUTCOME
+    shared and the mechanism idiomatic per runtime.
+    """
+    if ctx.request.method.upper() != "HEAD":
+        return None
+
+    body = ctx.response.content if ctx.response.content is not None else b""
+    if isinstance(body, str):
+        body = body.encode("utf-8")
+    if body:
+        ctx.response.header("Content-Length", str(len(body)))
+        ctx.response.content = b""
+    return None
+
+
 async def handle(request: Request) -> Response:
     """Dispatch a pre-built Request through the Tina4 router and return a Response.
 
     Handles session setup, CORS, rate limiting, routing, auth, middleware,
     dev toolbar injection, and session saving. The caller is responsible
     for sending the response over the wire. Useful for testing and embedding.
-    """
-    import time as _time
 
+    Every branch this used to hold now lives in a named stage - see
+    ``_PRE_MATCH_STAGES``. The only control flow left here is "walk the list,
+    stop when a stage answers".
+    """
     request_id = request.headers.get("x-request-id", str(uuid.uuid4())[:8])
     set_request_id(request_id)
     _init_session(request)
@@ -1961,181 +2274,21 @@ async def handle(request: Request) -> Response:
     response = Response()
     response.header("x-request-id", request_id)
 
-    # CORS preflight
-    #
-    # The response also carries the resource's REAL method set as ``Allow``
-    # (RFC 9110 s9.3.7): a preflight IS an OPTIONS response, so it answers the
-    # same question a bare OPTIONS does, on top of the CORS policy headers.
-    #
-    # This is CONFORMANCE, not a deviation. The frameworks' own OPTIONS
-    # handlers already do it - Django's View.options() sets Allow from
-    # _allowed_methods(), Express's router auto-answers OPTIONS with Allow.
-    # The add-on CORS libraries (cors npm, django-cors-headers, rack-cors,
-    # stack-cors, ASP.NET CORS) omit it, but that is a LAYERING artifact: each
-    # sits ahead of the framework, so short-circuiting the preflight also skips
-    # the framework's OPTIONS handler and the header it would have produced.
-    # Tina4 owns both paths in one dispatcher. See ADR-0013.
-    #
-    # ``Allow`` and ``Access-Control-Allow-Methods`` are NOT interchangeable:
-    # Allow is what the resource supports, ACAM is what the CORS policy permits
-    # cross-origin. A policy allowing DELETE on a GET-only route still 405s.
-    # An unknown path yields "" - the same shape the bare-OPTIONS branch uses -
-    # so a client can tell "nothing here" from "not told".
-    if _cors.is_preflight(request):
-        _cors.apply(request, response)
-        response.header("Allow", ", ".join(Router.methods_allowed_for_path(request.path)))
-        response.status(204)
-        return response
+    ctx = DispatchContext(request, response, request_id)
 
-    # Rate limiting
-    rate_response = _handle_rate_limit(request, response)
-    if rate_response is not None:
-        return rate_response
+    for stage in _PRE_MATCH_STAGES:
+        answered = await stage(ctx)
+        if answered is not None:
+            # Sent AS IS: these branches bypass the HEAD strip and finalize,
+            # exactly as they did when each was a bare `return`.
+            return answered
 
-    _req_start = _time.perf_counter()
-    from tina4_python.dotenv import is_truthy
-    _is_dev = is_truthy(os.environ.get("TINA4_DEBUG", ""))
+    await _stage_dispatch_route(ctx)
+    _stage_head_strip(ctx)
 
-    # Trailing-slash redirect — when TINA4_TRAILING_SLASH_REDIRECT=true and a
-    # request arrives at `/foo/`, return 301 to `/foo`. Skip the root `/` so
-    # the homepage still works. Cross-framework parity v3.12.4.
-    if (
-        is_truthy(os.environ.get("TINA4_TRAILING_SLASH_REDIRECT", ""))
-        and len(request.path) > 1
-        and request.path.endswith("/")
-    ):
-        canonical = request.path.rstrip("/") or "/"
-        return response.status(301).header("location", canonical)
-
-    # Dev admin — also catches /ai/api/chat (SPA's ollama proxy), the
-    # bare /ai /vision /embed /image /rag service-health probes that
-    # drive the "SERVICES ●●●●●" dots in the dev-admin UI, and the
-    # /__feedback/* routes used by the customer feedback widget. The
-    # feedback paths live OUTSIDE /__dev because the widget is for
-    # whitelisted END USERS of the shipped app — they shouldn't see
-    # any /__dev URL in their network tab.
-    _dev_extra_paths = {"/ai/api/chat", "/ai", "/vision", "/embed", "/image", "/rag"}
-    if _is_dev and (
-        request.path.startswith("/__dev")
-        or request.path.startswith("/__feedback")
-        or request.path in _dev_extra_paths
-    ):
-        return await _handle_dev_admin(request, response)
-
-    # Swagger — _handle_swagger self-gates on swagger.is_enabled()
-    # (TINA4_SWAGGER_ENABLED, else TINA4_DEBUG), so we call it on any GET:
-    # this honours an explicit prod-enable AND an explicit dev-disable, both
-    # of which the old `_is_dev`-only gate silently ignored.
-    if request.method == "GET":
-        swagger_resp = _handle_swagger(request, response)
-        if swagger_resp is not None:
-            return swagger_resp
-
-    # Reset the request-scoped query cache so identical SELECTs are deduped
-    # within this request but never served across requests (zero cross-request
-    # staleness). No-op when TINA4_DB_CACHE=true (persistent mode) or disabled.
-    try:
-        from tina4_python.database.connection import Database as _Db
-        _Db.reset_request_caches()
-    except Exception:
-        pass
-
-    # PRE-MATCH global middleware: runs before a route is even looked up, so
-    # CORS and anything else that must survive a short-circuit can set headers
-    # that outlive a 401/403. Opt in with ``pre_match = True``.
-    from tina4_python.core.middleware import Middleware as _Mw
-    _pre = _Mw.pre_match_middleware()
-    if _pre:
-        _pre_route = {"middleware": _pre, "handler": None}
-        request, response, _skip = _run_before_middleware(
-            request, response, _pre_route, include_globals=False
-        )
-        if _skip:
-            _run_after_middleware(request, response, _pre_route, include_globals=False)
-            return response
-
-    # Route matching and dispatch
-    route, params = Router.match(request.method, request.path)
-
-    if route:
-        request._route_params = params
-        request.merge_route_params()
-        # Expose the matched handler on the request so before_* middleware
-        # (e.g. CsrfMiddleware) can read handler metadata such as _noauth.
-        request._handler = route.get("handler")
-        try:
-            # Order: POST-MATCH globals -> auth gate -> the route's OWN
-            # middleware -> handler.
-            #
-            # The globals run BEFORE the gate so a rate limiter can throttle a
-            # brute-force login and an access log records the 401 - neither is
-            # possible if they only run on authenticated requests. That is what
-            # every mainstream framework does: Django ships CsrfViewMiddleware
-            # ahead of AuthenticationMiddleware and enforces auth in a view
-            # decorator after all MIDDLEWARE, Laravel runs the `web` group
-            # before the `auth` route middleware, ASP.NET puts UseAuthorization
-            # last before the endpoint. Python and Ruby ran the gate first;
-            # Node and PHP did not. Aligned on the mainstream answer (ADR-0012).
-            #
-            # The route's OWN middleware stays AFTER the gate, so middleware
-            # attached to a secured route never processes an unauthenticated
-            # request - `->middleware(['auth', ...])` ordering in Laravel,
-            # `@login_required` as the outermost decorator in Django.
-            request, response, skip = _run_before_middleware(
-                request, response, {"middleware": [], "handler": route.get("handler")}
-            )
-            if not skip:
-                skip = _check_auth(request, response, route)
-            if not skip:
-                request, response, skip = _run_before_middleware(
-                    request, response, route, include_globals=False
-                )
-            if not skip:
-                response = await _invoke_handler_with_middleware(request, response, route, params)
-            request, response = _run_after_middleware(request, response, route)
-        except Exception as e:
-            response = _handle_route_error(e, request, response, request_id, _is_dev)
-    else:
-        # RFC 9110 conformance — before falling through to 404 / static / template,
-        # check whether the PATH is known to the router under any OTHER method.
-        # If yes:
-        #   - OPTIONS request → 204 No Content with Allow listing the methods
-        #     (RFC 9110 §9.3.7). Generic OPTIONS handler.
-        #   - Any other method (PUT on GET-only route, TRACE, CONNECT, etc.)
-        #     → 405 Method Not Allowed with Allow header (§15.5.6 + §10.2.1).
-        allowed = Router.methods_allowed_for_path(request.path)
-        if allowed:
-            allow_header = ", ".join(allowed)
-            if request.method.upper() == "OPTIONS":
-                response.header("Allow", allow_header)
-                response.status(204)
-            else:
-                response.header("Allow", allow_header)
-                response.status(405).json({
-                    "error": "Method Not Allowed",
-                    "path": request.path,
-                    "method": request.method,
-                    "allow": allowed,
-                    "status": 405,
-                })
-        else:
-            response = _handle_no_route(request, response, request_id)
-
-    # RFC 9110 §9.3.2: a HEAD response MUST NOT include content. Strip the
-    # body unconditionally (even for explicit Router.head() handlers that
-    # accidentally returned one) and record what Content-Length the GET
-    # would have sent — cache validators / link checkers / monitoring
-    # probes rely on that header to size estimates.
-    if request.method.upper() == "HEAD":
-        body = response.content if response.content is not None else b""
-        if isinstance(body, str):
-            body = body.encode("utf-8")
-        if body:
-            response.header("Content-Length", str(len(body)))
-            response.content = b""
-
-    return _finalize_response(request, response, route, request_id, _is_dev, _req_start)
-
+    return _finalize_response(
+        ctx.request, ctx.response, ctx.route, ctx.request_id, ctx.is_dev, ctx.req_start
+    )
 
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
