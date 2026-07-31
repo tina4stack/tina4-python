@@ -14,10 +14,15 @@ a ``.broken`` file does not. And a restart cannot fix the thing it is reacting
 to: a route file that fails to import will fail to import again.
 
 So ``/health`` answers the liveness question ONLY - "can this process serve at
-all" - and the answer is carried by the fact that it responded. Route errors
-stay in the body as diagnostics (``errors`` / ``latest_error``) for the dev
-dashboard, but they no longer set the status code, because "restart me" is the
-wrong response to a broken route file.
+all" - and the answer is carried by the fact that it responded. "Restart me" is
+the wrong response to a broken route file, so a recorded route error no longer
+touches the status code.
+
+Nor does it appear in the body. Once errors stopped driving the status they were
+pure diagnostics, and the wire contract is exactly four keys - status, version,
+uptime, framework - identical in all four frameworks. ``.broken`` is still
+written, and the dev dashboard and the MCP tools still read it; the probe just
+stopped carrying it.
 
 Readiness (dependency probes, 503 to withdraw traffic without a restart) is a
 separate endpoint, specified in ADR-0014 and scheduled separately.
@@ -136,16 +141,26 @@ class TestHealthIsLiveness:
         )
         assert json.loads(body)["status"] == "ok"
 
-    def test_a_route_error_is_still_reported_in_the_body(self, live_server):
-        """Dropped from the status code, kept as diagnostics."""
+    def test_a_route_error_leaves_the_health_body_unchanged(self, live_server):
+        """Error diagnostics live on the dev dashboard, not on the probe.
+
+        The body used to carry ``errors`` / ``latest_error``. Once they stopped
+        driving the status code they were pure diagnostics, and the wire
+        contract is four keys in all four frameworks. ``.broken`` is still
+        written and the dashboard still reads it.
+        """
         root, port = live_server
+        before = json.loads(_get(port, "/health")[1])
+
         _get(port, "/boom")
         time.sleep(0.4)
+        assert list((root / "data" / ".broken").glob("*.broken")), \
+            "the sentinel must still be written for the dev dashboard"
 
-        _, body = _get(port, "/health")
-        payload = json.loads(body)
-        assert payload["errors"] >= 1
-        assert "latest_error" in payload
+        after = json.loads(_get(port, "/health")[1])
+        assert set(after) == set(before)
+        assert "errors" not in after
+        assert "latest_error" not in after
 
     def test_stale_broken_files_are_cleared_at_boot(self, tmp_path):
         """A sentinel from a previous run describes a process that no longer
@@ -162,8 +177,9 @@ class TestHealthIsLiveness:
         try:
             status, body = _get(port, "/health")
             assert status == 200
-            assert json.loads(body)["errors"] == 0, (
-                "a .broken file from a previous process was still being reported"
+            assert json.loads(body)["status"] == "ok"
+            assert not list(broken_dir.glob("*.broken")), (
+                "a .broken sentinel from a previous process survived boot"
             )
         finally:
             proc.terminate()
@@ -187,3 +203,13 @@ class TestHealthWireContract:
         _, port = live_server
         payload = json.loads(_get(port, "/health")[1])
         assert payload["framework"] == "tina4-python"
+
+    def test_the_body_is_exactly_the_four_contract_keys(self, live_server):
+        """The whole point of the contract: one key set, four frameworks.
+
+        php, ruby and node emit exactly {status, version, uptime, framework}.
+        Any key added here is a key three other frameworks do not send.
+        """
+        _, port = live_server
+        payload = json.loads(_get(port, "/health")[1])
+        assert set(payload) == {"status", "version", "uptime", "framework"}

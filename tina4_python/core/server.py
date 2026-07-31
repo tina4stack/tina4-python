@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import importlib
 import threading
+import time
 import uuid
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
@@ -32,7 +33,10 @@ _rate_limiter = RateLimiter()
 _ai_port_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("_ai_port_ctx", default=False)
 
 # Track startup time
-_start_time: float = 0
+# Seeded at import so `uptime` is a small, sane number even if the health
+# handler is reached before run() re-stamps it. A 0 default meant "seconds since
+# 1970" (uptime of 1.7e9) rather than "just started".
+_start_time: float = time.time()
 
 # ── Background tasks registry ────────────────────────────────────────────
 _background_tasks: list["BackgroundTask"] = []
@@ -476,29 +480,22 @@ async def _health_handler(request: Request, response: Response) -> Response:
 
     Dependency health (database, cache, queue) belongs on a READINESS endpoint,
     which withdraws traffic WITHOUT a restart. See ADR-0014.
+
+    The body is exactly four keys, identical in all four frameworks. It used to
+    also carry ``errors`` and ``latest_error`` read from ``data/.broken``. Once
+    those stopped driving the status code they were pure diagnostics, and
+    diagnostics do not belong on a probe endpoint that should stay minimal and
+    fast. The ``.broken`` writer and the dev dashboard that reads it are both
+    unchanged; only this body dropped the keys.
     """
     import time
-    broken_dir = Path("data/.broken")
-    broken_files = list(broken_dir.glob("*.broken")) if broken_dir.exists() else []
 
-    health = {
+    return response.status(200).json({
         "status": "ok",
         "version": __version__,
         "uptime": round(time.time() - _start_time, 2),
         "framework": "tina4-python",
-        "errors": len(broken_files),
-    }
-
-    if broken_files:
-        # Read latest .broken file
-        latest = sorted(broken_files, key=lambda f: f.stat().st_mtime)[-1]
-        try:
-            import json
-            health["latest_error"] = json.loads(latest.read_text())
-        except Exception:
-            health["latest_error"] = {"file": latest.name}
-
-    return response.status(200).json(health)
+    })
 
 
 # Register health check.
