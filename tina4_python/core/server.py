@@ -2672,13 +2672,12 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     is_managed = "--managed" in sys.argv
     if not is_managed and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
         # Load .env early so TINA4_OVERRIDE_CLIENT can be read.
-        # Precedence: real-env > .env.local > .env. Both loads are
-        # override=false (first-wins), and .env.local is loaded BEFORE .env
-        # so it beats .env while a real (pre-boot) env var still wins over
-        # both. This prevents a stray gitignored .env.local from clobbering
-        # an explicitly-set real env var (e.g. TINA4_SECRET).
+        # ONE call: load_env() with no argument treats the cwd as the ROOT and
+        # applies real-env > .env.local > .env itself. It used to be two calls
+        # here and two more below, and a caller who got the order or the
+        # override flag wrong let a stray gitignored .env.local clobber an
+        # explicitly-set real env var. The rule now lives in one place.
         from tina4_python.dotenv import load_env
-        load_env(".env.local", override=False)
         load_env(override=False)
         if os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
             print()
@@ -2707,15 +2706,12 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     if cwd not in sys.path:
         sys.path.insert(0, cwd)
 
-    # Load env so vars are available for logger init.
-    # Precedence: real-env > .env.local > .env. Both loads are override=false
-    # (first-wins), and .env.local is loaded BEFORE .env so it beats .env while
-    # a real (pre-boot) env var still wins over both. This prevents a stray
-    # gitignored .env.local from clobbering an explicitly-set real env var
-    # (e.g. a production TINA4_SECRET). A previously-generated dev secret in
-    # .env.local is still picked up when no real value is set.
+    # Load env so vars are available for logger init. ONE call - load_env()
+    # applies real-env > .env.local > .env itself (see the note above). A
+    # previously-generated dev secret in .env.local is still picked up when no
+    # real value is set, and TINA4_ENV_FILE still names the .env while
+    # .env.local beside it keeps applying.
     from tina4_python.dotenv import load_env
-    load_env(".env.local", override=False)
     load_env(override=False)
 
     # Fail-safe dev secret: if TINA4_SECRET is blank AND we are in dev (not CI,

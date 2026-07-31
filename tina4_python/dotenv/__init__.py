@@ -70,8 +70,62 @@ def _parse_value(value: str, env_file, line_num: int, warned_refs: set) -> str:
     return _interpolate(value.rstrip(), env_file, line_num, warned_refs)
 
 
-def load_env(file_path: str = None, override: bool = False) -> dict:
-    """Load environment variables from a .env file.
+def load_env(path: str = None, override: bool = False) -> dict:
+    """Load environment variables from a root DIRECTORY or a single .env file.
+
+    The directory form is canonical, in all four frameworks. Given a directory it
+    loads ``<dir>/.env.local`` and then ``<dir>/.env``, both first-wins, which is
+    the documented precedence: real environment > .env.local > .env.
+
+    That ordering is the whole reason the directory form exists. It used to be the
+    CALLER's job in Python, PHP and Node - two calls in the right order, with
+    override left off - and it was duplicated at every boot site. Get it wrong
+    (override=True on .env.local) and a stray gitignored file silently beats an
+    explicitly-set production variable. Ruby encapsulated it and did not have that
+    footgun; the other three now do the same.
+
+    A FILE path still works and is unchanged, so every existing call keeps its
+    behaviour. Only that file is read; the caller owns the ordering, as before.
+
+    Args:
+        path: A root directory (canonical) OR a path to a single .env file
+            (back-compatible). When None, TINA4_ENV_FILE wins if set - so ops can
+            still point at ".env.staging" without a code change - otherwise the
+            current directory is used as the root.
+        override: If True, overwrite existing env vars (default: False)
+
+    Returns:
+        Dict of loaded key-value pairs. For the directory form this is the merge
+        of both files, with .env.local winning on a duplicate key.
+    """
+    if path is None:
+        explicit_file = os.environ.get("TINA4_ENV_FILE")
+        if explicit_file:
+            # TINA4_ENV_FILE names the .env; .env.local BESIDE it still applies,
+            # because the boot sites always loaded both and a bare load_env() has
+            # to be self-sufficient. Collapsing them without this would silently
+            # stop honouring .env.local whenever ops pointed at .env.staging.
+            named = Path(explicit_file)
+            loaded = _load_env_file(named.parent / ".env.local", override)
+            for key, value in _load_env_file(named, override).items():
+                loaded.setdefault(key, value)
+            return loaded
+        path = "."
+
+    root = Path(path)
+    if root.is_dir():
+        # .env.local FIRST so it beats .env; both first-wins, so a variable
+        # already in the real environment still beats both.
+        loaded = _load_env_file(root / ".env.local", override)
+        for key, value in _load_env_file(root / ".env", override).items():
+            loaded.setdefault(key, value)
+        return loaded
+
+    return _load_env_file(root, override)
+
+
+def _load_env_file(file_path, override: bool = False) -> dict:
+    """Load one .env file.
 
     Supports:
         KEY=value
@@ -83,17 +137,9 @@ def load_env(file_path: str = None, override: bool = False) -> dict:
         export KEY=value (export prefix stripped)
         multi-word unquoted values
 
-    Args:
-        file_path: Path to .env file. When None, falls back to the
-            TINA4_ENV_FILE env var, then ".env". This lets ops point at
-            an alternate file (e.g. ".env.staging") without code changes.
-        override: If True, overwrite existing env vars (default: False)
-
-    Returns:
-        Dict of loaded key-value pairs
+    A missing file is not an error: it returns an empty dict. A fresh checkout has
+    no .env.local, and the directory form reads it unconditionally.
     """
-    if file_path is None:
-        file_path = os.environ.get("TINA4_ENV_FILE", ".env")
     env_file = Path(file_path)
     loaded = {}
 
@@ -128,12 +174,19 @@ def load_env(file_path: str = None, override: bool = False) -> dict:
 
         value = _parse_value(value, env_file, line_num, warned_refs)
 
-        loaded[key] = value
-
-        # Set in os.environ
+        # Set in os.environ. First-wins by default: a variable already in the
+        # real environment is never clobbered.
         if override or key not in os.environ:
             os.environ[key] = value
             _loaded_keys.append(key)
+
+        # Report the value that WON, not the one this file declared. They differ
+        # exactly when the real environment beat the file, which is the case an
+        # operator most needs to see: reporting the file's value there means the
+        # returned map says "from_local" while the process is actually running
+        # on "from_REAL". A map that disagrees with os.environ is worse than no
+        # map, because it looks authoritative.
+        loaded[key] = os.environ[key]
 
     return loaded
 
@@ -153,14 +206,22 @@ def require_env(*keys: str) -> dict:
         Dict of key-value pairs for the required variables
 
     Raises:
-        SystemExit: If any required variables are missing (fail fast)
+        KeyError: If any required variables are missing, naming ALL of them.
+
+    Reports every missing name in one raise rather than the first: an operator
+    fixing a deployment wants the whole list, not one name per restart.
+
+    This used to `raise SystemExit(1)` after printing to stdout. A library
+    function must not terminate its host process - it cannot be caught in any
+    useful way, it bypasses every error handler the app installed, and a web
+    framework that exits on a config read is unusable in a worker. Callers who
+    genuinely want fail-fast-and-exit can catch this and exit themselves.
     """
     missing = [k for k in keys if not os.environ.get(k)]
     if missing:
-        print(f"[FATAL] Missing required environment variables:")
-        for k in missing:
-            print(f"  - {k}: not set")
-        raise SystemExit(1)
+        raise KeyError(
+            "Missing required environment variables: " + ", ".join(missing)
+        )
 
     return {k: os.environ[k] for k in keys}
 

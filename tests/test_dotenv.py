@@ -99,9 +99,19 @@ class TestRequireEnv:
         del os.environ["REQ_A"]
         del os.environ["REQ_B"]
 
-    def test_missing_var_exits(self):
-        with pytest.raises(SystemExit):
+    def test_missing_var_raises_a_catchable_error(self):
+        # Was SystemExit, which TERMINATED the host process from a library call:
+        # uncatchable in practice, bypassing every handler the app installed.
+        with pytest.raises(KeyError):
             require_env("DEFINITELY_NOT_SET_12345")
+
+    def test_every_missing_var_is_named_in_one_raise(self):
+        # An operator fixing a deployment wants the whole list, not one name
+        # per restart.
+        with pytest.raises(KeyError) as excinfo:
+            require_env("MISSING_X_1", "MISSING_Y_2")
+        assert "MISSING_X_1" in str(excinfo.value)
+        assert "MISSING_Y_2" in str(excinfo.value)
 
 
 class TestHasEnv:
