@@ -1962,8 +1962,28 @@ async def handle(request: Request) -> Response:
     response.header("x-request-id", request_id)
 
     # CORS preflight
+    #
+    # The response also carries the resource's REAL method set as ``Allow``
+    # (RFC 9110 s9.3.7): a preflight IS an OPTIONS response, so it answers the
+    # same question a bare OPTIONS does, on top of the CORS policy headers.
+    #
+    # This is CONFORMANCE, not a deviation. The frameworks' own OPTIONS
+    # handlers already do it - Django's View.options() sets Allow from
+    # _allowed_methods(), Express's router auto-answers OPTIONS with Allow.
+    # The add-on CORS libraries (cors npm, django-cors-headers, rack-cors,
+    # stack-cors, ASP.NET CORS) omit it, but that is a LAYERING artifact: each
+    # sits ahead of the framework, so short-circuiting the preflight also skips
+    # the framework's OPTIONS handler and the header it would have produced.
+    # Tina4 owns both paths in one dispatcher. See ADR-0013.
+    #
+    # ``Allow`` and ``Access-Control-Allow-Methods`` are NOT interchangeable:
+    # Allow is what the resource supports, ACAM is what the CORS policy permits
+    # cross-origin. A policy allowing DELETE on a GET-only route still 405s.
+    # An unknown path yields "" - the same shape the bare-OPTIONS branch uses -
+    # so a client can tell "nothing here" from "not told".
     if _cors.is_preflight(request):
         _cors.apply(request, response)
+        response.header("Allow", ", ".join(Router.methods_allowed_for_path(request.path)))
         response.status(204)
         return response
 
