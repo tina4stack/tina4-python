@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import importlib
 import threading
+import time
 import uuid
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
@@ -32,7 +33,10 @@ _rate_limiter = RateLimiter()
 _ai_port_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("_ai_port_ctx", default=False)
 
 # Track startup time
-_start_time: float = 0
+# Seeded at import so `uptime` is a small, sane number even if the health
+# handler is reached before run() re-stamps it. A 0 default meant "seconds since
+# 1970" (uptime of 1.7e9) rather than "just started".
+_start_time: float = time.time()
 
 # ── Background tasks registry ────────────────────────────────────────────
 _background_tasks: list["BackgroundTask"] = []
@@ -403,6 +407,27 @@ def _ensure_folders():
     for folder in folders:
         Path(folder).mkdir(parents=True, exist_ok=True)
 
+    _clear_stale_broken_sentinels()
+
+
+def _clear_stale_broken_sentinels() -> None:
+    """Drop ``.broken`` sentinels left by a PREVIOUS run.
+
+    A sentinel records an error that happened in a process that no longer
+    exists, so reporting it on this process's health is simply wrong -- and
+    because nothing ever removed them the set grew without bound and a single
+    historical error was reported forever, across restarts. The health body
+    describes THIS run.
+    """
+    broken_dir = Path("data/.broken")
+    if not broken_dir.is_dir():
+        return
+    for sentinel in broken_dir.glob("*.broken"):
+        try:
+            sentinel.unlink()
+        except OSError as error:  # pragma: no cover - unreadable dir is not fatal
+            Log.warning(f"health: could not clear stale sentinel {sentinel.name}: {error}")
+
 
 def _auto_wire_i18n():
     """Auto-register t() as a Frond global if locale files exist.
@@ -436,30 +461,41 @@ def _auto_wire_i18n():
 
 
 async def _health_handler(request: Request, response: Response) -> Response:
-    """Built-in /health endpoint."""
+    """Built-in health endpoint. This is a LIVENESS probe.
+
+    Liveness answers exactly one question: can this process serve at all? The
+    answer is carried by the fact that it responded, so this handler reports 200
+    whenever it runs. A failing liveness probe tells an orchestrator to RESTART
+    the container, so the only thing it may react to is a condition a restart
+    actually fixes.
+
+    It therefore does NOT fail on a recorded route error. It used to: any
+    unhandled exception in any route writes ``data/.broken/*.broken`` from the
+    request path, and this handler returned 503 while such a file existed.
+    Nothing cleared them, so one ordinary 500 flipped health to 503 for good and
+    the file survived a restart -- a CrashLoopBackOff from a single bad request,
+    reacting to something a restart cannot repair (a route file that fails to
+    import fails again on the next boot). Route errors are still reported below
+    as diagnostics for the dev dashboard; they no longer set the status code.
+
+    Dependency health (database, cache, queue) belongs on a READINESS endpoint,
+    which withdraws traffic WITHOUT a restart. See ADR-0016.
+
+    The body is exactly four keys, identical in all four frameworks. It used to
+    also carry ``errors`` and ``latest_error`` read from ``data/.broken``. Once
+    those stopped driving the status code they were pure diagnostics, and
+    diagnostics do not belong on a probe endpoint that should stay minimal and
+    fast. The ``.broken`` writer and the dev dashboard that reads it are both
+    unchanged; only this body dropped the keys.
+    """
     import time
-    broken_dir = Path("data/.broken")
-    broken_files = list(broken_dir.glob("*.broken")) if broken_dir.exists() else []
 
-    health = {
-        "status": "error" if broken_files else "ok",
-        "uptime_seconds": int(time.time() - _start_time),
+    return response.status(200).json({
+        "status": "ok",
         "version": __version__,
-        "framework": "tina4py",
-        "errors": len(broken_files),
-    }
-
-    if broken_files:
-        # Read latest .broken file
-        latest = sorted(broken_files, key=lambda f: f.stat().st_mtime)[-1]
-        try:
-            import json
-            health["latest_error"] = json.loads(latest.read_text())
-        except Exception:
-            health["latest_error"] = {"file": latest.name}
-
-    code = 503 if broken_files else 200
-    return response.status(code).json(health)
+        "uptime": round(time.time() - _start_time, 2),
+        "framework": "tina4-python",
+    })
 
 
 # Register health check.
