@@ -206,3 +206,36 @@ class DatabaseUrl:
         # takes one or two leading slashes and rejects a relative path outright.
         database = _strip_one_slash(parsed.path or "")
         self.database = database or ("tina4" if engine == "mongodb" else "")
+
+
+def url_credentials(connection_string: str,
+                    username: str = "",
+                    password: str = "") -> tuple[str, str]:
+    """The (username, password) a URL carries, PERCENT-DECODED.
+
+    ``urlparse().username`` and ``.password`` return the RAW userinfo - Python's
+    stdlib does not decode them. Five adapters read those attributes directly,
+    so a password containing any character that has to be escaped in a URL
+    (``!``, ``@``, ``:``, ``/``, ``#``) was sent to the driver still encoded and
+    the connection failed with a plain "login failed". Nothing in the message
+    pointed at the URL, which is what made it expensive to find.
+
+    Ruby, PHP and Node all decode on this path already; Python was the only one
+    that did not, and Python is the master.
+
+    An explicit ``username``/``password`` argument is used only when the URL
+    carries none, which preserves the documented "URL wins" precedence.
+
+    Args:
+        connection_string: A ``driver://user:pass@host:port/db`` URL.
+        username: Fallback used when the URL has no user.
+        password: Fallback used when the URL has no password.
+
+    Returns:
+        The decoded ``(username, password)`` pair; empty strings when neither
+        the URL nor the fallback supplies one.
+    """
+    parsed = urlparse(connection_string)
+    user = unquote(parsed.username) if parsed.username else (username or "")
+    pwd = unquote(parsed.password) if parsed.password else (password or "")
+    return user, pwd

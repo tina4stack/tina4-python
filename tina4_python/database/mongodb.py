@@ -14,6 +14,7 @@ handle should be done with native pymongo via db.adapter._collection().
 """
 import re
 from urllib.parse import urlparse
+from tina4_python.database.database_url import url_credentials
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
 
 
@@ -360,8 +361,7 @@ class MongoDBAdapter(DatabaseAdapter):
         parsed = urlparse(normalised)
 
         # Inject credentials if not in the URL
-        u = parsed.username or username or ""
-        p = parsed.password or password or ""
+        u, p = url_credentials(connection_string, username, password)
         dbname = parsed.path.lstrip("/") if parsed.path else "tina4"
 
         # Build a clean mongodb:// URI for MongoClient

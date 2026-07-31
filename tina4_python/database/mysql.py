@@ -8,6 +8,7 @@ Requires: pip install mysql-connector-python
 """
 import re
 from urllib.parse import urlparse
+from tina4_python.database.database_url import url_credentials
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
 
 
@@ -42,11 +43,15 @@ class MySQLAdapter(DatabaseAdapter):
             )
 
         parsed = urlparse(connection_string)
+
+        # Percent-DECODED: urlparse leaves userinfo escaped.
+
+        _url_user, _url_pass = url_credentials(connection_string, username, password)
         self._conn = mysql.connector.connect(
             host=parsed.hostname or "localhost",
             port=parsed.port or 3306,
-            user=parsed.username or username or "",
-            password=parsed.password or password or "",
+            user=_url_user,
+            password=_url_pass,
             database=parsed.path.lstrip("/") if parsed.path else "",
             autocommit=False,
             **kwargs,

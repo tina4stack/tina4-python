@@ -9,6 +9,7 @@ Requires: pip install psycopg2-binary
 """
 import re
 from urllib.parse import urlparse
+from tina4_python.database.database_url import url_credentials
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
 
 
@@ -259,11 +260,15 @@ class PostgreSQLAdapter(DatabaseAdapter):
             )
 
         parsed = urlparse(connection_string)
+
+        # Percent-DECODED: urlparse leaves userinfo escaped.
+
+        _url_user, _url_pass = url_credentials(connection_string, username, password)
         self._conn = psycopg2.connect(
             host=parsed.hostname or "localhost",
             port=parsed.port or 5432,
-            user=parsed.username or username or "",
-            password=parsed.password or password or "",
+            user=_url_user,
+            password=_url_pass,
             dbname=parsed.path.lstrip("/") if parsed.path else "",
             **kwargs,
         )

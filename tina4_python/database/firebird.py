@@ -9,6 +9,7 @@ Requires: pip install firebird-driver  (or pip install fdb for legacy)
 import os
 import re
 from urllib.parse import urlparse, unquote, parse_qs
+from tina4_python.database.database_url import url_credentials
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
 
 
@@ -169,8 +170,9 @@ class FirebirdAdapter(DatabaseAdapter):
         else:
             db_path = _normalize_firebird_db_identifier(parsed.path)
 
-        user = parsed.username or username or "SYSDBA"
-        password = parsed.password or password or "masterkey"
+        user, password = url_credentials(connection_string, username, password)
+        user = user or "SYSDBA"
+        password = password or "masterkey"
         # php #160: honour ?charset= in the URL and TINA4_DATABASE_CHARSET so a
         # legacy NONE database isn't force-connected as UTF8 (double-encoding).
         # Pop the kwarg first so it isn't also forwarded into the driver connect
