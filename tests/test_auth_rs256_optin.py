@@ -56,6 +56,22 @@ def _header(alg: str) -> str:
     return _b64(json.dumps({"alg": alg, "typ": "JWT"}).encode())
 
 
+def _token_alg(token: str):
+    """The ``alg`` a token's own header claims, or None if it has no readable one.
+
+    Needed to tell the two RS256 rejection paths apart. ``valid_token`` pins the
+    algorithm to the CONFIGURED one before any signature work, so a token whose
+    header claims something else is refused without the RSA backend ever being
+    consulted. Only a token whose header alg matches the pin actually reaches
+    ``_rs256_verify`` and therefore the capability check.
+    """
+    try:
+        raw = token.split(".")[0]
+        return json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))).get("alg")
+    except Exception:
+        return None
+
+
 def _run_child(body: str, isolated: bool) -> str:
     """Run source in a REAL child interpreter and return its stdout.
 
@@ -303,14 +319,42 @@ def test_the_cross_framework_jwt_contract_fixture_is_honoured():
         assert payload is not None, f"fixture accept rejected: {entry['name']}"
         assert payload == fixture["expectedPayload"], f"claims differ: {entry['name']}"
 
+    reached_the_rsa_backend = False
     for entry in fixture["reject"]:
         key = fixture[entry["key"]]
         if entry["algorithm"] == "RS256" and not CRYPTOGRAPHY_INSTALLED:
-            with pytest.raises(RS256UnavailableError):
-                Auth(secret=key, algorithm="RS256").valid_token(entry["token"])
+            verifier = Auth(secret=key, algorithm="RS256")
+            if _token_alg(entry["token"]) == "RS256":
+                # The token's header matches the pin, so verification really does
+                # reach the RSA backend. With none installed the contract is a
+                # LOUD failure, not a quiet rejection. Still an assertion, never
+                # a skip.
+                with pytest.raises(RS256UnavailableError):
+                    verifier.valid_token(entry["token"])
+                reached_the_rsa_backend = True
+            else:
+                # The header claims a DIFFERENT algorithm, so the pin refuses the
+                # token before any signature work and the RSA backend is never
+                # consulted -- deliberately (valid_token: "an RS256-labelled token
+                # can never drive an HMAC-configured app into the RS256 capability
+                # check", and the same holds mirrored). Refusal here is None, which
+                # is exactly what the fixture demands of a `reject` entry; turning
+                # it into a raise would let an attacker-chosen header steer the app
+                # into a deployment-error path it did not choose.
+                assert verifier.valid_token(entry["token"]) is None, (
+                    f"fixture reject ACCEPTED: {entry['name']}"
+                )
             continue
         assert Auth(secret=key, algorithm=entry["algorithm"]).valid_token(entry["token"]) is None, (
             f"fixture reject ACCEPTED: {entry['name']}"
+        )
+
+    # ANTI-VACUITY: with no RSA backend the loud-failure branch above must have
+    # actually run, otherwise a fixture that lost its RS256-headered reject entry
+    # would leave the capability contract untested while still reading PASS.
+    if not CRYPTOGRAPHY_INSTALLED:
+        assert reached_the_rsa_backend, (
+            "no reject entry exercised the RS256 capability check"
         )
 
 

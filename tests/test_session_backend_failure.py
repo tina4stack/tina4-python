@@ -337,25 +337,32 @@ def test_negative_control_a_healthy_backend_really_round_trips(log_sink):
     "Logged zero errors" is also true of a backend that silently does nothing,
     so on the same live server we prove a real value crosses a process boundary:
     a SECOND Session on a SECOND handler resumes the id and finds it.
+
+    ADR-0021: the id must be the one ``start()`` ISSUES. A well-formed id the
+    store has never held is discarded (session fixation), so
+    ``start("roundtrip-<hex>")`` mints a fresh id, writes under THAT, and the
+    reader then resumes an id that was never written -- the round trip would be
+    measured against the wrong key.
     """
     writer = RedisSessionHandler(host=_REDIS_HOST, port=_REDIS_PORT, ttl=60)
-    sid = f"roundtrip-{uuid.uuid4().hex}"
+    sid = None
     try:
         log_sink.mark()
         session = Session(handler=writer, ttl=600)
-        session.start(sid)
+        sid = session.start()
         session.set("user_id", 42)
         assert session.save() is True
 
         reader_handler = RedisSessionHandler(host=_REDIS_HOST, port=_REDIS_PORT, ttl=60)
         resumed = Session(handler=reader_handler, ttl=600)
-        resumed.start(sid)
+        assert resumed.start(sid) == sid, "the stored id was not adopted on resume"
         assert resumed.get("user_id") == 42, "the value never reached Redis"
         reader_handler.close()
 
         assert log_sink.errors() == [], "a healthy round-trip must log no errors"
     finally:
-        writer.destroy(sid)
+        if sid is not None:
+            writer.destroy(sid)
         writer.close()
 
 

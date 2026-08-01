@@ -10,6 +10,7 @@ import time
 import pytest
 
 from tina4_python.core.router import Router, get, post
+from tina4_python.core.request import Request
 from tina4_python.core.response import Response
 from tina4_python.core.middleware import CorsMiddleware
 from tina4_python.database import Database, DatabaseResult
@@ -410,38 +411,42 @@ class TestAutoCRUD:
 
 
 class TestResponseCache:
+    @staticmethod
+    def _request(url="/api/cached"):
+        """A REAL framework Request, populated the way the dispatcher does."""
+        request = Request()
+        request.method = "GET"
+        request.url = url
+        request.path = url
+        request.params = {}
+        request.headers = {}
+        return request
+
     def test_cache_hit(self):
+        """The REAL Request/Response, and the REAL short-circuit contract.
+
+        This used to drive an in-test ``Req``/``Resp`` pair and unpack
+        ``before_cache`` as a ``(request, response)`` 2-tuple. Both were wrong:
+        the real ``Request`` has ``__slots__`` (which is how the middleware's
+        request-tagging bug went unnoticed -- see tests/test_cache.py), and a
+        cache HIT short-circuits by returning the Response OBJECT. Returning the
+        pair only REBINDS and lets the handler run, so the cache would save
+        nothing while still reading PASS.
+        """
         cache = ResponseCache(ttl=60)
 
-        class Req:
-            method = "GET"
-            url = "/api/cached"
-            params = None
+        # Miss — the pair comes back, so the handler runs.
+        req = self._request()
+        miss = cache.before_cache(req, Response())
+        assert isinstance(miss, tuple), "a MISS must let the request continue"
+        cache.after_cache(req, Response()('{"ok":true}', 200))
 
-        class Resp:
-            def __init__(self, body="", status_code=200):
-                self.body = body
-                self.status_code = status_code
-                self.content_type = "application/json"
-            def __call__(self, body=None, status_code=None):
-                return Resp(
-                    body=body if body is not None else self.body,
-                    status_code=status_code if status_code is not None else self.status_code,
-                )
-
-        req = Req()
-        resp = Resp()
-
-        # Miss
-        cache.before_cache(req, resp)
-        resp_out = Resp(body='{"ok":true}', status_code=200)
-        cache.after_cache(req, resp_out)
-
-        # Hit
-        req2 = Req()
-        resp2 = Resp()
-        _, hit = cache.before_cache(req2, resp2)
-        assert hit.body == '{"ok":true}'
+        # Hit — the Response OBJECT comes back instead of the pair.
+        hit = cache.before_cache(self._request(), Response())
+        assert not isinstance(hit, tuple), "a HIT must short-circuit with the Response"
+        assert hit.content == b'{"ok":true}'
+        assert hit.status_code == 200
+        assert dict(hit.build_headers())[b"X-Cache"] == b"HIT"
         assert cache.cache_stats()["hits"] == 1
 
 
