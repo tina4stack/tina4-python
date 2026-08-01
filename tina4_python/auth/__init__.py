@@ -211,6 +211,21 @@ _HMAC_ALGORITHMS = {
 _JWT_LEEWAY_SECONDS = 60
 
 
+def _numeric_date(value) -> "int | None":
+    """Coerce an RFC 7519 NumericDate claim to int seconds, else ``None``.
+
+    RFC 7519 s2 defines ``exp``/``nbf``/``iat`` as a NumericDate — a JSON
+    numeric value. A claim that is PRESENT but not a number is malformed, and a
+    malformed constraint must never read as "no constraint": treating a
+    non-numeric ``exp`` as absent turns a broken token into one that never
+    expires. ``bool`` is excluded deliberately — it is an ``int`` subclass in
+    Python, so ``exp: true`` would otherwise compare as the year 1970.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
 def _resolve_algorithm(algorithm: str = None) -> str:
     """Pick the JWT algorithm: explicit arg, else TINA4_JWT_ALGORITHM, else HS256.
 
@@ -322,15 +337,27 @@ class Auth:
 
             payload = json.loads(_b64url_decode(p))
 
-            now = time.time()
-            if "exp" in payload and now > payload["exp"]:
-                return None
+            # Integer seconds, so all four frameworks compare the SAME number.
+            # PHP/Ruby read an integer clock and Python/Node a float one; with a
+            # float clock "now > exp" and "now >= exp" differ only on an exactly
+            # integral instant, so truncating here is what makes the boundary
+            # identical everywhere rather than merely close.
+            now = int(time.time())
 
-            # "nbf" (not-before): a post-dated token is not valid yet. Was
-            # honoured only by Ruby, so Python/PHP/Node accepted tokens their
-            # issuer had explicitly marked as not-yet-usable (python#107).
-            if "nbf" in payload and now + _JWT_LEEWAY_SECONDS < payload["nbf"]:
-                return None
+            # RFC 7519 s4.1.4: "The processing of the 'exp' claim requires that
+            # the current date/time MUST be before the expiration date/time".
+            # now == exp is therefore ALREADY expired, so the test is >=.
+            if "exp" in payload:
+                exp = _numeric_date(payload["exp"])
+                if exp is None or now >= exp:
+                    return None
+
+            # "nbf" (not-before): a post-dated token is not valid yet. Tolerates
+            # _JWT_LEEWAY_SECONDS of clock skew, which RFC 7519 s4.1.5 permits.
+            if "nbf" in payload:
+                nbf = _numeric_date(payload["nbf"])
+                if nbf is None or now + _JWT_LEEWAY_SECONDS < nbf:
+                    return None
 
             return payload
         except Exception:
@@ -481,8 +508,17 @@ class Auth:
             secret:    Override signing secret (default: self.secret / TINA4_SECRET env var).
             algorithm: JWT algorithm override (default: self.algorithm / TINA4_JWT_ALGORITHM).
 
-        Checks: Bearer JWT, Bearer API key, Basic auth.
-        Returns payload dict on success, None on failure.
+        Checks a Bearer JWT, then falls back to a Bearer API key. Returns the
+        verified payload dict on success, ``None`` on failure.
+
+        There is deliberately NO Basic branch. This method used to decode
+        ``Authorization: Basic`` and return a truthy
+        ``{"auth_type": "basic", "username": ..., "password": ...}`` — but it
+        never checked those credentials against anything, so every caller
+        following the documented ``if auth is None: return 401`` idiom
+        authenticated any client that sent a base64 string. PHP, Ruby and Node
+        all returned None there. An app that wants Basic auth must verify the
+        credentials itself against its own user store.
         """
         # Both overrides used to be accepted and then dropped on the floor: the
         # body called self.valid_token(), so a caller passing secret= or
@@ -498,17 +534,12 @@ class Auth:
             token = auth_header[7:]
             if self.valid_token(token):
                 return self.get_payload(token)
+            # "_auth" is the cross-framework key for a non-JWT auth result; PHP
+            # and Node already used it, Python used "auth_type" and Ruby
+            # "api_key", so the same successful auth read three different ways.
             if self.validate_api_key(token):
-                return {"auth_type": "api_key"}
+                return {"_auth": "api_key"}
             return None
-
-        if auth_header.startswith("Basic "):
-            try:
-                decoded = base64.b64decode(auth_header[6:]).decode()
-                username, password = decoded.split(":", 1)
-                return {"auth_type": "basic", "username": username, "password": password}
-            except Exception:
-                return None
 
         return None
 

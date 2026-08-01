@@ -12,6 +12,59 @@ UNRELEASED work. When a version ships, its notes go to the release notes above.
 
 ## Unreleased
 
+### Security: a session id is opaque and can never steer a filesystem path
+
+The session cookie value reached the file session backend as a path component.
+Tina4 for Python hashes the id into the filename, so it was NOT vulnerable to
+the arbitrary file write proven in PHP and the arbitrary `.json` read/overwrite
+proven in Node - but it did ADOPT any attacker-supplied cookie id verbatim.
+
+`Session.start()` now discards a session id that is not a well-formed opaque
+identifier (`[A-Za-z0-9_-]`, up to 128 characters) and mints a fresh one
+instead. Every id the four frameworks mint passes unchanged, and an app that
+manages its own id (`session.start("my-session-id")`) is unaffected - the
+restriction is on the ALPHABET, not on length. `is_valid_session_id()` is
+exported for apps that want the same check.
+
+### Security: an unverified Basic credential is no longer an auth result
+
+**Breaking:** `Auth.authenticate_request()` no longer has a `Basic` branch. It
+used to decode `Authorization: Basic` and return a truthy
+`{"auth_type": "basic", "username": ..., "password": ...}` without checking
+those credentials against anything, so an app following the documented
+`if auth is None: return 401` idiom authenticated every caller that sent a
+base64 string. PHP, Ruby and Node all returned `None` there.
+
+Migration: an app that relied on this was not authenticating anyone. Decode the
+header yourself and verify the credentials against your user store with
+`Auth.check_password()`, or move the endpoint to Bearer JWT.
+
+### Breaking: the API-key auth result key is `_auth` in all four frameworks
+
+`Auth.authenticate_request()` returns `{"_auth": "api_key"}` instead of
+`{"auth_type": "api_key"}`. PHP and Node already used `_auth` and Ruby used
+`api_key`, so one successful authentication read three different ways across
+the family.
+
+Migration: replace `payload["auth_type"] == "api_key"` with
+`payload["_auth"] == "api_key"`.
+
+### Security: the write-route auth gate compares the API key in constant time
+
+`core.server._check_auth` compared the bearer token against `TINA4_API_KEY`
+with a plain `==`, which returns as soon as two bytes differ and leaks the key
+prefix through response timing. It now routes through
+`Auth.validate_api_key()`, which uses `hmac.compare_digest`.
+
+### Fixed: a malformed `exp` / `nbf` no longer reads as "no constraint"
+
+RFC 7519 s2 defines `exp` and `nbf` as NumericDate. A token carrying
+`"exp": true` was compared as the year 1970 (Python treats `bool` as an `int`),
+and the expiry clock is now truncated to integer seconds and tested with `>=`
+so the boundary is byte-identical to PHP and Ruby - RFC 7519 s4.1.4 requires
+the current time to be strictly BEFORE `exp`. A token with no `exp`/`nbf` claim
+at all stays unconstrained.
+
 ### Breaking: one return-value contract for every middleware hook
 
 What a `before_*` / `after_*` hook RETURNS now decides what happens next, the

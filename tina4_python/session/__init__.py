@@ -11,11 +11,40 @@ File-based sessions by default. Pluggable backends for Redis, MongoDB, Database.
     session.save()
 """
 import os
+import re
 import json
 import time
 import hashlib
 import secrets
 from pathlib import Path
+
+
+#: A session id is OPAQUE — an unguessable lookup token and nothing else. It is
+#: never a filename, a path, a SQL fragment or a Redis key fragment, so the only
+#: characters it may contain are the ones every backend treats as inert.
+#:
+#: The alphabet is the RFC 4648 base64url set, which is exactly what all four
+#: frameworks already mint: Python ``secrets.token_urlsafe(32)``, Ruby
+#: ``SecureRandom.hex(32)``, PHP/Node ``hex(16)``. Validation is therefore
+#: non-breaking for every id the family has ever issued, while rejecting the
+#: ``.`` and ``/`` that turn a cookie into a path traversal.
+#:
+#: There is deliberately NO entropy floor here. Unguessability is guaranteed by
+#: the framework's own minting (``secrets.token_urlsafe(32)``), not by inspecting
+#: an id a trusted caller passed to ``start()`` on purpose — an app is entitled
+#: to run ``session.start("my-session-id")`` with an id it manages itself, and a
+#: length rule would break that without closing any attack. The 128-character
+#: ceiling only bounds what an attacker can push through a backend key.
+_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def is_valid_session_id(session_id) -> bool:
+    """True when ``session_id`` is a well-formed opaque session identifier.
+
+    Callers pass UNTRUSTED input here (the session cookie is attacker-chosen),
+    so anything that is not a string of the opaque alphabet is rejected.
+    """
+    return isinstance(session_id, str) and bool(_SESSION_ID_PATTERN.match(session_id))
 
 
 def session_cookie_name() -> str:
@@ -319,7 +348,20 @@ class Session:
             return False
 
     def start(self, session_id: str = None) -> str:
-        """Start or resume a session. Returns the session ID."""
+        """Start or resume a session. Returns the session ID.
+
+        ``session_id`` is UNTRUSTED — it arrives from the session cookie, which
+        the client fully controls. An id that is not a well-formed opaque
+        identifier is DISCARDED and a fresh one minted, never adopted: adopting
+        it let a cookie steer a filesystem path (arbitrary read/write on the
+        file backend) and let an attacker pre-plant a session id that survived
+        the victim's login (session fixation).
+
+        A legitimate id from any of the four frameworks passes unchanged, so
+        this is non-breaking for every session already in flight.
+        """
+        if session_id is not None and not is_valid_session_id(session_id):
+            session_id = None
         self._session_id = session_id or secrets.token_urlsafe(32)
         self._data = self._safe_read(self._session_id)
         self._dirty = False

@@ -1558,19 +1558,21 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
     if not route.get("auth_required"):
         return False
     _auth_header = request.headers.get("authorization", "")
-    _api_key = os.environ.get("TINA4_API_KEY", "")
     _auth_ok = False
     if _auth_header and _auth_header.startswith("Bearer "):
         _token = _auth_header[7:]
-        if _api_key and _token == _api_key:
-            _auth_ok = True
-        else:
-            try:
-                from tina4_python.auth import Auth
-                if Auth.valid_token_static(_token):
-                    _auth_ok = True
-            except Exception:
-                pass
+        try:
+            from tina4_python.auth import Auth
+            # The API-key bypass goes through validate_api_key, which compares
+            # with hmac.compare_digest. A plain `==` on a secret returns as soon
+            # as two bytes differ, so response timing leaks the key prefix and
+            # the key can be recovered a character at a time.
+            if Auth.validate_api_key(_token):
+                _auth_ok = True
+            elif Auth.valid_token_static(_token):
+                _auth_ok = True
+        except Exception:
+            pass
     # Fall back to formToken in request body (frond.js sends token here)
     if not _auth_ok:
         _body = getattr(request, "body", None) or {}
