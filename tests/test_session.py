@@ -469,3 +469,59 @@ class TestSessionDirtyFlag:
         session.save()
         session.clear()
         assert session._dirty is True
+
+
+# ── Falsy-value read contract (cross-framework) ───────────────
+
+
+class TestSessionGetFalsyContract:
+    """``get(key, default)`` must tell a STORED falsy value apart from an ABSENT key.
+
+    This is the shared cross-framework contract test. The same wording is used
+    in tina4-python, tina4-php, tina4-ruby and tina4-nodejs so the contract is
+    greppable across all four repos:
+
+        "session get returns a stored false instead of the default"
+
+    Ruby's ``Session#get`` used ``@data[key.to_s] || default``, and ``||``
+    yields the caller's default for ANY falsy stored value — so a legitimately
+    stored ``false`` read back as ``true`` whenever the caller passed ``true``
+    as the default, even though the key really was set. Python already uses
+    ``dict.get(key, default)``, which keys off PRESENCE rather than truthiness
+    and is correct. This test pins that, so the ``or default`` shape can never
+    creep in here.
+
+    Real ``FileSessionHandler``, real temp directory, real JSON on disk, real
+    save/resume round-trip through the handler. No doubles.
+    """
+
+    def test_session_get_returns_a_stored_false_instead_of_the_default(self, tmp_path):
+        store = tmp_path / "falsy_sessions"
+        handler = FileSessionHandler(str(store))
+
+        s = Session(handler=handler, ttl=300)
+        sid = s.start("falsy-contract")
+        s.set("flag", False)
+
+        # POSITIVE — a stored False reads back as False, not as the default.
+        assert s.get("flag", True) is False
+        assert s.get("flag", "fallback") is False
+        assert s.get("flag") is False
+        assert s.has("flag") is True
+
+        # ...and it survives a real write to disk and a real resume.
+        assert s.save() is True
+        assert list(store.glob("*.json")), "handler wrote no session file"
+
+        resumed = Session(handler=handler, ttl=300)
+        resumed.start(sid)
+        assert resumed.get("flag", True) is False
+        assert resumed.has("flag") is True
+
+        # NEGATIVE CONTROL — an ABSENT key STILL returns the default. Without
+        # this half, a "fix" that simply never returns the default would pass,
+        # which would be a worse bug than the one being closed.
+        assert resumed.get("absent", True) is True
+        assert resumed.get("absent", "fallback") == "fallback"
+        assert resumed.get("absent") is None
+        assert resumed.has("absent") is False
