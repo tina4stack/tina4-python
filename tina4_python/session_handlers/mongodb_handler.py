@@ -80,44 +80,69 @@ class MongoDBSessionHandler(SessionHandler):
 
     # ── SessionHandler Interface ─────────────────────────────────
 
+    @staticmethod
+    def _has_expired(doc: dict) -> bool:
+        """Decide whether a stored document has expired, from the document alone.
+
+        THE CONTRACT: an ABSENT or ZERO expiry stamp means "never expires". It is
+        guarded OUT of the comparison, never fed INTO it.
+
+        This used to read ``time.time() - doc.get("last_accessed", 0) > self._ttl``,
+        which puts a missing stamp (0) into a subtraction that is then always true,
+        and the failure branch calls destroy(). Proved against real MongoDB 7.0.39
+        by planting ``{"_id": ..., "data": {...}}`` with no stamp: read() returned
+        {} and the document was DESTROYED. It survived only because this handler's
+        own write() always stamps, so any document written by another framework, an
+        older version, or a direct insert was silently destroyed on first read.
+
+        Every mainstream implementation measured treats a missing expiry as valid;
+        connect-mongo whitelists it deliberately with
+        ``$or: [{expires: {$exists: false}}, {expires: {$gt: now}}]``.
+
+        :param doc: the stored session document
+        :return: True only when a stamp is genuinely PRESENT and in the PAST
+        """
+        expires_at = doc.get("expires_at", 0) or 0
+        return expires_at > 0 and expires_at < time.time()
+
     def read(self, session_id: str) -> dict:
         """Read session data by session ID."""
         if self._use_pymongo:
             doc = self._collection.find_one({"_id": session_id})
-            if doc is None:
-                return {}
-            # Check TTL
-            last_accessed = doc.get("last_accessed", 0)
-            if self._ttl > 0 and time.time() - last_accessed > self._ttl:
-                self.destroy(session_id)
-                return {}
-            return doc.get("data", {})
         else:
             self._ensure_connected()
             ns = f"{self._database}.{self._collection_name}"
-            result = self._find_one(ns, {"_id": session_id})
-            if result is None:
-                return {}
-            last_accessed = result.get("last_accessed", 0)
-            if self._ttl > 0 and time.time() - last_accessed > self._ttl:
-                self.destroy(session_id)
-                return {}
-            return result.get("data", {})
+            doc = self._find_one(ns, {"_id": session_id})
+
+        if doc is None:
+            return {}
+        if self._has_expired(doc):
+            self.destroy(session_id)
+            return {}
+        return doc.get("data", {})
 
     def write(self, session_id: str, data: dict, ttl: int = 0):
-        """Write session data."""
+        """Write session data.
+
+        The ttl is consumed HERE, at write time, and baked into an ABSOLUTE
+        deadline, so nothing at read time needs to know what the ttl was. A
+        per-call ``ttl`` wins over the handler default; previously it was accepted
+        and then discarded, so ``Session(ttl=60)`` on mongo really gave 3600.
+        """
         now = time.time()
+        effective_ttl = ttl if ttl > 0 else self._ttl
+        expires_at = now + effective_ttl if effective_ttl > 0 else 0
+        fields = {"data": data, "expires_at": expires_at, "last_accessed": now}
         if self._use_pymongo:
             self._collection.update_one(
                 {"_id": session_id},
-                {"$set": {"data": data, "last_accessed": now}},
+                {"$set": fields},
                 upsert=True,
             )
         else:
             self._ensure_connected()
             ns = f"{self._database}.{self._collection_name}"
-            doc = {"_id": session_id, "data": data, "last_accessed": now}
-            self._upsert(ns, {"_id": session_id}, doc)
+            self._upsert(ns, {"_id": session_id}, {"_id": session_id, **fields})
 
     def destroy(self, session_id: str):
         """Delete a session."""
@@ -129,14 +154,23 @@ class MongoDBSessionHandler(SessionHandler):
             self._delete_one(ns, {"_id": session_id})
 
     def gc(self, max_lifetime: int):
-        """Garbage-collect expired sessions."""
-        cutoff = time.time() - max_lifetime
+        """Garbage-collect expired sessions.
+
+        Same contract as read(): only a stamp that is genuinely present and in the
+        past makes a document a deletion candidate. ``expires_at > 0`` is explicit
+        so a document with a zero stamp is never swept, and one with no stamp at
+        all cannot match the range predicate either.
+
+        :param max_lifetime: accepted for interface parity; expiry is absolute and
+            already baked into ``expires_at`` at write time, so it is not used.
+        """
+        expired = {"expires_at": {"$gt": 0, "$lt": time.time()}}
         if self._use_pymongo:
-            self._collection.delete_many({"last_accessed": {"$lt": cutoff}})
+            self._collection.delete_many(expired)
         else:
             self._ensure_connected()
             ns = f"{self._database}.{self._collection_name}"
-            self._delete_many(ns, {"last_accessed": {"$lt": cutoff}})
+            self._delete_many(ns, expired)
 
     def close(self):
         """Close the connection."""
