@@ -437,7 +437,8 @@ class Auth:
     def authenticate_request_static(cls, headers: dict) -> dict | None:
         """Extract and validate auth from request headers without instantiating Auth.
 
-        Reads TINA4_SECRET from env. Checks: Bearer JWT, Bearer API key, Basic auth.
+        Reads TINA4_SECRET from env. Checks a Bearer JWT, then a Bearer API key.
+        There is no Basic branch - see authenticate_request.
         Returns payload dict on success, None on failure.
         """
         secret = _resolve_secret()
