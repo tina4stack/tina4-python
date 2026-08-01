@@ -114,6 +114,13 @@ class TestLogIsEnabled:
 
 
 class TestLogFormat:
+    # CONTRACT CHANGE 2026-08-01: `production=True` no longer selects JSON.
+    # Format is TEXT everywhere unless TINA4_LOG_FORMAT=json says otherwise, so
+    # the JSON-shape assertions below now drive the format the way an operator
+    # actually would. Not one assertion was dropped -- only the switch that got
+    # the logger into JSON mode changed, because "production" meant four
+    # different things in the four frameworks and silently picked your format.
+    # The new contract itself is pinned in tests/test_log_contract.py.
 
     def test_dev_format_contains_level(self, tmp_path):
         Log.configure(log_dir=str(tmp_path), level="debug", production=False)
@@ -136,20 +143,23 @@ class TestLogFormat:
         line = Log._format("info", "test", user="alice")
         assert "alice" in line
 
-    def test_production_format_is_json(self, tmp_path):
+    def test_json_format_is_json(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_LOG_FORMAT", "json")
         Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         line = Log._format("info", "test message")
         data = json.loads(line)
         assert data["level"] == "INFO"
         assert data["message"] == "test message"
 
-    def test_production_format_includes_context(self, tmp_path):
+    def test_json_format_includes_context(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_LOG_FORMAT", "json")
         Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         line = Log._format("error", "fail", code=500)
         data = json.loads(line)
         assert data["context"]["code"] == 500
 
-    def test_format_with_request_id(self, tmp_path):
+    def test_format_with_request_id(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_LOG_FORMAT", "json")
         Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         set_request_id("req-123")
         line = Log._format("info", "test")
@@ -248,9 +258,10 @@ class TestLogDefaultFileOutput:
             assert "debug noise" not in content
             assert "info noise" not in content
 
-    def test_error_log_format_matches_main_log(self, tmp_path):
+    def test_error_log_format_matches_main_log(self, tmp_path, monkeypatch):
         # An error written via Log.error should appear with the same
         # JSON shape in both tina4.log and error.log.
+        monkeypatch.setenv("TINA4_LOG_FORMAT", "json")
         Log.configure(log_dir=str(tmp_path), level="debug", production=True)
         Log.error("parity check", code=500)
         main = (tmp_path / "tina4.log").read_text().splitlines()[0]
@@ -287,7 +298,10 @@ class TestStdoutInProduction:
             "production must write logs to stdout (docker logs reads stdout)"
         )
 
-    def test_production_stdout_is_json(self, tmp_path, capsys):
+    def test_json_stdout_is_json(self, tmp_path, capsys, monkeypatch):
+        # Format now comes from TINA4_LOG_FORMAT, not from the production flag
+        # (2026-08-01) — the assertions are unchanged.
+        monkeypatch.setenv("TINA4_LOG_FORMAT", "json")
         Log.configure(log_dir=str(tmp_path), level="info", production=True)
         Log.error("boom", code=500)
         out = capsys.readouterr().out.strip().splitlines()[-1]

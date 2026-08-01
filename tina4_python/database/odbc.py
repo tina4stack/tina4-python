@@ -77,8 +77,17 @@ class ODBCAdapter(DatabaseAdapter):
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
-        # Count total
-        count_sql = f"SELECT COUNT(*) FROM ({sql}) AS _t"
+        # v3.13.12 parity: strip trailing `;` BEFORE any wrapping. This adapter
+        # wraps the caller's SQL twice (count probe + pagination) and a trailing
+        # semicolon breaks both — `SELECT COUNT(*) FROM (SELECT * FROM t;) AS _t`
+        # is a syntax error, and so is `SELECT * FROM t; OFFSET ? ROWS ...`.
+        sql = self._strip_trailing_semicolons(sql)
+
+        # Count total. The closing paren goes on a NEW LINE: a trailing
+        # `-- comment` in the caller's SQL otherwise comments it out, the probe
+        # fails, the bare `except` below swallows it, and the result reports
+        # count=0 alongside real records. Same fix already shipped in sqlite.py.
+        count_sql = f"SELECT COUNT(*) FROM ({sql}\n) AS _t"
         cursor = self._conn.cursor()
         try:
             cursor.execute(count_sql, params or [])
@@ -86,17 +95,36 @@ class ODBCAdapter(DatabaseAdapter):
         except Exception:
             total = 0
 
-        # Apply pagination — use OFFSET/FETCH for ODBC (SQL Server style)
-        paginated_sql = f"{sql} OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
-        paginated_params = (params or []) + [offset, limit]
-
-        try:
-            cursor.execute(paginated_sql, paginated_params)
-        except Exception:
-            # Fallback: try LIMIT/OFFSET for non-SQL Server ODBC sources
-            paginated_sql = f"{sql} LIMIT ? OFFSET ?"
-            paginated_params = (params or []) + [limit, offset]
-            cursor.execute(paginated_sql, paginated_params)
+        # Apply pagination — ODBC gets the SQL Server style OFFSET/FETCH, with a
+        # LIMIT/OFFSET fallback for the many non-SQL-Server ODBC sources.
+        #
+        # This adapter had NO already-paginated guard at all, so a caller who
+        # wrote their own trailing LIMIT got a second clause appended on top of
+        # it — a syntax error on BOTH paths (the OFFSET/FETCH attempt fails, the
+        # fallback then appends `LIMIT ? OFFSET ?` after the caller's LIMIT and
+        # fails too). `_has_trailing_limit` scrubs literals, quoted identifiers
+        # and comments first and anchors to the end of the statement, so a column
+        # named `rate_limit` or a `-- LIMIT 5` comment can neither defeat the cap
+        # nor fake one. Same helper the sqlite/postgres/mysql adapters use, so
+        # all engines answer the question identically.
+        # limit <= 0 still means "no pagination" (fetch_all's give-me-everything).
+        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
+            cursor.execute(sql, params or [])
+        else:
+            # The clause goes on a NEW LINE. Appended inline it lands INSIDE a
+            # trailing `-- comment` and is silently swallowed — a bug at the
+            # append site that survives even a perfect detector.
+            try:
+                cursor.execute(
+                    f"{sql}\nOFFSET ? ROWS FETCH NEXT ? ROWS ONLY",
+                    (params or []) + [offset, limit],
+                )
+            except Exception:
+                # Fallback: try LIMIT/OFFSET for non-SQL Server ODBC sources
+                cursor.execute(
+                    f"{sql}\nLIMIT ? OFFSET ?",
+                    (params or []) + [limit, offset],
+                )
 
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]

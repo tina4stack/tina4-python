@@ -7,21 +7,42 @@ Zero-dependency structured logger.
     Log.info("Request completed", method="GET", path="/api/users", duration_ms=45)
     Log.error("Database failed", error="connection refused")
 
-Production: JSON lines → logs/tina4.log (with rotation)
-Development: Human-readable → stdout + logs/tina4.log
+FORMAT IS TEXT BY DEFAULT, in every environment. Only TINA4_LOG_FORMAT=json
+selects JSON. Nothing else may — the implicit "production means JSON" switch was
+DELETED on 2026-08-01 because "production" meant four different things across
+the four frameworks (Node: TINA4_DEBUG unset; Ruby: TINA4_ENV/RACK_ENV/RUBY_ENV;
+Python: only Log.configure(production=True); PHP: no switch at all, JSON always),
+so the same machine with the same .env produced four different log formats and
+your format was picked for you by a variable you never associated with logging.
+An OBJECT passed as the message is still JSON-encoded INLINE inside the text
+line — that is what makes a text log useful, and it is unchanged.
 
-Environment variables (all optional — defaults match v2 behaviour):
+CONFIG IS RESOLVED ON FIRST USE. TINA4_LOG_* used to be read only inside
+configure(), which only the server calls, so any script, worker, CLI tool or
+test that logged without booting a server silently got the class defaults and
+ignored the operator's .env entirely. configure() still works and still wins as
+an explicit override.
+
+Environment variables (all optional):
     TINA4_LOG_FILE          Log filename. Empty string = stdout only.
     TINA4_LOG_DIR           Directory for log files (default: "logs"). Joined
                             with TINA4_LOG_FILE unless that is absolute.
     TINA4_LOG_FORMAT        "text" (default) or "json".
     TINA4_LOG_OUTPUT        "stdout" (default), "file", or "both".
+    TINA4_LOG_LEVEL         Console verbosity (default: "info"). Read on the
+                            first-use path; configure(level=...) overrides it.
     TINA4_LOG_ROTATE_SIZE   Bytes per file before rotation. Default 10 MB.
                             Set to 0 to disable rotation.
     TINA4_LOG_ROTATE_KEEP   Number of rotated files to keep (default: 5).
-    TINA4_LOG_MAX_SIZE      [legacy] Megabytes per file. Used only when
-                            TINA4_LOG_ROTATE_SIZE is unset (back-compat).
-    TINA4_LOG_KEEP          [legacy] Alias for TINA4_LOG_ROTATE_KEEP.
+    TINA4_LOG_APPEND        Append (default) or truncate the file at startup.
+    TINA4_LOG_STRICT        Truthy = a log-write failure RAISES instead of
+                            being swallowed.
+    TINA4_LOG_FUNC          Truthy = include the calling function name.
+
+Breaking (2026-08-01): the legacy aliases TINA4_LOG_MAX_SIZE and TINA4_LOG_KEEP
+are GONE. Use TINA4_LOG_ROTATE_SIZE (BYTES, not megabytes) and
+TINA4_LOG_ROTATE_KEEP. TINA4_LOG_MAX_SIZE=10 becomes
+TINA4_LOG_ROTATE_SIZE=10485760.
 """
 import os
 import re
@@ -116,6 +137,17 @@ def _is_truthy(val) -> bool:
     return str(val or "").strip().lower() in ("true", "1", "yes", "on")
 
 
+def _reraise_write_error(record):
+    """Re-raise the log-write failure stdlib logging is trying to swallow.
+
+    Installed as ``Handler.handleError`` when TINA4_LOG_STRICT is truthy. A bare
+    ``raise`` re-raises the exception currently being handled, and handleError is
+    only ever called from inside ``emit``'s except block, so the original OSError
+    (not a new one) reaches the caller.
+    """
+    raise
+
+
 class _LogWriter:
     """File writer with numbered rotation support — used as the default
     fallback when TINA4_LOG_FILE is unset (legacy "logs/tina4.log" path).
@@ -125,11 +157,15 @@ class _LogWriter:
     """
 
     def __init__(self, log_dir: str = "logs", filename: str = "tina4.log",
-                 max_size_mb: int = 10, keep: int = 5):
+                 max_size_mb: int = 10, keep: int = 5, strict: bool = False):
         self.log_dir = Path(log_dir)
         self.filename = filename
         self.max_size = max_size_mb * 1024 * 1024
         self.keep = keep
+        # TINA4_LOG_STRICT. Documented on all four env-var pages and, before
+        # 2026-08-01, implemented ONLY in Ruby — a documented no-op in the other
+        # three. See write().
+        self.strict = strict
         self._lock = threading.Lock()
         self._ensure_dir()
 
@@ -185,7 +221,11 @@ class _LogWriter:
                 with open(log_path, "a", encoding="utf-8") as f:
                     f.write(clean_line + "\n")
             except OSError:
-                pass  # Can't write logs — don't crash the app
+                # Default: can't write logs — don't crash the app.
+                # TINA4_LOG_STRICT flips that: an audit trail you cannot write
+                # is worse than a crash when the operator has said so.
+                if self.strict:
+                    raise
 
 
 class _StdlibFileWriter:
@@ -196,10 +236,12 @@ class _StdlibFileWriter:
     produced the file output.
     """
 
-    def __init__(self, path: Path, max_bytes: int, backup_count: int):
+    def __init__(self, path: Path, max_bytes: int, backup_count: int,
+                 strict: bool = False):
         # Resolve dir up-front so callers can fail fast on a bad path.
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
+        self.strict = strict   # TINA4_LOG_STRICT — see write()
         if max_bytes > 0:
             self._handler = RotatingFileHandler(
                 str(path),
@@ -213,6 +255,15 @@ class _StdlibFileWriter:
             self._handler = logging.FileHandler(str(path), encoding="utf-8")
         # Bare formatter — Log already builds the full line itself.
         self._handler.setFormatter(logging.Formatter("%(message)s"))
+        if strict:
+            # stdlib logging swallows write failures INSIDE Handler.emit and
+            # routes them to handleError(), which only prints to stderr. A plain
+            # `except OSError: raise` around emit() below can therefore never
+            # fire, and TINA4_LOG_STRICT would be a no-op through this writer —
+            # the exact trap Ruby hit, where ::Logger::LogDevice swallowed the
+            # error one layer BELOW Tina4's own rescue. handleError is the
+            # stdlib's own seam for this, so re-raise through it.
+            self._handler.handleError = _reraise_write_error
         self._lock = threading.Lock()
 
     def write(self, line: str):
@@ -231,7 +282,8 @@ class _StdlibFileWriter:
                 self._handler.emit(record)
                 self._handler.flush()
             except OSError:
-                pass
+                if self.strict:
+                    raise
 
     def close(self):
         try:
@@ -246,17 +298,39 @@ class Log:
     _writer: _LogWriter | _StdlibFileWriter | None = None
     _error_writer: _LogWriter | None = None
     _level: str = "info"
+    # Production affects the CONSOLE PRESENTATION only (no ANSI colour). It has
+    # not selected the log FORMAT since 2026-08-01 — see _format_line.
     _is_production: bool = False
     _initialized: bool = False
     # Output toggles — driven by TINA4_LOG_OUTPUT.
     _stdout_enabled: bool = True
     _file_enabled: bool = True
-    # Format — "text" or "json". Independent of _is_production so users
-    # can opt into JSON in dev too (TINA4_LOG_FORMAT=json). Stored under
+    # Format — "text" or "json", set ONLY by TINA4_LOG_FORMAT. Stored under
     # _format_mode so it doesn't clash with the legacy _format() method
     # name kept below for backward compatibility.
     _format_mode: str = "text"
+    # TINA4_LOG_STRICT — raise on a log-write failure instead of swallowing it.
+    _strict: bool = False
     LEVELS = {"debug": 0, "info": 1, "warning": 2, "error": 3, "critical": 4}
+
+    @classmethod
+    def _resolve_env(cls):
+        """Resolve TINA4_LOG_* on FIRST USE, if configure() never ran.
+
+        MEASURED 2026-08-01: Ruby and Node resolved lazily, Python and PHP read
+        TINA4_LOG_* only inside configure() — and only the SERVER calls
+        configure(). So a worker, a CLI tool, a cron script or a test that
+        logged without booting a server silently got the class defaults and
+        ignored the operator's .env completely; worse, those defaults were
+        OPPOSITE across frameworks (python: stdout + text + no file;
+        php: no stdout + files in ./logs + json). One .env, four behaviours.
+
+        configure() remains the explicit override and always wins: it sets
+        _initialized, which turns this into a no-op.
+        """
+        if cls._initialized:
+            return
+        cls.configure(level=os.environ.get("TINA4_LOG_LEVEL", "info") or "info")
 
     @classmethod
     def configure(cls, log_dir: str = "logs", level: str = "info",
@@ -295,25 +369,31 @@ class Log:
         cls._format_mode = "json" if fmt == "json" else "text"
 
         # ── Rotation config ──────────────────────────────────────
-        # New-style: TINA4_LOG_ROTATE_SIZE in BYTES (0 = disabled).
-        # Legacy: TINA4_LOG_MAX_SIZE in MEGABYTES.
-        rotate_size_env = os.environ.get("TINA4_LOG_ROTATE_SIZE")
-        if rotate_size_env is not None:
-            try:
-                rotate_bytes = int(rotate_size_env)
-            except ValueError:
-                rotate_bytes = 10 * 1024 * 1024
-        else:
-            try:
-                rotate_bytes = int(os.environ.get("TINA4_LOG_MAX_SIZE", "10")) * 1024 * 1024
-            except ValueError:
-                rotate_bytes = 10 * 1024 * 1024
-
-        keep_env = os.environ.get("TINA4_LOG_ROTATE_KEEP", os.environ.get("TINA4_LOG_KEEP", "5"))
+        # TINA4_LOG_ROTATE_SIZE is in BYTES (0 = rotation disabled).
+        #
+        # Breaking (2026-08-01): the legacy aliases TINA4_LOG_MAX_SIZE (in
+        # MEGABYTES) and TINA4_LOG_KEEP were DELETED. They were documented for
+        # all four frameworks and implemented in only two, and the size alias
+        # took a different UNIT from the name it aliased — so the same .env
+        # rotated at 10 MB here and at 10 BYTES nowhere else. One canonical name
+        # per setting; rename the primary rather than keep an alias.
+        # Migration: TINA4_LOG_MAX_SIZE=10 -> TINA4_LOG_ROTATE_SIZE=10485760,
+        #            TINA4_LOG_KEEP=n      -> TINA4_LOG_ROTATE_KEEP=n.
         try:
-            keep = int(keep_env)
+            rotate_bytes = int(os.environ.get("TINA4_LOG_ROTATE_SIZE", 10 * 1024 * 1024))
+        except ValueError:
+            rotate_bytes = 10 * 1024 * 1024
+
+        try:
+            keep = int(os.environ.get("TINA4_LOG_ROTATE_KEEP", "5"))
         except ValueError:
             keep = 5
+
+        # ── Strict mode ──────────────────────────────────────────
+        # TINA4_LOG_STRICT: a log-write failure RAISES instead of being
+        # swallowed. Documented on all four env-var pages since forever and,
+        # until 2026-08-01, implemented ONLY in Ruby.
+        cls._strict = _is_truthy(os.environ.get("TINA4_LOG_STRICT"))
 
         # ── File path resolution ─────────────────────────────────
         # `log_dir` accepts a DIRECTORY or a FILE PATH. Passing a file path used
@@ -361,19 +441,19 @@ class Log:
                 resolved = Path(log_file)
             else:
                 resolved = Path(log_dir_env) / log_file
-            cls._writer = _StdlibFileWriter(resolved, rotate_bytes, keep)
+            cls._writer = _StdlibFileWriter(resolved, rotate_bytes, keep, cls._strict)
         elif cls._file_enabled:
             # Default behaviour: keep the existing logs/tina4.log writer
             # so v2 deployments don't need to change a thing.
             mb = max(1, rotate_bytes // (1024 * 1024)) if rotate_bytes > 0 else 10
-            cls._writer = _LogWriter(log_dir_env, "tina4.log", mb, keep)
+            cls._writer = _LogWriter(log_dir_env, "tina4.log", mb, keep, cls._strict)
 
         # Error mirror — only when no explicit TINA4_LOG_FILE is set.
         # When the operator points at a custom file they almost certainly
         # don't want a second sibling error.log appearing alongside it.
         if not log_file and cls._file_enabled:
             mb = max(1, rotate_bytes // (1024 * 1024)) if rotate_bytes > 0 else 10
-            cls._error_writer = _LogWriter(log_dir_env, "error.log", mb, keep)
+            cls._error_writer = _LogWriter(log_dir_env, "error.log", mb, keep, cls._strict)
         else:
             cls._error_writer = None
 
@@ -381,6 +461,7 @@ class Log:
 
     @classmethod
     def _should_log(cls, level: str) -> bool:
+        cls._resolve_env()
         return cls.LEVELS.get(level, 0) >= cls.LEVELS.get(cls._level, 0)
 
     # ANSI color codes for dev mode (matching PHP reference)
@@ -451,10 +532,19 @@ class Log:
         request_id = get_request_id()
         caller = cls._caller_name()
 
-        # JSON format wins whenever the explicit env opt-in is set,
-        # regardless of production flag (so dev devs can ship JSON to
-        # `jq` if they prefer).
-        if cls._format_mode == "json" or cls._is_production:
+        # TEXT BY DEFAULT, EVERYWHERE. Only TINA4_LOG_FORMAT=json selects JSON.
+        #
+        # `or cls._is_production` used to sit here, and it is deliberately GONE
+        # (owner decision 2026-08-01). "Production" meant four different things
+        # across the four frameworks — Node keyed off TINA4_DEBUG being unset,
+        # Ruby off TINA4_ENV/RACK_ENV/RUBY_ENV, Python only off an explicit
+        # configure(production=True), PHP had no switch at all and always shipped
+        # JSON — so one machine with one .env produced four different formats and
+        # your log format was chosen by a variable you never connected to
+        # logging. An object passed as the message is still JSON-encoded inline
+        # in the text line (see _coerce_message); that is the only implicit JSON
+        # left, and it is the useful one.
+        if cls._format_mode == "json":
             entry = {
                 "timestamp": timestamp,
                 "level": level.upper(),
@@ -495,6 +585,11 @@ class Log:
 
     @classmethod
     def _log(cls, level: str, message, **kwargs):
+        # Resolve TINA4_LOG_* here, at the top of the real write path, if the
+        # server never called configure(). _format_line runs BEFORE _should_log
+        # below, so the resolution cannot be left to either of them.
+        cls._resolve_env()
+
         # Coerce FIRST: a dict, a bytes payload or anything else must become
         # text before formatting, or the logger raises and takes the caller with
         # it. See _coerce_message.
@@ -507,13 +602,18 @@ class Log:
         # v3.13.14: stdout is NOT suppressed in production — containers
         # treat stdout as the canonical log sink (docker logs / k8s read
         # PID 1 stdout), and the pre-v3.13.14 `not _is_production` gate
-        # meant deployed containers got nothing. Production still emits
-        # JSON (see _format_line / _is_production), just on stdout now.
+        # meant deployed containers got nothing. (Production no longer changes
+        # the FORMAT — set TINA4_LOG_FORMAT=json if you want JSON there.)
         # flush=True so logs appear immediately on a non-TTY pipe rather
         # than sitting in Python's block buffer until the process exits.
         if cls._stdout_enabled and cls._should_log(level):
-            color = "" if cls._is_production else cls.COLORS.get(level, "")
-            reset = "" if cls._is_production else cls.RESET
+            # No ANSI in production (a log shipper reads this) and none in JSON
+            # mode either — an escape sequence wrapped around a JSON object makes
+            # the line unparseable, which would make the one format you can
+            # explicitly ask for useless on stdout.
+            plain = cls._is_production or cls._format_mode == "json"
+            color = "" if plain else cls.COLORS.get(level, "")
+            reset = "" if plain else cls.RESET
             # Truncate on the CONSOLE only. The file keeps the full line so a
             # consumer parsing it loses nothing; a terminal does not need 10MB.
             print(f"{color}{_truncate_for_stdout(line)}{reset}", flush=True)
