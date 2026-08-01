@@ -249,3 +249,52 @@ class TestPersistentBackend:
         assert db2.cache_stats()["hits"] >= 1 and db2.cache_stats()["misses"] == 0
         assert [row["n"] for row in r] == ["x", "y"]
         assert db2.cache_stats()["backend"] == "redis"
+
+
+class TestPersistentFetchOneShape:
+    """fetch_one() returns a plain dict, not a DatabaseResult.
+
+    The persistent serializer read ``result.records`` unconditionally, so the
+    moment TINA4_DB_CACHE was turned on EVERY fetch_one() raised
+    ``AttributeError: 'dict' object has no attribute 'records'``. The opt-in
+    persistent cache was therefore unusable with fetch_one. PHP, Ruby and Node
+    all already carried a shape marker; Python was the 1-of-4 outlier.
+    """
+
+    def test_db_cache_persistent_fetch_one_round_trips(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TINA4_DB_CACHE", "true")
+        monkeypatch.setenv("TINA4_DB_CACHE_BACKEND", "memory")
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        db = _make_db(tmp_path)
+
+        first = db.fetch_one("SELECT * FROM t WHERE id = 1")   # miss, stores
+        second = db.fetch_one("SELECT * FROM t WHERE id = 1")  # hit, reconstructs
+
+        assert isinstance(first, dict) and first["n"] == "a"
+        assert isinstance(second, dict), "a cached fetch_one must come back as a dict"
+        assert second["n"] == "a"
+        assert db.cache_stats()["hits"] >= 1
+
+    def test_db_cache_persistent_fetch_and_fetch_one_do_not_collide(self, tmp_path, monkeypatch):
+        """The two shapes share one backend, so each must keep its own type."""
+        monkeypatch.setenv("TINA4_DB_CACHE", "true")
+        monkeypatch.setenv("TINA4_DB_CACHE_BACKEND", "memory")
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        db = _make_db(tmp_path)
+        from tina4_python.database.adapter import DatabaseResult
+
+        db.fetch("SELECT * FROM t ORDER BY id")
+        db.fetch_one("SELECT * FROM t WHERE id = 1")
+
+        assert isinstance(db.fetch("SELECT * FROM t ORDER BY id"), DatabaseResult)
+        assert isinstance(db.fetch_one("SELECT * FROM t WHERE id = 1"), dict)
+
+    def test_db_cache_persistent_fetch_one_missing_row_round_trips(self, tmp_path, monkeypatch):
+        """A cached 'no such row' must stay None, not become an empty result."""
+        monkeypatch.setenv("TINA4_DB_CACHE", "true")
+        monkeypatch.setenv("TINA4_DB_CACHE_BACKEND", "memory")
+        monkeypatch.delenv("TINA4_AUTO_CACHING", raising=False)
+        db = _make_db(tmp_path)
+
+        assert db.fetch_one("SELECT * FROM t WHERE id = 999") is None
+        assert db.fetch_one("SELECT * FROM t WHERE id = 999") is None
