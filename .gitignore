@@ -10,6 +10,13 @@
 .env.local
 /public/css/test.css
 /sessions/
+# Runtime session files written by the suite. This was the ONE gap of the four:
+# php ignores /data/, node ignores data/, ruby ignores sessions/ (and defaults to
+# pwd/sessions anyway) - only python left data/sessions/ visible, so a plain test
+# run dirtied the tree and `git add -A` committed session payloads. It did: five
+# of them are tracked on feature/audit-auth. FileSessionHandler already does
+# mkdir(parents=True, exist_ok=True), so a fresh clone needs nothing here.
+/data/sessions/
 /tests/secrets/domain.cert
 /tests/secrets/private.key
 /tests/secrets/public.key
