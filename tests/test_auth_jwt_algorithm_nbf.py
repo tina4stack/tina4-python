@@ -111,13 +111,21 @@ def test_default_is_hs256_when_env_var_is_unset(monkeypatch):
 
 
 def test_unsupported_algorithm_fails_loudly_naming_the_supported_set():
-    """NEGATIVE: an algorithm we cannot sign raises instead of quietly
-    downgrading to HS256 - a silent downgrade is the whole bug in #106."""
+    """NEGATIVE: an algorithm we do not recognise raises instead of quietly
+    downgrading to HS256 - a silent downgrade is the whole bug in #106.
+
+    This used to assert on RS256. It no longer can: under the 2026-08-01 ruling
+    RS256 is a RECOGNISED name that resolves without any probe, and whether a
+    backend exists is decided later, at the point of use. The unrecognised-name
+    branch is what #106 was actually about, so it is pinned with a name that is
+    genuinely not an algorithm. RS256's own behaviour is pinned in
+    tests/test_auth_rs256_optin.py.
+    """
     with pytest.raises(ValueError) as excinfo:
-        Auth(secret=SECRET, algorithm="RS256")
+        Auth(secret=SECRET, algorithm="ES256")
     message = str(excinfo.value)
-    assert "RS256" in message
-    for supported in ("HS256", "HS384", "HS512"):
+    assert "ES256" in message
+    for supported in ("HS256", "HS384", "HS512", "RS256"):
         assert supported in message
     assert "TINA4_JWT_ALGORITHM" in message
 

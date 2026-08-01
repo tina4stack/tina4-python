@@ -1,7 +1,19 @@
 # Tina4 Auth — Zero-dependency JWT, password hashing, and token validation.
 """
-JWT implementation using Python stdlib only (hmac + hashlib).
-No PyJWT, no cryptography package.
+JWT implementation using Python stdlib only (hmac + hashlib). No PyJWT.
+
+HMAC — HS256 (default), HS384, HS512 — is Tina4's JWT algorithm family, and it is
+zero-dependency in all four frameworks. RS256 is OPT-IN: Python's standard library
+has no asymmetric crypto, so it needs the ``cryptography`` package, which Tina4
+never declares as a dependency. Nothing about RS256 is loaded, probed or warned
+about unless a caller actually asks for it; when they do without a backend
+installed, they get ``RS256UnavailableError`` naming the exact install command.
+
+SECURITY — HMAC IS SYMMETRIC. Every service that VERIFIES a token holds the SAME
+secret that signs it, so any verifier can also MINT tokens. That is fine for one
+app or a trusted fleet, and wrong for handing tokens to a third party you do not
+control. RS256 exists so a verifier can hold only a public key; reach for it (and
+install ``cryptography``) when the verifier is not someone you trust to sign.
 
     from tina4_python.auth import Auth
 
@@ -196,14 +208,138 @@ def _resolve_secret(secret: str = None) -> str:
     return env_secret
 
 
-# Supported JWT algorithms. HMAC only — the whole family is in hashlib, so this
-# stays zero-dependency. The header's "alg" is now always the one we actually sign
+# The STANDARD JWT algorithm family for Tina4: HMAC, in every framework, with zero
+# dependencies (python: hmac + hashlib, php: hash_hmac, ruby: OpenSSL::HMAC, node:
+# node:crypto createHmac). The header's "alg" is always the one we actually sign
 # with (python#105): the digest is looked up here rather than hardcoded.
 _HMAC_ALGORITHMS = {
     "HS256": hashlib.sha256,
     "HS384": hashlib.sha384,
     "HS512": hashlib.sha512,
 }
+
+# RS256 is OPT-IN. It is a recognised algorithm NAME everywhere, but it only works
+# where the runtime provides asymmetric crypto. Python's standard library provides
+# NONE, so RS256 in Python needs a library the app already installed - and Tina4
+# still declares no dependency on one. See _require_rs256() for the contract.
+_RSA_ALGORITHMS = ("RS256",)
+
+# Every algorithm name Tina4 recognises. RS256's PRESENCE here is deliberate: an app
+# may configure it, and whether it WORKS is decided later, at the point of use.
+_SUPPORTED_ALGORITHMS = tuple(_HMAC_ALGORITHMS) + _RSA_ALGORITHMS
+
+
+class RS256UnavailableError(RuntimeError):
+    """RS256 was asked to sign or verify and no RSA backend is installed.
+
+    Raised at the POINT OF USE (signing or verifying), never at import, boot, or
+    construction - an app that never touches RS256 never sees this type at all.
+
+    It is deliberately loud. Returning ``None`` here would be indistinguishable
+    from "that token is invalid", so a missing deployment dependency would read
+    as an authentication failure and be debugged as the wrong problem.
+
+    Cross-framework contract: the BEHAVIOUR is identical in all four - loud, at
+    the point of use, naming the remedy - while the raised TYPE is each runtime's
+    own idiom, because that is what a developer's existing handlers already
+    catch:
+
+        python  RS256UnavailableError(RuntimeError)   pip install cryptography
+        php     \\RuntimeException                     install ext-openssl
+        ruby    NotImplementedError                   rebuild Ruby with OpenSSL
+        node    Error                                 (node:crypto is builtin)
+
+    Only Python and PHP can realistically raise: Ruby's OpenSSL is a stdlib
+    default gem and Node's crypto is builtin, so their branches are unreachable
+    on any normal build. A single shared class name in four languages would be
+    four new public types for a state two of them cannot reach, so the contract
+    is pinned on the message and the timing instead - see
+    tests/test_auth_rs256_optin.py and the equivalents in the other three.
+    """
+
+
+# The message a developer actually sees. It names the package, the exact install
+# command, and the zero-dependency alternative, because "RS256 unavailable" with no
+# remedy is the mysterious failure this ruling exists to remove.
+#
+# ONE library is named on purpose. Supporting cryptography AND PyJWT AND
+# python-jose would double this code to buy nothing: they all end up calling
+# cryptography for RSA, and the base64url header.payload.signature envelope is
+# something Auth already builds for HMAC. cryptography supplies the missing
+# PRIMITIVE and nothing else.
+_RS256_UNAVAILABLE_MESSAGE = (
+    "JWT algorithm RS256 was requested, but no RSA backend is installed. "
+    "Python's standard library has no asymmetric crypto, so Tina4 cannot sign or "
+    "verify RS256 on its own - and Tina4 will not add a dependency for you. "
+    "Install it:\n"
+    "    uv add cryptography       (or: pip install cryptography)\n"
+    "Or stay zero-dependency: the HMAC family (HS256/HS384/HS512) is Tina4's "
+    "default and works in all four frameworks with no install at all - set "
+    "TINA4_JWT_ALGORITHM=HS256."
+)
+
+
+def _require_rs256():
+    """Return the RSA primitives RS256 needs, or raise ``RS256UnavailableError``.
+
+    LAZY CAPABILITY DETECTION. This function is called from the RS256 signing and
+    verifying paths and NOWHERE else: there is no import-time probe, no boot-time
+    probe, no startup warning and no log line. An app on the default HMAC path
+    never executes a line of this function, so it pays nothing - not an import,
+    not a warning - for a feature it does not use.
+
+    The import is the detection: if ``cryptography`` is installed we use it, and
+    if it is not, the ImportError becomes the actionable error above.
+    """
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+    except ImportError:
+        raise RS256UnavailableError(_RS256_UNAVAILABLE_MESSAGE) from None
+    return hashes, serialization, padding
+
+
+def _pem_bytes(key: str) -> bytes:
+    """Coerce PEM key material to bytes.
+
+    The key travels in the same ``secret`` slot the HMAC family uses, which is the
+    contract PHP and Node already implement (PHP hands ``$secret`` straight to
+    openssl_pkey_get_private/openssl_pkey_get_public). One slot, one env var
+    (TINA4_SECRET), no new API surface for the other three to mirror.
+    """
+    return key.encode() if isinstance(key, str) else bytes(key or b"")
+
+
+def _rs256_sign(signing_input: bytes, private_key_pem: str) -> bytes:
+    """RSASSA-PKCS1-v1_5 over SHA-256 - the signature RFC 7518 calls RS256."""
+    hashes, serialization, padding = _require_rs256()
+    private_key = serialization.load_pem_private_key(
+        _pem_bytes(private_key_pem), password=None
+    )
+    return private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+
+
+def _rs256_verify(signing_input: bytes, signature: bytes, key_pem: str) -> bool:
+    """Verify an RS256 signature with a public (or private) PEM key.
+
+    A verifier normally holds ONLY the public key - that is the entire reason
+    RS256 exists. A private PEM is accepted too so one configured key round-trips
+    in a single-service app.
+    """
+    hashes, serialization, padding = _require_rs256()
+    pem = _pem_bytes(key_pem)
+    try:
+        public_key = serialization.load_pem_public_key(pem)
+    except Exception:
+        try:
+            public_key = serialization.load_pem_private_key(pem, password=None).public_key()
+        except Exception:
+            return False  # unusable key material is a failed verification
+    try:
+        public_key.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
+        return True
+    except Exception:
+        return False
 
 # Seconds of clock skew tolerated on the "nbf" (not-before) claim. Without this a
 # token minted on one host and validated on another a second behind is rejected
@@ -229,15 +365,23 @@ def _numeric_date(value) -> "int | None":
 def _resolve_algorithm(algorithm: str = None) -> str:
     """Pick the JWT algorithm: explicit arg, else TINA4_JWT_ALGORITHM, else HS256.
 
-    Raises ValueError naming the supported set when asked for one we cannot sign
-    (python#106 — the env var was registered in the CLI's known_vars and then
-    silently ignored, so a user could set HS512 and still get HS256 tokens).
+    Raises ValueError naming the supported set when asked for one we do not
+    recognise at all (python#106 — the env var was registered in the CLI's
+    known_vars and then silently ignored, so a user could set HS512 and still get
+    HS256 tokens).
+
+    RS256 RESOLVES HERE WITHOUT ANY PROBE. Recognising the name is not the same as
+    being able to sign with it: whether an RSA backend exists is decided lazily, in
+    _require_rs256(), the first time a token is actually signed or verified. That
+    split is what keeps the HMAC majority free of any RS256 detection cost.
     """
     chosen = (algorithm or os.environ.get("TINA4_JWT_ALGORITHM") or "HS256").strip()
-    if chosen not in _HMAC_ALGORITHMS:
+    if chosen not in _SUPPORTED_ALGORITHMS:
         raise ValueError(
             f"Unsupported JWT algorithm {chosen!r}. Tina4 signs with "
-            f"{', '.join(sorted(_HMAC_ALGORITHMS))} (HMAC only, zero-dependency). "
+            f"{', '.join(sorted(_HMAC_ALGORITHMS))} (HMAC, zero-dependency, the "
+            f"default and the cross-framework standard) or RS256 (opt-in, needs an "
+            f"RSA backend installed - see RS256UnavailableError). "
             f"Set TINA4_JWT_ALGORITHM to one of those."
         )
     return chosen
@@ -325,14 +469,18 @@ class Auth:
 
             # Pin the algorithm to OUR configured one instead of trusting the
             # token's header. A token asking to be verified as anything else --
-            # "none", a weaker HMAC, or an RSA alg we do not implement -- is
+            # "none", a weaker HMAC, or RS256 when we are configured for HMAC -- is
             # rejected before any signature work. Matches the Ruby check.
+            #
+            # This matters MORE now that RS256 is opt-in, not less: pinning is what
+            # stops an attacker re-labelling a token's header to pick an algorithm
+            # we did not choose, and it also means an RS256-labelled token can never
+            # drive an HMAC-configured app into the RS256 capability check.
             header = json.loads(_b64url_decode(h))
             if header.get("alg") != self.algorithm:
                 return None
 
-            expected = self._sign(f"{h}.{p}")
-            if not hmac.compare_digest(sig, expected):
+            if not self._verify(f"{h}.{p}", sig):
                 return None
 
             payload = json.loads(_b64url_decode(p))
@@ -360,6 +508,12 @@ class Auth:
                     return None
 
             return payload
+        except RS256UnavailableError:
+            # A missing RSA backend is a DEPLOYMENT fault, not an invalid token.
+            # Swallowing it into the None below would report "authentication
+            # failed" for every request and hide the one-line fix, so it is the
+            # single exception this catch-all deliberately lets through.
+            raise
         except Exception:
             return None
 
@@ -389,12 +543,30 @@ class Auth:
         return self.get_token(payload, expires_in=expires_in)
 
     def _sign(self, message: str) -> str:
+        # RS256 is the opt-in branch: the capability check happens HERE, at the
+        # point of use, and raises RS256UnavailableError naming the fix if no RSA
+        # backend is installed. self.secret carries the PEM private key.
+        if self.algorithm in _RSA_ALGORITHMS:
+            return _b64url_encode(_rs256_sign(message.encode(), self.secret))
         # Digest comes from the configured algorithm, so the "alg" we advertise in
         # the header is the one that actually produced this signature.
         sig = hmac.new(
             self.secret.encode(), message.encode(), _HMAC_ALGORITHMS[self.algorithm]
         ).digest()
         return _b64url_encode(sig)
+
+    def _verify(self, message: str, signature: str) -> bool:
+        """Check a signature against the CONFIGURED algorithm.
+
+        Symmetric and asymmetric verification are genuinely different operations:
+        HMAC recomputes the signature and compares it in constant time, while RS256
+        verifies against a public key it cannot use to sign. Recomputing an RSA
+        signature would demand the private key on every verifier, which is exactly
+        the property RS256 exists to avoid.
+        """
+        if self.algorithm in _RSA_ALGORITHMS:
+            return _rs256_verify(message.encode(), _b64url_decode(signature), self.secret)
+        return hmac.compare_digest(signature, self._sign(message))
 
     # ── Legacy aliases ─────────────────────────────────────────────
 
@@ -616,7 +788,7 @@ class AuthMiddleware:
 
 
 __all__ = [
-    "Auth", "AuthMiddleware", "get_token", "valid_token", "get_payload",
-    "refresh_token", "authenticate_request", "validate_api_key",
+    "Auth", "AuthMiddleware", "RS256UnavailableError", "get_token", "valid_token",
+    "get_payload", "refresh_token", "authenticate_request", "validate_api_key",
     "ensure_dev_secret",
 ]
