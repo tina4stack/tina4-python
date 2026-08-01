@@ -66,6 +66,16 @@ class _CacheBackend:
     def name(self) -> str:
         raise NotImplementedError
 
+    def sweep(self) -> int:
+        """Drop expired entries, returning how many went.
+
+        In-process backends (memory, file) hold entries until something looks
+        at them, so an explicit sweep is the only way to reclaim the space.
+        Network backends expire server-side and report 0. Mirrors PHP's
+        ``CacheBackend::sweep()``.
+        """
+        return 0
+
     def is_available(self) -> bool:
         """Whether this backend is actually usable (driver present + service
         reachable). Local backends are always available; network/driver backends
@@ -135,6 +145,14 @@ class _MemoryBackend(_CacheBackend):
                 "size": len(self._store),
                 "backend": "memory",
             }
+
+    def sweep(self) -> int:
+        with self._lock:
+            now = time.monotonic()
+            expired = [k for k, (_, exp) in self._store.items() if exp and now > exp]
+            for k in expired:
+                del self._store[k]
+            return len(expired)
 
     def name(self) -> str:
         return "memory"
@@ -421,6 +439,20 @@ class _FileBackend(_CacheBackend):
                 "size": count,
                 "backend": "file",
             }
+
+    def sweep(self) -> int:
+        with self._lock:
+            now = time.time()
+            removed = 0
+            for f in self._dir.glob("*.json"):
+                try:
+                    exp = json.loads(f.read_text()).get("expires_at")
+                    if exp and now > exp:
+                        f.unlink(missing_ok=True)
+                        removed += 1
+                except (json.JSONDecodeError, OSError):
+                    pass
+            return removed
 
     def name(self) -> str:
         return "file"
@@ -784,8 +816,17 @@ def _create_backend(
     elif backend == "file":
         cache_dir = cache_dir or os.environ.get("TINA4_CACHE_DIR", "data/cache")
         return _FileBackend(cache_dir=cache_dir, max_entries=max_entries)
-    else:
+    elif backend in ("memory", ""):
         return _MemoryBackend(max_entries=max_entries)
+    else:
+        # An UNRECOGNISED name RAISES, naming the bad value and the valid ones
+        # — the same contract the session layer settled on. Falling through to
+        # memory turned a typo (TINA4_CACHE_BACKEND=redsi) into a running app
+        # with a per-process cache while the operator believed it was in Redis.
+        raise ValueError(
+            f"Unknown cache backend '{backend}'. Valid backends: "
+            "memory, file, redis, valkey, memcached, mongodb, database."
+        )
 
     # Graceful degradation: if the configured backend's driver is missing or the
     # service is unreachable, fall back to the file backend (persistent, zero-dep,
@@ -804,18 +845,119 @@ def _create_backend(
     return be
 
 
+# ── Shared response-cache backend ─────────────────────────────────
+
+_response_backend: _CacheBackend | None = None
+
+
+def _get_response_backend() -> _CacheBackend:
+    """The backend every default ResponseCache shares.
+
+    Memoised at module level so a dispatcher that builds a fresh middleware
+    instance per request still reads and writes ONE store. Mirrors Node's
+    ``_getResponseBackend``.
+    """
+    global _response_backend
+    if _response_backend is None:
+        _response_backend = _create_backend()
+    return _response_backend
+
+
+def _reset_response_backend() -> None:
+    """Drop the shared response-cache backend so the next use rebuilds it.
+
+    Test seam only — mirrors Node's ``_resetBackend()``. Production code never
+    needs it; ``clear_cache()`` empties the store without rebuilding it.
+    """
+    global _response_backend
+    _response_backend = None
+
+
 # ── Cache entry (for response cache) ──────────────────────────────
 
 
 class _CacheEntry:
     """Single cached response."""
-    __slots__ = ("body", "content_type", "status_code", "expires_at")
+    __slots__ = ("body", "content_type", "status_code", "expires_at", "vary", "vary_values")
 
-    def __init__(self, body: str, content_type: str, status_code: int, expires_at: float):
+    def __init__(self, body: str, content_type: str, status_code: int, expires_at: float,
+                 vary: list | None = None, vary_values: dict | None = None):
         self.body = body
         self.content_type = content_type
         self.status_code = status_code
         self.expires_at = expires_at
+        # RFC 9111 s4.1 — the field names the origin nominated, and the values
+        # they had on the request that caused this response to be stored.
+        self.vary = vary or []
+        self.vary_values = vary_values or {}
+
+    def to_dict(self) -> dict:
+        """Plain JSON-serialisable form, so every backend can round-trip it."""
+        return {
+            "body": self.body,
+            "content_type": self.content_type,
+            "status_code": self.status_code,
+            "expires_at": self.expires_at,
+            "vary": self.vary,
+            "vary_values": self.vary_values,
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        """Rebuild from whatever a backend handed back, or None if unusable."""
+        if isinstance(data, cls):
+            return data
+        if not isinstance(data, dict) or "body" not in data:
+            return None
+        return cls(
+            body=data.get("body", ""),
+            content_type=data.get("content_type", "application/json"),
+            status_code=int(data.get("status_code", 200)),
+            expires_at=float(data.get("expires_at", 0.0)),
+            vary=data.get("vary") or [],
+            vary_values=data.get("vary_values") or {},
+        )
+
+
+# Response directives that let a SHARED cache store a response to a request
+# carrying Authorization (RFC 9111 s3.5).
+_SHARED_CACHE_DIRECTIVES = ("public", "s-maxage", "must-revalidate")
+
+
+def _header_value(carrier, name: str) -> str | None:
+    """Case-insensitive header lookup on a request or response, or None.
+
+    Handles both shapes the framework uses: the ``Request``'s ``headers`` dict
+    and the ``Response``'s ``_headers`` list of ``(name, value)`` pairs. Reading
+    only the dict form made every Vary/Cache-Control check silently no-op on a
+    real response.
+    """
+    target = name.lower()
+    headers = getattr(carrier, "headers", None)
+    if isinstance(headers, dict):
+        for key, value in headers.items():
+            if str(key).lower() == target:
+                return str(value)
+    pairs = getattr(carrier, "_headers", None)
+    if isinstance(pairs, (list, tuple)):
+        for pair in pairs:
+            if isinstance(pair, (list, tuple)) and len(pair) == 2 and str(pair[0]).lower() == target:
+                return str(pair[1])
+    return None
+
+
+def _vary_fields(response) -> list:
+    """The lower-cased field names in a response's Vary header."""
+    raw = _header_value(response, "Vary")
+    if not raw:
+        return []
+    return [f.strip().lower() for f in raw.split(",") if f.strip()]
+
+
+def _shared_cache_allowed(response) -> bool:
+    """Does the response carry a directive that lets a shared cache store it?"""
+    cc = (_header_value(response, "Cache-Control") or "").lower()
+    return any(directive in cc for directive in _SHARED_CACHE_DIRECTIVES)
 
 
 # ── ResponseCache middleware ───────────────────────────────────────
@@ -864,23 +1006,30 @@ class ResponseCache:
         self.status_codes: set[int] = set(status_codes or [200])
         self._cleanup_interval: float = cleanup_interval
 
-        # Create the backend
-        self._backend = _create_backend(
-            backend=backend,
-            url=cache_url,
-            max_entries=self.max_entries,
-        )
+        # The backend stores the cached RESPONSES too, so a redis/valkey/
+        # memcached/mongodb/database backend distributes them across workers
+        # and instances (parity with PHP/Ruby/Node). Before 3.13.95 this object
+        # was built and then never read on the request path: responses went to
+        # a private per-instance dict, so TINA4_CACHE_BACKEND=redis reported
+        # "redis" while two workers — and even two ResponseCache instances in
+        # one process — shared nothing.
+        #
+        # With no explicit backend the module-level one is shared, so every
+        # @middleware(ResponseCache) route hits the same store even when the
+        # dispatcher builds a fresh instance per request (mirrors Node's
+        # memoised _getResponseBackend). An explicit backend/URL gets its own.
+        if backend is not None or cache_url is not None or max_entries is not None:
+            self._backend = _create_backend(
+                backend=backend,
+                url=cache_url,
+                max_entries=self.max_entries,
+            )
+        else:
+            self._backend = _get_response_backend()
 
-        # For memory backend, also keep the old LRU store for response caching
-        # (direct entry access with expiry tracking)
-        self._store: OrderedDict[str, _CacheEntry] = OrderedDict()
         self._lock = threading.Lock()
         self._hits: int = 0
         self._misses: int = 0
-
-        # Start periodic cleanup if TTL is positive
-        if self.ttl > 0:
-            self._start_cleanup_timer()
 
     # ── Middleware interface ──────────────────────────────────────
 
@@ -898,33 +1047,24 @@ class ResponseCache:
         if method.upper() != "GET":
             return request, response
 
-        url = getattr(request, "url", "/")
-        params = getattr(request, "params", None)
-        if params:
-            qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-            cache_key = f"GET:{url}?{qs}"
-        else:
-            cache_key = f"GET:{url}"
+        cache_key = self.cache_key(request)
+        entry = _CacheEntry.from_dict(self._backend.get(cache_key))
 
-        # Check for per-route TTL override
-        route_ttl = self._get_route_ttl(request)
+        if entry is not None and time.time() < entry.expires_at and self._vary_matches(entry, request):
+            with self._lock:
+                self._hits += 1
+            remaining = max(0, int(round(entry.expires_at - time.time())))
+            hit_response = response(entry.body, entry.status_code)
+            self._set_cache_headers(hit_response, "HIT", remaining)
+            # Returning the Response OBJECT is what short-circuits — see
+            # Middleware.apply_hook_result: "a Response object -> SHORT-CIRCUIT,
+            # and that object IS the response, at ANY status". Returning the
+            # (request, response) pair only REBINDS and continues, so the
+            # handler still ran and the cache never saved a single call.
+            return hit_response
 
         with self._lock:
-            entry = self._store.get(cache_key)
-            if entry is not None and time.monotonic() < entry.expires_at:
-                self._hits += 1
-                # Move to end (most recently used)
-                self._store.move_to_end(cache_key)
-                remaining = max(0, int(round(entry.expires_at - time.monotonic())))
-                hit_response = response(entry.body, entry.status_code)
-                self._set_cache_headers(hit_response, "HIT", remaining)
-                return request, hit_response
-
             self._misses += 1
-
-        # Tag the request so after_cache can store the response
-        request._cache_key = cache_key
-        request._cache_ttl = route_ttl if route_ttl is not None else self.ttl
         return request, response
 
     def after_cache(self, request, response):
@@ -933,40 +1073,47 @@ class ResponseCache:
 
         Capture the response body and cache it if the status code is
         in the allowed set.
+
+        The key is RECOMPUTED from the request rather than read off a tag the
+        before-hook wrote: the framework ``Request`` uses ``__slots__``, so
+        tagging it raised ``AttributeError`` on every real request and the
+        middleware never worked outside the test stubs.
         """
         if self.ttl <= 0:
             return request, response
 
-        cache_key = getattr(request, "_cache_key", None)
-        if cache_key is None:
+        method = getattr(request, "method", "GET")
+        if method.upper() != "GET":
             return request, response
 
-        cache_ttl = getattr(request, "_cache_ttl", self.ttl)
+        # This response came OUT of the cache — the after pass still runs on a
+        # short-circuit (by design, so audit/header hooks fire), so without this
+        # the HIT would be re-stored and its X-Cache header overwritten to MISS.
+        if _header_value(response, "X-Cache") == "HIT":
+            return request, response
+
+        route_ttl = self._get_route_ttl(request)
+        cache_ttl = route_ttl if route_ttl is not None else self.ttl
         if cache_ttl <= 0:
             return request, response
 
-        # Extract response data
         status_code = self._extract_status(response)
         if status_code not in self.status_codes:
             return request, response
 
-        body = self._extract_body(response)
-        content_type = self._extract_content_type(response)
+        if not self._may_store(request, response):
+            return request, response
 
+        vary = _vary_fields(response)
         entry = _CacheEntry(
-            body=body,
-            content_type=content_type,
+            body=self._extract_body(response),
+            content_type=self._extract_content_type(response),
             status_code=status_code,
-            expires_at=time.monotonic() + cache_ttl,
+            expires_at=time.time() + cache_ttl,
+            vary=vary,
+            vary_values={field: _header_value(request, field) for field in vary},
         )
-
-        with self._lock:
-            # Evict LRU if at capacity
-            while len(self._store) >= self.max_entries:
-                self._store.popitem(last=False)
-
-            self._store[cache_key] = entry
-            self._store.move_to_end(cache_key)
+        self._backend.set(self.cache_key(request), entry.to_dict(), cache_ttl)
 
         # The handler ran for this request → MISS. Advertise the TTL the
         # entry was just stored with so clients can see how long the next
@@ -974,6 +1121,50 @@ class ResponseCache:
         self._set_cache_headers(response, "MISS", cache_ttl)
 
         return request, response
+
+    # ── RFC 9111 conformance ─────────────────────────────────────
+
+    @staticmethod
+    def _may_store(request, response) -> bool:
+        """May a SHARED cache store this response? (RFC 9111 s3, s4.1)
+
+        Two normative constraints are enforced here:
+
+        * s3 — "if the cache is shared: the Authorization header field is not
+          present in the request ... or a response directive is present that
+          explicitly allows shared caching". Without this, a response built for
+          one authenticated caller is replayed to every later caller of the same
+          URL, because the key is method + URL only.
+        * s4.1 — "A stored response with a Vary header field value containing a
+          member '*' always fails to match", so storing one is pointless.
+        """
+        if "*" in _vary_fields(response):
+            return False
+        if _header_value(request, "Authorization") is not None:
+            return _shared_cache_allowed(response)
+        return True
+
+    @staticmethod
+    def _vary_matches(entry, request) -> bool:
+        """Do the nominated request headers match the ones that were stored?
+
+        RFC 9111 s4.1 — the cache MUST NOT use a stored response unless every
+        request header field nominated by its Vary value matches. An absent
+        field only matches an absent field.
+        """
+        for field in entry.vary:
+            if _header_value(request, field) != entry.vary_values.get(field):
+                return False
+        return True
+
+    def cache_key(self, request) -> str:
+        """The cache key for a request: method + URL + sorted query params."""
+        url = getattr(request, "url", "/")
+        params = getattr(request, "params", None)
+        if params:
+            qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+            return f"GET:{url}?{qs}"
+        return f"GET:{url}"
 
     # ── Public API ───────────────────────────────────────────────
 
@@ -986,22 +1177,22 @@ class ResponseCache:
             ``{"hits": int, "misses": int, "size": int, "backend": str}``
         """
         with self._lock:
-            return {
-                "hits": self._hits,
-                "misses": self._misses,
-                "size": len(self._store),
-                "backend": self._backend.name(),
-            }
+            hits, misses = self._hits, self._misses
+        stats = self._backend.stats()
+        return {
+            "hits": hits,
+            "misses": misses,
+            "size": stats.get("size", 0),
+            "backend": self._backend.name(),
+        }
 
     def sweep(self) -> int:
         """Remove all expired entries. Returns count removed."""
-        self._cleanup_expired()
-        return 0
+        return self._backend.sweep() if hasattr(self._backend, "sweep") else 0
 
     def clear_cache(self) -> None:
         """Flush all cached entries and reset stats."""
         with self._lock:
-            self._store.clear()
             self._hits = 0
             self._misses = 0
         self._backend.clear()
@@ -1035,7 +1226,19 @@ class ResponseCache:
 
     @staticmethod
     def _get_route_ttl(request) -> int | None:
-        """Check for a per-route cache TTL set via the @cached decorator."""
+        """The per-route TTL from ``@cached(max_age=N)``, or None.
+
+        Read off the matched handler, which the dispatcher attaches to the
+        request as ``_handler``. ``@cached`` stamps ``_cache_max_age`` on the
+        function; nothing read it before, so the decorator was inert and the
+        documented per-route override did nothing. ``_route_meta`` is still
+        honoured for callers that supply one, but it can never exist on a real
+        ``Request`` (``__slots__``), which is why the handler is the source.
+        """
+        handler = getattr(request, "_handler", None)
+        max_age = getattr(handler, "_cache_max_age", None)
+        if max_age is not None:
+            return int(max_age)
         meta = getattr(request, "_route_meta", None)
         if meta and "cache_max_age" in meta:
             return int(meta["cache_max_age"])
@@ -1052,13 +1255,20 @@ class ResponseCache:
 
     @staticmethod
     def _extract_body(response) -> str:
-        """Best-effort extraction of the response body."""
-        if hasattr(response, "body"):
-            body = response.body
-            return body if isinstance(body, str) else str(body)
-        if hasattr(response, "content"):
-            return str(response.content)
-        return str(response)
+        """Best-effort extraction of the response body.
+
+        The framework ``Response`` holds bytes; ``str(b'{"n":1}')`` yields the
+        literal ``b'{"n":1}'``, which is what a HIT would then replay to the
+        client. Decode instead.
+        """
+        body = getattr(response, "body", None)
+        if body is None:
+            body = getattr(response, "content", None)
+        if body is None:
+            return str(response)
+        if isinstance(body, (bytes, bytearray)):
+            return bytes(body).decode("utf-8", errors="replace")
+        return body if isinstance(body, str) else str(body)
 
     @staticmethod
     def _extract_content_type(response) -> str:
@@ -1072,22 +1282,8 @@ class ResponseCache:
         return "application/json"
 
     def _cleanup_expired(self) -> None:
-        """Remove entries whose TTL has expired."""
-        now = time.monotonic()
-        with self._lock:
-            expired_keys = [k for k, v in self._store.items() if now >= v.expires_at]
-            for key in expired_keys:
-                del self._store[key]
-
-    def _start_cleanup_timer(self) -> None:
-        """Start a daemon thread that periodically cleans expired entries."""
-        def _run():
-            while True:
-                time.sleep(self._cleanup_interval)
-                self._cleanup_expired()
-
-        t = threading.Thread(target=_run, daemon=True, name="tina4-cache-cleanup")
-        t.start()
+        """Drop expired entries from the backend."""
+        self._backend.sweep()
 
 
 # ── Module-level direct cache API (backend-aware) ─────────────────
