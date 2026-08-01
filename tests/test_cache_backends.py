@@ -110,12 +110,23 @@ class TestLocalBackends:
         _roundtrip(b, "database")
         _ttl_expiry(b)
 
-    def test_unknown_falls_back_to_memory(self):
-        # An unrecognised backend name is a real working memory cache, not a no-op.
-        b = _create_backend(backend="bogus")
-        assert b.name() == "memory"
-        b.set("x", {"ok": 1}, 60)
-        assert b.get("x") == {"ok": 1}
+    def test_cache_backend_unknown_name_raises(self):
+        """An unrecognised TINA4_CACHE_BACKEND raises, naming the valid set.
+
+        It used to fall through to memory, so a typo (redsi) produced a running
+        app with a per-process cache while the operator believed it was Redis.
+        Same contract the session layer already settled on.
+        """
+        with pytest.raises(ValueError) as excinfo:
+            _create_backend(backend="redsi")
+        message = str(excinfo.value)
+        assert "redsi" in message
+        assert "memory, file, redis, valkey, memcached, mongodb, database" in message
+
+    def test_cache_backend_known_names_do_not_raise(self):
+        """Negative control: every documented name (and alias) still builds."""
+        for name in ("memory", "", "file", "MEMORY", " file "):
+            assert _create_backend(backend=name).name() in ("memory", "file")
 
     def test_unavailable_backend_falls_back_to_file(self, tmp_path):
         # A configured backend whose service is unreachable degrades to the

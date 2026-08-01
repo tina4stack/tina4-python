@@ -13,44 +13,89 @@ from tina4_python.cache import (
 import tina4_python.cache as cache_module
 
 
-class MockRequest:
-    """Minimal request stub for cache tests."""
-
-    def __init__(self, method="GET", url="/test", params=None, route_meta=None):
-        self.method = method
-        self.url = url
-        self.params = params
-        if route_meta is not None:
-            self._route_meta = route_meta
+from tina4_python.core.request import Request
+from tina4_python.core.response import Response
 
 
-class MockResponse:
-    """Callable response stub that records what was returned.
+# These tests drive the REAL framework Request and Response.
+#
+# They used to drive a `MockRequest` stub with a plain `__dict__`. The real
+# Request has `__slots__`, so `request._cache_key = ...` — which the middleware
+# did on every call — raised AttributeError against a live request while the
+# stub happily accepted it. The suite was green for the middleware's whole life
+# while `@middleware(ResponseCache)` 500'd every real request. A double standing
+# in for a real collaborator is what the no-mock rule forbids, and this is why.
 
-    Carries a ``headers`` dict and an ``add_header`` method so it mirrors the
-    real framework ``Response`` closely enough to assert on ``X-Cache``.
+
+def make_request(method="GET", url="/test", params=None, headers=None, cache_max_age=None):
+    """A real framework Request, populated like the dispatcher populates one.
+
+    ``cache_max_age`` attaches a handler carrying the flag ``@cached(max_age=N)``
+    stamps, exactly as the dispatcher does via ``request._handler``.
     """
+    request = Request()
+    request.method = method
+    request.url = url
+    request.path = url
+    request.params = params or {}
+    request.headers = headers or {}
+    if cache_max_age is not None:
+        def handler(req, resp):
+            return resp
+        handler._cached = True
+        handler._cache_max_age = cache_max_age
+        request._handler = handler
+    return request
 
-    def __init__(self, body="", status_code=200, content_type="application/json"):
-        self.body = body
-        self.status_code = status_code
-        self.content_type = content_type
-        self.headers = {}
-        self._called_with = None
 
-    def add_header(self, name, value):
-        self.headers[name] = value
-        return self
+def make_response(body=None, status_code=200):
+    """A real framework Response, optionally pre-filled with a body."""
+    response = Response()
+    if body is not None:
+        response(body, status_code)
+    return response
 
-    def __call__(self, body=None, status_code=None):
-        """Simulate response(body, status_code) call."""
-        r = MockResponse(
-            body=body if body is not None else self.body,
-            status_code=status_code if status_code is not None else self.status_code,
-            content_type=self.content_type,
-        )
-        r._called_with = (body, status_code)
-        return r
+
+def body_of(response):
+    """The response body as text, whatever shape it is carried in."""
+    content = getattr(response, "content", None)
+    if isinstance(content, (bytes, bytearray)):
+        return bytes(content).decode("utf-8", errors="replace")
+    return "" if content is None else str(content)
+
+
+def header_of(response, name):
+    """A single response header value, or None."""
+    target = name.lower()
+    for key, value in getattr(response, "_headers", []):
+        if str(key).lower() == target:
+            return str(value)
+    return None
+
+
+def serve(cache, request, response):
+    """Run before_cache and return the response the caller would receive.
+
+    A HIT short-circuits by returning the Response OBJECT; a MISS returns the
+    ``(request, response)`` pair. Both shapes are part of the middleware
+    contract (``Middleware.apply_hook_result``), so tests read through here.
+    """
+    result = cache.before_cache(request, response)
+    return result[1] if isinstance(result, tuple) else result
+
+
+@pytest.fixture(autouse=True)
+def _isolate_response_cache():
+    """Every test starts with an empty, freshly-built shared backend."""
+    cache_module._reset_response_backend()
+    cache_module._default_backend = None
+    cache_module._default_cache = None
+    cache_module._default_ttl = None
+    yield
+    cache_module._reset_response_backend()
+    cache_module._default_backend = None
+    cache_module._default_cache = None
+    cache_module._default_ttl = None
 
 
 # ── Construction & Defaults ──────────────────────────────────────
@@ -278,27 +323,27 @@ class TestCacheKeyGeneration:
 
     def test_get_without_params(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/items")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/items")
 
-        cache.before_cache(req, resp)
-        assert req._cache_key == "GET:/api/items"
+        assert cache.cache_key(req) == "GET:/api/items"
 
     def test_get_with_params_sorted(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/items", params={"z": "1", "a": "2"})
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/items", params={"z": "1", "a": "2"})
 
-        cache.before_cache(req, resp)
-        assert req._cache_key == "GET:/api/items?a=2&z=1"
+        assert cache.cache_key(req) == "GET:/api/items?a=2&z=1"
 
     def test_non_get_no_cache_key(self):
+        """A non-GET is never stored, so a later GET on the same URL misses."""
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="POST", url="/api/items")
-        resp = MockResponse()
+        cache.clear_cache()
+        post = make_request(method="POST", url="/api/items")
+        cache.before_cache(post, make_response())
+        cache.after_cache(post, make_response(body='{"posted": true}'))
 
-        cache.before_cache(req, resp)
-        assert not hasattr(req, "_cache_key")
+        get = make_request(method="GET", url="/api/items")
+        out = serve(cache, get, make_response())
+        assert body_of(out) == ""
 
 
 # ── Cache Hit (before_cache) ─────────────────────────────────────
@@ -309,32 +354,31 @@ class TestCacheHit:
 
     def test_cache_hit_returns_cached_body(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/data")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/data")
+        resp = make_response()
 
         # First request — miss
         cache.before_cache(req, resp)
         # Simulate handler producing a response
-        resp_out = MockResponse(body='{"result": 1}', status_code=200)
+        resp_out = make_response(body='{"result": 1}', status_code=200)
         cache.after_cache(req, resp_out)
 
         # Second request — hit
-        req2 = MockRequest(method="GET", url="/api/data")
-        resp2 = MockResponse()
-        _, hit_resp = cache.before_cache(req2, resp2)
+        req2 = make_request(method="GET", url="/api/data")
+        resp2 = make_response()
+        hit_resp = serve(cache, req2, resp2)
 
-        assert hit_resp.body == '{"result": 1}'
+        assert body_of(hit_resp) == '{"result": 1}'
         assert hit_resp.status_code == 200
 
     def test_cache_miss_lets_request_through(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/new")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/new")
+        resp = make_response()
 
-        returned_req, returned_resp = cache.before_cache(req, resp)
+        returned_resp = serve(cache, req, resp)
         # On miss, the original response is returned unchanged
         assert returned_resp is resp
-        assert hasattr(req, "_cache_key")
 
 
 # ── X-Cache headers ───────────────────────────────────────────────
@@ -347,53 +391,53 @@ class TestXCacheHeaders:
         cache = ResponseCache(ttl=60)
 
         # First request — handler runs → MISS.
-        req = MockRequest(method="GET", url="/api/x")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/x")
+        resp = make_response()
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body='{"v": 1}', status_code=200)
+        resp_out = make_response(body='{"v": 1}', status_code=200)
         _, after = cache.after_cache(req, resp_out)
-        assert after.headers["X-Cache"] == "MISS"
-        assert after.headers["X-Cache-TTL"] == "60"
+        assert header_of(after, "X-Cache") == "MISS"
+        assert header_of(after, "X-Cache-TTL") == "60"
 
         # Second request — served from cache → HIT.
-        req2 = MockRequest(method="GET", url="/api/x")
-        resp2 = MockResponse()
-        _, hit = cache.before_cache(req2, resp2)
-        assert hit.body == '{"v": 1}'
-        assert hit.headers["X-Cache"] == "HIT"
+        req2 = make_request(method="GET", url="/api/x")
+        resp2 = make_response()
+        hit = serve(cache, req2, resp2)
+        assert body_of(hit) == '{"v": 1}'
+        assert header_of(hit, "X-Cache") == "HIT"
         # Remaining TTL present and within (0, 60].
-        assert "X-Cache-TTL" in hit.headers
-        assert 0 < int(hit.headers["X-Cache-TTL"]) <= 60
+        assert header_of(hit, "X-Cache-TTL") is not None
+        assert 0 < int(header_of(hit, "X-Cache-TTL")) <= 60
 
     def test_no_cache_control_header_emitted(self):
         """We must NOT set Cache-Control — that's the app's call."""
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/nocc")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/nocc")
+        resp = make_response()
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="x", status_code=200)
+        resp_out = make_response(body="x", status_code=200)
         _, after = cache.after_cache(req, resp_out)
-        assert "Cache-Control" not in after.headers
+        assert header_of(after, "Cache-Control") is None
 
     def test_route_ttl_reflected_in_header(self):
         cache = ResponseCache(ttl=300)
-        req = MockRequest(method="GET", url="/api/rt", route_meta={"cache_max_age": 42})
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/rt", cache_max_age=42)
+        resp = make_response()
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="x", status_code=200)
+        resp_out = make_response(body="x", status_code=200)
         _, after = cache.after_cache(req, resp_out)
-        assert after.headers["X-Cache"] == "MISS"
-        assert after.headers["X-Cache-TTL"] == "42"
+        assert header_of(after, "X-Cache") == "MISS"
+        assert header_of(after, "X-Cache-TTL") == "42"
 
     def test_uncached_status_gets_no_headers(self):
         """A 404 isn't stored, so no X-Cache header is added in after_cache."""
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/404")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/404")
+        resp = make_response()
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="missing", status_code=404)
+        resp_out = make_response(body="missing", status_code=404)
         _, after = cache.after_cache(req, resp_out)
-        assert "X-Cache" not in after.headers
+        assert header_of(after, "X-Cache") is None
 
     def test_headers_on_real_framework_response(self):
         """End-to-end against the real Response: headers land in build_headers()."""
@@ -402,7 +446,7 @@ class TestXCacheHeaders:
         cache = ResponseCache(ttl=60)
 
         # MISS — handler produced a real Response.
-        req = MockRequest(method="GET", url="/api/real")
+        req = make_request(method="GET", url="/api/real")
         cache.before_cache(req, Response())
         handler_resp = Response()(  # call to populate body/content
             {"hello": "world"}, 200
@@ -413,8 +457,8 @@ class TestXCacheHeaders:
         assert miss_headers[b"X-Cache-TTL"] == b"60"
 
         # HIT — before_cache returns a fresh Response carrying the headers.
-        req2 = MockRequest(method="GET", url="/api/real")
-        _, hit = cache.before_cache(req2, Response())
+        req2 = make_request(method="GET", url="/api/real")
+        hit = serve(cache, req2, Response())
         hit_headers = dict(hit.build_headers())
         assert hit_headers[b"X-Cache"] == b"HIT"
         assert b"X-Cache-TTL" in hit_headers
@@ -428,11 +472,11 @@ class TestAfterCache:
 
     def test_stores_200_response(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/store")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/store")
+        resp = make_response()
 
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="stored", status_code=200)
+        resp_out = make_response(body="stored", status_code=200)
         cache.after_cache(req, resp_out)
 
         stats = cache.cache_stats()
@@ -440,8 +484,8 @@ class TestAfterCache:
 
     def test_does_not_store_without_cache_key(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="POST", url="/api/store")
-        resp = MockResponse(body="nope", status_code=200)
+        req = make_request(method="POST", url="/api/store")
+        resp = make_response(body="nope", status_code=200)
 
         cache.after_cache(req, resp)
         assert cache.cache_stats()["size"] == 0
@@ -455,11 +499,11 @@ class TestTTLExpiry:
 
     def test_entry_expires_after_ttl(self):
         cache = ResponseCache(ttl=1, cleanup_interval=9999)
-        req = MockRequest(method="GET", url="/api/expire")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/expire")
+        resp = make_response()
 
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="temp", status_code=200)
+        resp_out = make_response(body="temp", status_code=200)
         cache.after_cache(req, resp_out)
 
         # Entry is present
@@ -468,18 +512,18 @@ class TestTTLExpiry:
         time.sleep(1.1)
 
         # New request should miss (entry expired)
-        req2 = MockRequest(method="GET", url="/api/expire")
-        resp2 = MockResponse()
-        _, ret = cache.before_cache(req2, resp2)
+        req2 = make_request(method="GET", url="/api/expire")
+        resp2 = make_response()
+        ret = serve(cache, req2, resp2)
         # The response should be the original (not cached)
         assert ret is resp2
 
     def test_ttl_zero_disables_caching(self):
         cache = ResponseCache(ttl=0)
-        req = MockRequest(method="GET", url="/api/disabled")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/disabled")
+        resp = make_response()
 
-        returned_req, returned_resp = cache.before_cache(req, resp)
+        returned_resp = serve(cache, req, resp)
         assert returned_resp is resp
         assert not hasattr(req, "_cache_key")
 
@@ -494,25 +538,25 @@ class TestLRUEviction:
         cache = ResponseCache(ttl=60, max_entries=2)
 
         for i in range(3):
-            req = MockRequest(method="GET", url=f"/api/item/{i}")
-            resp = MockResponse()
+            req = make_request(method="GET", url=f"/api/item/{i}")
+            resp = make_response()
             cache.before_cache(req, resp)
-            resp_out = MockResponse(body=f"item-{i}", status_code=200)
+            resp_out = make_response(body=f"item-{i}", status_code=200)
             cache.after_cache(req, resp_out)
 
         assert cache.cache_stats()["size"] == 2
 
         # First item should have been evicted
-        req_check = MockRequest(method="GET", url="/api/item/0")
-        resp_check = MockResponse()
-        _, ret = cache.before_cache(req_check, resp_check)
+        req_check = make_request(method="GET", url="/api/item/0")
+        resp_check = make_response()
+        ret = serve(cache, req_check, resp_check)
         assert ret is resp_check  # miss — evicted
 
         # Third item should still be cached
-        req_check2 = MockRequest(method="GET", url="/api/item/2")
-        resp_check2 = MockResponse()
-        _, ret2 = cache.before_cache(req_check2, resp_check2)
-        assert ret2.body == "item-2"  # hit
+        req_check2 = make_request(method="GET", url="/api/item/2")
+        resp_check2 = make_response()
+        ret2 = serve(cache, req_check2, resp_check2)
+        assert body_of(ret2) == "item-2"  # hit
 
 
 # ── Status Codes ──────────────────────────────────────────────────
@@ -523,28 +567,28 @@ class TestStatusCodes:
 
     def test_200_is_cached_by_default(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/ok")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/ok")
+        resp = make_response()
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="ok", status_code=200)
+        resp_out = make_response(body="ok", status_code=200)
         cache.after_cache(req, resp_out)
         assert cache.cache_stats()["size"] == 1
 
     def test_404_is_not_cached_by_default(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/missing")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/missing")
+        resp = make_response()
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="not found", status_code=404)
+        resp_out = make_response(body="not found", status_code=404)
         cache.after_cache(req, resp_out)
         assert cache.cache_stats()["size"] == 0
 
     def test_custom_status_codes(self):
         cache = ResponseCache(ttl=60, status_codes=[200, 404])
-        req = MockRequest(method="GET", url="/api/custom")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/custom")
+        resp = make_response()
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="not found", status_code=404)
+        resp_out = make_response(body="not found", status_code=404)
         cache.after_cache(req, resp_out)
         assert cache.cache_stats()["size"] == 1
 
@@ -558,8 +602,8 @@ class TestNonGetMethods:
     @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
     def test_non_get_method_not_cached(self, method):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method=method, url="/api/write")
-        resp = MockResponse()
+        req = make_request(method=method, url="/api/write")
+        resp = make_response()
 
         cache.before_cache(req, resp)
         assert not hasattr(req, "_cache_key")
@@ -581,15 +625,15 @@ class TestCacheStats:
 
     def test_stats_after_miss_and_hit(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/stats")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/stats")
+        resp = make_response()
 
         cache.before_cache(req, resp)  # miss
-        resp_out = MockResponse(body="data", status_code=200)
+        resp_out = make_response(body="data", status_code=200)
         cache.after_cache(req, resp_out)
 
-        req2 = MockRequest(method="GET", url="/api/stats")
-        resp2 = MockResponse()
+        req2 = make_request(method="GET", url="/api/stats")
+        resp2 = make_response()
         cache.before_cache(req2, resp2)  # hit
 
         stats = cache.cache_stats()
@@ -606,11 +650,11 @@ class TestClearCache:
 
     def test_clear_resets_store_and_stats(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/clear")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/clear")
+        resp = make_response()
 
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="data", status_code=200)
+        resp_out = make_response(body="data", status_code=200)
         cache.after_cache(req, resp_out)
 
         cache.clear_cache()
@@ -627,43 +671,46 @@ class TestPerRouteTTL:
     """Test per-route TTL override via _route_meta."""
 
     def test_route_meta_overrides_default_ttl(self):
+        """The per-route max_age is what the MISS advertises, not the default."""
         cache = ResponseCache(ttl=60)
-        req = MockRequest(
+        req = make_request(
             method="GET",
             url="/api/custom-ttl",
-            route_meta={"cache_max_age": 1},
+            cache_max_age=1,
         )
-        resp = MockResponse()
+        resp = make_response(body='{"a": 1}')
 
         cache.before_cache(req, resp)
-        assert req._cache_ttl == 1
+        cache.after_cache(req, resp)
+        assert header_of(resp, "X-Cache-TTL") == "1"
 
     def test_no_route_meta_uses_default_ttl(self):
         cache = ResponseCache(ttl=60)
-        req = MockRequest(method="GET", url="/api/default-ttl")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/default-ttl")
+        resp = make_response(body='{"a": 1}')
 
         cache.before_cache(req, resp)
-        assert req._cache_ttl == 60
+        cache.after_cache(req, resp)
+        assert header_of(resp, "X-Cache-TTL") == "60"
 
     def test_route_meta_ttl_expiry(self):
         cache = ResponseCache(ttl=300, cleanup_interval=9999)
-        req = MockRequest(
+        req = make_request(
             method="GET",
             url="/api/short-lived",
-            route_meta={"cache_max_age": 1},
+            cache_max_age=1,
         )
-        resp = MockResponse()
+        resp = make_response()
 
         cache.before_cache(req, resp)
-        resp_out = MockResponse(body="short", status_code=200)
+        resp_out = make_response(body="short", status_code=200)
         cache.after_cache(req, resp_out)
 
         time.sleep(1.1)
 
-        req2 = MockRequest(method="GET", url="/api/short-lived")
-        resp2 = MockResponse()
-        _, ret = cache.before_cache(req2, resp2)
+        req2 = make_request(method="GET", url="/api/short-lived")
+        resp2 = make_response()
+        ret = serve(cache, req2, resp2)
         # Should be a miss (expired after 1s despite 300s default)
         assert ret is resp2
 
@@ -680,18 +727,18 @@ class TestThreadSafety:
 
         def writer(idx):
             try:
-                req = MockRequest(method="GET", url=f"/api/thread/{idx}")
-                resp = MockResponse()
+                req = make_request(method="GET", url=f"/api/thread/{idx}")
+                resp = make_response()
                 cache.before_cache(req, resp)
-                resp_out = MockResponse(body=f"val-{idx}", status_code=200)
+                resp_out = make_response(body=f"val-{idx}", status_code=200)
                 cache.after_cache(req, resp_out)
             except Exception as e:
                 errors.append(e)
 
         def reader(idx):
             try:
-                req = MockRequest(method="GET", url=f"/api/thread/{idx}")
-                resp = MockResponse()
+                req = make_request(method="GET", url=f"/api/thread/{idx}")
+                resp = make_response()
                 cache.before_cache(req, resp)
             except Exception as e:
                 errors.append(e)
@@ -775,10 +822,10 @@ class TestModuleLevelFunctions:
     def test_clear_cache_resets_default(self):
         # Populate the default cache
         default = _get_default()
-        req = MockRequest(method="GET", url="/api/module")
-        resp = MockResponse()
+        req = make_request(method="GET", url="/api/module")
+        resp = make_response()
         default.before_cache(req, resp)
-        resp_out = MockResponse(body="mod", status_code=200)
+        resp_out = make_response(body="mod", status_code=200)
         default.after_cache(req, resp_out)
         assert default.cache_stats()["size"] == 1
 
@@ -821,3 +868,107 @@ class TestFileBackendEnv:
         backend.set("env_key", {"test": True}, ttl=60)
         result = backend.get("env_key")
         assert result == {"test": True}
+
+
+# ── RFC 9111 conformance (shared-cache rules) ─────────────────────
+
+
+class TestSharedCacheAuthorization:
+    """RFC 9111 s3: a shared cache MUST NOT store a response to a request
+    carrying Authorization unless a response directive allows shared caching.
+
+    Without this the key is method + URL only, so one authenticated caller's
+    body is replayed to every later caller of the same URL — including, where
+    the cache sits ahead of the auth gate, an unauthenticated one.
+    """
+
+    def test_response_cache_does_not_store_a_response_to_an_authorized_request(self):
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        alice = make_request(url="/api/me", headers={"Authorization": "Bearer alice-token"})
+        alice_resp = make_response(body='{"user": "alice", "balance": 42}')
+        cache.before_cache(alice, alice_resp)
+        cache.after_cache(alice, alice_resp)
+
+        # A later caller of the same URL must NOT see alice's body.
+        bob = make_request(url="/api/me", headers={"Authorization": "Bearer bob-token"})
+        bob_out = serve(cache, bob, make_response())
+        assert "alice" not in body_of(bob_out)
+
+        anon = make_request(url="/api/me")
+        anon_out = serve(cache, anon, make_response())
+        assert "alice" not in body_of(anon_out)
+
+    def test_response_cache_stores_an_authorized_response_when_cache_control_public(self):
+        """s3.5's escape hatch: public / s-maxage / must-revalidate opt back in."""
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        req = make_request(url="/api/rates", headers={"Authorization": "Bearer any-token"})
+        resp = make_response(body='{"usd": 1.0}')
+        resp.header("Cache-Control", "public, max-age=60")
+        cache.before_cache(req, resp)
+        cache.after_cache(req, resp)
+
+        later = make_request(url="/api/rates", headers={"Authorization": "Bearer other"})
+        out = serve(cache, later, make_response())
+        assert body_of(out) == '{"usd": 1.0}'
+
+    def test_response_cache_serves_an_unauthenticated_get(self):
+        """Positive control: the cache still works for ordinary public GETs."""
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        req = make_request(url="/api/public")
+        resp = make_response(body='{"public": true}')
+        cache.before_cache(req, resp)
+        cache.after_cache(req, resp)
+
+        out = serve(cache, make_request(url="/api/public"), make_response())
+        assert body_of(out) == '{"public": true}'
+        assert header_of(out, "X-Cache") == "HIT"
+
+
+class TestVary:
+    """RFC 9111 s4.1: a stored response with Vary is only reusable when every
+    nominated request header matches the request that caused it to be stored."""
+
+    def test_response_cache_honours_vary_on_a_nominated_request_header(self):
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        en = make_request(url="/api/greeting", headers={"Accept-Language": "en"})
+        en_resp = make_response(body='"hello"')
+        en_resp.header("Vary", "Accept-Language")
+        cache.before_cache(en, en_resp)
+        cache.after_cache(en, en_resp)
+
+        # Same header value → HIT.
+        same = serve(cache, 
+            make_request(url="/api/greeting", headers={"Accept-Language": "en"}), make_response())
+        assert body_of(same) == '"hello"'
+
+        # Different value → MISS, the handler must run again.
+        other = serve(cache, 
+            make_request(url="/api/greeting", headers={"Accept-Language": "fr"}), make_response())
+        assert body_of(other) != '"hello"'
+
+        # Absent only matches absent.
+        absent = serve(cache, make_request(url="/api/greeting"), make_response())
+        assert body_of(absent) != '"hello"'
+
+    def test_response_cache_never_stores_vary_asterisk(self):
+        """s4.1: 'A stored response with a Vary header field value containing a
+        member "*" always fails to match', so storing one is pointless."""
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        req = make_request(url="/api/anything")
+        resp = make_response(body='"never-reusable"')
+        resp.header("Vary", "*")
+        cache.before_cache(req, resp)
+        cache.after_cache(req, resp)
+
+        out = serve(cache, make_request(url="/api/anything"), make_response())
+        assert body_of(out) != '"never-reusable"'

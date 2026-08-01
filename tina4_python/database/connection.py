@@ -255,16 +255,33 @@ class Database:
 
     @staticmethod
     def _serialize_result(result) -> dict:
-        """Flatten a DatabaseResult to a JSON-friendly dict for shared backends."""
-        return {
-            "records": result.records, "count": result.count,
-            "limit": result.limit, "offset": result.offset,
-            "affected_rows": result.affected_rows, "last_id": result.last_id,
-        }
+        """Flatten a cached read to a JSON-friendly dict for shared backends.
+
+        ``fetch()`` yields a ``DatabaseResult``; ``fetch_one()`` yields a plain
+        dict (or None). Both go through here, so both shapes are handled: this
+        used to read ``result.records`` unconditionally, which made every
+        ``fetch_one()`` raise ``AttributeError`` the moment TINA4_DB_CACHE was
+        turned on. The envelope records which shape it holds so the read side
+        hands back exactly what the caller expects.
+        """
+        if isinstance(result, DatabaseResult):
+            return {
+                "_shape": "result",
+                "records": result.records, "count": result.count,
+                "limit": result.limit, "offset": result.offset,
+                "affected_rows": result.affected_rows, "last_id": result.last_id,
+            }
+        return {"_shape": "row", "row": result}
 
     @staticmethod
-    def _deserialize_result(data: dict) -> DatabaseResult:
-        """Reconstruct a DatabaseResult from a backend-cached dict."""
+    def _deserialize_result(data: dict):
+        """Reconstruct a cached read from its backend envelope.
+
+        Returns a ``DatabaseResult`` for a ``fetch()`` entry and the plain row
+        (dict or None) for a ``fetch_one()`` entry.
+        """
+        if isinstance(data, dict) and data.get("_shape") == "row":
+            return data.get("row")
         return DatabaseResult(
             records=data.get("records", []), count=data.get("count", 0),
             limit=data.get("limit", 0), offset=data.get("offset", 0),
