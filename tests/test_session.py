@@ -21,8 +21,18 @@ class TestFileSession:
         assert len(sid) > 10
 
     def test_start_with_id(self, session):
+        # 3.13.95 (ADR-0021): strict mode. start() adopts a supplied id only
+        # when the store already holds that session -- adopting an unknown id is
+        # session fixation. A KNOWN id still resumes under its own id.
+        session._handler.write("my-session-id", {"seeded": 1}, 300)
         sid = session.start("my-session-id")
         assert sid == "my-session-id"
+        assert session.get("seeded") == 1
+
+    def test_start_with_unknown_id_mints_a_fresh_one(self, session):
+        # The negative half: an id the store has never seen is never adopted.
+        sid = session.start("never-issued-by-us")
+        assert sid != "never-issued-by-us"
 
     def test_set_and_get(self, session):
         session.start()

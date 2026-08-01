@@ -519,30 +519,54 @@ class TestSessionWithHandlers:
         return handler, mock_client
 
     def test_session_with_redis_handler(self):
-        from tina4_python.session import Session
+        """Session over a REAL Redis: mint, persist, resume, destroy.
 
-        handler, mock_client = self._make_redis_handler_mocked()
-        mock_client.get.return_value = None
+        3.13.95: this test used a MagicMock Redis client, which is a mock test
+        and forbidden outright -- it also meant the Redis session path had never
+        been proven against a live server. It now drives the real one, and it
+        pins strict mode (ADR-0021): a known id resumes, an unknown one does not.
+        """
+        from tina4_python.session import Session
+        from tina4_python.session_handlers.redis_handler import RedisSessionHandler
+
+        if not _reachable(_REDIS_HOST, _REDIS_PORT):
+            pytest.skip(f"redis not reachable at {_REDIS_HOST}:{_REDIS_PORT}")
+        handler = RedisSessionHandler()
 
         session = Session(handler=handler, ttl=600)
-        sid = session.start("test-session")
-        assert sid == "test-session"
+        sid = session.start()
         session.set("user_id", 42)
-        assert session.get("user_id") == 42
+        assert session.save() is True
+        try:
+            resumed = Session(handler=handler, ttl=600)
+            assert resumed.start(sid) == sid, "a real Redis session failed to resume"
+            assert resumed.get("user_id") == 42
+
+            # Negative half: an id Redis has never seen is not adopted.
+            assert Session(handler=handler, ttl=600).start("neverissuedbyus000") != \
+                "neverissuedbyus000"
+        finally:
+            handler.destroy(sid)
 
     def test_session_with_valkey_handler(self):
+        """Same contract over a REAL Valkey (previously a MagicMock too)."""
         from tina4_python.session import Session
         from tina4_python.session_handlers.valkey_handler import ValkeySessionHandler
 
+        if not _reachable(_VALKEY_HOST, _VALKEY_PORT):
+            pytest.skip(f"valkey not reachable at {_VALKEY_HOST}:{_VALKEY_PORT}")
         handler = ValkeySessionHandler()
-        mock_client = MagicMock()
-        handler._redis_client = mock_client
-        handler._use_redis_pkg = True
-        mock_client.get.return_value = None
 
         session = Session(handler=handler, ttl=600)
-        sid = session.start("valkey-session")
-        assert sid == "valkey-session"
+        sid = session.start()
+        session.set("user_id", 43)
+        assert session.save() is True
+        try:
+            resumed = Session(handler=handler, ttl=600)
+            assert resumed.start(sid) == sid, "a real Valkey session failed to resume"
+            assert resumed.get("user_id") == 43
+        finally:
+            handler.destroy(sid)
         session.set("lang", "en")
         assert session.get("lang") == "en"
 

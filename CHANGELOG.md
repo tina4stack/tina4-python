@@ -69,6 +69,73 @@ throttle at half its configured limit. It now runs once.
 
 **Migration.** Routes in nested groups move to the path you declared. If you had
 worked around the old behaviour by flattening a prefix, remove the workaround.
+### Security: a session id is opaque and can never steer a filesystem path
+
+The session cookie value reached the file session backend as a path component.
+Tina4 for Python hashes the id into the filename, so it was NOT vulnerable to
+the arbitrary file write proven in PHP and the arbitrary `.json` read/overwrite
+proven in Node - but it did ADOPT any attacker-supplied cookie id verbatim.
+
+**Breaking.** `Session.start()` now adopts a supplied session id only when it
+passes BOTH gates, and mints a fresh id otherwise:
+
+1. It is a well-formed opaque identifier (`[A-Za-z0-9_-]`, up to 128
+   characters). The restriction is on the ALPHABET, not on length.
+2. STRICT MODE: the store already holds that session. A well-formed id the store
+   has never seen is discarded, because adopting one is session fixation. This
+   matches PHP's own `session.use_strict_mode=1` default, Django and Rails, and
+   the behaviour Tina4 for Node already had.
+
+A backend that is UNREACHABLE is not treated as "unknown id". Strict mode
+discards an id the store does not know; an outage is not evidence of that, and
+rotating on it would log every user out over a blip and orphan their stored
+sessions. The documented policy stays log-loud + degrade.
+
+`is_valid_session_id()` is exported for apps that want the same check.
+
+Migration: `session.start("some-new-id")` no longer returns that id for a
+session the store does not hold. Write the session first, or let the framework
+mint the id and read it back from `session.session_id`. Deploying this also logs
+every existing session out once.
+
+### Security: an unverified Basic credential is no longer an auth result
+
+**Breaking:** `Auth.authenticate_request()` no longer has a `Basic` branch. It
+used to decode `Authorization: Basic` and return a truthy
+`{"auth_type": "basic", "username": ..., "password": ...}` without checking
+those credentials against anything, so an app following the documented
+`if auth is None: return 401` idiom authenticated every caller that sent a
+base64 string. PHP, Ruby and Node all returned `None` there.
+
+Migration: an app that relied on this was not authenticating anyone. Decode the
+header yourself and verify the credentials against your user store with
+`Auth.check_password()`, or move the endpoint to Bearer JWT.
+
+### Breaking: the API-key auth result key is `_auth` in all four frameworks
+
+`Auth.authenticate_request()` returns `{"_auth": "api_key"}` instead of
+`{"auth_type": "api_key"}`. PHP and Node already used `_auth` and Ruby used
+`api_key`, so one successful authentication read three different ways across
+the family.
+
+Migration: replace `payload["auth_type"] == "api_key"` with
+`payload["_auth"] == "api_key"`.
+
+### Security: the write-route auth gate compares the API key in constant time
+
+`core.server._check_auth` compared the bearer token against `TINA4_API_KEY`
+with a plain `==`, which returns as soon as two bytes differ and leaks the key
+prefix through response timing. It now routes through
+`Auth.validate_api_key()`, which uses `hmac.compare_digest`.
+
+### Fixed: a malformed `exp` / `nbf` no longer reads as "no constraint"
+
+RFC 7519 s2 defines `exp` and `nbf` as NumericDate. A token carrying
+`"exp": true` was compared as the year 1970 (Python treats `bool` as an `int`),
+and the expiry clock is now truncated to integer seconds and tested with `>=`
+so the boundary is byte-identical to PHP and Ruby - RFC 7519 s4.1.4 requires
+the current time to be strictly BEFORE `exp`. A token with no `exp`/`nbf` claim
+at all stays unconstrained.
 
 ### Breaking: one return-value contract for every middleware hook
 

@@ -506,8 +506,18 @@ async def login(request, response):
 @post("/api/orders")                         # protected automatically — write nothing extra
 async def create_order(request, response):
     auth = Auth.authenticate_request(request.headers)            # verified payload, or None
+    if auth is None:
+        return response({"error": "Unauthorized"}, 401)
     return response(Order({**request.body, "user_id": auth["user_id"]}).save(), 201)
 ```
+
+> `authenticate_request` verifies a **Bearer JWT**, then falls back to a Bearer
+> **API key** (`{"_auth": "api_key"}`), and returns `None` otherwise. It does
+> **not** handle `Authorization: Basic` — it used to decode Basic and return a
+> truthy dict for credentials it had never checked, so the `if auth is None`
+> guard above passed for any caller that sent a base64 string. If you want Basic
+> auth, decode the header yourself and verify the password with
+> `Auth.check_password()` against your own user store.
 
 > Look a user up by a column with `User.where("email = ?", [...])[0]` or
 > `User.find({"email": ...})[0]` — **not** `select_one("email = ?", ...)` (which needs full

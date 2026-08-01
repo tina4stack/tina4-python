@@ -11,11 +11,40 @@ File-based sessions by default. Pluggable backends for Redis, MongoDB, Database.
     session.save()
 """
 import os
+import re
 import json
 import time
 import hashlib
 import secrets
 from pathlib import Path
+
+
+#: A session id is OPAQUE — an unguessable lookup token and nothing else. It is
+#: never a filename, a path, a SQL fragment or a Redis key fragment, so the only
+#: characters it may contain are the ones every backend treats as inert.
+#:
+#: The alphabet is the RFC 4648 base64url set, which is exactly what all four
+#: frameworks already mint: Python ``secrets.token_urlsafe(32)``, Ruby
+#: ``SecureRandom.hex(32)``, PHP/Node ``hex(16)``. Validation is therefore
+#: non-breaking for every id the family has ever issued, while rejecting the
+#: ``.`` and ``/`` that turn a cookie into a path traversal.
+#:
+#: There is deliberately NO entropy floor here. Unguessability is guaranteed by
+#: the framework's own minting (``secrets.token_urlsafe(32)``), not by inspecting
+#: an id a trusted caller passed to ``start()`` on purpose — an app is entitled
+#: to run ``session.start("my-session-id")`` with an id it manages itself, and a
+#: length rule would break that without closing any attack. The 128-character
+#: ceiling only bounds what an attacker can push through a backend key.
+_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+
+def is_valid_session_id(session_id) -> bool:
+    """True when ``session_id`` is a well-formed opaque session identifier.
+
+    Callers pass UNTRUSTED input here (the session cookie is attacker-chosen),
+    so anything that is not a string of the opaque alphabet is rejected.
+    """
+    return isinstance(session_id, str) and bool(_SESSION_ID_PATTERN.match(session_id))
 
 
 def session_cookie_name() -> str:
@@ -182,6 +211,9 @@ class Session:
         self._session_id: str | None = None
         self._data: dict = {}
         self._dirty: bool = False
+        #: True when the LAST backend read raised rather than returning a miss.
+        #: Lets start() tell "no such session" from "the store is unreachable".
+        self._last_read_failed: bool = False
         # Backend-failure policy (parity across all 4 frameworks): a backend
         # that becomes unreachable mid-request must NEVER take the whole app
         # down with it, and must NEVER fail silently. The default is
@@ -290,9 +322,19 @@ class Session:
         )
 
     def _safe_read(self, session_id: str) -> dict:
+        """Read through the backend, recording WHY an empty result came back.
+
+        ``_last_read_failed`` distinguishes "the store answered, and has no such
+        session" from "the store did not answer at all". Strict mode must only
+        discard an id on the first: treating an outage as "unknown id" rotates
+        the session id on every request while the backend is down, which logs
+        every user out over a blip and orphans their stored sessions.
+        """
+        self._last_read_failed = False
         try:
             return self._handler.read(session_id)
         except Exception as exc:
+            self._last_read_failed = True
             self._log_backend_error("read", exc)
             if self._strict:
                 raise
@@ -319,9 +361,45 @@ class Session:
             return False
 
     def start(self, session_id: str = None) -> str:
-        """Start or resume a session. Returns the session ID."""
-        self._session_id = session_id or secrets.token_urlsafe(32)
-        self._data = self._safe_read(self._session_id)
+        """Start or resume a session. Returns the session ID.
+
+        ``session_id`` is UNTRUSTED - it arrives from the session cookie, which
+        the client fully controls. It is adopted ONLY when it passes both gates:
+
+        1. It is a well-formed opaque identifier. Anything else could steer a
+           filesystem path (arbitrary read/write on the file backend).
+        2. STRICT MODE: the store already knows it. A well-formed id the store
+           has never seen is discarded too, because adopting one is textbook
+           session fixation - an attacker plants a cookie, the victim logs in
+           under it, and the attacker replays the id they chose.
+
+        Either gate failing mints a fresh id instead. This matches PHP's own
+        ``session.use_strict_mode=1`` default, Django, Rails, and the behaviour
+        Tina4 for Node already had.
+
+        BREAKING: ``start("some-new-id")`` no longer returns that id for a
+        session the store does not hold. Write the session first, or let the
+        framework mint the id and read it back from ``session_id``.
+        """
+        if session_id is not None and not is_valid_session_id(session_id):
+            session_id = None
+
+        if session_id:
+            existing = self._safe_read(session_id)
+            if existing or self._last_read_failed:
+                # Adopt when the store HAS the session, and also when the store
+                # could not be reached: an outage is not evidence the id is
+                # unknown, and rotating on it would log every user out over a
+                # blip. The backend-failure policy is degrade, not rotate.
+                self._session_id = session_id
+                self._data = existing
+                self._dirty = False
+                return self._session_id
+            # The store answered and has no such session: never adopt an id we
+            # did not issue.
+
+        self._session_id = secrets.token_urlsafe(32)
+        self._data = {}
         self._dirty = False
         return self._session_id
 

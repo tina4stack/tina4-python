@@ -161,16 +161,22 @@ class TestRequestAuth:
         try:
             result = auth.authenticate_request({"authorization": "Bearer my-api-key"})
             assert result is not None
-            assert result["auth_type"] == "api_key"
+            # 3.13.95: the key is "_auth", matching PHP and Node. Python used
+            # "auth_type" and Ruby "api_key", so one successful auth read three
+            # different ways across the family. See ADR-0021.
+            assert result["_auth"] == "api_key"
         finally:
             del os.environ["TINA4_API_KEY"]
 
     def test_basic_auth(self, auth):
+        # 3.13.95: Basic credentials are NOT an authentication result. This test
+        # previously asserted that authenticate_request returned a truthy dict
+        # carrying the submitted username/password -- i.e. it pinned the bypass
+        # as correct. Nothing ever verified those credentials, so any caller
+        # following the documented "if auth is None: return 401" idiom
+        # authenticated every client that sent a base64 string. See ADR-0021.
         creds = base64.b64encode(b"admin:pass123").decode()
-        result = auth.authenticate_request({"authorization": f"Basic {creds}"})
-        assert result is not None
-        assert result["username"] == "admin"
-        assert result["password"] == "pass123"
+        assert auth.authenticate_request({"authorization": f"Basic {creds}"}) is None
 
     def test_no_auth_header(self, auth):
         assert auth.authenticate_request({}) is None
@@ -301,11 +307,10 @@ class TestPasswordEdgeCases:
 
 class TestRequestAuthEdgeCases:
     def test_basic_auth_with_colon_in_password(self, auth):
+        # 3.13.95: no Basic branch at all, so a colon-bearing password is just
+        # another unverified credential and is not an authentication result.
         creds = base64.b64encode(b"user:pass:with:colons").decode()
-        result = auth.authenticate_request({"authorization": f"Basic {creds}"})
-        assert result is not None
-        assert result["username"] == "user"
-        assert result["password"] == "pass:with:colons"
+        assert auth.authenticate_request({"authorization": f"Basic {creds}"}) is None
 
     def test_malformed_basic_auth(self, auth):
         result = auth.authenticate_request({"authorization": "Basic !!invalid!!"})
