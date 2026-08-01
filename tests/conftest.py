@@ -102,10 +102,47 @@ def pytest_runtest_makereport(item, call):
 # child's own output. Every other failure stops immediately and reports what the
 # child printed, so a real bug still fails fast and legibly.
 
+import signal as _signal
 import socket as _socket
 import subprocess as _subprocess
 import sys as _sys
 import time as _time
+
+
+def _reset_inherited_signal_dispositions():  # pragma: no cover - runs in the child
+    """Restore SIGHUP/SIGINT/SIGQUIT to SIG_DFL in a spawned test server.
+
+    SIG_IGN is inherited across fork AND preserved across exec, so a child
+    inherits whatever the harness that launched pytest was given. The lab
+    runner starts the suite with `setsid nohup`, and nohup sets SIGHUP,
+    SIGINT and SIGQUIT to SIG_IGN - measured on the running suite process:
+
+        SigIgn: 0000000000000007      (bits 0,1,2 = HUP, INT, QUIT)
+
+    A test that asserts a signal's DEFAULT disposition therefore proves
+    nothing under that harness: `test_sighup_is_not_trapped_and_terminates_
+    the_process` sent SIGHUP to a child that had inherited SIG_IGN, nothing
+    happened, and the run failed on Linux while passing on macOS - where the
+    suite is not run under nohup.
+
+    Only SIGHUP was affected in practice: the framework TRAPS SIGINT, so
+    those cases never depended on the inherited default. That is exactly why
+    one test broke and the neighbouring ones did not, which made it look like
+    a Linux behaviour difference in the framework rather than a harness
+    artifact.
+
+    Resetting here means the child always starts from the documented default,
+    whatever launched the suite. POSIX-only; Windows has no SIGHUP/SIGQUIT and
+    preexec_fn is not supported there.
+    """
+    for name in ("SIGHUP", "SIGINT", "SIGQUIT"):
+        sig = getattr(_signal, name, None)
+        if sig is not None:
+            try:
+                _signal.signal(sig, _signal.SIG_DFL)
+            except (OSError, ValueError):
+                pass
+
 
 _ADDR_IN_USE = ("address already in use", "address in use", "eaddrinuse",
                 "errno 48", "errno 98", "oserror: [errno 48]", "oserror: [errno 98]")
@@ -223,6 +260,7 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
                 [_sys.executable, "app.py"], cwd=str(proj), env=env,
                 stdout=sink or _subprocess.PIPE, stderr=_subprocess.STDOUT,
                 start_new_session=new_session,
+                preexec_fn=_reset_inherited_signal_dispositions,
             )
         finally:
             if sink is not None:
