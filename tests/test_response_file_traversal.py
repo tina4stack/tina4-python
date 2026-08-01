@@ -58,11 +58,34 @@ def test_file_refuses_deep_traversal_chain(confined):
     assert response.status_code == 403
 
 
-def test_file_refuses_absolute_path_outside_root(confined):
-    """No ``..`` at all - containment, not the ``..`` check, has to catch this."""
+def test_file_refuses_absolute_path_outside_a_declared_root(confined):
+    """No ``..`` at all - containment, not the ``..`` check, has to catch this.
+
+    Containment applies ONLY when the caller declared a root, so the root is
+    what makes this 403.
+    """
     response = Response()
-    response.file("/etc/passwd")
+    response.file("/etc/passwd", root=str(confined))
     assert response.status_code == 403
+
+
+def test_file_serves_an_absolute_path_when_no_root_is_declared(confined):
+    """REGRESSION CONTROL. Confinement once defaulted to the cwd, so every
+    legitimate absolute path outside the project answered 403 - a missing file
+    reported Forbidden instead of Not Found. Unrooted, an absolute path is the
+    caller's business (Express res.sendFile, Rails send_file, ASP.NET
+    PhysicalFile all serve one), so this must NOT be 403.
+    """
+    outside = confined.parent / "outside.txt"
+    outside.write_text("OUTSIDE\n")
+    response = Response()
+    response.file(str(outside))
+    assert response.status_code == 200
+    assert response.content == b"OUTSIDE\n"
+
+    missing = Response()
+    missing.file("/nonexistent/path/to/file.css")
+    assert missing.status_code == 404
 
 
 def test_file_honours_an_explicit_root(confined):

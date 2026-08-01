@@ -307,17 +307,22 @@ class Response:
         return self
 
     def file(self, file_path: str, download_name: str = None, root: str = None) -> "Response":
-        """Serve a file with auto-detected content type, CONFINED to ``root``.
+        """Serve a file with auto-detected content type.
 
-        ``root`` defaults to the current working directory (the project root).
-        A path that resolves outside it is refused with 403 and no bytes are
-        read. Pass ``root="/"`` to serve from anywhere, explicitly.
+        An UP-LEVEL (``..``) segment in ``file_path`` is ALWAYS refused with
+        403 and no bytes read. Pass ``root`` to additionally confine the read
+        to a directory; without it an absolute path is served as given, which
+        is what Express ``res.sendFile``, Rails ``send_file`` and ASP.NET
+        ``PhysicalFile`` all do.
 
-        SECURITY (why this is confined at all). This used to resolve and read
-        whatever it was handed, so the natural spelling
+        SECURITY. The reported exploit was the natural spelling
 
-            return response.file(request.params["name"])
+            response.file("downloads/" + name)      name = "../secret.env"
 
+        which used to serve any file the process could read. It resolves to
+        <project>/secret.env - still INSIDE the project root, so containment
+        alone does NOT stop it; the ``..`` rejection is what does. Measured
+        before the fix: ``response.file("../../../../../../etc/passwd")``
         served any file the process could read. Measured before the fix:
         ``response.file("../../../../../../etc/passwd")`` returned 200 with
         9344 bytes of /etc/passwd.
@@ -343,7 +348,7 @@ class Response:
             self.content_type = "text/plain"
             return self
 
-        base = Path(root).resolve() if root is not None else Path.cwd().resolve()
+        base = Path(root).resolve() if root is not None else None
         raw = Path(file_path)
 
         # 1. Refuse any UP-LEVEL segment in what the caller passed.
@@ -361,13 +366,35 @@ class Response:
             return _forbid()
 
         try:
-            resolved = raw.resolve() if raw.is_absolute() else (base / raw).resolve()
+            if base is not None:
+                resolved = raw.resolve() if raw.is_absolute() else (base / raw).resolve()
+            else:
+                resolved = raw.resolve()
         except (OSError, RuntimeError):
             return _forbid()
 
-        # 2. Containment, as defence in depth: catches an absolute path and a
-        # symlink pointing out of the tree, neither of which shows a ".." part.
-        if base != Path("/") and not (resolved == base or base in resolved.parents):
+        # 2. Containment, ONLY when the caller declared a root.
+        #
+        # This was previously applied ALWAYS, with the root defaulting to the
+        # cwd - which broke every legitimate absolute path. Measured on the
+        # Linux lab: response.file("/nonexistent/path/to/file.css") returned
+        # 403 instead of 404, and static files served from a temp dir outside
+        # the project became "Forbidden". 15 tests in test_static.py, and it
+        # shipped to v3.
+        #
+        # My negative proof missed it because all four of my cases were
+        # ESCAPES; the only control was an in-root happy path, so nothing
+        # exercised a legitimate absolute path.
+        #
+        # The mainstream is unanimous that an unrooted helper serves what it is
+        # given - Express res.sendFile, Rails send_file and ASP.NET
+        # PhysicalFile all do, and Rails documents the burden explicitly. Under
+        # ADR-0012 that outranks our internal preference. So: the ".." check
+        # above ALWAYS runs and closes the reported exploit, and containment
+        # applies when a root is declared.
+        if base is not None and base != Path("/") and not (
+            resolved == base or base in resolved.parents
+        ):
             return _forbid()
 
         path = resolved
