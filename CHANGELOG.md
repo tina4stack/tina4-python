@@ -12,6 +12,45 @@ UNRELEASED work. When a version ships, its notes go to the release notes above.
 
 ## Unreleased
 
+### Breaking: the response cache obeys RFC 9111 (Authorization and Vary)
+
+The response cache keyed entries on method plus URL, with NO request header in
+the key. It is a shared, server-side store, so on a secured GET route the first
+caller's body was served to every later caller of the same URL. Measured
+end-to-end on a real secured route: a valid token for `bob` returned alice's
+private body with `X-Cache: HIT`. In Node, where route middleware runs before
+the auth gate, an ANONYMOUS request returned 200 with alice's body.
+
+Two RFC 9111 rules now apply, as they do in Varnish, nginx and Rails:
+
+- Section 3 / 3.5: a response to a request carrying `Authorization` is NOT
+  stored unless the response carries `Cache-Control: public`, `s-maxage` or
+  `must-revalidate`.
+- Section 4.1: `Vary` is honoured. The nominated request headers are recorded
+  with the entry and must match on lookup; an absent field matches only an
+  absent field. `Vary: *` is never stored.
+
+**Migration.** Authenticated GETs are no longer cached by default. If a
+response body is genuinely identical for every caller, opt back in per
+response:
+
+```python
+response.add_header("Cache-Control", "public")
+```
+
+Only add it where the body carries nothing user-specific. Public GET caching is
+unchanged. See ADR-0020 and `plan/v3/features/043-caching.md`.
+
+### Breaking: an unknown TINA4_CACHE_BACKEND raises instead of falling back to memory
+
+An unrecognised name silently became an in-process memory cache, so a typo
+(`TINA4_CACHE_BACKEND=redsi`) produced a running app that shared nothing while the
+operator believed it was Redis. It now raises, naming the bad value and the valid
+set - the contract `TINA4_SESSION_BACKEND` already uses.
+
+**Migration.** Fix the spelling. Valid: `memory`, `file`, `redis`, `valkey`,
+`memcached`, `mongodb`, `database` (plus the aliases `memcache`, `mongo`, `db`).
+
 ### Breaking: one return-value contract for every middleware hook
 
 What a `before_*` / `after_*` hook RETURNS now decides what happens next, the
