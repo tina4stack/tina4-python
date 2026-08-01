@@ -129,22 +129,24 @@ class TestRabbitMQBackendConfig:
         assert backend._socket is None
 
     def test_acknowledge_without_delivery_tag_is_inert(self):
-        # Real behaviour: ack with no outstanding delivery tag does nothing —
-        # the tag stays None (no broker call attempted, no state change).
+        # Real behaviour: ack for a message that is not in flight does nothing —
+        # no broker call attempted, no state change. Same guarantee as before
+        # ADR-0022; only the state it reads changed, from a single
+        # _last_delivery_tag slot to the per-message _delivery_tags map.
         from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
 
         backend = RabbitMQBackend()
-        assert backend._last_delivery_tag is None
+        assert backend._delivery_tags == {}
         backend.acknowledge("test", "msg-1")
-        assert backend._last_delivery_tag is None
+        assert backend._delivery_tags == {}
 
     def test_reject_without_delivery_tag_is_inert(self):
         from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
 
         backend = RabbitMQBackend()
-        assert backend._last_delivery_tag is None
+        assert backend._delivery_tags == {}
         backend.reject("test", "msg-1")
-        assert backend._last_delivery_tag is None
+        assert backend._delivery_tags == {}
 
 
 # ── Kafka Backend Config (pure constructor state) ────────────────
@@ -546,9 +548,12 @@ class TestRabbitMQConnectorLive:
             assert msg["to"] == "alice@test.com"
             assert msg["value"] == 7
             assert msg["id"] == msg_id
-            assert reader._last_delivery_tag is not None   # delivery tag captured
+            # The tag is now recorded AGAINST THE MESSAGE ID (ADR-0022), so an
+            # ack can name the delivery it means. Was a single
+            # _last_delivery_tag slot, which acked whatever was popped last.
+            assert msg_id in reader._delivery_tags        # delivery tag captured
             reader.acknowledge(topic, msg_id)
-            assert reader._last_delivery_tag is None        # cleared after ack
+            assert msg_id not in reader._delivery_tags    # cleared after ack
         finally:
             reader.close()
 
@@ -686,8 +691,13 @@ class TestKafkaConnectorLive:
             assert msg["type"] == "click"
             assert msg["value"] == 42
             assert msg["id"] == msg_id
+            # The polled Message is now held AGAINST ITS MESSAGE ID (ADR-0022)
+            # so the commit names the record it means. Was a single
+            # _last_message slot, which committed past whatever was polled last
+            # and buried any record failed before it.
+            assert msg_id in consumer._in_flight
             consumer.acknowledge(topic, msg_id)   # commits the offset
-            assert consumer._last_message is None  # cleared after commit
+            assert msg_id not in consumer._in_flight  # cleared after commit
         finally:
             consumer.close()
 
@@ -1282,3 +1292,255 @@ class TestRabbitMQLiveRawHandshake:
             verifier._queue_purge_raw(topic)
         finally:
             verifier.close()
+
+
+# ── Feature 48 audit: job lifecycle over REAL brokers (ADR-0022) ─────
+#
+# The suite above proves the CONNECTORS work against live RabbitMQ/Kafka. It
+# never drove Job.complete()/Job.fail() through those connectors, and that gap
+# is where three data-loss bugs lived undetected. These lock the LIFECYCLE.
+# No mocks: every case below talks to a real broker.
+
+
+@pytest.mark.skipif(not _confluent_available(), reason="confluent-kafka not installed")
+@pytest.mark.skipif(not _kafka_reachable(), reason="Kafka not reachable")
+class TestKafkaJobLifecycleLive:
+    """Kafka has no per-record nack, so a retry is a re-produce + an offset commit.
+
+    Authority: Kafka commits a consumer-group OFFSET, not individual records, so
+    the only way to retry one record without replaying its successors is to
+    re-produce it and commit past the original. Confluent's retry-topic pattern
+    and Spring Kafka's DeadLetterPublishingRecoverer both work this way.
+    """
+
+    def _queue(self, topic, max_retries=3, group=None):
+        # group=None mints a fresh consumer group. Pass an explicit group to
+        # model a RESTARTED worker rejoining the same group, which is the only
+        # way to observe a committed offset.
+        os.environ["TINA4_KAFKA_BROKERS"] = _KAFKA_BROKER
+        os.environ["TINA4_KAFKA_GROUP_ID"] = group or ("tina4_test_" + secrets.token_hex(8))
+        os.environ.pop("TINA4_QUEUE_URL", None)
+        from tina4_python.queue import Queue
+        return Queue(topic=topic, backend="kafka", max_retries=max_retries)
+
+    @staticmethod
+    def _close(queue):
+        try:
+            queue._backend._backend.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def test_kafka_fail_with_retries_left_redelivers_instead_of_dropping(self):
+        """fail() below max_retries must re-deliver, not silently destroy the job.
+
+        Regression: KafkaBackend.fail() had no else branch. A job failing its
+        FIRST attempt (the common case) was neither re-published nor
+        dead-lettered - the consumer position had already advanced past the
+        record, so the job simply vanished.
+        """
+        topic = "tina4_test_" + secrets.token_hex(8)
+        queue = self._queue(topic, max_retries=3)
+        try:
+            queue.push({"work": "retry-me"})
+            job = queue.pop()
+            assert job is not None, "real Kafka did not return the pushed job"
+            job.fail("first attempt blew up")
+
+            again = queue.pop()
+            assert again is not None, (
+                "a job failed with retries remaining was DROPPED: neither "
+                "re-delivered nor dead-lettered"
+            )
+            assert again.payload == {"work": "retry-me"}
+            assert again.attempts == 1, (
+                "the retry must carry the incremented attempt count, otherwise "
+                "the job can never reach the dead-letter topic"
+            )
+        finally:
+            self._close(queue)
+
+    def test_kafka_fail_then_complete_does_not_bury_the_failed_job(self):
+        """Completing a LATER job must not commit an offset past a failed one.
+
+        Regression: complete() committed the consumer offset, so completing B
+        after failing A moved the group past A permanently. A was unrecoverable
+        even by a brand-new consumer in the same group.
+        """
+        topic = "tina4_test_" + secrets.token_hex(8)
+        group = "tina4_test_" + secrets.token_hex(8)
+        queue = self._queue(topic, max_retries=3, group=group)
+        try:
+            queue.push({"which": "A"})
+            queue.push({"which": "B"})
+            job_a = queue.pop()
+            assert job_a is not None and job_a.payload == {"which": "A"}
+            job_a.fail("A blew up but has retries left")
+            job_b = queue.pop()
+            assert job_b is not None and job_b.payload == {"which": "B"}
+            job_b.complete()
+        finally:
+            self._close(queue)
+
+        # SAME group: a restarted worker resumes from the committed offset.
+        survivor = self._queue(topic, max_retries=3, group=group)
+        try:
+            os.environ["TINA4_KAFKA_ASSIGN_TIMEOUT"] = "25"
+            seen = []
+            for _ in range(3):
+                job = survivor.pop()
+                if job is None:
+                    break
+                seen.append(job.payload)
+            assert {"which": "A"} in seen, (
+                "completing B buried the failed A: a fresh consumer in the same "
+                "group can no longer see it. Failed work must survive a "
+                "successor's commit."
+            )
+        finally:
+            self._close(survivor)
+
+    def test_kafka_fail_past_max_retries_reaches_dead_letters(self):
+        """attempts must survive the re-produce so the job can finally die.
+
+        Regression: attempts was re-read from the pushed body (always 0), so
+        the dead-letter branch was only reachable when max_retries <= 1.
+        """
+        topic = "tina4_test_" + secrets.token_hex(8)
+        queue = self._queue(topic, max_retries=2)
+        try:
+            queue.push({"work": "poison"})
+            for attempt in range(4):
+                job = queue.pop()
+                if job is None:
+                    break
+                job.fail("attempt %d" % attempt)
+            dead = queue.dead_letters()
+            assert dead, (
+                "a job failed more times than max_retries never reached the "
+                "dead-letter topic - it would be retried forever"
+            )
+            assert dead[0].payload == {"work": "poison"}
+        finally:
+            self._close(queue)
+
+
+@pytest.mark.skipif(not _pika_available(), reason="pika not installed")
+@pytest.mark.skipif(
+    not _reachable(_RABBIT_HOST, _RABBIT_PORT),
+    reason="RabbitMQ not reachable",
+)
+class TestRabbitMQJobLifecycleLive:
+    """AMQP 0-9-1 basic.nack(requeue=1) returns the body UNMODIFIED.
+
+    The spec carries no delivery counter, so a retry count cannot ride on a
+    requeue. Every mainstream AMQP client that counts attempts (Celery,
+    Spring AMQP's RepublishMessageRecoverer, laravel-queue-rabbitmq)
+    acknowledges the original and re-publishes a body carrying the new count.
+    """
+
+    def _queue(self, topic, max_retries=3):
+        os.environ["TINA4_QUEUE_URL"] = "amqp://guest:guest@%s:%d/" % (_RABBIT_HOST, _RABBIT_PORT)
+        from tina4_python.queue import Queue
+        return Queue(topic=topic, backend="rabbitmq", max_retries=max_retries)
+
+    @staticmethod
+    def _close(queue, topic):
+        connector = queue._backend._backend
+        try:
+            connector.clear(topic)
+            connector.clear(topic + ".dead_letter")
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            connector.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def test_rabbitmq_fail_past_max_retries_reaches_dead_letters(self):
+        """A persistently failing job must die, not spin forever.
+
+        Regression: fail() nacked with requeue=True. AMQP returns the ORIGINAL
+        body, so attempts came back as 0 on every redelivery and
+        attempts >= max_retries could never trip for max_retries >= 2. The job
+        was redelivered forever with no dead-letter escape.
+        """
+        topic = "tina4_test_" + secrets.token_hex(8)
+        queue = self._queue(topic, max_retries=2)
+        try:
+            queue.push({"work": "poison"})
+            for attempt in range(5):
+                job = queue.pop()
+                if job is None:
+                    break
+                job.fail("attempt %d" % attempt)
+            dead = queue.dead_letters()
+            assert dead, (
+                "a job failed more times than max_retries never reached the "
+                "dead-letter queue - the consumer would spin on it forever"
+            )
+            assert dead[0].payload == {"work": "poison"}
+        finally:
+            self._close(queue, topic)
+
+    def test_rabbitmq_fail_carries_the_attempt_count_across_a_redelivery(self):
+        """attempts must be observable on the NEXT pop, not reset to zero."""
+        topic = "tina4_test_" + secrets.token_hex(8)
+        queue = self._queue(topic, max_retries=5)
+        try:
+            queue.push({"work": "count-me"})
+            first = queue.pop()
+            assert first is not None and first.attempts == 0
+            first.fail("one")
+            second = queue.pop()
+            assert second is not None, "the failed job was not re-delivered"
+            assert second.attempts == 1, (
+                "attempts reset to 0 across the redelivery, so the job can "
+                "never reach max_retries"
+            )
+        finally:
+            self._close(queue, topic)
+
+    def test_rabbitmq_complete_acknowledges_that_job_not_the_last_popped(self):
+        """Two pops before an ack must not make complete(A) acknowledge B.
+
+        Authority: AMQP 0-9-1 s1.8.3.12 - delivery-tag identifies ONE delivery
+        on the channel. Regression: the connector kept a single
+        _last_delivery_tag slot, so the second pop overwrote the first and
+        complete(A) acked B. A was redelivered (duplicate work) and B was
+        acked without ever being completed (lost work).
+        """
+        topic = "tina4_test_" + secrets.token_hex(8)
+        queue = self._queue(topic, max_retries=3)
+        connector = queue._backend._backend
+        try:
+            queue.push({"which": "A"})
+            queue.push({"which": "B"})
+            job_a = queue.pop()
+            job_b = queue.pop()
+            assert job_a.payload == {"which": "A"}
+            assert job_b.payload == {"which": "B"}
+
+            job_a.complete()
+            # Dropping the channel requeues everything still unacked. Whatever
+            # comes back is what complete(A) did NOT acknowledge.
+            connector.close()
+
+            verifier = self._queue(topic, max_retries=3)
+            try:
+                survivors = []
+                while True:
+                    job = verifier.pop()
+                    if job is None:
+                        break
+                    survivors.append(job.payload)
+                assert survivors == [{"which": "B"}], (
+                    "complete(A) acknowledged the wrong delivery: expected B "
+                    "to survive unacked, got %r" % (survivors,)
+                )
+            finally:
+                self._close(verifier, topic)
+        finally:
+            try:
+                connector.close()
+            except Exception:  # noqa: BLE001
+                pass

@@ -171,16 +171,36 @@ class RabbitMQBackend:
         self._jobs.pop(str(job.id), None)
 
     def fail(self, job: Job, error: str = ""):
+        """Record a failed attempt, then either retry it or dead-letter it.
+
+        AMQP 0-9-1 basic.nack(requeue=1) returns the ORIGINAL body to the queue,
+        unmodified - the protocol carries no delivery counter. Re-queueing that
+        way meant ``attempts`` came back as 0 on every redelivery, so
+        ``attempts >= max_retries`` never tripped and a poison job spun forever.
+
+        So the retry acknowledges the original delivery and RE-PUBLISHES a body
+        carrying the new count. That is what every AMQP client that counts
+        attempts does (Celery, Spring AMQP's RepublishMessageRecoverer,
+        laravel-queue-rabbitmq).
+        """
         job.attempts += 1
+        msg = self._jobs.pop(str(job.id), None) or {"payload": job.data, "id": job.id}
+        msg["attempts"] = job.attempts
         if job.attempts >= self._max_retries:
-            msg = self._jobs.pop(str(job.id), {"payload": job.data, "id": job.id})
             msg["error"] = error
             self._backend.dead_letter(self._topic, msg)
         else:
-            self._backend.reject(self._topic, str(job.id), requeue=True)
-        self._jobs.pop(str(job.id), None)
+            msg["error"] = error
+            self._backend.enqueue(self._topic, msg)
+        # Ack LAST: the re-publish (or dead-letter) is durable before the
+        # original leaves the queue, so a crash in between redelivers rather
+        # than loses. That is at-least-once, which is the contract.
+        self._backend.acknowledge(self._topic, str(job.id))
 
     def retry(self, job: Job, delay_seconds: int = 0):
         job.attempts += 1
-        self._backend.reject(self._topic, str(job.id), requeue=True)
-        self._jobs.pop(str(job.id), None)
+        msg = self._jobs.pop(str(job.id), None) or {"payload": job.data, "id": job.id}
+        msg["attempts"] = job.attempts
+        msg.pop("error", None)
+        self._backend.enqueue(self._topic, msg)
+        self._backend.acknowledge(self._topic, str(job.id))

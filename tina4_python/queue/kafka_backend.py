@@ -140,12 +140,38 @@ class KafkaBackend:
         self._backend.acknowledge(self._topic, str(job.id))
 
     def fail(self, job: Job, error: str = ""):
+        """Record a failed attempt, then either retry it or dead-letter it.
+
+        Kafka has no per-record nack: a consumer group commits an OFFSET, so a
+        record cannot be returned to its position without replaying everything
+        after it. The retry is therefore a RE-PRODUCE carrying the incremented
+        attempt count, followed by a commit past the original record - the same
+        retry-topic shape Confluent documents and Spring Kafka implements in
+        DeadLetterPublishingRecoverer.
+
+        Both branches acknowledge. Leaving the original uncommitted would make a
+        rebalance replay a record that has already been re-produced or
+        dead-lettered, duplicating it.
+        """
         job.attempts += 1
         if job.attempts >= self._max_retries:
-            msg = {"id": job.id, "payload": job.data, "error": error}
+            msg = {"id": job.id, "payload": job.data,
+                   "attempts": job.attempts, "error": error}
             self._backend.dead_letter(self._topic, msg)
+        else:
+            # Re-produce so the job is actually retried. Without this a job
+            # failing below max_retries was dropped outright: the consumer
+            # position had already moved past it and nothing re-published it.
+            self._backend.enqueue(self._topic, {
+                "payload": job.data,
+                "priority": job.priority,
+                "attempts": job.attempts,
+                "error": error,
+            })
+        self._backend.acknowledge(self._topic, str(job.id))
 
     def retry(self, job: Job, delay_seconds: int = 0):
         job.attempts += 1
-        msg = {"payload": job.data, "attempts": job.attempts}
+        msg = {"payload": job.data, "priority": job.priority, "attempts": job.attempts}
         self._backend.enqueue(self._topic, msg)
+        self._backend.acknowledge(self._topic, str(job.id))
