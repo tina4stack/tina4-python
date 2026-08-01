@@ -1,17 +1,32 @@
 # Tests for Tina4 Session Handlers — Redis, MongoDB, Valkey.
 """
 Tests cover:
-- Handler interface/contract verification
-- In-memory operation without external services (mocked)
-- Skip markers for tests requiring actual Redis/MongoDB/Valkey
+- Handler interface/contract verification (construction only, no dependency)
+- Real write/read/destroy/expiry/gc round-trips against the LIVE Redis, Valkey
+  and MongoDB, verified out-of-band with an INDEPENDENT client
+- Loud skips naming host and port when a service is absent
+
+3.13.95 -- the no-mock sweep. This file used to carry three MagicMock classes
+(TestRedisHandlerMocked, TestMongoDBHandlerMocked, TestValkeyHandlerMocked) plus
+two MagicMock-backed Session tests. They asserted the SHAPE of a call
+(`setex.assert_called_once_with(...)`) and never proved a single byte reached a
+server -- the same defect that let the Node MongoDB queue redeliver every
+completed job for two releases. Every one of them is gone; the assertions they
+were reaching for are now made against the real store.
+
+The out-of-band verification clients below (`redis.Redis`, `pymongo.MongoClient`)
+are NOT doubles: they are second, independent connections to the same real
+server, used to observe what the handler actually stored. That is the
+`test_write_path_contract.py::ContractConnection` pattern -- a write visible only
+on the writing handle is exactly the bug a second connection catches.
 """
 import json
 import os
 import socket as _socket
 import time
+import uuid
 from urllib.parse import urlparse
 import pytest
-from unittest.mock import MagicMock, patch
 
 
 # ── Live-service targets ─────────────────────────────────────────
@@ -152,59 +167,11 @@ class TestRedisHandlerConfig:
         handler.gc(1800)  # Should not raise
 
 
-class TestRedisHandlerMocked:
-    """Test Redis handler with mocked redis client."""
-
-    def _make_handler_with_mock(self):
-        from tina4_python.session_handlers.redis_handler import RedisSessionHandler
-
-        handler = RedisSessionHandler()
-        mock_client = MagicMock()
-        handler._redis_client = mock_client
-        handler._use_redis_pkg = True
-        return handler, mock_client
-
-    def test_read_returns_empty_when_no_data(self):
-        handler, mock_client = self._make_handler_with_mock()
-        mock_client.get.return_value = None
-        assert handler.read("session-1") == {}
-
-    def test_read_returns_parsed_json(self):
-        handler, mock_client = self._make_handler_with_mock()
-        mock_client.get.return_value = json.dumps({"user_id": 42, "role": "admin"})
-        result = handler.read("session-1")
-        assert result == {"user_id": 42, "role": "admin"}
-
-    def test_read_returns_empty_on_invalid_json(self):
-        handler, mock_client = self._make_handler_with_mock()
-        mock_client.get.return_value = "not-json"
-        assert handler.read("session-1") == {}
-
-    def test_write_with_ttl(self):
-        handler, mock_client = self._make_handler_with_mock()
-        handler.write("session-1", {"user_id": 42}, ttl=600)
-        mock_client.setex.assert_called_once()
-        args = mock_client.setex.call_args[0]
-        assert args[0] == "tina4:session:session-1"
-        assert args[1] == 600
-
-    def test_write_uses_default_ttl(self):
-        handler, mock_client = self._make_handler_with_mock()
-        handler._ttl = 1800
-        handler.write("session-1", {"user_id": 42})
-        mock_client.setex.assert_called_once()
-        args = mock_client.setex.call_args[0]
-        assert args[1] == 1800
-
-    def test_destroy(self):
-        handler, mock_client = self._make_handler_with_mock()
-        handler.destroy("session-1")
-        mock_client.delete.assert_called_once_with("tina4:session:session-1")
-
-    def test_close(self):
-        handler, mock_client = self._make_handler_with_mock()
-        handler.close()
-        mock_client.close.assert_called_once()
+# TestRedisHandlerMocked lived here. It drove read/write/destroy/close against a
+# MagicMock and asserted setex/delete CALL SHAPES. Deleted in the no-mock sweep;
+# every assertion it made now runs against the live Redis in
+# TestRedisIntegration below, where the key name, the TTL and the deletion are
+# read back off the server with an independent client.
 
 
 # ── MongoDB Handler Tests ────────────────────────────────────────
@@ -425,46 +392,9 @@ class TestValkeyHandlerConfig:
         handler.gc(1800)  # Should not raise
 
 
-class TestValkeyHandlerMocked:
-    """Test Valkey handler with mocked redis client."""
-
-    def _make_handler_with_mock(self):
-        from tina4_python.session_handlers.valkey_handler import ValkeySessionHandler
-
-        handler = ValkeySessionHandler()
-        mock_client = MagicMock()
-        handler._redis_client = mock_client
-        handler._use_redis_pkg = True
-        return handler, mock_client
-
-    def test_read_returns_empty_when_no_data(self):
-        handler, mock_client = self._make_handler_with_mock()
-        mock_client.get.return_value = None
-        assert handler.read("session-1") == {}
-
-    def test_read_returns_parsed_json(self):
-        handler, mock_client = self._make_handler_with_mock()
-        mock_client.get.return_value = json.dumps({"theme": "dark"})
-        result = handler.read("session-1")
-        assert result == {"theme": "dark"}
-
-    def test_write_with_ttl(self):
-        handler, mock_client = self._make_handler_with_mock()
-        handler.write("session-1", {"theme": "dark"}, ttl=300)
-        mock_client.setex.assert_called_once()
-        args = mock_client.setex.call_args[0]
-        assert args[0] == "tina4:session:session-1"
-        assert args[1] == 300
-
-    def test_destroy(self):
-        handler, mock_client = self._make_handler_with_mock()
-        handler.destroy("session-1")
-        mock_client.delete.assert_called_once_with("tina4:session:session-1")
-
-    def test_close(self):
-        handler, mock_client = self._make_handler_with_mock()
-        handler.close()
-        mock_client.close.assert_called_once()
+# TestValkeyHandlerMocked lived here. It never opened a socket to Valkey, so it
+# would have kept passing with the handler pointed at the wrong port entirely.
+# Deleted; see TestValkeyIntegration, which talks to the real daemon on 6380.
 
 
 # ── Database Session Handler Tests ────────────────────────────────
@@ -554,16 +484,15 @@ class TestResolveHandlerDatabase:
 
 
 class TestSessionWithHandlers:
-    """Test that handlers work with the Session class."""
+    """Session over a REAL backend, proven by a CROSS-INSTANCE read-back.
 
-    def _make_redis_handler_mocked(self):
-        from tina4_python.session_handlers.redis_handler import RedisSessionHandler
-
-        handler = RedisSessionHandler()
-        mock_client = MagicMock()
-        handler._redis_client = mock_client
-        handler._use_redis_pkg = True
-        return handler, mock_client
+    Both tests here used a MagicMock client and asserted
+    ``session.get("user_id") == 42`` immediately after ``session.set`` -- which
+    reads the in-process dict, not the store. They passed for a handler that
+    discarded every write. The only assertion that proves a value left the
+    process is a SECOND Session, built on a SECOND handler instance, resuming
+    the same id and finding the value; that is what these do now.
+    """
 
     def test_session_with_redis_handler(self):
         """Session over a REAL Redis: mint, persist, resume, destroy.
@@ -572,28 +501,36 @@ class TestSessionWithHandlers:
         and forbidden outright -- it also meant the Redis session path had never
         been proven against a live server. It now drives the real one, and it
         pins strict mode (ADR-0021): a known id resumes, an unknown one does not.
+
+        A SEPARATE handler for the reader (from feature/no-mock-sweep) so the
+        value is proven to cross a real connection, not just an in-process cache.
+        The id is the one start() ISSUES -- ADR-0021 refuses to adopt an id the
+        store never issued, so asserting start(chosen) == chosen cannot hold.
         """
         from tina4_python.session import Session
         from tina4_python.session_handlers.redis_handler import RedisSessionHandler
 
         if not _reachable(_REDIS_HOST, _REDIS_PORT):
             pytest.skip(f"redis not reachable at {_REDIS_HOST}:{_REDIS_PORT}")
-        handler = RedisSessionHandler()
+        writer = RedisSessionHandler()
 
-        session = Session(handler=handler, ttl=600)
+        session = Session(handler=writer, ttl=600)
         sid = session.start()
         session.set("user_id", 42)
         assert session.save() is True
         try:
-            resumed = Session(handler=handler, ttl=600)
+            reader = RedisSessionHandler()
+            resumed = Session(handler=reader, ttl=600)
             assert resumed.start(sid) == sid, "a real Redis session failed to resume"
-            assert resumed.get("user_id") == 42
+            assert resumed.get("user_id") == 42, (
+                "the value never reached Redis -- Session.save() did not persist"
+            )
 
             # Negative half: an id Redis has never seen is not adopted.
-            assert Session(handler=handler, ttl=600).start("neverissuedbyus000") != \
+            assert Session(handler=reader, ttl=600).start("neverissuedbyus000") != \
                 "neverissuedbyus000"
         finally:
-            handler.destroy(sid)
+            writer.destroy(sid)
 
     def test_session_with_valkey_handler(self):
         """Same contract over a REAL Valkey (previously a MagicMock too)."""
@@ -602,80 +539,364 @@ class TestSessionWithHandlers:
 
         if not _reachable(_VALKEY_HOST, _VALKEY_PORT):
             pytest.skip(f"valkey not reachable at {_VALKEY_HOST}:{_VALKEY_PORT}")
-        handler = ValkeySessionHandler()
+        writer = ValkeySessionHandler()
 
-        session = Session(handler=handler, ttl=600)
+        session = Session(handler=writer, ttl=600)
         sid = session.start()
         session.set("user_id", 43)
         assert session.save() is True
         try:
-            resumed = Session(handler=handler, ttl=600)
+            # Separate handler == separate connection to the real server.
+            reader = ValkeySessionHandler()
+            resumed = Session(handler=reader, ttl=600)
             assert resumed.start(sid) == sid, "a real Valkey session failed to resume"
             assert resumed.get("user_id") == 43
+
+            # A SECOND write on the original session must also cross the wire.
+            # (This half came from feature/no-mock-sweep; it has to live inside
+            # the same try, because the finally below destroys sid and ADR-0021
+            # then correctly refuses to adopt it again.)
+            session.set("lang", "en")
+            assert session.save() is True
+            again = Session(handler=ValkeySessionHandler(), ttl=600)
+            assert again.start(sid) == sid
+            assert again.get("lang") == "en", (
+                "the value never reached Valkey -- Session.save() did not persist"
+            )
         finally:
-            handler.destroy(sid)
-        session.set("lang", "en")
-        assert session.get("lang") == "en"
+            writer.destroy(sid)
+            writer.close()
 
 
 # ── Integration Tests (require actual services) ─────────────────
 
 
+def _observer(host: int, port: int):
+    """A SECOND, independent connection to the real Redis/Valkey.
+
+    Not a double -- it is the witness. Everything the deleted MagicMock classes
+    asserted about key names and TTLs is asserted here against what the server
+    actually holds, on a connection the handler under test does not own.
+    """
+    import redis as redis_pkg
+
+    return redis_pkg.Redis(host=host, port=port, db=0, decode_responses=True)
+
+
+class _RedisLikeContract:
+    """Shared real-server contract for the Redis and Valkey handlers.
+
+    Valkey is a separate daemon on a separate port speaking its own build of the
+    protocol; running the identical contract against both is the point.
+    """
+
+    HOST: str = ""
+    PORT: int = 0
+    NAME: str = ""
+
+    def _handler(self, **kw):
+        raise NotImplementedError
+
+    def _sid(self):
+        return f"itest-{uuid.uuid4().hex}"
+
+    def test_read_write_destroy_cycle(self):
+        handler = self._handler(ttl=60)
+        sid = self._sid()
+        obs = _observer(self.HOST, self.PORT)
+        try:
+            handler.write(sid, {"user_id": 99})
+            assert handler.read(sid)["user_id"] == 99
+            handler.destroy(sid)
+            assert handler.read(sid) == {}
+            assert obs.exists(f"tina4:session:{sid}") == 0, "the key survived destroy()"
+        finally:
+            obs.delete(f"tina4:session:{sid}")
+            obs.close()
+            handler.close()
+
+    def test_read_of_a_never_written_id_is_empty(self):
+        # A genuinely unknown key on a HEALTHY server: empty, not an error.
+        handler = self._handler(ttl=60)
+        try:
+            assert handler.read(self._sid()) == {}
+        finally:
+            handler.close()
+
+    def test_write_stores_json_under_the_prefixed_key(self):
+        # Replaces setex.assert_called_once_with(...): read the real bytes back
+        # off the server on an independent connection.
+        handler = self._handler(ttl=600)
+        sid = self._sid()
+        obs = _observer(self.HOST, self.PORT)
+        try:
+            handler.write(sid, {"user_id": 42, "role": "admin"}, ttl=600)
+            raw = obs.get(f"tina4:session:{sid}")
+            assert raw is not None, f"nothing stored at tina4:session:{sid}"
+            assert json.loads(raw) == {"user_id": 42, "role": "admin"}
+        finally:
+            obs.delete(f"tina4:session:{sid}")
+            obs.close()
+            handler.close()
+
+    def test_explicit_ttl_is_applied_by_the_server(self):
+        handler = self._handler(ttl=60)
+        sid = self._sid()
+        obs = _observer(self.HOST, self.PORT)
+        try:
+            handler.write(sid, {"user_id": 42}, ttl=600)
+            ttl = obs.ttl(f"tina4:session:{sid}")
+            assert 590 <= ttl <= 600, f"server reports TTL {ttl}, expected ~600"
+        finally:
+            obs.delete(f"tina4:session:{sid}")
+            obs.close()
+            handler.close()
+
+    def test_default_ttl_is_applied_by_the_server(self):
+        handler = self._handler(ttl=1800)
+        sid = self._sid()
+        obs = _observer(self.HOST, self.PORT)
+        try:
+            handler.write(sid, {"user_id": 42})  # no ttl arg -> handler default
+            ttl = obs.ttl(f"tina4:session:{sid}")
+            assert 1790 <= ttl <= 1800, f"server reports TTL {ttl}, expected ~1800"
+        finally:
+            obs.delete(f"tina4:session:{sid}")
+            obs.close()
+            handler.close()
+
+    def test_a_custom_prefix_changes_the_real_key(self):
+        prefix = f"probe:{uuid.uuid4().hex[:8]}:"
+        handler = self._handler(ttl=60, prefix=prefix)
+        sid = self._sid()
+        obs = _observer(self.HOST, self.PORT)
+        try:
+            handler.write(sid, {"a": 1})
+            assert obs.exists(f"{prefix}{sid}") == 1
+            assert obs.exists(f"tina4:session:{sid}") == 0
+        finally:
+            obs.delete(f"{prefix}{sid}")
+            obs.close()
+            handler.close()
+
+    @pytest.mark.slow
+    def test_the_ttl_actually_expires_the_session(self):
+        # The MagicMock version could only ever assert the NUMBER 600 was passed.
+        # This waits for the real server to drop the real key.
+        handler = self._handler(ttl=60)
+        sid = self._sid()
+        obs = _observer(self.HOST, self.PORT)
+        try:
+            handler.write(sid, {"user_id": 1}, ttl=1)
+            assert handler.read(sid) == {"user_id": 1}
+            time.sleep(1.5)
+            assert obs.exists(f"tina4:session:{sid}") == 0, "server kept an expired key"
+            assert handler.read(sid) == {}
+        finally:
+            obs.delete(f"tina4:session:{sid}")
+            obs.close()
+            handler.close()
+
+    def test_corrupt_stored_bytes_read_as_an_empty_session(self):
+        # Genuinely corrupt data in the real store, planted by an independent
+        # client -- not a mocked return value.
+        handler = self._handler(ttl=60)
+        sid = self._sid()
+        obs = _observer(self.HOST, self.PORT)
+        try:
+            obs.set(f"tina4:session:{sid}", "not-json")
+            assert handler.read(sid) == {}
+        finally:
+            obs.delete(f"tina4:session:{sid}")
+            obs.close()
+            handler.close()
+
+    def test_close_releases_the_connection_and_is_repeatable(self):
+        handler = self._handler(ttl=60)
+        sid = self._sid()
+        try:
+            handler.write(sid, {"x": 1})
+            handler.close()
+            handler.close()  # idempotent against a real client
+            # redis-py reconnects on demand: the handler is still usable, which
+            # proves close() released rather than corrupted the pool.
+            assert handler.read(sid) == {"x": 1}
+        finally:
+            handler.destroy(sid)
+            handler.close()
+
+    def test_the_zero_dependency_raw_protocol_path_talks_to_the_same_server(self):
+        """The RESP fallback used when the `redis` package is absent.
+
+        Selecting it is real configuration (the same switch __init__ makes when
+        the import fails), not a double: the socket, the RESP framing and the
+        server are all real. Nothing in the suite had ever run this path.
+        """
+        handler = self._handler(ttl=60)
+        handler._use_redis_pkg = False
+        handler._redis_client = None
+        sid = self._sid()
+        obs = _observer(self.HOST, self.PORT)
+        try:
+            handler.write(sid, {"raw": True}, ttl=300)
+            assert obs.ttl(f"tina4:session:{sid}") > 0
+            assert handler.read(sid) == {"raw": True}
+            handler.destroy(sid)
+            assert obs.exists(f"tina4:session:{sid}") == 0
+        finally:
+            obs.delete(f"tina4:session:{sid}")
+            obs.close()
+            handler.close()
+
+
 @pytest.mark.skipif(
     not _reachable(_REDIS_HOST, _REDIS_PORT),
-    reason="redis not reachable"
+    reason=f"redis not reachable at {_REDIS_HOST}:{_REDIS_PORT}",
 )
-class TestRedisIntegration:
-    """Integration tests that drive a real Redis server (no mocks)."""
+class TestRedisIntegration(_RedisLikeContract):
+    """Real Redis. No doubles anywhere in this class."""
 
-    def test_read_write_destroy_cycle(self):
+    HOST, PORT, NAME = _REDIS_HOST, _REDIS_PORT, "redis"
+
+    def _handler(self, **kw):
         from tina4_python.session_handlers.redis_handler import RedisSessionHandler
 
-        handler = RedisSessionHandler(host=_REDIS_HOST, port=_REDIS_PORT, ttl=60)
-        handler.write("int-test", {"user_id": 99})
-        data = handler.read("int-test")
-        assert data["user_id"] == 99
-        handler.destroy("int-test")
-        assert handler.read("int-test") == {}
-        handler.close()
-
-
-@pytest.mark.skipif(
-    not _reachable(_MONGO_HOST, _MONGO_PORT),
-    reason="mongo not reachable"
-)
-class TestMongoDBIntegration:
-    """Integration tests that drive a real MongoDB server (no mocks)."""
-
-    def test_read_write_destroy_cycle(self):
-        from tina4_python.session_handlers.mongodb_handler import MongoDBSessionHandler
-
-        handler = MongoDBSessionHandler(url=f"mongodb://{_MONGO_HOST}:{_MONGO_PORT}", ttl=60)
-        handler.write("int-test", {"user_id": 99})
-        data = handler.read("int-test")
-        assert data["user_id"] == 99
-        handler.destroy("int-test")
-        assert handler.read("int-test") == {}
-        handler.close()
+        return RedisSessionHandler(host=_REDIS_HOST, port=_REDIS_PORT, **kw)
 
 
 @pytest.mark.skipif(
     not _reachable(_VALKEY_HOST, _VALKEY_PORT),
-    reason="valkey not reachable"
+    reason=f"valkey not reachable at {_VALKEY_HOST}:{_VALKEY_PORT}",
 )
-class TestValkeyIntegration:
-    """Integration tests that drive a real Valkey server (no mocks)."""
+class TestValkeyIntegration(_RedisLikeContract):
+    """Real Valkey on its own port and its own daemon. No doubles."""
 
-    def test_read_write_destroy_cycle(self):
+    HOST, PORT, NAME = _VALKEY_HOST, _VALKEY_PORT, "valkey"
+
+    def _handler(self, **kw):
         from tina4_python.session_handlers.valkey_handler import ValkeySessionHandler
 
-        handler = ValkeySessionHandler(host=_VALKEY_HOST, port=_VALKEY_PORT, ttl=60)
-        handler.write("int-test", {"user_id": 99})
-        data = handler.read("int-test")
-        assert data["user_id"] == 99
-        handler.destroy("int-test")
-        assert handler.read("int-test") == {}
-        handler.close()
+        return ValkeySessionHandler(host=_VALKEY_HOST, port=_VALKEY_PORT, **kw)
+
+
+@pytest.mark.skipif(
+    not _reachable(_MONGO_HOST, _MONGO_PORT),
+    reason=f"mongo not reachable at {_MONGO_HOST}:{_MONGO_PORT}",
+)
+class TestMongoDBIntegration:
+    """Real MongoDB. Documents are observed with an independent pymongo client."""
+
+    URL = f"mongodb://{_MONGO_HOST}:{_MONGO_PORT}"
+
+    def _handler(self, **kw):
+        from tina4_python.session_handlers.mongodb_handler import MongoDBSessionHandler
+
+        return MongoDBSessionHandler(url=self.URL, **kw)
+
+    def _observer(self, collection="sessions"):
+        import pymongo
+
+        client = pymongo.MongoClient(self.URL, serverSelectionTimeoutMS=3000)
+        return client, client["tina4"][collection]
+
+    def _sid(self):
+        return f"itest-{uuid.uuid4().hex}"
+
+    def test_read_write_destroy_cycle(self):
+        handler = self._handler(ttl=60)
+        sid = self._sid()
+        client, coll = self._observer()
+        try:
+            handler.write(sid, {"user_id": 99})
+            assert handler.read(sid)["user_id"] == 99
+            handler.destroy(sid)
+            assert handler.read(sid) == {}
+            assert coll.find_one({"_id": sid}) is None, "the document survived destroy()"
+        finally:
+            coll.delete_one({"_id": sid})
+            client.close()
+            handler.close()
+
+    def test_a_second_handler_instance_reads_the_same_document(self):
+        # Durability, not local state: the reader is a separate client.
+        writer = self._handler(ttl=60)
+        reader = self._handler(ttl=60)
+        sid = self._sid()
+        try:
+            writer.write(sid, {"user_id": 7, "role": "admin"})
+            assert reader.read(sid) == {"user_id": 7, "role": "admin"}
+        finally:
+            writer.destroy(sid)
+            writer.close()
+            reader.close()
+
+    def test_read_of_a_never_written_id_is_empty(self):
+        handler = self._handler(ttl=60)
+        try:
+            assert handler.read(self._sid()) == {}
+        finally:
+            handler.close()
+
+    def test_write_upserts_rather_than_duplicating(self):
+        handler = self._handler(ttl=60)
+        sid = self._sid()
+        client, coll = self._observer()
+        try:
+            handler.write(sid, {"n": 1})
+            handler.write(sid, {"n": 2})
+            assert coll.count_documents({"_id": sid}) == 1
+            assert coll.find_one({"_id": sid})["data"] == {"n": 2}
+        finally:
+            coll.delete_one({"_id": sid})
+            client.close()
+            handler.close()
+
+    @pytest.mark.slow
+    def test_a_genuinely_aged_document_reads_empty_and_is_removed(self):
+        # The mocked version fabricated last_accessed. This lets a REAL document
+        # age past a REAL ttl and then checks Mongo no longer holds it.
+        handler = self._handler(ttl=1)
+        sid = self._sid()
+        client, coll = self._observer()
+        try:
+            handler.write(sid, {"user_id": 42})
+            assert coll.find_one({"_id": sid}) is not None
+            time.sleep(1.5)
+            assert handler.read(sid) == {}
+            assert coll.find_one({"_id": sid}) is None, (
+                "an expired read must destroy the document, not just hide it"
+            )
+        finally:
+            coll.delete_one({"_id": sid})
+            client.close()
+            handler.close()
+
+    @pytest.mark.slow
+    def test_gc_removes_only_the_genuinely_expired_documents(self):
+        # Own collection so gc() cannot disturb anything else in the database.
+        coll_name = f"sessions_gc_{uuid.uuid4().hex[:8]}"
+        handler = self._handler(ttl=3600, collection=coll_name)
+        client, coll = self._observer(coll_name)
+        old_a, old_b, fresh = self._sid(), self._sid(), self._sid()
+        try:
+            # Expiry is an ABSOLUTE deadline baked in at write time, so the
+            # per-call ttl is what makes a document genuinely expired. gc() takes
+            # max_lifetime for interface parity only and does NOT use it -- the
+            # old relative "anything touched more than Ns ago" shape cannot
+            # express this, and passing 1 here swept nothing.
+            handler.write(old_a, {"a": 1}, 1)
+            handler.write(old_b, {"b": 2}, 1)
+            time.sleep(2)
+            handler.write(fresh, {"c": 3}, 3600)
+            handler.gc(1)
+            assert coll.find_one({"_id": old_a}) is None
+            assert coll.find_one({"_id": old_b}) is None
+            assert coll.find_one({"_id": fresh}) is not None, "gc ate a live session"
+            assert coll.count_documents({}) == 1
+        finally:
+            coll.drop()
+            client.close()
+            handler.close()
 
 
 # ── Import Tests ─────────────────────────────────────────────────
