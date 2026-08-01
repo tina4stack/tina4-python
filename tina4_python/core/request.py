@@ -2,6 +2,7 @@
 """
 Clean request object with parsed body, params, headers, and cookies.
 """
+import ipaddress
 import json
 import os
 from urllib.parse import parse_qs, unquote
@@ -133,11 +134,13 @@ class Request:
             req.headers[name.decode().lower()] = value.decode()
 
         req.content_type = req.headers.get("content-type", "")
-        req.ip = _extract_ip(scope, req.headers)
         # Raw socket peer address — NEVER honours X-Forwarded-For, so it can
         # be trusted for loopback/remote authorisation (e.g. the MCP guard).
         _client = scope.get("client")
         req.remote_ip = _client[0] if _client else ""
+        # Resolved AFTER remote_ip: the peer decides whether the forwarding
+        # headers may be believed at all (TINA4_TRUSTED_PROXIES).
+        req.ip = _extract_ip(scope, req.headers, req.remote_ip)
 
         # Native connection scheme (ASGI: "http"/"https"; TLS terminated at a
         # proxy shows "http" here — x-forwarded-proto carries the real one).
@@ -225,13 +228,112 @@ class Request:
         return _parse_body(self.raw_body, self.content_type)
 
 
-def _extract_ip(scope: dict, headers: dict) -> str:
-    """Extract client IP, respecting X-Forwarded-For."""
+# Parsed TINA4_TRUSTED_PROXIES, cached on the raw env string so a change is
+# picked up but the parse does not run per request. (raw_value, networks)
+_trusted_proxy_cache: tuple = (None, ())
+
+
+def _normalise_ip(value: str) -> str:
+    """Strip the decorations a peer address can arrive with.
+
+    Handles ``[::1]`` bracket form and an IPv6 zone id (``fe80::1%eth0``).
+    """
+    value = value.strip()
+    if value.startswith("[") and "]" in value:
+        value = value[1:value.index("]")]
+    if "%" in value:
+        value = value.split("%", 1)[0]
+    return value
+
+
+def _parse_ip(value: str):
+    """Parse an address, unmapping IPv4-in-IPv6. Returns None if unparseable.
+
+    A peer arriving as ``::ffff:10.0.0.1`` must match an allow-list entry of
+    ``10.0.0.0/8`` - dual-stack listeners hand out the mapped form routinely.
+    """
+    try:
+        address = ipaddress.ip_address(_normalise_ip(value))
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        return address.ipv4_mapped
+    return address
+
+
+def trusted_proxy_networks() -> tuple:
+    """The configured trusted-proxy networks, from ``TINA4_TRUSTED_PROXIES``.
+
+    Comma-separated exact addresses and/or CIDR ranges, IPv4 and IPv6:
+    ``10.0.0.0/8, 192.168.1.5, ::1, fd00::/8``. Empty or unset means trust
+    NOTHING, which is the secure default: ``X-Forwarded-For`` is then ignored
+    entirely and the raw socket peer identifies the client.
+    """
+    global _trusted_proxy_cache
+    raw = os.environ.get("TINA4_TRUSTED_PROXIES", "")
+    cached_raw, cached_networks = _trusted_proxy_cache
+    if raw == cached_raw:
+        return cached_networks
+
+    networks = []
+    for entry in raw.split(","):
+        entry = _normalise_ip(entry)
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            # Loud, and exactly once per distinct config value (the cache
+            # below means this parse runs once). A silently-skipped entry
+            # would leave a real proxy untrusted, which looks like the app
+            # over-limiting every client - a very expensive typo to debug.
+            from tina4_python.debug import Log
+            Log.error(
+                f"TINA4_TRUSTED_PROXIES: ignoring invalid entry '{entry}' - "
+                "expected an IP address or CIDR range, e.g. 10.0.0.0/8 or 192.168.1.5"
+            )
+    _trusted_proxy_cache = (raw, tuple(networks))
+    return _trusted_proxy_cache[1]
+
+
+def is_trusted_proxy(address: str) -> bool:
+    """Is this address a configured trusted proxy?"""
+    networks = trusted_proxy_networks()
+    if not networks or not address:
+        return False
+    parsed = _parse_ip(address)
+    if parsed is None:
+        return False
+    return any(parsed in network for network in networks)
+
+
+def _extract_ip(scope: dict, headers: dict, peer: str = "") -> str:
+    """Resolve the client IP, honouring forwarding headers ONLY behind a trusted proxy.
+
+    ``X-Forwarded-For`` is set by whoever sends it, so an unfiltered read lets
+    any client choose its own rate-limit bucket - and, worse, choose SOMEONE
+    ELSE'S. The header is therefore consulted only when the raw socket peer is
+    listed in ``TINA4_TRUSTED_PROXIES``; otherwise the peer IS the client.
+
+    When it is consulted, the RIGHTMOST entry that is not itself a trusted
+    proxy wins. Taking the leftmost would be no safer than trusting the header
+    outright: a client can prepend its own hop, and the proxy appends rather
+    than replaces. This is the algorithm Rack uses (``Rack::Request#ip``).
+    """
+    if not (peer and is_trusted_proxy(peer)):
+        return peer
+
     forwarded = headers.get("x-forwarded-for", "")
     if forwarded:
-        return forwarded.split(",")[0].strip()
-    client = scope.get("client")
-    return client[0] if client else ""
+        hops = [hop.strip() for hop in forwarded.split(",") if hop.strip()]
+        for hop in reversed(hops):
+            if not is_trusted_proxy(hop):
+                return hop
+        # Every hop is itself a trusted proxy - the peer is the best we have.
+        return peer
+
+    real_ip = headers.get("x-real-ip", "").strip()
+    return real_ip or peer
 
 
 def _parse_body(body: bytes, content_type: str) -> dict | str | None:
