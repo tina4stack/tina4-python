@@ -168,7 +168,7 @@ from tina4_python.database import Database
 db = Database(url: str, username="", password="")
 # Connection pooling: Database("sqlite:///app.db", pool=4)  # 4 round-robin connections
 
-db.fetch(sql, params=None, limit=10, offset=0) -> DatabaseResult  # records, count, limit, offset
+db.fetch(sql, params=None, limit=100, offset=0) -> DatabaseResult  # records, count, limit, offset
 db.fetch_one(sql, params=None) -> dict | None
 db.execute(sql, params=None) -> True | DatabaseResult  # True for writes, DatabaseResult for RETURNING/CALL/EXEC; RAISES on SQL error (never returns False — cause on get_error()). Wrap in try/except, don't test the return.
 db.execute_many(sql, params=None) -> DatabaseResult
