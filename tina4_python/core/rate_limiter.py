@@ -45,11 +45,37 @@ class RateLimiter:
         return request, response
 
     def __init__(self):
-        self.limit = int(os.environ.get("TINA4_RATE_LIMIT", "100"))
-        self.window = int(os.environ.get("TINA4_RATE_WINDOW", "60"))
+        self._env_snapshot: tuple = ()
+        self.configure_from_env()
         self._requests: dict[str, list[float]] = {}
         self._lock = threading.Lock()
         self._last_cleanup = time.monotonic()
+
+    def configure_from_env(self) -> None:
+        """Re-read limit and window from the environment if they changed.
+
+        The shared limiter is built when the module is imported, but ``.env``
+        is loaded AFTER that. Snapshotting at construction meant an app that
+        set TINA4_RATE_LIMIT in ``.env`` opened the dispatch gate (which reads
+        the variable per request) while the limiter kept the 100/60 defaults -
+        the documented setting silently did nothing. Cheap: two env reads and
+        a tuple compare, and it only assigns when something actually changed.
+        """
+        raw = (
+            os.environ.get("TINA4_RATE_LIMIT", "100"),
+            os.environ.get("TINA4_RATE_WINDOW", "60"),
+        )
+        if raw == self._env_snapshot:
+            return
+        try:
+            self.limit = int(raw[0])
+        except ValueError:
+            self.limit = 100
+        try:
+            self.window = int(raw[1])
+        except ValueError:
+            self.window = 60
+        self._env_snapshot = raw
 
     def check(self, ip: str) -> tuple[bool, dict]:
         """Check if request is allowed.

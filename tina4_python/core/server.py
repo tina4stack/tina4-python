@@ -1410,6 +1410,7 @@ def _handle_rate_limit(request: Request, response: Response) -> Response | None:
     rate_enabled = os.environ.get("TINA4_RATE_LIMIT", "")
     if not rate_enabled:
         return None
+    _rate_limiter.configure_from_env()
     allowed, info = _rate_limiter.check(request.ip)
     _rate_limiter.apply_headers(response, info)
     if not allowed:
