@@ -95,8 +95,34 @@ sessions. The documented policy stays log-loud + degrade.
 
 Migration: `session.start("some-new-id")` no longer returns that id for a
 session the store does not hold. Write the session first, or let the framework
-mint the id and read it back from `session.session_id`. Deploying this also logs
-every existing session out once.
+mint the id and read it back from `session.session_id`.
+
+**Signed-in users are NOT logged out by this release.** An earlier draft of this
+entry said they were; that was wrong and is corrected here. Strict mode discards
+only an id the store does NOT hold, so a live session the store already has is
+resumed exactly as before. No key or filename naming changed either:
+`FileSessionHandler._file` has written `sha256(session_id).hexdigest() + ".json"`
+since v3 and is byte-identical in this release, and the Redis, Valkey, MongoDB
+and database handlers all key on the raw id. Every id the framework has ever
+minted (`secrets.token_urlsafe(32)`) is inside the accepted alphabet, so the new
+well-formedness gate rejects none of them.
+
+| session backend | live sessions after upgrade |
+| --- | --- |
+| file | survive - filename is still `sha256(id).json` in `data/sessions` |
+| redis | survive - key is still `tina4:session:<id>` |
+| valkey | survive - key is still `tina4:session:<id>` |
+| mongodb | survive - `_id` is still the raw id |
+| database | survive - `tina4_session.session_id` is still the raw id |
+| memcached | not applicable - new session backend in this release, no prior sessions to lose |
+
+What DOES break is an application that mints its own session ids: `start(id)`
+for an id the store has never held now returns a fresh id instead of that one.
+Check for `session.start(<your own value>)` before upgrading.
+
+Upgrading Python and Ruby together: tina4-ruby's FILE backend DID change its
+filename in this release, so Ruby file-backed sessions do not survive there. Its
+other backends do. See the tina4-ruby changelog.
 
 ### Security: an unverified Basic credential is no longer an auth result
 
@@ -174,6 +200,41 @@ set - the contract `TINA4_SESSION_BACKEND` already uses.
 
 **Migration.** Fix the spelling. Valid: `memory`, `file`, `redis`, `valkey`,
 `memcached`, `mongodb`, `database` (plus the aliases `memcache`, `mongo`, `db`).
+
+### Breaking: a failed job on RabbitMQ or Kafka is redelivered, not dropped or reset
+
+Two data-loss defects in the job lifecycle, both confirmed against live brokers.
+
+On **Kafka**, `fail()` had no retry branch at all: a job failing below
+`max_retries` was neither re-produced nor dead-lettered, and the consumer
+position had already moved past the record, so the job simply vanished.
+Completing any later job committed the offset and buried it for good. Kafka has
+no per-record nack, so a retry is now a RE-PRODUCE carrying the incremented
+`attempts`, followed by a commit past the original - the retry-topic shape
+Confluent documents and Spring Kafka implements.
+
+On **RabbitMQ**, `fail()` nacked with `requeue=True`. AMQP 0-9-1 s1.8.3.13
+returns the body UNMODIFIED and the protocol carries no delivery counter, so
+`attempts` came back as 0 on every redelivery: `attempts >= max_retries` could
+never trip for `max_retries >= 2`, and a poison job spun forever with no
+dead-letter escape. A retry now acknowledges the original delivery and
+republishes a body carrying the new count - what Celery, Spring AMQP's
+`RepublishMessageRecoverer` and laravel-queue-rabbitmq all do. The republish
+happens BEFORE the ack, so a crash in between duplicates rather than loses,
+which is the at-least-once contract.
+
+**Migration.** No application code has to change, but two observable behaviours
+move:
+
+- A redelivered job now arrives with `attempts` INCREMENTED rather than reset to
+  0. If you were detecting a redelivery by stashing your own counter in the
+  payload, read `job.attempts` instead.
+- A job that keeps failing now reaches `dead_letters()` after `max_retries`
+  instead of retrying forever (RabbitMQ) or disappearing (Kafka). Drain
+  `queue.dead_letters()` on these backends - on a busy topic it may have entries
+  the moment you upgrade.
+
+The file and MongoDB queue backends are unchanged. See ADR-0022.
 
 ### Breaking: one return-value contract for every middleware hook
 
