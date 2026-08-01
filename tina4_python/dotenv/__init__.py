@@ -52,16 +52,32 @@ def _parse_value(value: str, env_file, line_num: int, warned_refs: set) -> str:
     audit): identical in Python, PHP, Ruby and Node, driven off one committed
     fixture.
     """
-    # A fully single-quoted value is verbatim: no escapes, no interpolation.
-    # Shell semantics, and the documented way to keep a literal ${...}.
-    if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
-        return value[1:-1]
-
-    # A double-quoted value keeps its interior verbatim (a `#` inside stays a
-    # `#`), minus the quotes, with escape processing.
-    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
-        inner = value[1:-1].replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\")
-        return _interpolate(inner, env_file, line_num, warned_refs)
+    # A QUOTED value ends at its CLOSING QUOTE, and anything after it is a
+    # comment. Testing the LAST character instead was wrong: a trailing comment
+    # makes the last character non-quote, so `PW="s3cret" # note` fell through to
+    # the unquoted branch below, which strips only the ` #` and left the QUOTE
+    # CHARACTERS in the value - a credential handed to a driver as '"s3cret"'.
+    # PHP already scanned for the terminator; this is that mechanism, and the
+    # scan SKIPS a quote preceded by a backslash so an escaped \" cannot end it.
+    if value and value[0] in ("'", '"'):
+        quote = value[0]
+        i, n = 1, len(value)
+        while i < n:
+            if value[i] == "\\" and quote == '"' and i + 1 < n:
+                i += 2
+                continue
+            if value[i] == quote:
+                break
+            i += 1
+        if i < n:
+            inner = value[1:i]
+            # Single quotes are verbatim: no escapes, no interpolation.
+            if quote == "'":
+                return inner
+            inner = (inner.replace("\\n", "\n").replace("\\r", "\r")
+                          .replace("\\t", "\t").replace('\\"', '"')
+                          .replace("\\\\", "\\"))
+            return _interpolate(inner, env_file, line_num, warned_refs)
 
     # An unquoted value is truncated at the first SPACE-HASH, then trimmed.
     comment_idx = value.find(" #")
