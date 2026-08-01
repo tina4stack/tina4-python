@@ -341,8 +341,16 @@ class TestCsrfBearerSkip:
 
 
 def _started_session(session_id):
-    """A REAL Session (default file backend) started with a known id."""
+    """A REAL Session (default file backend) started with a known id.
+
+    3.13.95: strict mode means ``start()`` adopts a supplied id only when the
+    store already holds that session, so the record is written first. Without
+    this the session silently comes back under a freshly-minted id and the
+    binding assertions compare against the wrong one. See ADR-0021.
+    """
     session = Session()
+    session.start()
+    session._handler.write(session_id, {"_seeded": True}, session._ttl)
     session.start(session_id)
     return session
 

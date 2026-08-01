@@ -350,20 +350,39 @@ class Session:
     def start(self, session_id: str = None) -> str:
         """Start or resume a session. Returns the session ID.
 
-        ``session_id`` is UNTRUSTED — it arrives from the session cookie, which
-        the client fully controls. An id that is not a well-formed opaque
-        identifier is DISCARDED and a fresh one minted, never adopted: adopting
-        it let a cookie steer a filesystem path (arbitrary read/write on the
-        file backend) and let an attacker pre-plant a session id that survived
-        the victim's login (session fixation).
+        ``session_id`` is UNTRUSTED - it arrives from the session cookie, which
+        the client fully controls. It is adopted ONLY when it passes both gates:
 
-        A legitimate id from any of the four frameworks passes unchanged, so
-        this is non-breaking for every session already in flight.
+        1. It is a well-formed opaque identifier. Anything else could steer a
+           filesystem path (arbitrary read/write on the file backend).
+        2. STRICT MODE: the store already knows it. A well-formed id the store
+           has never seen is discarded too, because adopting one is textbook
+           session fixation - an attacker plants a cookie, the victim logs in
+           under it, and the attacker replays the id they chose.
+
+        Either gate failing mints a fresh id instead. This matches PHP's own
+        ``session.use_strict_mode=1`` default, Django, Rails, and the behaviour
+        Tina4 for Node already had.
+
+        BREAKING: ``start("some-new-id")`` no longer returns that id for a
+        session the store does not hold. Write the session first, or let the
+        framework mint the id and read it back from ``session_id``.
         """
         if session_id is not None and not is_valid_session_id(session_id):
             session_id = None
-        self._session_id = session_id or secrets.token_urlsafe(32)
-        self._data = self._safe_read(self._session_id)
+
+        if session_id:
+            existing = self._safe_read(session_id)
+            if existing:
+                self._session_id = session_id
+                self._data = existing
+                self._dirty = False
+                return self._session_id
+            # Well-formed but unknown: fall through and mint. We never adopt an
+            # id we did not issue.
+
+        self._session_id = secrets.token_urlsafe(32)
+        self._data = {}
         self._dirty = False
         return self._session_id
 

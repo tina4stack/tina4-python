@@ -69,14 +69,15 @@ def test_session_id_from_cookie_cannot_escape_the_session_directory(tmp_path):
         "a traversal session id was adopted verbatim"
     )
 
-    # Positive half: a legitimate id in the same handler still works.
+    # NEGATIVE CONTROL. Without this, a "fix" that simply breaks every session
+    # passes every other assertion in this file.
     good = Session(handler=FileSessionHandler(str(sessions)))
     good_id = good.start()
     good.set("k", "v")
     good.save()
     resumed = Session(handler=FileSessionHandler(str(sessions)))
-    resumed.start(good_id)
-    assert resumed.get("k") == "v"
+    assert resumed.start(good_id) == good_id, "a real session failed to resume"
+    assert resumed.get("k") == "v", "a real session lost its data"
 
 
 def test_session_id_with_path_separator_is_rejected_and_a_fresh_id_minted(tmp_path):
@@ -90,11 +91,37 @@ def test_session_id_with_path_separator_is_rejected_and_a_fresh_id_minted(tmp_pa
             f"replacement id is itself invalid for input {hostile!r}"
         )
 
-    # Positive half: an app is entitled to manage its own id. A short but
-    # alphabet-clean id is a TRUSTED programmatic choice, not an attack, and
-    # must still round-trip -- the vulnerability was the alphabet, not length.
-    session = Session(handler=handler)
-    assert session.start("my-session-id") == "my-session-id"
+    # Positive half: an alphabet-clean id that the store ALREADY KNOWS resumes
+    # under its own id, so the rule rejects the alphabet, not short ids.
+    seeded = Session(handler=handler)
+    seeded.start("my-session-id")
+    handler.write("my-session-id", {"seeded": True}, 3600)
+    resumed = Session(handler=handler)
+    assert resumed.start("my-session-id") == "my-session-id"
+    assert resumed.get("seeded") is True
+
+
+def test_unknown_session_id_is_not_adopted(tmp_path):
+    """Strict mode: an id the store has never seen is never adopted.
+
+    Adopting one is session fixation - an attacker plants a cookie, the victim
+    logs in under it, and the attacker replays the id they chose. Matches PHP's
+    session.use_strict_mode=1 default, Django and Rails.
+    """
+    handler = FileSessionHandler(str(tmp_path))
+
+    planted = "attackerplantedsessionid00"
+    assert is_valid_session_id(planted), "the test's own id must be well-formed"
+    victim = Session(handler=handler)
+    adopted = victim.start(planted)
+    assert adopted != planted, "an attacker-planted session id was adopted"
+
+    # Positive half: a KNOWN id still resumes unchanged, so strict mode has not
+    # simply broken session resumption.
+    handler.write(planted, {"real": 1}, 3600)
+    returning = Session(handler=handler)
+    assert returning.start(planted) == planted
+    assert returning.get("real") == 1
 
 
 def test_valid_generated_session_id_is_accepted_unchanged(tmp_path):
@@ -107,6 +134,8 @@ def test_valid_generated_session_id_is_accepted_unchanged(tmp_path):
     session = Session(handler=handler)
     minted = session.start()
     assert is_valid_session_id(minted)
+    session.set("k", "v")
+    session.save()  # strict mode resumes only a session the store actually holds
 
     resumed = Session(handler=handler)
     assert resumed.start(minted) == minted, "a self-minted id was not resumed as-is"

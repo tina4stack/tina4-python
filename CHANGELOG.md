@@ -19,12 +19,22 @@ Tina4 for Python hashes the id into the filename, so it was NOT vulnerable to
 the arbitrary file write proven in PHP and the arbitrary `.json` read/overwrite
 proven in Node - but it did ADOPT any attacker-supplied cookie id verbatim.
 
-`Session.start()` now discards a session id that is not a well-formed opaque
-identifier (`[A-Za-z0-9_-]`, up to 128 characters) and mints a fresh one
-instead. Every id the four frameworks mint passes unchanged, and an app that
-manages its own id (`session.start("my-session-id")`) is unaffected - the
-restriction is on the ALPHABET, not on length. `is_valid_session_id()` is
-exported for apps that want the same check.
+**Breaking.** `Session.start()` now adopts a supplied session id only when it
+passes BOTH gates, and mints a fresh id otherwise:
+
+1. It is a well-formed opaque identifier (`[A-Za-z0-9_-]`, up to 128
+   characters). The restriction is on the ALPHABET, not on length.
+2. STRICT MODE: the store already holds that session. A well-formed id the store
+   has never seen is discarded, because adopting one is session fixation. This
+   matches PHP's own `session.use_strict_mode=1` default, Django and Rails, and
+   the behaviour Tina4 for Node already had.
+
+`is_valid_session_id()` is exported for apps that want the same check.
+
+Migration: `session.start("some-new-id")` no longer returns that id for a
+session the store does not hold. Write the session first, or let the framework
+mint the id and read it back from `session.session_id`. Deploying this also logs
+every existing session out once.
 
 ### Security: an unverified Basic credential is no longer an auth result
 
