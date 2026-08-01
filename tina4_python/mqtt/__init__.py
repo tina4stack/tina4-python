@@ -38,6 +38,7 @@ import time
 from typing import Any, Iterator
 from urllib.parse import unquote
 
+from tina4_python.dotenv import is_truthy
 from tina4_python.mqtt.message import MqttMessage
 
 __all__ = ["Mqtt", "MqttMessage", "MqttError", "MqttTimeoutError"]
@@ -52,7 +53,10 @@ class MqttTimeoutError(MqttError):
 
 
 def _truthy(value: str | None) -> bool:
-    return str(value).strip().lower() in ("true", "1", "yes", "on") if value is not None else False
+    # One env truthiness table for the whole framework - see dotenv.is_truthy.
+    # A second copy here is a second thing to keep in step, and env booleans
+    # answering differently per subsystem is the ADR-0024 break in miniature.
+    return is_truthy(value) if value is not None else False
 
 
 # Control packet types. The low nibble of SUBSCRIBE is 0x2 because MQTT 3.1.1

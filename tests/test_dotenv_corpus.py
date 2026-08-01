@@ -18,7 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from tina4_python.dotenv import load_env
+from tina4_python.dotenv import is_truthy, load_env
+from tina4_python.mqtt import _truthy as _mqtt_truthy
 
 FIXTURE = Path(__file__).parent / "fixtures" / "dotenv_corpus.json"
 CORPUS = json.loads(FIXTURE.read_text(encoding="utf-8"))
@@ -169,3 +170,29 @@ class TestDotEnvPrecedence:
         load_env(str(tmp_path / ".env.local"))
         load_env(str(tmp_path / ".env"))
         assert os.environ.get(real["key"]) == real["value"]
+
+
+class TestEnvTruthiness:
+    """One truthiness table, every subsystem, every framework.
+
+    The env parser is only half the contract - the other half is what a parsed
+    value MEANS as a boolean. This was not one table (see the fixture note), so
+    the same .env answered differently depending on which subsystem asked.
+    """
+
+    @pytest.mark.parametrize("value", CORPUS["truthiness"]["truthy"])
+    def test_truthy_values(self, value):
+        assert is_truthy(value) is True
+
+    @pytest.mark.parametrize("value", CORPUS["truthiness"]["falsy"])
+    def test_falsy_values(self, value):
+        assert is_truthy(value) is False
+
+    @pytest.mark.parametrize("value", CORPUS["truthiness"]["truthy"])
+    def test_mqtt_agrees_on_truthy(self, value):
+        """The MQTT subsystem held a second copy of this table."""
+        assert _mqtt_truthy(value) is True
+
+    @pytest.mark.parametrize("value", CORPUS["truthiness"]["falsy"])
+    def test_mqtt_agrees_on_falsy(self, value):
+        assert _mqtt_truthy(value) is False
