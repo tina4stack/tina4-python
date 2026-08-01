@@ -111,7 +111,7 @@ class DatabaseSessionHandler(SessionHandler):
                 CREATE TABLE tina4_session (
                     session_id TEXT PRIMARY KEY,
                     data TEXT NOT NULL,
-                    expires_at REAL NOT NULL
+                    expires_at DOUBLE PRECISION NOT NULL
                 )
             """)
             self._db.commit()

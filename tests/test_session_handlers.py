@@ -261,64 +261,111 @@ class TestMongoDBHandlerConfig:
         assert handler._port == 27020
 
 
-class TestMongoDBHandlerMocked:
-    """Test MongoDB handler with mocked pymongo client."""
+@pytest.mark.skipif(
+    not _reachable(_MONGO_HOST, _MONGO_PORT),
+    reason=f"MongoDB is not reachable at {_MONGO_HOST}:{_MONGO_PORT}",
+)
+class TestMongoDBHandlerReal:
+    """MongoDB handler against a REAL MongoDB server.
 
-    def _make_handler_with_mock(self):
+    This class replaces a MagicMock-based one. The mocks asserted the SHAPE of
+    the pymongo calls (``update_one`` was called, the filter had ``$lt`` on
+    ``last_accessed``), which is not the same thing as the handler working - and
+    two of those assertions were pinning the destroy-on-unstamped defect in
+    place, so the mock suite went green while the bug shipped.
+
+    Every assertion below is made OUT OF BAND with an independent pymongo
+    handle, never through the code under test.
+    """
+
+    @pytest.fixture
+    def handler(self):
         from tina4_python.session_handlers.mongodb_handler import MongoDBSessionHandler
 
-        handler = MongoDBSessionHandler()
-        mock_collection = MagicMock()
-        handler._collection = mock_collection
-        handler._use_pymongo = True
-        return handler, mock_collection
+        pytest.importorskip("pymongo", reason="pymongo is not installed")
+        instance = MongoDBSessionHandler(
+            url=f"mongodb://{_MONGO_HOST}:{_MONGO_PORT}",
+            database="tina4_test",
+            collection="session_handlers",
+            ttl=3600,
+        )
+        instance._collection.delete_many({})
+        yield instance
+        try:
+            instance._collection.delete_many({})
+        finally:
+            instance.close()
 
-    def test_read_returns_empty_when_no_doc(self):
-        handler, mock_collection = self._make_handler_with_mock()
-        mock_collection.find_one.return_value = None
+    def _probe(self):
+        """An INDEPENDENT client for out-of-band assertions."""
+        import pymongo
+
+        return pymongo.MongoClient(
+            f"mongodb://{_MONGO_HOST}:{_MONGO_PORT}", serverSelectionTimeoutMS=3000
+        )["tina4_test"]["session_handlers"]
+
+    def test_read_returns_empty_when_no_doc(self, handler):
+        assert handler.read("no-such-session") == {}
+
+    def test_read_returns_session_data(self, handler):
+        handler.write("session-1", {"user_id": 42}, 3600)
+        assert handler.read("session-1") == {"user_id": 42}
+
+    def test_read_expired_session_returns_empty_and_destroys(self, handler):
+        """A GENUINELY expired document still reads empty and is still destroyed."""
+        self._probe().insert_one({
+            "_id": "session-1",
+            "data": {"user_id": 42},
+            "expires_at": time.time() - 120,
+        })
+
         assert handler.read("session-1") == {}
+        assert self._probe().find_one({"_id": "session-1"}) is None
 
-    def test_read_returns_session_data(self):
-        handler, mock_collection = self._make_handler_with_mock()
-        mock_collection.find_one.return_value = {
-            "_id": "session-1",
-            "data": {"user_id": 42},
-            "last_accessed": time.time(),
-        }
-        result = handler.read("session-1")
-        assert result == {"user_id": 42}
+    def test_read_unstamped_document_survives(self, handler):
+        """A document carrying NO expiry must be returned and KEPT.
 
-    def test_read_expired_session_returns_empty(self):
-        handler, mock_collection = self._make_handler_with_mock()
-        handler._ttl = 60
-        mock_collection.find_one.return_value = {
-            "_id": "session-1",
-            "data": {"user_id": 42},
-            "last_accessed": time.time() - 120,  # expired
-        }
-        result = handler.read("session-1")
-        assert result == {}
-        mock_collection.delete_one.assert_called_once()
+        The old relative shape (``time.time() - doc.get("last_accessed", 0) >
+        self._ttl``) fed a missing stamp into a subtraction that is always true
+        and then called destroy(), so an unstamped document was silently
+        destroyed on first read.
+        """
+        self._probe().insert_one({"_id": "naked", "data": {"user_id": 42}})
 
-    def test_write_upserts(self):
-        handler, mock_collection = self._make_handler_with_mock()
-        handler.write("session-1", {"user_id": 42})
-        mock_collection.update_one.assert_called_once()
-        call_args = mock_collection.update_one.call_args
-        assert call_args[0][0] == {"_id": "session-1"}
-        assert call_args[1]["upsert"] is True
+        assert handler.read("naked") == {"user_id": 42}
+        assert self._probe().find_one({"_id": "naked"}) is not None
 
-    def test_destroy(self):
-        handler, mock_collection = self._make_handler_with_mock()
+    def test_write_upserts(self, handler):
+        handler.write("session-1", {"user_id": 42}, 3600)
+        handler.write("session-1", {"user_id": 43}, 3600)
+
+        assert self._probe().count_documents({"_id": "session-1"}) == 1
+        assert handler.read("session-1") == {"user_id": 43}
+
+    def test_write_honours_the_per_call_ttl(self, handler):
+        handler.write("shortlived", {"user_id": 42}, 1)
+
+        stored = self._probe().find_one({"_id": "shortlived"})
+        assert stored["expires_at"] - time.time() < 5, "a ttl of 1s must not become the 3600s default"
+
+    def test_destroy(self, handler):
+        handler.write("session-1", {"user_id": 42}, 3600)
         handler.destroy("session-1")
-        mock_collection.delete_one.assert_called_once_with({"_id": "session-1"})
 
-    def test_gc_deletes_expired(self):
-        handler, mock_collection = self._make_handler_with_mock()
+        assert self._probe().find_one({"_id": "session-1"}) is None
+
+    def test_gc_deletes_expired_but_keeps_unstamped(self, handler):
+        probe = self._probe()
+        probe.insert_one({"_id": "stale", "data": {"a": 1}, "expires_at": time.time() - 120})
+        probe.insert_one({"_id": "naked", "data": {"a": 1}})
+        probe.insert_one({"_id": "zeroed", "data": {"a": 1}, "expires_at": 0})
+
         handler.gc(1800)
-        mock_collection.delete_many.assert_called_once()
-        call_args = mock_collection.delete_many.call_args[0][0]
-        assert "$lt" in call_args["last_accessed"]
+
+        assert probe.find_one({"_id": "stale"}) is None, "a genuinely expired doc must be swept"
+        assert probe.find_one({"_id": "naked"}) is not None, "an unstamped doc must never be swept"
+        assert probe.find_one({"_id": "zeroed"}) is not None, "a zero-stamped doc must never be swept"
+
 
 
 # ── Valkey Handler Tests ─────────────────────────────────────────
