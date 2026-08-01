@@ -20,6 +20,7 @@ import pytest
 
 from tina4_python.auth import Auth
 from tina4_python.session import (
+    SessionHandler,
     FileSessionHandler,
     Session,
     is_valid_session_id,
@@ -239,6 +240,41 @@ def test_authenticate_request_api_key_payload_shape_is_uniform():
             os.environ.pop("TINA4_API_KEY", None)
         else:
             os.environ["TINA4_API_KEY"] = previous
+
+
+def test_backend_outage_does_not_rotate_the_session_id(tmp_path):
+    """An unreachable backend must degrade, never rotate the session id.
+
+    Strict mode discards an id the store does not KNOW. A backend that does not
+    ANSWER is not evidence of that, and treating it as such rotates the id on
+    every request for the whole outage - logging every user out over a blip and
+    orphaning their stored sessions. The documented policy is log-loud +
+    degrade. Caught by the PHP and Ruby ports, which both refused to copy it.
+    """
+    class UnreachableBackend(SessionHandler):
+        """A REAL handler whose backend is down - it raises, as the shipped ones do."""
+
+        def read(self, session_id):
+            raise ConnectionError("redis unreachable")
+
+        def write(self, session_id, data, ttl=0):
+            raise ConnectionError("redis unreachable")
+
+        def destroy(self, session_id):
+            raise ConnectionError("redis unreachable")
+
+    supplied = "abcdef0123456789abcdef0123456789"
+    seen = [Session(handler=UnreachableBackend()).start(supplied) for _ in range(3)]
+    assert seen == [supplied] * 3, (
+        f"session id rotated during a backend outage: {seen}"
+    )
+
+    # Negative half: with a HEALTHY store that genuinely has no such session,
+    # strict mode must still discard the id.
+    healthy = FileSessionHandler(str(tmp_path))
+    assert Session(handler=healthy).start(supplied) != supplied, (
+        "strict mode stopped discarding an unknown id on a healthy backend"
+    )
 
 
 def test_password_hash_is_byte_identical_across_the_four_frameworks():

@@ -211,6 +211,9 @@ class Session:
         self._session_id: str | None = None
         self._data: dict = {}
         self._dirty: bool = False
+        #: True when the LAST backend read raised rather than returning a miss.
+        #: Lets start() tell "no such session" from "the store is unreachable".
+        self._last_read_failed: bool = False
         # Backend-failure policy (parity across all 4 frameworks): a backend
         # that becomes unreachable mid-request must NEVER take the whole app
         # down with it, and must NEVER fail silently. The default is
@@ -319,9 +322,19 @@ class Session:
         )
 
     def _safe_read(self, session_id: str) -> dict:
+        """Read through the backend, recording WHY an empty result came back.
+
+        ``_last_read_failed`` distinguishes "the store answered, and has no such
+        session" from "the store did not answer at all". Strict mode must only
+        discard an id on the first: treating an outage as "unknown id" rotates
+        the session id on every request while the backend is down, which logs
+        every user out over a blip and orphans their stored sessions.
+        """
+        self._last_read_failed = False
         try:
             return self._handler.read(session_id)
         except Exception as exc:
+            self._last_read_failed = True
             self._log_backend_error("read", exc)
             if self._strict:
                 raise
@@ -373,13 +386,17 @@ class Session:
 
         if session_id:
             existing = self._safe_read(session_id)
-            if existing:
+            if existing or self._last_read_failed:
+                # Adopt when the store HAS the session, and also when the store
+                # could not be reached: an outage is not evidence the id is
+                # unknown, and rotating on it would log every user out over a
+                # blip. The backend-failure policy is degrade, not rotate.
                 self._session_id = session_id
                 self._data = existing
                 self._dirty = False
                 return self._session_id
-            # Well-formed but unknown: fall through and mint. We never adopt an
-            # id we did not issue.
+            # The store answered and has no such session: never adopt an id we
+            # did not issue.
 
         self._session_id = secrets.token_urlsafe(32)
         self._data = {}

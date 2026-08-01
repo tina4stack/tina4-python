@@ -29,6 +29,11 @@ passes BOTH gates, and mints a fresh id otherwise:
    matches PHP's own `session.use_strict_mode=1` default, Django and Rails, and
    the behaviour Tina4 for Node already had.
 
+A backend that is UNREACHABLE is not treated as "unknown id". Strict mode
+discards an id the store does not know; an outage is not evidence of that, and
+rotating on it would log every user out over a blip and orphan their stored
+sessions. The documented policy stays log-loud + degrade.
+
 `is_valid_session_id()` is exported for apps that want the same check.
 
 Migration: `session.start("some-new-id")` no longer returns that id for a
