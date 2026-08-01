@@ -431,6 +431,94 @@ class DatabaseAdapter:
         return stripped
 
     @staticmethod
+    def _scrub_sql_text(sql: str) -> str:
+        """Blank out string literals, quoted identifiers and comments so a
+        keyword search sees only real SQL.
+
+        Blanks are spaces of the SAME LENGTH (newlines preserved), so offsets
+        and line structure still line up with the original.
+
+        MEASURED 2026-08-01 on a real 150-row SQLite table with the 100-row cap
+        in force. The old test was ``"LIMIT" in sql.upper().split("--")[0]``,
+        and each of these returned ALL 150 ROWS instead of 100:
+
+            SELECT * FROM t WHERE label != 'LIMIT' ORDER BY id     literal
+            SELECT * FROM t ORDER BY id -- LIMIT 5                 line comment
+            SELECT id, label AS rate_limit FROM t                  identifier
+
+        A silently uncapped read of a whole table is the production incident the
+        cap exists to prevent, and an ordinary column name was enough to cause it.
+        """
+        if not sql:
+            return sql
+
+        out = []
+        i = 0
+        n = len(sql)
+        while i < n:
+            ch = sql[i]
+            nxt = sql[i + 1] if i + 1 < n else ""
+
+            if ch in ("'", '"'):
+                quote = ch
+                out.append(" ")
+                i += 1
+                while i < n:
+                    if sql[i] == quote:
+                        if i + 1 < n and sql[i + 1] == quote:
+                            out.append("  ")
+                            i += 2
+                            continue
+                        out.append(" ")
+                        i += 1
+                        break
+                    out.append("\n" if sql[i] == "\n" else " ")
+                    i += 1
+                continue
+
+            if ch == "-" and nxt == "-":
+                while i < n and sql[i] != "\n":
+                    out.append(" ")
+                    i += 1
+                continue
+
+            if ch == "/" and nxt == "*":
+                out.append("  ")
+                i += 2
+                while i < n and not (sql[i] == "*" and i + 1 < n and sql[i + 1] == "/"):
+                    out.append("\n" if sql[i] == "\n" else " ")
+                    i += 1
+                if i < n:
+                    out.append("  ")
+                    i += 2
+                continue
+
+            out.append(ch)
+            i += 1
+
+        return "".join(out)
+
+    @staticmethod
+    def _has_trailing_limit(sql: str) -> bool:
+        """True when the statement ENDS with its own LIMIT clause.
+
+        Anchored to the END on purpose: a bare "contains LIMIT" test also matches
+        a LIMIT inside a subquery, where the OUTER statement still needs its cap.
+        This is tina4-php's ``SqlNormalizerTrait::hasTrailingLimit`` regex, ported
+        verbatim so all four frameworks answer identically. It accepts a numeric
+        value, ``?``/``$1``/``:name`` placeholders, MySQL's ``LIMIT a, b``, and a
+        trailing OFFSET.
+
+        Literals and comments are scrubbed before matching (see _scrub_sql_text).
+        """
+        val = r"(?:\d+|\?|\$\d+|:\w+|%s)"
+        pattern = (
+            r"\bLIMIT\s+" + val + r"(?:\s*,\s*" + val + r")?"
+            r"(?:\s+OFFSET\s+" + val + r")?\s*;?\s*$"
+        )
+        return bool(re.search(pattern, DatabaseAdapter._scrub_sql_text(sql or ""), re.IGNORECASE))
+
+    @staticmethod
     def _strip_trailing_order_by(sql: str) -> str:
         """Strip a trailing top-level ``ORDER BY`` so the SQL can be safely
         wrapped in ``SELECT COUNT(*) FROM (<sql>)`` for the row-count probe.

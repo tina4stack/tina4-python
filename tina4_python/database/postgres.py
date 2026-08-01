@@ -403,11 +403,15 @@ class PostgreSQLAdapter(DatabaseAdapter):
         # _safe_execute (a failed probe shouldn't taint last_error).
         # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
         # default — give me ALL rows, not a silent first-100 slice).
-        if limit is None or limit <= 0:
+        # _has_trailing_limit: only SQLite deduped before, so SQL that already
+        # carried its own LIMIT became `... LIMIT 3 LIMIT %s OFFSET %s` here --
+        # a syntax error MEASURED on a live PostgreSQL. It worked on sqlite and
+        # crashed on the server, which is the swap ADR-0024 exists to protect.
+        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
             paginated_sql = sql
             paginated_params = params or []
         else:
-            paginated_sql = f"{sql} LIMIT %s OFFSET %s"
+            paginated_sql = f"{sql}\nLIMIT %s OFFSET %s"
             paginated_params = (params or []) + [limit, offset]
         self._exec_with_handling(cursor, paginated_sql, paginated_params)
         columns = [d[0] for d in cursor.description] if cursor.description else []

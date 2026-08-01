@@ -168,7 +168,10 @@ class SQLiteAdapter(DatabaseAdapter):
         # is deliberately NOT wrapped in try/except so its error FAILS LOUD
         # (parity with execute()). A typo'd query then raises, instead of the
         # old behaviour where a buried probe error made it look like "no rows".
-        count_sql = f"SELECT COUNT(*) as cnt FROM ({sql})"
+        # The newline matters: a trailing `-- comment` in the user SQL would
+        # otherwise comment out the closing paren, making the probe fail and
+        # silently report count=0 alongside real records.
+        count_sql = f"SELECT COUNT(*) as cnt FROM ({sql}\n)"
         try:
             total = self._conn.execute(count_sql, params or []).fetchone()["cnt"]
         except Exception:
@@ -176,14 +179,18 @@ class SQLiteAdapter(DatabaseAdapter):
 
         # Apply pagination — skip if SQL already has LIMIT, or if
         # limit <= 0 (v3.13.12: fetch_all's "give me all rows" path).
-        if limit is None or limit <= 0:
-            paginated_sql = sql
-            paginated_params = params or []
-        elif "LIMIT" in sql.upper().split("--")[0]:
+        # _has_trailing_limit scrubs literals/comments first: the old test was
+        # `"LIMIT" in sql.upper().split("--")[0]`, so `WHERE label != 'LIMIT'`
+        # or a column named rate_limit read as "the caller supplied their own"
+        # and the cap was silently dropped -- a full-table read.
+        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
             paginated_sql = sql
             paginated_params = params or []
         else:
-            paginated_sql = f"{sql} LIMIT ? OFFSET ?"
+            # The clause goes on a NEW LINE. Appended inline it lands INSIDE a
+            # trailing `-- comment` and is swallowed, which is the same bug at
+            # the append site rather than the detector.
+            paginated_sql = f"{sql}\nLIMIT ? OFFSET ?"
             paginated_params = (params or []) + [limit, offset]
         # Hydrate via a tuple cursor + a column list computed ONCE, rather than
         # dict(sqlite3.Row) per row. The connection's row_factory is sqlite3.Row,
