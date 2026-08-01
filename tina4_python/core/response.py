@@ -306,9 +306,71 @@ class Response:
         self._headers.append(("location", url))
         return self
 
-    def file(self, file_path: str, download_name: str = None) -> "Response":
-        """Serve a file with auto-detected content type."""
-        path = Path(file_path)
+    def file(self, file_path: str, download_name: str = None, root: str = None) -> "Response":
+        """Serve a file with auto-detected content type, CONFINED to ``root``.
+
+        ``root`` defaults to the current working directory (the project root).
+        A path that resolves outside it is refused with 403 and no bytes are
+        read. Pass ``root="/"`` to serve from anywhere, explicitly.
+
+        SECURITY (why this is confined at all). This used to resolve and read
+        whatever it was handed, so the natural spelling
+
+            return response.file(request.params["name"])
+
+        served any file the process could read. Measured before the fix:
+        ``response.file("../../../../../../etc/passwd")`` returned 200 with
+        9344 bytes of /etc/passwd.
+
+        Note the mainstream does NOT confine its general file helper - Flask's
+        send_file, Rails' send_file and Django's FileResponse all serve what
+        they are given, and each ships a SEPARATE confined variant
+        (send_from_directory, static.serve with safe_join). Tina4 had no such
+        variant, so the unsafe call was the only call. Rather than add a second
+        function nobody would discover in time, the default is confined and the
+        escape hatch is explicit - the same secure-by-default stance write
+        routes, session backends and CORS already take here.
+
+        The check compares RESOLVED paths, so it holds for ``..`` segments,
+        absolute paths and symlinks alike.
+        """
+        def _forbid() -> "Response":
+            # Refuse BEFORE touching the filesystem: never read a byte we will
+            # not send, and never let the reply distinguish "blocked" from
+            # "absent" by timing or by body.
+            self.status_code = 403
+            self.content = b"Forbidden"
+            self.content_type = "text/plain"
+            return self
+
+        base = Path(root).resolve() if root is not None else Path.cwd().resolve()
+        raw = Path(file_path)
+
+        # 1. Refuse any UP-LEVEL segment in what the caller passed.
+        #
+        # This is the check that actually stops the realistic attack, and
+        # containment alone does NOT. The natural vulnerable spelling is
+        #
+        #     response.file("downloads/" + name)      name = "../secret.env"
+        #
+        # which resolves to <project>/secret.env - still INSIDE the project
+        # root, so a containment-only fix happily serves it. And the project
+        # root is exactly where .env lives. Rejecting ".." on the way in is
+        # what closes it.
+        if ".." in raw.parts:
+            return _forbid()
+
+        try:
+            resolved = raw.resolve() if raw.is_absolute() else (base / raw).resolve()
+        except (OSError, RuntimeError):
+            return _forbid()
+
+        # 2. Containment, as defence in depth: catches an absolute path and a
+        # symlink pointing out of the tree, neither of which shows a ".." part.
+        if base != Path("/") and not (resolved == base or base in resolved.parents):
+            return _forbid()
+
+        path = resolved
         if not path.is_file():
             self.status_code = 404
             self.content = b"File not found"
