@@ -93,23 +93,54 @@ class RouteGroup:
         self._prefix = prefix
         self._middleware = middleware or []
 
+    def _register(self, method: str, path: str, handler, **options) -> RouteRef:
+        """Register one route with THIS group's prefix and middleware bound.
+
+        Two bugs lived in the old shape, and both came from the group state
+        being read off the CLASS while a RouteGroup carried its own copy:
+
+        1. The verbs passed ``middleware=self._middleware`` AND ``Router.add``
+           prepended ``cls._group_middleware``, so every group middleware was
+           merged twice and RAN TWICE per request. A counter or a rate-limit
+           bucket silently double-counted.
+        2. ``RouteGroup.group`` built a correct nested prefix but nothing ever
+           read it - registration used ``cls._group_prefix``, which the nested
+           call never updated. A route declared at ``/api/admin/stats``
+           silently registered at ``/api/stats``, which can land it inside a
+           differently-protected prefix or collide with an existing route.
+
+        Binding the class state to this group's own values for the duration of
+        the call fixes both, and keeps ONE code path for prefix + middiddleware
+        composition instead of two that must agree.
+        """
+        router = self._router
+        previous_prefix = router._group_prefix
+        previous_middleware = router._group_middleware
+        router._group_prefix = self._prefix
+        router._group_middleware = list(self._middleware)
+        try:
+            return router.add(method, path, handler, **options)
+        finally:
+            router._group_prefix = previous_prefix
+            router._group_middleware = previous_middleware
+
     def get(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("GET", path, handler, middleware=self._middleware, **options)
+        return self._register("GET", path, handler, **options)
 
     def post(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("POST", path, handler, middleware=self._middleware, **options)
+        return self._register("POST", path, handler, **options)
 
     def put(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("PUT", path, handler, middleware=self._middleware, **options)
+        return self._register("PUT", path, handler, **options)
 
     def patch(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("PATCH", path, handler, middleware=self._middleware, **options)
+        return self._register("PATCH", path, handler, **options)
 
     def delete(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("DELETE", path, handler, middleware=self._middleware, **options)
+        return self._register("DELETE", path, handler, **options)
 
     def any(self, path: str, handler, **options) -> RouteRef:
-        return self._router.add("ANY", path, handler, middleware=self._middleware, **options)
+        return self._register("ANY", path, handler, **options)
 
     def group(self, prefix: str, callback, middleware=None):
         merged = list(self._middleware) + (middleware or [])
@@ -315,18 +346,31 @@ class Router:
 
         pattern, param_names, param_types = _compile_pattern(path)
 
-        # Auth default: GET=public, writes=secured (unless custom middleware handles auth)
+        # Auth default: GET=public, writes=secured.
+        #
+        # Middleware is PURELY ADDITIVE and must NOT silently disable the
+        # built-in Bearer-token gate. This used to carry an
+        # ``elif effective_middleware: auth_required = False`` branch on the
+        # reasoning that a route with custom middleware "handles auth itself".
+        # Group middleware is merged into effective_middleware, so attaching an
+        # ordinary logging or audit middleware to a GROUP silently made every
+        # POST/PUT/PATCH/DELETE inside it PUBLIC - measured: an unauthenticated
+        # POST to a grouped route returned 200 where the identical ungrouped
+        # route returned 401. The developer's action (add request logging) had
+        # no visible relationship to its effect (the gate disappeared).
+        #
+        # tina4-php, tina4-ruby and tina4-nodejs all key auth off the method and
+        # the explicit flags, independent of middleware; Node's router.ts even
+        # annotates it as "parity with PY-10-02". Python was the drift. Use
+        # @noauth() to open a write route - that is the explicit spelling and it
+        # already exists. ADR-0019.
         m = method.upper()
-        has_middleware = bool(effective_middleware)
         if "auth_required" in options:
             auth_required = options["auth_required"]
         elif hasattr(handler, "_noauth"):
             auth_required = False
         elif hasattr(handler, "_secured"):
             auth_required = True
-        elif has_middleware:
-            # Route has custom middleware — developer handles auth themselves
-            auth_required = False
         else:
             # GET, HEAD, OPTIONS, and ANY are public by default. HEAD and
             # OPTIONS are safe/idempotent introspection methods (RFC 9110
