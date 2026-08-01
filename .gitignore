@@ -98,3 +98,4 @@ example/src/**/__pycache__/
 # relative to cwd would create these under the repo. Never commit them.
 /private/
 /var/folders/
+/data/sessions/
