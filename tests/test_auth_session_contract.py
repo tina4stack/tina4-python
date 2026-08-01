@@ -241,6 +241,32 @@ def test_authenticate_request_api_key_payload_shape_is_uniform():
             os.environ["TINA4_API_KEY"] = previous
 
 
+def test_password_hash_is_byte_identical_across_the_four_frameworks():
+    """A known-answer test pinning the cross-framework PBKDF2 contract.
+
+    A user row written by one framework must verify in the other three, so the
+    hash string is part of the public contract: `pbkdf2_sha256$<iterations>$<salt>$<hex>`
+    over PBKDF2-HMAC-SHA256 with a 32-byte derived key. The expected digest below
+    was verified by hand against PHP's `hash_pbkdf2`, Ruby's `OpenSSL::KDF.pbkdf2_hmac`
+    and Node's `pbkdf2Sync` - changing any parameter here silently locks every
+    existing user out of the other three frameworks.
+    """
+    expected = (
+        "pbkdf2_sha256$260000$0123456789abcdef0123456789abcdef$"
+        "e01952fa5e6b8a48f9372945e3e2539f4bc7d8db5f80298cbda678cd4bb7a0b0"
+    )
+    produced = Auth.hash_password(
+        "correct horse battery staple", salt="0123456789abcdef0123456789abcdef"
+    )
+    assert produced == expected, (
+        "the PBKDF2 hash format or parameters changed - every existing user row "
+        "would stop verifying in PHP, Ruby and Node"
+    )
+    assert Auth.check_password("correct horse battery staple", expected) is True
+    # Negative half: a wrong password must not verify against the same record.
+    assert Auth.check_password("wrong password", expected) is False
+
+
 def test_route_gate_api_key_comparison_is_timing_safe():
     """The write-route gate must compare the API key through validate_api_key.
 
