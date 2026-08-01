@@ -39,7 +39,12 @@ class RabbitMQConnector:
         self._socket: socket.socket | None = None
         self._channel_id = 1
         self._declared_queues: set[str] = set()
-        self._last_delivery_tag: int | None = None
+        # AMQP 0-9-1 s1.8.3.12: a delivery-tag identifies ONE delivery on the
+        # channel. Keying by message id lets acknowledge()/reject() name the
+        # message they mean. A single "last tag" slot silently acked the WRONG
+        # message whenever two deliveries were in flight (pop_batch, or any
+        # consumer that pops twice before acking).
+        self._delivery_tags: dict[str, int] = {}
 
         # Try pika first
         try:
@@ -91,44 +96,53 @@ class RabbitMQConnector:
             method, _props, body = self._channel.basic_get(queue=topic, auto_ack=False)
             if method is None:
                 return None
-            self._last_delivery_tag = method.delivery_tag
             try:
-                return json.loads(body)
+                message = json.loads(body)
             except json.JSONDecodeError:
                 return None
+            self._remember_delivery_tag(message, method.delivery_tag)
+            return message
         else:
             self._declare_queue_raw(topic)
             result = self._basic_get_raw(topic)
             if result is None:
                 return None
-            self._last_delivery_tag = result["delivery_tag"]
-            return result["message"]
+            message = result["message"]
+            self._remember_delivery_tag(message, result["delivery_tag"])
+            return message
+
+    def _remember_delivery_tag(self, message, delivery_tag: int) -> None:
+        """Record which delivery carried this message, so it can be acked by id."""
+        if isinstance(message, dict) and message.get("id") is not None:
+            self._delivery_tags[str(message["id"])] = delivery_tag
+
+    def _take_delivery_tag(self, message_id: str) -> int | None:
+        """Pop the delivery tag for message_id. None when it is not in flight."""
+        return self._delivery_tags.pop(str(message_id), None)
 
     def acknowledge(self, topic: str, message_id: str):
-        """Acknowledge a message as processed."""
-        if self._last_delivery_tag is None:
+        """Acknowledge THIS message as processed."""
+        delivery_tag = self._take_delivery_tag(message_id)
+        if delivery_tag is None:
             return
         self._ensure_connected()
 
         if self._use_pika:
-            self._channel.basic_ack(delivery_tag=self._last_delivery_tag)
+            self._channel.basic_ack(delivery_tag=delivery_tag)
         else:
-            self._basic_ack_raw(self._last_delivery_tag)
-        self._last_delivery_tag = None
+            self._basic_ack_raw(delivery_tag)
 
     def reject(self, topic: str, message_id: str, requeue: bool = True):
-        """Reject a message. Optionally requeue it."""
-        if self._last_delivery_tag is None:
+        """Reject THIS message. Optionally requeue it."""
+        delivery_tag = self._take_delivery_tag(message_id)
+        if delivery_tag is None:
             return
         self._ensure_connected()
 
         if self._use_pika:
-            self._channel.basic_nack(
-                delivery_tag=self._last_delivery_tag, requeue=requeue
-            )
+            self._channel.basic_nack(delivery_tag=delivery_tag, requeue=requeue)
         else:
-            self._basic_nack_raw(self._last_delivery_tag, requeue)
-        self._last_delivery_tag = None
+            self._basic_nack_raw(delivery_tag, requeue)
 
     def size(self, topic: str) -> int:
         """Get the number of messages in a queue."""

@@ -61,7 +61,11 @@ class KafkaConnector:
         self._offsets: dict[str, int] = {}
         self._known_topics: set[str] = set()
         self._subscribed_topics: set[str] = set()
-        self._last_message = None
+        # Kafka commits an OFFSET, not a record, so a commit is only safe once
+        # the caller names the message it finished. Keyed by message id: a
+        # single "last message" slot committed past whichever record happened
+        # to be polled most recently, burying anything failed before it.
+        self._in_flight: dict[str, object] = {}
 
         # Try confluent-kafka first
         try:
@@ -125,11 +129,13 @@ class KafkaConnector:
                     break
             if msg is None:
                 return None
-            self._last_message = msg
             try:
-                return json.loads(msg.value().decode("utf-8"))
+                message = json.loads(msg.value().decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 return None
+            if isinstance(message, dict) and message.get("id") is not None:
+                self._in_flight[str(message["id"])] = msg
+            return message
         else:
             self._ensure_topic_metadata(topic)
             offset = self._offsets.get(topic, 0)
@@ -140,11 +146,11 @@ class KafkaConnector:
             return result["message"]
 
     def acknowledge(self, topic: str, message_id: str):
-        """Acknowledge a message. In Kafka, this commits the consumer offset."""
+        """Acknowledge THIS message by committing the offset just past it."""
         if self._use_confluent:
-            if self._consumer and self._last_message:
-                self._consumer.commit(message=self._last_message)
-                self._last_message = None
+            msg = self._in_flight.pop(str(message_id), None)
+            if self._consumer and msg is not None:
+                self._consumer.commit(message=msg)
         # For raw protocol, offset advancement in dequeue serves as acknowledgment
 
     def reject(self, topic: str, message_id: str, requeue: bool = True):
