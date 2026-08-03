@@ -10,6 +10,17 @@ This file is deliberately NOT a copy of those notes. Duplicating them is exactly
 changelog rots into claiming a version that was never cut, so this file records only
 UNRELEASED work. When a version ships, its notes go to the release notes above.
 
+### Fixed (queue operations acted on the local file store, not the configured backend)
+
+Every operation must act on the CONFIGURED backend. These calls appeared to succeed
+while operating on the wrong data, which is the worst failure class because nothing
+surfaces it. `pop_by_id` was broken in ALL FOUR frameworks.
+
+- `pop_by_id()` returned `None` on every non-file backend - a literal
+  `if not isinstance(self._backend, LiteBackend): return None`. A silent no-op,
+  indistinguishable from "no such job". It now claims the document on mongodb and
+  raises a named refusal on a backend that cannot address one message by id.
+
 ### Fixed (a queue method could be a fatal error instead of resolving)
 
 Every public `Queue` method must RESOLVE on every backend the framework offers. A

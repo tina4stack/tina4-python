@@ -342,7 +342,17 @@ class Queue:
         """Pop a specific job by ID from the queue."""
         job_id = id
         if not isinstance(self._backend, LiteBackend):
-            return None
+            # Was `return None` - a SILENT no-op indistinguishable from "no such
+            # job", on every backend but file. A backend that CAN claim one
+            # document by id does so; one that cannot raises naming itself.
+            claim = getattr(self._backend, "pop_by_id", None)
+            if claim is None:
+                raise NotImplementedError(
+                    f"The {type(self._backend).__name__} queue backend cannot perform "
+                    "pop_by_id(): it cannot address a single message by id. Use "
+                    "the file or mongodb backend."
+                )
+            return claim(self, job_id)
         queue_dir = self._backend._queue_dir()
         try:
             for filename in os.listdir(queue_dir):

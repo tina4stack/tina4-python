@@ -62,6 +62,32 @@ class MongoBackend:
             attempts=attempts,
         )
 
+    def pop_by_id(self, queue_ref, job_id: str) -> Job | None:
+        """Claim ONE specific job by id, the same way pop() claims the head.
+
+        Queue.pop_by_id used to `return None` on every non-file backend - a
+        silent no-op indistinguishable from "no such job".
+        """
+        self._backend._ensure_connected()
+        doc = self._backend._collection.find_one_and_update(
+            {"_id": job_id, "topic": self._topic, "status": "pending"},
+            {"$set": {"status": "processing",
+                      "reserved_at": _now(),
+                      "available_at": _future(self._backend._visibility_timeout)}},
+            return_document=self._backend._pymongo.ReturnDocument.AFTER,
+        )
+        if doc is None:
+            return None
+        payload = (doc.get("data") or {}).get("payload", doc.get("data"))
+        return Job(
+            queue=queue_ref,
+            job_id=doc.get("_id"),
+            topic=self._topic,
+            data=payload if isinstance(payload, dict) else doc.get("data"),
+            priority=doc.get("priority", 0),
+            attempts=doc.get("attempts", 0),
+        )
+
     def size(self, status: str = "pending") -> int:
         if status != "pending":
             return 0
