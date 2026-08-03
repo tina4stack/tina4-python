@@ -249,40 +249,104 @@ def compile_filter(query: dict):
                 clauses.append(frag)
                 params.extend(p)
         else:
-            # equality
-            if value is None:
-                clauses.append(f"{_extract(key)} IS NULL")
-            else:
-                clauses.append(f"{_extract(key)} = ?")
-                params.append(_bind(value))
+            # equality - same helper the $eq operator uses, so the array rule
+            # applies whether the filter is written {"tags": "x"} or
+            # {"tags": {"$eq": "x"}}
+            frag, p = _equality(key, value)
+            clauses.append(frag)
+            params.extend(p)
 
     return (" AND ".join(clauses) if clauses else "1=1"), params
+
+
+def _each(field: str) -> str:
+    """A rowset over the field: one row per element of an array, one for a scalar."""
+    return f"json_each(doc, '{_path(field)}')"
+
+
+def _any_element(field: str, condition: str) -> str:
+    """True when the field is an ARRAY and any element satisfies `condition`.
+
+    MongoDB's rule for an array-valued field is that a condition matches when ANY
+    ELEMENT matches it. json_each yields one row per element, so EXISTS is the
+    direct translation.
+
+    The `= 'array'` guard is load-bearing. json_each over an OBJECT iterates its
+    VALUES, and Mongo never matches an object field against one of its values -
+    {"obj": "x"} must NOT match {"obj": {"city": "x"}}.
+    """
+    return (
+        f"({_type(field)} = 'array'"
+        f" AND EXISTS (SELECT 1 FROM {_each(field)} WHERE {condition}))"
+    )
+
+
+def _equality(field: str, operand):
+    """`field == operand` under Mongo's array rule. Returns (sql, params)."""
+    ex = _extract(field)
+    if operand is None:
+        return f"{ex} IS NULL", []
+    if isinstance(operand, (list, tuple, dict)):
+        # An array or object operand compares against the WHOLE value, never
+        # element-wise: {"tags": ["x","y"]} is exact-array equality.
+        return f"{ex} = ?", [_bind(operand)]
+    return (
+        f"({ex} = ? OR {_any_element(field, 'value = ?')})",
+        [_bind(operand), _bind(operand)],
+    )
+
+
+def _compare(field: str, sql_op: str, operand):
+    """`field OP operand` under Mongo's array rule. Returns (sql, params).
+
+    The `<> 'array'` guard on the scalar branch is what removes a measured FALSE
+    POSITIVE: json_extract of an array returns its JSON TEXT, and SQLite sorts
+    any text above any number, so {"nums": {"$gt": 9}} matched [1,2,3].
+    """
+    ex = _extract(field)
+    return (
+        f"(({_type(field)} <> 'array' AND {ex} {sql_op} ?)"
+        f" OR {_any_element(field, f'value {sql_op} ?')})",
+        [_bind(operand), _bind(operand)],
+    )
 
 
 def _compile_op(field: str, op: str, operand):
     ex = _extract(field)
     if op in _COMPARATORS:
-        return f"{ex} {_COMPARATORS[op]} ?", [_bind(operand)]
+        return _compare(field, _COMPARATORS[op], operand)
     if op == "$eq":
-        if operand is None:
-            return f"{ex} IS NULL", []
-        return f"{ex} = ?", [_bind(operand)]
+        return _equality(field, operand)
     if op == "$ne":
         if operand is None:
             return f"{ex} IS NOT NULL", []
-        return f"({ex} <> ? OR {ex} IS NULL)", [_bind(operand)]
+        sql, params = _equality(field, operand)
+        # A MISSING field satisfies $ne in Mongo, and SQL's NOT(NULL) is NULL
+        # rather than true - so the IS NULL arm is required, not decoration.
+        return f"(NOT ({sql}) OR {ex} IS NULL)", params
     if op == "$in":
         items = list(operand) or []
         if not items:
             return "0", []
         placeholders = ",".join("?" for _ in items)
-        return f"{ex} IN ({placeholders})", [_bind(v) for v in items]
+        bound = [_bind(v) for v in items]
+        return (
+            f"({ex} IN ({placeholders})"
+            f" OR {_any_element(field, f'value IN ({placeholders})')})",
+            bound + bound,
+        )
     if op == "$nin":
         items = list(operand) or []
         if not items:
             return "1", []
         placeholders = ",".join("?" for _ in items)
-        return f"({ex} NOT IN ({placeholders}) OR {ex} IS NULL)", [_bind(v) for v in items]
+        bound = [_bind(v) for v in items]
+        return (
+            f"(NOT ({ex} IN ({placeholders})"
+            f" OR {_any_element(field, f'value IN ({placeholders})')})"
+            f" OR {ex} IS NULL)",
+            bound + bound,
+        )
     if op == "$exists":
         # json_type is NULL when the path is absent; present-but-null still has a type
         return (f"{_type(field)} IS NOT NULL" if operand else f"{_type(field)} IS NULL"), []
@@ -290,7 +354,11 @@ def _compile_op(field: str, op: str, operand):
         pattern = operand
         if isinstance(operand, dict):  # not expected, but be safe
             pattern = operand.get("$regex", "")
-        return f"{ex} REGEXP ?", [str(pattern)]
+        return (
+            f"(({_type(field)} <> 'array' AND {ex} REGEXP ?)"
+            f" OR {_any_element(field, 'value REGEXP ?')})",
+            [str(pattern), str(pattern)],
+        )
     raise ValueError(f"DocStore: unsupported query operator {op!r}")
 
 
@@ -302,7 +370,7 @@ def _bind(value):
         return encode_value(value)
     if isinstance(value, (int, float, str)) or value is None:
         return value
-    return json.dumps(encode_value(value))
+    return json.dumps(encode_value(value), separators=(",", ":"))
 
 
 def _regexp(pattern, value):

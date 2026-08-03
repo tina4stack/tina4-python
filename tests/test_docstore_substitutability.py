@@ -213,76 +213,81 @@ class TestTheDocumentRoundTripIsIdentical:
         assert got == [5, 9], f"{provider}: $gt returned {got}"
 
 
-class TestQuerySemanticsMatchOnBothProviders:
-    """docstore_contract.json :: query-semantics-match-on-both-providers.
 
-    OPEN DEFECT, measured and reported rather than asserted.
+# ── ADR-0025 clause 4 / query-semantics-match-on-both-providers (ASSERTED) ────
 
-    Mongo's array-containment semantics - a scalar filter matching any element
-    of an array field - are ABSENT on the SQLite fallback in all four
-    frameworks. A query returning documents in production returns NOTHING in
-    development, silently.
+ARRAY_CASES = [
+    ("equality containment", {"tags": "x"}),
+    ("equality no match", {"tags": "z"}),
+    ("exact array, right order", {"tags": ["x", "y"]}),
+    ("exact array, wrong order", {"tags": ["y", "x"]}),
+    ("$in hits one element", {"tags": {"$in": ["x", "q"]}}),
+    ("$in hits nothing", {"tags": {"$in": ["q"]}}),
+    ("$nin excludes a present element", {"tags": {"$nin": ["x"]}}),
+    ("$nin with an absent element", {"tags": {"$nin": ["q"]}}),
+    ("$ne a present element", {"tags": {"$ne": "x"}}),
+    ("$ne an absent element", {"tags": {"$ne": "q"}}),
+    ("numeric containment", {"nums": 1}),
+    ("$gt any element", {"nums": {"$gt": 2}}),
+    ("$gt no element", {"nums": {"$gt": 9}}),
+    ("$lt any element", {"nums": {"$lt": 2}}),
+    ("$exists on an array", {"tags": {"$exists": True}}),
+    ("empty array exact", {"empty": []}),
+    ("$regex on an array element", {"tags": {"$regex": "^x$"}}),
+    ("scalar still works", {"scalar": "x"}),
+    ("object field is not matched by its value", {"obj": "x"}),
+    ("object field matches the whole object", {"obj": {"city": "x"}}),
+]
 
-    It is printed rather than asserted for the same reason the row-cap contract
-    printed its open defect: this file must stay a live gate for the invariants
-    that DO hold, and a permanently-red file is one somebody disables. The
-    defect has its own backlog entry and its own fixture invariant.
+ARRAY_DOC = {
+    "name": "w", "tags": ["x", "y"], "nums": [1, 2, 3],
+    "empty": [], "scalar": "x", "obj": {"city": "x"},
+}
+
+
+class TestArrayQuerySemantics:
+    """docstore_contract.json :: query-semantics-match-on-both-providers
+
+    MEASURED 2026-08-03 against a real MongoDB: EIGHT array-query behaviours
+    diverged IDENTICALLY in all four frameworks, which is the signature of a
+    contract nobody had written down. Three of them were FALSE POSITIVES - the
+    fallback returned a document Mongo excludes:
+
+        {"nums": {"$gt": 9}} matched [1,2,3], because json_extract of an array
+        returns its JSON TEXT and SQLite sorts any text above any number.
+
+    MongoDB's rule is one sentence: a condition on an array-valued field matches
+    when ANY ELEMENT matches it (or the whole array equals the operand), and a
+    negation matches when NO element does. The fallback now implements exactly
+    that over json_each.
+
+    The assertion is not "the fallback returns N" - it is that BOTH PROVIDERS
+    RETURN THE SAME THING. That is ADR-0024 stated directly, and it cannot drift
+    to match a hard-coded expectation.
     """
 
-    def test_array_containment_is_reported_for_both_providers(self, store, capsys):
-        provider, ds, collection = store
-        collection.insert_one({"name": "arr", "tags": ["x", "y"]})
+    def test_array_queries_match_identically_on_both_providers(self):
+        if not _mongo_reachable():
+            pytest.skip(f"no reachable MongoDB at {MONGO_URI}")
 
-        matched = list(collection.find({"tags": "x"}))
+        results = {}
+        for provider, uri in (("fallback", None), ("mongo", MONGO_URI)):
+            docstore = _fresh_docstore(uri)
+            col = docstore.get_collection("array_semantics")
+            col.delete_many({})
+            col.insert_one(dict(ARRAY_DOC))
+            results[provider] = {n: len(list(col.find(q))) for n, q in ARRAY_CASES}
+            col.delete_many({})
 
-        with capsys.disabled():
-            state = "matches" if matched else "NO MATCH (open defect)"
-            print(f"\n    array containment on {provider:8}: {state}")
-
-        # What IS asserted: the document is retrievable by a NON-array field, so
-        # this is specifically an array-query defect and not a broken fixture.
-        assert collection.find_one({"name": "arr"}) is not None, (
-            f"{provider}: the control document is unfindable - the fixture itself is wrong"
-        )
-
-    def test_the_array_defect_is_wider_than_containment(self, store, capsys):
-        """MEASURED 2026-08-03 - the backlog understated this.
-
-        It recorded "array containment semantics are absent". Measured against a
-        real MongoDB, NO query against an array field matches ANYTHING on the
-        fallback:
-
-            query                       fallback   mongo
-            {tags: "x"}   containment      0         1
-            {tags: [x,y]} exact equality   0         1
-            {tags: {$in: ["x"]}}           0         1
-            {nums: 1}     numeric element  0         1
-            {name: "a"}   control          1         1
-
-        Mongo also correctly distinguishes element ORDER ({tags: [y,x]} -> 0),
-        so it is doing real array semantics while the fallback does none. An
-        array field on the fallback is effectively write-only.
-        """
-        provider, ds, collection = store
-        collection.insert_one({"name": "wide", "tags": ["x", "y"], "nums": [1, 2]})
-
-        probes = {
-            "containment": {"tags": "x"},
-            "exact array": {"tags": ["x", "y"]},
-            "$in": {"tags": {"$in": ["x"]}},
-            "numeric element": {"nums": 1},
+        mismatched = {
+            n: (results["fallback"][n], results["mongo"][n])
+            for n, _ in ARRAY_CASES
+            if results["fallback"][n] != results["mongo"][n]
         }
-        results = {k: len(list(collection.find({**q, "name": "wide"}))) for k, q in probes.items()}
-
-        with capsys.disabled():
-            print(f"\n    array queries on {provider:8}: {results}")
-
-        # The control must hold on BOTH providers, or the probe proves nothing.
-        assert collection.find_one({"name": "wide"}) is not None
-
-
-# ── ADR-0025 / client-lifecycle-is-bounded (ASSERTED) ────────────────────────
-
+        assert not mismatched, (
+            "array-query semantics diverge between the providers "
+            f"(fallback, mongo): {mismatched}"
+        )
 
 class TestClientLifecycleIsBounded:
     """docstore_contract.json :: client-lifecycle-is-bounded

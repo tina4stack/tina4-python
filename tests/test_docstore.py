@@ -113,7 +113,17 @@ class TestFilters:
     def test_pushdown_uses_json_extract(self):
         where, params = compile_filter({"customer_id": {"$in": [1, 2]}})
         assert "json_extract(doc" in where and "IN (?,?)" in where
-        assert params == [1, 2]
+        # The operands are bound ONCE PER BRANCH - the scalar-field branch and
+        # the array-element branch each carry their own placeholders. This
+        # doubled when Mongo's array rule landed; the intent the test protects
+        # is that the filter is pushed into SQL, never scanned in memory.
+        assert params == [1, 2, 1, 2]
+
+    def test_pushdown_covers_array_elements(self):
+        """The array rule is pushed down too, not applied after the fact."""
+        where, params = compile_filter({"tags": "x"})
+        assert "json_each(doc" in where, where
+        assert params == ["x", "x"]
 
 
 # ── cursor: sort / limit / skip / projection ────────────────────────────────
