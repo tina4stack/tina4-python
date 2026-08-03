@@ -26,6 +26,13 @@ class KafkaBackend:
         self._max_retries = max_retries
 
     def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> str:
+        if priority > 0:
+            raise NotImplementedError(
+                "The kafka queue backend cannot honour push(priority): Kafka has "
+                "no priority concept at all — a consumer reads a partition in "
+                "offset order. Use the file or mongodb backend for prioritised "
+                "jobs."
+            )
         if delay_seconds > 0:
             raise NotImplementedError(
                 "The kafka queue backend cannot honour push(delay_seconds): "

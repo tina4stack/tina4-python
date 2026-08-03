@@ -51,6 +51,16 @@ class RabbitMQBackend:
         self._jobs: dict = {}  # track jobs by id for complete/fail/retry
 
     def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> str:
+        if priority > 0:
+            raise NotImplementedError(
+                "The rabbitmq queue backend cannot honour push(priority): "
+                "RabbitMQ orders a queue FIFO. Native priority needs the queue "
+                "DECLARED with an x-max-priority argument, and an existing queue "
+                "cannot be redeclared with one (the broker answers "
+                "PRECONDITION_FAILED), so enabling it would break every queue "
+                "already in service. Use the file or mongodb backend for "
+                "prioritised jobs."
+            )
         if delay_seconds > 0:
             raise NotImplementedError(
                 "The rabbitmq queue backend cannot honour push(delay_seconds): "

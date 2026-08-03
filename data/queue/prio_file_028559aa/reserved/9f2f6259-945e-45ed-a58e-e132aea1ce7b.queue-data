@@ -1,0 +1,14 @@
+{
+  "id": "9f2f6259-945e-45ed-a58e-e132aea1ce7b",
+  "topic": "prio_file_028559aa",
+  "data": {
+    "m": "high"
+  },
+  "status": "reserved",
+  "priority": 9,
+  "attempts": 0,
+  "error": null,
+  "reserved_at": "2026-08-03T20:41:48.316975+00:00",
+  "available_at": "2026-08-03T20:46:48.316997+00:00",
+  "created_at": "2026-08-03T20:41:46.813098+00:00"
+}
