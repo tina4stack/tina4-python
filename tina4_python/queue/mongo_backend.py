@@ -125,6 +125,10 @@ class MongoBackend:
         return result.modified_count == 1
 
     def clear(self) -> int:
+        # The only one of this adapter's six _collection users that forgot to
+        # connect first, so clear() on a fresh Queue raised AttributeError on
+        # NoneType instead of clearing anything.
+        self._backend._ensure_connected()
         result = self._backend._collection.delete_many(
             {"topic": self._topic, "status": "pending"}
         )
