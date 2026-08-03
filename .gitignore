@@ -106,3 +106,7 @@ example/src/**/__pycache__/
 /private/
 /var/folders/
 /data/sessions/
+
+# Local file-backend queue store - runtime artefacts, never committed.
+# Four probe .queue-data files were swept in by `git add -A` on 2026-08-03.
+data/queue/
