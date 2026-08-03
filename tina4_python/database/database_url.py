@@ -111,6 +111,20 @@ def _strip_one_slash(path: str) -> str:
 class DatabaseUrl:
     """A parsed connection URL. Constructed from a string, and nothing else.
 
+    DISPLAY REDACTS, FIDELITY DOES NOT. ``repr()``, ``str()`` and
+    ``to_safe_string()`` replace the password with the redaction marker, so a log
+    line, a traceback or a status payload is safe. ``pickle`` deliberately does
+    not: its contract is a faithful round trip, and a masked pickle would restore
+    an object whose password is the literal "***". tina4-php reaches the same
+    boundary with ``serialize()``/``var_export()``.
+
+    The consequence: DO NOT PERSIST THIS OBJECT. A DatabaseUrl pickled into a
+    cache, a session, a queue payload or a multiprocessing hand-off puts the
+    password in cleartext on disk or on a wire. Record ``to_safe_string()``
+    instead, or store the redacted parts. ``TestTheFidelityBoundaryIsEnforced``
+    in tests/test_credential_leak_paths.py fails the build if framework code
+    ever pickles one.
+
     Attributes:
         engine: canonical engine name (sqlite, postgres, mysql, mssql, firebird,
             mongodb, odbc). Never an adapter class name.

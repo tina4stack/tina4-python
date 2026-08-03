@@ -31,6 +31,10 @@ assertion goes through the real JSON-RPC dispatch.
 from __future__ import annotations
 
 import json
+import re
+import pickle
+import pathlib
+from urllib.parse import quote
 import os
 import socket
 
@@ -472,3 +476,91 @@ class TestC7EmptyPasswordIsExplicitNotAbsent:
             assert row["ok"] == 1
         finally:
             db.close()
+
+
+class TestTheFidelityBoundaryIsEnforced:
+    """DISPLAY REDACTS, FIDELITY DOES NOT - and nothing may persist the object.
+
+    MEASURED 2026-08-03 with two sentinels (one containing a SPACE, one a quote,
+    a double quote, a backslash and a percent): repr(), str(), to_safe_string(),
+    the exception message, traceback.format_exc() and repr(exception) are ALL
+    clean, and a connect failure reports
+    ``postgres://tina4:***@host:5432/db`` - redacted but still naming the exact
+    connection that refused, which is the point.
+
+    ``pickle.dumps()`` still emits the password in full, and that is deliberate.
+    Its contract is a faithful round trip; a masked pickle would restore an
+    object whose password is the literal "***", which is a worse bug than the
+    disclosure. tina4-php reaches the identical boundary with serialize() and
+    var_export(), so this is PARITY rather than a divergence.
+
+    That rule is only safe while nothing PERSISTS one of these objects - a
+    DatabaseUrl pickled into a cache, a session, a queue payload or a
+    multiprocessing hand-off puts a cleartext credential on disk or on a wire.
+    This is the guard that keeps it true, ported from tina4-php's
+    DatabaseCredentialLeakTest so the protection exists in both, not just the
+    behaviour.
+    """
+
+    #: Persistence calls that would carry the secret out of the process.
+    _PERSIST = re.compile(r"\b(pickle\.dumps?|pickle\.dump|copyreg|__reduce__)\s*\(")
+    #: ...applied to something that looks like a connection URL.
+    _URLISH = re.compile(r"\b(db_?url|database_?url|conn_?url|dsn)\b", re.IGNORECASE)
+
+    def _offenders(self) -> list[str]:
+        root = pathlib.Path(__file__).resolve().parent.parent / "tina4_python"
+        found = []
+        for path in sorted(root.rglob("*.py")):
+            try:
+                src = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for n, line in enumerate(src.splitlines(), 1):
+                if self._PERSIST.search(line) and self._URLISH.search(line):
+                    found.append(f"{path.relative_to(root)}:{n}  {line.strip()}")
+        return found
+
+    def test_no_framework_code_pickles_a_database_url(self):
+        offenders = self._offenders()
+        assert offenders == [], (
+            "pickling a DatabaseUrl writes the PASSWORD verbatim - pickle keeps the "
+            "secret on purpose so the round trip stays faithful. Persisting one puts a "
+            "credential on disk or on a wire. Record to_safe_string() instead:\n  - "
+            + "\n  - ".join(offenders)
+        )
+
+    def test_the_scanner_detects_an_offending_line(self):
+        """Negative case - proves the guard has TEETH.
+
+        A regex that silently stopped matching would leave the test above green
+        and guarding nothing. tina4-php's ClassCollection guard passed VACUOUSLY
+        this week for exactly that reason, so the scanner is fed the shape it
+        must catch and a shape it must not.
+        """
+        offending = "        blob = pickle.dumps(db_url)"
+        innocent = "        blob = json.dumps(db_url.to_safe_string())"
+
+        def matches(line: str) -> bool:
+            return bool(self._PERSIST.search(line) and self._URLISH.search(line))
+
+        assert matches(offending), "the scanner must flag pickle.dumps(db_url)"
+        assert not matches(innocent), "the scanner must not flag a redacted render"
+
+    def test_pickle_really_does_carry_the_password(self):
+        """The premise the guard rests on, measured rather than assumed.
+
+        If a future change made pickle redact, this fails and the guard above
+        becomes unnecessary - better to be told than to keep enforcing a rule
+        whose reason has gone.
+        """
+        secret = "s3ntinel-Pa55 word"
+        url = DatabaseUrl("postgres://user:" + quote(secret, safe="") + "@h:5432/db")
+
+        assert "s3nt" in str(pickle.dumps(url)), (
+            "pickle no longer carries the password - re-read the boundary rule, "
+            "the persistence guard may no longer be needed"
+        )
+        # ...while every DISPLAY surface stays clean.
+        for rendered in (repr(url), str(url), url.to_safe_string()):
+            assert "s3nt" not in rendered
+
