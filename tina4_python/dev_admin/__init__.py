@@ -18,6 +18,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from tina4_python import __version__
+# THE redaction primitive. A connection URL in a response body is a credential
+# leak exactly like one in a log line: /__dev/api/status and the system-info
+# endpoint both used to hand back TINA4_DATABASE_URL verbatim, password and all.
+from tina4_python.database.database_url import redact_url
 
 
 class MessageLog:
@@ -569,7 +573,7 @@ async def _api_status(request, response):
         "framework_version": __version__,
         "debug": os.environ.get("TINA4_DEBUG", "false"),
         "log_level": os.environ.get("TINA4_LOG_LEVEL", "ERROR"),
-        "database": os.environ.get("TINA4_DATABASE_URL", "not configured"),
+        "database": redact_url(os.environ.get("TINA4_DATABASE_URL", "not configured")),
         "db_tables": db_table_count,
         "mailbox": mailbox.count(),
         "messages": MessageLog.count(),
@@ -1123,7 +1127,7 @@ async def _api_system(request, response):
         "cwd": os.getcwd(),
         "debug": os.environ.get("TINA4_DEBUG", "false"),
         "log_level": os.environ.get("TINA4_LOG_LEVEL", "ERROR"),
-        "database": os.environ.get("TINA4_DATABASE_URL", "not configured"),
+        "database": redact_url(os.environ.get("TINA4_DATABASE_URL", "not configured")),
     }
 
     # Memory info

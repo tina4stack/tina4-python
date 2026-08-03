@@ -540,7 +540,11 @@ def _console(args=None):
             password = os.environ.get("TINA4_DATABASE_PASSWORD", "")
             db = Database(db_url, username, password)
             bind_database(db)
-            print(f"  Database: {db_url}")
+            # Redacted, always. This printed the raw TINA4_DATABASE_URL - so
+            # `tina4 console` put the production password on the terminal, into
+            # scrollback, and into any transcript or screen share of it.
+            from tina4_python.database.database_url import redact_url
+            print(f"  Database: {redact_url(db_url)}")
         except Exception as e:
             print(f"  Database: failed ({e})")
 

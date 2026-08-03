@@ -212,11 +212,21 @@ def register_dev_tools(server):
         return resolved
 
     def _redact_env(key: str, value: str) -> str:
-        """Redact sensitive environment variable values."""
+        """Redact sensitive environment variable values.
+
+        Two rules, because matching on the NAME alone was not enough:
+        ``TINA4_DATABASE_URL`` contains none of the sensitive words, so
+        ``env_list()`` handed its embedded password straight over MCP. Every
+        value is therefore also run through the connection-string redactor,
+        which catches the credential wherever it is spelled -
+        ``postgres://u:pw@h``, ``redis://:pw@h``, an ODBC ``PWD=`` - in
+        TINA4_DATABASE_URL, TINA4_CACHE_URL, a broker URL or an http_proxy.
+        """
+        from tina4_python.database.database_url import redact_url
         sensitive = ("secret", "password", "token", "key", "credential", "api_key")
         if any(s in key.lower() for s in sensitive):
             return "***REDACTED***"
-        return value
+        return redact_url(value)
 
     # ── Database Tools ──────────────────────────────────────────
 

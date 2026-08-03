@@ -47,12 +47,21 @@ class TestDatabaseUrlCorpus:
 
         The redacted form is the only shape allowed in a log line or an error
         message, which is why __repr__ uses it too.
+
+        STRENGTHENED 2026-08-02 (C5): the secret is ``case["secret"]`` when the
+        row supplies one, and only otherwise the ``password`` FIELD. An ODBC DSN
+        keeps its password in a ``PWD=`` keyword and parses to
+        ``password=None``, so the old field-only rule skipped every odbc row -
+        and ``to_safe_string()`` returned those DSNs verbatim, PWD= and all,
+        with this test green throughout. A guard whose fixture has no row for
+        the case that matters protects nothing.
         """
-        if case["password"] is None:
+        secret = case.get("secret", case["password"])
+        if secret is None or secret == "":
             pytest.skip("no password in this URL")
         url = DatabaseUrl(case["url"])
-        assert case["password"] not in url.to_safe_string()
-        assert case["password"] not in repr(url)
+        assert secret not in url.to_safe_string()
+        assert secret not in repr(url)
 
     @pytest.mark.parametrize("case", CORPUS["errors"], ids=_case_id)
     def test_an_unparseable_url_raises_instead_of_guessing(self, case):

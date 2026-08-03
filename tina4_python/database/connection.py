@@ -15,8 +15,31 @@ import threading
 import time
 import weakref
 from urllib.parse import urlparse
-from tina4_python.database.database_url import DatabaseUrl
+from tina4_python.database.database_url import DatabaseUrl, redact_url
 from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
+
+
+def _connect_or_explain(adapter: DatabaseAdapter, path: str,
+                        username: str = "", password: str = "", **kwargs) -> None:
+    """Connect, and on failure say WHICH target failed - redacted.
+
+    A driver's own message names the host and the reason but never the
+    configured URL, so an operator running several connections could not tell
+    which one refused them. ``redact_url`` is the only form allowed to carry
+    that context: the connect path IS the full URL for every engine except
+    sqlite, so interpolating it raw would put the password in the error that is
+    about to be logged, overlaid and shipped to CI.
+    """
+    try:
+        adapter.connect(path, username=username, password=password, **kwargs)
+    except ImportError:
+        # "install psycopg2" is already the actionable message; wrapping it in
+        # a connection error would bury the one instruction that fixes it.
+        raise
+    except Exception as cause:
+        raise ConnectionError(
+            f"Database: could not connect to {redact_url(path)}: {cause}"
+        ) from cause
 
 
 class ConnectionPool:
@@ -53,7 +76,9 @@ class ConnectionPool:
         """Lazily create an adapter at the given index."""
         if self._adapters[idx] is None:
             adapter = self._factory()
-            adapter.connect(self._connect_path, username=self._username, password=self._password, **self._connect_kwargs)
+            _connect_or_explain(adapter, self._connect_path,
+                                username=self._username, password=self._password,
+                                **self._connect_kwargs)
             self._adapters[idx] = adapter
         return self._adapters[idx]
 
@@ -206,7 +231,8 @@ class Database:
             # Single-connection mode — current behavior
             self._pool: ConnectionPool | None = None
             self._adapter: DatabaseAdapter = self._create_adapter()
-            self._adapter.connect(self._connection_path(), username=self.username, password=self.password, **kwargs)
+            _connect_or_explain(self._adapter, self._connection_path(),
+                                username=self.username, password=self.password, **kwargs)
 
         # Per-thread transaction adapter pin. While set, every operation
         # on this thread routes to the same adapter — so the round-robin

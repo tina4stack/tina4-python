@@ -16,7 +16,14 @@
     "",
     "'safe' is toSafeString(): the input URL with the password replaced by ***.",
     "It round-trips, which is what makes it safe to put in a log line - the only",
-    "form of a connection URL allowed in a log or an error message."
+    "form of a connection URL allowed in a log or an error message.",
+    "",
+    "'secret' is OPTIONAL and means: this exact substring must never appear in",
+    "'safe' (nor in repr/inspect/toString). It exists because the password is",
+    "not always the 'password' FIELD: an ODBC DSN carries it in a PWD= keyword",
+    "and parses to password=null, so the negative test skipped every odbc case",
+    "and the guard protected nothing. When 'secret' is absent the 'password'",
+    "field is the secret, as before."
   ],
   "default_ports": {
     "postgres": 5432,
@@ -256,6 +263,44 @@
       "username": "readonly",
       "password": null,
       "safe": "postgres://readonly@localhost:5432/db"
+    },
+    {
+      "name": "an_empty_password_is_explicitly_empty_not_absent",
+      "_why": "C7, settled 2026-08-02. `user:@host` means THIS ACCOUNT HAS AN EMPTY PASSWORD, which is a different value from carrying no password at all - every framework's docblock already said absent and blank differ, and two of the four then ignored it (python/node parsed null, php/ruby parsed ''). The value decides who authenticates: the TINA4_DATABASE_PASSWORD fallback is gated on 'absent', so the SAME .env logged in with two different passwords depending on the framework. An empty URL password wins over the env fallback exactly like any other URL password. 'safe' still shows *** rather than a bare colon, so the redacted form never discloses that an account's password is blank.",
+      "url": "postgres://user:@localhost:5432/db",
+      "engine": "postgres",
+      "host": "localhost",
+      "port": 5432,
+      "database": "db",
+      "username": "user",
+      "password": "",
+      "safe": "postgres://user:***@localhost:5432/db"
+    },
+    {
+      "name": "odbc_dsn_password_keyword_is_redacted",
+      "_why": "C5, 2026-08-02. toSafeString() returned the ODBC connection string VERBATIM - PWD= and all - in python, ruby and node, while the negative test 'never contains the password' passed in ALL FOUR because this corpus had no odbc row. The guard existed, the test was green, and it protected nothing. The password lives in a PWD= keyword here, not in userinfo, so it needs keyword redaction; DRIVER/SERVER/DATABASE/UID survive on purpose, because a redaction that erases everything is useless for diagnosing a failed connection.",
+      "url": "odbc:///DRIVER={PostgreSQL};SERVER=h;DATABASE=d;UID=u;PWD=s3ntinel-Pa55 word;",
+      "engine": "odbc",
+      "host": null,
+      "port": null,
+      "database": "",
+      "username": null,
+      "password": null,
+      "secret": "s3ntinel-Pa55 word",
+      "safe": "odbc:///DRIVER={PostgreSQL};SERVER=h;DATABASE=d;UID=u;PWD=***;"
+    },
+    {
+      "name": "odbc_brace_quoted_password_containing_the_delimiter_is_redacted_whole",
+      "_why": "The C1/C4 shape, pinned so it cannot come back in any framework. ODBC braces are what let a value contain the ';' delimiter and spaces, so a redactor that stops at the first ';' - or at the first whitespace, which is exactly what tina4-php's password=\\S* did - leaves the TAIL of the password in the 'redacted' message. The brace form must be consumed whole.",
+      "url": "odbc:///DRIVER={PostgreSQL};UID=u;PWD={s3ntinel;Pa55 word};DATABASE=d",
+      "engine": "odbc",
+      "host": null,
+      "port": null,
+      "database": "",
+      "username": null,
+      "password": null,
+      "secret": "s3ntinel;Pa55 word",
+      "safe": "odbc:///DRIVER={PostgreSQL};UID=u;PWD=***;DATABASE=d"
     }
   ],
   "errors": [
