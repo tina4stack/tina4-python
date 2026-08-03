@@ -54,7 +54,7 @@ class InvalidId(ValueError):
     """Raised when a value cannot be parsed as an ObjectId (mirrors bson.errors.InvalidId)."""
 
 
-class ObjectId:
+class _NativeObjectId:
     """A 12-byte MongoDB-style ObjectId, with no external dependency.
 
     Layout: 4-byte big-endian seconds since epoch, 5-byte per-process random,
@@ -71,7 +71,7 @@ class ObjectId:
     def __init__(self, oid=None):
         if oid is None:
             self._bytes = self._generate()
-        elif isinstance(oid, ObjectId):
+        elif isinstance(oid, _NativeObjectId):
             self._bytes = oid._bytes
         elif isinstance(oid, (bytes, bytearray)):
             if len(oid) != 12:
@@ -95,7 +95,7 @@ class ObjectId:
     @classmethod
     def is_valid(cls, value) -> bool:
         try:
-            ObjectId(value)
+            _NativeObjectId(value)
             return True
         except (InvalidId, TypeError):
             return False
@@ -116,11 +116,35 @@ class ObjectId:
         return f"ObjectId('{self._bytes.hex()}')"
 
     def __eq__(self, other) -> bool:
-        return isinstance(other, ObjectId) and other._bytes == self._bytes
+        return isinstance(other, _NativeObjectId) and other._bytes == self._bytes
 
     def __hash__(self) -> int:
         return hash(self._bytes)
 
+
+
+# The PUBLIC ObjectId is the DRIVER'S type whenever the driver is installed.
+#
+# MEASURED 2026-08-03 against a real MongoDB: the framework exported its own
+# ObjectId class, pymongo received it, and refused -
+#
+#     InvalidDocument: cannot encode object: ObjectId('6a70a6d8...')
+#
+# even though bson.ObjectId(str(oid)) encodes fine. The VALUE was always right;
+# the TYPE was wrong. So the documented way to construct an id worked on the
+# local SQLite fallback and failed the moment TINA4_MONGO_URI was set - the
+# swap breaking at the exact call site it advertises (ADR-0024).
+#
+# The native implementation stays, because it is what makes the zero-dependency
+# install work at all. It is simply not the public name when a real bson is
+# present. Note the internal references above were re-pointed at
+# _NativeObjectId first: leaving them on the public name would have made this
+# rebind silently break its own isinstance and __eq__.
+try:  # pragma: no cover - depends on whether the driver is installed
+    from bson import ObjectId  # type: ignore[assignment]
+    from bson.errors import InvalidId  # type: ignore[assignment]
+except ImportError:  # zero-dependency install: our own is the real one
+    ObjectId = _NativeObjectId
 
 # ── Value encoding: keep scalars queryable, rehydrate types on read ──────────
 

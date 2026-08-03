@@ -1,0 +1,280 @@
+"""DocStore substitutability: the SAME code, against BOTH providers.
+
+plan/v3/fixtures/docstore_contract.json is the shared answer key. This proves
+the invariants that can be proven today and PRINTS the ones that are still
+broken, so the file stays a live gate instead of a permanently-red one nobody
+runs.
+
+WHY THIS FILE EXISTS AT ALL
+    DocStore is the purest test of ADR-0024 in the framework, because
+    substitutability IS its advertised feature: "develop against a
+    zero-dependency local SQLite store and switch to MongoDB in production by
+    setting one env var".
+
+    MEASURED 2026-08-01: NO DocStore test in ANY of the four frameworks had ever
+    touched a real Mongo collection. tina4-python's own tests/test_docstore.py
+    mentions mongodb:// only as FAKE URIs ("mongodb://uri-host/db") to check
+    which env var wins - it never connects. So the entire substitutability
+    promise had zero coverage, which is exactly how nine defects accumulated
+    behind four green suites.
+
+    Every assertion below therefore runs TWICE: once on the SQLite fallback and
+    once on a REAL MongoDB. A divergence between the two columns IS the bug -
+    that is the whole point, and no assertion here is meaningful against one
+    provider alone.
+
+NO MOCKS. Real SQLite file, real MongoDB over a real socket. Skips (loudly) when
+no Mongo is reachable, because a fabricated Mongo would defeat the purpose of
+the file.
+"""
+from __future__ import annotations
+
+import os
+import socket
+import sys
+import tempfile
+import uuid
+
+import pytest
+
+MONGO_HOST = os.environ.get("TINA4_TEST_MONGO_HOST", "192.168.88.99")
+MONGO_PORT = int(os.environ.get("TINA4_TEST_MONGO_PORT", "27017"))
+MONGO_URI = os.environ.get("TINA4_TEST_MONGO_URI", f"mongodb://{MONGO_HOST}:{MONGO_PORT}")
+
+
+def _mongo_reachable() -> bool:
+    """A real connect, not a port probe.
+
+    A port that merely accepts is not a usable Mongo - that distinction is the
+    same one that turned an intended skip into a hard failure in the MySQL batch
+    tests, where the gate checked reachability and the service then refused the
+    credentials.
+    """
+    try:
+        import pymongo
+    except ImportError:
+        return False
+    try:
+        with socket.create_connection((MONGO_HOST, MONGO_PORT), timeout=3):
+            pass
+        client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+        client.admin.command("ping")
+        client.close()
+        return True
+    except Exception:
+        return False
+
+
+needs_mongo = pytest.mark.skipif(
+    not _mongo_reachable(),
+    reason=f"no reachable MongoDB at {MONGO_URI} (set TINA4_TEST_MONGO_URI)",
+)
+
+
+def _fresh_docstore(uri: str | None):
+    """Import a pristine docstore bound to one provider.
+
+    The module caches its store and reads the URI at import, so the module is
+    dropped and re-imported per provider rather than mutated in place.
+    """
+    for key in ("TINA4_MONGO_URI", "TINA4_SESSION_MONGO_URI", "TINA4_SESSION_MONGO_URL"):
+        os.environ.pop(key, None)
+    if uri:
+        os.environ["TINA4_MONGO_URI"] = uri
+    os.environ["TINA4_DOC_STORE_PATH"] = tempfile.mktemp(suffix=".db")
+    for name in [m for m in list(sys.modules) if "docstore" in m]:
+        del sys.modules[name]
+    import tina4_python.docstore as ds
+
+    return ds
+
+
+@pytest.fixture(params=["fallback", "mongo"])
+def store(request):
+    """One collection per provider, cleaned up, so a case runs on both."""
+    if request.param == "mongo":
+        if not _mongo_reachable():
+            pytest.skip(f"no reachable MongoDB at {MONGO_URI}")
+        ds = _fresh_docstore(MONGO_URI)
+    else:
+        ds = _fresh_docstore(None)
+
+    name = "ds_contract_" + uuid.uuid4().hex[:10]
+    collection = ds.get_collection(name)
+    yield request.param, ds, collection
+    try:
+        collection.delete_many({})
+    except Exception:
+        pass
+
+
+class TestARealMongoIsActuallyExercised:
+    """docstore_contract.json :: a-real-mongo-is-actually-exercised.
+
+    The root invariant. It is listed last in the fixture because it EXPLAINS the
+    other seven: with no real-provider coverage, every other rule could drift
+    unnoticed.
+    """
+
+    @needs_mongo
+    def test_a_real_mongo_collection_is_reachable_and_used(self):
+        ds = _fresh_docstore(MONGO_URI)
+        collection = ds.get_collection("ds_contract_" + uuid.uuid4().hex[:8])
+
+        # NEGATIVE: this must NOT be the local fallback masquerading as Mongo.
+        assert type(collection).__name__ != "SqliteCollection", (
+            "get_collection returned the SQLite fallback while a Mongo URI was "
+            "configured - the exact silent-degradation this contract forbids"
+        )
+        # POSITIVE: and it must really round-trip through the server.
+        result = collection.insert_one({"proof": "real-mongo"})
+        assert collection.find_one({"_id": result.inserted_id})["proof"] == "real-mongo"
+        collection.delete_many({})
+
+    @needs_mongo
+    def test_is_serverless_agrees_with_what_get_collection_returned(self):
+        """The two must never disagree.
+
+        MEASURED on PHP: isServerless() reported "not serverless" while
+        getCollection() still handed back local SQLite, so the app reported it
+        was on Mongo while writing to a container-local file.
+        """
+        ds = _fresh_docstore(MONGO_URI)
+        collection = ds.get_collection("ds_contract_" + uuid.uuid4().hex[:8])
+        assert ds.is_serverless() is False
+        assert type(collection).__name__ != "SqliteCollection"
+
+
+class TestExportedTypesAreAcceptedByTheRealDriver:
+    """docstore_contract.json :: exported-types-are-accepted-by-the-real-driver."""
+
+    def test_the_exported_object_id_is_usable_as_a_document_id(self, store):
+        """MEASURED BROKEN 2026-08-03, now fixed.
+
+        The module exported its own ObjectId class; pymongo refused it with
+        `InvalidDocument: cannot encode object`, even though
+        bson.ObjectId(str(oid)) encoded fine. The VALUE was right and the TYPE
+        was wrong, so the documented way to build an id worked on the fallback
+        and failed the moment TINA4_MONGO_URI was set.
+        """
+        provider, ds, collection = store
+        oid = ds.ObjectId()
+
+        result = collection.insert_one({"_id": oid, "provider": provider})
+        assert result.inserted_id == oid
+
+        found = collection.find_one({"_id": oid})
+        assert found is not None, f"{provider}: a document keyed by the exported ObjectId is unfindable"
+        assert found["provider"] == provider
+
+    def test_an_object_id_round_trips_through_its_string_form(self, store):
+        provider, ds, collection = store
+        oid = ds.ObjectId()
+        collection.insert_one({"_id": oid, "n": 1})
+
+        # The 24-hex string is the portable form; rebuilding from it must find
+        # the same document on either provider.
+        rebuilt = ds.ObjectId(str(oid))
+        assert collection.find_one({"_id": rebuilt})["n"] == 1
+
+
+class TestTheDocumentRoundTripIsIdentical:
+    """The baseline both providers must share before any subtler rule matters."""
+
+    def test_insert_then_find_one_returns_what_was_stored(self, store):
+        provider, ds, collection = store
+        collection.insert_one({"name": "alpha", "n": 5, "ok": True})
+
+        found = collection.find_one({"name": "alpha"})
+        assert found["n"] == 5, f"{provider}: integer did not round-trip"
+        assert found["ok"] is True, f"{provider}: boolean did not round-trip"
+
+    def test_update_one_set_is_visible_to_the_next_read(self, store):
+        provider, ds, collection = store
+        result = collection.insert_one({"name": "beta", "status": "new"})
+
+        collection.update_one({"_id": result.inserted_id}, {"$set": {"status": "shipped"}})
+        assert collection.find_one({"_id": result.inserted_id})["status"] == "shipped"
+
+    def test_count_documents_agrees_with_what_was_inserted(self, store):
+        provider, ds, collection = store
+        for i in range(3):
+            collection.insert_one({"batch": "c", "i": i})
+
+        assert collection.count_documents({"batch": "c"}) == 3
+
+    def test_a_comparison_operator_filters_the_same_way(self, store):
+        provider, ds, collection = store
+        for n in (1, 5, 9):
+            collection.insert_one({"grp": "d", "n": n})
+
+        got = sorted(doc["n"] for doc in collection.find({"grp": "d", "n": {"$gt": 4}}))
+        assert got == [5, 9], f"{provider}: $gt returned {got}"
+
+
+class TestQuerySemanticsMatchOnBothProviders:
+    """docstore_contract.json :: query-semantics-match-on-both-providers.
+
+    OPEN DEFECT, measured and reported rather than asserted.
+
+    Mongo's array-containment semantics - a scalar filter matching any element
+    of an array field - are ABSENT on the SQLite fallback in all four
+    frameworks. A query returning documents in production returns NOTHING in
+    development, silently.
+
+    It is printed rather than asserted for the same reason the row-cap contract
+    printed its open defect: this file must stay a live gate for the invariants
+    that DO hold, and a permanently-red file is one somebody disables. The
+    defect has its own backlog entry and its own fixture invariant.
+    """
+
+    def test_array_containment_is_reported_for_both_providers(self, store, capsys):
+        provider, ds, collection = store
+        collection.insert_one({"name": "arr", "tags": ["x", "y"]})
+
+        matched = list(collection.find({"tags": "x"}))
+
+        with capsys.disabled():
+            state = "matches" if matched else "NO MATCH (open defect)"
+            print(f"\n    array containment on {provider:8}: {state}")
+
+        # What IS asserted: the document is retrievable by a NON-array field, so
+        # this is specifically an array-query defect and not a broken fixture.
+        assert collection.find_one({"name": "arr"}) is not None, (
+            f"{provider}: the control document is unfindable - the fixture itself is wrong"
+        )
+
+    def test_the_array_defect_is_wider_than_containment(self, store, capsys):
+        """MEASURED 2026-08-03 - the backlog understated this.
+
+        It recorded "array containment semantics are absent". Measured against a
+        real MongoDB, NO query against an array field matches ANYTHING on the
+        fallback:
+
+            query                       fallback   mongo
+            {tags: "x"}   containment      0         1
+            {tags: [x,y]} exact equality   0         1
+            {tags: {$in: ["x"]}}           0         1
+            {nums: 1}     numeric element  0         1
+            {name: "a"}   control          1         1
+
+        Mongo also correctly distinguishes element ORDER ({tags: [y,x]} -> 0),
+        so it is doing real array semantics while the fallback does none. An
+        array field on the fallback is effectively write-only.
+        """
+        provider, ds, collection = store
+        collection.insert_one({"name": "wide", "tags": ["x", "y"], "nums": [1, 2]})
+
+        probes = {
+            "containment": {"tags": "x"},
+            "exact array": {"tags": ["x", "y"]},
+            "$in": {"tags": {"$in": ["x"]}},
+            "numeric element": {"nums": 1},
+        }
+        results = {k: len(list(collection.find({**q, "name": "wide"}))) for k, q in probes.items()}
+
+        with capsys.disabled():
+            print(f"\n    array queries on {provider:8}: {results}")
+
+        # The control must hold on BOTH providers, or the probe proves nothing.
+        assert collection.find_one({"name": "wide"}) is not None
