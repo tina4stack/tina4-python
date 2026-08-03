@@ -100,8 +100,15 @@ class MongoConnector:
         self._collection = self._db[self._collection_name]
         self._ensure_indexes()
 
-    def enqueue(self, topic: str, message: dict) -> str:
-        """Push a message onto a queue. Returns the message ID."""
+    def enqueue(self, topic: str, message: dict, delay_seconds: float = 0) -> str:
+        """Push a message onto a queue. Returns the message ID.
+
+        ``delay_seconds`` postpones the message: dequeue() already filters on
+        ``available_at <= now``, so stamping it in the future is the whole
+        implementation. Before 3.13.95 enqueue always stamped ``now`` and the
+        caller's delay was silently dropped, so a scheduled job fired
+        immediately on Mongo and on time on the file backend.
+        """
         self._ensure_connected()
         msg_id = message.get("id", str(uuid.uuid4()))
         now = _now()
@@ -114,7 +121,7 @@ class MongoConnector:
             "priority": message.get("priority", 0),
             "attempts": message.get("attempts", 0),
             "error": None,
-            "available_at": now,
+            "available_at": _future(delay_seconds) if delay_seconds > 0 else now,
             "created_at": now,
             "completed_at": None,
         }

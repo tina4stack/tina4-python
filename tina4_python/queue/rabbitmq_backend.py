@@ -51,6 +51,16 @@ class RabbitMQBackend:
         self._jobs: dict = {}  # track jobs by id for complete/fail/retry
 
     def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> str:
+        if delay_seconds > 0:
+            raise NotImplementedError(
+                "The rabbitmq queue backend cannot honour push(delay_seconds): "
+                "RabbitMQ has no per-message delay in core. The "
+                "rabbitmq_delayed_message_exchange plugin is not part of a "
+                "standard broker, and the TTL + dead-letter workaround "
+                "head-of-line blocks (a long-delayed job holds up every shorter "
+                "one behind it in the same queue). Use the file or mongodb "
+                "backend for delayed jobs, or schedule the push itself."
+            )
         msg = {"payload": data, "priority": priority, "attempts": 0}
         msg_id = self._backend.enqueue(self._topic, msg)
         return msg_id

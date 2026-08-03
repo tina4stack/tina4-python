@@ -37,7 +37,7 @@ class MongoBackend:
 
     def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> str:
         msg = {"payload": data, "priority": priority, "attempts": 0}
-        return self._backend.enqueue(self._topic, msg)
+        return self._backend.enqueue(self._topic, msg, delay_seconds)
 
     def pop(self, queue_ref) -> Job | None:
         # Reclaim any reservations whose consumer died before acking, then take
