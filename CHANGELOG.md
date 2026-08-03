@@ -10,6 +10,31 @@ This file is deliberately NOT a copy of those notes. Duplicating them is exactly
 changelog rots into claiming a version that was never cut, so this file records only
 UNRELEASED work. When a version ships, its notes go to the release notes above.
 
+### Fixed (DocStore leaked a Mongo client per call, ADR-0025)
+
+- `get_collection()` cached the connected client instead of building a new one on every
+  call. Added `close_doc_store()` to close every Mongo client and the SQLite store.
+
+  WHY: MEASURED 2026-08-03 against a real MongoDB - 20 calls left ~39 server
+  connections open, growing LINEARLY and without bound. It was invisible in
+  development, because the SQLite fallback opens no connections at all: a
+  resource leak that existed ONLY after the swap to the real provider, and that
+  exhausts the server rather than erroring.
+
+  The cache is keyed per URI so a reconfigure gets its own client, and it is
+  guarded against the check-then-act race in which two concurrent first-callers
+  both build a client and one is orphaned - the same leak, just rarer.
+
+  Pinned by `tests/test_docstore_substitutability.py`, which drives three identical rounds plus 100 further
+  calls and asserts the growth PLATEAUS. That is the distinction that matters: a
+  pool legitimately opens several connections and then flattens; a leak keeps
+  climbing. Mutation-proved by restoring one-client-per-call.
+
+  NOT affected: PHP. Its ext-mongodb driver pools at the libmongoc level, so
+  many Client objects sharing a URI share one pool - measured 0 growth over 60
+  calls. It gets the same named test anyway, because correct-for-a-reason-we-did-
+  not-choose is exactly what regresses silently.
+
 ## Unreleased
 
 ### Breaking: the rate limiter keys on the socket peer, not X-Forwarded-For

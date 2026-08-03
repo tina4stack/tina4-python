@@ -710,15 +710,57 @@ def get_collection(name: str):
     """
     if is_serverless():
         return _get_db().get_collection(name)
-    import pymongo
     uri = _mongo_uri()
     db_name = (
         os.environ.get("TINA4_MONGO_DB")
         or os.environ.get("TINA4_SESSION_MONGO_DB")
         or "tina4"
     )
-    client = pymongo.MongoClient(uri)
-    return client[db_name][name]
+    return _mongo_client(uri)[db_name][name]
+
+
+_mongo_clients = {}
+
+
+def _mongo_client(uri: str):
+    """Return the shared pymongo client for `uri`, constructing it once.
+
+    MEASURED 2026-08-03 against a real MongoDB: get_collection() used to build a
+    new MongoClient on EVERY call and never close it, so 20 calls left ~39 server
+    connections open and the count grew without bound. It was invisible in
+    development because the SQLite fallback has no connections at all - a
+    resource leak that only exists AFTER the swap to the real provider.
+
+    A MongoClient is already thread-safe and pools internally, so one per URI is
+    the shape pymongo itself expects. The double-checked lock matches _get_db()
+    above: without it two threads racing the first call both build a client, and
+    one of them is orphaned - the same leak, just rarer.
+    """
+    import pymongo
+
+    client = _mongo_clients.get(uri)
+    if client is None:
+        with _default_lock:
+            client = _mongo_clients.get(uri)
+            if client is None:
+                client = pymongo.MongoClient(uri)
+                _mongo_clients[uri] = client
+    return client
+
+
+def close_doc_store():
+    """Close every DocStore connection: the SQLite store and all Mongo clients."""
+    global _default_db
+    with _default_lock:
+        for client in _mongo_clients.values():
+            try:
+                client.close()
+            except Exception:  # pragma: no cover - a close failure must not mask the caller's work
+                pass
+        _mongo_clients.clear()
+        if _default_db is not None:
+            _default_db.close()
+        _default_db = None
 
 
 def reset_default_store():
@@ -733,6 +775,6 @@ def reset_default_store():
 __all__ = [
     "get_collection", "ObjectId", "InvalidId",
     "SqliteDatabase", "SqliteCollection", "Cursor",
-    "is_serverless", "reset_default_store",
+    "is_serverless", "reset_default_store", "close_doc_store",
     "encode_value", "decode_value", "compile_filter",
 ]

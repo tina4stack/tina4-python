@@ -28,6 +28,7 @@ no Mongo is reachable, because a fabricated Mongo would defeat the purpose of
 the file.
 """
 from __future__ import annotations
+import time
 
 import os
 import socket
@@ -278,3 +279,62 @@ class TestQuerySemanticsMatchOnBothProviders:
 
         # The control must hold on BOTH providers, or the probe proves nothing.
         assert collection.find_one({"name": "wide"}) is not None
+
+
+# ── ADR-0025 / client-lifecycle-is-bounded (ASSERTED) ────────────────────────
+
+
+class TestClientLifecycleIsBounded:
+    """docstore_contract.json :: client-lifecycle-is-bounded
+
+    MEASURED 2026-08-03 against a real MongoDB: get_collection() built a NEW
+    MongoClient on every call and never closed it. 20 calls left ~39 server
+    connections open, growing linearly and without bound. Invisible in
+    development, because the SQLite fallback opens no connections at all - the
+    leak existed ONLY after the swap to the real provider.
+
+    What is asserted is the SHAPE of the growth, not its size. A pool
+    legitimately opens several connections to serve work and then PLATEAUS; a
+    leak keeps climbing. So this drives three identical rounds plus a long
+    sequential run and asserts the last stretch adds nothing.
+    """
+
+    @staticmethod
+    def _server_connections() -> int:
+        import pymongo
+
+        probe = pymongo.MongoClient(MONGO_URI)
+        try:
+            return probe.admin.command("serverStatus")["connections"]["current"]
+        finally:
+            probe.close()
+
+    def test_repeated_get_collection_does_not_grow_connections(self, tmp_path):
+        if not _mongo_reachable():
+            pytest.skip(f"no reachable MongoDB at {MONGO_URI}")
+
+        docstore = _fresh_docstore(MONGO_URI)
+
+        rounds = []
+        for _ in range(3):
+            for _ in range(20):
+                docstore.get_collection("lifecycle_probe").count_documents({})
+            rounds.append(self._server_connections())
+
+        settled = rounds[-1]
+        for _ in range(100):
+            docstore.get_collection("lifecycle_probe").count_documents({})
+        after_hundred = self._server_connections()
+
+        # POSITIVE: 100 further calls on a settled pool add nothing. Under the
+        # old one-client-per-call code this was roughly +200.
+        assert after_hundred <= settled + 2, (
+            f"connections still growing: settled={settled} after 100 more={after_hundred}"
+        )
+        # And the growth flattened rather than tracking the call count.
+        assert rounds[2] - rounds[1] <= 2 and rounds[2] < 60, f"rounds={rounds}"
+
+        before = self._server_connections()
+        docstore.close_doc_store()
+        time.sleep(1)
+        assert self._server_connections() < before, "close_doc_store released nothing"

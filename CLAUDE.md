@@ -356,6 +356,8 @@ Selection and configuration:
 - `TINA4_MONGO_URI` — app-wide Mongo URI. Falls back to `TINA4_SESSION_MONGO_URI`, then the legacy `TINA4_SESSION_MONGO_URL`. When one is set and the driver is present, `get_collection` returns a real Mongo collection.
 - `TINA4_DOC_STORE_PATH` — SQLite file for the fallback store (default `data/tina4_docstore.db`).
 
+**One client per URI, and a way to close it.** `get_collection` caches the `MongoClient` rather than building a new one per call — before 3.13.95 it constructed one on EVERY call and never closed it, so 20 calls left ~39 server connections open and the count grew without bound (invisible locally, because the SQLite fallback opens no connections at all). `close_doc_store()` closes every Mongo client and the SQLite store.
+
 ### Request extras
 
 ```python
