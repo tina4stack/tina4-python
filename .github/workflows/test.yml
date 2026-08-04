@@ -221,6 +221,71 @@ jobs:
             --ignore=tests/test_metrics_nested_complexity.py \
             --ignore=tests/test_metrics_offender_cap.py
 
+      # ADR-0024 rule 4: the ZERO-DEPENDENCY default counts double, because it
+      # is the provider every developer starts on. `uv sync --extra test`
+      # installs the `redis` package, so every redis/valkey cache test above
+      # takes the DRIVER path and the raw RESP transport - the default install -
+      # has no coverage at all in that run. That is not hypothetical: the
+      # measured RedisBackend.clear() no-op and the stats() constant-0 both lived
+      # ONLY on the raw path and both shipped green for exactly this reason.
+      #
+      # So run the cache suites again with the driver REMOVED. This is a real
+      # zero-dependency environment, not a simulated one. TINA4_TEST_NO_REDIS_DRIVER
+      # marks the removal as deliberate, so the driver-path variants report
+      # not-applicable instead of tripping the no-silent-skip gate - an
+      # UNEXPECTED missing driver still fails loudly, because that variable
+      # cannot be set by accident.
+      - name: Run cache suites on the ZERO-DEPENDENCY transport
+        env:
+          TINA4_TEST_NO_REDIS_DRIVER: "1"
+        run: |
+          uv pip uninstall redis
+          python -c "
+          import importlib.util, sys
+          if importlib.util.find_spec('redis') is not None:
+              sys.exit('redis driver still importable - this leg would prove nothing')
+          print('confirmed: redis driver absent, raw RESP is the only transport')
+          "
+          uv run pytest -v \
+            tests/test_cache_clear_invalidates.py \
+            tests/test_cache_key_database_identity.py \
+            tests/test_cache_provider_selection.py \
+            tests/test_cache_null_round_trip.py \
+            tests/test_cache_sweep_counts.py \
+            tests/test_cache_clear_persistent_layer.py \
+            tests/test_cache_memcached_exptime.py \
+            tests/test_cache_backends.py \
+            tests/test_cache.py \
+            tests/test_db_query_cache.py \
+            | tee /tmp/zerodep.txt
+          # A LEG THAT FALLS BACK MUST NOT REPORT SUCCESS. Adapted from the PHP
+          # driver leg, which asserts on the assertion-count DIFFERENTIAL: if the
+          # driver leg ever reports the raw leg's number, it silently fell back.
+          #
+          # The zero-dep failure mode is the mirror image and just as quiet: if
+          # redis were UNREACHABLE, every redis test would skip, nothing would
+          # fail, and this leg would report success having exercised nothing at
+          # all. So require BOTH a real floor of passing tests AND exactly the
+          # driver-variant skips - no more, no less.
+          python - <<'PY'
+          import re, sys
+          out = open("/tmp/zerodep.txt").read()
+          m = re.search(r"(\d+) passed(?:, (\d+) skipped)?", out)
+          if not m:
+              sys.exit("no pytest summary found - the leg proved nothing")
+          passed, skipped = int(m.group(1)), int(m.group(2) or 0)
+          # The 4 driver-parametrised cases in test_cache_clear_invalidates.py are
+          # the ONLY things allowed to skip here.
+          if skipped != 4:
+              sys.exit(f"expected exactly 4 driver-variant skips, got {skipped}. "
+                       "More means real tests skipped silently (an unreachable "
+                       "service); fewer means the driver is still present.")
+          if passed < 140:
+              sys.exit(f"only {passed} tests passed on the zero-dependency path; "
+                       "expected 140+. The leg ran but exercised almost nothing.")
+          print(f"zero-dependency leg exercised {passed} passing tests, {skipped} driver-variant skips")
+          PY
+
       - name: Report results
         if: always()
         run: echo "Test run completed with exit code $?"
