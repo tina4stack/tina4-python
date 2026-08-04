@@ -10,6 +10,29 @@ This file is deliberately NOT a copy of those notes. Duplicating them is exactly
 changelog rots into claiming a version that was never cut, so this file records only
 UNRELEASED work. When a version ships, its notes go to the release notes above.
 
+### Breaking: the DB query-cache key now carries DATABASE IDENTITY
+
+CACHE CONTRACT invariant `the-cache-key-carries-database-identity` (ADR-0024).
+
+The persistent DB query-cache key was `sha256(sql + params)` with nothing naming the
+connection, so on ANY shared backend two databases cross-served each other's rows.
+Two apps pointed at one Redis, or one app with a primary and an analytics connection,
+silently read each other's data. Identical SQL text across tenants is the COMMON case,
+so the collision was the normal outcome, not an edge case. This is a data-isolation
+failure that looked like a caching optimisation.
+
+The key is now `sha256(engine://host:port/database + NUL + sql + NUL + params)`.
+Credentials are deliberately excluded: a password in a key means every rotation
+cold-starts the cache, and a shared backend's key namespace is visible to every tenant
+of that backend.
+
+**Migration:** every entry already in a persistent cache becomes a MISS on upgrade,
+because the key format changed. Nothing needs to be done - the cache refills from the
+database on first read. Expect one cold-cache period per deployment after upgrading,
+sized by `TINA4_DB_CACHE_TTL`. A cold cache is safe; cross-served rows are not. If you
+want the old entries gone rather than orphaned, call `db.cache_clear()` once after
+deploying. Applications not using `TINA4_DB_CACHE=true` are unaffected.
+
 ### Fixed (queue operations acted on the local file store, not the configured backend)
 
 Every operation must act on the CONFIGURED backend. These calls appeared to succeed
