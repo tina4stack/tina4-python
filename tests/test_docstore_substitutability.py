@@ -319,8 +319,9 @@ class TestAMissingDriverHasOneOutcomeInAllFour:
         # NEGATIVE: naming the variable must not mean printing its value. A
         # Mongo URI routinely carries credentials and an error string is the
         # most-logged text a framework emits.
+        # case: the message does not leak the uri credentials
         assert "s3cr3t-p4ssw0rd" not in message, (
-            f"the error message leaked the URI credentials: {message}"
+            f"the message does not leak the uri credentials, but it did: {message}"
         )
 
         # NEGATIVE, and the one that matters most: nothing was written to the
