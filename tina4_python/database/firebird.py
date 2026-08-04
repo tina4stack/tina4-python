@@ -380,13 +380,44 @@ class FirebirdAdapter(DatabaseAdapter):
         # fdb starts transactions automatically on first operation
         self._in_transaction = True
 
+    def _active_transaction(self):
+        """The connection's transaction manager when one is genuinely OPEN.
+
+        ``firebird-driver`` (the preferred driver) delegates ``Connection.commit()``
+        and ``.rollback()`` to ``main_transaction``, whose internal handle is
+        ``None`` until a statement opens a transaction -- so calling either with
+        nothing open raises ``AttributeError: 'NoneType' object has no attribute
+        'commit'`` out of the driver's own core. The legacy ``fdb`` driver started
+        a transaction implicitly, which is why the unconditional call was safe
+        when this adapter was written (see ``start_transaction`` below) and why
+        the breakage only appears on a real Firebird server with the modern
+        driver installed.
+
+        Returns None when there is nothing to commit or roll back; returns the
+        manager (or a truthy sentinel on legacy ``fdb``, which exposes no
+        ``main_transaction``) when the call must go through.
+        """
+        connection = self._conn
+        if connection is None:
+            return None
+        transaction = getattr(connection, "main_transaction", None)
+        if transaction is None:
+            return connection  # legacy fdb: no manager to inspect, call through
+        try:
+            return transaction if transaction.is_active() else None
+        except Exception:  # noqa: BLE001 - a driver without is_active(); call through
+            return transaction
+
     def commit(self):
-        if self._conn:
+        # A commit with no open transaction has nothing to do, so it is a no-op
+        # rather than an error -- matching every other adapter here.
+        if self._active_transaction() is not None:
             self._conn.commit()
         self._in_transaction = False
 
     def rollback(self):
-        if self._conn:
+        # Same as commit(): nothing open means nothing to undo.
+        if self._active_transaction() is not None:
             self._conn.rollback()
         self._in_transaction = False
 
