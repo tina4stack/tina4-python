@@ -146,6 +146,170 @@ class TestARealMongoIsActuallyExercised:
         assert type(collection).__name__ != "SqliteCollection"
 
 
+# ── the driverless environment (ADR-0033) ────────────────────────────────────
+#
+# NO MOCKS, and this is the case where that rule bites hardest: faking an
+# ImportError is exactly the forbidden thing, because the bug being pinned IS
+# how the import failure is handled. A stub would test the stub.
+#
+# So the driver is made GENUINELY absent. tina4_python's core has zero
+# dependencies, so a bare `python -m venv` (empty site-packages, ~0.04s) plus
+# the framework on PYTHONPATH is a real interpreter in which `import pymongo`
+# really fails. The child process reports whether it really was driverless, and
+# the test FAILS - never skips - if it was not.
+
+DRIVER_ABSENCE_PROBE = r'''
+import json, os, sys
+
+report = {}
+try:
+    import pymongo  # noqa: F401
+    report["driverless"] = False
+except ImportError:
+    report["driverless"] = True
+
+import tina4_python.docstore as docstore
+
+report["is_serverless"] = docstore.is_serverless()
+try:
+    collection = docstore.get_collection("driver_absence_probe")
+    report["outcome"] = "returned"
+    report["returned_type"] = type(collection).__name__
+except BaseException as exc:  # noqa: BLE001 - the whole point is what it raises
+    report["outcome"] = "raised"
+    report["error_type"] = type(exc).__name__
+    report["error_bases"] = [base.__name__ for base in type(exc).__mro__]
+    report["message"] = str(exc)
+
+report["store_file_exists"] = os.path.exists(os.environ["TINA4_DOC_STORE_PATH"])
+sys.stdout.write("__PROBE__" + json.dumps(report))
+'''
+
+
+@pytest.fixture(scope="session")
+def driverless_python(tmp_path_factory):
+    """A REAL interpreter with no pymongo. Not a patched import.
+
+    Built from sys._base_executable, not sys.executable: a venv created BY a
+    venv inherits an @executable_path libpython reference that does not resolve
+    under a uv-managed standalone interpreter, and the child then dies in dyld
+    before it can report anything.
+    """
+    import subprocess
+
+    base = getattr(sys, "_base_executable", None) or sys.executable
+    root = tmp_path_factory.mktemp("driverless")
+    subprocess.run([base, "-m", "venv", "--without-pip", str(root)], check=True, timeout=120)
+    python_binary = root / ("Scripts" if os.name == "nt" else "bin") / "python"
+
+    # Fail here, loudly, rather than let a broken interpreter look like a
+    # broken framework further down.
+    subprocess.run([str(python_binary), "-c", "import sys"], check=True, timeout=60)
+    return python_binary
+
+
+class TestAMissingDriverHasOneOutcomeInAllFour:
+    """docstore_contract.json :: a-missing-driver-has-one-outcome-in-all-four
+
+    MEASURED 2026-08-01 and re-measured 2026-08-04 at v3 HEAD: one env produced
+    two shapes and four messages. Python, PHP and Ruby silently degraded to the
+    local SQLite file; Node crashed with a bare ERR_MODULE_NOT_FOUND. Silent
+    degradation here means production traffic writing to a container-local file
+    nobody reads, which vanishes on the next deploy, with no error at any point.
+
+    ADR-0024 rule 3, settled for DocStore by ADR-0033: a provider that cannot
+    honour an operation must RAISE, naming the provider and what is missing.
+    """
+
+    @staticmethod
+    def _run_probe(python_binary, repo_root, uri, store_path) -> dict:
+        import json
+        import subprocess
+
+        completed = subprocess.run(
+            [str(python_binary), "-c", DRIVER_ABSENCE_PROBE],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            # A CLEAN env: nothing inherited can smuggle pymongo back in.
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONPATH": str(repo_root),
+                "TINA4_MONGO_URI": uri,
+                "TINA4_DOC_STORE_PATH": str(store_path),
+            },
+        )
+        assert "__PROBE__" in completed.stdout, (
+            f"probe did not report:\nstdout={completed.stdout}\nstderr={completed.stderr}"
+        )
+        return json.loads(completed.stdout.split("__PROBE__", 1)[1])
+
+    def test_a_missing_driver_raises_instead_of_using_the_local_file(
+        self, driverless_python, tmp_path
+    ):
+        repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        store_path = tmp_path / "must_not_be_created.db"
+        # A password in the URI, so the credential-leak assertion has something
+        # real to catch.
+        uri = "mongodb://docstore_user:s3cr3t-p4ssw0rd@192.0.2.1:27017"
+
+        report = self._run_probe(driverless_python, repo_root, uri, store_path)
+
+        # The environment must really be driverless, or nothing below means
+        # anything. This FAILS rather than skipping, on purpose.
+        assert report["driverless"] is True, (
+            "the probe interpreter could import pymongo, so this test would "
+            "have proved nothing"
+        )
+
+        # Configuration says Mongo, so is_serverless() must say Mongo. When it
+        # answered True here, get_collection() took the local branch and that
+        # WAS the silent degradation.
+        assert report["is_serverless"] is False
+
+        assert report["outcome"] == "raised", (
+            f"expected a raise, got {report.get('returned_type')} - the exact "
+            "silent degradation ADR-0033 forbids"
+        )
+        assert report["error_type"] == "DocStoreDriverMissing"
+        assert "ImportError" in report["error_bases"]
+
+        message = report["message"]
+        assert "pymongo" in message, message
+        assert "pip install pymongo" in message, message
+        assert "TINA4_MONGO_URI" in message, message
+
+        # NEGATIVE: naming the variable must not mean printing its value. A
+        # Mongo URI routinely carries credentials and an error string is the
+        # most-logged text a framework emits.
+        assert "s3cr3t-p4ssw0rd" not in message, (
+            f"the error message leaked the URI credentials: {message}"
+        )
+
+        # NEGATIVE, and the one that matters most: nothing was written to the
+        # local store. A raise that still created the file would mean the
+        # fallback was reached first.
+        assert report["store_file_exists"] is False, (
+            "the local SQLite store was created even though a Mongo URI was "
+            "configured"
+        )
+
+    @needs_mongo
+    def test_the_same_uri_with_the_driver_present_still_selects_mongo(self):
+        """POSITIVE half: the raise must be about the DRIVER, not the URI.
+
+        Same configuration, driver installed, and the real provider is selected
+        with no exception. Without this, deleting the whole real-Mongo path
+        would satisfy the negative case above.
+        """
+        docstore = _fresh_docstore(MONGO_URI)
+        assert docstore.is_serverless() is False
+        collection = docstore.get_collection("ds_contract_" + uuid.uuid4().hex[:8])
+        assert type(collection).__name__ != "SqliteCollection"
+        collection.insert_one({"proof": "driver-present"})
+        collection.delete_many({})
+
+
 class TestExportedTypesAreAcceptedByTheRealDriver:
     """docstore_contract.json :: exported-types-are-accepted-by-the-real-driver."""
 

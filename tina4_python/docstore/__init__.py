@@ -19,6 +19,11 @@ fallbacks the queue, cache, and session subsystems already provide: an app that
 talks to Mongo in production runs serverless in local dev with no code change -
 only the backend differs.
 
+A configured URI with NO driver installed raises `DocStoreDriverMissing`
+(ADR-0033). It does NOT quietly use the local SQLite store: that turns a
+production write into a write to a container-local file nobody reads, which
+vanishes on the next deploy, with no error at any point.
+
 Design (the SQLite backend):
     - Each collection is a table `(_id TEXT PRIMARY KEY, doc TEXT)`; `doc` is JSON.
     - Query filters are pushed down to SQL over `json_extract(doc, '$.field')`
@@ -729,31 +734,55 @@ class SqliteDatabase:
         self._conn.close()
 
 
-def _mongo_uri() -> str:
-    """The configured Mongo URI, reusing the app-wide queue/session env vars.
+class DocStoreDriverMissing(ImportError):
+    """A Mongo URI is configured but the MongoDB driver is not installed.
 
-    TINA4_MONGO_URI is the canonical app-wide name; TINA4_SESSION_MONGO_URI is
-    the session-layer name; TINA4_SESSION_MONGO_URL is a back-compat alias.
+    ADR-0024 rule 3, settled for DocStore by ADR-0033: a provider that cannot
+    honour an operation must RAISE, naming the provider and what is missing.
+    Falling back to the local SQLite store here would send production writes to
+    a container-local file nobody reads.
+
+    It subclasses ImportError because that is exactly what it is - a missing
+    package, reported at the point where the choice of provider makes it
+    matter - so code already guarding an optional-driver import still catches it.
     """
-    return (
-        os.environ.get("TINA4_MONGO_URI")
-        or os.environ.get("TINA4_SESSION_MONGO_URI")
-        or os.environ.get("TINA4_SESSION_MONGO_URL")
-        or ""
-    ).strip()
+
+
+# TINA4_MONGO_URI is the canonical app-wide name; TINA4_SESSION_MONGO_URI is
+# the session-layer name; TINA4_SESSION_MONGO_URL is a back-compat alias.
+_MONGO_URI_VARS = ("TINA4_MONGO_URI", "TINA4_SESSION_MONGO_URI", "TINA4_SESSION_MONGO_URL")
+
+
+def _mongo_uri_source() -> str:
+    """The env var that supplied the URI, or "" when none did.
+
+    Named separately so an error can tell the operator WHICH variable to unset
+    without ever printing its value - a Mongo URI routinely carries
+    `user:password@`.
+    """
+    for name in _MONGO_URI_VARS:
+        if (os.environ.get(name) or "").strip():
+            return name
+    return ""
+
+
+def _mongo_uri() -> str:
+    """The configured Mongo URI, reusing the app-wide queue/session env vars."""
+    source = _mongo_uri_source()
+    return (os.environ.get(source) or "").strip() if source else ""
 
 
 def is_serverless() -> bool:
-    """True when no Mongo is configured, so the SQLite fallback is in effect."""
-    if not _mongo_uri():
-        return True
-    try:
-        import pymongo  # noqa: F401
-        return False
-    except ImportError:
-        # A URI is set but the driver is absent: degrade to the local store
-        # rather than crash, and say so once.
-        return True
+    """True when no Mongo is configured, so the SQLite fallback is in effect.
+
+    CONFIGURATION ONLY. Before 3.13.95 this also returned True when a URI was
+    set but pymongo was absent, and that is precisely what made get_collection()
+    hand back the local SQLite store while the operator believed they were on
+    Mongo. A missing driver is now an error (ADR-0033), not a second way to be
+    serverless - otherwise an app branching on this would take the local path
+    and never reach the raise.
+    """
+    return not _mongo_uri()
 
 
 _default_db = None
@@ -803,8 +832,20 @@ def _mongo_client(uri: str):
     the shape pymongo itself expects. The double-checked lock matches _get_db()
     above: without it two threads racing the first call both build a client, and
     one of them is orphaned - the same leak, just rarer.
+
+    A missing driver raises here, at provider RESOLUTION, before any socket is
+    opened: it is a static fact and needs no network to establish.
     """
-    import pymongo
+    try:
+        import pymongo
+    except ImportError as driver_absent:
+        source = _mongo_uri_source() or "TINA4_MONGO_URI"
+        raise DocStoreDriverMissing(
+            f"Tina4 DocStore: {source} is set, so the MongoDB provider is "
+            "selected, but its driver is not installed (python package "
+            "'pymongo'). Install it with `pip install pymongo`, or unset "
+            f"{source} to use the local SQLite store."
+        ) from driver_absent
 
     client = _mongo_clients.get(uri)
     if client is None:
@@ -841,7 +882,7 @@ def reset_default_store():
 
 
 __all__ = [
-    "get_collection", "ObjectId", "InvalidId",
+    "get_collection", "ObjectId", "InvalidId", "DocStoreDriverMissing",
     "SqliteDatabase", "SqliteCollection", "Cursor",
     "is_serverless", "reset_default_store", "close_doc_store",
     "encode_value", "decode_value", "compile_filter",
