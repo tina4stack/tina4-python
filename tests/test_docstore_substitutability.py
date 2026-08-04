@@ -438,7 +438,10 @@ class TestTheCursorChainWorksOnBothProviders:
 
     def test_the_cursor_chain_works_on_both_providers(self, store):
         provider, ds, collection = store
-        for total in (9, 7, 3):
+        # Inserted OUT of the expected order on purpose: with (9, 7, 3) a sort
+        # that silently did NOTHING still returned [9, 7], so the assertion
+        # passed on a broken sort.
+        for total in (3, 9, 7):
             collection.insert_one({"total": total, "grp": "chain"})
 
         spellings = {
