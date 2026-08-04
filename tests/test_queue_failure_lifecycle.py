@@ -152,6 +152,46 @@ def test_a_failed_job_under_max_retries_is_retried_rather_than_dead_lettered(mak
 
 
 @pytest.mark.parametrize("backend", LIFECYCLE_BACKENDS)
+def test_a_popped_job_carries_its_own_lifecycle_methods(make_queue, backend):
+    """SHARED PARITY CASE - this name exists VERBATIM in the PHP, Ruby and Node
+    suites, so one fixture case resolves against all four files.
+
+    A job you popped must carry its own lifecycle. PHP was the last framework
+    where it did not: Queue::pop() returned the backend's raw array, so
+    ``$queue->pop()->fail('boom')`` was a fatal there while the identical line
+    worked here, in Ruby and in Node.
+
+    The assertions are on the QUEUE's state after each call, never on the job's
+    own fields: a fail() that only set an in-memory status would satisfy an
+    object-level check while the backend never heard about it.
+    """
+    queue = make_queue(backend)
+    queue.push({"m": "lifecycle"})
+    time.sleep(0.4)
+
+    job = queue.pop()
+    assert job is not None, f"{backend}: nothing to pop"
+    assert callable(getattr(job, "fail", None)), f"{backend}: a popped job must expose fail()"
+    assert callable(getattr(job, "complete", None)), f"{backend}: a popped job must expose complete()"
+
+    # Called DIRECTLY on what pop() returned - no re-wrap, no queue-level call.
+    job.fail("boom-1")
+    time.sleep(0.4)
+
+    assert len(queue.failed()) == 1, (
+        f"{backend}: fail() called on a popped job must reach the backend"
+    )
+
+    again = queue.pop()
+    assert again is not None, f"{backend}: a job with retries left must come back"
+    again.complete()
+    time.sleep(0.4)
+    assert queue.failed() == [], (
+        f"{backend}: complete() called on a popped job must reach the backend"
+    )
+
+
+@pytest.mark.parametrize("backend", LIFECYCLE_BACKENDS)
 def test_a_job_past_max_retries_becomes_a_dead_letter(make_queue, backend):
     """The core rule: exhausting the retries makes the job observable as dead."""
     queue = make_queue(backend)
