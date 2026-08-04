@@ -114,11 +114,26 @@ class MongoBackend:
         return result.modified_count
 
     def failed(self) -> list[dict]:
-        """Query MongoDB for jobs with status=failed and attempts < max_retries."""
+        """Jobs that failed but are still eligible for retry.
+
+        Found by the ATTEMPTS COUNTER, not by a "failed" status. fail() under
+        max_retries re-queues the job as ``pending`` (that is what makes the
+        next pop() pick it up), so no document ever carries status="failed" on
+        the normal path — querying for one returned an empty list forever, and
+        an empty list is indistinguishable from "nothing has failed"
+        (ADR-0022 decision 7). ``attempts > 0`` is the real marker of a job
+        that has already died at least once.
+        """
         self._backend._ensure_connected()
+        # status="pending" is REQUIRED, not decoration. The final fail() writes a
+        # dead-letter copy and acknowledges the original, but the original keeps
+        # the attempts value it had BEFORE that last increment (the last one is
+        # in-memory only). Without the status clause that acknowledged doc still
+        # matched the attempts range, so failed() returned a job that was
+        # already dead - file returned 0 for the same sequence.
         docs = self._backend._collection.find(
-            {"topic": self._topic, "status": "failed",
-             "attempts": {"$lt": self._max_retries}}
+            {"topic": self._topic, "status": "pending",
+             "attempts": {"$gt": 0, "$lt": self._max_retries}}
         )
         return [{"id": d.get("_id"), "data": d.get("payload", d.get("data")),
                  "attempts": d.get("attempts", 0), "error": d.get("error")}
@@ -165,12 +180,18 @@ class MongoBackend:
 
     def fail(self, job: Job, error: str = ""):
         job.attempts += 1
+        job.error = error
         if job.attempts >= self._max_retries:
-            msg = {"id": job.id, "payload": job.data, "error": error}
+            # attempts MUST ride along: dead_letters() reads it back, and
+            # omitting it reported every Mongo dead letter as attempts=0 while
+            # file/rabbitmq/kafka reported the real count. A dead-letter handler
+            # logging "died after N attempts" printed 0 on Mongo only.
+            msg = {"id": job.id, "payload": job.data,
+                   "attempts": job.attempts, "error": error}
             self._backend.dead_letter(self._topic, msg)
             self._backend.acknowledge(self._topic, str(job.id))
         else:
-            self._backend.reject(self._topic, str(job.id), requeue=True)
+            self._backend.reject(self._topic, str(job.id), requeue=True, error=error)
 
     def retry(self, job: Job, delay_seconds: int = 0):
         job.attempts += 1

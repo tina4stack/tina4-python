@@ -70,36 +70,46 @@ class KafkaBackend:
         pass  # Kafka does not support purging
 
     def retry_failed(self, max_retries: int = None) -> int:
-        jobs = self.failed(max_retries)
-        count = 0
-        for job in jobs:
-            if self.retry_job(job.get("id", "")):
-                count += 1
-        return count
+        """Not performable on Kafka — raises naming the backend and the operation.
+
+        It is built on failed(), which cannot be answered here (see above). It
+        gets its OWN refusal rather than letting failed()'s message escape,
+        because invariant 6 requires the raise to name the operation the caller
+        actually invoked.
+        """
+        raise NotImplementedError(
+            "The kafka queue backend cannot perform retry_failed(): it must "
+            "first enumerate the failed-but-retryable jobs, which a log cannot "
+            "be queried for. Returning 0 would claim nothing needed retrying. "
+            "Use retry(job_id) with an id you already hold, or the file or "
+            "mongodb backend."
+        )
 
     def failed(self, max_retries: int = None) -> list[dict]:
-        """Consume dead_letter topic, republish, return jobs under max_retries.
+        """Not answerable on Kafka — raises naming the backend and the operation.
 
-        Accepts max_retries to match the LiteBackend contract — Queue.retry_failed()
-        passes it as a kwarg, so without this signature the call raised TypeError.
+        failed() means "died at least once and is STILL eligible for retry".
+        On this backend fail() re-produces such a record to the MAIN topic, so
+        it is indistinguishable from any other pending record — a log cannot be
+        queried by job state. It is NOT on the .dead_letter topic; only jobs
+        that exhausted max_retries are produced there.
+
+        This used to consume .dead_letter looking for attempts < max_retries.
+        Nothing there ever satisfies that predicate, so it returned [] every
+        time, and an empty list claims "nothing has failed"
+        (ADR-0022 decision 7). Refusing by name is the honest answer.
+
+        dead_letters() is unaffected and still works here: this backend keeps
+        its own <topic>.dead_letter topic and can enumerate it.
         """
-        mr = max_retries if max_retries is not None else self._max_retries
-        dl_topic = f"{self._topic}.dead_letter"
-        results = []
-        requeue = []
-        while True:
-            msg = self._backend.dequeue(dl_topic)
-            if msg is None:
-                break
-            payload = msg.get("payload", msg)
-            attempts = msg.get("attempts", 0)
-            if attempts < mr:
-                results.append({"id": msg.get("id"), "data": payload,
-                                 "attempts": attempts, "error": msg.get("error")})
-            requeue.append(msg)
-        for msg in requeue:
-            self._backend.enqueue(dl_topic, msg)
-        return results
+        raise NotImplementedError(
+            "The kafka queue backend cannot answer failed(): a job that failed "
+            "but is still retryable is re-produced to the main topic, and a log "
+            "cannot be queried by job state, so it cannot be told apart from a "
+            "normal pending record. Returning an empty list would claim nothing "
+            "has failed. Use dead_letters() for exhausted jobs, or the file or "
+            "mongodb backend to enumerate retryable failures."
+        )
 
     def dead_letters(self, max_retries: int = None) -> list[dict]:
         """Consume dead_letter topic, republish, return jobs at/over max_retries.

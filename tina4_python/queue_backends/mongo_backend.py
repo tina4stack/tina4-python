@@ -219,8 +219,13 @@ class MongoConnector:
             {"$set": {"status": "completed", "completed_at": _now()}},
         )
 
-    def reject(self, topic: str, message_id: str, requeue: bool = True):
-        """Reject a message. Optionally requeue it."""
+    def reject(self, topic: str, message_id: str, requeue: bool = True, error: str = ""):
+        """Reject a message. Optionally requeue it.
+
+        ``error`` is recorded on the document so a re-queued job carries WHY it
+        last died. Without it a failed-but-retryable job came back through
+        failed() with error=None, losing the only diagnostic the consumer wrote.
+        """
         self._ensure_connected()
         if requeue:
             # Reset available_at so the requeued job is visible again right away
@@ -231,13 +236,14 @@ class MongoConnector:
             self._collection.update_one(
                 {"_id": message_id, "topic": topic},
                 {"$set": {"status": "pending", "available_at": available,
-                          "reserved_at": None},
+                          "reserved_at": None, "error": error},
                  "$inc": {"attempts": 1}},
             )
         else:
             self._collection.update_one(
                 {"_id": message_id, "topic": topic},
-                {"$set": {"status": "failed"}, "$inc": {"attempts": 1}},
+                {"$set": {"status": "failed", "error": error},
+                 "$inc": {"attempts": 1}},
             )
 
     def size(self, topic: str) -> int:
