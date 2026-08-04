@@ -560,6 +560,11 @@ class _ValkeyBackend(_RedisBackend):
 # ── Memcached backend (zero-dependency text protocol) ──────────────
 
 
+# memcached's own boundary: an exptime at or below this is RELATIVE seconds,
+# above it is an ABSOLUTE unix timestamp. See _MemcachedBackend._exptime.
+MAX_RELATIVE_EXPTIME = 2592000  # 30 days
+
+
 class _MemcachedBackend(_CacheBackend):
     """Memcached backend using the zero-dependency text protocol over TCP."""
 
@@ -648,13 +653,38 @@ class _MemcachedBackend(_CacheBackend):
         self._misses += 1
         return None
 
+    @staticmethod
+    def _exptime(ttl: int) -> int:
+        """Convert a TTL in seconds to memcached's exptime field.
+
+        memcached reads exptime as RELATIVE seconds at or below 2592000 (30
+        days) and as an ABSOLUTE UNIX TIMESTAMP above it. Interpolating the
+        caller's ttl raw meant any TTL over 30 days was read as a date in 1970,
+        so the entry expired the instant it was written - and memcached still
+        answers STORED, so it presented as a 100% miss rate with nothing logged.
+
+        CONVERT, never CLAMP. Clamping to 2592000 also makes the entry survive
+        and is also wrong: it silently discards more than half the lifetime the
+        operator explicitly configured, which is the same class of
+        silent-wrong-answer as the bug it would be replacing.
+        """
+        if ttl <= 0:
+            return 0
+        if ttl > MAX_RELATIVE_EXPTIME:
+            return int(time.time()) + ttl
+        return ttl
+
     def set(self, key: str, value, ttl: int):
         data = json.dumps(value, default=str).encode()
-        exptime = ttl if ttl > 0 else 0
+        exptime = self._exptime(ttl)
         mc_key = self._mc_key(key)
         payload = f"set {mc_key} 0 {exptime} {len(data)}\r\n".encode() + data + b"\r\n"
         self._command(payload, b"\r\n")
-        self._own[mc_key] = (time.time() + exptime) if exptime > 0 else 0.0
+        # The local write log takes the RAW ttl, never `exptime`. Above the
+        # cliff `exptime` is already an absolute stamp, so `time.time() +
+        # exptime` would put this entry's deadline about 166 years out and
+        # stats() would report expired entries as live forever.
+        self._own[mc_key] = (time.time() + ttl) if ttl > 0 else 0.0
 
     def delete(self, key: str) -> bool:
         mc_key = self._mc_key(key)
