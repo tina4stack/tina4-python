@@ -14,7 +14,8 @@ jobs:
     # CI so the integration tests execute instead of skipping (the gap that let
     # the migration / queue bugs ship). Service containers are health-checked, so
     # the job fails if one never comes up. Ports mirror the local docker harness
-    # (/tmp/tina4_infra_up.sh) so the same TINA4_TEST_* values work locally and here.
+    # (/tmp/tina4_infra_up.sh) so the same canonical test-service variables
+    # (tests/fixtures/test_env_contract.json) work locally and here.
     services:
       # GreenMail: real SMTP 3025 + IMAP 3143 for the Messenger round-trip
       # tests. auth.disabled is REQUIRED, not laziness: every suite uses a unique
@@ -87,8 +88,8 @@ jobs:
       TINA4_TEST_PG_USERNAME: tina4
       TINA4_TEST_PG_PASSWORD: tina4
       TINA4_TEST_PG_DB: tina4_py
-      TINA4_TEST_POSTGRES_URL: postgres://tina4:tina4@localhost:55432/tina4_py
-      TINA4_TEST_MONGO_URL: mongodb://localhost:27017
+      TINA4_TEST_PG_URL: postgres://tina4:tina4@localhost:55432/tina4_py
+      TINA4_TEST_MONGO_URI: mongodb://localhost:27017
       TINA4_TEST_REDIS_URL: redis://localhost:6379
       TINA4_TEST_VALKEY_URL: redis://localhost:6380
       TINA4_TEST_RABBITMQ_URL: amqp://guest:guest@localhost:5672

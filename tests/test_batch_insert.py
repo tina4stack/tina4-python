@@ -144,7 +144,9 @@ def test_postgres_batch_insert_list_of_dicts():
 
 # ── MySQL / MSSQL: run against the live engine when reachable ──
 # Mirror tests/test_database_drivers.py: build the connection from the discrete
-# TINA4_TEST_MYSQL_* / _MSSQL_* vars the CI provisions (the *_URL var still works
+# TINA4_TEST_MYSQL_HOST / _PORT / _USERNAME / _PASSWORD / _DB vars the CI
+# provisions (and the MSSQL equivalents; TINA4_TEST_MYSQL_URL and
+# TINA4_TEST_MSSQL_URL still work
 # as an override), and gate on the driver being importable AND the service
 # reachable. This is why the batch runs for real in CI (MySQL/MSSQL provisioned
 # in #262) instead of skipping on the absent *_URL — previously it keyed only on

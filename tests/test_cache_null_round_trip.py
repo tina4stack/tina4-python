@@ -33,10 +33,10 @@ import pytest
 
 from tina4_python.cache import _create_backend
 
-REDIS_URL = os.environ.get("TINA4_TEST_CACHE_REDIS_URL", "redis://localhost:6379")
-VALKEY_URL = os.environ.get("TINA4_TEST_CACHE_VALKEY_URL", "valkey://localhost:6380")
-MEMCACHED_URL = os.environ.get("TINA4_TEST_CACHE_MEMCACHED_URL", "memcached://localhost:11211")
-MONGO_URL = os.environ.get("TINA4_TEST_CACHE_MONGO_URL", "mongodb://localhost:27017")
+REDIS_URL = os.environ.get("TINA4_TEST_REDIS_URL", "redis://localhost:6379")
+VALKEY_URL = os.environ.get("TINA4_TEST_VALKEY_URL", "valkey://localhost:6380")
+MEMCACHED_URL = os.environ.get("TINA4_TEST_MEMCACHED_URL", "memcached://localhost:11211")
+MONGO_URL = os.environ.get("TINA4_TEST_MONGO_URI", "mongodb://localhost:27017")
 
 
 def _reachable(url: str, default_port: int) -> bool:

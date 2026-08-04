@@ -39,7 +39,7 @@ import pytest
 
 from tina4_python.cache import _MemcachedBackend
 
-MEMCACHED_URL = os.environ.get("TINA4_TEST_CACHE_MEMCACHED_URL", "memcached://localhost:11211")
+MEMCACHED_URL = os.environ.get("TINA4_TEST_MEMCACHED_URL", "memcached://localhost:11211")
 
 # memcached's own boundary: at or below this, exptime is RELATIVE seconds;
 # above it, exptime is an ABSOLUTE unix timestamp.

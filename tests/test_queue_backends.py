@@ -282,7 +282,7 @@ class TestMongoDBBackendConfig:
 # ── Live MongoDB Connector Behaviour (real Mongo, no mocks) ──────
 
 
-_MONGO_TEST_URL = os.environ.get("TINA4_TEST_MONGO_URL", "mongodb://localhost:27017")
+_MONGO_TEST_URL = os.environ.get("TINA4_TEST_MONGO_URI", "mongodb://localhost:27017")
 
 
 def _mongo_reachable() -> bool:
@@ -1085,7 +1085,7 @@ class TestKafkaSecurityConfig:
         assert cfg == {"sasl.mechanism": "PLAIN", "sasl.username": "user", "sasl.password": "secret"}
 
 
-_MONGO_TEST_URL_FACADE = os.environ.get("TINA4_TEST_MONGO_URL", "mongodb://localhost:27017")
+_MONGO_TEST_URL_FACADE = os.environ.get("TINA4_TEST_MONGO_URI", "mongodb://localhost:27017")
 
 
 @pytest.mark.skipif(not _pymongo_available(), reason="pymongo not installed")

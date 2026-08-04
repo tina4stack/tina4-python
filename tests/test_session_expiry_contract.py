@@ -221,8 +221,8 @@ def test_session_expires_at_survives_a_postgres_round_trip():
         host=pg_host,
         port=pg_port,
         dbname=os.environ.get("TINA4_TEST_PG_DB", "postgres"),
-        user=os.environ.get("TINA4_TEST_PG_USER", "tina4"),
-        password=os.environ.get("TINA4_TEST_PG_PASS", "tina4"),
+        user=os.environ.get("TINA4_TEST_PG_USERNAME", "tina4"),
+        password=os.environ.get("TINA4_TEST_PG_PASSWORD", "tina4"),
     )
     conn.autocommit = True
     try:

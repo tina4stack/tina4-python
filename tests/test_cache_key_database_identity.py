@@ -17,7 +17,7 @@ Everything here runs against REAL databases (two real SQLite files and two real
 PostgreSQL databases) and a REAL shared cache backend. Nothing is simulated.
 
 SERVICE ADDRESSES
-        TINA4_TEST_CACHE_REDIS_URL   (default redis://localhost:6379)
+        TINA4_TEST_REDIS_URL   (default redis://localhost:6379)
         TINA4_TEST_PG_HOST / _PORT / _USERNAME / _PASSWORD
 """
 import os
@@ -29,7 +29,7 @@ import pytest
 
 from tina4_python.database import Database
 
-REDIS_URL = os.environ.get("TINA4_TEST_CACHE_REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.environ.get("TINA4_TEST_REDIS_URL", "redis://localhost:6379")
 PG_HOST = os.environ.get("TINA4_TEST_PG_HOST", "localhost")
 PG_PORT = int(os.environ.get("TINA4_TEST_PG_PORT", "55432"))
 PG_USER = os.environ.get("TINA4_TEST_PG_USERNAME", "tina4")

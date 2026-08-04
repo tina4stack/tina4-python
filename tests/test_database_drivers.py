@@ -17,7 +17,8 @@ from tina4_python.database import Database
 from tina4_python.database.connection import _DRIVERS
 
 
-# ── Live PostgreSQL connection config (canonical TINA4_TEST_PG_* convention) ──
+# ── Live PostgreSQL connection config (canonical TINA4_TEST_PG_HOST /
+# _PORT / _USERNAME / _PASSWORD / _DB convention) ──
 # Matches the rest of the suite (test_postgres_create_table.py,
 # test_postgres_uuid_pk.py, ...): a real container at localhost:55432,
 # user/pass/db all "tina4". Skips automatically when nothing is listening.
@@ -567,10 +568,11 @@ def _has_firebird_driver():
 class TestPostgreSQLLive:
     """Live PostgreSQL round-trips against the provisioned container.
 
-    Uses the canonical TINA4_TEST_PG_* convention (default localhost:55432,
-    user/pass/db all "tina4") shared with the rest of the PG test suite — so
-    this RUNS in CI (PostgreSQL is provisioned) rather than skipping. Older
-    callers can still point TINA4_TEST_PG_* at a different instance.
+    Uses the canonical TINA4_TEST_PG_HOST / _PORT / _USERNAME / _PASSWORD /
+    _DB convention (default localhost:55432, user/pass/db all "tina4") shared
+    with the rest of the PG test suite — so this RUNS in CI (PostgreSQL is
+    provisioned) rather than skipping. Older callers can still point those
+    variables at a different instance.
     """
 
     @pytest.fixture
@@ -659,7 +661,8 @@ class TestMySQLLive:
     """Live MySQL round-trips against the provisioned container (#262).
 
     Defaults to localhost:3306 / tina4 / tina4_test; override via the
-    TINA4_TEST_MYSQL_* env vars. Skips when nothing is listening — under
+    TINA4_TEST_MYSQL_HOST / _PORT / _USERNAME / _PASSWORD / _DB env vars.
+    Skips when nothing is listening — under
     TINA4_REQUIRE_SERVICES the conftest gate turns that into a failure.
     """
 
@@ -703,7 +706,8 @@ class TestMSSQLLive:
     """Live MSSQL round-trips against the provisioned container (#262).
 
     Defaults to localhost:1433 / sa / tina4_test; override via the
-    TINA4_TEST_MSSQL_* env vars. Skips when nothing is listening — under
+    TINA4_TEST_MSSQL_HOST / _PORT / _USERNAME / _PASSWORD / _DB env vars.
+    Skips when nothing is listening — under
     TINA4_REQUIRE_SERVICES the conftest gate turns that into a failure.
     """
 

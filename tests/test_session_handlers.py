@@ -35,7 +35,8 @@ import pytest
 # REACHABLE (not on an opt-in env var), so they RUN BY DEFAULT whenever the
 # local/CI infra is up — the same pattern the other real-service suites use
 # (test_queue_backends, test_database_drivers). An env var still overrides the
-# target (CI sets TINA4_TEST_*_URL); it just defaults to the local docker infra.
+# target (CI sets TINA4_TEST_REDIS_URL, TINA4_TEST_MONGO_URI and
+# TINA4_TEST_VALKEY_URL); it just defaults to the local docker infra.
 # Under TINA4_REQUIRE_SERVICES (CI) a "not reachable" skip becomes a hard failure
 # (see conftest.py), so a provisioned session backend can never silently no-op.
 
@@ -54,7 +55,7 @@ def _reachable(host: str, port: int, timeout: float = 1.5) -> bool:
 
 
 _REDIS_HOST, _REDIS_PORT = _service_target("TINA4_TEST_REDIS_URL", "redis://localhost:6379", 6379)
-_MONGO_HOST, _MONGO_PORT = _service_target("TINA4_TEST_MONGO_URL", "mongodb://localhost:27017", 27017)
+_MONGO_HOST, _MONGO_PORT = _service_target("TINA4_TEST_MONGO_URI", "mongodb://localhost:27017", 27017)
 _VALKEY_HOST, _VALKEY_PORT = _service_target("TINA4_TEST_VALKEY_URL", "redis://localhost:6380", 6380)
 
 

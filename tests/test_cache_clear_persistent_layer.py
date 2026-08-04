@@ -24,7 +24,7 @@ import pytest
 
 from tina4_python.database import Database
 
-REDIS_URL = os.environ.get("TINA4_TEST_CACHE_REDIS_URL", "redis://localhost:6379")
+REDIS_URL = os.environ.get("TINA4_TEST_REDIS_URL", "redis://localhost:6379")
 _parsed = urlparse(REDIS_URL if "://" in REDIS_URL else "//" + REDIS_URL)
 
 

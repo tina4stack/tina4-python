@@ -64,7 +64,8 @@ def pytest_runtest_makereport(item, call):
     service being unavailable into a hard FAILURE.
 
     CI provisions PostgreSQL, MySQL, MSSQL, Redis, Valkey, Memcached, MongoDB,
-    RabbitMQ, and Kafka and sets every TINA4_TEST_* URL, so these integration
+    RabbitMQ, and Kafka and sets every canonical test-service URL (see
+    tests/fixtures/test_env_contract.json), so these integration
     tests must run. A skip that names one of those services (or its client
     library) means the service or driver silently went missing -- the exact gap
     that let the migration and queue bugs ship green. Firebird is not
