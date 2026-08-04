@@ -82,10 +82,21 @@ class SessionHandler:
 class FileSessionHandler(SessionHandler):
     """File-based session storage (default, zero-dep)."""
 
-    def __init__(self, path: str = None):
+    def __init__(self, path: str = None, ttl: int = None):
         self._path = Path(
             path or os.environ.get("TINA4_SESSION_PATH", "data/sessions")
         )
+        # TINA4_SESSION_TTL is the ONE session-lifetime variable and it must reach
+        # EVERY backend (ADR-0024). redis, valkey, mongodb and memcached have
+        # always read it; file and database had no ttl at all, so a bare
+        # write(id, data) here stored _expires = 0 and the record NEVER EXPIRED
+        # while the same call on memcached expired in an hour. Same call, two
+        # contracts, on the two backends most likely to be used by default.
+        #
+        # This is a WRITE-time default only. read() must never consult it: the
+        # deadline is absolute and baked in at write time, so a reader with a
+        # different ttl can never judge someone else's record.
+        self._ttl = int(ttl if ttl is not None else os.environ.get("TINA4_SESSION_TTL", "3600"))
         self._path.mkdir(parents=True, exist_ok=True)
 
     def _file(self, session_id: str) -> Path:
@@ -107,7 +118,8 @@ class FileSessionHandler(SessionHandler):
 
     def write(self, session_id: str, data: dict, ttl: int = 0):
         f = self._file(session_id)
-        expires = time.time() + ttl if ttl > 0 else 0
+        effective_ttl = ttl if ttl > 0 else self._ttl
+        expires = time.time() + effective_ttl if effective_ttl > 0 else 0
         f.write_text(
             json.dumps({"_data": data, "_expires": expires}, default=str),
             encoding="utf-8",
@@ -130,8 +142,12 @@ class FileSessionHandler(SessionHandler):
 class DatabaseSessionHandler(SessionHandler):
     """Database-backed session storage. Uses whatever DB is connected."""
 
-    def __init__(self, db):
+    def __init__(self, db, ttl: int = None):
         self._db = db
+        # Same contract as FileSessionHandler above: TINA4_SESSION_TTL reaches
+        # every backend (ADR-0024). Write-time default only - read() compares the
+        # absolute stored deadline and never consults this.
+        self._ttl = int(ttl if ttl is not None else os.environ.get("TINA4_SESSION_TTL", "3600"))
         self._ensure_table()
 
     def _ensure_table(self):
@@ -161,7 +177,8 @@ class DatabaseSessionHandler(SessionHandler):
             return {}
 
     def write(self, session_id: str, data: dict, ttl: int = 0):
-        expires = time.time() + ttl if ttl > 0 else 0
+        effective_ttl = ttl if ttl > 0 else self._ttl
+        expires = time.time() + effective_ttl if effective_ttl > 0 else 0
         payload = json.dumps(data, default=str)
         existing = self._db.fetch_one(
             "SELECT session_id FROM tina4_session WHERE session_id = ?",
