@@ -103,7 +103,14 @@ docker run --rm -v "$PWD/conf:/mosquitto/config" --user root eclipse-mosquitto:2
 echo "password file hashed + 0600 mosquitto:mosquitto (tina4 / testpass)"
 
 docker rm -f tina4-mosquitto >/dev/null 2>&1 || true
+# --ulimit: the image default soft nofile is 1024. mongod hit exactly that on the
+# lab on 2026-08-04 and started logging "Unable to create eventfd" / "Error
+# accepting new connection" while KEEPING its port open, so it looked alive and
+# refused every connection. Brokers here take many short-lived connections from
+# four suites, so they are raised for the same reason. It must be set at
+# CREATION - ulimits cannot be changed on a running container.
 docker run -d --name tina4-mosquitto \
+  --ulimit nofile=64000:64000 \
   -p 1883:1883 -p 1884:1884 -p 8883:8883 \
   -v "$PWD/conf/mosquitto.conf:/mosquitto/config/mosquitto.conf" \
   -v "$PWD/conf/passwd:/mosquitto/config/passwd" \
@@ -123,7 +130,7 @@ docker run -d --name tina4-mosquitto \
 require_emqx="${MQTT_REQUIRE_EMQX:-true}"
 if [ "$require_emqx" = "true" ]; then
   docker rm -f tina4-emqx >/dev/null 2>&1 || true
-  docker run -d --name tina4-emqx -p 1885:1883 emqx/emqx:5.8 >/dev/null
+  docker run -d --name tina4-emqx --ulimit nofile=64000:64000 -p 1885:1883 emqx/emqx:5.8 >/dev/null
 fi
 
 # ---------------------------------------------------------------- wait
