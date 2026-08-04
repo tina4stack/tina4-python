@@ -116,4 +116,8 @@ def test_a_committed_write_is_still_really_committed(database):
         verifier.close()
 
     assert row is not None, "a committed row was not visible to a second connection"
-    assert str(row["NAME"]).strip() == "committed"
+    # Firebird stores unquoted identifiers folded to upper case; Tina4 hands the
+    # row back with lower-cased keys. Read it case-insensitively so this test
+    # asserts the COMMIT, not the key spelling.
+    value = next(v for k, v in row.items() if k.lower() == "name")
+    assert str(value).strip() == "committed"
