@@ -415,6 +415,60 @@ class TestTheDocumentRoundTripIsIdentical:
         assert got == [5, 9], f"{provider}: $gt returned {got}"
 
 
+# -- ADR-0036 / the-call-site-surface-is-identical (ASSERTED) -----------------
+
+
+class TestTheCursorChainWorksOnBothProviders:
+    """docstore_contract.json :: the-call-site-surface-is-identical.
+
+    ADR-0036. The chain the framework DOCUMENTS must run on both providers.
+
+    Python's chain already worked - pymongo's Cursor is lazy and chainable, so
+    it is the reference shape the other three were brought to. What did NOT
+    work here, measured 2026-08-04 against a real MongoDB, was the MAPPING sort
+    spelling: ``sort({"total": -1})`` raised
+
+        ValueError: too many values to unpack (expected 2)
+
+    on the fallback and worked on the driver, because ``for k, d in {...}``
+    iterates the KEYS. Same defect class, one layer down, and in three of the
+    four frameworks at once - so all three spellings are asserted rather than
+    only the documented one.
+    """
+
+    def test_the_cursor_chain_works_on_both_providers(self, store):
+        provider, ds, collection = store
+        for total in (9, 7, 3):
+            collection.insert_one({"total": total, "grp": "chain"})
+
+        spellings = {
+            "sort(field, direction)": lambda: collection.find({"grp": "chain"}).sort("total", -1).limit(2),
+            "sort(mapping)": lambda: collection.find({"grp": "chain"}).sort({"total": -1}).limit(2),
+            "sort(pairs)": lambda: collection.find({"grp": "chain"}).sort([("total", -1)]).limit(2),
+        }
+        for spelling, chain in spellings.items():
+            assert [d["total"] for d in chain()] == [9, 7], (
+                f"{provider} {spelling}: iterating the chain must order and cap"
+            )
+            assert [d["total"] for d in chain().to_list()] == [9, 7], (
+                f"{provider} {spelling}: to_list over the chain must order and cap"
+            )
+
+        # skip composes, and ascending is not merely the absence of descending -
+        # a direction that is ignored would pass a descending-only test.
+        skipped = collection.find({"grp": "chain"}).sort("total", -1).skip(1).limit(1)
+        assert [d["total"] for d in skipped] == [7], f"{provider}: skip must compose"
+        ascending = collection.find({"grp": "chain"}).sort("total", 1).limit(2)
+        assert [d["total"] for d in ascending] == [3, 7], f"{provider}: ascending must ascend"
+
+        # LAZY: building the chain must not execute it.
+        pending = collection.find({"grp": "chain"}).sort("total", -1)
+        collection.insert_one({"total": 99, "grp": "chain"})
+        assert next(iter(pending))["total"] == 99, (
+            f"{provider}: the chain must run at materialisation, not at find()"
+        )
+
+
 
 # ── ADR-0025 clause 4 / query-semantics-match-on-both-providers (ASSERTED) ────
 
