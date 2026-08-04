@@ -530,6 +530,7 @@ queue.retry_failed() -> int
 queue.dead_letters() -> list[dict]
 queue.produce(topic, data, priority=0, delay_seconds=0)  # Push to a specific topic
 queue.consume(topic=None, job_id=None, poll_interval=1.0)   # Long-running generator; sleeps when empty. poll_interval=0 for single-pass drain.
+queue.close() -> None   # Release the backend connection. No-op on the file backend, idempotent, discard the queue afterwards.
 
 # Job methods
 job.complete()                  # Mark as completed
