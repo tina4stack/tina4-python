@@ -10,6 +10,33 @@ This file is deliberately NOT a copy of those notes. Duplicating them is exactly
 changelog rots into claiming a version that was never cut, so this file records only
 UNRELEASED work. When a version ships, its notes go to the release notes above.
 
+### Breaking (DocStore: a missing MongoDB driver now raises)
+
+`TINA4_MONGO_URI` set with the `pymongo` package NOT installed used to return the local SQLite collection. It now
+raises `DocStoreDriverMissing`, naming the provider and what is missing (ADR-0033,
+applying ADR-0024 rule 3).
+
+Re-measured 2026-08-04 at `v3` HEAD in a REAL driverless environment - no mock, no
+faked import - one env produced two shapes and four messages across the family:
+Python, PHP and Ruby silently returned the local SQLite store, Node threw a bare
+`ERR_MODULE_NOT_FOUND`. Silent degradation here means production writes landing in a
+container-local file nobody reads, which vanishes on the next deploy, with no error at
+any point.
+
+**Migration - one of two lines:**
+
+```
+pip install pymongo          # use the real provider
+unset TINA4_MONGO_URI        # or use the local SQLite store, explicitly
+```
+
+Also changed: `is_serverless()` is now CONFIGURATION ONLY. It used to also return True when the driver was absent, which is
+what routed the call into the local branch; without this an app branching on it would
+take the local path and never reach the raise. The error message names the env var that
+supplied the URI and never its VALUE, because a Mongo URI routinely carries
+`user:password@` and an error string is the most-logged text a framework emits.
+
+
 ### Fixed (queue operations acted on the local file store, not the configured backend)
 
 Every operation must act on the CONFIGURED backend. These calls appeared to succeed
