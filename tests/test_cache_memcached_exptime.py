@@ -122,13 +122,32 @@ def test_a_ttl_beyond_the_cliff_keeps_its_full_lifetime():
 def test_the_thirty_day_boundary_itself_stays_relative():
     """Boundary control: 2592000 is still RELATIVE, so it must not convert.
 
-    Converting AT the boundary rather than above it would push the value to
-    now+2592000 as an absolute stamp, which memcached also accepts - so this
-    catches an off-by-one in the comparison that nothing else would.
+    THE SERVER CANNOT SETTLE THIS ONE, and an earlier version of this test
+    wrongly claimed it could. Sending a relative 2592000 and sending an absolute
+    time()+2592000 produce the SAME deadline, so memcached reports an identical
+    `t2592000` either way. MEASURED, by the PHP port: an off-by-one mutation
+    (`>=` instead of `>`) left this file GREEN when it asserted only the
+    server's remaining lifetime. Reproduced here before this line was written.
+
+    So the boundary is settled on the COMPUTED exptime instead - a pure function
+    over its inputs, needing no service and using no stand-in. Below/at the
+    boundary the value must be the ttl ITSELF; above it, a unix timestamp.
     """
+    assert _MemcachedBackend._exptime(THIRTY_DAYS) == THIRTY_DAYS, (
+        "at exactly 2592000 the exptime was CONVERTED to an absolute stamp. "
+        "memcached treats 2592000 as relative, so the comparison is off by one "
+        "and the server cannot show it - both forms expire at the same instant."
+    )
+    above = _MemcachedBackend._exptime(THIRTY_DAYS + 1)
+    assert above > int(time.time()), (
+        f"just above the boundary the exptime is still {above}, a relative "
+        "duration memcached will read as a 1970 timestamp"
+    )
+    assert _MemcachedBackend._exptime(THIRTY_DAYS - 1) == THIRTY_DAYS - 1
+
+    # And the real round trip still has to work at the boundary.
     backend = _MemcachedBackend(MEMCACHED_URL)
     key = f"boundary-{uuid.uuid4().hex}"
-
     backend.set(key, {"v": "exactly thirty days"}, THIRTY_DAYS)
 
     assert backend.get(key) == {"v": "exactly thirty days"}
