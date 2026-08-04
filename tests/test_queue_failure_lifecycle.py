@@ -230,6 +230,59 @@ def test_reading_dead_letters_does_not_consume_them(make_queue, backend):
     )
 
 
+def test_failing_a_job_reaches_the_configured_backend_and_not_just_local_memory():
+    """Proof the failure LEAVES the process.
+
+    None of the cases above can catch this: they run on file/mongodb, where the
+    backend has always had a working fail(). Only a broker exposes a failure
+    that is recorded locally and never transmitted - the shape Ruby shipped,
+    where job.fail() bumped an in-memory counter while the broker was never
+    told, leaving the delivery unacked with no dead letter written.
+
+    The proof is redelivery carrying the incremented count: that can only
+    happen if fail() re-published through the broker.
+    """
+    if not _reachable(RABBIT_HOST, RABBIT_PORT):
+        if os.environ.get("TINA4_REQUIRE_SERVICES"):
+            raise RuntimeError(
+                "TINA4_REQUIRE_SERVICES is set but RabbitMQ is not reachable at "
+                f"{RABBIT_HOST}:{RABBIT_PORT}"
+            )
+        pytest.skip(f"RabbitMQ not reachable at {RABBIT_HOST}:{RABBIT_PORT}")
+
+    os.environ["TINA4_RABBITMQ_HOST"] = RABBIT_HOST
+    os.environ["TINA4_RABBITMQ_PORT"] = str(RABBIT_PORT)
+    from tina4_python.queue import Queue
+
+    queue = Queue(topic=f"faillc_rmq_{uuid.uuid4().hex[:8]}", backend="rabbitmq",
+                  max_retries=MAX_RETRIES)
+    queue.push({"m": "poison"})
+    time.sleep(0.5)
+
+    job = queue.pop()
+    assert job is not None, "nothing to pop from the broker"
+    job.fail("boom-1")
+    time.sleep(0.5)
+
+    redelivered = queue.pop()
+    assert redelivered is not None, (
+        "the failure did not reach the broker - nothing was redelivered"
+    )
+    assert redelivered.attempts == 1, (
+        "the attempt count did not survive the round-trip through the broker "
+        f"(got {redelivered.attempts})"
+    )
+
+    redelivered.fail("boom-2")
+    time.sleep(0.5)
+    dead = queue.dead_letters()
+    assert len(dead) == 1, (
+        "a broker job past max_retries must reach the dead-letter queue"
+    )
+    assert dead[0].attempts == MAX_RETRIES
+    assert dead[0].error == f"boom-{MAX_RETRIES}"
+
+
 def test_a_backend_that_cannot_enumerate_retryable_failures_refuses_by_name():
     """Invariant 6's half of this rule.
 
