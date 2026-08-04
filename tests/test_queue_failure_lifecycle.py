@@ -80,6 +80,12 @@ def make_queue(monkeypatch, tmp_path):
     monkeypatch.setenv("TINA4_QUEUE_PATH", str(tmp_path))
     monkeypatch.setenv("TINA4_MONGO_URI", f"mongodb://{HOST}:{PORT}")
     monkeypatch.setenv("TINA4_QUEUE_MONGO_URI", f"mongodb://{HOST}:{PORT}")
+    # A stray TINA4_QUEUE_URL is passed straight through as the backend's
+    # connection URI, so an amqp:// value left behind by an earlier test file
+    # became this queue's MONGO uri and died with pymongo InvalidURI. That is a
+    # real leak and it is fixed at its source in test_queue_backends.py, but
+    # this suite must not depend on file ordering to be correct.
+    monkeypatch.delenv("TINA4_QUEUE_URL", raising=False)
 
     from tina4_python.queue import Queue
 
