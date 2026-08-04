@@ -907,6 +907,31 @@ class _DatabaseBackend(_CacheBackend):
         self._misses = 0
         self._db.execute("DELETE FROM tina4_cache")
 
+    def sweep(self) -> int:
+        """Delete expired rows and return how many went.
+
+        The base class returns 0 because redis, valkey, memcached and mongodb
+        expire entries SERVER-SIDE - nothing was evicted because there was
+        nothing left to evict, and 0 is the honest answer. A SQL table expires
+        nothing by itself. Before this override the database backend inherited
+        that 0, so expired rows were removed only when someone happened to read
+        that exact key again: the table grew without bound and the one API whose
+        job is reclaiming that space reported success having done nothing.
+
+        ``expires_at > 0`` is load-bearing: an entry stored with ttl <= 0 is
+        permanent and carries 0, so a bare ``now > expires_at`` would evict every
+        permanent entry on the first sweep.
+        """
+        now = time.time()
+        row = self._db.fetch_one(
+            "SELECT COUNT(*) AS c FROM tina4_cache WHERE expires_at > 0 AND expires_at < ?",
+            [now])
+        expired = int(row["c"]) if row and row.get("c") is not None else 0
+        if expired:
+            self._db.execute(
+                "DELETE FROM tina4_cache WHERE expires_at > 0 AND expires_at < ?", [now])
+        return expired
+
     def stats(self) -> dict:
         row = self._db.fetch_one("SELECT COUNT(*) AS c FROM tina4_cache")
         size = int(row["c"]) if row and row.get("c") is not None else 0
