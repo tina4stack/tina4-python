@@ -1438,6 +1438,31 @@ class TestRabbitMQJobLifecycleLive:
     acknowledges the original and re-publishes a body carrying the new count.
     """
 
+    @pytest.fixture(autouse=True)
+    def _contain_the_queue_url(self):
+        """TINA4_QUEUE_URL is set to an amqp:// URL below and MUST NOT escape.
+
+        MEASURED on the lab 2026-08-04: it was set with a RAW os.environ
+        assignment and never unset, so it survived this class and every LATER
+        test that built a MongoDB queue received 'amqp://guest:guest@host:5672/'
+        as its Mongo URI and died with pymongo InvalidURI. That made all five
+        mongodb cases of test_queue_failure_lifecycle.py red while this file
+        itself stayed green - a leak whose only symptom is somebody else's suite
+        failing, which is the worst kind to debug.
+
+        It only bites where RabbitMQ is actually reachable (this class is
+        skipped otherwise), so it was invisible on a developer machine and red
+        on the lab, where the broker is up and TINA4_REQUIRE_SERVICES is set.
+        """
+        saved = os.environ.get("TINA4_QUEUE_URL")
+        try:
+            yield
+        finally:
+            if saved is None:
+                os.environ.pop("TINA4_QUEUE_URL", None)
+            else:
+                os.environ["TINA4_QUEUE_URL"] = saved
+
     def _queue(self, topic, max_retries=3):
         os.environ["TINA4_QUEUE_URL"] = "amqp://guest:guest@%s:%d/" % (_RABBIT_HOST, _RABBIT_PORT)
         from tina4_python.queue import Queue

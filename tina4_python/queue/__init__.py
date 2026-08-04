@@ -240,6 +240,26 @@ class Queue:
         """Remove all pending jobs from the queue. Returns count removed."""
         return self._backend.clear()
 
+    def close(self) -> None:
+        """Release the backend's connection and free its resources.
+
+        A queue on RabbitMQ, Kafka or MongoDB holds a REAL client and socket.
+        Until 3.13.95 there was no way to hand it back: ``close()`` existed on
+        some backends but was never surfaced on Queue, so an app that built a
+        Queue per request (or per job) leaked one connection per request until
+        the broker refused new ones. Same class of leak as ADR-0025 corollary 4
+        (client-lifecycle-is-bounded), which fixed exactly this in DocStore.
+
+        Safe on EVERY backend: the file backend holds no connection and closes
+        as a documented no-op, so a ``TINA4_QUEUE_BACKEND`` change never turns a
+        working shutdown path into an error. Idempotent — each backend drops its
+        handles on the first call, so a second call finds nothing to close and
+        returns.
+
+        Treat the queue as spent afterwards and build a new one to keep working.
+        """
+        self._backend.close()
+
     def produce(self, topic: str, data: dict, priority: int = 0,
                 delay_seconds: int = 0, delay_until: datetime | None = None):
         """Produce a message onto a topic. Convenience wrapper around push().
