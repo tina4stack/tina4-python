@@ -1401,8 +1401,29 @@ def _init_session(request: Request) -> None:
         import random
         if random.randint(1, 100) == 1:
             sess.gc()
-    except Exception:
-        pass  # Session module not available — session stays None
+    except Exception as session_error:
+        # LOG LOUD, THEN DEGRADE (ADR-0021). This was a bare `except Exception:
+        # pass` whose comment claimed it covered a missing session module, while
+        # it actually swallowed EVERYTHING: a handler that could not construct
+        # (the database backend connects and issues DDL in its constructor), the
+        # deliberate ValueError for an unknown TINA4_SESSION_BACKEND, and every
+        # TINA4_SESSION_STRICT re-raise. request.session simply became None and
+        # nothing was written anywhere, so the operator saw users mysteriously
+        # logged out with no signal at all.
+        #
+        # An EMPTY session never reaches here. Session.start() returns an empty
+        # dict for a session the store has never heard of, which is an ordinary
+        # outcome and not an error - logging that would fill the log with noise
+        # on every new visitor and bury the real outage.
+        from tina4_python.debug import Log
+        from tina4_python.session import session_strict_mode
+        Log.error(
+            f"Session unavailable for this request "
+            f"({type(session_error).__name__}): {session_error}"
+        )
+        if session_strict_mode():
+            raise
+        request.session = None
 
 
 def _handle_rate_limit(request: Request, response: Response) -> Response | None:
@@ -2414,8 +2435,19 @@ def _stage_session_save(ctx: DispatchContext) -> None:
         import random
         if random.randint(1, 100) == 1:
             session.gc()
-    except Exception:
-        pass
+    except Exception as session_error:
+        # Same policy as the read side above: loud, then degrade. Session.save()
+        # already logs a backend write failure and returns False without raising,
+        # so anything arriving here is a failure OUTSIDE that policy (cookie
+        # construction, gc, a strict-mode re-raise) and was previously silent.
+        from tina4_python.debug import Log
+        from tina4_python.session import session_strict_mode
+        Log.error(
+            f"Session could not be finalised for this response "
+            f"({type(session_error).__name__}): {session_error}"
+        )
+        if session_strict_mode():
+            raise
     return None
 
 

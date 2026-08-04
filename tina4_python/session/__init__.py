@@ -62,6 +62,23 @@ def session_cookie_name() -> str:
     return os.environ.get("TINA4_SESSION_NAME", "tina4_session")
 
 
+def session_strict_mode() -> bool:
+    """Is TINA4_SESSION_STRICT on? The single source of truth for the flag.
+
+    Module level, not a Session attribute, because the REQUEST PATH has to be
+    able to consult it when a Session could not be constructed at all - a
+    handler whose constructor raises, or a refused TINA4_SESSION_BACKEND, both
+    fail BEFORE there is an object to ask. That gap is why strict mode used to
+    be inert on the request path: core/server.py swallowed the re-raise it was
+    supposed to honour, and the caller got a cheerful 200 with no session.
+
+        TINA4_SESSION_STRICT   re-raise instead of degrading (default: false)
+    """
+    return str(
+        os.environ.get("TINA4_SESSION_STRICT", "false")
+    ).strip().lower() in ("true", "1", "yes", "on")
+
+
 class SessionHandler:
     """Base class for session storage backends."""
 
@@ -82,10 +99,21 @@ class SessionHandler:
 class FileSessionHandler(SessionHandler):
     """File-based session storage (default, zero-dep)."""
 
-    def __init__(self, path: str = None):
+    def __init__(self, path: str = None, ttl: int = None):
         self._path = Path(
             path or os.environ.get("TINA4_SESSION_PATH", "data/sessions")
         )
+        # TINA4_SESSION_TTL is the ONE session-lifetime variable and it must reach
+        # EVERY backend (ADR-0024). redis, valkey, mongodb and memcached have
+        # always read it; file and database had no ttl at all, so a bare
+        # write(id, data) here stored _expires = 0 and the record NEVER EXPIRED
+        # while the same call on memcached expired in an hour. Same call, two
+        # contracts, on the two backends most likely to be used by default.
+        #
+        # This is a WRITE-time default only. read() must never consult it: the
+        # deadline is absolute and baked in at write time, so a reader with a
+        # different ttl can never judge someone else's record.
+        self._ttl = int(ttl if ttl is not None else os.environ.get("TINA4_SESSION_TTL", "3600"))
         self._path.mkdir(parents=True, exist_ok=True)
 
     def _file(self, session_id: str) -> Path:
@@ -107,7 +135,8 @@ class FileSessionHandler(SessionHandler):
 
     def write(self, session_id: str, data: dict, ttl: int = 0):
         f = self._file(session_id)
-        expires = time.time() + ttl if ttl > 0 else 0
+        effective_ttl = ttl if ttl > 0 else self._ttl
+        expires = time.time() + effective_ttl if effective_ttl > 0 else 0
         f.write_text(
             json.dumps({"_data": data, "_expires": expires}, default=str),
             encoding="utf-8",
@@ -130,15 +159,29 @@ class FileSessionHandler(SessionHandler):
 class DatabaseSessionHandler(SessionHandler):
     """Database-backed session storage. Uses whatever DB is connected."""
 
-    def __init__(self, db):
+    def __init__(self, db, ttl: int = None):
         self._db = db
-        self._ensure_table()
+        # Same contract as FileSessionHandler above: TINA4_SESSION_TTL reaches
+        # every backend (ADR-0024). Write-time default only - read() compares the
+        # absolute stored deadline and never consults this.
+        self._ttl = int(ttl if ttl is not None else os.environ.get("TINA4_SESSION_TTL", "3600"))
+        # NO NETWORK I/O IN A CONSTRUCTOR (ADR-0021). _ensure_table() runs
+        # table_exists() + CREATE TABLE + commit() - real DDL on a real
+        # connection - and it used to run HERE. Because the request path builds a
+        # Session per request, that was DDL on every request, and it sat OUTSIDE
+        # the log-loud-and-degrade policy: an unreachable database took the app
+        # down at construction instead of degrading per request as designed.
+        # The table is now created on first use, inside that policy.
+        self._table_ready = False
 
     def _ensure_table(self):
+        if self._table_ready:
+            return
+        self._table_ready = True
         if not self._db.table_exists("tina4_session"):
             self._db.execute("""
                 CREATE TABLE tina4_session (
-                    session_id TEXT PRIMARY KEY,
+                    session_id VARCHAR(255) PRIMARY KEY,
                     data TEXT NOT NULL,
                     expires_at DOUBLE PRECISION NOT NULL
                 )
@@ -146,6 +189,7 @@ class DatabaseSessionHandler(SessionHandler):
             self._db.commit()
 
     def read(self, session_id: str) -> dict:
+        self._ensure_table()
         row = self._db.fetch_one(
             "SELECT data, expires_at FROM tina4_session WHERE session_id = ?",
             [session_id],
@@ -161,7 +205,9 @@ class DatabaseSessionHandler(SessionHandler):
             return {}
 
     def write(self, session_id: str, data: dict, ttl: int = 0):
-        expires = time.time() + ttl if ttl > 0 else 0
+        self._ensure_table()
+        effective_ttl = ttl if ttl > 0 else self._ttl
+        expires = time.time() + effective_ttl if effective_ttl > 0 else 0
         payload = json.dumps(data, default=str)
         existing = self._db.fetch_one(
             "SELECT session_id FROM tina4_session WHERE session_id = ?",
@@ -180,6 +226,7 @@ class DatabaseSessionHandler(SessionHandler):
         self._db.commit()
 
     def destroy(self, session_id: str):
+        self._ensure_table()
         self._db.execute(
             "DELETE FROM tina4_session WHERE session_id = ?",
             [session_id],
@@ -187,6 +234,7 @@ class DatabaseSessionHandler(SessionHandler):
         self._db.commit()
 
     def gc(self, max_lifetime: int = 0):
+        self._ensure_table()
         self._db.execute(
             "DELETE FROM tina4_session WHERE expires_at > 0 AND expires_at < ?",
             [time.time()],
@@ -222,9 +270,11 @@ class Session:
         # TINA4_SESSION_STRICT=true to re-raise instead (matches the `strict`
         # escape hatch used by events/seeding) when you'd rather a failed
         # persist surface loudly than be tolerated.
-        self._strict: bool = str(
-            os.environ.get("TINA4_SESSION_STRICT", "false")
-        ).strip().lower() in ("true", "1", "yes", "on")
+        self._strict: bool = session_strict_mode()
+
+    # (session_strict_mode lives at module level so the REQUEST PATH can consult
+    # the same flag without constructing a Session - see core/server.py, where a
+    # failure happens BEFORE there is a Session to ask.)
 
     #: Every accepted TINA4_SESSION_BACKEND value, aliases included. Byte-identical
     #: membership in all four frameworks; this tuple is the one place it is written
