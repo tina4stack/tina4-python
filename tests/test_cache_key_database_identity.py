@@ -67,6 +67,34 @@ def shared_redis_cache(monkeypatch):
     monkeypatch.setenv("TINA4_DB_CACHE_URL", REDIS_URL)
 
 
+def _ensure_postgres_database(name: str) -> None:
+    """Create the test database if it is not already there.
+
+    THIS IS NOT A CONVENIENCE. Without it the postgres case only passes where
+    somebody created the database BY HAND, which is precisely the
+    environment-dependent false green this whole contract exists to stamp out -
+    and it was measured: with the two databases dropped, this file failed with
+    'database "tina4_cache_contract_a" does not exist'. The Node port
+    self-provisioned from the start and was right to; ADR-0004 says the best
+    implementation prevails, so the other three follow it.
+
+    psycopg2 directly, with autocommit, because CREATE DATABASE cannot run
+    inside a transaction block. That is a REAL connection to the REAL server,
+    not a stand-in.
+    """
+    import psycopg2
+    conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, user=PG_USER,
+                            password=PG_PASS, dbname="postgres")
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
+            if cur.fetchone() is None:
+                cur.execute(f'CREATE DATABASE "{name}"')
+    finally:
+        conn.close()
+
+
 def _seed_sqlite(path, marker):
     db = Database(f"sqlite:///{path}")
     db.execute("CREATE TABLE IF NOT EXISTS widget (id INTEGER PRIMARY KEY, owner TEXT)")
@@ -184,6 +212,9 @@ def test_two_postgres_databases_do_not_cross_serve(shared_redis_cache):
         "database-a": f"postgres://{PG_HOST}:{PG_PORT}/{PG_DB_A}",
         "database-b": f"postgres://{PG_HOST}:{PG_PORT}/{PG_DB_B}",
     }
+    for db_name in (PG_DB_A, PG_DB_B):
+        _ensure_postgres_database(db_name)
+
     handles = {}
     try:
         for marker, url in urls.items():
