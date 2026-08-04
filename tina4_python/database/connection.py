@@ -558,7 +558,18 @@ class Database:
             }
 
     def cache_clear(self):
-        """Flush the query cache and reset counters."""
+        """Flush the query cache and reset counters - BOTH layers.
+
+        This used to clear only the in-process dict, so with TINA4_DB_CACHE=true
+        it was a no-op on every provider: clearing the cache after a bulk import
+        appeared to work in development (where the cache IS in-process) and did
+        nothing in production (where it is shared). ``_cache_invalidate()`` on
+        the write path already routed to the backend, so the two ways of
+        clearing the same cache disagreed. PHP, Ruby and Node all cleared the
+        backend already - Python was the outlier.
+        """
+        if self._cache_backend is not None:
+            self._cache_backend.clear()
         with self._cache_lock:
             self._query_cache.clear()
             self._cache_hits = 0
