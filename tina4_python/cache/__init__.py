@@ -372,21 +372,34 @@ class _RedisBackend(_CacheBackend):
         """
         self._hits = 0
         self._misses = 0
+        self._walk_prefixed_keys(delete=True)
+
+    def _walk_prefixed_keys(self, delete: bool = False) -> int:
+        """Scan every key under our prefix; optionally DEL each batch. Returns
+        how many keys were seen.
+
+        ONE walk drives both clear() and stats(), so the two can never disagree
+        about what this cache holds. On the raw transport the whole cursor loop
+        runs over a SINGLE connection, so a DEL batch does not reconnect.
+        """
+        seen = 0
         if self._client:
             try:
                 batch = []
                 for key in self._client.scan_iter(match=self._prefix + "*", count=500):
                     batch.append(key)
+                    seen += 1
                     if len(batch) >= 500:
-                        self._client.delete(*batch)
+                        if delete:
+                            self._client.delete(*batch)
                         batch = []
-                if batch:
+                if batch and delete:
                     self._client.delete(*batch)
             except Exception:
                 pass
-            return
+            return seen
         if not self._use_raw:
-            return
+            return 0
         sock = reader = None
         try:
             sock, reader = self._resp_session()
@@ -399,8 +412,10 @@ class _RedisBackend(_CacheBackend):
                     break
                 cursor, keys = reply[0], reply[1]
                 if isinstance(keys, list) and keys:
-                    sock.sendall(self._resp_encode("DEL", *keys))
-                    self._resp_read(reader)
+                    seen += len(keys)
+                    if delete:
+                        sock.sendall(self._resp_encode("DEL", *keys))
+                        self._resp_read(reader)
                 if cursor in ("0", 0, None):
                     break
         except Exception:
@@ -412,19 +427,26 @@ class _RedisBackend(_CacheBackend):
                         handle.close()
                 except Exception:
                     pass
+        return seen
 
     def stats(self) -> dict:
-        size = 0
-        if self._client:
-            try:
-                keys = self._client.keys(self._prefix + "*")
-                size = len(keys)
-            except Exception:
-                pass
+        """Report what this cache actually holds, on BOTH transports.
+
+        ``size`` used to be a hardcoded 0 unless the ``redis`` package was
+        loaded, so on the ZERO-DEPENDENCY raw transport - the default install -
+        anything reading it was reading a constant: a monitoring dashboard,
+        ``db.cache_stats()``, or an operator checking whether a clear had
+        worked. Found in Ruby while writing the persistent-layer lock-in, and
+        present identically here; ADR-0004 says the best implementation
+        prevails, so it is fixed in all four rather than left diverging.
+
+        It counts through the same scoped SCAN walk clear() uses, so the two can
+        never disagree about what is in the cache.
+        """
         return {
             "hits": self._hits,
             "misses": self._misses,
-            "size": size,
+            "size": self._walk_prefixed_keys(),
             "backend": self._name,
         }
 

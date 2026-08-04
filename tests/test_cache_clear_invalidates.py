@@ -228,6 +228,39 @@ def test_clear_removes_many_entries_not_just_the_first_page():
     )
 
 
+@redis_up
+@pytest.mark.parametrize("transport", ["resp", "driver"])
+def test_stats_reports_a_real_size_on_both_transports(transport):
+    """``size`` must count what the cache holds, not a constant.
+
+    Found in Ruby while writing the persistent-layer lock-in, and present
+    identically here: ``size`` was a hardcoded 0 unless the redis package was
+    loaded, so on the ZERO-DEPENDENCY raw transport - the default install -
+    every reader of that number was reading a constant. A monitoring dashboard,
+    ``db.cache_stats()``, and an operator checking whether a clear had worked
+    all saw 0 no matter what was cached.
+
+    This is also what stops the persistent-layer tests being accidentally green:
+    they assert on stats()["size"], and on a zero-dependency install that
+    assertion could never have been true.
+    """
+    backend = _RedisBackend(REDIS_URL)
+    backend = _raw(backend) if transport == "resp" else _driver(backend)
+    backend.clear()
+    assert backend.stats()["size"] == 0, "a cleared cache must report zero"
+
+    marker = uuid.uuid4().hex
+    for index in range(3):
+        backend.set(f"contract-{marker}-{index}", {"i": index}, 300)
+
+    assert backend.stats()["size"] == 3, (
+        f"stats() reported {backend.stats()['size']} with 3 entries cached on "
+        f"the {transport} transport - the number is a constant, not a count"
+    )
+    backend.clear()
+    assert backend.stats()["size"] == 0, "size did not fall back to zero after a clear"
+
+
 @valkey_up
 def test_clear_invalidates_on_valkey_too(_unused=None):
     """The same rule on Valkey - a second provider on the same wire protocol."""
