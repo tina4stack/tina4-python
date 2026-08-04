@@ -181,7 +181,7 @@ class DatabaseSessionHandler(SessionHandler):
         if not self._db.table_exists("tina4_session"):
             self._db.execute("""
                 CREATE TABLE tina4_session (
-                    session_id TEXT PRIMARY KEY,
+                    session_id VARCHAR(255) PRIMARY KEY,
                     data TEXT NOT NULL,
                     expires_at DOUBLE PRECISION NOT NULL
                 )
