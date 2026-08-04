@@ -178,25 +178,53 @@ def test_clear_leaves_another_tenants_keys_untouched(transport):
 
 
 @redis_up
-def test_clear_removes_many_entries_not_just_the_first_page(_pagesize=250):
-    """clear() must remove EVERY entry, not one socket-buffer's worth.
+def test_clear_removes_many_entries_not_just_the_first_page():
+    """clear() must remove EVERY entry: every SCAN page, and a full reply.
 
-    The raw RESP reader read a single 64KB recv and parsed the first line. A
-    multi-bulk reply larger than that silently truncates, so a fix built on it
-    would clear only some of the keys and still look green on a small test.
+    THE COUNT IS LOAD-BEARING AND WAS MEASURED, not guessed. At 250 keys a
+    ``SCAN ... COUNT 500`` returns everything on the FIRST page with cursor 0,
+    so a cursor loop that stops after one page still clears everything and the
+    test goes green while gating nothing. That is exactly what happened: the
+    first version of this test used 250 and stayed GREEN under a mutation that
+    broke the loop. 2000 keys spans several pages on a real Redis, so the same
+    mutation now fails here.
+
+    It also covers the other half: the reply for a page of keys exceeds one
+    64KB recv, which the old single-read RESP parser truncated silently.
+
+    The bulk write is pipelined over ONE real connection using the backend's own
+    encoder and the same SETEX it would send anyway. That is the real wire path,
+    just not reconnecting 2000 times - which took over 20 seconds and taught the
+    test nothing.
     """
+    total = 2000
     backend = _raw(_RedisBackend(REDIS_URL))
     marker = uuid.uuid4().hex
-    keys = [f"contract-{marker}-{i}" for i in range(_pagesize)]
-    for key in keys:
-        backend.set(key, {"i": key}, 300)
+    keys = [f"contract-{marker}-{i}" for i in range(total)]
+
+    sock, reader = backend._resp_session()
+    try:
+        payload = b"".join(
+            backend._resp_encode("SETEX", backend._prefix + key, "300", f'{{"i":{i}}}')
+            for i, key in enumerate(keys)
+        )
+        sock.sendall(payload)
+        for _ in keys:
+            backend._resp_read(reader)
+    finally:
+        reader.close()
+        sock.close()
+
+    # Confirm the write really landed before asserting the clear did anything.
+    assert backend.get(keys[0]) == {"i": 0}
+    assert backend.get(keys[-1]) == {"i": total - 1}
 
     backend.clear()
 
     survivors = [key for key in keys if backend.get(key) is not None]
     assert survivors == [], (
-        f"{len(survivors)} of {len(keys)} entries survived clear() - the reply "
-        "was truncated or the scan stopped after one page"
+        f"{len(survivors)} of {total} entries survived clear() - the scan "
+        "stopped after one page, or the reply was truncated"
     )
 
 
