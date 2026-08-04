@@ -422,11 +422,29 @@ class FirebirdAdapter(DatabaseAdapter):
         self._in_transaction = False
 
     def table_exists(self, name: str) -> bool:
+        """Is this table present, under either spelling Firebird could have stored?
+
+        Firebird's folding rule is ASYMMETRIC::
+
+            CREATE TABLE foo     ->  stored as FOO   (unquoted folds to UPPER)
+            CREATE TABLE "Foo"   ->  stored as Foo   (quoted keeps its case)
+
+        So upper-casing is CORRECT for the unquoted case - the common one - and
+        WRONG for a quoted mixed-case table, which is a real thing on Firebird.
+        Dropping the upper-case would not fix that; it would invert which half is
+        broken.
+
+        ``table_exists("Foo")`` is genuinely AMBIGUOUS: the caller could mean the
+        quoted ``Foo`` or the unquoted ``FOO``. Match EITHER, and report present
+        when either exists. Do not "simplify" this back to one comparison - that
+        is the bug it replaces, where a quoted mixed-case table was reported
+        absent and a CREATE TABLE idempotency guard never fired.
+        """
         row = self.fetch_one(
             "SELECT RDB$RELATION_NAME FROM RDB$RELATIONS "
             "WHERE RDB$SYSTEM_FLAG = 0 AND RDB$VIEW_BLR IS NULL "
-            "AND TRIM(RDB$RELATION_NAME) = ?",
-            [name.upper()],
+            "AND (TRIM(RDB$RELATION_NAME) = ? OR TRIM(RDB$RELATION_NAME) = ?)",
+            [name, name.upper()],
         )
         return row is not None
 
