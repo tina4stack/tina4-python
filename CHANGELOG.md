@@ -10,6 +10,35 @@ This file is deliberately NOT a copy of those notes. Duplicating them is exactly
 changelog rots into claiming a version that was never cut, so this file records only
 UNRELEASED work. When a version ships, its notes go to the release notes above.
 
+### Fixed (the mapping sort spelling raised on the fallback, ADR-0036)
+
+`collection.find({}).sort({"total": -1})` worked on a real MongoDB and raised
+
+```
+ValueError: too many values to unpack (expected 2)
+```
+
+on the SQLite fallback, because `for k, d in {"total": -1}` iterates the KEYS and
+tries to unpack the string `"total"` into two names. pymongo's `Cursor.sort`
+accepts a key plus a direction, a list of pairs, OR a mapping, and ADR-0025 makes
+the driver the shape this fallback imitates - so all three now work here too.
+
+  **Python is the master and Python was broken.** The alternative was mirroring a
+  master defect into three frameworks to preserve parity, which produces four
+  broken frameworks and calls it consistency. It is fixed here and the other
+  three match this.
+
+  NOT affected: Python's chain was already lazy and chainable on both providers.
+  That is the shape PHP and Ruby were brought to by ADR-0036, not a new idea.
+
+  MEASURED 2026-08-04 against a real MongoDB 7.0.39: 4 chain cases x 2 providers
+  x 4 frameworks = 32 combinations, of which **10 failed** before this change and
+  0 fail after. Pinned by the substitutability suite in all four frameworks,
+  which asserts every spelling on BOTH providers, that `skip` composes, that an
+  ASCENDING sort actually ascends (a direction ignored outright would pass a
+  descending-only test), and that the chain is LAZY - a document inserted after
+  the chain is built but before it is iterated must appear.
+
 ### Breaking (DocStore: a missing MongoDB driver now raises)
 
 `TINA4_MONGO_URI` set with the `pymongo` package NOT installed used to return the local SQLite collection. It now

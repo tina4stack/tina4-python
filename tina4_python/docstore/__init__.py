@@ -52,6 +52,7 @@ import struct
 import secrets
 import sqlite3
 import threading
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 
@@ -389,6 +390,25 @@ def _regexp(pattern, value):
 
 # ── Cursor ───────────────────────────────────────────────────────────────────
 
+def sort_spec(key_or_list, direction=1):
+    """Normalise pymongo's three sort spellings to a list of (key, direction).
+
+    ADR-0036. pymongo's ``Cursor.sort`` accepts a key plus a direction, a list
+    of ``(key, direction)`` pairs, OR a mapping - and the driver is the shape
+    this fallback imitates (ADR-0025). The mapping form used to raise
+    ``ValueError: too many values to unpack`` here, because ``for k, d in
+    {"total": -1}`` iterates the KEYS and tries to unpack the string ``"total"``
+    into two names. Measured 2026-08-04 against a real MongoDB: the mapping
+    spelling worked on the driver and raised on the fallback, in three of the
+    four frameworks.
+    """
+    if isinstance(key_or_list, str):
+        return [(key_or_list, direction)]
+    if isinstance(key_or_list, Mapping):
+        return list(key_or_list.items())
+    return [(k, d) for k, d in key_or_list]
+
+
 class Cursor:
     """Lazy result cursor. Builds and runs SQL only when iterated."""
 
@@ -402,11 +422,7 @@ class Cursor:
         self._skip = 0
 
     def sort(self, key_or_list, direction=1):
-        if isinstance(key_or_list, str):
-            self._sort.append((key_or_list, direction))
-        else:
-            for k, d in key_or_list:
-                self._sort.append((k, d))
+        self._sort.extend(sort_spec(key_or_list, direction))
         return self
 
     def limit(self, n):
