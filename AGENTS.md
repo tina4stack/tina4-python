@@ -2,6 +2,10 @@
 
 v3.13.87. 98 built-in features, zero dependencies. Python 3.12+.
 
+## AI Skills
+
+Codex discovers the project skills in `.agents/skills`; each is a tracked entrypoint to the canonical `.claude/skills` instructions also used by Claude. Use the maintainer, Python developer, and Tina4-js skills that apply to the task.
+
 ## Framework
 
 This project uses Tina4 Python. All features are built in — do not install external packages for routing, ORM, auth, templates, GraphQL, WebSocket, email, queues, or any other feature listed below.
