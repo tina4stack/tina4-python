@@ -203,7 +203,7 @@ def test_a_reachable_backend_is_not_replaced(tmp_path, monkeypatch):
     report a working cache - the same invisible degradation, from the other
     direction.
     """
-    redis_url = os.environ.get("TINA4_TEST_CACHE_REDIS_URL", "redis://localhost:6379")
+    redis_url = os.environ.get("TINA4_TEST_REDIS_URL", "redis://localhost:6379")
     from urllib.parse import urlparse
     parsed = urlparse(redis_url if "://" in redis_url else "//" + redis_url)
     try:

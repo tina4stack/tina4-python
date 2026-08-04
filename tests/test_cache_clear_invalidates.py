@@ -24,9 +24,9 @@ WHY THIS FILE EXISTS AND THE EXISTING CACHE TESTS DID NOT CATCH IT
 SERVICE ADDRESSES
     Default to the lab's localhost ports; override per service so a developer
     (or a second agent) can point at their own isolated containers:
-        TINA4_TEST_CACHE_REDIS_URL      (default redis://localhost:6379)
-        TINA4_TEST_CACHE_VALKEY_URL     (default valkey://localhost:6380)
-        TINA4_TEST_CACHE_MEMCACHED_URL  (default memcached://localhost:11211)
+        TINA4_TEST_REDIS_URL      (default redis://localhost:6379)
+        TINA4_TEST_VALKEY_URL     (default valkey://localhost:6380)
+        TINA4_TEST_MEMCACHED_URL  (default memcached://localhost:11211)
 """
 import os
 import socket
@@ -38,9 +38,9 @@ import pytest
 
 from tina4_python.cache import _MemcachedBackend, _RedisBackend, _ValkeyBackend
 
-REDIS_URL = os.environ.get("TINA4_TEST_CACHE_REDIS_URL", "redis://localhost:6379")
-VALKEY_URL = os.environ.get("TINA4_TEST_CACHE_VALKEY_URL", "valkey://localhost:6380")
-MEMCACHED_URL = os.environ.get("TINA4_TEST_CACHE_MEMCACHED_URL", "memcached://localhost:11211")
+REDIS_URL = os.environ.get("TINA4_TEST_REDIS_URL", "redis://localhost:6379")
+VALKEY_URL = os.environ.get("TINA4_TEST_VALKEY_URL", "valkey://localhost:6380")
+MEMCACHED_URL = os.environ.get("TINA4_TEST_MEMCACHED_URL", "memcached://localhost:11211")
 
 
 def _reachable(url: str, default_port: int) -> bool:

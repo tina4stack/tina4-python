@@ -51,26 +51,43 @@ def _engines():
 
     ``TINA4_TEST_WRITE_PATH_URL`` is the shared spelling all four runners
     accept, so one CI invocation drives the identical suite everywhere. The
-    per-engine ``TINA4_TEST_<ENGINE>_URL`` pairs are Python's own extra: they
-    let a single local invocation cover several engines at once.
+    per-engine triples below are Python's own extra: they let a single local
+    invocation cover several engines at once.
+
+    Every variable name is written out IN FULL rather than built from a
+    prefix. The names used to be assembled as f"{prefix}_URL", which the
+    environment contract gate (tests/test_env_contract.py) cannot resolve -
+    it saw only a bare service prefix and had no way to know which real names
+    that stood for. An explicit triple is the remedy the shared fixture
+    prescribes, and it is what the Ruby queue specs did for the same reason.
 
     SQLite is always included and always insufficient on its own, so the run
     reports which engines it actually covered.
     """
     found = [("sqlite", (None, None, None))]
-    for name, prefix in (
-        ("write_path", "TINA4_TEST_WRITE_PATH"),
-        ("postgres", "TINA4_TEST_PG"),
-        ("mysql", "TINA4_TEST_MYSQL"),
-        ("mssql", "TINA4_TEST_MSSQL"),
+    for name, url_var, username_var, password_var in (
+        (
+            "write_path",
+            "TINA4_TEST_WRITE_PATH_URL",
+            "TINA4_TEST_WRITE_PATH_USERNAME",
+            "TINA4_TEST_WRITE_PATH_PASSWORD",
+        ),
+        ("postgres", "TINA4_TEST_PG_URL", "TINA4_TEST_PG_USERNAME", "TINA4_TEST_PG_PASSWORD"),
+        ("mysql", "TINA4_TEST_MYSQL_URL", "TINA4_TEST_MYSQL_USERNAME", "TINA4_TEST_MYSQL_PASSWORD"),
+        ("mssql", "TINA4_TEST_MSSQL_URL", "TINA4_TEST_MSSQL_USERNAME", "TINA4_TEST_MSSQL_PASSWORD"),
         # Firebird is deliberately last and is NOT in the .99 default set: the
         # suite HANGS against it rather than failing, so it has to be opted into
         # knowingly. Left running it would look like a slow suite instead of a
         # blocked one. Tracked as its own item; do not add it to a CI matrix
         # until the hang is understood.
-        ("firebird", "TINA4_TEST_FIREBIRD"),
+        (
+            "firebird",
+            "TINA4_TEST_FIREBIRD_URL",
+            "TINA4_TEST_FIREBIRD_USERNAME",
+            "TINA4_TEST_FIREBIRD_PASSWORD",
+        ),
     ):
-        url = (os.environ.get(f"{prefix}_URL") or "").strip()
+        url = (os.environ.get(url_var) or "").strip()
         if not url:
             continue
         # PER-ENGINE credentials, falling back to the global pair. Without this
@@ -78,8 +95,8 @@ def _engines():
         # so a single TINA4_DATABASE_USERNAME can only ever satisfy some of them
         # and the rest fail at connect - which reads like a broken suite rather
         # than a credential problem.
-        user = os.environ.get(f"{prefix}_USERNAME") or os.environ.get("TINA4_DATABASE_USERNAME") or ""
-        password = os.environ.get(f"{prefix}_PASSWORD") or os.environ.get("TINA4_DATABASE_PASSWORD") or ""
+        user = os.environ.get(username_var) or os.environ.get("TINA4_DATABASE_USERNAME") or ""
+        password = os.environ.get(password_var) or os.environ.get("TINA4_DATABASE_PASSWORD") or ""
         found.append((name, (url, user, password)))
     return found
 

@@ -2,7 +2,8 @@
 #
 # AutoCrud generates five REST routes per ORM model and registers them on the
 # Router. These tests do NOT stop at "the route object exists" — they bind a
-# REAL database (SQLite on disk, plus PostgreSQL when TINA4_TEST_PG_* is set),
+# REAL database (SQLite on disk, plus PostgreSQL when TINA4_TEST_PG_URL or the
+# discrete TINA4_TEST_PG_HOST coordinates are set),
 # create a REAL table, register the CRUD routes, then INVOKE the registered
 # async handlers exactly as the dispatcher would and assert the real list /
 # create / read / update / delete results AND the resulting database state.
