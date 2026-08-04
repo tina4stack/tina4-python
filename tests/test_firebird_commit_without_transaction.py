@@ -40,17 +40,30 @@ TABLE = "TINA4_COMMIT_NO_TXN"
 
 @pytest.fixture()
 def database():
+    """A live Firebird connection, and it is CLOSED again.
+
+    Every connection here is closed explicitly. Firebird takes an exclusive lock
+    for DDL, so one connection left open makes the next ``DROP TABLE`` block
+    forever rather than fail - the suite stops dead instead of reporting
+    anything. That is almost certainly what
+    ``tests/test_write_path_contract.py`` means by "the suite HANGS against it
+    rather than failing"; a leaked handle is the mechanism, and it cost this
+    test file a 300s timeout before the close was added.
+    """
     connection = Database(FIREBIRD_URL, "SYSDBA", "masterkey")
+    _drop_table(connection)
+    try:
+        yield connection
+    finally:
+        _drop_table(connection)
+        connection.close()
+
+
+def _drop_table(connection):
     try:
         connection.execute(f"DROP TABLE {TABLE}")
         connection.commit()
-    except Exception:  # noqa: BLE001 - first run against this engine
-        pass
-    yield connection
-    try:
-        connection.execute(f"DROP TABLE {TABLE}")
-        connection.commit()
-    except Exception:  # noqa: BLE001 - teardown must never mask a test failure
+    except Exception:  # noqa: BLE001 - absent on the first run; never mask a failure
         pass
 
 
@@ -95,6 +108,12 @@ def test_a_committed_write_is_still_really_committed(database):
     database.commit()
 
     verifier = Database(FIREBIRD_URL, "SYSDBA", "masterkey")
-    row = verifier.fetch_one(f"SELECT NAME FROM {TABLE} WHERE ID = 1")
+    try:
+        row = verifier.fetch_one(f"SELECT NAME FROM {TABLE} WHERE ID = 1")
+    finally:
+        # MUST close: an open reader holds the table and the fixture's teardown
+        # DROP TABLE would block on Firebird's exclusive DDL lock forever.
+        verifier.close()
+
     assert row is not None, "a committed row was not visible to a second connection"
     assert str(row["NAME"]).strip() == "committed"
