@@ -27,6 +27,27 @@ def _case_id(case):
     return case["name"]
 
 
+def _secret_of(case):
+    """The value that must never survive redaction, or None if the row has none.
+
+    ``case["secret"]`` when the row supplies one, else the ``password`` FIELD --
+    an ODBC DSN keeps its password in a ``PWD=`` keyword and parses to
+    ``password=None``.
+    """
+    return case.get("secret", case["password"])
+
+
+# Rows carrying no secret have nothing to leak, so the redaction test has nothing
+# to assert for them. They are filtered OUT of that one parametrize rather than
+# skipped inside it: a skip should mean "this should have run and could not",
+# never "this row does not apply". Skipping them cost 15 of Python's 26 lab
+# skips, which is noise that makes a strict no-skip gate impossible to turn on.
+# No coverage is lost - every row is still exercised by the two tests above.
+# Node already behaves this way (test/databaseUrlCorpus.test.ts:69-71 simply
+# guards the assert instead of reporting a skip).
+SECRET_CASES = [case for case in CORPUS["cases"] if _secret_of(case)]
+
+
 class TestDatabaseUrlCorpus:
     """Every case in the shared answer key."""
 
@@ -41,7 +62,7 @@ class TestDatabaseUrlCorpus:
     def test_to_safe_string_round_trips(self, case):
         assert DatabaseUrl(case["url"]).to_safe_string() == case["safe"]
 
-    @pytest.mark.parametrize("case", CORPUS["cases"], ids=_case_id)
+    @pytest.mark.parametrize("case", SECRET_CASES, ids=_case_id)
     def test_to_safe_string_never_contains_the_password(self, case):
         """A connection URL in a log is a credential leak.
 
@@ -55,10 +76,12 @@ class TestDatabaseUrlCorpus:
         and ``to_safe_string()`` returned those DSNs verbatim, PWD= and all,
         with this test green throughout. A guard whose fixture has no row for
         the case that matters protects nothing.
+
+        Only rows that HAVE a secret are parametrized here (``SECRET_CASES``);
+        see the note there for why a no-secret row is filtered out rather than
+        skipped.
         """
-        secret = case.get("secret", case["password"])
-        if secret is None or secret == "":
-            pytest.skip("no password in this URL")
+        secret = _secret_of(case)
         url = DatabaseUrl(case["url"])
         assert secret not in url.to_safe_string()
         assert secret not in repr(url)
