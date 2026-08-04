@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import socket
+import time
 
 from tina4_python.session import SessionHandler
 
@@ -36,6 +37,11 @@ from tina4_python.session import SessionHandler
 # key that could exceed the limit is hashed rather than truncated — truncating
 # would let two different sessions collide on one key.
 _MAX_KEY_BYTES = 250
+
+# memcached's exptime field changes meaning at 30 days: at or below this it is
+# RELATIVE seconds, above it the server reads an ABSOLUTE UNIX TIMESTAMP. See
+# MemcachedSessionHandler._exptime for why we convert instead of clamping.
+_MAX_RELATIVE_EXPTIME = 2592000
 
 
 class MemcachedSessionHandler(SessionHandler):
@@ -101,9 +107,31 @@ class MemcachedSessionHandler(SessionHandler):
             # crashing the request; the next write replaces it.
             return {}
 
+    @staticmethod
+    def _exptime(ttl: int) -> int:
+        """Convert a ttl in SECONDS to memcached's dual-meaning exptime field.
+
+        memcached documents exptime as RELATIVE seconds up to 2592000 (30 days),
+        and as an ABSOLUTE UNIX TIMESTAMP for anything larger. Sending a raw ttl
+        of 2592001 therefore does not mean "30 days and one second" - it means
+        1970-01-31, which is already past, so the item expires the instant it is
+        stored. memcached still replies STORED, so the write looks fine and the
+        very next read is a miss: a silent logout on every request.
+
+        Measured against real memcached 1.6.45: ttl=2592000 survives, ttl=2592001
+        vanishes instantly.
+
+        We CONVERT rather than CLAMP. Clamping a 60-day session down to 30 days
+        would silently shorten a lifetime the operator explicitly asked to be
+        longer, which is the same class of lie in the other direction.
+        """
+        if ttl > _MAX_RELATIVE_EXPTIME:
+            return int(time.time()) + ttl
+        return ttl
+
     def write(self, session_id: str, data: dict, ttl: int = 0):
         """Store the session with a TTL (0 falls back to TINA4_SESSION_TTL)."""
-        effective_ttl = ttl if ttl > 0 else self._ttl
+        effective_ttl = self._exptime(ttl if ttl > 0 else self._ttl)
         payload = json.dumps(data, default=str).encode()
         cmd = f"set {self._key(session_id)} 0 {effective_ttl} {len(payload)}\r\n".encode()
         resp = self._command(cmd + payload + b"\r\n", (b"STORED\r\n", b"ERROR\r\n",
