@@ -34,9 +34,23 @@ PG_HOST = os.environ.get("TINA4_TEST_PG_HOST", "localhost")
 PG_PORT = int(os.environ.get("TINA4_TEST_PG_PORT", "55432"))
 PG_USER = os.environ.get("TINA4_TEST_PG_USERNAME", "tina4")
 PG_PASS = os.environ.get("TINA4_TEST_PG_PASSWORD", "tina4")
-# Databases this contract OWNS. Never touch one we did not create.
-PG_DB_A = "tina4_cache_contract_a"
-PG_DB_B = "tina4_cache_contract_b"
+# Databases this contract OWNS, named PER LANGUAGE.
+#
+# They used to be the shared pair tina4_cache_contract_a/_b, and that was a
+# RACE, not just a naming preference. Four frameworks run this same case against
+# one PostgreSQL server; the PHP port measured the failure directly - its run
+# errored with 'database "tina4_cache_contract_a" does not exist' SECONDS after
+# it had listed both databases as present, because a sibling suite dropped the
+# shared pair mid-run.
+#
+# Self-provisioning alone does not fix that. It converts a hard, obvious failure
+# into an INTERMITTENT one: framework A drops the database between framework B's
+# existence check and its connect. That is strictly worse, because it passes on
+# a quiet machine and fails on a loaded runner, and an intermittent red is the
+# kind people re-run until it goes green. Per-language names remove the shared
+# resource entirely - the same call already made for the service containers.
+PG_DB_A = "tina4_cache_ident_python_a"
+PG_DB_B = "tina4_cache_ident_python_b"
 
 
 def _reachable(host: str, port: int) -> bool:

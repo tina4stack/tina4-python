@@ -256,7 +256,35 @@ jobs:
             tests/test_cache_memcached_exptime.py \
             tests/test_cache_backends.py \
             tests/test_cache.py \
-            tests/test_db_query_cache.py
+            tests/test_db_query_cache.py \
+            | tee /tmp/zerodep.txt
+          # A LEG THAT FALLS BACK MUST NOT REPORT SUCCESS. Adapted from the PHP
+          # driver leg, which asserts on the assertion-count DIFFERENTIAL: if the
+          # driver leg ever reports the raw leg's number, it silently fell back.
+          #
+          # The zero-dep failure mode is the mirror image and just as quiet: if
+          # redis were UNREACHABLE, every redis test would skip, nothing would
+          # fail, and this leg would report success having exercised nothing at
+          # all. So require BOTH a real floor of passing tests AND exactly the
+          # driver-variant skips - no more, no less.
+          python - <<'PY'
+          import re, sys
+          out = open("/tmp/zerodep.txt").read()
+          m = re.search(r"(\d+) passed(?:, (\d+) skipped)?", out)
+          if not m:
+              sys.exit("no pytest summary found - the leg proved nothing")
+          passed, skipped = int(m.group(1)), int(m.group(2) or 0)
+          # The 4 driver-parametrised cases in test_cache_clear_invalidates.py are
+          # the ONLY things allowed to skip here.
+          if skipped != 4:
+              sys.exit(f"expected exactly 4 driver-variant skips, got {skipped}. "
+                       "More means real tests skipped silently (an unreachable "
+                       "service); fewer means the driver is still present.")
+          if passed < 140:
+              sys.exit(f"only {passed} tests passed on the zero-dependency path; "
+                       "expected 140+. The leg ran but exercised almost nothing.")
+          print(f"zero-dependency leg exercised {passed} passing tests, {skipped} driver-variant skips")
+          PY
 
       - name: Report results
         if: always()
