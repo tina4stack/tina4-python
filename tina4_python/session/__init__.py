@@ -62,6 +62,23 @@ def session_cookie_name() -> str:
     return os.environ.get("TINA4_SESSION_NAME", "tina4_session")
 
 
+def session_strict_mode() -> bool:
+    """Is TINA4_SESSION_STRICT on? The single source of truth for the flag.
+
+    Module level, not a Session attribute, because the REQUEST PATH has to be
+    able to consult it when a Session could not be constructed at all - a
+    handler whose constructor raises, or a refused TINA4_SESSION_BACKEND, both
+    fail BEFORE there is an object to ask. That gap is why strict mode used to
+    be inert on the request path: core/server.py swallowed the re-raise it was
+    supposed to honour, and the caller got a cheerful 200 with no session.
+
+        TINA4_SESSION_STRICT   re-raise instead of degrading (default: false)
+    """
+    return str(
+        os.environ.get("TINA4_SESSION_STRICT", "false")
+    ).strip().lower() in ("true", "1", "yes", "on")
+
+
 class SessionHandler:
     """Base class for session storage backends."""
 
@@ -239,9 +256,11 @@ class Session:
         # TINA4_SESSION_STRICT=true to re-raise instead (matches the `strict`
         # escape hatch used by events/seeding) when you'd rather a failed
         # persist surface loudly than be tolerated.
-        self._strict: bool = str(
-            os.environ.get("TINA4_SESSION_STRICT", "false")
-        ).strip().lower() in ("true", "1", "yes", "on")
+        self._strict: bool = session_strict_mode()
+
+    # (session_strict_mode lives at module level so the REQUEST PATH can consult
+    # the same flag without constructing a Session - see core/server.py, where a
+    # failure happens BEFORE there is a Session to ask.)
 
     #: Every accepted TINA4_SESSION_BACKEND value, aliases included. Byte-identical
     #: membership in all four frameworks; this tuple is the one place it is written
