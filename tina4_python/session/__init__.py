@@ -165,9 +165,19 @@ class DatabaseSessionHandler(SessionHandler):
         # every backend (ADR-0024). Write-time default only - read() compares the
         # absolute stored deadline and never consults this.
         self._ttl = int(ttl if ttl is not None else os.environ.get("TINA4_SESSION_TTL", "3600"))
-        self._ensure_table()
+        # NO NETWORK I/O IN A CONSTRUCTOR (ADR-0021). _ensure_table() runs
+        # table_exists() + CREATE TABLE + commit() - real DDL on a real
+        # connection - and it used to run HERE. Because the request path builds a
+        # Session per request, that was DDL on every request, and it sat OUTSIDE
+        # the log-loud-and-degrade policy: an unreachable database took the app
+        # down at construction instead of degrading per request as designed.
+        # The table is now created on first use, inside that policy.
+        self._table_ready = False
 
     def _ensure_table(self):
+        if self._table_ready:
+            return
+        self._table_ready = True
         if not self._db.table_exists("tina4_session"):
             self._db.execute("""
                 CREATE TABLE tina4_session (
@@ -179,6 +189,7 @@ class DatabaseSessionHandler(SessionHandler):
             self._db.commit()
 
     def read(self, session_id: str) -> dict:
+        self._ensure_table()
         row = self._db.fetch_one(
             "SELECT data, expires_at FROM tina4_session WHERE session_id = ?",
             [session_id],
@@ -194,6 +205,7 @@ class DatabaseSessionHandler(SessionHandler):
             return {}
 
     def write(self, session_id: str, data: dict, ttl: int = 0):
+        self._ensure_table()
         effective_ttl = ttl if ttl > 0 else self._ttl
         expires = time.time() + effective_ttl if effective_ttl > 0 else 0
         payload = json.dumps(data, default=str)
@@ -214,6 +226,7 @@ class DatabaseSessionHandler(SessionHandler):
         self._db.commit()
 
     def destroy(self, session_id: str):
+        self._ensure_table()
         self._db.execute(
             "DELETE FROM tina4_session WHERE session_id = ?",
             [session_id],
@@ -221,6 +234,7 @@ class DatabaseSessionHandler(SessionHandler):
         self._db.commit()
 
     def gc(self, max_lifetime: int = 0):
+        self._ensure_table()
         self._db.execute(
             "DELETE FROM tina4_session WHERE expires_at > 0 AND expires_at < ?",
             [time.time()],

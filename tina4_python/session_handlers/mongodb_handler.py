@@ -36,8 +36,9 @@ class MongoDBSessionHandler(SessionHandler):
         self._ttl = int(config.get("ttl", os.environ.get("TINA4_SESSION_TTL", "3600")))
 
         self._pymongo_client = None
-        self._collection = None
+        self._collection_cache = None
         self._use_pymongo = False
+        self._mongo_url = mongo_url
 
         # Raw socket state
         self._socket: socket.socket | None = None
@@ -49,14 +50,31 @@ class MongoDBSessionHandler(SessionHandler):
         self._parse_url(mongo_url)
 
         # Try pymongo first
+        # NO NETWORK I/O IN A CONSTRUCTOR (ADR-0021). `import pymongo` is a pure
+        # import and costs nothing on the wire; pymongo.MongoClient(url) is NOT -
+        # it starts topology monitoring and dials the server immediately.
+        # MEASURED against a real counting TCP listener: constructing this
+        # handler accepted 1 connection before the client was made lazy.
+        #
+        # That connect sat OUTSIDE the failure policy, so an unreachable MongoDB
+        # took the app down at construction rather than degrading per request -
+        # the one place the policy cannot protect being the first thing that runs.
         try:
-            import pymongo
-            self._pymongo_client = pymongo.MongoClient(mongo_url)
-            db = self._pymongo_client[self._database]
-            self._collection = db[self._collection_name]
+            import pymongo  # noqa: F401 - availability probe only, opens nothing
             self._use_pymongo = True
         except ImportError:
             pass
+
+    @property
+    def _collection(self):
+        """The pymongo collection, built on FIRST USE rather than at construction."""
+        if self._collection_cache is None:
+            import pymongo
+            self._pymongo_client = pymongo.MongoClient(self._mongo_url)
+            self._collection_cache = (
+                self._pymongo_client[self._database][self._collection_name]
+            )
+        return self._collection_cache
 
     def _parse_url(self, url: str):
         """Extract host and port from a MongoDB URL."""
