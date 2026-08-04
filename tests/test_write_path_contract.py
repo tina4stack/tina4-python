@@ -240,9 +240,17 @@ def _check_expectations(connection, case, table, result):
         )
 
     if "primary_key" in expect:
-        assert list(result) == expect["primary_key"], (
-            f"{name}: expected primary key {expect['primary_key']}, got {result!r}"
-        )
+        # Compared case-INSENSITIVELY, in ORDER. The engines fold identifiers
+        # differently by design - Firebird upper-cases an unquoted name,
+        # PostgreSQL lower-cases it, MySQL and SQLite keep it - so demanding one
+        # exact spelling would make this shared answer key assert one engine's
+        # convention rather than the contract. What the contract actually
+        # promises is WHICH columns the key is made of, and in what order: a key
+        # that collapsed to its first column is the data-loss bug this case
+        # exists to catch, and lower-casing both sides cannot hide that.
+        assert [str(c).lower() for c in result] == [
+            str(c).lower() for c in expect["primary_key"]
+        ], f"{name}: expected primary key {expect['primary_key']}, got {result!r}"
 
     if expect.get("last_id_is_null"):
         assert result.last_id is None, (

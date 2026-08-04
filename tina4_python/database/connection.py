@@ -829,6 +829,51 @@ class Database:
             return where, list(filter_sql.values())
         return filter_sql, params or []
 
+    @staticmethod
+    def _match_key_columns(table: str, key_columns: list, data: dict) -> tuple[dict, list]:
+        """Map each introspected key column to the caller's own key for it.
+
+        Returns ``({engine_column: caller_key}, [engine columns not in data])``.
+
+        The engines disagree about identifier case BY DESIGN and always will:
+        Firebird folds an unquoted identifier to UPPER, PostgreSQL folds it to
+        LOWER, MySQL and SQLite preserve what was typed. Introspection therefore
+        hands back the ENGINE's spelling while ``data`` carries whatever the
+        caller typed, and comparing the two case-sensitively made a correct call
+        fail on whichever engine folds the other way.
+
+        That is a case-sensitivity bug, not a Firebird quirk - Firebird only
+        made it visible first, because the shared write-path contract writes
+        lower-case keys and Firebird reports upper-case ones. PostgreSQL has the
+        mirror image for an upper-case caller key.
+
+        Matching case-insensitively fixes both without naming either engine, and
+        without lower-casing what introspection returns - which would special-case
+        one engine and break a genuinely quoted mixed-case table, a real thing on
+        Firebird.
+
+        Ambiguity is refused rather than guessed: if ``data`` carries both ``id``
+        and ``ID`` there is no defensible way to choose, and choosing wrong here
+        writes the WHERE clause of an UPDATE.
+        """
+        resolved: dict = {}
+        missing: list = []
+        for column in key_columns:
+            folded = column.lower()
+            matches = [key for key in data if str(key).lower() == folded]
+            if len(matches) > 1:
+                raise ValueError(
+                    f"update was given more than one key for the primary-key column "
+                    f"{column!r}: {sorted(matches)!r} (table={table!r}). These differ "
+                    f"only by case, so which one identifies the row is ambiguous - "
+                    f"pass exactly one, or pass an explicit filter."
+                )
+            if matches:
+                resolved[column] = matches[0]
+            else:
+                missing.append(column)
+        return resolved, missing
+
     def update(self, table: str, data: dict,
                filter_sql: str | dict = "", params: list = None) -> DatabaseResult:
         """Update rows. A write with no filter is an error, not a full-table write.
@@ -841,7 +886,7 @@ class Database:
 
         if not filter_sql:
             pk_columns = self.primary_key(table)
-            missing = [c for c in pk_columns if c not in data]
+            resolved, missing = self._match_key_columns(table, pk_columns, data)
             if not pk_columns or missing:
                 raise ValueError(
                     f"update requires a filter or the complete primary key in the "
@@ -854,8 +899,11 @@ class Database:
             # composite key that used only its first column would match every
             # row sharing that value - the data-loss bug this method exists to
             # prevent, reintroduced.
+            #
+            # The WHERE is built from the ENGINE's column name and the CALLER's
+            # value, which is why the pop goes through `resolved`.
             data = dict(data)
-            params = [data.pop(c) for c in pk_columns]
+            params = [data.pop(resolved[c]) for c in pk_columns]
             if not data:
                 raise ValueError(
                     f"update was given only the primary key {pk_columns!r} and no "
