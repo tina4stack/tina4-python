@@ -218,49 +218,91 @@ class _RedisBackend(_CacheBackend):
     def is_available(self) -> bool:
         return self._available
 
-    def _resp_command(self, *args) -> str | None:
-        """Send a command using raw RESP protocol over TCP."""
+    @staticmethod
+    def _resp_encode(*args) -> bytes:
+        """Encode one command as a RESP array of bulk strings."""
+        out = [f"*{len(args)}\r\n".encode()]
+        for arg in args:
+            raw = str(arg).encode()
+            out.append(b"$%d\r\n%s\r\n" % (len(raw), raw))
+        return b"".join(out)
+
+    @staticmethod
+    def _resp_read(reader):
+        """Read ONE complete RESP reply and return str | None | list.
+
+        Reads through a buffered file object so a reply LARGER than one socket
+        read is assembled in full. The previous implementation did a single
+        ``recv(65536)`` and string-split the result, which silently truncated
+        any bulk value or multi-bulk reply bigger than the buffer - so a large
+        cached entry came back corrupt and a key scan came back short.
+        """
+        line = reader.readline()
+        if not line:
+            return None
+        prefix, body = line[:1], line[1:].strip()
+        if prefix in (b"+", b":"):
+            return body.decode()
+        if prefix == b"-":
+            return None
+        if prefix == b"$":
+            length = int(body)
+            if length < 0:
+                return None
+            payload = reader.read(length + 2)  # value + trailing CRLF
+            return payload[:length].decode()
+        if prefix == b"*":
+            count = int(body)
+            if count < 0:
+                return None
+            return [_RedisBackend._resp_read(reader) for _ in range(count)]
+        return body.decode()
+
+    def _resp_session(self):
+        """Open an authenticated RESP socket and return (socket, reader).
+
+        The caller closes both. Kept separate from ``_resp_command`` so a
+        multi-step conversation (a SCAN cursor loop) runs over ONE connection
+        instead of reconnecting per command.
+        """
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect((self._host, self._port))
+        reader = sock.makefile("rb")
+        if self._password:
+            if self._username:
+                sock.sendall(self._resp_encode("AUTH", self._username, self._password))
+            else:
+                sock.sendall(self._resp_encode("AUTH", self._password))
+            if self._resp_read(reader) != "OK":
+                reader.close()
+                sock.close()
+                raise OSError("redis AUTH rejected")
+        if self._db != 0:
+            sock.sendall(self._resp_encode("SELECT", self._db))
+            self._resp_read(reader)
+        return sock, reader
+
+    def _resp_command(self, *args):
+        """Send one command using the raw RESP protocol over TCP.
+
+        Returns the decoded reply: a string for simple/bulk/integer replies,
+        ``None`` for a nil or an error, and a LIST for a multi-bulk reply.
+        """
+        sock = reader = None
         try:
-            cmd = f"*{len(args)}\r\n"
-            for arg in args:
-                s = str(arg)
-                cmd += f"${len(s)}\r\n{s}\r\n"
-
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect((self._host, self._port))
-            if self._password:
-                if self._username:
-                    auth = (f"*3\r\n$4\r\nAUTH\r\n${len(self._username)}\r\n{self._username}\r\n"
-                            f"${len(self._password)}\r\n{self._password}\r\n")
-                else:
-                    auth = f"*2\r\n$4\r\nAUTH\r\n${len(self._password)}\r\n{self._password}\r\n"
-                sock.sendall(auth.encode())
-                if not sock.recv(1024).startswith(b"+"):
-                    sock.close()
-                    return None
-            if self._db != 0:
-                select_cmd = f"*2\r\n$6\r\nSELECT\r\n${len(str(self._db))}\r\n{self._db}\r\n"
-                sock.sendall(select_cmd.encode())
-                sock.recv(1024)
-            sock.sendall(cmd.encode())
-            response = sock.recv(65536).decode()
-            sock.close()
-
-            if response.startswith("+"):
-                return response[1:].strip()
-            elif response.startswith("$-1"):
-                return None
-            elif response.startswith("$"):
-                lines = response.split("\r\n")
-                return lines[1] if len(lines) > 1 else None
-            elif response.startswith(":"):
-                return response[1:].strip()
-            elif response.startswith("-"):
-                return None
-            return response.strip()
+            sock, reader = self._resp_session()
+            sock.sendall(self._resp_encode(*args))
+            return self._resp_read(reader)
         except Exception:
             return None
+        finally:
+            for handle in (reader, sock):
+                try:
+                    if handle is not None:
+                        handle.close()
+                except Exception:
+                    pass
 
     def get(self, key: str):
         full_key = self._prefix + key
@@ -312,32 +354,99 @@ class _RedisBackend(_CacheBackend):
         return False
 
     def clear(self):
+        """Remove EVERY entry this cache can serve - on BOTH transports.
+
+        The raw RESP path used to be a literal ``pass``: "no easy pattern
+        delete, let the TTL handle it". That made clear() a no-op on the
+        ZERO-DEPENDENCY default install, so a write never invalidated the
+        persistent DB query cache and every instance kept serving pre-write rows
+        until the TTL ran out (ADR-0024 rule 4: the default provider counts
+        double). The bug survived because `uv sync --extra test` installs the
+        `redis` package, so every redis test took the DRIVER path.
+
+        SCAN, not KEYS: clear() runs on every write in persistent DB-cache mode,
+        and KEYS is O(N) and blocks the whole server for its duration. Redis's
+        own documentation says to prefer SCAN in production. The scan is scoped
+        to our prefix, so another application sharing the server is untouched -
+        FLUSHALL/FLUSHDB would take their data with it and is never used here.
+        """
         self._hits = 0
         self._misses = 0
+        self._walk_prefixed_keys(delete=True)
+
+    def _walk_prefixed_keys(self, delete: bool = False) -> int:
+        """Scan every key under our prefix; optionally DEL each batch. Returns
+        how many keys were seen.
+
+        ONE walk drives both clear() and stats(), so the two can never disagree
+        about what this cache holds. On the raw transport the whole cursor loop
+        runs over a SINGLE connection, so a DEL batch does not reconnect.
+        """
+        seen = 0
         if self._client:
             try:
-                keys = self._client.keys(self._prefix + "*")
-                if keys:
-                    self._client.delete(*keys)
+                batch = []
+                for key in self._client.scan_iter(match=self._prefix + "*", count=500):
+                    batch.append(key)
+                    seen += 1
+                    if len(batch) >= 500:
+                        if delete:
+                            self._client.delete(*batch)
+                        batch = []
+                if batch and delete:
+                    self._client.delete(*batch)
             except Exception:
                 pass
-        elif self._use_raw:
-            # Raw RESP doesn't support pattern delete easily,
-            # so we just clear stats and let TTL handle cleanup
+            return seen
+        if not self._use_raw:
+            return 0
+        sock = reader = None
+        try:
+            sock, reader = self._resp_session()
+            cursor = "0"
+            while True:
+                sock.sendall(self._resp_encode(
+                    "SCAN", cursor, "MATCH", self._prefix + "*", "COUNT", "500"))
+                reply = self._resp_read(reader)
+                if not isinstance(reply, list) or len(reply) != 2:
+                    break
+                cursor, keys = reply[0], reply[1]
+                if isinstance(keys, list) and keys:
+                    seen += len(keys)
+                    if delete:
+                        sock.sendall(self._resp_encode("DEL", *keys))
+                        self._resp_read(reader)
+                if cursor in ("0", 0, None):
+                    break
+        except Exception:
             pass
+        finally:
+            for handle in (reader, sock):
+                try:
+                    if handle is not None:
+                        handle.close()
+                except Exception:
+                    pass
+        return seen
 
     def stats(self) -> dict:
-        size = 0
-        if self._client:
-            try:
-                keys = self._client.keys(self._prefix + "*")
-                size = len(keys)
-            except Exception:
-                pass
+        """Report what this cache actually holds, on BOTH transports.
+
+        ``size`` used to be a hardcoded 0 unless the ``redis`` package was
+        loaded, so on the ZERO-DEPENDENCY raw transport - the default install -
+        anything reading it was reading a constant: a monitoring dashboard,
+        ``db.cache_stats()``, or an operator checking whether a clear had
+        worked. Found in Ruby while writing the persistent-layer lock-in, and
+        present identically here; ADR-0004 says the best implementation
+        prevails, so it is fixed in all four rather than left diverging.
+
+        It counts through the same scoped SCAN walk clear() uses, so the two can
+        never disagree about what is in the cache.
+        """
         return {
             "hits": self._hits,
             "misses": self._misses,
-            "size": size,
+            "size": self._walk_prefixed_keys(),
             "backend": self._name,
         }
 
@@ -473,6 +582,11 @@ class _ValkeyBackend(_RedisBackend):
 # ── Memcached backend (zero-dependency text protocol) ──────────────
 
 
+# memcached's own boundary: an exptime at or below this is RELATIVE seconds,
+# above it is an ABSOLUTE unix timestamp. See _MemcachedBackend._exptime.
+MAX_RELATIVE_EXPTIME = 2592000  # 30 days
+
+
 class _MemcachedBackend(_CacheBackend):
     """Memcached backend using the zero-dependency text protocol over TCP."""
 
@@ -483,6 +597,9 @@ class _MemcachedBackend(_CacheBackend):
         self._port = int(parts[1]) if len(parts) > 1 and parts[1] else 11211
         self._max_entries = max_entries
         self._prefix = "tina4:cache:"
+        # The SHARED namespace generation counter. clear() bumps it; every real
+        # key carries it, so a bump invalidates every instance at once.
+        self._gen_key = self._prefix + "generation"
         self._hits = 0
         self._misses = 0
         # Keys THIS backend wrote, with the moment each expires (0 = no expiry).
@@ -495,9 +612,38 @@ class _MemcachedBackend(_CacheBackend):
     def is_available(self) -> bool:
         return self._available
 
+    def _generation(self) -> str:
+        """Read the SHARED namespace generation from the server.
+
+        memcached has no KEYS scan and no prefix delete, so the only way to
+        invalidate globally without destroying other tenants is the documented
+        namespace idiom: every real key carries a generation, and clear() bumps
+        it. Every instance then computes a different key and the old entries
+        become unreachable at once, expiring under the server's own TTL/LRU.
+
+        The generation is read from the server on every operation, deliberately.
+        Caching it in-process would reintroduce exactly the bug this fixes: an
+        instance holding a stale generation keeps computing the OLD key, and the
+        old key still holds the old value, so it serves a stale hit after
+        another instance cleared. One extra round trip on a sub-millisecond
+        local service is the price of cross-instance invalidation.
+        """
+        resp = self._command(f"get {self._gen_key}\r\n".encode(), b"END\r\n")
+        if resp.startswith(b"VALUE"):
+            try:
+                header, rest = resp.split(b"\r\n", 1)
+                nbytes = int(header.split()[3])
+                return rest[:nbytes].decode()
+            except Exception:
+                pass
+        return "0"
+
     def _mc_key(self, key: str) -> str:
-        # Hash to a safe, bounded key (memcached keys: no spaces/control, <=250 chars)
-        return self._prefix + hashlib.sha256(key.encode()).hexdigest()
+        # Hash to a safe, bounded key (memcached keys: no spaces/control, <=250
+        # chars). The generation sits IN the key so a clear() on ANY instance
+        # orphans it for every instance at once.
+        return (self._prefix + self._generation() + ":"
+                + hashlib.sha256(key.encode()).hexdigest())
 
     def _command(self, payload: bytes, terminator: bytes) -> bytes:
         try:
@@ -529,13 +675,38 @@ class _MemcachedBackend(_CacheBackend):
         self._misses += 1
         return None
 
+    @staticmethod
+    def _exptime(ttl: int) -> int:
+        """Convert a TTL in seconds to memcached's exptime field.
+
+        memcached reads exptime as RELATIVE seconds at or below 2592000 (30
+        days) and as an ABSOLUTE UNIX TIMESTAMP above it. Interpolating the
+        caller's ttl raw meant any TTL over 30 days was read as a date in 1970,
+        so the entry expired the instant it was written - and memcached still
+        answers STORED, so it presented as a 100% miss rate with nothing logged.
+
+        CONVERT, never CLAMP. Clamping to 2592000 also makes the entry survive
+        and is also wrong: it silently discards more than half the lifetime the
+        operator explicitly configured, which is the same class of
+        silent-wrong-answer as the bug it would be replacing.
+        """
+        if ttl <= 0:
+            return 0
+        if ttl > MAX_RELATIVE_EXPTIME:
+            return int(time.time()) + ttl
+        return ttl
+
     def set(self, key: str, value, ttl: int):
         data = json.dumps(value, default=str).encode()
-        exptime = ttl if ttl > 0 else 0
+        exptime = self._exptime(ttl)
         mc_key = self._mc_key(key)
         payload = f"set {mc_key} 0 {exptime} {len(data)}\r\n".encode() + data + b"\r\n"
         self._command(payload, b"\r\n")
-        self._own[mc_key] = (time.time() + exptime) if exptime > 0 else 0.0
+        # The local write log takes the RAW ttl, never `exptime`. Above the
+        # cliff `exptime` is already an absolute stamp, so `time.time() +
+        # exptime` would put this entry's deadline about 166 years out and
+        # stats() would report expired entries as live forever.
+        self._own[mc_key] = (time.time() + ttl) if ttl > 0 else 0.0
 
     def delete(self, key: str) -> bool:
         mc_key = self._mc_key(key)
@@ -544,21 +715,36 @@ class _MemcachedBackend(_CacheBackend):
         return resp.startswith(b"DELETED")
 
     def clear(self):
-        """Remove OUR entries, not the whole server's.
+        """Invalidate EVERY entry this cache can serve, on EVERY instance.
 
-        This used to send `flush_all`, which wipes EVERY key on the memcached
-        instance - including every other application sharing it. cache_clear()
-        is public API, so calling it destroyed other tenants' data. No other
-        backend does that: they each clear only what they own.
+        Two wrong answers were shipped before this one. `flush_all` wipes EVERY
+        key on the instance including every other application's - cache_clear()
+        is public API, so calling it destroyed other tenants' data. Deleting
+        only the keys THIS process wrote fixed that but broke the contract the
+        other way: a second instance kept serving rows the first had just
+        invalidated, because it had never seen those keys.
 
-        Now that the backend tracks the keys it wrote, it deletes exactly those.
-        A key it never wrote is not its to remove.
+        The namespace generation does both. Bumping the shared counter orphans
+        every previously-written entry for every instance at once, and touches
+        nothing outside our own prefix. The orphans are reclaimed by memcached's
+        own TTL and LRU - unreachable is what "removed" means for a cache.
+
+        The local write log is still cleared so stats() reports honestly, and
+        its keys are deleted eagerly so the space comes back immediately rather
+        than waiting for eviction.
         """
         self._hits = 0
         self._misses = 0
         for mc_key in list(self._own):
             self._command(f"delete {mc_key}\r\n".encode(), b"\r\n")
         self._own.clear()
+        # incr is atomic, so two instances clearing at once still both advance.
+        resp = self._command(f"incr {self._gen_key} 1\r\n".encode(), b"\r\n")
+        if not resp.strip().isdigit():
+            # No counter yet: create it. `add` fails harmlessly if another
+            # instance created it in the gap, and the incr then applies.
+            self._command(f"add {self._gen_key} 0 0 1\r\n1\r\n".encode(), b"\r\n")
+            self._command(f"incr {self._gen_key} 1\r\n".encode(), b"\r\n")
 
     def stats(self) -> dict:
         """Report OUR entries, not the whole server's.
@@ -772,6 +958,31 @@ class _DatabaseBackend(_CacheBackend):
         self._hits = 0
         self._misses = 0
         self._db.execute("DELETE FROM tina4_cache")
+
+    def sweep(self) -> int:
+        """Delete expired rows and return how many went.
+
+        The base class returns 0 because redis, valkey, memcached and mongodb
+        expire entries SERVER-SIDE - nothing was evicted because there was
+        nothing left to evict, and 0 is the honest answer. A SQL table expires
+        nothing by itself. Before this override the database backend inherited
+        that 0, so expired rows were removed only when someone happened to read
+        that exact key again: the table grew without bound and the one API whose
+        job is reclaiming that space reported success having done nothing.
+
+        ``expires_at > 0`` is load-bearing: an entry stored with ttl <= 0 is
+        permanent and carries 0, so a bare ``now > expires_at`` would evict every
+        permanent entry on the first sweep.
+        """
+        now = time.time()
+        row = self._db.fetch_one(
+            "SELECT COUNT(*) AS c FROM tina4_cache WHERE expires_at > 0 AND expires_at < ?",
+            [now])
+        expired = int(row["c"]) if row and row.get("c") is not None else 0
+        if expired:
+            self._db.execute(
+                "DELETE FROM tina4_cache WHERE expires_at > 0 AND expires_at < ?", [now])
+        return expired
 
     def stats(self) -> dict:
         row = self._db.fetch_one("SELECT COUNT(*) AS c FROM tina4_cache")
