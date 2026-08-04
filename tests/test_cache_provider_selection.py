@@ -54,8 +54,14 @@ def _closed_port() -> int:
 # ── an explicit provider is honoured ──────────────────────────────
 
 
-def test_an_explicit_provider_is_honoured(tmp_path, monkeypatch):
-    """A named backend wins over the env AND over anything already built."""
+def test_an_explicitly_named_provider_is_used(tmp_path, monkeypatch):
+    """A named backend wins over the env AND over anything already built.
+
+    Named "explicitly named ... is used" rather than "explicit provider is
+    honoured" ON PURPOSE: the contract auditor matches a case name as a
+    SUBSTRING of the suite file, so a name that is a PREFIX of another case
+    would still be "found" after it was deleted. Do not shorten it back.
+    """
     monkeypatch.setenv("TINA4_CACHE_BACKEND", "memory")
     monkeypatch.setenv("TINA4_CACHE_DIR", str(tmp_path / "explicit"))
 
