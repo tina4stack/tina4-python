@@ -448,6 +448,15 @@ class LiteBackend:
                 pass
         return count
 
+    def close(self) -> None:
+        """No-op: the file backend holds no connection to release.
+
+        It exists so ``Queue.close()`` can call ONE method on every backend
+        instead of testing for it, and so switching TINA4_QUEUE_BACKEND to
+        'file' never turns a working close() into an AttributeError. Idempotent
+        by construction — there is nothing to drop.
+        """
+
     def _clear_reservation(self, job_id: str):
         """Delete a job's reservation record (best-effort)."""
         try:

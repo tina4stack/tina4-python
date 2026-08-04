@@ -200,3 +200,11 @@ class KafkaBackend:
         msg = {"payload": job.data, "priority": job.priority, "attempts": job.attempts}
         self._backend.enqueue(self._topic, msg)
         self._backend.acknowledge(self._topic, str(job.id))
+
+    def close(self) -> None:
+        """Flush the producer, leave the consumer group, and release the socket.
+
+        Idempotent: the connector drops its producer/consumer/socket handles on
+        the first call, so a second call finds nothing to close and returns.
+        """
+        self._backend.close()

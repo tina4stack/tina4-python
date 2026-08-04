@@ -196,3 +196,11 @@ class MongoBackend:
     def retry(self, job: Job, delay_seconds: int = 0):
         job.attempts += 1
         self._backend.reject(self._topic, str(job.id), requeue=True)
+
+    def close(self) -> None:
+        """Close the MongoClient and release its connection pool.
+
+        Idempotent: the connector drops its client/db/collection handles on the
+        first call, so a second call finds nothing to close and returns.
+        """
+        self._backend.close()
