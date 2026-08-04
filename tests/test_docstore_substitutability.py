@@ -72,22 +72,59 @@ needs_mongo = pytest.mark.skipif(
 )
 
 
+_DOCSTORE_MODULE = "tina4_python.docstore"
+
+
 def _fresh_docstore(uri: str | None):
     """Import a pristine docstore bound to one provider.
 
     The module caches its store and reads the URI at import, so the module is
     dropped and re-imported per provider rather than mutated in place.
+
+    THE IMPORT TABLE IS PUT BACK AFTERWARDS. Purging sys.modules and walking
+    away is global interpreter state that escapes this file, and it did:
+
+      - the old predicate was `"docstore" in name`, which also matched the TEST
+        modules (test_docstore, test_docstore_substitutability), so this helper
+        was quietly evicting its own neighbours;
+      - and any later `from tina4_python.docstore import SqliteCollection` in
+        another file resolved to the RE-IMPORTED module, while a function
+        imported at that file's top level still came from the ORIGINAL one. The
+        two classes then have the same name and are different objects, so an
+        isinstance() across the boundary is False for a reason that has nothing
+        to do with the code under test.
+
+    MEASURED: that made tests/test_docstore.py::TestSelection::
+    test_get_collection_is_sqlite_when_serverless fail whenever this file ran
+    first, and it passed only because pytest happens to collect the other file
+    earlier. Order is not something a test may depend on.
+
+    The caller keeps the fresh module by REFERENCE, so restoring the table
+    costs it nothing - re-imports stay fresh, the pollution stops here.
     """
     for key in ("TINA4_MONGO_URI", "TINA4_SESSION_MONGO_URI", "TINA4_SESSION_MONGO_URL"):
         os.environ.pop(key, None)
     if uri:
         os.environ["TINA4_MONGO_URI"] = uri
     os.environ["TINA4_DOC_STORE_PATH"] = tempfile.mktemp(suffix=".db")
-    for name in [m for m in list(sys.modules) if "docstore" in m]:
-        del sys.modules[name]
-    import tina4_python.docstore as ds
 
-    return ds
+    purged = {
+        name: sys.modules.pop(name)
+        for name in list(sys.modules)
+        if name == _DOCSTORE_MODULE or name.startswith(_DOCSTORE_MODULE + ".")
+    }
+    try:
+        import tina4_python.docstore as ds
+
+        return ds
+    finally:
+        sys.modules.update(purged)
+        # The import also rebinds the attribute on the parent package, and
+        # `from tina4_python.docstore import X` reads it from there.
+        parent = sys.modules.get("tina4_python")
+        original = purged.get(_DOCSTORE_MODULE)
+        if parent is not None and original is not None:
+            parent.docstore = original
 
 
 @pytest.fixture(params=["fallback", "mongo"])
