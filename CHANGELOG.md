@@ -226,7 +226,7 @@ previous behaviour was an open door. Direct-to-internet apps need no change.
 
 See ADR-0019.
 
-### Breaking: middleware no longer disables a route's auth gate
+### Security (Breaking): middleware no longer disables a route's auth gate
 
 Attaching middleware to a route or a route GROUP used to set
 `auth_required = False`, so an ordinary logging or audit middleware on a group
