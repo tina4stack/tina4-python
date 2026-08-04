@@ -302,15 +302,49 @@ class TestClientLifecycleIsBounded:
     legitimately opens several connections to serve work and then PLATEAUS; a
     leak keeps climbing. So this drives three identical rounds plus a long
     sequential run and asserts the last stretch adds nothing.
+
+    EVERY COUNT HERE IS SCOPED TO THE CONNECTIONS THIS TEST OWNS.
+    serverStatus.connections.current, which this test used to read, is a
+    SERVER-GLOBAL counter across every client on that mongod - so any other
+    process moves it and the assertion becomes a coin flip rather than a gate.
+    Measured 2026-08-04 against the shared lab MongoDB 7.0.39, with the
+    docstore code UNCHANGED and correct: the global count read [88, 89, 90]
+    with one other agent connected, [193, 194, 195] with 45 further real
+    clients held open, against an idle baseline near 6. The old absolute
+    ceiling `rounds[2] < 60` therefore passed or failed on who else was
+    connected, and failed for a reason that had nothing to do with the
+    docstore.
+
+    $currentOp with idleConnections is the per-client view. An appName in the
+    connection string tags every socket this test's client opens, and nobody
+    else's carry it, so the same run under that 45-client load measures a flat
+    [3, 3, 3]. That also lets close_doc_store() be asserted at its real
+    strength - OUR connections must reach exactly ZERO, not merely "fewer than
+    before", which another tenant disconnecting could satisfy on its own.
     """
 
-    @staticmethod
-    def _server_connections() -> int:
+    APP_NAME = "tina4_docstore_lifecycle_" + uuid.uuid4().hex[:10]
+
+    @classmethod
+    def _tagged_uri(cls) -> str:
+        """MONGO_URI carrying this test's appName. A driver connection-string
+        option, honoured by every official driver, so nothing in the framework
+        needs to know about it."""
+        return MONGO_URI + ("&" if "?" in MONGO_URI else "/?") + "appName=" + cls.APP_NAME
+
+    @classmethod
+    def _own_connections(cls) -> int:
+        """Connections opened by THIS test's client, and nothing else."""
         import pymongo
 
         probe = pymongo.MongoClient(MONGO_URI)
         try:
-            return probe.admin.command("serverStatus")["connections"]["current"]
+            counted = probe.admin.aggregate([
+                {"$currentOp": {"allUsers": True, "idleConnections": True, "localOps": True}},
+                {"$match": {"appName": cls.APP_NAME}},
+                {"$count": "n"},
+            ])
+            return next(iter(counted), {"n": 0})["n"]
         finally:
             probe.close()
 
@@ -318,28 +352,41 @@ class TestClientLifecycleIsBounded:
         if not _mongo_reachable():
             pytest.skip(f"no reachable MongoDB at {MONGO_URI}")
 
-        docstore = _fresh_docstore(MONGO_URI)
+        docstore = _fresh_docstore(self._tagged_uri())
+
+        # The measurement must be able to SEE this client, or every assertion
+        # below is vacuously true and proves nothing.
+        docstore.get_collection("lifecycle_probe").count_documents({})
+        assert self._own_connections() > 0, (
+            "appName scoping saw none of our own connections - the probe is "
+            "blind, so the assertions below would pass no matter what"
+        )
 
         rounds = []
         for _ in range(3):
             for _ in range(20):
                 docstore.get_collection("lifecycle_probe").count_documents({})
-            rounds.append(self._server_connections())
+            rounds.append(self._own_connections())
 
         settled = rounds[-1]
         for _ in range(100):
             docstore.get_collection("lifecycle_probe").count_documents({})
-        after_hundred = self._server_connections()
+        after_hundred = self._own_connections()
 
         # POSITIVE: 100 further calls on a settled pool add nothing. Under the
         # old one-client-per-call code this was roughly +200.
-        assert after_hundred <= settled + 2, (
+        assert after_hundred <= settled, (
             f"connections still growing: settled={settled} after 100 more={after_hundred}"
         )
-        # And the growth flattened rather than tracking the call count.
-        assert rounds[2] - rounds[1] <= 2 and rounds[2] < 60, f"rounds={rounds}"
+        # And the growth flattened rather than tracking the call count. Both
+        # halves are now scoped, so the ceiling measures OUR pool: one client
+        # settles at ~3, while a client-per-call leak reached ~39 after the
+        # first 20 calls alone.
+        assert rounds[2] - rounds[1] <= 2, f"rounds={rounds}"
+        assert rounds[2] <= 10, f"our own pool is not bounded: rounds={rounds}"
 
-        before = self._server_connections()
+        # NEGATIVE: after close there must be NONE of ours left, not merely
+        # fewer than before.
         docstore.close_doc_store()
         time.sleep(1)
-        assert self._server_connections() < before, "close_doc_store released nothing"
+        assert self._own_connections() == 0, "close_doc_store released nothing"
