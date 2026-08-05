@@ -38,6 +38,22 @@ def _reachable(host: str, port: int, timeout: float = 1.5) -> bool:
 # ── Interface Contract Tests ─────────────────────────────────────
 
 
+
+@pytest.fixture()
+def no_backend_env(monkeypatch):
+    """Assert a DEFAULT against the code's defaults, not the machine's environment.
+
+    A test that constructs a backend with no arguments and asserts
+    "host == localhost" is only testing the default when the environment holds
+    no override. These tests took no monkeypatch, so on any box that exports
+    TINA4_RABBITMQ_HOST -- a CI runner, or the lab once the suites were given
+    per-framework namespaces -- they asserted the machine's configuration and
+    failed. A default is a property of the code; establish the condition rather
+    than assuming it.
+    """
+    for name in [k for k in os.environ if k.startswith(("TINA4_RABBITMQ", "TINA4_KAFKA", "TINA4_MONGO", "TINA4_QUEUE"))]:
+        monkeypatch.delenv(name, raising=False)
+
 class TestQueueBackendContract:
     """One rename guard for the whole backend family.
 
@@ -76,7 +92,7 @@ class TestQueueBackendContract:
 class TestRabbitMQBackendConfig:
     """Constructor resolves host/port/credentials from kwargs and env — no broker."""
 
-    def test_default_config(self):
+    def test_default_config(self, no_backend_env):
         from tina4_python.queue_backends.rabbitmq_backend import RabbitMQBackend
 
         backend = RabbitMQBackend()
@@ -155,7 +171,7 @@ class TestRabbitMQBackendConfig:
 class TestKafkaBackendConfig:
     """Constructor resolves brokers/group/client from kwargs and env — no broker."""
 
-    def test_default_config(self):
+    def test_default_config(self, no_backend_env):
         from tina4_python.queue_backends.kafka_backend import KafkaBackend
 
         backend = KafkaBackend()
@@ -228,7 +244,7 @@ _skip_no_pymongo = pytest.mark.skipif(
 class TestMongoDBBackendConfig:
     """Constructor resolves host/port/db/collection from kwargs and env — no broker."""
 
-    def test_default_config(self):
+    def test_default_config(self, no_backend_env):
         from tina4_python.queue_backends.mongo_backend import MongoBackend
 
         backend = MongoBackend()

@@ -12,6 +12,27 @@ from tina4_python.docstore import (
     ObjectId, InvalidId, SqliteDatabase, get_collection, is_serverless,
     reset_default_store, compile_filter,
 )
+from tina4_python.docstore import _MONGO_URI_VARS
+
+
+@pytest.fixture
+def no_mongo_env(monkeypatch):
+    """Clear EVERY var that selects Mongo, read from the module's own tuple.
+
+    "No Mongo is configured" is a property of the environment, so a test that
+    asserts it has to establish it -- otherwise it passes on a laptop and fails
+    on any machine that exports one of these, which is what happened when the
+    four suites started running in parallel with per-framework Mongo databases.
+
+    The list is _MONGO_URI_VARS itself rather than a copy of it. A hardcoded
+    copy here had drifted to two of the three names: it cleared the canonical
+    TINA4_MONGO_URI and the legacy TINA4_SESSION_MONGO_URL but not
+    TINA4_SESSION_MONGO_URI in between, so the test silently measured the
+    machine instead of the default. Reading the tuple means a fourth name can
+    never reintroduce that gap.
+    """
+    for name in _MONGO_URI_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture
@@ -219,14 +240,10 @@ class TestDeleteAndNested:
 # ── serverless selection ─────────────────────────────────────────────────────
 
 class TestSelection:
-    def test_serverless_when_no_mongo(self, monkeypatch):
-        for k in ("TINA4_MONGO_URI", "TINA4_SESSION_MONGO_URL"):
-            monkeypatch.delenv(k, raising=False)
+    def test_serverless_when_no_mongo(self, no_mongo_env):
         assert is_serverless() is True
 
-    def test_get_collection_is_sqlite_when_serverless(self, monkeypatch, tmp_path):
-        for k in ("TINA4_MONGO_URI", "TINA4_SESSION_MONGO_URL"):
-            monkeypatch.delenv(k, raising=False)
+    def test_get_collection_is_sqlite_when_serverless(self, no_mongo_env, monkeypatch, tmp_path):
         monkeypatch.setenv("TINA4_DOC_STORE_PATH", str(tmp_path / "ds.db"))
         reset_default_store()
         col = get_collection("widgets")

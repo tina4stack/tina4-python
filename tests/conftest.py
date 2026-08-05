@@ -289,3 +289,25 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
     raise AssertionError(
         "child server never became ready:\n\n" + "\n\n".join(failures)
     )
+
+
+def mongo_uri_with_option(uri: str, option: str) -> str:
+    """Append one connection-string option to a MongoDB URI of ANY shape.
+
+    The separator depends on whether the URI already has a PATH, not merely
+    whether it has a query string. A mongodb URI needs a "/" before its query,
+    but appending "/?" to a URI that already carries a database produces
+    ".../tina4_py/?x=1" -- the driver then reads the database name as
+    "tina4_py/" and rejects the whole string with InvalidURI.
+
+    MEASURED against pymongo: the hand-rolled `"&" if "?" in uri else "/?"`
+    join this replaces broke 3 of 6 real URI shapes -- host/db, a bare trailing
+    slash, and mongodb+srv://.../db, which is the ordinary Atlas connection
+    string. It only ever looked correct because TINA4_TEST_MONGO_URI happened
+    to be the bare host:port form; the moment per-framework test isolation
+    pointed it at a URI carrying a database, every caller failed at once.
+    """
+    if "?" in uri:
+        return uri + "&" + option
+    _, _, after_scheme = uri.partition("://")
+    return uri + ("?" if "/" in after_scheme else "/?") + option

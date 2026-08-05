@@ -592,7 +592,9 @@ def test_the_third_party_client_is_still_used_when_present(monkeypatch):
 
     collection = _unique_collection()
     app_name = "tina4_zero_dep_negative_" + uuid.uuid4().hex[:10]
-    tagged_uri = MONGO_URI + ("&" if "?" in MONGO_URI else "/?") + "appName=" + app_name
+    from conftest import mongo_uri_with_option
+
+    tagged_uri = mongo_uri_with_option(MONGO_URI, "appName=" + app_name)
     session_id = "pymongo-path-" + uuid.uuid4().hex
     payload = {"user": "andre", "path": "pymongo"}
 

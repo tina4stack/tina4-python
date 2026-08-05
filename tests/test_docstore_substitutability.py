@@ -588,8 +588,24 @@ class TestClientLifecycleIsBounded:
     def _tagged_uri(cls) -> str:
         """MONGO_URI carrying this test's appName. A driver connection-string
         option, honoured by every official driver, so nothing in the framework
-        needs to know about it."""
-        return MONGO_URI + ("&" if "?" in MONGO_URI else "/?") + "appName=" + cls.APP_NAME
+        needs to know about it.
+
+        The separator depends on whether the URI already has a PATH, not just
+        whether it has a query. A mongodb URI needs a "/" before its query
+        string, but appending "/?" to a URI that already carries a database
+        makes the driver read the database name as "tina4_py/" and reject the
+        whole string with InvalidURI.
+
+        MEASURED against pymongo: the old `"&" if "?" in uri else "/?"` join
+        broke 3 of 6 real URI shapes -- host/db, a bare trailing slash, and
+        mongodb+srv://.../db, which is the ordinary Atlas connection string.
+        It only ever looked correct because TINA4_TEST_MONGO_URI happened to be
+        the bare host:port form here; pointing it at a URI with a database (as
+        per-framework test isolation does) failed instantly.
+        """
+        from conftest import mongo_uri_with_option
+
+        return mongo_uri_with_option(MONGO_URI, "appName=" + cls.APP_NAME)
 
     @classmethod
     def _own_connections(cls) -> int:
