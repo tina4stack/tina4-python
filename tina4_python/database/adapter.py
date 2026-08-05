@@ -118,14 +118,16 @@ class DatabaseResult:
         - which is what makes the envelope honest. Ruby and Node still populate
         it with rows returned; see feature 18.
         """
-        if (page is not None or per_page is not None) and self.offset:
+        if (page is not None or per_page is not None) and len(self.records) < self.count:
             raise ValueError(
-                "to_paginate(page=..., per_page=...) slices the rows this result "
-                f"holds, but this result already starts at offset {self.offset} - "
-                "it is one page of a larger query, so slicing it from row 0 gives "
-                "a silently wrong answer. Call to_paginate() with no arguments to "
-                "describe the page you fetched, or re-fetch without limit/offset "
-                "to slice the whole set in memory."
+                f"to_paginate(page=..., per_page=...) slices the rows this result holds, "
+                f"but this result holds only {len(self.records)} of {self.count} rows - "
+                "it is a PARTIAL result, so any page past the rows it holds comes back "
+                "empty while total_pages claims it exists. MEASURED on 100,000 rows read "
+                "under the default cap of 100: pages 1-5 of 20 were right and pages 6 "
+                "onward returned NOTHING, with the envelope still reporting 5,000 pages. "
+                "Fetch the page you want instead: fetch(sql, limit=per_page, "
+                "offset=(page - 1) * per_page), then call to_paginate() with no arguments."
             )
 
         if page is None and per_page is None:
