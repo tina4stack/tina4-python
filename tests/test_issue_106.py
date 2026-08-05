@@ -267,3 +267,39 @@ class TestTina4CssExists:
             "tina4_python", "public", "css", "tina4.min.css",
         )
         assert os.path.isfile(css_path), f"tina4.min.css not found at {css_path}"
+
+
+class TestPaginateDescribesTheFetchedPage:
+    """to_paginate() with NO arguments describes the page the query returned.
+
+    REGRESSION, measured 2026-08-05 across all four frameworks on a real
+    250-row table read with limit=20 offset=40 (page 3 of 13). Python reported
+    page 1, Node reported page 1 of 2 with 10 of the 20 rows, and Ruby returned
+    ZERO rows. Only PHP was correct. The envelope named the wrong page while
+    carrying a correct total, so it read as authoritative.
+    """
+
+    def _result(self):
+        from tina4_python.database.adapter import DatabaseResult
+        rows = [{"id": i} for i in range(40, 60)]      # the rows page 3 holds
+        return DatabaseResult(records=rows, count=250, limit=20, offset=40)
+
+    def test_page_is_derived_from_the_offset(self):
+        pag = self._result().to_paginate()
+        assert pag["page"] == 3, "offset 40 / limit 20 is page 3, not page 1"
+        assert pag["per_page"] == 20
+        assert pag["total_pages"] == 13
+
+    def test_records_are_the_rows_the_query_returned(self):
+        pag = self._result().to_paginate()
+        assert len(pag["records"]) == 20, "the envelope must not re-slice the page"
+        assert pag["records"][0]["id"] == 40
+
+    def test_total_is_the_true_total_not_rows_returned(self):
+        assert self._result().to_paginate()["total"] == 250
+
+    def test_slicing_an_already_offset_page_is_refused(self):
+        # NEGATIVE: slicing from row 0 a result whose rows start at 40 is the
+        # measured Ruby zero-rows bug. It must raise, not answer wrongly.
+        with pytest.raises(ValueError):
+            self._result().to_paginate(page=2, per_page=10)

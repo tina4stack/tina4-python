@@ -91,10 +91,58 @@ class DatabaseResult:
         rows = [",".join(escape(row.get(c)) for c in columns) for row in self.records]
         return "\n".join([header] + rows)
 
-    def to_paginate(self, page: int = 1, per_page: int = 20) -> dict:
-        total_pages = max(1, -(-self.count // per_page))  # ceil division
+    def to_paginate(self, page: int = None, per_page: int = None) -> dict:
+        """Paginate this result. Two modes, and the default one is new.
+
+        NO ARGUMENTS: describe the page this result already IS, derived from
+        the query that produced it. This is the mode that was broken.
+
+        MEASURED 2026-08-05 on a real 250-row table read with limit=20
+        offset=40 (page 3 of 13): this reported page 1. It defaulted the page
+        rather than deriving it from the offset, so every offset fetch was
+        mislabelled as the first page while carrying a correct total and a
+        correct total_pages - an envelope that looked authoritative and named
+        the wrong page.
+
+        WITH page/per_page: slice this result in memory, which is what GitHub
+        issue #106 asked for and what tests/test_issue_106.py pins. Valid only
+        when the result holds the WHOLE set. Slicing a result that is already
+        one page of a larger query is refused: the slice is taken from row 0 of
+        what you hold, while the rows themselves start at ``offset``, so the
+        answer is silently wrong. That is not hypothetical - it is exactly the
+        measured Ruby defect, where slicing offset 40 into a 20-row page
+        returned NOTHING and still reported a page number and a total.
+
+        Python and PHP populate ``count`` from a separate COUNT probe, so
+        ``total`` here is the TRUE total for the filter and not the capped read
+        - which is what makes the envelope honest. Ruby and Node still populate
+        it with rows returned; see feature 18.
+        """
+        if (page is not None or per_page is not None) and self.offset:
+            raise ValueError(
+                "to_paginate(page=..., per_page=...) slices the rows this result "
+                f"holds, but this result already starts at offset {self.offset} - "
+                "it is one page of a larger query, so slicing it from row 0 gives "
+                "a silently wrong answer. Call to_paginate() with no arguments to "
+                "describe the page you fetched, or re-fetch without limit/offset "
+                "to slice the whole set in memory."
+            )
+
+        if page is None and per_page is None:
+            per_page = self.limit if self.limit and self.limit > 0 else len(self.records)
+            page = (self.offset // per_page) + 1 if per_page > 0 else 1
+            total_pages = max(1, -(-self.count // per_page)) if per_page > 0 else 1
+            return self._paginate_envelope(self.records, page, per_page, self.offset, total_pages)
+
+        page = page or 1
+        per_page = per_page or (self.limit if self.limit and self.limit > 0 else 20)
+        total_pages = max(1, -(-self.count // per_page))
         offset = (page - 1) * per_page
         data = self.records[offset:offset + per_page]
+        return self._paginate_envelope(data, page, per_page, offset, total_pages)
+
+    def _paginate_envelope(self, data, page, per_page, offset, total_pages) -> dict:
+        """The one envelope shape, so both modes cannot drift apart."""
         return {
             "records": data,        # standard name
             "data": data,           # backwards compat (PHP/Ruby/Node)
