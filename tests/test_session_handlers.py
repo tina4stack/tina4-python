@@ -824,10 +824,21 @@ class TestMongoDBIntegration:
         return MongoDBSessionHandler(url=self.URL, **kw)
 
     def _observer(self, collection="sessions"):
+        """The witness must open the SAME database the handler wrote to.
+
+        This was pinned to client["tina4"] while the handler honours
+        TINA4_SESSION_MONGO_DB, so with a per-framework database configured the
+        witness looked in an empty one and reported count_documents == 0 and
+        find_one is None - four failures that read as the session never being
+        written. Same root cause as the redis/valkey witness and the TTL probe:
+        a test reaching past the framework to the real server must resolve the
+        SAME configuration the framework resolved.
+        """
         import pymongo
 
         client = pymongo.MongoClient(self.URL, serverSelectionTimeoutMS=3000)
-        return client, client["tina4"][collection]
+        database = os.environ.get("TINA4_SESSION_MONGO_DB") or "tina4"
+        return client, client[database][collection]
 
     def _sid(self):
         return f"itest-{uuid.uuid4().hex}"
