@@ -46,13 +46,24 @@ class TestDatabaseResult:
         assert bool(r) is False
 
     def test_to_paginate(self):
-        r = DatabaseResult(records=[{"id": 1}], count=50)
-        p = r.to_paginate(page=2, per_page=10)
+        # A result that IS page 2 of 10 describes itself with no arguments:
+        # per_page from the limit, page from the offset, total from count.
+        r = DatabaseResult(records=[{"id": i} for i in range(10, 20)],
+                           count=50, limit=10, offset=10)
+        p = r.to_paginate()
         assert p["total"] == 50
         assert p["page"] == 2
         assert p["total_pages"] == 5
-        assert p["page"] == 2
         assert p["per_page"] == 10
+        assert len(p["records"]) == 10
+
+    def test_to_paginate_refuses_to_slice_a_partial_result(self):
+        # NEGATIVE. Slicing by page number is only honest when the result holds
+        # the WHOLE set. This one holds 1 of 50, so page 2 of 10 would come back
+        # empty while total_pages claimed 5 existed.
+        r = DatabaseResult(records=[{"id": 1}], count=50)
+        with pytest.raises(ValueError):
+            r.to_paginate(page=2, per_page=10)
 
 
 class TestSQLiteAdapter:
