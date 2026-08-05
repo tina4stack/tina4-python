@@ -6,9 +6,20 @@ Response cache for GET requests with pluggable backends.
 
 Backends are selected via the ``TINA4_CACHE_BACKEND`` env var:
 
-    memory  — in-process LRU cache (default, zero deps)
-    redis   — Redis / Valkey (uses ``redis`` package or raw RESP over TCP)
-    file    — JSON files in ``data/cache/``
+    memory     — in-process LRU cache (default, zero deps)
+    file       — JSON files in ``data/cache/`` (see ``TINA4_CACHE_DIR``)
+    redis      — Redis (uses the ``redis`` package, or raw RESP over TCP)
+    valkey     — Valkey (same wire protocol as Redis)
+    memcached  — Memcached (alias: ``memcache``); unauthenticated
+    mongodb    — MongoDB (alias: ``mongo``)
+    database   — the app's SQL database (alias: ``db``)
+
+An unrecognised name RAISES, naming the bad value and the valid ones, instead of
+falling through to memory: a typo (``TINA4_CACHE_BACKEND=redsi``) used to leave a
+running app with a per-process cache while the operator believed it was in Redis.
+If a configured backend's driver is missing or its service is unreachable, the
+cache logs a warning and falls back to ``file`` — a real persistent cache, never
+a silent no-op.
 
     from tina4_python.cache import ResponseCache, cache_stats, clear_cache
     from tina4_python.cache import cache_get, cache_set, cache_delete, cache_clear, cache_stats
@@ -27,10 +38,24 @@ Backends are selected via the ``TINA4_CACHE_BACKEND`` env var:
     stats = cache_stats()  # {"hits": 42, "misses": 7, "size": 15, "backend": "memory"}
 
 Environment:
-    TINA4_CACHE_BACKEND      — memory | redis | file  (default: memory)
-    TINA4_CACHE_URL           — redis://localhost:6379  (redis backend only)
-    TINA4_CACHE_TTL           — default TTL in seconds  (default: 60)
-    TINA4_CACHE_MAX_ENTRIES   — max cached entries       (default: 1000)
+    TINA4_CACHE_BACKEND       — memory | file | redis | valkey | memcached |
+                                mongodb | database        (default: memory)
+    TINA4_CACHE_URL           — connection string for redis / valkey / memcached /
+                                mongodb, or a SQL URL for database. Per-backend
+                                defaults: redis://localhost:6379,
+                                valkey://localhost:6379,
+                                memcached://localhost:11211,
+                                mongodb://localhost:27017. The database backend
+                                falls back to TINA4_DATABASE_URL, then to
+                                sqlite:///data/tina4.db
+    TINA4_CACHE_USERNAME      — credentials for redis / valkey / mongodb, read
+    TINA4_CACHE_PASSWORD        only when the URL carries none of its own
+                                (mirrors TINA4_DATABASE_USERNAME / _PASSWORD).
+                                memcached is unauthenticated
+    TINA4_CACHE_TTL           — default TTL in seconds   (default: 60)
+    TINA4_CACHE_MAX_ENTRIES   — max cached entries        (default: 1000)
+    TINA4_CACHE_DIR           — directory for the file backend
+                                (default: data/cache)
 """
 import os
 import time
