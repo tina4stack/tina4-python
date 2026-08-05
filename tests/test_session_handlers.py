@@ -165,7 +165,7 @@ class TestRedisHandlerConfig:
         assert handler._prefix == "myapp:sess:"
         assert handler._password == "secret"
 
-    def test_env_config(self, monkeypatch):
+    def test_env_config(self, no_session_env, monkeypatch):
         from tina4_python.session_handlers.redis_handler import RedisSessionHandler
 
         monkeypatch.setenv("TINA4_SESSION_REDIS_HOST", "redis-env")
@@ -226,7 +226,7 @@ class TestMongoDBHandlerConfig:
         assert handler._collection_name == "user_sessions"
         assert handler._ttl == 3600
 
-    def test_env_config(self, monkeypatch):
+    def test_env_config(self, no_session_env, monkeypatch):
         from tina4_python.session_handlers.mongodb_handler import MongoDBSessionHandler
 
         monkeypatch.setenv("TINA4_SESSION_MONGO_URL", "mongodb://mongo-env:27019")
@@ -390,7 +390,7 @@ class TestValkeyHandlerConfig:
         assert handler._prefix == "valkey:sess:"
         assert handler._password == "valkeypass"
 
-    def test_env_config(self, monkeypatch):
+    def test_env_config(self, no_session_env, monkeypatch):
         from tina4_python.session_handlers.valkey_handler import ValkeySessionHandler
 
         monkeypatch.setenv("TINA4_SESSION_VALKEY_HOST", "valkey-env")
