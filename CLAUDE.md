@@ -10,11 +10,16 @@ Version 3.13.94 - Lightweight Python web framework. See https://tina4.com for fu
 - Install for the FULL test suite: `uv sync --extra test` — the declared client set
   for every live service the suite touches (PostgreSQL, MySQL, MSSQL, Firebird,
   MongoDB, ODBC, Redis, Memcached, **Kafka via confluent-kafka, RabbitMQ via
-  pika**). Use this on any machine that runs the real-service tests. Note
-  `uv sync --extra X` PRUNES packages outside the named extras, so prefer
+  pika, S3/MinIO via boto3**). Use this on any machine that runs the real-service
+  tests. Note `uv sync --extra X` PRUNES packages outside the named extras, so prefer
   `--extra test` over `--all-extras` when you want exactly the test set. `pyodbc`
   additionally needs the SYSTEM unixODBC library (`libodbc.so.2`, e.g.
   `apt-get install unixodbc`) — the wheel installs without it but cannot import.
+  That pruning is not theoretical: boto3 was declared in no extra at all, was
+  present only because someone had installed it by hand, and the first
+  `uv sync --extra test` removed it — taking the two real-MinIO S3 tests with it
+  while the suite still reported green. Anything the suite imports must be
+  declared here, or it is one sync away from disappearing.
 - Run all tests: `.venv/bin/python -m pytest tests/`
 - Run single test: `.venv/bin/python -m pytest tests/test_file.py::TestClass::test_method`
 - Coverage: `.venv/bin/python -m pytest tests/ --cov=tina4_python`
@@ -132,7 +137,7 @@ src/                   # User application code
   scss/                # User SCSS → auto-compiled to src/public/css/
   public/              # User static assets served at /
   seeds/               # Seeder files (auto-discovered)
-tests/                 # pytest test files (27 test modules)
+tests/                 # pytest test files (271 test modules)
 benchmarks/            # Performance benchmarks
 migrations/            # Database migration SQL files
 ```
@@ -832,6 +837,8 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Inline testing via `tina4_python.Testing` (decorator-based assertions)
 - HTML builder via `tina4_python.HtmlElement` (programmatic HTML generation)
 - Messenger via `tina4_python.messenger` (.env driven, SMTP/IMAP)
+- Realtime collaboration via `tina4_python.realtime` — call `realtime(features=[...])` in `app.py` before `run()` to mount a zero-dependency control plane. Features: `calls` (WebRTC signalling relay + self-describing ICE config; media is peer-to-peer mesh, Tina4 relays only the offer/answer/ICE handshake), `chat` (framework-owned ORM channels/messages, secured chat WebSocket with presence/typing/read receipts, history endpoint), `files` (uploads through a pluggable `StorageBackend`). Paths are convention-based, overridable via `prefix`, and the client discovers resolved paths from the config endpoint so client and server cannot drift. Env: `TINA4_RTC_BACKEND`, `TINA4_RTC_STUN_URLS`, `TINA4_RTC_TURN_URL`, `TINA4_RTC_TURN_SECRET`, `TINA4_RTC_TURN_TTL`
+- File storage via `tina4_python.realtime.storage` — `TINA4_STORAGE_BACKEND` selects `local` (default, zero-dependency filesystem, `TINA4_STORAGE_DIR`) or `s3` (opt-in S3/MinIO, **needs boto3** — `uv sync --extra s3`; configured by `TINA4_STORAGE_URL`/`_KEY`/`_SECRET`/`_BUCKET`/`_REGION`). `S3Storage` issues presigned GET URLs so large blobs stream straight from object storage instead of through the app; `LocalStorage` returns `None` for `url()` and is served by the permissioned download route. An `s3` backend that cannot be built (boto3 missing or config incomplete) logs why and falls back to local — a real persistent store, never a silent no-op
 - SQL Translation via `tina4_python.database.adapter` (cross-engine SQL portability + query cache)
 - CLI scaffolding: `tina4python generate model/route/migration/middleware`
 - Production server auto-detection: `tina4python serve --production` (auto-installs uvicorn)
@@ -850,7 +857,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - Frond template engine optimizations: pre-compiled regexes, lazy loop context (copy-on-write), filter chain caching, path split caching, inline common filters (11-15% speedup)
 - SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools auto-start when MCP is a capability of the deployment. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. **Security is a two-layer gate (v3.13.40):** `is_enabled()` is a pure capability gate (explicit `TINA4_MCP` wins, else `TINA4_DEBUG`; host-independent), and `is_request_allowed(remote_ip, has_valid_token)` authorises each request on the RAW socket peer (`request.remote_ip`, never X-Forwarded-For): loopback always; a remote caller needs `TINA4_MCP_REMOTE=true` AND a token matching `TINA4_MCP_TOKEN` (fallback `TINA4_API_KEY`; sent as Authorization Bearer / X-MCP-Token / X-Api-Key; no configured token means remote is always denied). All MCP surfaces (REST shim, JSON-RPC, SSE) 404 a disallowed caller. `database_query` is SELECT/WITH-only and rejects stacked statements; the file tools are sandboxed to the project root. `is_localhost()` is informational only, not the gate
-- Tests: 4,113 passing, 0 failures (34 skipped) - measured 2026-07-29 on Ubuntu 24.04.4 LTS x86_64, Python 3.13.3, live services, TINA4_REQUIRE_SERVICES=1; Firebird excluded by design
+- Tests: 5,040 passing, 0 failures, 1 skipped — measured 2026-08-06 on the lab (Ubuntu 24.04.4 LTS x86_64, Python 3.13.3, live services, `TINA4_REQUIRE_SERVICES=1`, 375s). **Firebird is NOT excluded.** The lab provisions a live Firebird 5 (`firebirdsql/firebird:5` on :3050, `TINA4_TEST_FIREBIRD_URL`) and those tests run. What IS deliberate is Firebird's absence from the `TINA4_REQUIRE_SERVICES` keyword gate in `tests/conftest.py`: GitHub CI does not provision Firebird, so a Firebird skip has to stay green *there*. Those are two different things and this line used to conflate them into "excluded by design", which read as "the Firebird tests do not run" — they do. The single remaining skip is `tests/test_session_backend_failure.py` `[needs:no-dac-override]`: the suite runs as root, which holds `CAP_DAC_OVERRIDE`, so a write goes straight through a 0400 file and a real `EACCES` is unreachable. Run it under `setpriv --bounding-set=-dac_override,-dac_read_search` to exercise that path. Re-measure with `.venv/bin/python -m pytest tests/ -q` and quote the summary line, never the exit code
 - Version: 3.13.94
 
 ## Links
