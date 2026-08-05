@@ -592,16 +592,23 @@ class TestSessionWithHandlers:
 # ── Integration Tests (require actual services) ─────────────────
 
 
-def _observer(host: int, port: int):
+def _observer(host: int, port: int, db: int = 0):
     """A SECOND, independent connection to the real Redis/Valkey.
 
     Not a double -- it is the witness. Everything the deleted MagicMock classes
     asserted about key names and TTLs is asserted here against what the server
     actually holds, on a connection the handler under test does not own.
+
+    It must witness the SAME database the handler wrote to. It was pinned to
+    db=0 while the handler honours TINA4_SESSION_REDIS_DB, so the moment the
+    four suites ran side by side on their own db numbers the witness looked in
+    an empty database and reported "nothing stored", "TTL -2" and "exists 0" -
+    eight failures that read as data loss and were only ever a mismatch about
+    WHERE to look.
     """
     import redis as redis_pkg
 
-    return redis_pkg.Redis(host=host, port=port, db=0, decode_responses=True)
+    return redis_pkg.Redis(host=host, port=port, db=db, decode_responses=True)
 
 
 class _RedisLikeContract:
@@ -624,7 +631,7 @@ class _RedisLikeContract:
     def test_read_write_destroy_cycle(self):
         handler = self._handler(ttl=60)
         sid = self._sid()
-        obs = _observer(self.HOST, self.PORT)
+        obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"user_id": 99})
             assert handler.read(sid)["user_id"] == 99
@@ -649,7 +656,7 @@ class _RedisLikeContract:
         # off the server on an independent connection.
         handler = self._handler(ttl=600)
         sid = self._sid()
-        obs = _observer(self.HOST, self.PORT)
+        obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"user_id": 42, "role": "admin"}, ttl=600)
             raw = obs.get(f"tina4:session:{sid}")
@@ -663,7 +670,7 @@ class _RedisLikeContract:
     def test_explicit_ttl_is_applied_by_the_server(self):
         handler = self._handler(ttl=60)
         sid = self._sid()
-        obs = _observer(self.HOST, self.PORT)
+        obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"user_id": 42}, ttl=600)
             ttl = obs.ttl(f"tina4:session:{sid}")
@@ -676,7 +683,7 @@ class _RedisLikeContract:
     def test_default_ttl_is_applied_by_the_server(self):
         handler = self._handler(ttl=1800)
         sid = self._sid()
-        obs = _observer(self.HOST, self.PORT)
+        obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"user_id": 42})  # no ttl arg -> handler default
             ttl = obs.ttl(f"tina4:session:{sid}")
@@ -690,7 +697,7 @@ class _RedisLikeContract:
         prefix = f"probe:{uuid.uuid4().hex[:8]}:"
         handler = self._handler(ttl=60, prefix=prefix)
         sid = self._sid()
-        obs = _observer(self.HOST, self.PORT)
+        obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"a": 1})
             assert obs.exists(f"{prefix}{sid}") == 1
@@ -706,7 +713,7 @@ class _RedisLikeContract:
         # This waits for the real server to drop the real key.
         handler = self._handler(ttl=60)
         sid = self._sid()
-        obs = _observer(self.HOST, self.PORT)
+        obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"user_id": 1}, ttl=1)
             assert handler.read(sid) == {"user_id": 1}
@@ -723,7 +730,7 @@ class _RedisLikeContract:
         # client -- not a mocked return value.
         handler = self._handler(ttl=60)
         sid = self._sid()
-        obs = _observer(self.HOST, self.PORT)
+        obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             obs.set(f"tina4:session:{sid}", "not-json")
             assert handler.read(sid) == {}
@@ -757,7 +764,7 @@ class _RedisLikeContract:
         handler._use_redis_pkg = False
         handler._redis_client = None
         sid = self._sid()
-        obs = _observer(self.HOST, self.PORT)
+        obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"raw": True}, ttl=300)
             assert obs.ttl(f"tina4:session:{sid}") > 0
@@ -778,6 +785,7 @@ class TestRedisIntegration(_RedisLikeContract):
     """Real Redis. No doubles anywhere in this class."""
 
     HOST, PORT, NAME = _REDIS_HOST, _REDIS_PORT, "redis"
+    DB = int(os.environ.get("TINA4_SESSION_REDIS_DB", "0") or 0)
 
     def _handler(self, **kw):
         from tina4_python.session_handlers.redis_handler import RedisSessionHandler
@@ -793,6 +801,7 @@ class TestValkeyIntegration(_RedisLikeContract):
     """Real Valkey on its own port and its own daemon. No doubles."""
 
     HOST, PORT, NAME = _VALKEY_HOST, _VALKEY_PORT, "valkey"
+    DB = int(os.environ.get("TINA4_SESSION_VALKEY_DB", "0") or 0)
 
     def _handler(self, **kw):
         from tina4_python.session_handlers.valkey_handler import ValkeySessionHandler
