@@ -5,34 +5,10 @@ and adapts it to the unified Queue API expected by Queue._backend.
 """
 import os
 
+from tina4_python.queue.amqp_url import parse_amqp_url as _parse_amqp_url
 from tina4_python.queue.job import Job
 
 
-def _parse_amqp_url(url: str) -> dict:
-    """Parse amqp://user:pass@host:port/vhost into config dict."""
-    config = {}
-    url = url.replace("amqp://", "").replace("amqps://", "")
-    if "@" in url:
-        creds, rest = url.split("@", 1)
-        if ":" in creds:
-            config["username"], config["password"] = creds.split(":", 1)
-        else:
-            config["username"] = creds
-    else:
-        rest = url
-    if "/" in rest:
-        hostport, vhost = rest.split("/", 1)
-        if vhost:
-            config["vhost"] = "/" + vhost if not vhost.startswith("/") else vhost
-    else:
-        hostport = rest
-    if ":" in hostport:
-        host, port = hostport.split(":", 1)
-        config["host"] = host
-        config["port"] = int(port)
-    elif hostport:
-        config["host"] = hostport
-    return config
 
 
 class RabbitMQBackend:

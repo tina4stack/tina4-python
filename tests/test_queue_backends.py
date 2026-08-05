@@ -1217,28 +1217,25 @@ class TestQueueAdapterSignatureContract:
 # ── Live RabbitMQ Integration (real broker, no mocks) ────────────────
 
 def _parse_amqp_url(url):
-    """Parse amqp://[user:pass@]host[:port][/vhost] into a config dict."""
-    import re
-    rest = re.sub(r"^amqps?://", "", url)
-    username, password, vhost = "guest", "guest", "/"
-    if "@" in rest:
-        creds, rest = rest.split("@", 1)
-        if ":" in creds:
-            username, password = creds.split(":", 1)
-        else:
-            username = creds
-    hostport = rest
-    if "/" in rest:
-        hostport, vh = rest.split("/", 1)
-        if vh:
-            vhost = vh if vh.startswith("/") else "/" + vh
-    host = hostport
-    port = 5672
-    if ":" in hostport:
-        host, port_s = hostport.split(":", 1)
-        port = int(port_s)
-    return {"host": host or "localhost", "port": port or 5672,
-            "username": username, "password": password, "vhost": vhost}
+    """Parse an AMQP URL using THE FRAMEWORK'S parser, never a copy of it.
+
+    This file used to carry its own reimplementation, and it reproduced the
+    framework's bug exactly - both prepended "/" to the vhost - so the live
+    RabbitMQ integration test connected to the same wrong virtual host the
+    framework did, agreed with it, and could never have caught the divergence
+    from the RabbitMQ URI spec. A test that reimplements the code under test
+    measures its own copy, not the property.
+    """
+    from tina4_python.queue.amqp_url import parse_amqp_url
+
+    parsed = parse_amqp_url(url)
+    return {
+        "host": parsed.get("host") or "localhost",
+        "port": parsed.get("port") or 5672,
+        "username": parsed.get("username", "guest"),
+        "password": parsed.get("password", "guest"),
+        "vhost": parsed.get("vhost", "/"),
+    }
 
 
 def _rabbitmq_reachable(host, port):
@@ -1585,3 +1582,58 @@ class TestRabbitMQJobLifecycleLive:
                 connector.close()
             except Exception:  # noqa: BLE001
                 pass
+
+
+# ── AMQP URL vhost contract (RabbitMQ URI spec) ──────────────────────────────
+
+class TestAmqpUrlVhost:
+    """The vhost is the path segment, URL-decoded, with NO leading slash.
+
+    REGRESSION. All four frameworks used to prepend "/", so
+    amqp://guest:guest@rabbit:5672/orders asked the broker for a virtual host
+    literally named "/orders". No broker has that one - it is named "orders" -
+    so every publish failed against a named vhost, which is the ordinary
+    multi-tenant setup and the form every RabbitMQ tutorial shows.
+
+    Nothing caught it because the only URL shape that worked was the one
+    carrying NO vhost, which is what every test and every dev box used - and
+    because the live-integration test in this very file reimplemented the
+    parser, bug included, so it agreed with the framework instead of checking
+    it.
+    """
+
+    def test_vhost_is_the_path_segment_not_slash_prefixed(self):
+        from tina4_python.queue.amqp_url import parse_amqp_url
+
+        # POSITIVE: the name the broker actually has.
+        assert parse_amqp_url("amqp://guest:guest@rabbit:5672/orders")["vhost"] == "orders"
+        # NEGATIVE: and specifically NOT the old slash-prefixed name.
+        assert parse_amqp_url("amqp://guest:guest@rabbit:5672/orders")["vhost"] != "/orders"
+
+    def test_percent_encoded_default_vhost_decodes(self):
+        from tina4_python.queue.amqp_url import parse_amqp_url
+
+        # The DEFAULT vhost is named "/", which cannot appear literally in a
+        # path, so the spec spells it "%2f". Undecoded it asks for "%2f".
+        assert parse_amqp_url("amqp://rabbit:5672/%2f")["vhost"] == "/"
+        assert parse_amqp_url("amqp://rabbit:5672/a%2Fb")["vhost"] == "a/b"
+        # "+" is NOT a space here: this is a path, not a form body.
+        assert parse_amqp_url("amqp://rabbit:5672/a+b")["vhost"] == "a+b"
+
+    def test_no_vhost_given_leaves_the_callers_default(self):
+        from tina4_python.queue.amqp_url import parse_amqp_url
+
+        assert "vhost" not in parse_amqp_url("amqp://rabbit:5672")
+        # A bare trailing slash is "not specified" too - see the deviation note
+        # in amqp_url.py. Reading it as the empty vhost name would break a
+        # working amqp://host:5672/ for no benefit.
+        assert "vhost" not in parse_amqp_url("amqp://rabbit:5672/")
+
+    def test_credentials_and_hostport_still_parse(self):
+        from tina4_python.queue.amqp_url import parse_amqp_url
+
+        cfg = parse_amqp_url("amqps://user:p%40ss@rabbit.example.com:5671/orders")
+        assert cfg["username"] == "user"
+        assert cfg["host"] == "rabbit.example.com"
+        assert cfg["port"] == 5671
+        assert cfg["vhost"] == "orders"
