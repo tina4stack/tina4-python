@@ -25,6 +25,11 @@ odbc = ["pyodbc>=5.0"]
 redis = ["redis>=5.0"]
 memcache = ["pymemcache>=4.0"]
 
+# File-storage backends — install what you need.
+# The `local` filesystem backend is the zero-dependency default; S3Storage
+# (TINA4_STORAGE_BACKEND=s3) is opt-in and imports boto3 lazily.
+s3 = ["boto3>=1.34"]
+
 # Queue backends — install what you need
 kafka = ["confluent-kafka>=2.0"]
 rabbitmq = ["pika>=1.3"]
@@ -53,6 +58,17 @@ all-db = [
 # Includes firebird-driver even though the Firebird CI job installs it on its
 # own: `uv sync --extra X` PRUNES anything outside the named extras, so a test
 # extra that omitted it would silently uninstall it on a host that had it.
+#
+# boto3 is here for exactly that reason, MEASURED on the lab 2026-08-06
+# (Ubuntu 24.04.4 LTS x86_64, Python 3.13.3): it was declared in NO extra, but
+# happened to be installed ad hoc, so the two REAL-MinIO tests in
+# tests/test_realtime_files.py were passing. Running `uv sync --extra test`
+# pruned boto3 (plus s3transfer and jmespath) and those tests went straight from
+# "2 passed" to "2 skipped" -- with the suite still GREEN under
+# TINA4_REQUIRE_SERVICES=1, because the skip reason matched neither a service
+# keyword nor an unavailable hint in the conftest gate. Live S3 coverage
+# evaporated silently. Declaring it here is the fix; tests/conftest.py now also
+# recognises a missing boto3 so the gate can never miss it again.
 test = [
     "psycopg2-binary>=2.9",
     "mysql-connector-python>=9.0",
@@ -64,6 +80,7 @@ test = [
     "pymemcache>=4.0",
     "confluent-kafka>=2.0",
     "pika>=1.3",
+    "boto3>=1.34",
 ]
 
 [dependency-groups]

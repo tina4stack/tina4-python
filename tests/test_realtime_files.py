@@ -148,7 +148,33 @@ class TestFileRoutes:
 
 # ── S3Storage against a real MinIO (skipped if unreachable) ─────────
 
-def _minio_reachable(host="localhost", port=9100) -> bool:
+MINIO_HOST = "localhost"
+MINIO_PORT = 9100
+MINIO_BUCKET = "tina4-rt-test"
+
+# The two reasons are kept SEPARATE and never merged, because the
+# TINA4_REQUIRE_SERVICES gate in tests/conftest.py must treat them differently:
+#
+#   boto3 missing  -> a DECLARED client (pyproject `test` extra) is gone, which
+#                     is always a defect. The gate FAILS the run.
+#   MinIO down     -> an unprovisioned service (not in CI, not in the shared
+#                     test_env_contract.json), like Firebird. The skip is honest
+#                     and stays green.
+#
+# A single merged reason cannot express that: it would carry the "boto3" keyword
+# even when the real cause was an absent MinIO, and would fail every CI run.
+# Each string is also written in the gate's own vocabulary ("not installed" /
+# "not reachable") so it is machine-legible, and
+# tests/test_require_services_gate.py asserts both classifications against these
+# exact constants.
+BOTO3_MISSING_REASON = (
+    "boto3 not installed -- it is declared in the pyproject `test` extra, so "
+    "run `uv sync --extra test` (real S3, never mocked)")
+MINIO_UNREACHABLE_REASON = (
+    f"MinIO not reachable at {MINIO_HOST}:{MINIO_PORT} (real S3, never mocked)")
+
+
+def _minio_reachable(host=MINIO_HOST, port=MINIO_PORT) -> bool:
     try:
         with socket.create_connection((host, port), timeout=0.5):
             return True
@@ -164,21 +190,37 @@ def _boto3_available() -> bool:
         return False
 
 
-@pytest.mark.skipif(
-    not (_minio_reachable() and _boto3_available()),
-    reason="needs a real MinIO on localhost:9100 and boto3 (real S3, never mocked)")
+def _s3_skip_reason() -> str | None:
+    """Why the live-S3 tests cannot run, or None when they can.
+
+    Resolved once, in a fixed order, so the emitted reason is deterministic --
+    stacked skipif marks would leave it depending on pytest's mark iteration
+    order. The client is checked FIRST: a missing boto3 is the actionable
+    defect, and reporting an unreachable MinIO instead would hide it.
+    """
+    if not _boto3_available():
+        return BOTO3_MISSING_REASON
+    if not _minio_reachable():
+        return MINIO_UNREACHABLE_REASON
+    return None
+
+
+_S3_SKIP_REASON = _s3_skip_reason()
+
+
+@pytest.mark.skipif(_S3_SKIP_REASON is not None, reason=_S3_SKIP_REASON or "")
 class TestS3Storage:
     def _store(self, monkeypatch):
         monkeypatch.setenv("TINA4_STORAGE_BACKEND", "s3")
-        monkeypatch.setenv("TINA4_STORAGE_URL", "http://localhost:9100")
+        monkeypatch.setenv("TINA4_STORAGE_URL", f"http://{MINIO_HOST}:{MINIO_PORT}")
         monkeypatch.setenv("TINA4_STORAGE_KEY", "minioadmin")
         monkeypatch.setenv("TINA4_STORAGE_SECRET", "minioadmin")
-        monkeypatch.setenv("TINA4_STORAGE_BUCKET", "tina4-rt-test")
+        monkeypatch.setenv("TINA4_STORAGE_BUCKET", MINIO_BUCKET)
         monkeypatch.setenv("TINA4_STORAGE_REGION", "us-east-1")
         store = select_storage()
         assert isinstance(store, S3Storage)
         try:
-            store._client.create_bucket(Bucket="tina4-rt-test")
+            store._client.create_bucket(Bucket=MINIO_BUCKET)
         except Exception:
             pass  # already exists
         return store

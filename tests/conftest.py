@@ -26,7 +26,25 @@ _SERVICE_KEYWORDS = (
     # mail keyword existed in this tuple, so every one of those live tests could
     # skip green in CI forever behind a comment saying it could not.
     "greenmail", "smtp", "imap",
+    # boto3, the S3 CLIENT for the live-MinIO storage tests. It is a DECLARED
+    # client (pyproject `test` extra), so on any host that ran
+    # `uv sync --extra test` its absence is a real defect, exactly like "pika"
+    # and "pymemcache" above. MEASURED 2026-08-06: boto3 was declared in no
+    # extra at all, `uv sync --extra test` pruned it, and the two real-MinIO
+    # tests in test_realtime_files.py silently became skips that this gate did
+    # NOT catch -- the reason matched no keyword here AND no hint below.
+    "boto3",
 )
+# "minio" is deliberately NOT above, for the same reason as Firebird: it is not
+# provisioned by .github/workflows/test.yml and carries no entry in the shared
+# tests/fixtures/test_env_contract.json, so an unreachable-MinIO skip is a
+# genuinely-unprovisioned skip and must stay green. The lab DOES run MinIO
+# (container tina4-lab-minio on 9100), so the tests execute there; if MinIO is
+# ever added to CI and to the env contract, add "minio" here the same day.
+# This is why test_realtime_files.py reports the missing CLIENT and the
+# unreachable SERVICE as two separate reasons instead of one merged string:
+# merged, a MinIO-less CI run would trip the "boto3" keyword and fail honestly-
+# skipped tests.
 # A keyword must match the text the test ACTUALLY skips with, and tests skip on
 # the CLIENT LIBRARY name as often as the service name. Where the two differ and
 # the service name is not a substring of the client's, BOTH belong above:
