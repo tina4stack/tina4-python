@@ -23,6 +23,19 @@ def _future(seconds: int) -> str:
     ).isoformat()
 
 
+def queue_base_path() -> str:
+    """Where the file-backed queue stores its jobs — ``TINA4_QUEUE_PATH``, else
+    ``data/queue`` (relative to the working directory).
+
+    Public because it is the ONE answer to "where do the queue files live", and
+    anything that reads the store directly (the dev-admin queue panel) must ask
+    here rather than re-derive it. The dev admin hardcoded
+    ``os.getcwd()/data/queue/<topic>`` and so listed a DIFFERENT directory from
+    the one ``Queue.size()`` counted the moment ``TINA4_QUEUE_PATH`` was set.
+    """
+    return os.environ.get("TINA4_QUEUE_PATH", "data/queue")
+
+
 class LiteBackend:
     """File-based queue backend — JSON files on disk. Zero dependencies.
 
@@ -46,7 +59,7 @@ class LiteBackend:
         # reclaim (a reservation then lasts until the consumer acks — the old
         # at-most-once behaviour).
         self._visibility_timeout = visibility_timeout
-        self._base_path = os.environ.get("TINA4_QUEUE_PATH", "data/queue")
+        self._base_path = queue_base_path()
         self._lock = threading.Lock()
         self._seq = 0
         self._ensure_dirs()

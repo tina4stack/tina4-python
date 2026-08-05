@@ -610,10 +610,39 @@ async def _api_routes(request, response):
         return response({"routes": [], "count": 0, "error": str(e)})
 
 
+def _read_queue_dir(directory: str, status: str = None) -> list:
+    """Read every ``*.queue-data`` record in ONE queue directory, oldest name
+    first, skipping corrupt files exactly as ``LiteBackend.size()`` skips them —
+    so the list and the count always see the same set.
+
+    ``status`` labels the jobs, for the ``failed/`` and ``reserved/`` dirs whose
+    every file is counted by ``size()`` regardless of the status string stored
+    inside it. Left as None (the queue dir) each job keeps its OWN status, which
+    is exactly the field ``size("pending")`` / ``size("completed")`` matches on.
+    """
+    jobs = []
+    try:
+        filenames = sorted(os.listdir(directory))
+    except OSError:
+        return jobs
+    for filename in filenames:
+        if not filename.endswith(".queue-data"):
+            continue  # skips the failed/ + reserved/ subdirectories
+        try:
+            with open(os.path.join(directory, filename)) as fh:
+                job = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            continue  # skip corrupt files
+        job["status"] = status or job.get("status") or "pending"
+        jobs.append(job)
+    return jobs
+
+
 async def _api_queue_topics(request, response):
     """List available queue topics by scanning the queue data directory."""
     try:
-        queue_dir = os.path.join(os.getcwd(), "data", "queue")
+        from tina4_python.queue import queue_base_path
+        queue_dir = queue_base_path()
         if os.path.isdir(queue_dir):
             topics = sorted([d for d in os.listdir(queue_dir) if os.path.isdir(os.path.join(queue_dir, d))])
         else:
@@ -626,7 +655,7 @@ async def _api_queue_topics(request, response):
 async def _api_queue(request, response):
     """Queue status and jobs — works with any backend (lite, kafka, mongo, rabbitmq)."""
     try:
-        from tina4_python.queue import Queue
+        from tina4_python.queue import Queue, queue_base_path
         topic = request.params.get("topic", "default") if hasattr(request, "params") else "default"
         status_filter = request.params.get("status", None) if hasattr(request, "params") else None
         queue = Queue(topic=topic)
@@ -639,29 +668,36 @@ async def _api_queue(request, response):
             "reserved": queue.size("reserved"),
         }
 
-        # Jobs by status — list pending by reading queue files directly
+        # The job list and the stats above MUST describe the same set of jobs.
+        # Three defects broke that (see tests/test_dev_admin_queue_path.py):
+        #
+        #  1. The directory. This scanned a hardcoded cwd/data/queue/<topic>
+        #     while Queue.size() reads queue_base_path() — so with
+        #     TINA4_QUEUE_PATH set the panel listed one directory and counted
+        #     another.
+        #  2. The set. Reserved jobs were counted by stats.reserved but never
+        #     listed, and a failed-but-retryable job — which lives in the
+        #     PENDING directory with status "pending" — was listed twice: once
+        #     by the directory scan and again by queue.failed(), which re-reads
+        #     the same files.
+        #  3. maxRetries. queue.dead_letters() filters on THIS queue's
+        #     max_retries, which the dev admin cannot know, so it returned fewer
+        #     jobs than size("failed") counts — and returns Job OBJECTS, whose
+        #     item assignment raised TypeError and blanked the whole endpoint.
+        #
+        # Each job now appears exactly once, in the bucket its own stat counts
+        # it in: the queue dir under its own status (what size(<status>) matches
+        # on), reserved/ -> reserved, failed/ -> dead_letter (every file there,
+        # read the same way size("failed") counts it).
+        topic_dir = os.path.join(queue_base_path(), topic)
         jobs = []
-        if status_filter == "pending" or not status_filter:
-            queue_dir = os.path.join(os.getcwd(), "data", "queue", topic)
-            if os.path.isdir(queue_dir):
-                for filename in sorted(os.listdir(queue_dir)):
-                    if filename.endswith(".queue-data"):
-                        filepath = os.path.join(queue_dir, filename)
-                        try:
-                            with open(filepath, "r") as fh:
-                                job = json.load(fh)
-                                job["status"] = "pending"
-                                jobs.append(job)
-                        except Exception:
-                            pass
-        if status_filter == "failed" or not status_filter:
-            for j in queue.failed():
-                j["status"] = "failed"
-                jobs.append(j)
-        if status_filter == "dead" or not status_filter:
-            for j in queue.dead_letters():
-                j["status"] = "dead_letter"
-                jobs.append(j)
+        if not status_filter or status_filter in ("pending", "completed"):
+            counted = (status_filter,) if status_filter else ("pending", "completed")
+            jobs += [j for j in _read_queue_dir(topic_dir) if j["status"] in counted]
+        if not status_filter or status_filter == "reserved":
+            jobs += _read_queue_dir(os.path.join(topic_dir, "reserved"), "reserved")
+        if not status_filter or status_filter in ("failed", "dead"):
+            jobs += _read_queue_dir(os.path.join(topic_dir, "failed"), "dead_letter")
 
         return response({"jobs": jobs, "stats": stats})
     except Exception as e:
@@ -696,12 +732,18 @@ async def _api_queue_purge(request, response):
 
 
 async def _api_queue_dead_letters(request, response):
-    """List dead letter queue jobs (exceeded max retries)."""
+    """List dead letter queue jobs (exceeded max retries).
+
+    Reads failed/ the same way ``size("failed")`` counts it, for the same two
+    reasons as _api_queue: ``queue.dead_letters()`` filters on the DEV ADMIN's
+    own max_retries — hiding a job an app dead-lettered at fewer attempts — and
+    returns ``Job`` objects, which json.dumps(default=str) rendered as
+    "<tina4_python.queue.job.Job object at 0x...>" instead of job records.
+    """
     try:
-        from tina4_python.queue import Queue
+        from tina4_python.queue import queue_base_path
         topic = request.params.get("topic", "default") if hasattr(request, "params") else "default"
-        queue = Queue(topic=topic)
-        jobs = queue.dead_letters()
+        jobs = _read_queue_dir(os.path.join(queue_base_path(), topic, "failed"), "dead_letter")
         return response({"jobs": jobs, "count": len(jobs), "topic": topic})
     except Exception as e:
         return response({"jobs": [], "error": str(e)})

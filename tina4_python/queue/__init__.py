@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 
 from tina4_python.queue.amqp_url import parse_amqp_url as _parse_amqp_url
 from tina4_python.queue.job import Job
-from tina4_python.queue.lite_backend import LiteBackend
+from tina4_python.queue.lite_backend import LiteBackend, queue_base_path
 from tina4_python.queue.rabbitmq_backend import RabbitMQBackend
 from tina4_python.queue.kafka_backend import KafkaBackend
 from tina4_python.queue.mongo_backend import MongoBackend
@@ -418,4 +418,5 @@ def _future(seconds: int) -> str:
 
 
 
-__all__ = ["Queue", "Job", "LiteBackend", "RabbitMQBackend", "KafkaBackend", "MongoBackend"]
+__all__ = ["Queue", "Job", "LiteBackend", "RabbitMQBackend", "KafkaBackend", "MongoBackend",
+           "queue_base_path"]
