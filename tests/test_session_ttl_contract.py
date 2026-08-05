@@ -241,15 +241,23 @@ def test_session_ttl_env_var_reaches_the_stored_deadline_out_of_band(tmp_path):
 
     # redis / valkey - ask the SERVER for the key's own remaining TTL, over a
     # socket this test opens itself.
-    for name, host, port, db_env in (
-        ("redis", REDIS_HOST, REDIS_PORT, "TINA4_SESSION_REDIS_DB"),
-        ("valkey", VALKEY_HOST, VALKEY_PORT, "TINA4_SESSION_VALKEY_DB"),
+    for name, host, port, db_env, prefix_env in (
+        ("redis", REDIS_HOST, REDIS_PORT, "TINA4_SESSION_REDIS_DB", "TINA4_SESSION_REDIS_PREFIX"),
+        ("valkey", VALKEY_HOST, VALKEY_PORT, "TINA4_SESSION_VALKEY_DB", "TINA4_SESSION_VALKEY_PREFIX"),
     ):
         session_id = f"ttloob-{name}-{uuid.uuid4().hex[:8]}"
         _build(name, tmp_path, db_path).write(session_id, {"seeded": True})
         # Read from the SAME db number the handler used, not a hardcoded 0.
         db_num = int(os.environ.get(db_env, "0") or 0)
-        observed[name] = _raw_redis_ttl(host, port, f"tina4:session:{session_id}", db_num)
+        # And under the SAME key. "tina4:session:" is only the DEFAULT - the
+        # handlers read a prefix variable - so spelling it literally here asks
+        # for a key nobody wrote the moment a deployment namespaces its sessions.
+        # Redis answers TTL -2 on a missing key, which this case would then
+        # report as a deadline that did not come from TINA4_SESSION_TTL: a config
+        # mismatch dressed up as a TTL defect. Measured in exactly that form in
+        # Ruby and Node on 2026-08-05.
+        prefix = os.environ.get(prefix_env) or "tina4:session:"
+        observed[name] = _raw_redis_ttl(host, port, f"{prefix}{session_id}", db_num)
 
     # mongodb - read the document's own absolute deadline with an independent client
     mongo_id = f"ttloob-mongo-{uuid.uuid4().hex[:8]}"

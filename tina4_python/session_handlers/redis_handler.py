@@ -8,6 +8,7 @@ Environment variables:
     TINA4_SESSION_REDIS_PORT     — port (default: 6379)
     TINA4_SESSION_REDIS_PASSWORD — password (default: none)
     TINA4_SESSION_REDIS_DB       — database number (default: 0)
+    TINA4_SESSION_REDIS_PREFIX   — key prefix (default: tina4:session:)
     TINA4_SESSION_TTL            — session TTL in seconds (default: 3600)
 """
 import json
@@ -29,7 +30,9 @@ class RedisSessionHandler(SessionHandler):
         self._password = config.get("password") or os.environ.get("TINA4_SESSION_REDIS_PASSWORD") or None
         self._db = int(config.get("db", os.environ.get("TINA4_SESSION_REDIS_DB", "0")))
         self._ttl = int(config.get("ttl", os.environ.get("TINA4_SESSION_TTL", "3600")))
-        self._prefix = config.get("prefix", "tina4:session:")
+        self._prefix = config.get(
+            "prefix", os.environ.get("TINA4_SESSION_REDIS_PREFIX", "tina4:session:")
+        )
 
         self._redis_client = None
         self._use_redis_pkg = False

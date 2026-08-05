@@ -621,6 +621,14 @@ class _RedisLikeContract:
     HOST: str = ""
     PORT: int = 0
     NAME: str = ""
+    # The key PREFIX is a coordinate like the host, the port and the db number.
+    # Every assertion below used to spell "tina4:session:" literally, which is
+    # only the DEFAULT - the handlers read TINA4_SESSION_REDIS_PREFIX and
+    # TINA4_SESSION_VALKEY_PREFIX, so the moment a deployment or an isolated test
+    # run names its keys, the witness would look for a key nobody wrote and
+    # report data loss. Each subclass resolves it from the same variable its
+    # handler reads.
+    PREFIX: str = "tina4:session:"
 
     def _handler(self, **kw):
         raise NotImplementedError
@@ -637,9 +645,9 @@ class _RedisLikeContract:
             assert handler.read(sid)["user_id"] == 99
             handler.destroy(sid)
             assert handler.read(sid) == {}
-            assert obs.exists(f"tina4:session:{sid}") == 0, "the key survived destroy()"
+            assert obs.exists(f"{self.PREFIX}{sid}") == 0, "the key survived destroy()"
         finally:
-            obs.delete(f"tina4:session:{sid}")
+            obs.delete(f"{self.PREFIX}{sid}")
             obs.close()
             handler.close()
 
@@ -659,11 +667,11 @@ class _RedisLikeContract:
         obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"user_id": 42, "role": "admin"}, ttl=600)
-            raw = obs.get(f"tina4:session:{sid}")
-            assert raw is not None, f"nothing stored at tina4:session:{sid}"
+            raw = obs.get(f"{self.PREFIX}{sid}")
+            assert raw is not None, f"nothing stored at {self.PREFIX}{sid}"
             assert json.loads(raw) == {"user_id": 42, "role": "admin"}
         finally:
-            obs.delete(f"tina4:session:{sid}")
+            obs.delete(f"{self.PREFIX}{sid}")
             obs.close()
             handler.close()
 
@@ -673,10 +681,10 @@ class _RedisLikeContract:
         obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"user_id": 42}, ttl=600)
-            ttl = obs.ttl(f"tina4:session:{sid}")
+            ttl = obs.ttl(f"{self.PREFIX}{sid}")
             assert 590 <= ttl <= 600, f"server reports TTL {ttl}, expected ~600"
         finally:
-            obs.delete(f"tina4:session:{sid}")
+            obs.delete(f"{self.PREFIX}{sid}")
             obs.close()
             handler.close()
 
@@ -686,10 +694,10 @@ class _RedisLikeContract:
         obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"user_id": 42})  # no ttl arg -> handler default
-            ttl = obs.ttl(f"tina4:session:{sid}")
+            ttl = obs.ttl(f"{self.PREFIX}{sid}")
             assert 1790 <= ttl <= 1800, f"server reports TTL {ttl}, expected ~1800"
         finally:
-            obs.delete(f"tina4:session:{sid}")
+            obs.delete(f"{self.PREFIX}{sid}")
             obs.close()
             handler.close()
 
@@ -701,7 +709,7 @@ class _RedisLikeContract:
         try:
             handler.write(sid, {"a": 1})
             assert obs.exists(f"{prefix}{sid}") == 1
-            assert obs.exists(f"tina4:session:{sid}") == 0
+            assert obs.exists(f"{self.PREFIX}{sid}") == 0
         finally:
             obs.delete(f"{prefix}{sid}")
             obs.close()
@@ -718,10 +726,10 @@ class _RedisLikeContract:
             handler.write(sid, {"user_id": 1}, ttl=1)
             assert handler.read(sid) == {"user_id": 1}
             time.sleep(1.5)
-            assert obs.exists(f"tina4:session:{sid}") == 0, "server kept an expired key"
+            assert obs.exists(f"{self.PREFIX}{sid}") == 0, "server kept an expired key"
             assert handler.read(sid) == {}
         finally:
-            obs.delete(f"tina4:session:{sid}")
+            obs.delete(f"{self.PREFIX}{sid}")
             obs.close()
             handler.close()
 
@@ -732,10 +740,10 @@ class _RedisLikeContract:
         sid = self._sid()
         obs = _observer(self.HOST, self.PORT, self.DB)
         try:
-            obs.set(f"tina4:session:{sid}", "not-json")
+            obs.set(f"{self.PREFIX}{sid}", "not-json")
             assert handler.read(sid) == {}
         finally:
-            obs.delete(f"tina4:session:{sid}")
+            obs.delete(f"{self.PREFIX}{sid}")
             obs.close()
             handler.close()
 
@@ -767,12 +775,12 @@ class _RedisLikeContract:
         obs = _observer(self.HOST, self.PORT, self.DB)
         try:
             handler.write(sid, {"raw": True}, ttl=300)
-            assert obs.ttl(f"tina4:session:{sid}") > 0
+            assert obs.ttl(f"{self.PREFIX}{sid}") > 0
             assert handler.read(sid) == {"raw": True}
             handler.destroy(sid)
-            assert obs.exists(f"tina4:session:{sid}") == 0
+            assert obs.exists(f"{self.PREFIX}{sid}") == 0
         finally:
-            obs.delete(f"tina4:session:{sid}")
+            obs.delete(f"{self.PREFIX}{sid}")
             obs.close()
             handler.close()
 
@@ -786,6 +794,7 @@ class TestRedisIntegration(_RedisLikeContract):
 
     HOST, PORT, NAME = _REDIS_HOST, _REDIS_PORT, "redis"
     DB = int(os.environ.get("TINA4_SESSION_REDIS_DB", "0") or 0)
+    PREFIX = os.environ.get("TINA4_SESSION_REDIS_PREFIX") or "tina4:session:"
 
     def _handler(self, **kw):
         from tina4_python.session_handlers.redis_handler import RedisSessionHandler
@@ -802,6 +811,7 @@ class TestValkeyIntegration(_RedisLikeContract):
 
     HOST, PORT, NAME = _VALKEY_HOST, _VALKEY_PORT, "valkey"
     DB = int(os.environ.get("TINA4_SESSION_VALKEY_DB", "0") or 0)
+    PREFIX = os.environ.get("TINA4_SESSION_VALKEY_PREFIX") or "tina4:session:"
 
     def _handler(self, **kw):
         from tina4_python.session_handlers.valkey_handler import ValkeySessionHandler
