@@ -241,13 +241,15 @@ def test_session_ttl_env_var_reaches_the_stored_deadline_out_of_band(tmp_path):
 
     # redis / valkey - ask the SERVER for the key's own remaining TTL, over a
     # socket this test opens itself.
-    for name, host, port in (
-        ("redis", REDIS_HOST, REDIS_PORT),
-        ("valkey", VALKEY_HOST, VALKEY_PORT),
+    for name, host, port, db_env in (
+        ("redis", REDIS_HOST, REDIS_PORT, "TINA4_SESSION_REDIS_DB"),
+        ("valkey", VALKEY_HOST, VALKEY_PORT, "TINA4_SESSION_VALKEY_DB"),
     ):
         session_id = f"ttloob-{name}-{uuid.uuid4().hex[:8]}"
         _build(name, tmp_path, db_path).write(session_id, {"seeded": True})
-        observed[name] = _raw_redis_ttl(host, port, f"tina4:session:{session_id}")
+        # Read from the SAME db number the handler used, not a hardcoded 0.
+        db_num = int(os.environ.get(db_env, "0") or 0)
+        observed[name] = _raw_redis_ttl(host, port, f"tina4:session:{session_id}", db_num)
 
     # mongodb - read the document's own absolute deadline with an independent client
     mongo_id = f"ttloob-mongo-{uuid.uuid4().hex[:8]}"
@@ -261,14 +263,37 @@ def test_session_ttl_env_var_reaches_the_stored_deadline_out_of_band(tmp_path):
     )
 
 
-def _raw_redis_ttl(host: str, port: int, key: str) -> float:
-    """Issue a real TTL command over our own socket - not the handler's."""
+def _raw_redis_ttl(host: str, port: int, key: str, db: int = 0) -> float:
+    """Issue a real TTL command over our own socket - not the handler's.
+
+    SELECT the SAME database the handler wrote to. A fresh Redis connection is
+    always DB 0, so without this the probe looked in DB 0 while the handler had
+    written to whatever TINA4_SESSION_REDIS_DB says. Redis answers TTL on a
+    missing key with -2, and the assertion then read "the stored deadline did
+    not come from TINA4_SESSION_TTL" - a config-mismatch reported as a TTL bug.
+    MEASURED when the four suites began running side by side, each on its own
+    redis DB number: this failed in three frameworks at once and looked like a
+    real framework defect.
+
+    The sibling _raw_mongo_expires_at already honours TINA4_SESSION_MONGO_DB;
+    this one simply never got the same treatment.
+    """
     with socket.create_connection((host, port), timeout=3) as sock:
+        if db:
+            dbs = str(db)
+            sock.sendall(f"*2\r\n$6\r\nSELECT\r\n${len(dbs)}\r\n{dbs}\r\n".encode())
+            selected = sock.recv(128).decode()
+            assert selected.startswith("+OK"), f"SELECT {db} refused: {selected!r}"
         payload = f"*2\r\n$3\r\nTTL\r\n${len(key)}\r\n{key}\r\n".encode()
         sock.sendall(payload)
         reply = sock.recv(128).decode()
     assert reply.startswith(":"), f"unexpected TTL reply for {key}: {reply!r}"
-    return float(reply[1:].strip())
+    ttl = float(reply[1:].strip())
+    assert ttl != -2, (
+        f"{key} does not exist in redis db {db} - the probe and the handler "
+        "disagree about where the session was written"
+    )
+    return ttl
 
 
 def _raw_mongo_expires_at(session_id: str) -> float:
