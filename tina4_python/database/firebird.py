@@ -297,7 +297,7 @@ class FirebirdAdapter(DatabaseAdapter):
                         desc = cursor.description
                         row = cursor.fetchone()
                         if row and desc:
-                            col_names = [d[0].strip().lower() for d in desc]
+                            col_names = [FirebirdAdapter._column_name(d[0]) for d in desc]
                             records = [dict(zip(col_names, row))]
                 except Exception:
                     pass
@@ -351,7 +351,7 @@ class FirebirdAdapter(DatabaseAdapter):
         cursor = self._safe_cursor_execute(cursor, paginated_sql, params)  # FAILS LOUD
 
         desc = cursor.description
-        col_names = [d[0].strip().lower() for d in desc] if desc else []
+        col_names = [FirebirdAdapter._column_name(d[0]) for d in desc] if desc else []
         rows = [self._decode_blobs(dict(zip(col_names, row))) for row in cursor.fetchall()]
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
@@ -365,8 +365,33 @@ class FirebirdAdapter(DatabaseAdapter):
         row = cursor.fetchone()
         if row is None:
             return None
-        col_names = [d[0].strip().lower() for d in desc] if desc else []
+        col_names = [FirebirdAdapter._column_name(d[0]) for d in desc] if desc else []
         return self._decode_blobs(dict(zip(col_names, row)))
+
+    @staticmethod
+    def _column_name(raw: str) -> str:
+        """Firebird's stored column name, folded back only when it was folded.
+
+        Firebird's identifier folding is ASYMMETRIC. An unquoted `AS x` is
+        stored UPPERCASE, so the driver hands back "X" where every other engine
+        Tina4 supports gives "x" -- PostgreSQL folds to lower, and MySQL, SQLite
+        and MSSQL preserve what you wrote. Portable code that reads row["x"]
+        therefore breaks on Firebird alone.
+
+        A QUOTED `AS "MyCol"` is stored exactly as written, and that case is
+        deliberate: the caller asked for it. This used to lowercase
+        unconditionally, so "MyCol" came back "mycol" and there was no way to
+        get a mixed-case key at all -- the same asymmetric-folding trap that
+        made table_exists() miss quoted tables.
+
+        So: fold back only a name that carries no lowercase letter, which is
+        the only thing unquoted folding can produce. A quoted ALL-CAPS name is
+        genuinely indistinguishable from a folded one and is lowercased too;
+        that ambiguity is Firebird's, not ours, and quoting an all-caps name is
+        the one spelling this cannot round-trip.
+        """
+        name = raw.strip()
+        return name.lower() if name == name.upper() else name
 
     @staticmethod
     def _decode_blobs(row: dict) -> dict:

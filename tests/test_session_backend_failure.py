@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import socket
 import stat
 import uuid
@@ -213,6 +214,41 @@ def unreachable_mongo():
 # ── default policy: log-loud + degrade, driven by a real refused connection ──
 
 
+def _permission_bits_are_enforced() -> bool:
+    """Can a write through a 0400 file actually be refused in this process?
+
+    The guard here used to ask ``os.geteuid() == 0``, which is a PROXY for the
+    property the test needs rather than the property itself. Root walks through
+    the permission bits via CAP_DAC_OVERRIDE, not by being uid 0 -- a process can
+    DROP that capability and stay root (``setpriv --bounding-set=-dac_override``),
+    and then 0400 denies it like anyone else. The proxy answered "skip" for a
+    process that could have run the test perfectly well, so on any host whose
+    suite runs as root -- the lab, every time -- this never ran at all.
+
+    Ask the kernel instead of inferring from the uid.
+    """
+    probe = tempfile.NamedTemporaryFile(delete=False)
+    probe.write(b"x")
+    probe.close()
+    try:
+        os.chmod(probe.name, 0o400)
+        try:
+            with open(probe.name, "a"):
+                return False          # the write was allowed: bits do not bind
+        except PermissionError:
+            return True
+    finally:
+        os.chmod(probe.name, 0o600)   # a 0400 fixture must still be removable
+        os.unlink(probe.name)
+
+
+NO_DENIAL_REASON = (
+    "[needs:no-dac-override] this process writes straight through a 0400 file "
+    "(root holding CAP_DAC_OVERRIDE), so no real denial is reachable here - run "
+    "under `setpriv --bounding-set=-dac_override,-dac_read_search` to exercise it"
+)
+
+
 def test_read_failure_logs_and_degrades_to_empty(log_sink, unreachable_redis):
     """A real ECONNREFUSED on start() must NOT raise: the request still gets a
     session id with empty data, and the REAL logger records the REAL cause."""
@@ -270,8 +306,8 @@ def test_write_fails_after_a_successful_start_with_a_real_eacces(log_sink, tmp_p
     A REAL FileSessionHandler writes successfully, then the real session FILE is
     made read-only so the NEXT write takes a real EACCES from the real kernel.
     """
-    if os.geteuid() == 0:
-        pytest.skip("running as root: chmod 0400 does not deny root, so no real EACCES")
+    if not _permission_bits_are_enforced():
+        pytest.skip(NO_DENIAL_REASON)
 
     handler = FileSessionHandler(path=str(tmp_path / "sessions"))
     session = Session(handler=handler)
