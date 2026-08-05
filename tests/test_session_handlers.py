@@ -62,6 +62,26 @@ _VALKEY_HOST, _VALKEY_PORT = _service_target("TINA4_TEST_VALKEY_URL", "redis://l
 # ── Interface Contract Tests ─────────────────────────────────────
 
 
+
+@pytest.fixture()
+def no_session_env(monkeypatch):
+    """Assert a DEFAULT against the code's defaults, not the machine's environment.
+
+    A test that constructs a handler with no arguments and asserts host ==
+    "localhost" is only testing the default when the environment holds no
+    TINA4_SESSION_* / TINA4_*_HOST overrides. It passed on a laptop and failed
+    the moment the four suites ran side by side with a per-framework Redis DB,
+    Mongo database and memcached instance -- at which point it was measuring the
+    machine, not the framework.
+
+    Same shape as no_backend_env in tests/test_queue_backends.py.
+    """
+    prefixes = ("TINA4_SESSION_", "TINA4_REDIS", "TINA4_VALKEY", "TINA4_MONGO",
+                "TINA4_MEMCACHED")
+    for name in [k for k in os.environ if k.startswith(prefixes)]:
+        monkeypatch.delenv(name, raising=False)
+
+
 class TestSessionHandlerContract:
     """Verify that all handlers extend SessionHandler and implement required methods."""
 
@@ -117,7 +137,7 @@ class TestSessionHandlerContract:
 class TestRedisHandlerConfig:
     """Test Redis handler configuration without connecting."""
 
-    def test_default_config(self):
+    def test_default_config(self, no_session_env):
         from tina4_python.session_handlers.redis_handler import RedisSessionHandler
 
         handler = RedisSessionHandler()
@@ -181,7 +201,7 @@ class TestRedisHandlerConfig:
 class TestMongoDBHandlerConfig:
     """Test MongoDB handler configuration without connecting."""
 
-    def test_default_config(self):
+    def test_default_config(self, no_session_env):
         from tina4_python.session_handlers.mongodb_handler import MongoDBSessionHandler
 
         handler = MongoDBSessionHandler()
@@ -342,7 +362,7 @@ class TestMongoDBHandlerReal:
 class TestValkeyHandlerConfig:
     """Test Valkey handler configuration without connecting."""
 
-    def test_default_config(self):
+    def test_default_config(self, no_session_env):
         from tina4_python.session_handlers.valkey_handler import ValkeySessionHandler
 
         handler = ValkeySessionHandler()
