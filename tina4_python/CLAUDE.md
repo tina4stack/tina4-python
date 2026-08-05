@@ -1644,6 +1644,11 @@ TINA4_TOKEN_LIMIT=60              # Token lifetime in minutes (default: 60)
 TINA4_DATABASE_URL=sqlite:///app.db     # Connection URL (driver://host:port/database)
 TINA4_DATABASE_USERNAME=                 # DB username (for PostgreSQL, MySQL, etc.)
 TINA4_DATABASE_PASSWORD=                 # DB password
+TINA4_DATABASE_CONNECT_TIMEOUT=10        # Seconds a database connect may block (default 10). Set <= 0 to wait
+                                         # indefinitely (the old behaviour); a non-numeric value warns and uses 10.
+                                         # On expiry the error names the host, port, elapsed seconds and this variable.
+                                         # Applies to postgres/mysql/mssql/odbc/firebird, and to mongodb's deferred
+                                         # connect. SQLite is exempt: it opens a local file, there is no peer to hang on
 
 # Framework
 TINA4_DEBUG=true                  # Enable dev mode (toolbar, live reload, error overlay)

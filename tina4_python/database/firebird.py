@@ -10,7 +10,10 @@ import os
 import re
 from urllib.parse import urlparse, unquote, parse_qs
 from tina4_python.database.database_url import url_credentials
-from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
+from tina4_python.database.adapter import (
+    DatabaseAdapter, DatabaseResult, SQLTranslator,
+    call_with_deadline, connect_deadline,
+)
 
 
 # Detects a Windows drive-letter prefix like "C:/" or "C:\". The leading-slash
@@ -194,19 +197,20 @@ class FirebirdAdapter(DatabaseAdapter):
         if p is None:
             raise RuntimeError("FirebirdAdapter._open called before connect()")
 
-        if _driver_name == "firebird-driver":
-            # Modern firebird-driver uses dsn format: host/port:path
-            dsn = f"{p['host']}/{p['port']}:{p['db_path']}" if p['port'] != 3050 else f"{p['host']}:{p['db_path']}"
-            self._conn = _driver.connect(
-                dsn,
-                user=p["user"],
-                password=p["password"],
-                charset=p["charset"],
-                **p["extra"],
-            )
-        else:
+        def open_connection():
+            if _driver_name == "firebird-driver":
+                # Modern firebird-driver uses dsn format: host/port:path
+                dsn = (f"{p['host']}/{p['port']}:{p['db_path']}" if p['port'] != 3050
+                       else f"{p['host']}:{p['db_path']}")
+                return _driver.connect(
+                    dsn,
+                    user=p["user"],
+                    password=p["password"],
+                    charset=p["charset"],
+                    **p["extra"],
+                )
             # Legacy fdb
-            self._conn = _driver.connect(
+            return _driver.connect(
                 host=p["host"],
                 port=p["port"],
                 database=p["db_path"],
@@ -215,6 +219,15 @@ class FirebirdAdapter(DatabaseAdapter):
                 charset=p["charset"],
                 **p["extra"],
             )
+
+        # Neither firebird-driver nor fdb exposes a connect timeout — the work
+        # happens inside fbclient, a ctypes call into C that no Python socket
+        # timeout can reach — so the bound has to be a watchdog around the
+        # call. Measured in the Node sibling: a Firebird driver that never
+        # called back sat for 16 minutes at 0.0% CPU. This covers the reconnect
+        # path too, because _reconnect() comes back through here.
+        with connect_deadline(p["host"], p["port"]) as timeout_seconds:
+            self._conn = call_with_deadline(open_connection, timeout_seconds)
 
     @classmethod
     def _is_dead_connection(cls, exc: BaseException) -> bool:

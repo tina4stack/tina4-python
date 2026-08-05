@@ -15,7 +15,9 @@ handle should be done with native pymongo via db.adapter._collection().
 import re
 from urllib.parse import urlparse
 from tina4_python.database.database_url import url_credentials
-from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
+from tina4_python.database.adapter import (
+    DatabaseAdapter, DatabaseResult, resolve_connect_timeout,
+)
 
 
 # ── SQL → MongoDB translation helpers ─────────────────────────────────────────
@@ -377,6 +379,16 @@ class MongoDBAdapter(DatabaseAdapter):
         host = parsed.hostname or "localhost"
         port = parsed.port or 27017
         uri = f"mongodb://{auth}{host}:{port}/{dbname}"
+
+        # MongoClient does NOT connect here — it returns immediately and dials
+        # in the background — so this connect() cannot hang the way the others
+        # can. connectTimeoutMS is pymongo's own socket-connect bound and makes
+        # the same variable govern the DEFERRED connect that happens on the
+        # first operation. Server SELECTION keeps pymongo's own default: it is
+        # a retry loop around these bounded connects, not a connect itself.
+        timeout_seconds = resolve_connect_timeout()
+        if timeout_seconds is not None and "connectTimeoutMS" not in kwargs:
+            kwargs["connectTimeoutMS"] = int(timeout_seconds * 1000)
 
         self._client = pymongo.MongoClient(uri, **kwargs)
         self._db = self._client[dbname]

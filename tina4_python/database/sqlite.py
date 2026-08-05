@@ -51,6 +51,12 @@ class SQLiteAdapter(DatabaseAdapter):
         """Connect to SQLite database.
 
         Connection string: path to .db file (e.g., "data/app.db")
+
+        Deliberately NOT bounded by TINA4_DATABASE_CONNECT_TIMEOUT: this opens a
+        local file, there is no peer that can accept and then go silent, so there
+        is no connect to bound. The ``timeout`` below is a different thing
+        entirely — how long to wait for ANOTHER WRITER'S LOCK — and repurposing
+        it would break write contention, not add a connect bound.
         """
         self._conn = sqlite3.connect(
             connection_string,

@@ -3,8 +3,180 @@
 All database drivers implement DatabaseAdapter. This is the only interface
 the rest of the framework touches. Adding a new database = implementing this class.
 """
+import contextlib
+import math
+import os
 import re
+import threading
+import time
 from dataclasses import dataclass, field
+
+
+# ── Bounded connect ───────────────────────────────────────────────────────
+# A connect that can block forever hangs the application with no log, no error
+# and no signal to say what happened — the process just sits there at 0% CPU.
+# Every adapter whose connect talks to a peer therefore hands the driver a
+# connect timeout. Same variable, same unit and same default in all four
+# frameworks.
+CONNECT_TIMEOUT_VARIABLE = "TINA4_DATABASE_CONNECT_TIMEOUT"
+
+# 10 seconds: long enough for a cold container, a TLS handshake and a slow
+# intercontinental link, short enough that a black-holed host surfaces as an
+# error on the first request instead of a hung worker.
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 10.0
+
+
+class DatabaseConnectTimeout(TimeoutError):
+    """A database connect exceeded TINA4_DATABASE_CONNECT_TIMEOUT.
+
+    A subclass of the builtin TimeoutError, so ``except TimeoutError`` in
+    application code catches it without importing anything from Tina4.
+    """
+
+
+def resolve_connect_timeout() -> float | None:
+    """Seconds a database connect may block. ``None`` means unbounded.
+
+    Read from TINA4_DATABASE_CONNECT_TIMEOUT. A value <= 0 DISABLES the bound
+    and restores the old wait-forever behaviour — the deliberate escape hatch
+    for a link where a slow connect is normal and a hang is preferable to a
+    failed request. A value that is not a number at all is a typo, not a
+    choice, so it warns and uses the default rather than silently waiting
+    forever on what the operator believed was a bound.
+    """
+    raw = os.environ.get(CONNECT_TIMEOUT_VARIABLE, "").strip()
+    if not raw:
+        return DEFAULT_CONNECT_TIMEOUT_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError:
+        from tina4_python.debug import Log
+        Log.warning(
+            f"{CONNECT_TIMEOUT_VARIABLE}={raw!r} is not a number of seconds — "
+            f"bounding database connects at the {DEFAULT_CONNECT_TIMEOUT_SECONDS:g}s default instead"
+        )
+        return DEFAULT_CONNECT_TIMEOUT_SECONDS
+    if seconds <= 0:
+        return None
+    return seconds
+
+
+def driver_connect_timeout_seconds(seconds: float | None) -> int | None:
+    """A driver's own connect-timeout option value, rounded UP to whole seconds.
+
+    Every driver option here (libpq ``connect_timeout``, mysql-connector
+    ``connection_timeout``, pymssql ``login_timeout``, pyodbc ``timeout``) is
+    whole seconds. Rounding UP matters: a driver that fired EARLY — at 2s for a
+    configured 2.5s — would raise its own raw error before our bound was
+    reached, and the caller would see a bare driver message instead of one
+    naming the variable that caused it.
+    """
+    return None if seconds is None else max(1, math.ceil(seconds))
+
+
+@contextlib.contextmanager
+def connect_deadline(host, port):
+    """Bound a driver connect, and name the bound when it expires.
+
+    Yields the timeout in seconds (``None`` when unbounded, in which case the
+    caller passes the driver no timeout option at all and the old behaviour is
+    restored exactly). Any connect failure that took at least that long is
+    re-raised as :class:`DatabaseConnectTimeout` naming the host, the port, the
+    elapsed seconds and the variable that tunes it — the four things needed to
+    tell "the bound fired" apart from "the database rejected me", which a bare
+    driver timeout message does not.
+
+    A failure that arrives FASTER than the bound is a real error (a refused
+    connection, bad credentials, an unknown database) and is re-raised
+    untouched.
+
+    WHY THIS IS A WRAPPER AND NOT A COMPETING TIMER
+    ----------------------------------------------
+    The driver's own timer is MEANT to win the race. This is not a second
+    countdown fighting the driver's — it is an exception translator, so when
+    libpq or mysql-connector aborts at its own deadline we catch that failure
+    and restate it in the framework's words, keeping the driver's error as
+    ``__cause__``. The driver still gets to abort cleanly (no abandoned thread,
+    no orphaned socket) AND the operator still gets a message naming the
+    variable to tune.
+
+    The alternative — giving the driver a GRACE so an outer timer expires first
+    — was rejected: it inflates the operator's configured N into N+grace, it
+    throws away the driver's own diagnosis, and for the watchdog adapters it
+    would abandon a thread the driver could have unwound itself.
+
+    The invariant that makes this work: the driver's option is always >= our
+    bound (:func:`driver_connect_timeout_seconds` rounds UP), and our clock
+    starts BEFORE the call, so the driver's own timeout cannot expire before
+    ``elapsed`` has reached our bound. Break either half and a bare driver
+    message reaches the caller instead of ours.
+    """
+    seconds = resolve_connect_timeout()
+    started = time.monotonic()
+    try:
+        yield seconds
+    except Exception as failure:
+        elapsed = time.monotonic() - started
+        if seconds is not None and elapsed >= seconds:
+            raise DatabaseConnectTimeout(
+                f"Database connect to {host}:{port} timed out after {elapsed:.1f}s "
+                f"({CONNECT_TIMEOUT_VARIABLE}={seconds:g} seconds). "
+                f"Raise {CONNECT_TIMEOUT_VARIABLE} if the server is simply slow, "
+                f"or set it to 0 to wait indefinitely."
+            ) from failure
+        raise
+
+
+def call_with_deadline(operation, seconds: float | None):
+    """Run a blocking connect on a worker thread and give up after `seconds`.
+
+    The fallback for a driver whose own option cannot be trusted to bound a peer
+    that accepts the connection and then goes silent. Used by Firebird (no
+    connect-timeout parameter exists at all — the work is inside fbclient, a
+    ctypes call into C that no Python socket timeout can reach), by MSSQL
+    (pymssql's login_timeout was MEASURED not to cover this case) and by ODBC
+    (the guarantee would otherwise depend on which ODBC driver is loaded).
+
+    tina4: on expiry the worker is abandoned, still blocked inside the driver.
+    It is a daemon thread, so it cannot hold the process open, and it ends the
+    moment the peer replies or drops the socket. One leaked thread per timed-out
+    connect is the price of not hanging the entire application forever; remove
+    this the day every driver grows a real connect timeout.
+    """
+    if seconds is None:
+        return operation()
+
+    outcome = {}
+    handover_lock = threading.Lock()
+    abandoned = False
+
+    def run_operation():
+        try:
+            value = operation()
+        except BaseException as failure:  # carried across to the caller's thread
+            with handover_lock:
+                outcome["failure"] = failure
+            return
+        with handover_lock:
+            if not abandoned:
+                outcome["value"] = value
+                return
+        # The caller gave up and already raised. A connection nobody holds is a
+        # live server-side session that would never be closed, so close it here
+        # rather than leak it — the thread leak is bounded, a session leak is not.
+        with contextlib.suppress(Exception):
+            value.close()
+
+    worker = threading.Thread(target=run_operation, name="tina4-db-connect", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        with handover_lock:
+            abandoned = True
+        raise TimeoutError(f"driver connect did not return within {seconds:g}s")
+    if "failure" in outcome:
+        raise outcome["failure"]
+    return outcome["value"]
 
 
 @dataclass

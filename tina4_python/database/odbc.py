@@ -7,7 +7,34 @@ ODBC adapter using pyodbc. Provides access to any ODBC-compatible database.
 
 Requires: pip install pyodbc
 """
-from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
+import re
+
+from tina4_python.database.adapter import (
+    DatabaseAdapter, DatabaseResult,
+    call_with_deadline, connect_deadline, driver_connect_timeout_seconds,
+)
+
+
+def _odbc_server_and_port(connection_string: str) -> tuple[str, str]:
+    """The SERVER= endpoint of an ODBC connection string, for an error message.
+
+    Returns ``(host, port)`` with the port split off a ``host,port`` or
+    ``host:port`` SERVER value. Falls back to the DSN name, then a literal
+    placeholder. Only ever reads SERVER= / DSN= — an ODBC connection string
+    also carries UID= and PWD=, and none of it may reach an exception message.
+    """
+    server = re.search(r"(?:^|;)\s*SERVER\s*=\s*([^;]*)", connection_string, re.IGNORECASE)
+    if server:
+        endpoint = server.group(1).strip()
+        # SQL Server writes host,port; most other drivers use host:port.
+        host, separator, port = endpoint.partition(",")
+        if not separator:
+            host, separator, port = endpoint.partition(":")
+        return host.strip() or "(odbc)", port.strip() or "(default)"
+    dsn = re.search(r"(?:^|;)\s*DSN\s*=\s*([^;]*)", connection_string, re.IGNORECASE)
+    if dsn and dsn.group(1).strip():
+        return f"DSN={dsn.group(1).strip()}", "(dsn)"
+    return "(odbc)", "(unknown)"
 
 
 class ODBCAdapter(DatabaseAdapter):
@@ -40,7 +67,23 @@ class ODBCAdapter(DatabaseAdapter):
         if connection_string.startswith("odbc:///"):
             connection_string = connection_string[8:]
 
-        self._conn = pyodbc.connect(connection_string, autocommit=self._autocommit)
+        # pyodbc's timeout= sets SQL_ATTR_LOGIN_TIMEOUT, the ODBC-standard login
+        # bound — but whether it is honoured is up to whichever ODBC driver sits
+        # underneath, and "ODBC" is not one implementation. pymssql's
+        # login_timeout was MEASURED not to cover a peer that accepts and then
+        # goes silent (see mssql.py), and there is no reason to assume every
+        # ODBC driver does better. So the attribute is set AND the watchdog
+        # backs it up, which makes the bound hold whatever driver is loaded.
+        host, port = _odbc_server_and_port(connection_string)
+        with connect_deadline(host, port) as timeout_seconds:
+            timeout_option = driver_connect_timeout_seconds(timeout_seconds)
+            login_timeout = {} if timeout_option is None else {"timeout": timeout_option}
+            self._conn = call_with_deadline(
+                lambda: pyodbc.connect(
+                    connection_string, autocommit=self._autocommit, **login_timeout
+                ),
+                timeout_seconds,
+            )
 
     def close(self):
         if self._conn:

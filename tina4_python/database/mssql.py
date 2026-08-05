@@ -9,7 +9,10 @@ Requires: pip install pymssql
 import re
 from urllib.parse import urlparse
 from tina4_python.database.database_url import url_credentials
-from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
+from tina4_python.database.adapter import (
+    DatabaseAdapter, DatabaseResult, SQLTranslator,
+    call_with_deadline, connect_deadline, driver_connect_timeout_seconds,
+)
 
 
 class MSSQLAdapter(DatabaseAdapter):
@@ -47,15 +50,35 @@ class MSSQLAdapter(DatabaseAdapter):
         # Percent-DECODED: urlparse leaves userinfo escaped.
 
         _url_user, _url_pass = url_credentials(connection_string, username, password)
-        self._conn = pymssql.connect(
-            server=parsed.hostname or "localhost",
-            port=str(parsed.port or 1433),
-            user=_url_user,
-            password=_url_pass,
-            database=parsed.path.lstrip("/") if parsed.path else "",
-            autocommit=False,
-            **kwargs,
-        )
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 1433
+
+        # pymssql's login_timeout is NOT sufficient on its own. MEASURED against
+        # a server that accepts the TCP connection and then never replies
+        # (Ubuntu 24.04, pymssql 2.3.13): login_timeout=2, timeout=2, and both
+        # together ALL failed to return — killed at 25s. FreeTDS applies
+        # login_timeout to establishing the connection, and a black-holed peer
+        # gets past that and then wedges waiting for the login response.
+        #
+        # So both mechanisms are used: login_timeout still tightens the driver's
+        # own 60s default and lets it abort cleanly when it can, and the
+        # watchdog is what actually guarantees the bound.
+        with connect_deadline(host, port) as timeout_seconds:
+            timeout_option = driver_connect_timeout_seconds(timeout_seconds)
+            if timeout_option is not None and "login_timeout" not in kwargs:
+                kwargs["login_timeout"] = timeout_option
+            self._conn = call_with_deadline(
+                lambda: pymssql.connect(
+                    server=host,
+                    port=str(port),
+                    user=_url_user,
+                    password=_url_pass,
+                    database=parsed.path.lstrip("/") if parsed.path else "",
+                    autocommit=False,
+                    **kwargs,
+                ),
+                timeout_seconds,
+            )
 
     def close(self):
         if self._conn:

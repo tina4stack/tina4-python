@@ -9,7 +9,10 @@ Requires: pip install mysql-connector-python
 import re
 from urllib.parse import urlparse
 from tina4_python.database.database_url import url_credentials
-from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
+from tina4_python.database.adapter import (
+    DatabaseAdapter, DatabaseResult, SQLTranslator,
+    connect_deadline, driver_connect_timeout_seconds,
+)
 
 
 class MySQLAdapter(DatabaseAdapter):
@@ -47,15 +50,26 @@ class MySQLAdapter(DatabaseAdapter):
         # Percent-DECODED: urlparse leaves userinfo escaped.
 
         _url_user, _url_pass = url_credentials(connection_string, username, password)
-        self._conn = mysql.connector.connect(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 3306,
-            user=_url_user,
-            password=_url_pass,
-            database=parsed.path.lstrip("/") if parsed.path else "",
-            autocommit=False,
-            **kwargs,
-        )
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 3306
+
+        # mysql-connector's own connection_timeout — the socket timeout it
+        # applies while establishing the connection and reading the server
+        # handshake, so a peer that accepts and then says nothing is bounded
+        # too, not just an unroutable host.
+        with connect_deadline(host, port) as timeout_seconds:
+            timeout_option = driver_connect_timeout_seconds(timeout_seconds)
+            if timeout_option is not None and "connection_timeout" not in kwargs:
+                kwargs["connection_timeout"] = timeout_option
+            self._conn = mysql.connector.connect(
+                host=host,
+                port=port,
+                user=_url_user,
+                password=_url_pass,
+                database=parsed.path.lstrip("/") if parsed.path else "",
+                autocommit=False,
+                **kwargs,
+            )
 
     def close(self):
         if self._conn:

@@ -10,7 +10,10 @@ Requires: pip install psycopg2-binary
 import re
 from urllib.parse import urlparse
 from tina4_python.database.database_url import url_credentials
-from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
+from tina4_python.database.adapter import (
+    DatabaseAdapter, DatabaseResult, SQLTranslator,
+    connect_deadline, driver_connect_timeout_seconds,
+)
 
 
 class PostgreSQLAdapter(DatabaseAdapter):
@@ -264,14 +267,25 @@ class PostgreSQLAdapter(DatabaseAdapter):
         # Percent-DECODED: urlparse leaves userinfo escaped.
 
         _url_user, _url_pass = url_credentials(connection_string, username, password)
-        self._conn = psycopg2.connect(
-            host=parsed.hostname or "localhost",
-            port=parsed.port or 5432,
-            user=_url_user,
-            password=_url_pass,
-            dbname=parsed.path.lstrip("/") if parsed.path else "",
-            **kwargs,
-        )
+        host = parsed.hostname or "localhost"
+        port = parsed.port or 5432
+
+        # libpq's own connect_timeout — it covers the whole connection
+        # sequence (TCP, TLS, authentication), not just the socket connect,
+        # and aborts inside the driver so no thread or socket is left behind.
+        # An explicit connect_timeout in kwargs is the caller overriding us.
+        with connect_deadline(host, port) as timeout_seconds:
+            timeout_option = driver_connect_timeout_seconds(timeout_seconds)
+            if timeout_option is not None and "connect_timeout" not in kwargs:
+                kwargs["connect_timeout"] = timeout_option
+            self._conn = psycopg2.connect(
+                host=host,
+                port=port,
+                user=_url_user,
+                password=_url_pass,
+                dbname=parsed.path.lstrip("/") if parsed.path else "",
+                **kwargs,
+            )
         # Use RealDictCursor for dict-style rows
         self._conn.autocommit = False
 
