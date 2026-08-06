@@ -3020,14 +3020,51 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
     else:
         host = os.environ.get("TINA4_HOST") or os.environ.get("HOST", default_host)
 
-    # Port: CLI flag > PORT env > default
+    # Port: CLI flag > TINA4_PORT > PORT (deprecated) > default.
+    #
+    # This used to read PORT and nothing else, so TINA4_PORT - the name the CLI
+    # documents and prefers, and the one every .env sets - was IGNORED on the
+    # one path that binds the socket. An operator setting it saw the server
+    # come up on the default port with no complaint. It cost two benchmark runs
+    # in one afternoon before anyone read this function.
+    #
+    # Bare PORT is deprecated: it is a name anything can set, and a stray
+    # OS-level PORT on a shared runner should never outrank the framework's own
+    # variable. It is still honoured so no deployment breaks, and warns so the
+    # migration actually happens. Removal is 3.14.
     if cli_port is not None:
         port = cli_port
     else:
-        env_port = os.environ.get("PORT")
-        port = int(env_port) if env_port and env_port.isdigit() else default_port
+        tina4_port = os.environ.get("TINA4_PORT")
+        legacy_port = os.environ.get("PORT")
+        if tina4_port and tina4_port.isdigit():
+            port = int(tina4_port)
+        elif legacy_port and legacy_port.isdigit():
+            port = int(legacy_port)
+            _warn_deprecated_port(port)
+        else:
+            port = default_port
 
     return host, port
+
+
+_PORT_DEPRECATION_WARNED = False
+
+
+def _warn_deprecated_port(port: int) -> None:
+    """Warn ONCE that bare PORT was used instead of TINA4_PORT.
+
+    Once, because resolve_config can be called more than once per process and
+    a warning repeated on every call is a warning people filter out.
+    """
+    global _PORT_DEPRECATION_WARNED
+    if _PORT_DEPRECATION_WARNED:
+        return
+    _PORT_DEPRECATION_WARNED = True
+    Log.warning(
+        f"PORT is deprecated and will be removed in 3.14 - use TINA4_PORT "
+        f"instead (binding port {port} from PORT)"
+    )
 
 
 def banner_surface_lines(
