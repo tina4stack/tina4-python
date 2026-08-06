@@ -816,14 +816,41 @@ def _rollback(db, migration_folder: str = "migrations", delimiter: str = ";") ->
     return rolled_back
 
 
+#: kind values that mean "a code migration" rather than a .sql pair.
+#:
+#: "code" is the CANONICAL spelling and means the same thing in all four
+#: frameworks. Each framework also accepts its own language name as a legacy
+#: alias, because that is what it took before this was unified.
+#:
+#: MEASURED 2026-08-06: the accepted value differed in every framework -
+#: python "python", php "php", ruby "ruby" OR "python", node "class" - and NONE
+#: of them validated it. So create_migration(..., kind="python") produced a code
+#: migration in Python and Ruby and a SILENT .sql FILE in PHP and Node. The same
+#: call, four artefacts, no error.
+_CODE_KINDS = ("code", "python")
+_SQL_KINDS = ("sql",)
+
+
 def create_migration(description: str, migration_folder: str = "migrations", kind: str = "sql") -> str:
     """Create a new migration file with a YYYYMMDDHHMMSS timestamp prefix.
 
     kind="sql"    — creates {timestamp}_{description}.sql + .down.sql (default)
-    kind="python" — creates {timestamp}_{description}.py with MigrationBase subclass
+    kind="code"   — creates {timestamp}_{description}.py with a MigrationBase
+                    subclass. "python" is accepted as a legacy alias.
+
+    Raises ValueError on any other value: an unrecognised kind used to fall
+    through to a .sql file, so a typo silently produced the wrong artefact.
 
     Returns the path to the created file.
     """
+    kind = (kind or "sql").strip().lower()
+    if kind not in _CODE_KINDS + _SQL_KINDS:
+        raise ValueError(
+            f"Unknown migration kind {kind!r}. Use 'sql' (default) or 'code' "
+            f"(alias: 'python'). An unrecognised kind used to produce a .sql "
+            f"file silently, which is why this now raises."
+        )
+
     folder = Path(migration_folder)
     folder.mkdir(parents=True, exist_ok=True)
 
@@ -831,7 +858,7 @@ def create_migration(description: str, migration_folder: str = "migrations", kin
     clean = re.sub(r"[^a-z0-9]+", "_", description.lower()).strip("_")
     created_at = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
 
-    if kind == "python":
+    if kind in _CODE_KINDS:
         # Derive a CamelCase class name from description
         class_name = "".join(word.capitalize() for word in re.split(r"[^a-z0-9]+", description.lower()) if word)
         filename = f"{timestamp}_{clean}.py"
