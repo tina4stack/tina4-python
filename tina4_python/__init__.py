@@ -86,6 +86,7 @@ from tina4_python.core.constants import (  # noqa: E402, F401
 )
 from tina4_python.core.server import (  # noqa: E402, F401
     run, background, background_task_count, stop_all_background_tasks,
+    asgi,
 )
 from tina4_python.core.events import on, emit, once, off  # noqa: E402, F401
 from tina4_python.env import Env  # noqa: E402, F401

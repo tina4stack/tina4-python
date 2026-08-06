@@ -2581,6 +2581,34 @@ async def handle(request: Request) -> Response:
 
     return ctx.response
 
+def asgi(root_dir: str = "src"):
+    """Build the ASGI application, with routes discovered.
+
+    Point any ASGI server at this - uvicorn, hypercorn, granian, daphne - when
+    you want that server's process model instead of ``tina4 serve``:
+
+        # asgi.py
+        from tina4_python.core.server import asgi
+        app = asgi()
+
+        $ uvicorn asgi:app --workers 4
+
+    THE DISCOVERY IS THE POINT. Pointing a server straight at ``app`` below
+    starts a working ASGI application with NO ROUTES REGISTERED, because
+    discovery happens inside ``run()`` and nothing else calls it. Measured: the
+    bare app answers /hello with a 404 page, and the same app behind this
+    function answers 200. That failure is quiet - the server boots, the health
+    page renders, and every application route 404s - so the framework supplies
+    the bootstrap rather than leaving each user to find ``_auto_discover``,
+    which is private and has no business in a deployment file.
+
+    :param root_dir: Directory to discover routes from. Defaults to ``src``.
+    :return: The ASGI 3 callable.
+    """
+    _auto_discover(root_dir)
+    return app
+
+
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
     if scope["type"] == "lifespan":
