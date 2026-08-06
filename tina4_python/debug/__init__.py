@@ -333,7 +333,7 @@ class Log:
         cls.configure(level=os.environ.get("TINA4_LOG_LEVEL", "info") or "info")
 
     @classmethod
-    def configure(cls, log_dir: str = "logs", level: str = "info",
+    def configure(cls, log_dir: str | None = None, level: str = "info",
                   production: bool = False):
         """Configure the logger. Called once at startup.
 
@@ -342,6 +342,12 @@ class Log:
         the logger without code changes. Defaults preserve existing
         behaviour: file output to logs/tina4.log + stdout, text format,
         10 MB rotation, keep 5.
+
+        PRECEDENCE (ADR-0041): an explicit argument beats the environment,
+        which beats the built-in default. `log_dir` defaults to None rather
+        than "logs" so those are three distinguishable states -- with a real
+        default the function cannot tell "the caller asked for logs/" from
+        "the caller said nothing", and the three-way rule is inexpressible.
         """
         cls._level = level.lower()
         cls._is_production = production
@@ -401,8 +407,19 @@ class Log:
         # never what anyone means (feature 2 of the feature audit). Identical
         # rule in all four: an existing directory is a directory; otherwise a
         # basename with an extension is a file.
+        #
+        # PRECEDENCE (ADR-0041): explicit argument > environment > default.
+        # This was `os.environ.get("TINA4_LOG_DIR", log_dir)`, which reads
+        # naturally and says the opposite of what it looks like: it demotes the
+        # CALLER'S argument to the fallback default, so TINA4_LOG_DIR silently
+        # beat `Log.configure("/srv/app/logs")` and there was no way to say
+        # "put the logs exactly here". Measured against all four frameworks by
+        # setting the env to one directory, passing another, and looking at
+        # which one the file appeared in - Ruby honoured the argument, Python
+        # and PHP honoured the environment.
         log_file = os.environ.get("TINA4_LOG_FILE", "")
-        log_dir_env = os.environ.get("TINA4_LOG_DIR", log_dir)
+        env_dir = os.environ.get("TINA4_LOG_DIR", "")
+        log_dir_env = log_dir or env_dir or "logs"
         if not log_file and _target_is_file(log_dir_env):
             log_file = log_dir_env
             log_dir_env = os.path.dirname(log_dir_env) or "."

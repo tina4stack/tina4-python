@@ -254,6 +254,67 @@ class TestExplicitConfigureStillWins:
         assert "[INFO" in capsys.readouterr().out
 
 
+# ── L5: explicit argument > environment > default (ADR-0041) ─────────────
+
+
+class TestExplicitArgumentBeatsTheEnvironmentForTheLogDirectory:
+    """L5. `Log.configure("/srv/app/logs")` is one line that means one thing,
+    and it did three different things across the four frameworks.
+
+    This was `os.environ.get("TINA4_LOG_DIR", log_dir)` -- an idiom that reads
+    naturally and says the opposite of what it looks like, because it demotes
+    the CALLER'S argument to the fallback default. TINA4_LOG_DIR therefore beat
+    an explicit argument and "put the logs exactly here" was inexpressible.
+
+    Both halves are load-bearing and neither is sufficient alone: the positive
+    test passes on an implementation that ignores the environment ENTIRELY, and
+    the negative test passes on the old inverted code. Only together do they pin
+    the ordering.
+
+    The coordinate under test IS "which value wins", so these must not ask the
+    logger which directory it chose -- that would delegate the asserted
+    property to the code being tested. They CONTROL both candidates and read the
+    FILESYSTEM for the answer.
+    """
+
+    def test_an_explicit_log_dir_beats_a_conflicting_env_log_dir(self, monkeypatch, tmp_path):
+        env_dir = tmp_path / "from_env"
+        arg_dir = tmp_path / "from_argument"
+        env_dir.mkdir()
+        arg_dir.mkdir()
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "file")
+        monkeypatch.setenv("TINA4_LOG_DIR", str(env_dir))
+
+        Log.configure(log_dir=str(arg_dir), level="info")
+        Log.info("which directory won?")
+
+        assert (arg_dir / "tina4.log").exists(), \
+            "the explicit configure() argument did not win -- TINA4_LOG_DIR overrode it"
+        assert not (env_dir / "tina4.log").exists(), \
+            "the log landed in the env directory, so the environment beat the argument"
+
+    def test_the_env_log_dir_still_applies_when_no_argument_is_given(self, monkeypatch, tmp_path):
+        # NEGATIVE half: prove the fix did not simply stop reading the env.
+        env_dir = tmp_path / "from_env"
+        env_dir.mkdir()
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "file")
+        monkeypatch.setenv("TINA4_LOG_DIR", str(env_dir))
+
+        Log.configure(level="info")     # no log_dir -- nothing explicit to beat it
+        Log.info("the env should win here")
+
+        assert (env_dir / "tina4.log").exists(), \
+            "TINA4_LOG_DIR was ignored even with no explicit argument to outrank it"
+
+    def test_log_dir_defaults_to_none_so_unset_is_distinguishable(self):
+        # The signature is the mechanism. With a real default ("logs") the
+        # function cannot tell "the caller said nothing" from "the caller asked
+        # for logs/", and the three-way precedence is inexpressible -- so this
+        # pins the default rather than leaving it to be quietly restored.
+        import inspect
+        assert inspect.signature(Log.configure).parameters["log_dir"].default is None
+
+
 # ── L3: TINA4_LOG_STRICT ─────────────────────────────────────────────────
 
 
