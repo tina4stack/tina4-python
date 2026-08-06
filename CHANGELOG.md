@@ -23,6 +23,35 @@ server URL, set `TINA4_SWAGGER_SERVERS` (comma-separated, still overrides) or
 `SWAGGER_DEV_URL` (single URL) — both are unchanged. Only the built-in fallback
 moved from `http://localhost:7145` to `/`.
 
+### Breaking: Messenger `send()` result keys, `snippet`, and `read()` of a missing UID
+
+Three Messenger contract changes for cross-framework parity (decisions G6, G3, G2):
+
+- **`send()` returns `{success, message, id}` on BOTH paths.** It used to return
+  `{success, error, message_id}` on a real send and additionally `dev: true` on
+  the dev-capture path. `error` is renamed to `message`, `message_id` to `id`, the
+  capture-only `dev` key is dropped, and `id` is now populated from a REAL
+  `Message-ID` header the message actually carries (it was always empty before,
+  because no `Message-ID` was ever set). On success `message` is None; on failure
+  the keys are present with null values.
+- **`inbox()`/`search()` `snippet` is decoded plain text.** It fetched
+  `BODY.PEEK[TEXT]<0.200>` and returned the RAW first 200 bytes — base64 for a
+  base64-encoded part (`Ym9keSBvZiBQMw==`). It is now transfer-decoded,
+  tag-stripped, whitespace-collapsed, and truncated to 200 characters of readable
+  text.
+- **`read()` of a non-existent UID returns `None`, not `{}`.** An empty dict is
+  falsy but `result is None` gets it wrong, and it serialised to `{}` where the
+  other three frameworks carry `null`.
+
+New, non-breaking: `imap_username` / `imap_password` (read from
+`TINA4_MAIL_IMAP_USERNAME` / `_PASSWORD`, falling back to the SMTP creds — IMAP no
+longer silently authenticates to the SMTP account) and an `imap_encryption`
+constructor parameter (explicit beats env, ADR-0041).
+
+**Migration.** Callers of `send()` read `result["message"]`/`result["id"]` instead
+of `result["error"]`/`result["message_id"]`, and stop reading `result["dev"]`.
+Callers that checked `read(uid) == {}` for "not found" check `read(uid) is None`.
+
 ### Breaking: `uid` from the Messenger IMAP reads is now a real IMAP UID
 
 `inbox()`, `search()` and `unread()` returned an IMAP **sequence number** in the

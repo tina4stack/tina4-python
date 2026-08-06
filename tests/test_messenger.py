@@ -552,11 +552,13 @@ class TestIMAPReadLive:
         msg = _wait_for_message(m, subject)
         assert "<h1>Hello</h1>" in msg["body_html"]
 
-    def test_read_not_found_returns_empty(self):
-        # A non-existent UID on a real server returns an empty fetch -> {}.
+    def test_read_not_found_returns_none(self):
+        # A non-existent UID on a real server returns an empty fetch -> None (G2).
+        # NOT {}: an empty dict is falsy but `result is None` gets it wrong, and it
+        # serialises to `{}` where php/ruby/node all carry `null`.
         addr = _unique_address("read_missing")
         m = _plain_messenger(addr)
-        assert m.read("999999") == {}
+        assert m.read("999999") is None
 
 
 @_requires_greenmail

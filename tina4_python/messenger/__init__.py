@@ -55,7 +55,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders, policy
 from email.parser import BytesParser
-from email.utils import formataddr, formatdate, parsedate_to_datetime
+from email.utils import formataddr, formatdate, parsedate_to_datetime, make_msgid
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -104,7 +104,9 @@ class Messenger:
                  username: str = None, password: str = None,
                  from_address: str = None, from_name: str = None,
                  encryption: str = None, use_tls: bool = None,
-                 imap_host: str = None, imap_port: int = None):
+                 imap_host: str = None, imap_port: int = None,
+                 imap_username: str = None, imap_password: str = None,
+                 imap_encryption: str = None):
         # SMTP (send) — priority: constructor > .env > sensible default
         # Whether a host was actually CONFIGURED, which is not the same as
         # self.host being set: self.host falls back to "localhost", so it is never
@@ -135,12 +137,31 @@ class Messenger:
         # IMAP (read)
         self.imap_host = imap_host or os.environ.get("TINA4_MAIL_IMAP_HOST", "")
         self.imap_port = imap_port or int(os.environ.get("TINA4_MAIL_IMAP_PORT", "993"))
-        # IMAP encryption — independent of SMTP encryption above. Lets ops
-        # connect to e.g. an SMTP relay over starttls while reading mail
-        # over implicit TLS. Cross-framework parity v3.12.4.
-        self.imap_encryption = (
-            os.environ.get("TINA4_MAIL_IMAP_ENCRYPTION", "tls").lower().strip()
+        # IMAP credentials — the mailbox being READ is not always the account mail
+        # is SENT from, so IMAP has its own username/password. Resolution (G8):
+        # constructor arg > TINA4_MAIL_IMAP_USERNAME/_PASSWORD > the SMTP username/
+        # password (which themselves came from TINA4_MAIL_USERNAME/_PASSWORD). The
+        # last fallback is what keeps a single-account setup working with no IMAP
+        # vars; before this, IMAP always authenticated with the SMTP creds, so a
+        # separate IMAP account silently read the wrong mailbox.
+        self.imap_username = (
+            imap_username
+            or os.environ.get("TINA4_MAIL_IMAP_USERNAME")
+            or self.username
         )
+        self.imap_password = (
+            imap_password
+            or os.environ.get("TINA4_MAIL_IMAP_PASSWORD")
+            or self.password
+        )
+        # IMAP encryption — independent of SMTP encryption above. Lets ops
+        # connect to e.g. an SMTP relay over starttls while reading mail over
+        # implicit TLS. Constructor arg beats env (ADR-0041, G9); env default
+        # "tls". Cross-framework parity v3.12.4.
+        self.imap_encryption = (
+            imap_encryption
+            or os.environ.get("TINA4_MAIL_IMAP_ENCRYPTION", "tls")
+        ).lower().strip()
 
     def add_header(self, name: str, value: str):
         """Add a default header to all outgoing emails."""
@@ -197,7 +218,12 @@ class Messenger:
             headers: Additional headers
 
         Returns:
-            {"success": True/False, "error": None or str, "message_id": str or None}
+            {"success": bool, "message": None or str, "id": str or None}
+
+            One shape on BOTH the real-send and the dev-capture path. On success
+            ``message`` is None and ``id`` is the real Message-ID header (or the
+            local capture id); on failure ``message`` is the error text and ``id``
+            is None. No path-specific extra keys.
         """
         to_list = [to] if isinstance(to, str) else list(to)
         cc_list = [cc] if isinstance(cc, str) else list(cc or [])
@@ -247,6 +273,12 @@ class Messenger:
         msg["From"] = formataddr((self.from_name, self.from_address))
         msg["To"] = ", ".join(to_list)
         msg["Date"] = formatdate(localtime=True)
+        # A real Message-ID, so send() can return the id the server will carry.
+        # Domain comes from the sender address when it has one, else stdlib picks
+        # the FQDN. Without this the header was never set and send() reported an
+        # empty id on every real send.
+        domain = self.from_address.split("@")[-1] if "@" in (self.from_address or "") else None
+        msg["Message-ID"] = make_msgid(domain=domain)
 
         if cc_list:
             msg["Cc"] = ", ".join(cc_list)
@@ -271,9 +303,9 @@ class Messenger:
         all_recipients = to_list + cc_list + bcc_list
         try:
             message_id = self._smtp_send(msg, all_recipients)
-            return {"success": True, "error": None, "message_id": message_id}
+            return {"success": True, "message": None, "id": message_id}
         except Exception as e:
-            return {"success": False, "error": str(e), "message_id": None}
+            return {"success": False, "message": str(e), "id": None}
 
     def send_template(self, to: str | list[str], subject: str,
                       template: str, data: dict = None, **kwargs) -> dict:
@@ -380,8 +412,8 @@ class Messenger:
                 if self.use_tls:
                     conn.starttls()
 
-        if self.username and self.password:
-            conn.login(self.username, self.password)
+        if self.imap_username and self.imap_password:
+            conn.login(self.imap_username, self.imap_password)
         return conn
 
     def inbox(self, folder: str = "INBOX", limit: int = 20,
@@ -453,13 +485,15 @@ class Messenger:
                 pass
 
     def read(self, uid: str | bytes, folder: str = "INBOX",
-             mark_read: bool = True) -> dict:
+             mark_read: bool = True) -> dict | None:
         """Read a single message by UID.
 
         Returns: {uid, subject, from, to, cc, date, body_text, body_html, attachments, headers}
 
         Raises MessengerConnectionError on a connection/protocol failure.
-        A successful fetch for a non-existent UID returns {} (not an error).
+        A successful fetch for a non-existent UID returns None (not an error, and
+        not {} — an empty dict is falsy but `result is None` gets it wrong, and it
+        serialises to `{}` where the other frameworks carry `null`). G2.
         """
         if isinstance(uid, str):
             uid = uid.encode()
@@ -474,7 +508,7 @@ class Messenger:
                 raise MessengerConnectionError(
                     f"IMAP fetch returned {status} for uid {uid!r}")
             if not data or not data[0]:
-                return {}
+                return None
 
             raw = data[0][1] if isinstance(data[0], tuple) else data[0]
             msg = BytesParser(policy=policy.default).parsebytes(raw)
@@ -621,65 +655,32 @@ class Messenger:
             except Exception:
                 pass
 
-    def _fetch_header(self, conn, uid: bytes) -> dict:
-        """Fetch just headers + snippet for a message."""
-        status, data = conn.uid("FETCH", uid, "(FLAGS BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.200>)")
-        if status != "OK" or not data:
-            return {"uid": uid.decode(), "subject": "", "from": "", "date": "", "seen": False}
-
-        # Parse the response parts
-        headers_raw = b""
-        snippet_raw = b""
-        flags_str = ""
-        for part in data:
-            if isinstance(part, tuple):
-                desc = part[0].decode() if isinstance(part[0], bytes) else str(part[0])
-                if "HEADER" in desc:
-                    headers_raw = part[1]
-                elif "TEXT" in desc:
-                    snippet_raw = part[1]
-                elif "FLAGS" in desc:
-                    flags_str = desc
-            elif isinstance(part, bytes):
-                if b"FLAGS" in part:
-                    flags_str = part.decode()
-
-        msg = BytesParser(policy=policy.default).parsebytes(headers_raw)
-        seen = "\\Seen" in flags_str
-
-        snippet = snippet_raw.decode("utf-8", errors="replace").strip()[:150]
-        # Clean up snippet
-        snippet = re.sub(r"<[^>]+>", "", snippet)  # strip HTML tags
-        snippet = re.sub(r"\s+", " ", snippet).strip()
-
-        date_str = ""
+    @staticmethod
+    def _iso_date(msg) -> str:
+        """The message Date as ISO-8601, or "" when absent/unparseable."""
         if msg["Date"]:
             try:
-                date_str = parsedate_to_datetime(msg["Date"]).isoformat()
+                return parsedate_to_datetime(msg["Date"]).isoformat()
             except Exception:
-                date_str = msg["Date"]
+                return str(msg["Date"])
+        return ""
 
-        return {
-            "uid": uid.decode(),
-            "subject": str(msg.get("Subject", "")),
-            "from": str(msg.get("From", "")),
-            "to": str(msg.get("To", "")),
-            "date": date_str,
-            "snippet": snippet,
-            "seen": seen,
-        }
+    @staticmethod
+    def _extract_bodies(msg) -> tuple[str, str, list[dict]]:
+        """Walk a parsed message into (body_text, body_html, attachments).
 
-    def _parse_message(self, uid: bytes, msg) -> dict:
-        """Parse a full email message into a dict."""
+        ``get_payload(decode=True)`` TRANSFER-decodes each part (base64 /
+        quoted-printable → raw bytes), which is exactly what the snippet and the
+        read() bodies both need. Shared by _fetch_header and _parse_message so the
+        two never drift.
+        """
         body_text = ""
         body_html = ""
-        attachments = []
-
+        attachments: list[dict] = []
         if msg.is_multipart():
             for part in msg.walk():
                 content_type = part.get_content_type()
                 disposition = str(part.get("Content-Disposition", ""))
-
                 if "attachment" in disposition:
                     attachments.append({
                         "filename": part.get_filename() or "attachment",
@@ -703,21 +704,79 @@ class Messenger:
                     body_html = text
                 else:
                     body_text = text
+        return body_text, body_html, attachments
 
-        date_str = ""
-        if msg["Date"]:
-            try:
-                date_str = parsedate_to_datetime(msg["Date"]).isoformat()
-            except Exception:
-                date_str = str(msg["Date"])
+    @staticmethod
+    def _make_snippet(body_text: str, body_html: str) -> str:
+        """A decoded, tag-stripped, whitespace-collapsed 200-char preview (G3).
 
+        Prefers the plain-text part; falls back to the HTML with its tags removed.
+        The input is already transfer-decoded by _extract_bodies, so this is real
+        readable text, never the raw base64 the partial-fetch path used to emit.
+        """
+        text = body_text or body_html or ""
+        text = re.sub(r"<[^>]+>", " ", text)          # strip any HTML tags
+        text = re.sub(r"\s+", " ", text).strip()      # collapse whitespace
+        return text[:200]
+
+    def _fetch_header(self, conn, uid: bytes) -> dict:
+        """Fetch the listing fields for one message: {uid, subject, from, to,
+        date (ISO-8601), snippet, seen} — exactly these seven keys (G4).
+
+        Fetches the whole message with BODY.PEEK[] and parses it so the snippet is
+        transfer-decoded (G3). The partial BODY.PEEK[TEXT]<0.200> it replaced could
+        only ever hand back the RAW first 200 bytes — base64 for a base64-encoded
+        part, i.e. gibberish.
+
+        tina4: full-message fetch per listing row. inbox()/search() are bounded
+        (default limit 20), so this is correct-first and cheap in practice; the
+        upgrade if it ever gets hot is a BODYSTRUCTURE-guided single-part fetch.
+        """
+        empty = {"uid": uid.decode(), "subject": "", "from": "", "to": "",
+                 "date": "", "snippet": "", "seen": False}
+        status, data = conn.uid("FETCH", uid, "(FLAGS BODY.PEEK[])")
+        if status != "OK" or not data:
+            return empty
+
+        raw = b""
+        flags_str = ""
+        for part in data:
+            if isinstance(part, tuple):
+                desc = part[0].decode("utf-8", errors="replace") if isinstance(part[0], bytes) else str(part[0])
+                if "FLAGS" in desc:
+                    flags_str = desc
+                if part[1]:
+                    raw = part[1]
+            elif isinstance(part, bytes):
+                s = part.decode("utf-8", errors="replace")
+                if "FLAGS" in s:
+                    flags_str = s
+
+        if not raw:
+            return empty
+
+        msg = BytesParser(policy=policy.default).parsebytes(raw)
+        body_text, body_html, _ = self._extract_bodies(msg)
+        return {
+            "uid": uid.decode(),
+            "subject": str(msg.get("Subject", "")),
+            "from": str(msg.get("From", "")),
+            "to": str(msg.get("To", "")),
+            "date": self._iso_date(msg),
+            "snippet": self._make_snippet(body_text, body_html),
+            "seen": "\\Seen" in flags_str,
+        }
+
+    def _parse_message(self, uid: bytes, msg) -> dict:
+        """Parse a full email message into the read() dict."""
+        body_text, body_html, attachments = self._extract_bodies(msg)
         return {
             "uid": uid.decode() if isinstance(uid, bytes) else str(uid),
             "subject": str(msg.get("Subject", "")),
             "from": str(msg.get("From", "")),
             "to": str(msg.get("To", "")),
             "cc": str(msg.get("Cc", "") or ""),
-            "date": date_str,
+            "date": self._iso_date(msg),
             "body_text": body_text,
             "body_html": body_html,
             "attachments": [{k: v for k, v in a.items() if k != "content"} for a in attachments],
@@ -830,7 +889,10 @@ class DevMailbox:
             json.dumps(message, indent=2, default=str), encoding="utf-8"
         )
 
-        return {"success": True, "error": None, "message_id": msg_id, "dev": True}
+        # One send() result shape on both paths (G6): {success, message, id}.
+        # The capture id is the local mailbox id — the best "id" a message that
+        # never hit SMTP can have. No capture-only `dev` key.
+        return {"success": True, "message": None, "id": msg_id}
 
     def inbox(self, limit: int = 50, offset: int = 0,
               folder: str = None) -> list[dict]:
