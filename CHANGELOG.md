@@ -10,6 +10,19 @@ This file is deliberately NOT a copy of those notes. Duplicating them is exactly
 changelog rots into claiming a version that was never cut, so this file records only
 UNRELEASED work. When a version ships, its notes go to the release notes above.
 
+### Breaking: Swagger `servers[0].url` defaults to `/`
+
+The OpenAPI document's `servers[0].url` defaulted to a hard-coded
+`http://localhost:7145`. It now defaults to `/`, which resolves correctly under
+any port, host, or reverse proxy. The old default was measurably wrong the moment
+the server bound anywhere else: a server on 7146 still advertised 7145, so Swagger
+UI "Try it out" posted to the wrong place.
+
+**Migration.** Nothing to change for the common case. To advertise an absolute
+server URL, set `TINA4_SWAGGER_SERVERS` (comma-separated, still overrides) or
+`SWAGGER_DEV_URL` (single URL) — both are unchanged. Only the built-in fallback
+moved from `http://localhost:7145` to `/`.
+
 ### Breaking: `uid` from the Messenger IMAP reads is now a real IMAP UID
 
 `inbox()`, `search()` and `unread()` returned an IMAP **sequence number** in the

@@ -305,9 +305,12 @@ class Swagger:
         self.title = title or os.environ.get("TINA4_SWAGGER_TITLE", "Tina4 API")
         self.version = version or os.environ.get("TINA4_SWAGGER_VERSION", "1.0.0")
         self.description = description or os.environ.get("TINA4_SWAGGER_DESCRIPTION", "")
-        self.server_url = server_url or os.environ.get(
-            "SWAGGER_DEV_URL", "http://localhost:7145"
-        )
+        # servers[0].url defaults to "/" — correct under any port, host or reverse
+        # proxy. A hard-coded host:port (the old default) is measurably wrong the
+        # moment the server binds anywhere else: Swagger UI "Try it out" then posts
+        # to the wrong place. Explicit constructor arg wins (ADR-0041), then
+        # SWAGGER_DEV_URL, then "/". TINA4_SWAGGER_SERVERS overrides in _servers().
+        self.server_url = server_url or os.environ.get("SWAGGER_DEV_URL", "/")
         # Contact block — name/url/email surface in OpenAPI `info.contact`. Empty
         # values are suppressed. Reads TINA4_SWAGGER_CONTACT_* with the legacy
         # SWAGGER_CONTACT_* as fallback — parity with PHP/Ruby/Node (the root
