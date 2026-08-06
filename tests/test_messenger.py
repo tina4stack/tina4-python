@@ -27,6 +27,7 @@ connection refusal — no simulated exception.
 import os
 import socket
 import time
+import imaplib
 import uuid
 
 import pytest
@@ -376,6 +377,107 @@ class TestIMAPConfig:
 
 
 # ── Live IMAP inbox / read / search / actions (real GreenMail) ───
+
+
+@_requires_greenmail
+class TestUidIsARealUidLive:
+    """The `uid` field must be an IMAP UID, not a sequence number.
+
+    MEASURED 2026-08-06 against live GreenMail, all four frameworks, same
+    mailbox. Before any expunge the two numberings are IDENTICAL, which is
+    exactly why this survived every existing contract suite:
+
+        send P1 P2 P3     by sequence {1:P1, 2:P2, 3:P3}   by UID {1:P1, 2:P2, 3:P3}
+        expunge P1        by sequence {1:P2, 2:P3}         by UID {2:P2, 3:P3}
+
+    So after a real expunge, P3 is sequence number 2 and UID 3. What each
+    framework reported for that same message:
+
+        python  '2'   <- sequence number
+        node    '2'   <- sequence number
+        php     '3'   real UID
+        ruby     3    real UID
+
+    imaplib's ``search``/``fetch``/``store`` are the SEQUENCE-NUMBER commands;
+    the UID forms are ``conn.uid("SEARCH", ...)`` and friends.
+
+    Why it matters: a sequence number renumbers whenever ANY client expunges,
+    so an id stored today addresses a different message tomorrow. No error, no
+    crash - just the wrong message. Each framework was internally consistent
+    (reading back by its own reported id worked), which is why four
+    independently-written contract suites all passed while two were wrong.
+
+    No mocks: real SMTP delivery, a real expunge by a second IMAP client, and
+    the framework asked over a real connection.
+    """
+
+    def _real_uids_by_subject(self, address: str) -> dict:
+        """Ground truth from a plain imaplib client - a second observer, not a
+        double. It stands in for nothing; it speaks the protocol directly."""
+        conn = imaplib.IMAP4(_IMAP_HOST, _IMAP_PORT)
+        conn.login(address, "greenmail-password")
+        conn.select("INBOX")
+        _status, data = conn.uid("SEARCH", None, "ALL")
+        out = {}
+        for raw_uid in (data[0] or b"").split():
+            _s, d = conn.uid("FETCH", raw_uid, "(BODY.PEEK[HEADER.FIELDS (SUBJECT)])")
+            for part in d:
+                if isinstance(part, tuple) and part[1]:
+                    for line in part[1].decode(errors="replace").splitlines():
+                        if line.lower().startswith("subject:"):
+                            out[line.split(":", 1)[1].strip()] = int(raw_uid)
+        conn.logout()
+        return out
+
+    def _expunge_first(self, address: str) -> None:
+        conn = imaplib.IMAP4(_IMAP_HOST, _IMAP_PORT)
+        conn.login(address, "greenmail-password")
+        conn.select("INBOX")
+        conn.store("1", "+FLAGS", "\\Deleted")
+        conn.expunge()
+        conn.logout()
+
+    def test_uid_survives_an_expunge_by_another_client(self):
+        addr = _unique_address("uidstable")
+        m = _plain_messenger(addr)
+
+        subjects = [f"uid{i}-{uuid.uuid4().hex[:6]}" for i in range(3)]
+        for subject in subjects:
+            m.send(to=addr, subject=subject, body=f"body of {subject}")
+        for subject in subjects:
+            _wait_for_message(m, subject)
+
+        self._expunge_first(addr)
+
+        truth = self._real_uids_by_subject(addr)
+        # The instrument must be able to fail: if sequence and UID still agree
+        # the expunge did not take, and the assertion below proves nothing.
+        surviving = [s for s in subjects[1:] if s in truth]
+        assert len(surviving) == 2, f"fixture did not build: {truth}"
+        assert min(truth[s] for s in surviving) == 2, (
+            f"expunge did not shift the UIDs, so this cannot discriminate: {truth}"
+        )
+
+        reported = {item["subject"]: item["uid"] for item in m.inbox(limit=20)}
+        for subject in surviving:
+            assert str(reported.get(subject)) == str(truth[subject]), (
+                f"{subject}: framework reported uid={reported.get(subject)!r} but the "
+                f"real IMAP UID is {truth[subject]} - that is a SEQUENCE NUMBER"
+            )
+
+    def test_a_uid_still_reads_the_message_it_names(self):
+        # The pair. Switching to UID commands must not break the ordinary path:
+        # the uid handed out has to fetch back the same message.
+        addr = _unique_address("uidread")
+        m = _plain_messenger(addr)
+        subject = f"uidread-{uuid.uuid4().hex[:8]}"
+        m.send(to=addr, subject=subject, body="read me by uid")
+        _wait_for_message(m, subject)
+
+        item = next(i for i in m.inbox(limit=20) if i["subject"] == subject)
+        full = m.read(item["uid"])
+        assert full, f"read({item['uid']!r}) returned nothing for a message that exists"
+        assert full.get("subject") == subject
 
 
 @_requires_greenmail

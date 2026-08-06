@@ -10,6 +10,33 @@ This file is deliberately NOT a copy of those notes. Duplicating them is exactly
 changelog rots into claiming a version that was never cut, so this file records only
 UNRELEASED work. When a version ships, its notes go to the release notes above.
 
+### Breaking: `uid` from the Messenger IMAP reads is now a real IMAP UID
+
+`inbox()`, `search()` and `unread()` returned an IMAP **sequence number** in the
+field named `uid`, and `read()` / `markRead()` / `delete()` addressed messages by
+that same sequence number. They now use the UID form of every command.
+
+MEASURED against live GreenMail. Before an expunge the two numberings are
+identical, which is why this survived every existing contract suite:
+
+    send P1 P2 P3     by sequence {1:P1, 2:P2, 3:P3}   by UID {1:P1, 2:P2, 3:P3}
+    expunge P1        by sequence {1:P2, 2:P3}         by UID {2:P2, 3:P3}
+
+After that expunge P3 is sequence number 2 and UID 3. Reported for that same
+message: python `'2'`, node `'2'`, php `'3'`, ruby `3`. So two of the four
+frameworks were handing back sequence numbers.
+
+**Why it matters.** A sequence number renumbers whenever ANY client expunges, so
+an id stored today addresses a different message tomorrow - no error, no crash,
+just the wrong message. Each framework was internally consistent (reading back by
+its own reported id worked), which is exactly why four independently-written
+contract suites all passed while two were wrong.
+
+**Migration.** Any `uid` persisted by a previous version must be discarded and
+re-read. Those values were never stable - an expunge by any client already
+invalidated them - so there is nothing to convert. Values read from this version
+onward are stable for the life of the mailbox (IMAP UIDVALIDITY aside).
+
 ### Fixed (the mapping sort spelling raised on the fallback, ADR-0036)
 
 `collection.find({}).sort({"total": -1})` worked on a real MongoDB and raised

@@ -399,7 +399,7 @@ class Messenger:
             raise _imap_fail("inbox", exc) from exc
         try:
             conn.select(folder, readonly=True)
-            status, data = conn.search(None, "ALL")
+            status, data = conn.uid("SEARCH", "ALL")
             if status != "OK":
                 raise MessengerConnectionError(
                     f"IMAP search returned {status} for folder {folder!r}")
@@ -436,7 +436,7 @@ class Messenger:
             raise _imap_fail("unread", exc) from exc
         try:
             conn.select(folder, readonly=True)
-            status, data = conn.search(None, "UNSEEN")
+            status, data = conn.uid("SEARCH", "UNSEEN")
             if status != "OK":
                 raise MessengerConnectionError(
                     f"IMAP search returned {status} for folder {folder!r}")
@@ -469,7 +469,7 @@ class Messenger:
             raise _imap_fail("read", exc) from exc
         try:
             conn.select(folder, readonly=not mark_read)
-            status, data = conn.fetch(uid, "(RFC822)")
+            status, data = conn.uid("FETCH", uid, "(RFC822)")
             if status != "OK":
                 raise MessengerConnectionError(
                     f"IMAP fetch returned {status} for uid {uid!r}")
@@ -480,7 +480,7 @@ class Messenger:
             msg = BytesParser(policy=policy.default).parsebytes(raw)
 
             if mark_read:
-                conn.store(uid, "+FLAGS", "\\Seen")
+                conn.uid("STORE", uid, "+FLAGS", "(\\Seen)")
 
             return self._parse_message(uid, msg)
         except _IMAP_CONNECTION_ERRORS as exc:
@@ -528,7 +528,7 @@ class Messenger:
                 criteria.append(f'BEFORE {before}')
 
             search_str = " ".join(criteria) if criteria else "ALL"
-            status, data = conn.search(None, search_str)
+            status, data = conn.uid("SEARCH", search_str)
             if status != "OK":
                 raise MessengerConnectionError(
                     f"IMAP search returned {status} for folder {folder!r}")
@@ -564,7 +564,7 @@ class Messenger:
         conn = self._imap_connect()
         try:
             conn.select(folder)
-            conn.store(uid, "+FLAGS", "\\Deleted")
+            conn.uid("STORE", uid, "+FLAGS", "(\\Deleted)")
             conn.expunge()
         finally:
             try:
@@ -613,7 +613,7 @@ class Messenger:
         conn = self._imap_connect()
         try:
             conn.select(folder)
-            conn.store(uid, action, flag)
+            conn.uid("STORE", uid, action, f"({flag})")
         finally:
             try:
                 conn.close()
@@ -623,7 +623,7 @@ class Messenger:
 
     def _fetch_header(self, conn, uid: bytes) -> dict:
         """Fetch just headers + snippet for a message."""
-        status, data = conn.fetch(uid, "(FLAGS BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.200>)")
+        status, data = conn.uid("FETCH", uid, "(FLAGS BODY.PEEK[HEADER] BODY.PEEK[TEXT]<0.200>)")
         if status != "OK" or not data:
             return {"uid": uid.decode(), "subject": "", "from": "", "date": "", "seen": False}
 
