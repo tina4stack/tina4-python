@@ -164,7 +164,7 @@ class TestDevMailboxRoundTrip:
             from_name="Acme Support",
         )
         assert result["success"] is True
-        msg_id = result["message_id"]
+        msg_id = result["id"]
         assert msg_id
 
         msg = mailbox.read(msg_id)
@@ -184,7 +184,7 @@ class TestDevMailboxRoundTrip:
         """read() flips the unread flag and the change survives a re-read."""
         msg_id = mailbox.capture(
             to="u@example.com", subject="S", body="B", from_address="d@example.com"
-        )["message_id"]
+        )["id"]
         # Freshly captured mail is unread.
         assert mailbox.unread_count() == 1
         first = mailbox.read(msg_id)
@@ -220,8 +220,9 @@ class TestDevMailboxRoundTrip:
             html=False,
         )
         assert send_result["success"] is True
-        assert send_result["dev"] is True
-        msg_id = send_result["message_id"]
+        assert send_result["message"] is None
+        assert "dev" not in send_result  # G6: one shape, no capture-only key
+        msg_id = send_result["id"]
 
         # The "sent" message is sitting in the local outbox and reads back intact.
         captured = messenger.dev_mailbox.read(msg_id)

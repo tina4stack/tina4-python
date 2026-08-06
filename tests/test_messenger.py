@@ -172,7 +172,7 @@ class TestMessengerSendLive:
 
         result = m.send(to=addr, subject=subject, body="Hello from a real SMTP send")
         assert result["success"] is True
-        assert result["error"] is None
+        assert result["message"] is None
 
         msg = _wait_for_message(m, subject)
         assert msg["subject"] == subject
@@ -277,7 +277,7 @@ class TestMessengerSendLive:
 
         result = m.send(to=addr, subject=subject, body="Authenticated send")
         assert result["success"] is True
-        assert result["error"] is None
+        assert result["message"] is None
 
         msg = _wait_for_message(m, subject)
         assert msg["subject"] == subject
@@ -288,7 +288,7 @@ class TestMessengerSendLive:
         m = Messenger(host=_CLOSED_HOST, port=_CLOSED_PORT, encryption="none")
         result = m.send(to="user@greenmail.local", subject="Nope", body="Hi")
         assert result["success"] is False
-        assert result["error"]
+        assert result["message"]
 
 
 @_requires_greenmail

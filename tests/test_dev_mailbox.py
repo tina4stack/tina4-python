@@ -20,8 +20,8 @@ class TestDevMailbox:
             from_address="dev@test.com"
         )
         assert result["success"] is True
-        assert result["dev"] is True
-        assert result["message_id"]
+        assert result["message"] is None
+        assert result["id"]
 
         messages = mailbox.inbox()
         assert len(messages) == 1
@@ -92,7 +92,7 @@ class TestDevMailbox:
 
     def test_read_marks_as_read(self, mailbox):
         result = mailbox.capture(to="a@test.com", subject="Unread", body="test", from_address="dev@test.com")
-        msg_id = result["message_id"]
+        msg_id = result["id"]
         msg = mailbox.read(msg_id)
         assert msg["read"] is True
 
@@ -110,7 +110,7 @@ class TestDevMailbox:
 
     def test_delete(self, mailbox):
         result = mailbox.capture(to="a@test.com", subject="Delete me", body="bye", from_address="dev@test.com")
-        assert mailbox.delete(result["message_id"]) is True
+        assert mailbox.delete(result["id"]) is True
         assert len(mailbox.inbox()) == 0
 
     def test_delete_nonexistent(self, mailbox):
@@ -167,7 +167,8 @@ class TestCreateMessenger:
         messenger = create_messenger()
         result = messenger.send(to="user@test.com", subject="Dev Test", body="Hello")
         assert result["success"] is True
-        assert result["dev"] is True
+        assert result["message"] is None
+        assert "dev" not in result  # G6: no capture-only key
         # No SMTP connection was attempted
         assert messenger.dev_mailbox.count()["outbox"] == 1
 
