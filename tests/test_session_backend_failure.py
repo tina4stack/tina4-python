@@ -68,16 +68,55 @@ POSIX detail, measured not assumed (same finding as the Node conversion): chmod
 0500 on the session DIRECTORY does NOT block the write. ``write_text`` on an
 EXISTING path needs write permission on the FILE; directory permission governs
 create/unlink/rename.
+
+---------------------------------------------------------------------------
+A PERMISSION TEST IN A SUITE THAT RUNS AS ROOT.
+
+Case (3) asserts a real EACCES, and root holds CAP_DAC_OVERRIDE -- it writes
+straight through a 0400 file, so ``chmod`` denies it nothing and no denial is
+reachable. The test skipped ``[needs:no-dac-override]`` on every lab run: the
+one environment where it most needed to run was the one place it never did.
+
+It now stops being root for the length of the failing write (``os.seteuid`` to
+an unprivileged account; the SAVED uid stays 0, so ``seteuid`` back in a
+``finally`` restores it unconditionally -- a leaked euid would not fail here, it
+would fail in some unrelated later test as a permission error nobody could trace
+back). The kernel then enforces the bits for real and raises the genuine EACCES
+the test exists to assert, rather than a substitute denial (EROFS from a
+read-only mount, EPERM from an immutable file) with a different errno.
+
+Two things that look like details and are not, both learned by getting them
+wrong first:
+
+  * EXACTLY ONE THING MAY BE DENIED, and it is the session file. Dropping the
+    uid denies the LOGGER too -- ``Log.error`` could not open ``tina4.log``
+    inside the framework's own ``except`` block, so the EACCES under test never
+    got recorded. The log directory therefore lives in the same reachable root
+    and is handed to the dropped uid.
+  * IT MUST BE THE FILE'S BITS, NOT THE PATH TO IT. ``tmp_path`` lives under
+    ``/tmp/pytest-of-root/pytest-N/``, whose parents are 0700 root-owned: a
+    dropped uid cannot traverse there AT ALL, so every denial would be a
+    directory-traversal EACCES and the test would pass for the wrong reason even
+    while passing. The fixture root is its own 0755 ``mkdtemp``, and the two
+    positive controls inside the same window prove reachability by measurement
+    instead of assuming it.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import shutil
 import tempfile
 import socket
 import stat
 import uuid
 from pathlib import Path
+
+try:                      # POSIX only -- the uid drop below is a POSIX mechanism
+    import pwd
+except ImportError:       # pragma: no cover - Windows
+    pwd = None
 
 import pytest
 
@@ -148,37 +187,51 @@ class _RealLogSink:
         return out
 
 
-@pytest.fixture
-def log_sink(tmp_path, monkeypatch):
-    """Point the REAL logger at a real file, then put it back."""
+def _point_the_real_logger_at(directory: Path, monkeypatch) -> _RealLogSink:
+    """Send the REAL logger's output into ``directory``, and prove it lands there.
+
+    TINA4_LOG_DIR is SET as well as passed, because ``Log.configure`` resolves the
+    directory as ``os.environ.get("TINA4_LOG_DIR", log_dir)`` -- the env beats the
+    explicit argument, so re-pointing the logger by argument alone leaves it
+    writing to wherever the env still says.
+    """
     from tina4_python.debug import Log
 
-    log_dir = tmp_path / "logs"
-    log_dir.mkdir()
+    directory.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("TINA4_LOG_OUTPUT", "file")
-    monkeypatch.setenv("TINA4_LOG_DIR", str(log_dir))
+    monkeypatch.setenv("TINA4_LOG_DIR", str(directory))
     monkeypatch.setenv("TINA4_LOG_FORMAT", "json")
     monkeypatch.setenv("TINA4_LOG_LEVEL", "debug")
+    # An explicit TINA4_LOG_FILE would route the output through _StdlibFileWriter
+    # to a path of its own choosing and the sink would read an empty file.
+    monkeypatch.delenv("TINA4_LOG_FILE", raising=False)
+    Log.configure(log_dir=str(directory), level="debug")
 
-    saved = {
-        name: getattr(Log, name)
-        for name in ("_writer", "_error_writer", "_stdout_enabled",
-                     "_file_enabled", "_format_mode", "_level", "_is_production")
-    }
-    Log.configure(log_dir=str(log_dir), level="debug")
-
-    sink = _RealLogSink(log_dir)
+    sink = _RealLogSink(directory)
     # Driver sanity: the sink must be able to see a real record, otherwise every
     # "was logged" assertion below would be vacuous and every "logged nothing"
     # assertion would be trivially true.
     sink.mark()
     Log.error("sink-selftest")
     assert any("sink-selftest" in m for m in sink.errors()), (
-        f"the real logger wrote nothing to {log_dir / 'tina4.log'} -- "
+        f"the real logger wrote nothing to {directory / 'tina4.log'} -- "
         "every log assertion in this file would be meaningless"
     )
+    return sink
 
-    yield sink
+
+@pytest.fixture
+def log_sink(tmp_path, monkeypatch):
+    """Point the REAL logger at a real file, then put it back."""
+    from tina4_python.debug import Log
+
+    saved = {
+        name: getattr(Log, name)
+        for name in ("_writer", "_error_writer", "_stdout_enabled",
+                     "_file_enabled", "_format_mode", "_level", "_is_production")
+    }
+
+    yield _point_the_real_logger_at(tmp_path / "logs", monkeypatch)
 
     for name, value in saved.items():
         setattr(Log, name, value)
@@ -244,9 +297,75 @@ def _permission_bits_are_enforced() -> bool:
 
 NO_DENIAL_REASON = (
     "[needs:no-dac-override] this process writes straight through a 0400 file "
-    "(root holding CAP_DAC_OVERRIDE), so no real denial is reachable here - run "
-    "under `setpriv --bounding-set=-dac_override,-dac_read_search` to exercise it"
+    "(root holding CAP_DAC_OVERRIDE) AND cannot drop the effective uid to an "
+    "unprivileged account (no os.seteuid, or no unprivileged account exists), so "
+    "no real denial can be produced here"
 )
+
+
+def _current_euid() -> int:
+    """This process's effective uid, or -1 where the platform has no such thing."""
+    return os.geteuid() if hasattr(os, "geteuid") else -1
+
+
+def _droppable_unprivileged_uid() -> int | None:
+    """A uid we can drop the EFFECTIVE uid to and come back from, or None.
+
+    Only the effective uid moves. The REAL and SAVED uids stay 0, which is what
+    makes the drop reversible -- ``seteuid(0)`` is permitted afterwards precisely
+    because 0 is still the saved uid.
+    """
+    if pwd is None or not hasattr(os, "seteuid") or _current_euid() != 0:
+        return None
+    for account in ("nobody", "nfsnobody", "daemon"):
+        try:
+            return pwd.getpwnam(account).pw_uid
+        except KeyError:
+            continue
+    return None
+
+
+def _uid_the_denied_write_runs_as() -> int:
+    """Which uid must be refused, and skip ONLY if no uid can be refused at all.
+
+    Unprivileged already: our own -- the bits bind, nothing to do. Root: an
+    account we drop to, because root is exempt from the bits it is setting.
+    """
+    if _permission_bits_are_enforced():
+        return _current_euid()
+    dropped = _droppable_unprivileged_uid()
+    if dropped is None:
+        pytest.skip(NO_DENIAL_REASON)
+    return dropped
+
+
+@contextlib.contextmanager
+def _running_as(uid: int):
+    """Run the block with the kernel enforcing permission bits against ``uid``.
+
+    Process-wide for its duration (glibc propagates a setxid across every thread,
+    as POSIX requires), so keep the block down to the operations under test.
+    """
+    if uid == _current_euid():
+        yield                       # already unprivileged: the bits already bind
+        return
+    restore = _current_euid()
+    os.seteuid(uid)
+    try:
+        yield
+    finally:
+        # UNCONDITIONAL. A leaked dropped euid does not fail here -- it fails in
+        # some unrelated later test, looking like anything except this.
+        os.seteuid(restore)
+
+
+def _hand_directory_to(directory: Path, uid: int) -> None:
+    """Give ``uid`` ownership of ``directory`` and everything already in it."""
+    if uid == _current_euid():
+        return                      # it is already ours
+    os.chown(directory, uid, -1)
+    for child in directory.iterdir():
+        os.chown(child, uid, -1)
 
 
 def test_read_failure_logs_and_degrades_to_empty(log_sink, unreachable_redis):
@@ -300,38 +419,78 @@ def test_gc_failure_logs_and_does_not_crash(log_sink, unreachable_mongo):
     assert any("gc" in e and "failed" in e for e in log_sink.errors())
 
 
-def test_write_fails_after_a_successful_start_with_a_real_eacces(log_sink, tmp_path):
+def test_write_fails_after_a_successful_start_with_a_real_eacces(log_sink, monkeypatch):
     """The mid-request death case, produced rather than simulated.
 
     A REAL FileSessionHandler writes successfully, then the real session FILE is
-    made read-only so the NEXT write takes a real EACCES from the real kernel.
+    made read-only so the NEXT write takes a real EACCES from the real kernel --
+    with the process actually subject to the bits for the length of that write
+    (see "A PERMISSION TEST IN A SUITE THAT RUNS AS ROOT" in the module
+    docstring; ``log_sink`` is taken for its save/restore of the logger, then
+    re-pointed below because its directory is deliberately unreachable).
     """
-    if not _permission_bits_are_enforced():
-        pytest.skip(NO_DENIAL_REASON)
+    denied_uid = _uid_the_denied_write_runs_as()
 
-    handler = FileSessionHandler(path=str(tmp_path / "sessions"))
-    session = Session(handler=handler)
-    sid = session.start("sess-eacces")
-    session.set("stage", "one")
-    assert session.save() is True, "the first write must genuinely succeed"
+    # NOT tmp_path: its parents are 0700 root-owned, so an unprivileged uid is
+    # refused at the traversal and never reaches the file whose bits are the
+    # subject of the test. 0755 mkdtemp, walkable by anyone.
+    reachable_root = Path(tempfile.mkdtemp(prefix="tina4-eacces-"))
+    try:
+        os.chmod(reachable_root, 0o755)
+        # The logger must keep working while the session write is refused:
+        # exactly one thing is under denial here, and it is not the audit trail.
+        sink = _point_the_real_logger_at(reachable_root / "logs", monkeypatch)
+        _hand_directory_to(reachable_root / "logs", denied_uid)
 
-    session_file = handler._file(sid)
-    assert session_file.exists(), "start()+save() must have created a real file"
-    session_file.chmod(stat.S_IRUSR)  # 0400 -- read-only, on the FILE not the dir
+        sessions = reachable_root / "sessions"
+        handler = FileSessionHandler(path=str(sessions))
+        session = Session(handler=handler)
+        sid = session.start("sess-eacces")
+        session.set("stage", "one")
+        assert session.save() is True, "the first write must genuinely succeed"
 
-    log_sink.mark()
-    session.set("stage", "two")
-    assert session.save() is False, "a real EACCES must be reported, not swallowed"
-    assert session._dirty is True
+        session_file = handler._file(sid)
+        assert session_file.exists(), "start()+save() must have created a real file"
 
-    errors = log_sink.errors()
-    assert any("write" in e and "failed" in e for e in errors)
-    assert any("FileSessionHandler" in e for e in errors)
-    assert any(
-        "denied" in e.lower() or "errno 13" in e.lower() for e in errors
-    ), f"the logged cause must be the real EACCES. Got: {errors}"
+        # The DIRECTORY is handed over whole, so nothing but the file's own bits
+        # is left to do the denying -- and the file goes over with it, so the
+        # denial is the OWNER's read-only bit ("mine, and read-only"), not the
+        # weaker "someone else's".
+        _hand_directory_to(sessions, denied_uid)
+        session_file.chmod(stat.S_IRUSR)  # 0400 -- read-only, on the FILE not the dir
 
-    session_file.chmod(stat.S_IRUSR | stat.S_IWUSR)  # so tmp_path can be cleaned
+        session.set("stage", "two")
+        sink.mark()
+        traversal_control = sessions / "the-directory-is-writable.txt"
+        with _running_as(denied_uid):
+            # POSITIVE CONTROLS, in the same window as the failure: this uid can
+            # CREATE a file in that directory, and can READ the session file
+            # itself. Path reachable, file reachable -- so the only thing left to
+            # refuse the write is the write bit on that one file.
+            traversal_control.write_text("reachable", encoding="utf-8")
+            session_file.read_text(encoding="utf-8")
+            persisted = session.save()
+
+        assert persisted is False, "a real EACCES must be reported, not swallowed"
+        assert session._dirty is True, "dirty flag must be retained so a later save retries"
+        assert traversal_control.read_text(encoding="utf-8") == "reachable", (
+            "the denied uid could not even write this directory, so the failure "
+            "below would be an unreachable path rather than the session file"
+        )
+
+        errors = sink.errors()
+        assert any("write" in e and "failed" in e for e in errors)
+        assert any("FileSessionHandler" in e for e in errors)
+        # errno, not wording: strerror is localised, [Errno 13] is not.
+        eacces = [e for e in errors if "errno 13" in e.lower()]
+        assert eacces, f"the logged cause must be the real EACCES. Got: {errors}"
+        assert all(str(session_file) in e for e in eacces), (
+            "the EACCES must name the SESSION FILE. Any other path means the "
+            f"kernel refused a directory traversal, not the file's own bits. "
+            f"Got: {eacces}"
+        )
+    finally:
+        shutil.rmtree(reachable_root, ignore_errors=True)
 
 
 # ── the empty-but-healthy case, read off a real server ──────────────────────
