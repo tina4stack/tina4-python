@@ -119,18 +119,17 @@ class AutoCrud:
             records = _cls.all(limit=limit, offset=offset)
             total = _cls.count()
             total_pages = max(1, -(-total // limit)) if limit else 1
-            data = [r.to_dict() for r in records]
+            record_dicts = [record.to_dict() for record in records]
+            # The canonical ADR-0043 envelope: EXACTLY seven snake_case keys, no
+            # duplicate or camelCase spellings, matching DatabaseResult.to_paginate().
             return response({
-                "records": data,       # standard name
-                "data": data,          # backwards compat
-                "count": total,        # standard name
-                "total": total,        # backwards compat
-                "limit": limit,
-                "offset": offset,
-                "page": page,
-                "per_page": limit,     # backwards compat
-                "totalPages": total_pages,   # camelCase standard
-                "total_pages": total_pages,  # backwards compat
+                "records": record_dicts,     # the page rows, verbatim (never re-sliced)
+                "total": total,              # the true COUNT for the filter, NOT rows returned
+                "page": page,                # floor(offset / limit) + 1
+                "per_page": limit,           # the query's limit
+                "total_pages": total_pages,  # ceil(total / per_page)
+                "limit": limit,              # the SQL limit actually applied
+                "offset": offset,            # the SQL offset actually applied
             })
 
         list_handler.__name__ = f"autocrud_list_{table}"

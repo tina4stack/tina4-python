@@ -16,6 +16,7 @@ from tina4_python.crud import AutoCrud
 from tina4_python.core.router import Router
 from tina4_python.core.request import Request
 from tina4_python.core.response import Response
+from tina4_python.test_client import TestClient
 from tina4_python.database import Database
 from tina4_python.orm.model import ORM, bind_database
 import tina4_python.orm.model as orm_model
@@ -287,12 +288,9 @@ def test_list_returns_records_and_pagination_metadata(db):
 
     status, body = _invoke("GET", "/api/crud_widget")
     assert status == 200
-    assert body["count"] == 3
     assert body["total"] == 3
     names = sorted(r["name"] for r in body["records"])
     assert names == ["w0", "w1", "w2"]
-    # records and the backwards-compat data alias are the same payload.
-    assert body["data"] == body["records"]
 
 
 def test_list_pagination_limit_and_offset_slice_the_real_rows(db):
@@ -313,9 +311,57 @@ def test_list_pagination_limit_and_offset_slice_the_real_rows(db):
     assert len(body["records"]) == 2
     assert body["limit"] == 2
     assert body["offset"] == 2
-    assert body["count"] == 5
+    assert body["total"] == 5
     assert body["page"] == 2          # (offset // limit) + 1
-    assert body["totalPages"] == 3    # ceil(5 / 2)
+    assert body["total_pages"] == 3   # ceil(5 / 2)
+
+
+def test_paginate_rest_list_envelope_is_the_seven_keys(db):
+    """ADR-0043: the AutoCrud REST list endpoint returns EXACTLY the seven
+    canonical snake_case keys — records, total, page, per_page, total_pages,
+    limit, offset — with no ``data``/``count``/``totalPages`` duplicates, and
+    the same derivation ``DatabaseResult.to_paginate()`` uses.
+
+    Proven against a real 250-row SQLite table through the REAL front controller
+    (``TestClient`` -> ``core.server.app``), reading ADR-0043's measured page
+    (limit=20 offset=40, page 3 of 13), so ``total`` is the true COUNT (250),
+    never the number of rows returned (20). No mocks.
+    """
+    Widget = _make_widget_model()
+    Widget.create_table()
+    db.commit()
+
+    # A real 250-row table, inserted straight through the driver (no mock).
+    db.insert(
+        "crud_widget",
+        [{"name": f"w{i}", "price": float(i)} for i in range(250)],
+    )
+    db.commit()
+    assert db.fetch_one("SELECT COUNT(*) AS c FROM crud_widget")["c"] == 250
+
+    AutoCrud.register(Widget)
+
+    # Fetch page 3 the honest way: limit=20 offset=40.
+    resp = TestClient().get("/api/crud_widget?limit=20&offset=40")
+    assert resp.status == 200
+    body = resp.json()
+
+    # EXACTLY the seven canonical keys — the discriminator. On the old envelope
+    # this carried ten keys (records+data, total+count, total_pages+totalPages).
+    assert set(body) == {
+        "records", "total", "page", "per_page", "total_pages", "limit", "offset",
+    }
+    for dropped in ("data", "count", "totalPages", "perPage", "has_next", "has_prev"):
+        assert dropped not in body, f"dropped alias {dropped!r} is back in the envelope"
+
+    # total is the TRUE count (250), never rows returned (20).
+    assert body["total"] == 250
+    assert len(body["records"]) == 20        # the page's rows, verbatim
+    assert body["page"] == 3                  # floor(40 / 20) + 1
+    assert body["per_page"] == 20             # the query's limit
+    assert body["total_pages"] == 13          # ceil(250 / 20)
+    assert body["limit"] == 20
+    assert body["offset"] == 40
 
 
 def test_get_single_returns_record_then_404_after_delete(db):
@@ -417,7 +463,7 @@ def test_custom_prefix_handlers_serve_real_data(db):
 
     status, body = _invoke("GET", "/api/v2/crud_widget")
     assert status == 200
-    assert body["count"] == 1
+    assert body["total"] == 1
     assert body["records"][0]["name"] == "Prefixed"
 
 
