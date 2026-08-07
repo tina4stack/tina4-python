@@ -81,6 +81,10 @@ test = [
     "confluent-kafka>=2.0",
     "pika>=1.3",
     "boto3>=1.34",
+    # TEST-ONLY: validates the generated OpenAPI document against the real
+    # OpenAPI 3.0/3.1 schema (tests/test_swagger_contract.py). NEVER a framework
+    # runtime dependency — the swagger generator itself stays zero-dependency.
+    "openapi-spec-validator>=0.7",
 ]
 
 [dependency-groups]
