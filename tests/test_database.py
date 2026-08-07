@@ -57,13 +57,18 @@ class TestDatabaseResult:
         assert p["per_page"] == 10
         assert len(p["records"]) == 10
 
-    def test_to_paginate_refuses_to_slice_a_partial_result(self):
-        # NEGATIVE. Slicing by page number is only honest when the result holds
-        # the WHOLE set. This one holds 1 of 50, so page 2 of 10 would come back
-        # empty while total_pages claimed 5 existed.
-        r = DatabaseResult(records=[{"id": 1}], count=50)
-        with pytest.raises(ValueError):
-            r.to_paginate(page=2, per_page=10)
+    def test_to_paginate_rejects_any_argument(self):
+        # NEGATIVE (ADR-0043). to_paginate() takes NO arguments: it describes the
+        # page the query already returned. The old (page, per_page) in-memory
+        # slice is removed, so passing ANY argument is a hard error, never a
+        # silent reinterpretation. It raises regardless of result shape - the old
+        # code only raised on a PARTIAL result and silently sliced a whole one.
+        whole = DatabaseResult(records=[{"id": i} for i in range(50)], count=50)
+        with pytest.raises(TypeError):
+            whole.to_paginate(page=2, per_page=10)
+        partial = DatabaseResult(records=[{"id": 1}], count=50)
+        with pytest.raises(TypeError):
+            partial.to_paginate(page=2, per_page=10)
 
 
 class TestSQLiteAdapter:

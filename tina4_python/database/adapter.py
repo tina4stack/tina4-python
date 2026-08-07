@@ -263,71 +263,66 @@ class DatabaseResult:
         rows = [",".join(escape(row.get(c)) for c in columns) for row in self.records]
         return "\n".join([header] + rows)
 
-    def to_paginate(self, page: int = None, per_page: int = None) -> dict:
-        """Paginate this result. Two modes, and the default one is new.
+    def to_paginate(self, *args, **kwargs) -> dict:
+        """Describe the page this result already IS, as the canonical envelope.
 
-        NO ARGUMENTS: describe the page this result already IS, derived from
-        the query that produced it. This is the mode that was broken.
+        Takes NO arguments. Every field is derived from the query that
+        produced this result (ADR-0043):
+
+            per_page    = the query's limit
+            page        = floor(offset / limit) + 1
+            total       = the true total for the filter, the COUNT probe that
+                          populates .count, NEVER the number of rows returned
+            total_pages = ceil(total / per_page)
+            records     = the rows the query returned, VERBATIM, never re-sliced
+            limit       = the SQL limit actually applied
+            offset      = the SQL offset actually applied
+
+        The envelope is EXACTLY seven snake_case keys (records, total, page,
+        per_page, total_pages, limit, offset), identical in all four Tina4
+        frameworks. A JSON key is data and does not change spelling by host
+        language, so there is no camelCase and no duplicate spelling: the old
+        ``data``, ``count`` and ``totalPages`` aliases are gone.
+
+        Passing ANY argument RAISES. The method used to accept (page, per_page)
+        and slice the rows in memory (GitHub issue #106), but a DatabaseResult
+        holds no connection, so an argument can only re-slice the rows already
+        in memory and then report total_pages for pages it can never reach --
+        the measured Ruby defect where slicing offset 40 into a 20-row page
+        returned NOTHING while still naming a page and a total. To read a
+        different page, FETCH that page (limit + offset) and call this with no
+        arguments.
 
         MEASURED 2026-08-05 on a real 250-row table read with limit=20
-        offset=40 (page 3 of 13): this reported page 1. It defaulted the page
-        rather than deriving it from the offset, so every offset fetch was
-        mislabelled as the first page while carrying a correct total and a
-        correct total_pages - an envelope that looked authoritative and named
-        the wrong page.
-
-        WITH page/per_page: slice this result in memory, which is what GitHub
-        issue #106 asked for and what tests/test_issue_106.py pins. Valid only
-        when the result holds the WHOLE set. Slicing a result that is already
-        one page of a larger query is refused: the slice is taken from row 0 of
-        what you hold, while the rows themselves start at ``offset``, so the
-        answer is silently wrong. That is not hypothetical - it is exactly the
-        measured Ruby defect, where slicing offset 40 into a 20-row page
-        returned NOTHING and still reported a page number and a total.
-
-        Python and PHP populate ``count`` from a separate COUNT probe, so
-        ``total`` here is the TRUE total for the filter and not the capped read
-        - which is what makes the envelope honest. Ruby and Node still populate
-        it with rows returned; see feature 18.
+        offset=40 (page 3 of 13): the envelope shipped the same integer twice
+        under two spellings (totalPages and total_pages, count and total, data
+        and records) in every API response, so every consumer had to guess
+        which spelling was canonical. That, and the silent in-memory slice, are
+        what this fixes.
         """
-        if (page is not None or per_page is not None) and len(self.records) < self.count:
-            raise ValueError(
-                f"to_paginate(page=..., per_page=...) slices the rows this result holds, "
-                f"but this result holds only {len(self.records)} of {self.count} rows - "
-                "it is a PARTIAL result, so any page past the rows it holds comes back "
-                "empty while total_pages claims it exists. MEASURED on 100,000 rows read "
-                "under the default cap of 100: pages 1-5 of 20 were right and pages 6 "
-                "onward returned NOTHING, with the envelope still reporting 5,000 pages. "
-                "Fetch the page you want instead: fetch(sql, limit=per_page, "
-                "offset=(page - 1) * per_page), then call to_paginate() with no arguments."
+        if args or kwargs:
+            raise TypeError(
+                "to_paginate() takes no arguments -- it describes the page the "
+                "query already returned, derived from the limit and offset that "
+                "ran. It used to accept (page, per_page) and slice in memory, but "
+                "a DatabaseResult holds no connection, so an argument can only "
+                "re-slice the rows already in memory and then report total_pages "
+                "for pages it can never reach. To read a different page, FETCH it: "
+                "fetch(sql, params, limit=per_page, offset=(page - 1) * per_page), "
+                "then call to_paginate() with no arguments. (ADR-0043)"
             )
 
-        if page is None and per_page is None:
-            per_page = self.limit if self.limit and self.limit > 0 else len(self.records)
-            page = (self.offset // per_page) + 1 if per_page > 0 else 1
-            total_pages = max(1, -(-self.count // per_page)) if per_page > 0 else 1
-            return self._paginate_envelope(self.records, page, per_page, self.offset, total_pages)
-
-        page = page or 1
-        per_page = per_page or (self.limit if self.limit and self.limit > 0 else 20)
-        total_pages = max(1, -(-self.count // per_page))
-        offset = (page - 1) * per_page
-        data = self.records[offset:offset + per_page]
-        return self._paginate_envelope(data, page, per_page, offset, total_pages)
-
-    def _paginate_envelope(self, data, page, per_page, offset, total_pages) -> dict:
-        """The one envelope shape, so both modes cannot drift apart."""
+        per_page = self.limit if self.limit and self.limit > 0 else len(self.records)
+        page = (self.offset // per_page) + 1 if per_page > 0 else 1
+        total_pages = max(1, -(-self.count // per_page)) if per_page > 0 else 1
         return {
-            "records": data,        # standard name
-            "data": data,           # backwards compat (PHP/Ruby/Node)
-            "count": self.count,    # standard name
-            "total": self.count,    # backwards compat
-            "limit": per_page,      # standard name
-            "offset": offset,       # standard name
-            "page": page,
-            "per_page": per_page,   # backwards compat
-            "totalPages": total_pages,   # camelCase standard
-            "total_pages": total_pages,  # backwards compat
+            "records": self.records,     # the rows returned, verbatim (never re-sliced)
+            "total": self.count,         # the true COUNT for the filter, not rows returned
+            "page": page,                # floor(offset / limit) + 1
+            "per_page": per_page,        # the query's limit
+            "total_pages": total_pages,  # ceil(total / per_page)
+            "limit": per_page,           # the SQL limit actually applied
+            "offset": self.offset,       # the SQL offset actually applied
         }
 
     def column_info(self) -> list[dict]:

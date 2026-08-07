@@ -172,36 +172,36 @@ class TestMultipartFiles:
         assert "upload" not in req.body
 
 
-# ── 5. to_paginate() slices correctly ────────────────────────────
+# ── 5. to_paginate() describes the fetched page (issue #106 slice removed) ────
 
 class TestToPaginate:
-    def test_page_2_of_50_records(self):
+    """Issue #106 asked to_paginate(page, per_page) to slice a result in memory.
+
+    ADR-0043 REMOVED that (BREAKING): a DatabaseResult holds no connection, so an
+    in-memory slice silently returns the wrong rows for any result that is already
+    one page of a larger query. The replacement is to FETCH the page you want and
+    call to_paginate() with no arguments. These tests pin the new contract.
+    """
+
+    def test_argument_form_is_removed_and_raises(self):
         records = [{"id": i, "name": f"item_{i}"} for i in range(50)]
         result = DatabaseResult(records=records, count=50)
+        with pytest.raises(TypeError):
+            result.to_paginate(page=2, per_page=10)
 
-        page = result.to_paginate(page=2, per_page=10)
+    def test_no_argument_call_describes_the_fetched_page(self):
+        # A result that IS page 2 of 5 (offset 10, limit 10) describes itself.
+        records = [{"id": i} for i in range(10, 20)]
+        result = DatabaseResult(records=records, count=50, limit=10, offset=10)
 
-        assert len(page["data"]) == 10
-        assert page["data"][0]["id"] == 10
-        assert page["data"][-1]["id"] == 19
-        assert page["total"] == 50
+        page = result.to_paginate()
+
         assert page["page"] == 2
-
-    def test_last_page(self):
-        records = [{"id": i} for i in range(50)]
-        result = DatabaseResult(records=records, count=50)
-
-        page = result.to_paginate(page=5, per_page=10)
-
-        assert len(page["data"]) == 10
-
-    def test_first_page(self):
-        records = [{"id": i} for i in range(50)]
-        result = DatabaseResult(records=records, count=50)
-
-        page = result.to_paginate(page=1, per_page=10)
-
-        assert page["page"] == 1
+        assert page["per_page"] == 10
+        assert page["total"] == 50
+        assert page["total_pages"] == 5
+        assert len(page["records"]) == 10
+        assert page["records"][0]["id"] == 10
 
 
 # ── 6. column_info() infers types ────────────────────────────────
@@ -298,8 +298,9 @@ class TestPaginateDescribesTheFetchedPage:
     def test_total_is_the_true_total_not_rows_returned(self):
         assert self._result().to_paginate()["total"] == 250
 
-    def test_slicing_an_already_offset_page_is_refused(self):
-        # NEGATIVE: slicing from row 0 a result whose rows start at 40 is the
-        # measured Ruby zero-rows bug. It must raise, not answer wrongly.
-        with pytest.raises(ValueError):
+    def test_passing_an_argument_is_refused(self):
+        # NEGATIVE (ADR-0043): the arg form that used to slice from row 0 a result
+        # whose rows start at 40 (the measured Ruby zero-rows bug) is removed.
+        # Passing ANY argument now raises rather than answering wrongly.
+        with pytest.raises(TypeError):
             self._result().to_paginate(page=2, per_page=10)

@@ -821,7 +821,7 @@ row = db.fetch_one("SELECT * FROM users WHERE id = ?", [1])
 # Result methods
 result.to_json()       # JSON string
 result.to_array()      # List of dicts
-result.to_paginate()   # Dict with records, count, limit, offset
+result.to_paginate()   # Dict: records, total, page, per_page, total_pages, limit, offset (takes no args; ADR-0043)
 result.to_csv()        # CSV string
 
 # Transactions

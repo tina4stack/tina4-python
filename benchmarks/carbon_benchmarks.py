@@ -191,7 +191,7 @@ def bench_paginated():
 
     def op():
         result = db.fetch("SELECT * FROM products WHERE category = ?", ["Cat 3"], limit=20, offset=0)
-        result.to_paginate(page=1, per_page=20)
+        result.to_paginate()
 
     def teardown():
         db.close()
