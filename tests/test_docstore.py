@@ -187,6 +187,43 @@ class TestDatetime:
         assert orders.count_documents({"created_at": {"$gte": base}}) == 3
 
 
+# ── distinct ─────────────────────────────────────────────────────────────────
+
+class TestDistinct:
+    def test_distinct_dedups_repeated_objectid_and_date_by_value(self, orders):
+        """distinct() dedups by VALUE, including ObjectId (24-hex) and datetime
+        (instant) - not by object identity. ObjectId has __eq__/__hash__ and
+        datetime compares by value, so the plain `not in` membership test dedups
+        both. Parity with PHP/Ruby/Node; guards against a regression that drops
+        __eq__/__hash__ or the type-preserving decode."""
+        cat_a = ObjectId("64d2f8a1b2c3d4e5f6a7b8c9")
+        cat_b = ObjectId("64d2f8a1b2c3d4e5f6a7b8ca")
+        d1 = datetime(2026, 8, 7, 12, 0, 0, tzinfo=timezone.utc)
+        d2 = datetime(2026, 8, 8, 9, 30, 0, tzinfo=timezone.utc)
+        orders.insert_many([
+            {"category_id": cat_a, "when": d1},
+            {"category_id": cat_a, "when": d1},
+            {"category_id": cat_a, "when": d2},
+            {"category_id": cat_b, "when": d2},
+            {"category_id": cat_b, "when": d1},
+        ])
+
+        # ObjectId: two distinct values (A x3, B x2) -> exactly 2, not 5.
+        ids = orders.distinct("category_id")
+        assert len(ids) == 2
+        assert sorted(str(o) for o in ids) == [
+            "64d2f8a1b2c3d4e5f6a7b8c9",
+            "64d2f8a1b2c3d4e5f6a7b8ca",
+        ]
+
+        # datetime: two distinct instants (D1 x3, D2 x2) -> exactly 2, not 5.
+        dates = orders.distinct("when")
+        assert len(dates) == 2
+        assert sorted(d.isoformat() for d in dates) == sorted(
+            [d1.isoformat(), d2.isoformat()]
+        )
+
+
 # ── updates ──────────────────────────────────────────────────────────────────
 
 class TestUpdates:
