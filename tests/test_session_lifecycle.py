@@ -157,3 +157,112 @@ class TestNoSessionFileForWebSocketUpgrade:
         session.set("key", "value")
 
         assert session._dirty is True, "_dirty must be True after set()"
+
+
+class TestDestroyDoesNotResurrect:
+    """destroy() ENDS the session — a later set()+save() must NOT resurrect it.
+
+    The master nulls ``_session_id`` in destroy(), so a subsequent set()/save()
+    with NO new start() has no id to persist under and writes nothing. A fresh
+    session is only ever started by a new start() that MINTS a new id. This is
+    the cross-framework contract; Python is the reference and tina4-php /
+    tina4-ruby were re-persisting under the just-destroyed id.
+    """
+
+    def test_set_and_save_after_destroy_creates_no_record(self, tmp_path):
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        handler = FileSessionHandler(session_dir)
+
+        session = Session(handler=handler, ttl=300)
+        old_id = session.start()
+        session.set("user_id", 42)
+        session.save()
+        assert len(_session_files(session_dir)) == 1, (
+            "a record must exist after the first write"
+        )
+
+        # End the session: the record is removed and the id is cleared.
+        session.destroy()
+        assert _session_files(session_dir) == set(), (
+            "destroy() must remove the stored record"
+        )
+        assert session.get_session_id() is None, (
+            "destroy() must clear the session id so a later save() has no id"
+        )
+
+        # A set()+save() with NO new start() must write NO record — the session
+        # was ended, and this is exactly the resurrection the PHP/Ruby bug caused.
+        session.set("user_id", 99)
+        session.save()
+        assert _session_files(session_dir) == set(), (
+            "set()+save() after destroy() must NOT re-create a record"
+        )
+
+        # A FRESH handler reading the OLD id from the SAME backend finds NO data.
+        fresh = FileSessionHandler(session_dir)
+        assert fresh.read(old_id) == {}, (
+            "the destroyed session id must not be readable again — nothing was re-created"
+        )
+
+    def test_new_start_after_destroy_mints_a_fresh_id_and_persists(self, tmp_path):
+        """Negative control: destroy() is not a permanent gag.
+
+        A NEW start() after destroy() mints a fresh id and that session
+        persists normally — proving the no-resurrect rule targets the ENDED
+        session, not the Session object.
+        """
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        handler = FileSessionHandler(session_dir)
+
+        session = Session(handler=handler, ttl=300)
+        old_id = session.start()
+        session.set("k", "v")
+        session.save()
+        session.destroy()
+
+        new_id = session.start()
+        assert new_id != old_id, "a fresh start() after destroy() mints a NEW id"
+
+        session.set("k", "v2")
+        session.save()
+        assert len(_session_files(session_dir)) == 1, (
+            "the freshly started session persists normally"
+        )
+        fresh = FileSessionHandler(session_dir)
+        assert fresh.read(new_id).get("k") == "v2", (
+            "the fresh session is readable under its NEW id"
+        )
+
+
+class TestFlashNoneReadsNotStores:
+    """flash(key, None) is the GET sentinel — it READS-and-CLEARS, never STORES None.
+
+    The master keys the mode off ``value is not None`` (SET) vs the None default
+    (GET), so flash(key, None) returns the pending value and removes it. This is
+    the cross-framework contract; tina4-nodejs used ``value !== undefined`` and so
+    STORED null. Python is the reference.
+    """
+
+    def test_flash_none_reads_and_clears_and_does_not_store_none(self, tmp_path):
+        session_dir = str(tmp_path / "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+        handler = FileSessionHandler(session_dir)
+
+        session = Session(handler=handler, ttl=300)
+        session.start()
+
+        session.flash("message", "Saved!")  # set (value is not None)
+        assert session.has("_flash_message"), "flash set must store the value"
+
+        # GET sentinel: None reads the pending value AND clears it.
+        first = session.flash("message", None)
+        assert first == "Saved!", "flash(key, None) must READ the pending value"
+        assert not session.has("_flash_message"), (
+            "flash(key, None) must CLEAR the key — it must never STORE None"
+        )
+
+        # A second read is empty — the value was consumed, not re-stored as None.
+        second = session.flash("message", None)
+        assert second is None, "a second flash read is empty"
