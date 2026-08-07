@@ -311,8 +311,9 @@ class TestMessengerAttachmentsLive:
         msg = _wait_for_message(m, subject)
         names = [a["filename"] for a in msg["attachments"]]
         assert "test.txt" in names
-        # Content survives intact (real base64 transfer-encoding round-trip).
-        data = next(a for a in msg["attachments_data"] if a["filename"] == "test.txt")
+        # Content survives intact (real base64 transfer-encoding round-trip),
+        # carried inside attachments[i]["content"] as raw decoded bytes.
+        data = next(a for a in msg["attachments"] if a["filename"] == "test.txt")
         assert data["content"] == b"hello world"
 
     def test_file_attachment_round_trips(self, tmp_path):
@@ -331,7 +332,8 @@ class TestMessengerAttachmentsLive:
         msg = _wait_for_message(m, subject)
         names = [a["filename"] for a in msg["attachments"]]
         assert "report.csv" in names
-        data = next(a for a in msg["attachments_data"] if a["filename"] == "report.csv")
+        # Content lives inside attachments[i]["content"] as raw decoded bytes.
+        data = next(a for a in msg["attachments"] if a["filename"] == "report.csv")
         assert data["content"] == b"a,b,c\n1,2,3"
 
     def test_missing_file_is_skipped_send_still_succeeds(self):

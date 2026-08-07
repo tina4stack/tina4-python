@@ -94,6 +94,29 @@ re-read. Those values were never stable - an expunge by any client already
 invalidated them - so there is nothing to convert. Values read from this version
 onward are stable for the life of the mailbox (IMAP UIDVALIDITY aside).
 
+### Breaking: Messenger `read()` folds attachment bytes into `attachments`, drops `attachments_data`
+
+`read()` returned the attachment BYTES in a separate top-level `attachments_data`
+key while `attachments` carried metadata only (filename, content_type, size). The
+bytes are now folded INTO each attachment: `read()["attachments"][i]` is
+`{filename, content_type, size, content}` where `content` is the RAW DECODED BYTES
+of the part (bytes, not base64 - the same convention as
+`request.files[x]["content"]`) and `size` is that byte length. The separate
+`attachments_data` key is removed, so `read()` returns EXACTLY the ten canonical
+keys `{uid, subject, from, to, cc, date, body_text, body_html, attachments,
+headers}` and nothing else (messenger_contract `msg-read-item-shape`; ADR-0042).
+
+This closes the cross-framework follow-up where attachment bytes were retrievable
+only in Python; the other three frameworks move to the same shape (bytes in
+`attachments[i]["content"]`).
+
+**Migration.** Replace `read(uid)["attachments_data"][i]["content"]` with
+`read(uid)["attachments"][i]["content"]` - the bytes are in the same `content`
+field, now on the metadata item itself. Because `attachments` carries raw bytes,
+`read()` is not directly JSON-serialisable (exactly as `request.files` is not):
+encode `content` (e.g. base64) before serialising, or read the JSON-safe metadata
+fields (`filename` / `content_type` / `size`).
+
 ### Fixed (the mapping sort spelling raised on the fallback, ADR-0036)
 
 `collection.find({}).sort({"total": -1})` worked on a real MongoDB and raised

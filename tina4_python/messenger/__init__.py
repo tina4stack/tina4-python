@@ -776,7 +776,17 @@ class Messenger:
         }
 
     def _parse_message(self, uid: bytes, msg) -> dict:
-        """Parse a full email message into the read() dict."""
+        """Parse a full email message into the read() dict — EXACTLY the ten
+        canonical keys {uid, subject, from, to, cc, date, body_text, body_html,
+        attachments, headers}, no more (ADR-0042; messenger_contract
+        msg-read-item-shape). Message-ID lives in ``headers``.
+
+        Each attachment is {filename, content_type, size, content} where
+        ``content`` is the RAW DECODED BYTES of the part (same convention as
+        request.files[x]["content"] — bytes, not base64) and ``size`` is that
+        byte length. The bytes live INSIDE ``attachments``; there is no separate
+        ``attachments_data`` carrier (folded away in 3.13.96).
+        """
         body_text, body_html, attachments = self._extract_bodies(msg)
         return {
             "uid": uid.decode() if isinstance(uid, bytes) else str(uid),
@@ -787,8 +797,7 @@ class Messenger:
             "date": self._iso_date(msg),
             "body_text": body_text,
             "body_html": body_html,
-            "attachments": [{k: v for k, v in a.items() if k != "content"} for a in attachments],
-            "attachments_data": attachments,
+            "attachments": attachments,
             "headers": dict(msg.items()),
         }
 

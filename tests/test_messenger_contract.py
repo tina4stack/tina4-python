@@ -30,13 +30,18 @@ missing uid, and the live listing shape) are gated with @_requires_greenmail and
 skip on a laptop -- reported honestly, never mocked.
 
 Measured 2026-08-07 against the shipping feature/release3.13.96 code: Python
-already satisfies all 14 (the 3.13.96 parity commits 3237383 / 5e912ca / 75c2578
-landed the fixes), so this suite PROVES the shipped behaviour rather than driving
-a new change. The one nuance is invariant 8: read() carries the 10 canonical keys
-PLUS a documented ``attachments_data`` key holding the raw attachment bytes that
-``attachments`` strips for JSON-safety (used by tests/test_messenger.py). The
-contract locks the 10 canonical keys and permits ONLY that one master-internal
-extra; it never permits a stray key.
+already satisfied 13 of the 14 (the 3.13.96 parity commits 3237383 / 5e912ca /
+75c2578 landed those fixes), so for those this suite PROVES shipped behaviour
+rather than driving a change.
+
+Invariant 8 (read-item-shape) was tightened in 3.13.96 (#69): read() now returns
+EXACTLY the ten canonical keys {uid, subject, from, to, cc, date, body_text,
+body_html, attachments, headers} and NOTHING else. The separate ``attachments_data``
+bytes carrier was folded into ``attachments`` — each attachment now carries its
+raw decoded bytes at attachments[i]["content"] (bytes, not base64, the same
+convention as request.files[x]["content"]), so a stray key of ANY name is now
+forbidden. This closes the "bytes are Python-only via attachments_data" follow-up
+recorded in CONTRACT-MAP.md; the other three frameworks move to the same shape.
 """
 import os
 import socket
@@ -91,9 +96,10 @@ _READ_ITEM_KEYS = {
     "uid", "subject", "from", "to", "cc", "date",
     "body_text", "body_html", "attachments", "headers",
 }
-# The only extra key read() is permitted to carry: the raw attachment bytes that
-# `attachments` deliberately strips so read() stays JSON-serialisable.
-_READ_PERMITTED_EXTRA = {"attachments_data"}
+# The shape of ONE attachment inside read()["attachments"] — metadata plus the
+# raw decoded bytes (`content`). Folded in from the old attachments_data carrier
+# in 3.13.96 (#69), so read() carries no separate/extra key.
+_ATTACHMENT_ITEM_KEYS = {"filename", "content_type", "size", "content"}
 # The public concept methods every Messenger must expose under ONE name.
 _CONCEPT_METHODS = (
     "inbox", "read", "unread", "search", "folders",
@@ -365,13 +371,11 @@ def test_msg_inbox_item_shape():
 # 8. msg-read-item-shape — LOCAL core (real parsed msg) + LIVE leg
 # ══════════════════════════════════════════════════════════════════════════
 def _assert_read_shape(result: dict):
-    # The 10 canonical keys are all present...
-    assert _READ_ITEM_KEYS <= set(result), (
-        f"missing {sorted(_READ_ITEM_KEYS - set(result))}"
-    )
-    # ...and the ONLY permitted extra is the documented bytes carrier.
-    assert set(result) <= _READ_ITEM_KEYS | _READ_PERMITTED_EXTRA, (
-        f"stray key(s): {sorted(set(result) - _READ_ITEM_KEYS - _READ_PERMITTED_EXTRA)}"
+    # EXACTLY the ten canonical keys — no more (the attachments_data carrier was
+    # folded into attachments[i]["content"] in 3.13.96 #69), no fewer.
+    assert set(result) == _READ_ITEM_KEYS, (
+        f"missing {sorted(_READ_ITEM_KEYS - set(result))}; "
+        f"stray {sorted(set(result) - _READ_ITEM_KEYS)}"
     )
     assert isinstance(result["from"], str) and isinstance(result["to"], str)
     assert isinstance(result["cc"], str)
@@ -387,17 +391,17 @@ def _assert_read_shape(result: dict):
 
 
 def test_msg_read_item_shape():
-    """read() returns {uid, subject, from, to, cc, date, body_text, body_html,
-    attachments, headers} (+ the documented attachments_data bytes carrier);
-    Message-ID lives in headers; body_text/body_html is the canonical naming."""
+    """read() returns EXACTLY {uid, subject, from, to, cc, date, body_text,
+    body_html, attachments, headers}; Message-ID lives in headers;
+    body_text/body_html is the canonical naming. Attachment bytes are carried
+    inside attachments[i]["content"] — no separate carrier (3.13.96 #69)."""
     msg = _real_read_message(with_attachment=True)
     result = Messenger()._parse_message(b"11", msg)
     _assert_read_shape(result)
     assert "the quick brown fox" in result["body_text"]
     assert any(a["filename"] == "a.txt" for a in result["attachments"])
-    # `attachments` carries metadata only (JSON-safe); the raw bytes live in the
-    # permitted extra.
-    assert all("content" not in a for a in result["attachments"])
+    # The bytes live INSIDE each attachment now, not in a side carrier.
+    assert all("content" in a for a in result["attachments"])
 
     if _greenmail_up:
         addr = _unique("readshape")
@@ -410,6 +414,83 @@ def test_msg_read_item_shape():
         _assert_read_shape(live)
         assert "the body text" in live["body_text"]
         assert live["headers"].get("Subject")
+
+
+# ── 8b/8c. read-item-shape follow-up (#69): attachment bytes folded in ─────
+# Two dedicated gates strengthening invariant 8 for the Python reference: the
+# attachment BYTES carrier (formerly the separate `attachments_data`) is now
+# attachments[i]["content"], and read() carries EXACTLY the ten canonical keys.
+# Both run locally over a REAL parsed MIME message (no double) and add a live
+# GreenMail wire leg under `if _greenmail_up:`.
+def test_read_attachments_carry_decoded_bytes():
+    """Each attachment carries its RAW DECODED BYTES at attachments[i]["content"]
+    (bytes, not base64 — the request.files convention), alongside filename,
+    content_type and the byte-length size. Non-text bytes on purpose, so this
+    proves raw decoded bytes, not a text round-trip."""
+    raw = b"PK\x03\x04 binary-\x00\xff-payload"          # deliberately non-text
+    em = EmailMessage()
+    em["Subject"] = "attach-bytes"
+    em["From"] = "alice@example.com"
+    em["To"] = "bob@example.com"
+    em["Date"] = "Fri, 07 Aug 2026 07:15:51 +0200"
+    em["Message-ID"] = "<attach-bytes@example.com>"
+    em.set_content("see attached")
+    em.add_attachment(raw, maintype="application", subtype="octet-stream",
+                      filename="invoice.bin")
+    parsed = BytesParser(policy=policy.default).parsebytes(em.as_bytes())
+
+    att = Messenger()._parse_message(b"5", parsed)["attachments"]
+    assert len(att) == 1
+    item = att[0]
+    # The attachment item is EXACTLY {filename, content_type, size, content}.
+    assert set(item) == _ATTACHMENT_ITEM_KEYS, f"got {sorted(item)}"
+    assert item["filename"] == "invoice.bin"
+    assert item["content_type"] == "application/octet-stream"
+    # content is the raw decoded bytes; size is that byte length.
+    assert isinstance(item["content"], (bytes, bytearray))
+    assert item["content"] == raw
+    assert item["size"] == len(raw)
+
+    if _greenmail_up:
+        addr = _unique("attachbytes")
+        m = _plain_messenger(addr)
+        subject = f"attachbytes-{uuid.uuid4().hex[:8]}"
+        m.send(to=addr, subject=subject, body="see attached",
+               attachments=[{"filename": "invoice.bin", "content": raw,
+                             "mime": "application/octet-stream"}])
+        live = _wait_read(m, subject)
+        got = next(a for a in live["attachments"] if a["filename"] == "invoice.bin")
+        # Survives the real base64 SMTP->IMAP wire round-trip as the same bytes.
+        assert got["content"] == raw
+        assert got["content_type"] == "application/octet-stream"
+        assert got["size"] == len(raw)
+
+
+def test_read_item_shape_is_exactly_ten_keys():
+    """read() returns EXACTLY the ten canonical keys and nothing else — the
+    folded-away attachments_data (or any stray key) is forbidden. The key set
+    must not depend on whether the message has an attachment."""
+    with_att = Messenger()._parse_message(
+        b"1", _real_read_message(with_attachment=True))
+    without_att = Messenger()._parse_message(
+        b"2", _real_read_message(with_attachment=False))
+
+    assert set(with_att.keys()) == _READ_ITEM_KEYS, f"got {sorted(with_att)}"
+    assert set(without_att.keys()) == _READ_ITEM_KEYS, f"got {sorted(without_att)}"
+    # The specific carrier that was folded away is gone in both cases.
+    assert "attachments_data" not in with_att
+    assert "attachments_data" not in without_att
+
+    if _greenmail_up:
+        addr = _unique("tenkeys")
+        m = _plain_messenger(addr)
+        subject = f"tenkeys-{uuid.uuid4().hex[:8]}"
+        m.send(to=addr, subject=subject, body="ten keys please",
+               attachments=[{"filename": "a.txt", "content": b"data",
+                             "mime": "text/plain"}])
+        live = _wait_read(m, subject)
+        assert set(live.keys()) == _READ_ITEM_KEYS, f"got {sorted(live)}"
+        assert "attachments_data" not in live
 
 
 # ══════════════════════════════════════════════════════════════════════════
