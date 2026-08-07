@@ -67,7 +67,22 @@ class KafkaBackend:
         return self._backend.size(self._topic)
 
     def purge(self, status: str = "completed"):
-        pass  # Kafka does not support purging
+        """Not performable on Kafka — raises naming the backend and the operation.
+
+        purge(status) removes jobs SELECTED BY STATUS. A Kafka log has no notion
+        of job status and cannot delete records on demand: a partition is read
+        in offset order and records leave only by retention. This used to be a
+        bare ``pass``, so a caller who ran purge() believed jobs were removed
+        when nothing happened (ADR-0022 invariant 6: a backend that cannot
+        perform an operation refuses by name, it never silently no-ops).
+        """
+        raise NotImplementedError(
+            "The kafka queue backend cannot perform purge(): Kafka has no notion "
+            "of job status to purge by — a log is read in offset order and "
+            "records leave only by retention. Returning without doing anything "
+            "would claim jobs were purged when none were. Configure topic "
+            "retention, or use the file or mongodb backend."
+        )
 
     def retry_failed(self, max_retries: int = None) -> int:
         """Not performable on Kafka — raises naming the backend and the operation.
@@ -159,7 +174,21 @@ class KafkaBackend:
         return True
 
     def clear(self) -> int:
-        return 0  # Kafka does not support topic purging without admin API
+        """Not performable on Kafka — raises naming the backend and the operation.
+
+        clear() empties the queue. A Kafka log cannot delete records on demand:
+        a partition is read in offset order and records leave only by retention.
+        This used to ``return 0``, which claimed the queue was emptied when it
+        was untouched — the silent no-op ADR-0022 invariant 6 forbids. Refusing
+        by name is the honest answer.
+        """
+        raise NotImplementedError(
+            "The kafka queue backend cannot perform clear(): Kafka has no notion "
+            "of job status and cannot delete records on demand — a log is read "
+            "in offset order and records leave only by retention. Returning 0 "
+            "would claim the queue was emptied when it was not. Configure topic "
+            "retention, or use the file or mongodb backend."
+        )
 
     def complete(self, job: Job):
         self._backend.acknowledge(self._topic, str(job.id))
