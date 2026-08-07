@@ -10,6 +10,21 @@ This file is deliberately NOT a copy of those notes. Duplicating them is exactly
 changelog rots into claiming a version that was never cut, so this file records only
 UNRELEASED work. When a version ships, its notes go to the release notes above.
 
+### Breaking: `Api.send()` renamed to `Api.send_request()`
+
+The generic "pick the HTTP verb at call time" method was `send()` in Python
+alone. PHP, Ruby, and Node all call it `sendRequest` / `send_request`, so Python
+was the sole outlier and one concept carried two names. Python is now
+`send_request` too. `send()` could never be the shared name: Ruby's `send` is
+`Object#send`, the metaprogramming primitive that invokes any method by name, so
+a Ruby class cannot expose an HTTP `send` without shadowing it. The Python-only
+rename to `send()` made in 3.13.0 is reverted.
+
+**Migration.** Replace `api.send(method, ...)` with `api.send_request(method,
+...)` on `Api` instances. There is no alias (the primary is renamed, not
+aliased). The verb methods (`get` / `post` / `put` / `patch` / `delete`),
+`upload`, and `download` are unchanged.
+
 ### Breaking: Swagger `servers[0].url` defaults to `/`
 
 The OpenAPI document's `servers[0].url` defaulted to a hard-coded
