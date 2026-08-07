@@ -2,7 +2,8 @@
 
 * tina4_python.ai: detect_ai / detect_ai_names / install_context / status_report
 * queue.consume(job_id=) renamed from consume(id=)
-* Api.send() renamed from Api.send_request()
+* Api.send_request() — one name in all four (reverted the 3.13.0 Api.send() rename;
+  Ruby cannot use bare `send` because it is Object#send)
 * I18n(locale=, path=) preferred over I18n(locale_dir=, default_locale=)
 * TINA4_TOKEN_EXPIRES_IN env var now controls JWT expiry (was TINA4_TOKEN_LIMIT)
 """
@@ -103,20 +104,30 @@ class TestQueueConsumeJobIdKwarg:
         q.clear()
 
 
-# ─── Api.send() renamed from Api.send_request() ───────────────────────────
+# ─── Api.send_request() — the one name all four frameworks share ───────────
 
 
-class TestApiSendRename:
-    def test_send_method_exists(self):
+class TestApiSendRequestName:
+    """The arbitrary-method HTTP call is ``send_request`` in every framework.
+
+    This REVERSES the Python-only rename to ``send`` made in 3.13.0. ``send``
+    can never be the shared name: Ruby's ``send`` is ``Object#send`` (the
+    metaprogramming primitive that invokes any method by name), so a Ruby class
+    cannot expose an HTTP ``send`` without shadowing it. ``send_request`` is the
+    only spelling all four can adopt — PHP ``sendRequest``, Ruby
+    ``send_request``, Node ``sendRequest`` already do.
+    """
+
+    def test_send_request_method_exists(self):
         from tina4_python.api import Api
         api = Api("https://example.test")
-        assert callable(api.send)
+        assert callable(api.send_request)
 
-    def test_send_request_removed(self):
-        """The old name is no longer callable per feedback_no_aliases."""
+    def test_send_removed(self):
+        """The old name is gone — no aliases, the primary is renamed."""
         from tina4_python.api import Api
         api = Api("https://example.test")
-        assert not hasattr(api, "send_request")
+        assert not hasattr(api, "send")
 
 
 # ─── I18n(locale=, path=) ─────────────────────────────────────────────────

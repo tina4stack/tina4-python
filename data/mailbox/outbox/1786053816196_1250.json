@@ -1,0 +1,18 @@
+{
+  "id": "1786053816196_1250",
+  "type": "outbox",
+  "from": "noreply@localhost",
+  "to": [
+    "a@b.com"
+  ],
+  "cc": [],
+  "bcc": [],
+  "reply_to": "",
+  "subject": "s",
+  "body": "b",
+  "text": null,
+  "html": false,
+  "attachments": [],
+  "date": "2026-08-06T22:03:36.196653+00:00",
+  "read": false
+}

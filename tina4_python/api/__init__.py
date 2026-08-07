@@ -203,13 +203,16 @@ class Api:
         """HTTP DELETE request."""
         return self._request("DELETE", self._url(path), body)
 
-    def send(self, method: str, path: str = "", body=None,
-             content_type: str = "application/json") -> dict:
-        """Generic request method — pick HTTP verb at call time.
+    def send_request(self, method: str, path: str = "", body=None,
+                     content_type: str = "application/json") -> dict:
+        """Generic request method — pick the HTTP verb at call time.
 
-        Renamed from ``send_request`` in 3.13.0 for parity with the
-        documentation and conciseness (``api.send("PATCH", ...)`` reads
-        cleaner than ``api.send_request("PATCH", ...)``).
+        ``send_request`` is the name all four frameworks share (PHP
+        ``sendRequest``, Ruby ``send_request``, Node ``sendRequest``). The
+        3.13.0 Python-only rename to ``send`` was reverted: ``send`` can never
+        be the shared name because Ruby's ``send`` is ``Object#send``, the
+        metaprogramming primitive, so a Ruby class cannot expose an HTTP
+        ``send`` without shadowing it. One concept, one name, everywhere.
         """
         return self._request(method.upper(), self._url(path), body, content_type)
 

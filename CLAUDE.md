@@ -476,14 +476,14 @@ api.post(path="", body=None, content_type="application/json") -> dict
 api.put(path="", body=None, content_type="application/json") -> dict
 api.patch(path="", body=None, content_type="application/json") -> dict
 api.delete(path="", body=None) -> dict
-api.send(method="", path="", body=None, content_type="application/json") -> dict
+api.send_request(method="", path="", body=None, content_type="application/json") -> dict
 api.upload(path="", file_path=None, field_name="file", extra_fields=None,
            headers=None, file_bytes=None, filename=None) -> dict
 api.download(path="", dest_path=None, params=None) -> dict
 api.add_headers(headers: dict)
 api.set_basic_auth(username, password)
 api.set_bearer_token(token)
-# get/post/put/patch/delete/send/upload return:
+# get/post/put/patch/delete/send_request/upload return:
 #   {"http_code": 200, "body": {...}, "headers": {...}, "error": None}
 # download returns (no "body" key, the body went to disk):
 #   {"http_code": 200, "headers": {...}, "error": None, "path": "/tmp/out.pdf"}

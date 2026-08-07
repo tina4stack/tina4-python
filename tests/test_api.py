@@ -190,7 +190,7 @@ class TestInterfaceContract:
 
     def test_api_exposes_full_http_verb_surface(self):
         api = Api()
-        for name in ("get", "post", "put", "patch", "delete", "send",
+        for name in ("get", "post", "put", "patch", "delete", "send_request",
                      "set_basic_auth", "set_bearer_token", "add_headers"):
             assert callable(getattr(api, name)), f"Api.{name} missing/not callable"
 
@@ -284,9 +284,9 @@ class TestRequestRoundTrip:
         expected = "Basic " + base64.b64encode(b"user:secret").decode()
         assert rec["headers"]["authorization"] == expected
 
-    def test_send_generic_method_uses_given_verb(self, server):
+    def test_send_request_generic_method_uses_given_verb(self, server):
         api = Api(server.base_url)
-        api.send("OPTIONS", "/resource")
+        api.send_request("OPTIONS", "/resource")
 
         rec = server.requests[-1]
         assert rec["method"] == "OPTIONS"
