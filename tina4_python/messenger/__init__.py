@@ -660,7 +660,15 @@ class Messenger:
         """The message Date as ISO-8601, or "" when absent/unparseable."""
         if msg["Date"]:
             try:
-                return parsedate_to_datetime(msg["Date"]).isoformat()
+                # Normalise to UTC. parsedate_to_datetime preserves the SENDER's
+                # offset, so the same message read on a +02:00 host printed
+                # +02:00 while PHP/Ruby (also +00:00) and Node (Z) emitted UTC -
+                # a host-dependent string for the same instant. MEASURED against
+                # live GreenMail in the four-way parity check.
+                dt = parsedate_to_datetime(msg["Date"])
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc)
+                return dt.isoformat()
             except Exception:
                 return str(msg["Date"])
         return ""

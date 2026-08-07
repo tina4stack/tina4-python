@@ -419,3 +419,38 @@ class TestG8ImapUsesImapAccountLive:
 
         item = _wait_item(m, subject)
         assert item["subject"] == subject   # inbox() read the imap account
+
+
+class TestIsoDateIsUtc:
+    """The inbox/read `date` is UTC, matching PHP/Ruby (+00:00) and Node (Z).
+
+    MEASURED in the four-way parity check against live GreenMail: Python alone
+    emitted the SENDER's offset (a +02:00 host printed +02:00) because
+    parsedate_to_datetime preserves the parsed timezone. The other three
+    normalise to UTC, so the same message produced a host-dependent string.
+
+    _iso_date takes a real email.message.Message - a pure function over its
+    input, no server and no double.
+    """
+
+    def _iso(self, date_header: str) -> str:
+        import email.message
+        from tina4_python.messenger import Messenger
+        msg = email.message.Message()
+        msg["Date"] = date_header
+        return Messenger._iso_date(msg)
+
+    def test_a_non_utc_offset_is_normalised_to_utc(self):
+        # 07:15:51 +02:00 is 05:15:51 UTC.
+        out = self._iso("Fri, 07 Aug 2026 07:15:51 +0200")
+        assert out.endswith("+00:00"), f"date not normalised to UTC: {out}"
+        assert "05:15:51" in out, f"instant changed during normalisation: {out}"
+
+    def test_a_utc_date_stays_utc(self):
+        out = self._iso("Fri, 07 Aug 2026 05:15:51 +0000")
+        assert out.endswith("+00:00")
+        assert "05:15:51" in out
+
+    def test_an_unparseable_date_does_not_crash(self):
+        # The fallback path must survive garbage without raising.
+        assert self._iso("not a date") == "not a date"
