@@ -485,3 +485,20 @@ class TestCsrfErrorResponse:
         assert body["code"] == "CSRF_INVALID"
         assert "message" in body
         assert body["status"] == 403
+
+
+class TestCsrfNoDefaultSecret:
+    """SEC-01 (Feature 64 audit): the CSRF middleware must never fall back to a
+    guessable built-in secret. With TINA4_SECRET unset, a formToken an attacker
+    signs with the retired public 'tina4-default-secret' must be REJECTED (fail
+    closed) - the middleware resolves the secret through Auth (blank warns,
+    never substitutes a default). Real HS256, real Request, no mocks."""
+
+    def test_forged_default_secret_token_rejected_when_secret_unset(self):
+        os.environ.pop("TINA4_SECRET", None)
+        forged = Auth(secret="tina4-default-secret").get_token({"type": "form"})
+        res = _dispatch("POST", body={"formToken": forged})
+        assert res.status_code == 403, (
+            "a formToken signed with the public default secret must be rejected "
+            "when TINA4_SECRET is unset"
+        )
