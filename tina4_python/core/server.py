@@ -3546,6 +3546,13 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     if attach_csrf_from_env():
         Log.info("CSRF protection enabled (TINA4_CSRF) — CsrfMiddleware attached")
 
+    # Security headers: register in the default chain UNCONDITIONALLY
+    # (secure-by-default, SECHDR-DEC-01). Unlike CSRF this needs no opt-in — a
+    # default app ships X-Frame-Options/X-Content-Type-Options/CSP/etc. with no
+    # code change. HSTS stays HTTPS-only. Idempotent.
+    from tina4_python.core.middleware import attach_security_headers
+    attach_security_headers()
+
     # Apply pending DB migrations on startup (non-breaking — see helper).
     _auto_migrate_on_startup()
 

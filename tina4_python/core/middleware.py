@@ -455,6 +455,11 @@ class RateLimiterMiddleware:
 class SecurityHeadersMiddleware:
     """Injects security headers on every response.
 
+    Secure-by-default (SECHDR-DEC-01): the framework registers this in the
+    default middleware chain at boot via ``attach_security_headers`` (called
+    unconditionally from ``server.run``/``server.start``), so a default Tina4 app
+    ships the security headers with no opt-in. HSTS is HTTPS-only.
+
     Configurable via environment variables:
         TINA4_FRAME_OPTIONS        — X-Frame-Options (default: SAMEORIGIN)
         TINA4_HSTS                 — Strict-Transport-Security max-age value
@@ -466,31 +471,47 @@ class SecurityHeadersMiddleware:
 
     @staticmethod
     def before_security(request, response):
-        """Set security headers before the route handler runs."""
+        """Set security headers before the route handler runs.
+
+        Registered in the default chain (secure-by-default, SECHDR-DEC-01), so a
+        default app emits these headers with no opt-in. Header names use the
+        canonical Title-Case spelling shared with PHP/Ruby/Node — HTTP header
+        names are case-insensitive, so this is purely so the four frameworks are
+        byte-identical on the wire.
+        """
         response.header(
-            "x-frame-options",
+            "X-Frame-Options",
             os.environ.get("TINA4_FRAME_OPTIONS", "SAMEORIGIN"),
         )
-        response.header("x-content-type-options", "nosniff")
+        response.header("X-Content-Type-Options", "nosniff")
 
+        # HSTS is HTTPS-only (SECHDR-DEC-02). A downgrade-protection header on a
+        # plain-HTTP response is inert at best and ships a bad max-age on an
+        # unencrypted scheme at worst, so emit it ONLY when TINA4_HSTS is set AND
+        # the client request is HTTPS. is_secure_scheme() honours
+        # x-forwarded-proto then the native scheme — the same single source of
+        # truth the session cookie's Secure flag uses. Defensive getattr keeps a
+        # non-Request (e.g. a bare test double) from turning every response into a
+        # 500 now that this runs on every request.
         hsts = os.environ.get("TINA4_HSTS", "")
-        if hsts:
+        is_https = bool(getattr(request, "is_secure_scheme", lambda: False)())
+        if hsts and is_https:
             response.header(
-                "strict-transport-security",
+                "Strict-Transport-Security",
                 f"max-age={hsts}; includeSubDomains",
             )
 
         response.header(
-            "content-security-policy",
+            "Content-Security-Policy",
             os.environ.get("TINA4_CSP", "default-src 'self'"),
         )
         response.header(
-            "referrer-policy",
+            "Referrer-Policy",
             os.environ.get("TINA4_REFERRER_POLICY", "strict-origin-when-cross-origin"),
         )
-        response.header("x-xss-protection", "0")
+        response.header("X-XSS-Protection", "0")
         response.header(
-            "permissions-policy",
+            "Permissions-Policy",
             os.environ.get(
                 "TINA4_PERMISSIONS_POLICY",
                 "camera=(), microphone=(), geolocation=()",
@@ -668,6 +689,20 @@ def attach_csrf_from_env() -> bool:
         Middleware.use(CsrfMiddleware)
         return True
     return False
+
+
+def attach_security_headers() -> bool:
+    """Register ``SecurityHeadersMiddleware`` in the default chain (secure-by-default).
+
+    Unlike CSRF (opt-in via ``TINA4_CSRF``) this is UNCONDITIONAL: a default Tina4
+    app ships the security headers with no opt-in — the SECHDR-DEC-01 posture that
+    closes the SECHDR-OFF-BY-DEFAULT gap (the middleware existed with good defaults
+    but was never registered). Idempotent (``Middleware.use`` de-dupes). The
+    framework calls this once during ``server.run``/``server.start``. Returns True
+    (always attached).
+    """
+    Middleware.use(SecurityHeadersMiddleware)
+    return True
 
 
 class RequestLoggerMiddleware:
