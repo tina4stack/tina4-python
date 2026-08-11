@@ -932,10 +932,70 @@ def _routes(args):
     print(f"\n{len(routes)} route(s) registered.")
 
 
+def _run_inline_tests(root: Path) -> bool:
+    """Discover ``@tests``-decorated functions under ``src/`` and run them.
+
+    Returns True if any inline test FAILED or ERRORED (so the caller can exit
+    non-zero), False if everything passed or there were no inline tests.
+
+    Only files whose text contains ``@tests`` are imported — a source file
+    without an inline test is never executed, so ``tina4 test`` cannot run a
+    scanned file's arbitrary side effect. This is the ``@tests`` decorator
+    surface wired to a real exit code (INLINE-DEC-01).
+    """
+    import importlib.util
+
+    from tina4_python.Testing import reset, run_all
+
+    src = root / "src"
+    if not src.is_dir():
+        return False
+
+    reset()
+    discovered = 0
+    for path in sorted(src.rglob("*.py")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if "@tests" not in text:
+            continue
+        discovered += 1
+        module_name = "tina4_inline_" + re.sub(r"\W", "_", str(path.relative_to(root)))
+        spec = importlib.util.spec_from_file_location(module_name, str(path))
+        if spec is None or spec.loader is None:
+            continue
+        try:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as exc:  # noqa: BLE001 — report and keep going
+            print(f"  ! could not import {path.relative_to(root)}: {exc}")
+
+    if discovered == 0:
+        return False
+
+    results = run_all()
+    return (results["failed"] + results["errors"]) > 0
+
+
 def _test(args):
-    """Run the test suite."""
-    result = subprocess.run([sys.executable, "-m", "pytest", "tests/"] + args)
-    sys.exit(result.returncode)
+    """Run the inline ``@tests`` suite AND the pytest suite; exit non-zero if either fails.
+
+    The inline stage discovers ``@tests``-decorated functions under ``src/`` and
+    runs them with a real exit code (INLINE-DEC-01) — the batteries-included flow
+    the docs advertise. The pytest stage still runs the ``tests/`` suite when that
+    directory exists (preserving the python#96 exit-code contract), so a project
+    that keeps its tests in ``tests/`` is unaffected.
+    """
+    inline_failed = _run_inline_tests(Path.cwd())
+
+    pytest_code = 0
+    if Path("tests").is_dir():
+        pytest_code = subprocess.run(
+            [sys.executable, "-m", "pytest", "tests/"] + args
+        ).returncode
+
+    sys.exit(1 if (inline_failed or pytest_code) else 0)
 
 
 def _build(args):

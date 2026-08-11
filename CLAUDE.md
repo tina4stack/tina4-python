@@ -777,13 +777,13 @@ html = _div({"class": "card"},
 Attach test assertions directly to functions. Tests run via CLI or programmatically.
 
 ```python
-from tina4_python.Testing import tests, assert_equal, assert_raises, assert_true, assert_false
+from tina4_python.Testing import tests, expect_equal, expect_raises, expect_true, expect_false
 
 @tests(
-    assert_equal((5, 3), 8),
-    assert_equal((0, 0), 0),
-    assert_raises(ValueError, (None,)),
-    assert_true((1, 1)),
+    expect_equal((5, 3), 8),
+    expect_equal((0, 0), 0),
+    expect_raises(ValueError, (None,)),
+    expect_true((1, 1)),
 )
 def add(a, b=None):
     if b is None:
@@ -796,7 +796,7 @@ results = run_all(quiet=False, failfast=False)
 # {"passed": 3, "failed": 0, "errors": 0, "details": [...]}
 ```
 
-Available assertions: `assert_equal(args, expected)`, `assert_raises(exception_class, args)`, `assert_true(args)`, `assert_false(args)`.
+Available builders: `expect_equal(args, expected)`, `expect_raises(exception_class, args)`, `expect_true(args)`, `expect_false(args)`. They are DESCRIPTORS (they record an expectation for the runner), deliberately named apart from the xUnit `assert_*` in `tina4_python.test` so the two surfaces never collide.
 
 Run from CLI:
 ```bash

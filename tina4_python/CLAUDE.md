@@ -238,7 +238,7 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 | Static file serving | Put files in `src/public/` — auto-served |
 | Translations / i18n | `I18n` from `tina4_python.i18n` |
 | HTML generation in code | `HTMLElement` from `tina4_python.HtmlElement` |
-| Inline testing | `@tests`, `assert_equal`, `assert_raises` from `tina4_python.Testing` |
+| Inline testing | `@tests`, `expect_equal`, `expect_raises` from `tina4_python.Testing` |
 | Event system | `on`, `emit`, `once`, `off` from `tina4_python.core.events` |
 | AI assistant context | `detect_ai`, `install_context` from `tina4_python.ai` |
 | Response caching | `ResponseCache`, `cache_stats`, `clear_cache` from `tina4_python.cache` |
@@ -357,7 +357,7 @@ tina4_python/               # Core framework package (v3.0.0)
 ├── dotenv/                 # .env file loader
 ├── cli/                    # CLI commands
 ├── HtmlElement.py          # Programmatic HTML builder (HTMLElement, add_html_helpers)
-├── Testing.py              # Inline testing framework (tests, assert_equal, run_all)
+├── Testing.py              # Inline testing framework (tests, expect_equal, run_all)
 ├── templates/              # Built-in framework templates (Twig)
 ├── public/                 # Built-in static assets
 └── scss/                   # Built-in SCSS
@@ -1369,11 +1369,11 @@ Supports all HTML tags, void tags (`<br>`, `<img>`, `<input>`, etc.), and auto-e
 Tina4 includes a decorator-based test framework for inline test cases:
 
 ```python
-from tina4_python.Testing import tests, assert_equal, assert_raises
+from tina4_python.Testing import tests, expect_equal, expect_raises
 
 @tests(
-    assert_equal((5, 3), 8),
-    assert_raises(ValueError, (None,))
+    expect_equal((5, 3), 8),
+    expect_raises(ValueError, (None,))
 )
 def add(a, b=None):
     if b is None:
@@ -1383,7 +1383,7 @@ def add(a, b=None):
 
 Run all decorated tests:
 ```bash
-uv run tina4python test                     # Discovers @tests in src/**/*.py
+uv run tina4python test                     # Discovers @tests in src/**/*.py, real exit code
 ```
 
 Or programmatically:
@@ -1585,14 +1585,14 @@ HTMLElement("img", {"src": "/logo.png"})  # <img src="/logo.png">
 Attach test assertions directly to functions with the `@tests` decorator. Tests are registered globally and run via CLI or programmatically.
 
 ```python
-from tina4_python.Testing import tests, assert_equal, assert_raises, assert_true, assert_false, run_all
+from tina4_python.Testing import tests, expect_equal, expect_raises, expect_true, expect_false, run_all
 
 @tests(
-    assert_equal((5, 3), 8),           # add(5, 3) == 8
-    assert_equal((0, 0), 0),           # add(0, 0) == 0
-    assert_raises(ValueError, (None,)), # add(None) raises ValueError
-    assert_true((1, 1)),               # add(1, 1) is truthy
-    assert_false((0, 0)),              # add(0, 0) is falsy
+    expect_equal((5, 3), 8),           # add(5, 3) == 8
+    expect_equal((0, 0), 0),           # add(0, 0) == 0
+    expect_raises(ValueError, (None,)), # add(None) raises ValueError
+    expect_true((1, 1)),               # add(1, 1) is truthy
+    expect_false((0, 0)),              # add(0, 0) is falsy
 )
 def add(a, b=None):
     if b is None:

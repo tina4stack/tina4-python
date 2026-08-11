@@ -3,14 +3,14 @@
 # License: MIT https://opensource.org/licenses/MIT
 """
 Inline testing framework — decorate functions with test assertions
-that run alongside the code.
+that run alongside the code, and run them with ``tina4 test``.
 
 Usage:
-    from tina4_python.Testing import tests, assert_equal, assert_raises
+    from tina4_python.Testing import tests, expect_equal, expect_raises
 
     @tests(
-        assert_equal((5, 3), 8),
-        assert_raises(ValueError, (None,))
+        expect_equal((5, 3), 8),
+        expect_raises(ValueError, (None,))
     )
     def add(a, b=None):
         if b is None:
@@ -20,6 +20,15 @@ Usage:
 Run all tests:
     from tina4_python.Testing import run_all
     run_all()
+
+The builders are named ``expect_*`` — deliberately distinct from the xUnit
+``assert_*`` assertions in ``tina4_python.test`` (which take positional
+``(actual, expected, message)`` and assert immediately). ``expect_*`` are
+DESCRIPTORS: ``expect_equal((args,), expected)`` records "call the decorated
+function with ``args`` and check the result equals ``expected``" for the
+runner to execute later. Keeping the two surfaces' names apart means importing
+the wrong one is a loud ``ImportError``/``AttributeError``, never a silent
+change of call semantics.
 """
 
 import sys
@@ -32,23 +41,23 @@ _registry: list[dict] = []
 
 # ── Assertion builders ──────────────────────────────────────────────
 
-def assert_equal(args: tuple, expected):
-    """Assert that calling the decorated function with *args* returns *expected*."""
+def expect_equal(args: tuple, expected):
+    """Expect that calling the decorated function with *args* returns *expected*."""
     return {"type": "equal", "args": args, "expected": expected}
 
 
-def assert_raises(exception_class: type, args: tuple):
-    """Assert that calling the decorated function with *args* raises *exception_class*."""
+def expect_raises(exception_class: type, args: tuple):
+    """Expect that calling the decorated function with *args* raises *exception_class*."""
     return {"type": "raises", "exception": exception_class, "args": args}
 
 
-def assert_true(args: tuple):
-    """Assert that calling the decorated function with *args* returns a truthy value."""
+def expect_true(args: tuple):
+    """Expect that calling the decorated function with *args* returns a truthy value."""
     return {"type": "true", "args": args}
 
 
-def assert_false(args: tuple):
-    """Assert that calling the decorated function with *args* returns a falsy value."""
+def expect_false(args: tuple):
+    """Expect that calling the decorated function with *args* returns a falsy value."""
     return {"type": "false", "args": args}
 
 
