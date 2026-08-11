@@ -3462,6 +3462,12 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     route_count = len(Router.get_routes())
     Log.info(f"Discovered {route_count} routes")
 
+    # CSRF: attach the middleware when TINA4_CSRF is enabled (OFF by default —
+    # a default app has no CSRF gate; TINA4_CSRF=true gates every write route).
+    from tina4_python.core.middleware import attach_csrf_from_env
+    if attach_csrf_from_env():
+        Log.info("CSRF protection enabled (TINA4_CSRF) — CsrfMiddleware attached")
+
     # Apply pending DB migrations on startup (non-breaking — see helper).
     _auto_migrate_on_startup()
 

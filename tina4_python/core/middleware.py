@@ -503,16 +503,25 @@ class SecurityHeadersMiddleware:
 class CsrfMiddleware:
     """CSRF token validation middleware.
 
-    Off by default — only active when TINA4_CSRF=true in .env or when
-    registered explicitly via Router.use(CsrfMiddleware).
+    Off by default. Set ``TINA4_CSRF=true`` (or ``1``/``yes``/``on``) in the
+    environment and the framework auto-attaches this middleware at boot (see
+    ``attach_csrf_from_env``); or register it explicitly via
+    ``Router.use(CsrfMiddleware)``. Once attached, ``TINA4_CSRF=false`` (or
+    ``0``/``no``) is the kill switch that disables enforcement again.
 
     Behaviour:
         - Skips GET, HEAD, OPTIONS requests.
         - Skips routes marked @noauth().
+        - Fails CLOSED: with TINA4_SECRET unset the signing secret resolves to
+          blank (there is NO built-in default), and a blank HMAC key is
+          publicly reproducible — so no token can be trusted and every write is
+          rejected (403). This is the SEC-01 no-default-secret guarantee.
         - Skips requests with a valid Authorization: Bearer header (API clients).
         - Checks request.body["formToken"] then request.headers["X-Form-Token"].
         - Rejects if token found in request.query["formToken"] (log warning, 403).
-        - Validates token with Auth.valid_token using SECRET env var.
+        - Validates token with Auth.valid_token using the resolved SECRET, and
+          enforces that the token's ``type`` claim is ``"form"`` — a non-form
+          JWT presented in the formToken slot is rejected.
         - If token payload has session_id, verifies it matches request.session.session_id.
         - Returns 403 with response.error("CSRF_INVALID", ...) on failure.
     """
@@ -540,9 +549,24 @@ class CsrfMiddleware:
         if handler and getattr(handler, "_noauth", False):
             return request, response
 
-        # Skip requests with valid Bearer token (API clients)
-        auth_header = ""
+        # Resolve the signing secret ONCE, fail-closed (blank when TINA4_SECRET
+        # is unset — there is NO built-in default). A blank HMAC key is publicly
+        # reproducible, so a token signed with it (or with the retired public
+        # 'tina4-default-secret') is a forgery: reject every write rather than
+        # validate against a guessable key. SEC-01, fail closed hard.
+        from tina4_python.auth import Auth as _CsrfAuth, _resolve_secret
+        secret = _resolve_secret()
+        if not secret:
+            return request, response.error(
+                "CSRF_INVALID",
+                "CSRF token cannot be validated: TINA4_SECRET is not set",
+                403,
+            )
+        auth = _CsrfAuth(secret=secret)
+
+        # Skip requests with a valid Bearer token (API clients)
         headers = getattr(request, "headers", {})
+        auth_header = ""
         if isinstance(headers, dict):
             auth_header = headers.get("authorization", headers.get("Authorization", ""))
         elif hasattr(headers, "get"):
@@ -550,12 +574,8 @@ class CsrfMiddleware:
 
         if auth_header.startswith("Bearer "):
             bearer_token = auth_header[7:].strip()
-            if bearer_token:
-                from tina4_python.auth import Auth as _CsrfAuth, _resolve_secret
-                secret = _resolve_secret()
-                auth = _CsrfAuth(secret=secret)
-                if auth.valid_token(bearer_token):
-                    return request, response
+            if bearer_token and auth.valid_token(bearer_token):
+                return request, response
 
         # Reject if token is in query string (security risk — log warning)
         query = getattr(request, "params", None) or getattr(request, "query", None) or {}
@@ -589,10 +609,7 @@ class CsrfMiddleware:
                 403,
             )
 
-        # Validate the token
-        from tina4_python.auth import Auth as _CsrfAuth, _resolve_secret
-        secret = _resolve_secret()
-        auth = _CsrfAuth(secret=secret)
+        # Validate the token signature / expiry
         if not auth.valid_token(token):
             return request, response.error(
                 "CSRF_INVALID",
@@ -601,6 +618,16 @@ class CsrfMiddleware:
             )
 
         payload = auth.get_payload(token) or {}
+
+        # Enforce the form-token TYPE — a valid signature is not enough: a
+        # non-form JWT (e.g. an auth/session token) must never be accepted in
+        # the formToken slot.
+        if payload.get("type") != "form":
+            return request, response.error(
+                "CSRF_INVALID",
+                "Invalid or missing form token",
+                403,
+            )
 
         # Session binding — if token has session_id, verify it matches
         token_session_id = payload.get("session_id")
@@ -620,6 +647,27 @@ class CsrfMiddleware:
                 )
 
         return request, response
+
+
+def attach_csrf_from_env() -> bool:
+    """Auto-attach ``CsrfMiddleware`` when ``TINA4_CSRF`` is enabled in the env.
+
+    CSRF is OFF by default: with ``TINA4_CSRF`` unset the middleware is never
+    attached, so a default app has no CSRF gate. Setting ``TINA4_CSRF`` to a
+    truthy value (``true``/``1``/``yes``/``on``, case-insensitive) attaches it
+    globally at boot so every state-changing route is gated — the env flag is
+    the switch, no code change needed. Idempotent (``Middleware.use`` de-dupes).
+    Returns True when the middleware is now attached.
+
+    The framework calls this once during ``server.run``/``server.start``; a
+    ``false``/``0``/``no`` value still lets an explicit ``Router.use`` opt-in be
+    disabled at runtime by the kill switch in ``before_csrf``.
+    """
+    value = os.environ.get("TINA4_CSRF", "").strip().lower()
+    if value in ("true", "1", "yes", "on"):
+        Middleware.use(CsrfMiddleware)
+        return True
+    return False
 
 
 class RequestLoggerMiddleware:

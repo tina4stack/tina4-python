@@ -502,3 +502,134 @@ class TestCsrfNoDefaultSecret:
             "a formToken signed with the public default secret must be rejected "
             "when TINA4_SECRET is unset"
         )
+
+    def test_forged_blank_secret_token_rejected_when_secret_unset(self):
+        # With TINA4_SECRET unset the resolved key is BLANK, and a blank HMAC key
+        # is publicly reproducible — a token an attacker signs with '' must NOT
+        # validate. The middleware fails closed: no secret means no trusted token.
+        os.environ.pop("TINA4_SECRET", None)
+        forged = Auth(secret="").get_token({"type": "form"})
+        res = _dispatch("POST", body={"formToken": forged})
+        assert res.status_code == 403, (
+            "a formToken signed with the blank secret must be rejected when "
+            "TINA4_SECRET is unset (a blank HMAC key is publicly reproducible)"
+        )
+
+
+# ── Cross-framework conformance: the csrf_contract.json invariants ─────
+#
+# Each test name below matches a `case` in
+# tina4-documentation/plan/v3/fixtures/csrf_contract.json verbatim, so the
+# shared auditor (scripts/audit-contract-fixtures.py) credits this suite. The
+# SAME case names appear in the PHP, Ruby and Node CSRF suites — Python is the
+# reference. Real HS256, real Request pipeline, real Frond generation; no mocks.
+
+
+class TestCsrfConformance:
+    """The behavioural contract every framework must satisfy (feature 37)."""
+
+    # csrf-no-default-secret (SEC-01)
+    def test_forged_default_secret_token_is_rejected(self):
+        os.environ.pop("TINA4_SECRET", None)
+        forged = Auth(secret="tina4-default-secret").get_token({"type": "form"})
+        res = _dispatch("POST", body={"formToken": forged})
+        assert res.status_code == 403
+
+    def test_forged_blank_secret_token_is_rejected(self):
+        os.environ.pop("TINA4_SECRET", None)
+        forged = Auth(secret="").get_token({"type": "form"})
+        res = _dispatch("POST", body={"formToken": forged})
+        assert res.status_code == 403
+
+    # csrf-frond-token-validates
+    def test_a_frond_emitted_form_token_passes_csrf(self):
+        from tina4_python.frond.engine import _generate_form_jwt
+        # TINA4_SECRET is set by the autouse fixture; the Frond generator and the
+        # middleware both resolve the SAME secret, so a real token validates.
+        token = _generate_form_jwt("")
+        res = _dispatch("POST", body={"formToken": token})
+        assert res.passed is True
+        assert res.status_code == 200
+
+    # csrf-type-must-be-form
+    def test_a_non_form_jwt_in_the_form_token_slot_is_rejected(self):
+        # A validly-signed but non-form JWT (e.g. an auth token) must not be
+        # accepted in the formToken slot.
+        auth_jwt = Auth(secret="test-csrf-secret").get_token({"user_id": 1})
+        res = _dispatch("POST", body={"formToken": auth_jwt})
+        assert res.status_code == 403
+
+    # csrf-session-binding
+    def test_a_token_bound_to_a_foreign_session_is_rejected(self):
+        from types import SimpleNamespace
+        token = _make_form_token(extra_claims={"session_id": "session-A"})
+        res = _dispatch("POST", body={"formToken": token},
+                        session=SimpleNamespace(session_id="session-B"))
+        assert res.status_code == 403
+
+    # csrf-safe-methods-skipped
+    def test_a_safe_get_request_skips_csrf(self):
+        res = _dispatch(method="GET")
+        assert res.passed is True
+
+    # csrf-write-methods-gated
+    def test_a_post_without_a_token_is_rejected(self):
+        res = _dispatch(method="POST")
+        assert res.status_code == 403
+
+    # csrf-noauth-exempt
+    def test_a_noauth_write_route_skips_csrf(self):
+        @noauth()
+        def public_handler(request, response):
+            return response({"ok": True})
+
+        res = _dispatch(method="POST", handler=public_handler)
+        assert res.passed is True
+
+    # csrf-bearer-exempt
+    def test_a_valid_bearer_token_skips_csrf(self):
+        bearer = Auth(secret="test-csrf-secret").get_token({"user_id": 1})
+        res = _dispatch(method="POST", headers={"authorization": f"Bearer {bearer}"})
+        assert res.passed is True
+
+    # csrf-query-token-rejected
+    def test_a_form_token_in_the_query_string_is_rejected(self):
+        token = _make_form_token()
+        res = _dispatch("POST", params={"formToken": token})
+        assert res.status_code == 403
+
+    # csrf-env-attach
+    def test_csrf_is_off_by_default(self):
+        from tina4_python.core.middleware import (
+            Middleware, CsrfMiddleware, attach_csrf_from_env,
+        )
+        os.environ.pop("TINA4_CSRF", None)
+        saved = list(Middleware.get_global())
+        try:
+            Middleware._global_middleware = [m for m in saved if m is not CsrfMiddleware]
+            assert attach_csrf_from_env() is False
+            assert CsrfMiddleware not in Middleware.get_global()
+        finally:
+            Middleware._global_middleware = saved
+
+    def test_csrf_true_attaches_the_middleware(self):
+        from tina4_python.core.middleware import (
+            Middleware, CsrfMiddleware, attach_csrf_from_env,
+        )
+        os.environ["TINA4_CSRF"] = "true"
+        saved = list(Middleware.get_global())
+        try:
+            Middleware._global_middleware = [m for m in saved if m is not CsrfMiddleware]
+            assert attach_csrf_from_env() is True
+            assert CsrfMiddleware in Middleware.get_global()
+        finally:
+            Middleware._global_middleware = saved
+
+    # csrf-403-envelope
+    def test_the_rejection_body_is_the_csrf_invalid_envelope(self):
+        res = _dispatch(method="POST")
+        assert res.status_code == 403
+        body = res.envelope()
+        assert body["error"] is True
+        assert body["code"] == "CSRF_INVALID"
+        assert body["status"] == 403
