@@ -1491,6 +1491,20 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
             and (handler_info[0] == "*" or request.method == handler_info[0])
         )
         if method_ok:
+            # DEVADMIN-DEC-01/02: fail-closed same-origin + loopback gate on
+            # every /__dev write, before the handler runs. Closes drive-by CSRF
+            # (a cross-origin page POSTing to /file/save then /reload) and a
+            # network-exposed debug box. Scoped to /__dev so the deliberately
+            # cross-origin /__feedback widget is unaffected; GET/HEAD/OPTIONS are
+            # safe and skip the gate.
+            if (request.method not in ("GET", "HEAD", "OPTIONS")
+                    and request.path.startswith("/__dev")):
+                from tina4_python.dev_admin import _dev_mutation_denial
+                _denial = _dev_mutation_denial(request)
+                if _denial is not None:
+                    response.status(_denial[0]).json({"ok": False, "error": _denial[1]})
+                    _cors.apply(request, response)
+                    return response
             try:
                 def _resp(data, code=200, content_type=None):
                     # content_type overrides the auto-detected MIME —
@@ -3098,7 +3112,14 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
     Returns:
         (host, port) tuple with resolved values.
     """
-    default_host = "0.0.0.0"
+    # DEVADMIN-DEC-02: in dev/serve mode the dashboard exposes an unauthenticated
+    # file/SQL/RCE surface, so the DEFAULT bind is loopback, not 0.0.0.0. Only the
+    # default changes: production is unaffected (it passes an explicit host - the
+    # Docker CMD `app.py 0.0.0.0:PORT`, or uvicorn --host - which wins here, and
+    # prod does not set TINA4_DEBUG), and a developer who WANTS network exposure
+    # sets TINA4_HOST=0.0.0.0 to override deliberately.
+    from tina4_python.dotenv import is_truthy
+    default_host = "127.0.0.1" if is_truthy(os.environ.get("TINA4_DEBUG", "")) else "0.0.0.0"
     default_port = 7146
 
     # Host: CLI flag > TINA4_HOST env > HOST env > default.

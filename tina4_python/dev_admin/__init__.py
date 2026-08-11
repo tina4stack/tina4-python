@@ -24,6 +24,88 @@ from tina4_python import __version__
 from tina4_python.database.database_url import redact_url
 
 
+# ── Dev-admin mutation security (feature 127, DEVADMIN-DEC-01/02/03) ──────────
+# The dashboard can write files, run SQL and install packages, so it must assume
+# the developer ALSO browses the web. Two fail-closed gates guard every /__dev
+# write, and a secret denylist guards the file-read surface.
+
+_DEV_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+#: The MCP surface carries its own richer loopback+token+remote gate
+#: (_mcp_request_allowed → 404), so the REST loopback gate skips these prefixes
+#: and lets the MCP gate govern (keeps the mcp/call refusal a 404, not a 403).
+_DEV_MCP_PREFIXES = ("/__dev/api/mcp", "/__dev/mcp")
+#: Private-key / credential basenames the file endpoints must never serve.
+_DEV_SECRET_BASENAMES = frozenset({
+    ".env", ".envrc", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+})
+_DEV_SECRET_SUFFIXES = (".pem", ".key", ".pfx", ".p12", ".keystore", ".jks")
+
+
+def _dev_same_origin_ok(request) -> bool:
+    """Fail-closed same-origin check for a dev-admin mutation (DEVADMIN-DEC-01).
+
+    A drive-by CSRF is a BROWSER cross-origin request, and a modern browser
+    always sends ``Sec-Fetch-Site`` (and any browser sends ``Origin`` on a
+    cross-origin POST), so:
+
+    - ``Sec-Fetch-Site`` present -> trust the browser's own classification
+      (``cross-site`` is refused; ``same-origin`` / ``same-site`` / ``none`` ok).
+    - else ``Origin`` present -> require it to match the request Host.
+    - else neither header -> not a browser cross-origin request at all (curl, a
+      test client, a server-side caller); it cannot be a drive-by, so it is
+      allowed here and the loopback gate still constrains the peer.
+    """
+    headers = getattr(request, "headers", None) or {}
+    sec_fetch_site = (headers.get("sec-fetch-site") or "").strip().lower()
+    if sec_fetch_site:
+        return sec_fetch_site in ("same-origin", "same-site", "none")
+    origin = (headers.get("origin") or "").strip()
+    if origin:
+        netloc = origin.split("://", 1)[1] if "://" in origin else origin
+        host = (headers.get("host") or "").strip()
+        return bool(host) and netloc.lower() == host.lower()
+    return True
+
+
+def _dev_mutation_denial(request):
+    """Return ``(status, error)`` to REFUSE a dev-admin write, or ``None`` to allow.
+
+    Two independent fail-closed gates on every /__dev mutation:
+      DEVADMIN-DEC-01  same-origin (all writes, incl. mcp/call) - drive-by CSRF.
+      DEVADMIN-DEC-02  loopback peer (all writes EXCEPT the MCP surface, which
+                       carries its own gate) - a network-exposed debug box.
+    """
+    if not _dev_same_origin_ok(request):
+        return (403, "dev-admin: refused (cross-origin request)")
+    path = getattr(request, "path", "") or ""
+    if not path.startswith(_DEV_MCP_PREFIXES):
+        from tina4_python.mcp import is_loopback
+        remote_ip = getattr(request, "remote_ip", "") or ""
+        if not (is_loopback(remote_ip) or _mcp_token_ok(request)):
+            return (403, "dev-admin: refused (non-loopback peer)")
+    return None
+
+
+def _is_secret_path(rel: str) -> bool:
+    """True when ``rel`` names secret material the file endpoints must never
+    serve (DEVADMIN-DEC-03): ``.env`` / ``.env.*`` (the ``.env.example`` template
+    is allowed), anything under ``.git/`` or ``secrets/``, and private keys."""
+    norm = (rel or "").replace("\\", "/").strip("/").lower()
+    if not norm:
+        return False
+    parts = norm.split("/")
+    if any(p in (".git", "secrets") for p in parts):
+        return True
+    base = parts[-1]
+    if base == ".env.example":
+        return False
+    if base == ".env" or base.startswith(".env."):
+        return True
+    if base in _DEV_SECRET_BASENAMES:
+        return True
+    return base.endswith(_DEV_SECRET_SUFFIXES)
+
+
 class MessageLog:
     """In-memory message log for dev mode tracking.
 
@@ -2159,8 +2241,16 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     and a close button.
     """
     import sys
+    from html import escape as _html_escape
     from tina4_python.core.server import _ai_port_ctx
     python_version = sys.version.split()[0]
+    # DEVADMIN-DEC-04: the toolbar is injected into every text/html response
+    # (including 404s), so the reflected request path/method MUST be HTML-escaped
+    # or a crafted path reflects <script> that runs in the dev-server origin and
+    # can then drive every /__dev mutation route. (PHP already escapes; parity.)
+    method = _html_escape(str(method), quote=True)
+    path = _html_escape(str(path), quote=True)
+    matched_pattern = _html_escape(str(matched_pattern), quote=True)
     poll_interval_ms = int(os.environ.get("TINA4_DEV_POLL_INTERVAL", "3000"))
     no_reload = os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes") or _ai_port_ctx.get()
 
@@ -2423,8 +2513,12 @@ async def _api_files(request, response):
             full = os.path.join(target, name)
             entry_rel = os.path.relpath(full, base).replace("\\", "/")
 
+            # DEVADMIN-DEC-03: never surface secrets in the listing (.env, keys,
+            # .git/, secrets/). The .env.example template is safe to show.
+            if _is_secret_path(entry_rel):
+                continue
             # Skip hidden dirs and noise
-            if name.startswith(".") and name not in (".env", ".env.example"):
+            if name.startswith(".") and name != ".env.example":
                 continue
             if name in ("__pycache__", "node_modules", "vendor", ".git",
                         "venv", ".venv", "dist", "target", ".tina4"):
@@ -2508,6 +2602,10 @@ async def _api_file_read(request, response):
     if not rel:
         return response({"error": "path required", "path": "", "content": "", "language": "text", "size": 0}, 400)
 
+    # DEVADMIN-DEC-03: never serve secret material (.env, keys, .git/, secrets/).
+    if _is_secret_path(rel):
+        return response({"error": "Refused: secret file", "path": rel, "content": "", "language": "text", "size": 0}, 403)
+
     base = os.getcwd()
     target = os.path.normpath(os.path.join(base, rel))
 
@@ -2572,6 +2670,10 @@ async def _api_file_raw(request, response):
     rel = (request.params.get("path") or "").strip("/")
     if not rel:
         return response({"error": "path required"}, 400)
+
+    # DEVADMIN-DEC-03: never serve secret material (.env, keys, .git/, secrets/).
+    if _is_secret_path(rel):
+        return response({"error": "Refused: secret file"}, 403)
 
     base = os.getcwd()
     target = os.path.normpath(os.path.join(base, rel))
@@ -2984,6 +3086,13 @@ async def _api_mcp_call(request, response):
     through `handle_message` — we already know the name and args, no
     need to round-trip through JSON-RPC framing.
     """
+    # DEVADMIN-DEC-05 / MCP-02: two-layer gate, identical to every other MCP
+    # surface (tools-list, the JSON-RPC endpoint, the SSE stream): a disallowed
+    # caller gets 404 BEFORE any tool runs. Without this, a remote unauthenticated
+    # caller on a TINA4_DEBUG=true 0.0.0.0-bound server could invoke every tool
+    # (database_execute, file_write). Uses the RAW socket peer, never XFF.
+    if not _mcp_request_allowed(request):
+        return response({"ok": False, "error": "MCP forbidden"}, 404)
     body = request.body or {}
     if not isinstance(body, dict):
         return response({"ok": False, "error": "body must be a JSON object"}, 400)
