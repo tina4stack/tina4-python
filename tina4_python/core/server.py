@@ -25,7 +25,7 @@ from tina4_python.core.request import (
 from tina4_python.core.response import Response
 from tina4_python.core.router import Router
 from tina4_python.core.middleware import CorsMiddleware, RateLimiter
-from tina4_python.debug import Log, set_request_id
+from tina4_python.debug import Log, set_request_id, get_request_id, sanitize_request_id
 from tina4_python import __version__
 
 # Middleware singletons — created once on import
@@ -2570,7 +2570,11 @@ async def handle(request: Request) -> Response:
     over ``_PRE_MATCH_STAGES``, ``_POST_MATCH_STAGES``, ``_FALLBACK_STAGES``
     and ``_RESPONSE_STAGES``.
     """
-    request_id = request.headers.get("x-request-id", str(uuid.uuid4())[:8])
+    # Honour a well-formed inbound X-Request-ID (sanitized), else generate one.
+    # sanitize_request_id rejects a CR/LF-bearing, over-long or illegal-charset
+    # value outright, so an attacker-controlled header can never inject a second
+    # response header or forge a log line (RID-PY-INJECTION).
+    request_id = sanitize_request_id(request.headers.get("x-request-id")) or str(uuid.uuid4())[:8]
     set_request_id(request_id)
     _init_session(request)
 
@@ -3003,7 +3007,10 @@ def _write_broken(request: Request, error: Exception):
 
     data = {
         "timestamp": ts.isoformat(),
-        "request_id": request.headers.get("x-request-id", ""),
+        # The canonical, already-sanitized id for THIS request (set by dispatch),
+        # not the raw inbound header — so the stored .broken record can never
+        # carry an attacker-injected value and matches the logs + response header.
+        "request_id": get_request_id() or "",
         "error_type": error_type,
         "message": str(error),
         "location": location,

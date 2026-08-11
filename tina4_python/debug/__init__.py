@@ -49,6 +49,7 @@ import re
 import json
 import logging
 import threading
+import contextvars
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -111,21 +112,61 @@ def _target_is_file(path: str) -> bool:
     return "." in base and not base.startswith(".")
 
 
-# Request ID context (set per-request by middleware)
-_request_id_var = threading.local()
+# Request ID context (set per-request by dispatch). A ContextVar, NOT a
+# threading.local: dispatch is async — one OS thread runs every coroutine under
+# the asyncio/ASGI server — so a thread-local hands every concurrent request the
+# same slot, and a second request's set_request_id() overwrites the first's, so
+# the first's later log lines and response header carry the WRONG id. A
+# ContextVar is scoped to the logical task (the request and everything it
+# awaits), so each request sees only its own id even under load
+# (RID-PY-NO-ISOLATION).
+_request_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "tina4_request_id", default=None
+)
 
 # Regex to strip ANSI escape codes
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
+# The one disallowed-character test, cross-framework. A correlation id is
+# [A-Za-z0-9._-], and this matches anything OUTSIDE that set — CR, LF, space,
+# every other control char, and any non-ASCII byte. Testing for the presence of
+# a bad char (rather than anchoring `^...$`) is the identical rule in all four
+# frameworks and dodges the per-language anchor trap where `$` still matches
+# just before a trailing newline (RID-PY-INJECTION).
+_REQUEST_ID_INVALID_RE = re.compile(r"[^A-Za-z0-9._-]")
+# Cap length so an unbounded inbound header can never bloat a response or a log
+# line. 128 is generous for a uuid/trace id.
+_REQUEST_ID_MAX_LENGTH = 128
 
-def set_request_id(request_id: str):
-    """Set the current request ID (called by middleware)."""
-    _request_id_var.id = request_id
+
+def sanitize_request_id(value: str | None) -> str | None:
+    """Return an inbound X-Request-ID only if it is a safe correlation id.
+
+    Honours a well-formed inbound id ([A-Za-z0-9._-], 1..128 chars) so a client
+    or an upstream service can thread its own correlation id through. Anything
+    else — empty, over 128 chars, or carrying CR/LF, control chars or any
+    character outside the allow-list — is rejected wholesale (returns None), so
+    nothing attacker-controlled is ever reflected into the response header or a
+    log line; the caller then generates a fresh id instead of echoing a raw
+    header.
+    """
+    if not value:
+        return None
+    if len(value) > _REQUEST_ID_MAX_LENGTH:
+        return None
+    if _REQUEST_ID_INVALID_RE.search(value):
+        return None
+    return value
+
+
+def set_request_id(request_id: str | None) -> None:
+    """Set the current request ID (called by dispatch)."""
+    _request_id_var.set(request_id)
 
 
 def get_request_id() -> str | None:
     """Get the current request ID."""
-    return getattr(_request_id_var, "id", None)
+    return _request_id_var.get()
 
 
 def _strip_ansi(text: str) -> str:
