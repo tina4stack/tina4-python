@@ -1972,9 +1972,32 @@ def _handle_route_error(
             )
         except Exception:
             pass
-        from tina4_python.debug.error_overlay import render_error_overlay
-        overlay_html = render_error_overlay(error, request)
-        response.status(500).html(overlay_html)
+        # OVERLAY-DEC-03: guard the dev-overlay render. The call site sits INSIDE
+        # this catch, so if the overlay itself throws (a malformed frame, a
+        # source-read edge, an unrenderable request value) it would double-fault
+        # out of dispatch. Wrap it and fall back to the same safe production page,
+        # so a broken overlay still yields a bounded 500 — never a crashed handler.
+        try:
+            from tina4_python.debug.error_overlay import render_error_overlay
+            overlay_html = render_error_overlay(error, request)
+            response.status(500).html(overlay_html)
+        except Exception as overlay_err:
+            try:
+                Log.warning(
+                    f"Error overlay render failed, serving the safe page: "
+                    f"{type(overlay_err).__name__}: {overlay_err}"
+                )
+            except Exception:
+                pass
+            html = _render_error_page(500, request.path, request_id, "")
+            if html:
+                response.status(500).html(html)
+            else:
+                response.status(500).json({
+                    "error": "Internal Server Error",
+                    "request_id": request_id,
+                    "status": 500,
+                })
     else:
         # Production: NO traceback in the body. The trace is logged via
         # Log.error above; clients only see the generic page + request_id.
@@ -2128,10 +2151,14 @@ async def _stage_start_timer(ctx: DispatchContext) -> None:
     reaches ``_finalize_response``, so neither is timed today.
     """
     import time as _time
-    from tina4_python.dotenv import is_truthy
+    # OVERLAY-DEC-04: unify the debug gate on the overlay module's
+    # ``is_debug_mode()`` so the error-overlay gate (via ``ctx.is_dev`` ->
+    # ``_handle_route_error``) has ONE definition, instead of the server
+    # recomputing ``is_truthy(TINA4_DEBUG)`` separately. Same value today.
+    from tina4_python.debug.error_overlay import is_debug_mode
 
     ctx.req_start = _time.perf_counter()
-    ctx.is_dev = is_truthy(os.environ.get("TINA4_DEBUG", ""))
+    ctx.is_dev = is_debug_mode()
     return None
 
 

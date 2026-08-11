@@ -725,19 +725,18 @@ container.reset()
 Renders a syntax-highlighted HTML error page with stack trace, source context, request details, and environment info when an unhandled exception occurs.
 
 ```python
-from tina4_python.debug.error_overlay import render_error_overlay, render_production_error, is_debug_mode
+from tina4_python.debug.error_overlay import render_error_overlay, is_debug_mode
 
 try:
     handler(request, response)
 except Exception as exc:
     if is_debug_mode():
-        html = render_error_overlay(exc, request)
-    else:
-        html = render_production_error(500, "Internal Server Error")
+        html = render_error_overlay(exc, request)   # dev only
 ```
 
-- Activated when `TINA4_DEBUG` is `true`
-- In production, `render_production_error()` returns a safe, generic error page
+- Activated when `TINA4_DEBUG` is `true`; the caller gates it on `is_debug_mode()`
+- Dev-only: the production 500 is NOT rendered here — the server dispatch renders `errors/500.twig` with an empty `error_message` (CWE-209), so the exception detail stays in the server log only
+- Sensitive request fields (Authorization / Cookie / Set-Cookie headers and password-like body/param keys) are redacted even in the overlay, the frame count is capped, and the caller guards the render, so a broken overlay or a recursive stack still yields a bounded, safe 500
 - Shows: exception type/message, full stack trace with source code, request details, environment info
 
 ### HtmlElement — Programmatic HTML builder

@@ -1542,16 +1542,14 @@ container.get("unknown")           # KeyError: service not registered: unknown
 Rich, syntax-highlighted HTML error overlay for development mode. Shows stack traces with source code context, request details, and environment info.
 
 ```python
-from tina4_python.debug.error_overlay import render_error_overlay, render_production_error, is_debug_mode
+from tina4_python.debug.error_overlay import render_error_overlay, is_debug_mode
 
-# Check if overlay should be shown
+# Dev only — the caller gates the overlay on is_debug_mode()
 if is_debug_mode():    # True when TINA4_DEBUG is true
-    html = render_error_overlay(exception, request=request)
-else:
-    html = render_production_error(status_code=500, message="Internal Server Error")
+    html = render_error_overlay(exception, request)
 ```
 
-The error overlay is automatically activated when `TINA4_DEBUG=true`. In production, `render_production_error()` returns a safe, generic error page with no stack traces or source code.
+The error overlay is dev-only (gated on `is_debug_mode()`/`TINA4_DEBUG`). The production 500 is NOT rendered here — the server dispatch renders `errors/500.twig` with an empty `error_message` (CWE-209), so the exception detail stays in the server log only. Sensitive request fields (Authorization / Cookie / Set-Cookie headers and password-like body/param keys) are redacted even in the overlay, the frame count is capped, and the caller guards the render.
 
 ## HtmlElement — Programmatic HTML Builder
 
