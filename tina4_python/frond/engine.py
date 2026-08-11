@@ -1791,11 +1791,31 @@ class Frond:
         return _render_dump(v)
 
     def _load(self, name: str) -> str:
-        """Load template source from file."""
+        """Load a template's source, CONFINED under the templates directory.
+
+        Every path-taking tag ({% include %}, {% extends %}, {% import %},
+        {% from ... import %}) funnels through this single loader, so this one
+        guard confines them all (TAG-DEC-01). A template name that is absolute,
+        climbs out with a ``..`` up-level segment, or resolves through a symlink
+        to a location OUTSIDE the templates root is REFUSED with a clear error --
+        the outside file is never read. This is the template-side analogue of the
+        static-asset confinement (feature 41 / ADR-0050).
+        """
+        # Lexical belt: refuse an absolute path or a `..` up-level segment before
+        # touching the filesystem -- catches a traversal whose target may not even
+        # exist, in front of the realpath containment below (defense in depth).
+        if os.path.isabs(name) or ".." in re.split(r"[\\/]", name):
+            raise ValueError(f"Template path escapes the templates directory: {name!r}")
         path = self.template_dir / name
-        if not path.exists():
+        if not path.is_file():
             raise FileNotFoundError(f"Template not found: {path}")
-        return path.read_text(encoding="utf-8")
+        # Realpath containment: a symlink INSIDE the templates dir whose target
+        # resolves OUTSIDE it is refused -- the lexical belt cannot see a symlink.
+        root = self.template_dir.resolve()
+        real = path.resolve()
+        if real != root and root not in real.parents:
+            raise ValueError(f"Template path escapes the templates directory: {name!r}")
+        return real.read_text(encoding="utf-8")
 
     def _get_compiled(self, compile_key: str, ast: list):
         """Return the AOT-compiled ``_rendered(engine, ctx)`` for this template,
