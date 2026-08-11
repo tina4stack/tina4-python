@@ -3073,66 +3073,30 @@ def _find_production_server():
 
 
 def _kill_port(port: int) -> None:
-    """Kill whatever process is listening on *port*.
+    """Reclaim *port* from a stale Tina4 dev server via the shared, guarded path.
 
-    Uses lsof on macOS/Linux and netstat + taskkill on Windows.
-    Raises RuntimeError if the port cannot be freed.
+    This is the runtime bind-failure fallback. It used to SIGTERM whatever held
+    the port with NONE of the CLI's guards -- no identity check, no container
+    guard, no PID-safety filter -- so a foreign holder (another dev server, a
+    database) was killed on any bind failure. It now routes through the SAME
+    identity-checked helper the CLI uses (TAKEOVER-DEC-02), so only a
+    PID-file-confirmed Tina4 dev server is ever signalled.
+
+    Raises RuntimeError when the port is held by a non-Tina4 process (or takeover
+    is opted out / disabled outside dev), so the bind fails loudly with a clear
+    message instead of killing an innocent process.
     """
-    import subprocess
-    import time
+    from tina4_python.core.port_takeover import (
+        take_over_port, is_dev, no_takeover_opted_out,
+    )
 
-    print(f"  Port {port} in use — killing existing process...")
-
-    if sys.platform == "win32":
-        # Find PID via netstat
-        try:
-            result = subprocess.run(
-                ["netstat", "-ano"],
-                capture_output=True, text=True, timeout=5
-            )
-            pid = None
-            for line in result.stdout.splitlines():
-                if f":{port}" in line and ("LISTENING" in line or "ESTABLISHED" in line):
-                    parts = line.split()
-                    if parts:
-                        pid = parts[-1]
-                        break
-            if pid and pid.isdigit():
-                subprocess.run(["taskkill", "/PID", pid, "/F"], timeout=5)
-        except Exception as e:
-            raise RuntimeError(f"Could not free port {port}: {e}") from e
-    else:
-        # macOS / Linux — use lsof
-        try:
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}"],
-                capture_output=True, text=True, timeout=5
-            )
-            pids = result.stdout.strip().splitlines()
-            if not pids:
-                return  # Nothing found — port may have freed itself
-            for pid_str in pids:
-                pid_str = pid_str.strip()
-                if pid_str.isdigit():
-                    os.kill(int(pid_str), signal.SIGTERM)
-        except FileNotFoundError:
-            # lsof not available — try fuser
-            try:
-                result = subprocess.run(
-                    ["fuser", f"{port}/tcp"],
-                    capture_output=True, text=True, timeout=5
-                )
-                for pid_str in result.stdout.split():
-                    if pid_str.isdigit():
-                        os.kill(int(pid_str), signal.SIGTERM)
-            except Exception as e:
-                raise RuntimeError(f"Could not free port {port}: {e}") from e
-        except Exception as e:
-            raise RuntimeError(f"Could not free port {port}: {e}") from e
-
-    # Give the OS a moment to reclaim the port
-    time.sleep(0.5)
-    print(f"  Port {port} freed")
+    result = take_over_port(port, dev=is_dev(), no_takeover=no_takeover_opted_out())
+    if result.reclaimed:
+        print(f"  {result.message}")
+        return
+    if result.refused:
+        raise RuntimeError(result.message)
+    # NOTHING / SKIPPED_CONTAINER: nothing to reclaim -- let the real bind decide.
 
 
 def _find_available_port(start: int, max_tries: int = 10) -> int:
@@ -3559,8 +3523,16 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
 
-    # Claim the requested port — kill whatever is on it if needed
+    # Claim the requested port — reclaim it only from a stale Tina4 dev server
     port = _find_available_port(port)
+
+    # Record THIS process as the Tina4 dev server on this port, so a later
+    # `tina4 serve` can identify it as reclaimable (the identity signal behind
+    # TAKEOVER-DEC-01). Removed on clean exit; a fresh bind overwrites a stale one.
+    from tina4_python.core.port_takeover import write_pidfile, remove_pidfile
+    write_pidfile(port)
+    import atexit
+    atexit.register(remove_pidfile, port)
 
     # Detect production server (unless TINA4_DEBUG is true)
     from tina4_python.dotenv import is_truthy
