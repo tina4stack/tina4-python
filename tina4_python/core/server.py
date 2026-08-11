@@ -2862,20 +2862,67 @@ async def app(scope: dict, receive, send):
     await send({"type": "http.response.body", "body": response.content})
 
 
+def _has_hidden_segment(path: str) -> bool:
+    """Whether any '/'-segment of ``path`` is hidden (begins with a dot).
+
+    Refuses a dotfile (``.env``, ``.git/config``, ``.htpasswd``); a ``..`` segment
+    also begins with a dot, so this doubles as a belt on traversal.
+    """
+    return any(seg.startswith(".") for seg in path.split("/") if seg)
+
+
+def _confined_static_path(base_dir: Path, relative: str) -> Path | None:
+    """Resolve ``relative`` under ``base_dir``, confined the way PHP's reference
+    guard is (ADR-0050): return the REAL path only when it is a regular file whose
+    resolved location stays under the resolved base dir (so a symlink or a
+    sibling-prefix escape is refused) and names no dotfile segment. Else ``None``.
+
+    ``Path.resolve`` follows symlinks and ``relative_to`` is separator-aware, so a
+    symlink pointing outside, a ``publicsecret`` sibling-prefix and a ``..`` escape
+    all fail containment — a bare lexical ``..`` check would miss the symlink.
+    """
+    try:
+        real_dir = base_dir.resolve(strict=True)
+        real_path = (base_dir / relative).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if not real_path.is_file():
+        return None
+    try:
+        rel = real_path.relative_to(real_dir)
+    except ValueError:
+        return None  # escapes the public root (symlink, sibling-prefix or ..)
+    if _has_hidden_segment(rel.as_posix()):
+        return None  # a symlink pointing AT a dotfile inside the public dir
+    return real_path
+
+
 def _try_static(path: str) -> Response | None:
     """Serve static files. Searches multiple directories.
 
-    Search order (first match wins):
+    Search order (first match wins), unified across the four frameworks
+    (ST-SEARCHDIR-DIVERGE):
     1. TINA4_PUBLIC_DIR env var (if set)
     2. public/           (simple, IDE-friendly)
     3. src/public/       (nested convention)
-    4. tina4_python/public/  (framework built-in assets)
+    4. tina4_python/public/  (framework built-in assets, always last)
+
+    Every candidate is confined under its search dir with a realpath +
+    trailing-separator check and a dotfile block (ADR-0050), so a ``..`` escape, a
+    symlink pointing outside the public dir, a sibling-prefix dir and a dotfile
+    (``.env``/``.git``) are all refused.
 
     Index resolution: when ``path`` is ``/`` or ends with ``/``, the lookup
     appends ``index.html`` so a Vite/SPA build with ``src/public/index.html``
     serves at the matching URL — no custom ``@get("/")`` route needed.
     """
     clean = path.lstrip("/")
+
+    # Security: refuse an up-level segment or a dotfile before touching the
+    # filesystem (defense in depth; the realpath confinement below is what
+    # actually stops a symlink escape).
+    if _has_hidden_segment(clean):
+        return None
 
     # The framework ships the Swagger UI as STATIC assets under
     # tina4_python/public/swagger/. Static serving is independent of the gated
@@ -2894,32 +2941,35 @@ def _try_static(path: str) -> Response | None:
     # in src/public/ Just Work without a custom root route.
     if clean == "" or clean.endswith("/"):
         clean = clean + "index.html"
-    custom = os.environ.get("TINA4_PUBLIC_DIR")
-    candidates = []
-    if custom:
-        candidates.append(Path(custom) / clean)
-    candidates.append(Path("public") / clean)
-    candidates.append(Path("src/public") / clean)
-    # Framework built-in assets (tina4.min.js, frond.min.js, tina4.min.css, tina4-dev-admin.min.js, etc.)
-    candidates.append(Path(__file__).resolve().parent.parent / "public" / clean)
 
-    for file_path in candidates:
-        if file_path.is_file():
-            resp = Response()
-            resp.file(str(file_path))
-            # Static assets may be cached but must be revalidated on every use,
-            # so a redeployed file reaches the browser on the next load without a
-            # manual hard refresh. The response already carries an ETag
-            # (build_headers) and the pipeline answers If-None-Match with a 304,
-            # so revalidation is a cheap round-trip, not a re-download. A
-            # Last-Modified is added too (pipeline honours If-Modified-Since ->
-            # 304) so the validators match the other frameworks.
-            resp.header("cache-control", "no-cache, must-revalidate")
-            resp.header(
-                "last-modified",
-                formatdate(file_path.stat().st_mtime, usegmt=True),
-            )
-            return resp
+    search_dirs: list[Path] = []
+    custom = os.environ.get("TINA4_PUBLIC_DIR")
+    if custom:
+        search_dirs.append(Path(custom))
+    search_dirs.append(Path("public"))
+    search_dirs.append(Path("src/public"))
+    # Framework built-in assets (tina4.min.js, frond.min.js, tina4.min.css, tina4-dev-admin.min.js, etc.)
+    search_dirs.append(Path(__file__).resolve().parent.parent / "public")
+
+    for base_dir in search_dirs:
+        real_path = _confined_static_path(base_dir, clean)
+        if real_path is None:
+            continue
+        resp = Response()
+        resp.file(str(real_path))
+        # Static assets may be cached but must be revalidated on every use,
+        # so a redeployed file reaches the browser on the next load without a
+        # manual hard refresh. The response already carries an ETag
+        # (build_headers) and the pipeline answers If-None-Match with a 304,
+        # so revalidation is a cheap round-trip, not a re-download. A
+        # Last-Modified is added too (pipeline honours If-Modified-Since ->
+        # 304) so the validators match the other frameworks.
+        resp.header("cache-control", "no-cache, must-revalidate")
+        resp.header(
+            "last-modified",
+            formatdate(real_path.stat().st_mtime, usegmt=True),
+        )
+        return resp
     return None
 
 
