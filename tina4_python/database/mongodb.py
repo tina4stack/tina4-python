@@ -48,6 +48,24 @@ def _parse_where(where_clause: str, params: list) -> dict:
     return _parse_or(where_clause.strip(), param_queue)
 
 
+def _require_where_for_write(where_clause: str, operation: str, collection: str) -> None:
+    """Fail closed: a DELETE/UPDATE must carry a WHERE clause.
+
+    A missing or blank WHERE translates to an empty MongoDB filter, which
+    matches EVERY document, so ``delete_many``/``update_many`` would wipe or
+    rewrite the whole collection. Refuse it. The explicit whole-collection
+    spelling is ``truncate()`` (it passes ``WHERE 1 = 1``); native pymongo via
+    ``db.adapter._collection()`` is the escape hatch for anything the SQL subset
+    cannot express. Shared by both write paths so the guard cannot drift.
+    """
+    if not where_clause or not where_clause.strip():
+        raise ValueError(
+            f"Refusing to {operation} every document in {collection!r}: the "
+            f"statement has no WHERE clause, which would affect the whole "
+            f"collection. Add a WHERE, or use truncate() to clear it explicitly."
+        )
+
+
 def _next_param(param_queue: list):
     return param_queue.pop(0) if param_queue else None
 
@@ -213,8 +231,17 @@ def _parse_condition(cond: str, param_queue: list) -> dict:
     if m:
         return _parse_or(m.group(1).strip(), param_queue)
 
-    # Fallback — return empty filter (no crash)
-    return {}
+    # Fail closed. An unrecognised condition must NEVER degrade to an empty
+    # (match-all) filter: on a DELETE/UPDATE that empty filter reaches
+    # delete_many({})/update_many({}) and wipes or rewrites the WHOLE
+    # collection. Raise so the caller sees the unsupported SQL instead of
+    # silently losing data.
+    raise ValueError(
+        f"Unsupported MongoDB WHERE condition: {cond!r}. The MongoDB SQL "
+        f"provider fails closed rather than matching every document. Supported: "
+        f"= != <> > >= < <= LIKE, NOT LIKE, IN, NOT IN, IS [NOT] NULL, BETWEEN, "
+        f"AND, OR."
+    )
 
 
 def _parse_select_sql(sql: str, params: list, limit: int, offset: int) -> dict:
@@ -478,6 +505,7 @@ class MongoDBAdapter(DatabaseAdapter):
             col_name = m.group(1)
             set_clause = m.group(2).strip()
             where_clause = (m.group(3) or "").strip()
+            _require_where_for_write(where_clause, "UPDATE", col_name)
 
             # Parse SET clause — each assignment: col = ?
             set_doc = {}
@@ -504,6 +532,7 @@ class MongoDBAdapter(DatabaseAdapter):
         if m:
             col_name = m.group(1)
             where_clause = (m.group(2) or "").strip()
+            _require_where_for_write(where_clause, "DELETE", col_name)
             mongo_filter = _parse_where(where_clause, params)
             result = self._collection(col_name).delete_many(
                 mongo_filter, **self._session_kwargs()
@@ -597,6 +626,7 @@ class MongoDBAdapter(DatabaseAdapter):
 
     def update(self, table: str, data: dict,
                filter_sql: str = "", params: list = None) -> DatabaseResult:
+        _require_where_for_write(filter_sql, "UPDATE", table)
         mongo_filter = _parse_where(filter_sql, list(params or []))
         result = self._collection(table).update_many(
             mongo_filter, {"$set": data}, **self._session_kwargs()
@@ -609,6 +639,7 @@ class MongoDBAdapter(DatabaseAdapter):
 
     def delete(self, table: str,
                filter_sql: str = "", params: list = None) -> DatabaseResult:
+        _require_where_for_write(filter_sql, "DELETE", table)
         mongo_filter = _parse_where(filter_sql, list(params or []))
         result = self._collection(table).delete_many(
             mongo_filter, **self._session_kwargs()
