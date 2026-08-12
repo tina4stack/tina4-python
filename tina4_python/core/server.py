@@ -2721,6 +2721,31 @@ async def _send_payload_too_large(send, received: int, limit: int) -> None:
     await send({"type": "http.response.body", "body": payload, "more_body": False})
 
 
+def _strip_weak_etag_prefix(tag: str) -> str:
+    """Strip an optional leading ``W/`` weak-validator prefix (RFC 7232 S2.3)."""
+    tag = tag.strip()
+    return tag[2:] if tag.startswith("W/") else tag
+
+
+def _etag_matches(if_none_match: str, etag: str) -> bool:
+    """Match an ``If-None-Match`` header value against ``etag``.
+
+    RFC 7232 S3.2 weak comparison: an optional ``W/`` prefix is ignored on
+    both sides, the header may carry a comma-separated candidate list, and
+    ``*`` matches any current representation. This used to be an exact
+    full-string compare (CE-INM-SEMANTICS) — out of step with the RFC-7232
+    matching PHP/Ruby/Node already use for their conditional-GET paths.
+    """
+    if not etag:
+        return False
+    target = _strip_weak_etag_prefix(etag)
+    for candidate in if_none_match.split(","):
+        candidate = candidate.strip()
+        if candidate == "*" or _strip_weak_etag_prefix(candidate) == target:
+            return True
+    return False
+
+
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
     if scope["type"] == "lifespan":
@@ -2913,35 +2938,44 @@ async def app(scope: dict, receive, send):
     except Exception:
         pass  # Injection is best-effort — never break the response.
 
-    # ETag check — 304 Not Modified
+    # ETag / Last-Modified check — 304 Not Modified
     if_none_match = request.headers.get("if-none-match", "")
     accept_encoding = request.headers.get("accept-encoding", "")
     headers = response.build_headers(accept_encoding)
 
     etag = ""
+    last_modified = ""
     for name, value in headers:
         if name == b"etag":
             etag = value.decode()
-            break
-    if if_none_match and if_none_match == etag:
-        await send({"type": "http.response.start", "status": 304, "headers": []})
+        elif name == b"last-modified":
+            last_modified = value.decode()
+
+    # A 304 MUST echo the validators it would have carried on 200 (RFC 9110
+    # S15.4.5), so an intermediary cache can refresh freshness from the empty
+    # body alone. CE-PY-304-DROPS-VALIDATORS: this used to send an EMPTY
+    # header list on every 304, silently dropping ETag/Last-Modified while
+    # PHP/Ruby/Node preserved them.
+    validator_headers = []
+    if etag:
+        validator_headers.append((b"etag", etag.encode()))
+    if last_modified:
+        validator_headers.append((b"last-modified", last_modified.encode()))
+
+    # If-None-Match takes precedence over If-Modified-Since (RFC 9110 13.1.3).
+    if if_none_match and _etag_matches(if_none_match, etag):
+        await send({"type": "http.response.start", "status": 304, "headers": validator_headers})
         await send({"type": "http.response.body", "body": b""})
         return
 
     # If-Modified-Since -> 304, for responses carrying a Last-Modified (static
-    # assets). If-None-Match takes precedence (RFC 9110 13.1.3), so this only
-    # runs when the client sent no ETag validator.
+    # assets). Only runs when the client sent no ETag validator.
     if not if_none_match:
         if_modified_since = request.headers.get("if-modified-since", "")
-        last_modified = ""
-        for name, value in headers:
-            if name == b"last-modified":
-                last_modified = value.decode()
-                break
         if if_modified_since and last_modified:
             try:
                 if parsedate_to_datetime(last_modified) <= parsedate_to_datetime(if_modified_since):
-                    await send({"type": "http.response.start", "status": 304, "headers": []})
+                    await send({"type": "http.response.start", "status": 304, "headers": validator_headers})
                     await send({"type": "http.response.body", "body": b""})
                     return
             except (TypeError, ValueError):
@@ -3046,18 +3080,20 @@ def _try_static(path: str) -> Response | None:
             continue
         resp = Response()
         resp.file(str(real_path))
-        # Static assets may be cached but must be revalidated on every use,
-        # so a redeployed file reaches the browser on the next load without a
-        # manual hard refresh. The response already carries an ETag
-        # (build_headers) and the pipeline answers If-None-Match with a 304,
-        # so revalidation is a cheap round-trip, not a re-download. A
-        # Last-Modified is added too (pipeline honours If-Modified-Since ->
-        # 304) so the validators match the other frameworks.
+        stat = real_path.stat()
+        # Static assets may be cached but must be revalidated on every use, so
+        # a redeployed file reaches the browser on the next load without a
+        # manual hard refresh. The ETag is a cheap weak size+mtime validator
+        # (CE-DEC-02) — the SAME pinned format PHP/Ruby/Node use for a static
+        # file, so a client behind a reverse proxy sees an identical validator
+        # regardless of backend language. It is set here, before
+        # build_headers() runs, so build_headers() never overwrites it with
+        # its strong content-hash ETag (that one is for dynamic responses).
+        # Last-Modified is added too (the pipeline honours If-Modified-Since
+        # -> 304) so both validators match the other frameworks.
         resp.header("cache-control", "no-cache, must-revalidate")
-        resp.header(
-            "last-modified",
-            formatdate(real_path.stat().st_mtime, usegmt=True),
-        )
+        resp.header("etag", f'W/"{stat.st_size}-{int(stat.st_mtime)}"')
+        resp.header("last-modified", formatdate(stat.st_mtime, usegmt=True))
         return resp
     return None
 

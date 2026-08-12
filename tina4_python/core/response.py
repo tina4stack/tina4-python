@@ -485,8 +485,13 @@ class Response:
             self._headers.append(("content-encoding", "gzip"))
             self._headers.append(("vary", "Accept-Encoding"))
 
-        # ETag
-        if self.content and self.status_code == 200:
+        # ETag — a strong content hash over the FINAL (post-compression) bytes,
+        # UNLESS a validator is already set. A static-file response (_try_static
+        # in server.py) pins its own weak size+mtime ETag BEFORE build_headers
+        # runs (CE-DEC-02: one static-ETag format shared with PHP/Ruby/Node), so
+        # this never overwrites it with a content hash.
+        has_etag = any(name.lower() == "etag" for name, _ in self._headers)
+        if self.content and self.status_code == 200 and not has_etag:
             etag = hashlib.md5(self.content).hexdigest()[:16]
             self._headers.append(("etag", f'"{etag}"'))
 
