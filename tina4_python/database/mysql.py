@@ -94,23 +94,32 @@ class MySQLAdapter(DatabaseAdapter):
         # last (verified live: a 3-row insert into a fresh table reports 1 while
         # MAX(id) is 3). Every other engine reports the last, and callers -
         # get_last_id(), ORM.save(), the batch DatabaseResult - all expect the
-        # last. The ids in one statement are consecutive, so normalise here,
-        # where both the first id and the row count are known; doing it further
-        # up would leave get_last_id() disagreeing with the returned result.
+        # last. Normalise via the shared SQLTranslator.batch_last_id helper (the
+        # one place that knows the first id and the row count) instead of
+        # re-implementing the arithmetic inline (MYSQL-BATCH-ID-DUP).
         last_id = cursor.lastrowid
         if last_id:
-            last_id = int(last_id) + max(int(cursor.rowcount or 1), 1) - 1
+            last_id = SQLTranslator.batch_last_id(last_id, cursor.rowcount or 1, "mysql")
 
         if returning_cols and last_id:
-            table = self._extract_table(sql)
-            if returning_cols.strip() == "*":
-                fetch_sql = f"SELECT * FROM {table} WHERE id = %s"
-            else:
-                fetch_sql = f"SELECT {returning_cols} FROM {table} WHERE id = %s"
-            cursor.execute(fetch_sql, [last_id])
-            row = cursor.fetchone()
-            if row:
-                records = [dict(row)]
+            # MySQL has no RETURNING: emulate it by re-selecting the inserted row
+            # by the table's REAL primary key - never a hardcoded `id`
+            # (MYSQL-RETURNING-ID). A model whose PK is not named `id` used to get
+            # a wrong/empty returned row (SELECT ... WHERE id = ? raised "Unknown
+            # column 'id'"). The identifier is strict-backtick-quoted (escaped),
+            # not interpolated raw.
+            table = self._unquote_ident(self._extract_table(sql))
+            pk = self._returning_pk(table)
+            if pk:
+                cols = "*" if returning_cols.strip() == "*" else returning_cols
+                fetch_sql = (
+                    f"SELECT {cols} FROM {self._quote_mysql_ident(table)} "
+                    f"WHERE {self._quote_mysql_ident(pk)} = %s"
+                )
+                cursor.execute(fetch_sql, [last_id])
+                row = cursor.fetchone()
+                if row:
+                    records = [dict(row)]
 
         affected = cursor.rowcount if cursor.rowcount >= 0 else 0
 
@@ -215,10 +224,19 @@ class MySQLAdapter(DatabaseAdapter):
         return [r["TABLE_NAME"] for r in result.records]
 
     def get_columns(self, table: str) -> list[dict]:
-        sql = "DESCRIBE " + table
+        # DESCRIBE takes an IDENTIFIER, not a bind parameter, so the table name
+        # is made injection-safe by STRICT backtick-quoting (escaping embedded
+        # backticks) rather than interpolated raw (MYSQL-DESCRIBE-UNPARAM). A
+        # crafted/odd name becomes ONE escaped identifier - a clean "unknown
+        # table", never runnable SQL - and an odd-but-valid name (reserved word,
+        # special char) introspects correctly instead of a syntax error.
+        sql = f"DESCRIBE {self._quote_mysql_ident(table)}"
         cursor = self._conn.cursor(dictionary=True)
-        cursor.execute(sql)
-        rows = cursor.fetchall()
+        try:
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+        finally:
+            cursor.close()
         return [
             {
                 "name": r["Field"],
@@ -229,6 +247,46 @@ class MySQLAdapter(DatabaseAdapter):
             }
             for r in rows
         ]
+
+    @staticmethod
+    def _unquote_ident(token: str) -> str:
+        """Strip surrounding backticks (unescaping doubled ones) from a table
+        token pulled out of a statement, so it can be re-introspected + re-quoted
+        safely. ``INSERT INTO `t` ...`` yields the token ```t```; a raw
+        ``INSERT INTO t ...`` yields ``t``."""
+        t = (token or "").strip()
+        if len(t) >= 2 and t[0] == "`" and t[-1] == "`":
+            return t[1:-1].replace("``", "`")
+        return t
+
+    def _quote_mysql_ident(self, name: str) -> str:
+        """Backtick-quote a (possibly schema-qualified) identifier, ESCAPING
+        embedded backticks. DESCRIBE and the RETURNING re-select take an
+        identifier, not a bind parameter; strict-quoting makes a crafted name
+        one escaped identifier instead of interpolating it raw."""
+        schema, table = self._split_schema(name)
+
+        def q(part: str) -> str:
+            return "`" + part.replace("`", "``") + "`"
+
+        return q(table) if schema is None else f"{q(schema)}.{q(table)}"
+
+    def _returning_pk(self, table: str) -> str | None:
+        """The table's single PRIMARY KEY column, for RETURNING emulation.
+
+        MySQL has no RETURNING, so the provider re-selects the inserted row by
+        its REAL primary key - never a hardcoded ``id`` (MYSQL-RETURNING-ID).
+        Introspected via :meth:`get_columns` and cached per table. Returns
+        ``None`` when the table has no single-column PK (a composite or key-less
+        table degrades to no re-select rather than a wrong one)."""
+        cache = self.__dict__.setdefault("_returning_pk_cache", {})
+        if table not in cache:
+            try:
+                pks = [c["name"] for c in self.get_columns(table) if c.get("primary_key")]
+            except Exception:
+                pks = []
+            cache[table] = pks[0] if len(pks) == 1 else None
+        return cache[table]
 
     def get_database_type(self) -> str:
         return "mysql"
