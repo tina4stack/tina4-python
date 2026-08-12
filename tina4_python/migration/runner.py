@@ -719,6 +719,22 @@ def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
             continue
 
         try:
+            # Defensive: on an engine/driver that defaults to a non-autocommit
+            # connection even for reads (e.g. MySQL via mysql-connector-python,
+            # connected with autocommit=False -- see MySQLAdapter.connect()), a
+            # PRECEDING read (_ensure_tracking_table's table_exists()/get_columns(),
+            # _get_executed(), _get_next_batch()) can leave an implicit
+            # transaction open at the driver level. On a freshly-opened
+            # connection whose tracking table already exists (so nothing wrote
+            # -- and therefore committed -- before this point), that dangling
+            # implicit transaction makes db.start_transaction() raise
+            # "Transaction already in progress" on the very first migration
+            # file. A best-effort commit here clears it; it is a safe no-op on
+            # a connection that was already clean (nothing to commit).
+            try:
+                db.commit()
+            except Exception:
+                pass
             db.start_transaction()
 
             if mig_file.suffix == ".py":
@@ -783,6 +799,16 @@ def _rollback(db, migration_folder: str = "migrations", delimiter: str = ";") ->
         down_file = folder / f"{mid}.down.sql"
 
         try:
+            # Defensive: see the matching comment in _migrate() -- a preceding
+            # read (the batch SELECT above, or _ensure_tracking_table's own
+            # reads) can leave an implicit transaction open on a driver that
+            # defaults to non-autocommit even for reads (MySQL via
+            # mysql-connector-python). Best-effort clear before opening the
+            # real transaction; a safe no-op when there is nothing to commit.
+            try:
+                db.commit()
+            except Exception:
+                pass
             db.start_transaction()
 
             if py_file.exists():
