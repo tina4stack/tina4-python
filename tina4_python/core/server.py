@@ -231,6 +231,31 @@ def _start_background_tasks(executor, shutdown) -> list:
     return runners
 
 
+def _spin_up_background_tasks(shutdown):
+    """Build the shared thread-pool executor and start every registered task.
+
+    Returns ``(executor, runners)`` so the caller can cancel the runners and
+    shut the pool down on stop. This is the ONE place background tasks are
+    started, called by BOTH the built-in dev server (``_serve``) AND the
+    production ASGI lifespan (``app``) — so ``background()`` actually runs under
+    uvicorn/hypercorn/granian, not only the built-in loop. Before this, the
+    lifespan started nothing, so a task scheduled via ``background()`` was a
+    SILENT NO-OP in the common production deployment (BG-PY-PROD-NOOP).
+
+    ``max_workers`` is one per registered task (floor 2) — sound only because a
+    task never overlaps itself (see ``background_tick_loop``), so the pool
+    cannot be starved by a slow sync callback.
+    """
+    import concurrent.futures
+
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(background_task_count(), 2),
+        thread_name_prefix="tina4_bg",
+    )
+    runners = _start_background_tasks(executor, shutdown)
+    return executor, runners
+
+
 async def background_tick_loop(callback, interval: float, executor, shutdown):
     """Run one registered background task on its interval until shutdown.
 
@@ -2693,12 +2718,30 @@ async def app(scope: dict, receive, send):
         # It used to return after the first message, which made the shutdown
         # branch below unreachable: the app coroutine had already finished by
         # the time the server sent lifespan.shutdown.
+        #
+        # These live across the whole server lifetime (the coroutine spans both
+        # events), so the tasks started at startup are the ones stopped at
+        # shutdown.
+        lifespan_shutdown = None
+        lifespan_executor = None
+        lifespan_runners = []
         while True:
             msg = await receive()
             if msg["type"] == "lifespan.startup":
                 import time
                 global _start_time
                 _start_time = time.time()
+                # Start registered background tasks on the PRODUCTION server's
+                # event loop. Without this, background() was a SILENT NO-OP under
+                # uvicorn/hypercorn/granian (BG-PY-PROD-NOOP): tasks were
+                # registered but only the built-in dev server's _serve() ever
+                # started them. The lifespan runs on the same loop the ASGI
+                # server serves requests on, so the tasks tick alongside real
+                # traffic — and stop on lifespan.shutdown below.
+                lifespan_shutdown = asyncio.Event()
+                lifespan_executor, lifespan_runners = _spin_up_background_tasks(
+                    lifespan_shutdown
+                )
                 await send({"type": "lifespan.startup.complete"})
             elif msg["type"] == "lifespan.shutdown":
                 # The only shutdown hook that fires on the production path.
@@ -2706,8 +2749,14 @@ async def app(scope: dict, receive, send):
                 # signal as its run() returns, so the process dies inside the
                 # starter and nothing after it ever executes — a `finally` there
                 # is unreachable. uvicorn drains requests and closes sockets
-                # itself; the ORM-bound connections are the part only Tina4
-                # knows about, so this is where they get closed.
+                # itself; the background tasks and ORM-bound connections are the
+                # part only Tina4 knows about, so this is where they are stopped.
+                if lifespan_shutdown is not None:
+                    lifespan_shutdown.set()
+                for runner in lifespan_runners:
+                    runner.cancel()
+                if lifespan_executor is not None:
+                    lifespan_executor.shutdown(wait=False, cancel_futures=True)
                 _close_bound_databases()
                 await send({"type": "lifespan.shutdown.complete"})
                 return
@@ -2804,7 +2853,6 @@ async def app(scope: dict, receive, send):
             stream_headers.append((b"set-cookie", cookie_str.encode()))
         await send({"type": "http.response.start", "status": response.status_code, "headers": stream_headers})
 
-        import asyncio
         source = response._stream_source
         try:
             if hasattr(source, "__aiter__"):
@@ -3774,17 +3822,11 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             except NotImplementedError:
                 pass  # Windows
 
-        # Start registered background tasks as asyncio tasks.
-        # Sync callbacks run in a thread pool so they CANNOT block the event loop.
-        # max_workers is one per registered task — sound only because a task never
-        # overlaps itself (see background_tick_loop), so tasks cannot starve each
-        # other of workers.
-        import concurrent.futures
-        _executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max(background_task_count(), 2),
-            thread_name_prefix="tina4_bg",
-        )
-        bg_tasks = _start_background_tasks(_executor, shutdown)
+        # Start registered background tasks as asyncio tasks. Sync callbacks run
+        # in a thread pool so they CANNOT block the event loop. The SAME helper
+        # runs under the production ASGI lifespan (see app()), so a background()
+        # task behaves identically on the built-in and production servers.
+        _executor, bg_tasks = _spin_up_background_tasks(shutdown)
 
         await shutdown.wait()
 
