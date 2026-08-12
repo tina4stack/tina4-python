@@ -34,6 +34,14 @@ import sys
 from tina4_python.core.router import Router
 from tina4_python.debug import Log
 
+# PAGE-DEC-01: the maximum per-page size the list handler will honour, no matter
+# what a caller asks for via ?limit=/?per_page=. 100 is not an arbitrary pick -
+# it is the SAME row cap ORM.all()/select()/where()/db.fetch() already default to
+# ("the one row cap the whole family shares", tina4_python/orm/model.py), and the
+# number Node's AutoCrud shares via its own DEFAULT_ROW_CAP constant. Without this
+# a client could request the whole table in one query (?limit=1000000).
+MAX_PER_PAGE = 100
+
 
 class AutoCrud:
     """Auto-generate REST endpoints from ORM model classes."""
@@ -107,9 +115,18 @@ class AutoCrud:
                 if "page" in request.params and "offset" not in request.params:
                     page = int(request.params.get("page", 1))
                     per_page = int(request.params.get("per_page", limit))
+                    # PAGE-DEC-01: clamp page < 1 -> page 1 BEFORE deriving offset,
+                    # so offset=(page-1)*per_page can never go negative (a page=0/
+                    # negative request used to hand PostgreSQL a negative OFFSET -
+                    # a driver error - and silently misbehave on SQLite, while the
+                    # envelope reported page:0). Cap per_page BEFORE the same
+                    # derivation so the offset lines up with the size actually used.
+                    page = max(1, page)
+                    per_page = min(per_page, MAX_PER_PAGE)
                     offset = (page - 1) * per_page
                     limit = per_page
                 else:
+                    limit = min(limit, MAX_PER_PAGE)  # PAGE-DEC-01: cap an oversized ?limit=
                     page = (offset // limit) + 1 if limit else 1
             except (ValueError, TypeError):
                 limit = 10
