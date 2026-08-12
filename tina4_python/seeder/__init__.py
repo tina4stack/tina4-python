@@ -69,7 +69,23 @@ _CREDIT_CARD_PREFIXES = ["4111", "4242", "5500", "5105"]
 
 
 class FakeData:
-    """Fake data generator with deterministic seeding."""
+    """Fake data generator with deterministic seeding.
+
+    Determinism is PER-LANGUAGE, not cross-language (SEED-DETERMINISM-PERLANG):
+    ``FakeData(seed=42)`` reproduces the identical sequence on every run *within
+    Python*, but the same seed on PHP/Ruby/Node's ``FakeData`` will NOT produce
+    the same values — each language uses its own PRNG (Python's Mersenne
+    Twister, PHP's per-instance Mt19937, Ruby's ``Random``, Node's mulberry32).
+    There is no shared cross-language PRNG, and hand-rolling one would add cost
+    for no real benefit — use a seed to make ONE language's run reproducible,
+    never to compare output across languages.
+
+    NOT FOR SECRETS (SEED-SECRETS-DOC): this is a non-cryptographic PRNG meant
+    for realistic-looking fixtures and test data. Never use it to generate API
+    keys, passwords, tokens, or anything else that must be unguessable — use
+    ``secrets``/``os.urandom`` (or ``tina4_python.auth.Auth`` for password
+    hashing) instead.
+    """
 
     def __init__(self, seed: int = None):
         self._rng = random.Random(seed)
@@ -432,18 +448,42 @@ def seed_table(db, table: str, count: int = 10,
         overrides: Static values to set on every row.
         clear: If True, delete every existing row in ``table`` before seeding
             so re-runs don't duplicate rows or trip unique-PK violations (P2).
-        seed: Optional PRNG seed — seeds the FakeData RNG used for any
-            ``FakeData`` instance the caller passes through ``field_map``. Has
-            no effect unless the caller's generators read from a shared
-            ``FakeData(seed=...)``; provided for signature parity with
-            ``seed_orm`` and so the dev-admin endpoint can pass it through.
+        seed: REMOVED (SEED-TABLE-SEED-INERT, SEED-DEC-01, ratified
+            2026-08-11). ``seed_table`` has no generators of its own to seed —
+            ``field_map`` callables are opaque, so this argument used to be a
+            silent no-op that invited the wrong assumption (the signature
+            implied reproducibility that never happened). Passing anything but
+            ``None`` now RAISES instead of silently doing nothing. For a
+            reproducible run, build your own ``FakeData(seed=...)`` and close
+            over it in ``field_map``::
+
+                fake = FakeData(seed=42)
+                seed_table(db, "users", field_map={
+                    "name": fake.name, "email": fake.email,
+                })
+
+            ``seed_orm``/``seed_models`` are unaffected — they build and seed
+            their own ``FakeData`` internally, so their ``seed`` argument is
+            fully deterministic.
         strict: If True, re-raise on the first failed row instead of skipping.
 
     Returns:
         A :class:`SeedSummary` (``{seeded, failed, errors}``) — also usable as
         the int row-count for backward compatibility.
+
+    Raises:
+        ValueError: If ``seed`` is not ``None`` (see above).
     """
     from tina4_python.debug import Log  # lazy import to avoid circular deps
+
+    if seed is not None:
+        raise ValueError(
+            "seed_table() no longer accepts seed=: it has no generators of "
+            "its own to seed (field_map callables are opaque). Build a "
+            "seeded FakeData yourself and close over it in field_map, e.g. "
+            "fake = FakeData(seed=42); seed_table(db, table, field_map="
+            "{'name': fake.name})."
+        )
 
     if not field_map:
         return SeedSummary(0, 0, [])
