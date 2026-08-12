@@ -724,17 +724,24 @@ class MongoDBAdapter(DatabaseAdapter):
     def get_next_id(self, table: str, pk_column: str = "id") -> int:
         """Atomically increment and return the next integer ID.
 
-        Uses a tina4_sequences collection with findOneAndUpdate($inc) so the
-        operation is race-safe on standalone instances and replica sets alike.
-        Seeds from MAX(pk_column) on first use.
+        A ``findOneAndUpdate($inc)`` on the ``tina4_sequences`` collection,
+        keyed by ``_id`` (the counter name). Keying by ``_id`` makes the upsert
+        race-safe by construction: ``_id`` carries a built-in unique index, so
+        two concurrent first-callers can never create two separate counters for
+        the same table — the second upsert re-hits the same document and the
+        atomic ``$inc`` still hands out DISTINCT, monotonic values. Seeds from
+        ``MAX(pk_column)`` on first use (via ``$setOnInsert``, so the seed is
+        applied exactly once). Raises on an impossible empty result rather than
+        silently returning 1 (which would collide with a real row).
         """
         sequences = self._db["tina4_sequences"]
         seq_name = f"{table}.{pk_column}"
 
-        # Check if the sequence document exists; seed if missing
-        doc = sequences.find_one({"seq_name": seq_name}, **self._session_kwargs())
+        # Seed the counter the FIRST time only, from the collection's current
+        # max id. $setOnInsert applies the seed on creation and never on a later
+        # call, and the upsert is idempotent, so a concurrent seed is harmless.
+        doc = sequences.find_one({"_id": seq_name}, **self._session_kwargs())
         if doc is None:
-            # Seed from current max value in the collection
             seed_value = 0
             try:
                 pipeline = [
@@ -747,24 +754,29 @@ class MongoDBAdapter(DatabaseAdapter):
                     seed_value = int(agg[0]["max_id"])
             except Exception:
                 pass
-
             try:
-                sequences.insert_one(
-                    {"seq_name": seq_name, "current_value": seed_value},
+                sequences.update_one(
+                    {"_id": seq_name},
+                    {"$setOnInsert": {"current_value": seed_value}},
+                    upsert=True,
                     **self._session_kwargs()
                 )
             except Exception:
-                pass  # Race — another process inserted first; that's fine
+                pass  # Race — another caller seeded first; the $inc below still holds.
 
-        # Atomic increment
+        # Atomic increment-and-return on the single _id-keyed counter document.
         result = sequences.find_one_and_update(
-            {"seq_name": seq_name},
+            {"_id": seq_name},
             {"$inc": {"current_value": 1}},
             return_document=True,  # pymongo.ReturnDocument.AFTER equivalent
             upsert=True,
             **self._session_kwargs()
         )
-        return int(result["current_value"]) if result else 1
+        if not result or result.get("current_value") is None:
+            raise RuntimeError(
+                f"get_next_id: MongoDB counter '{seq_name}' produced no value"
+            )
+        return int(result["current_value"])
 
     def get_database_type(self) -> str:
         return "mongodb"
