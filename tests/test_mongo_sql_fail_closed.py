@@ -226,3 +226,45 @@ def test_a_valid_where_update_changes_only_matching_docs(mongo):
 
     # Only id=2 changed.
     assert _statuses(db, collection) == ["changed", "keep", "keep"]
+
+
+# ── Feature 14b: the explicit 1=1 tautology (truncate) empties the collection ─
+
+@needs_mongo
+def test_a_truncate_empties_the_collection(mongo):
+    # truncate() issues DELETE ... WHERE 1 = 1. The explicit 1=1 tautology must
+    # translate to a MATCH-ALL {} filter so EVERY document is removed -- not the
+    # {"1": 1} filter that matched nothing and made truncate() a silent no-op in
+    # Python/Ruby/Node (PHP already special-cased it). Mutation-proved: revert
+    # the 1=1 -> {} translation in _parse_condition and this count stays 3
+    # (truncate deletes 0), while the feature-14 guard cases stay green.
+    db, collection = mongo
+    _seed(db, collection, [
+        {"id": 1, "status": "keep"},
+        {"id": 2, "status": "keep"},
+        {"id": 3, "status": "gone"},
+    ])
+    assert _count(db, collection) == 3
+
+    db.truncate(collection)
+
+    # The witness: the collection is actually empty.
+    assert _count(db, collection) == 0
+
+
+@needs_mongo
+def test_a_scoped_equality_is_not_widened_to_match_all(mongo):
+    # The tautology fix must be TIGHT: only a lone "1 = 1" is match-all. An
+    # ordinary numeric equality like "id = 1" -- superficially close to "1 = 1"
+    # -- must stay SCOPED to its one match, never widening to a delete-all.
+    db, collection = mongo
+    _seed(db, collection, [
+        {"id": 1, "status": "keep"},
+        {"id": 2, "status": "keep"},
+    ])
+
+    db.execute(f"DELETE FROM {collection} WHERE id = 1")
+
+    # Only id=1 was removed; id=2 remains.
+    assert _count(db, collection) == 1
+    assert _statuses(db, collection) == ["keep"]

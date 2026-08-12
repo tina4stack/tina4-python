@@ -157,6 +157,19 @@ def _parse_condition(cond: str, param_queue: list) -> dict:
         else:
             break
 
+    # Explicit 1=1 tautology -- the WHERE clause truncate() passes -- means
+    # MATCH-ALL: translate it to an empty {} filter so truncate() empties the
+    # collection, exactly as PHP already does (its parseWhere special-cases
+    # "1 = 1" -> []). Without this, "1 = 1" fell through to the numeric-equality
+    # pattern below and parsed as {"1": 1}, which matches NOTHING, so a
+    # truncate() silently deleted 0 documents while the caller believed the
+    # collection was emptied. This does NOT weaken the fail-closed guard: 1=1 is
+    # an EXPLICIT tautology, distinct from an unparseable WHERE (the raise at the
+    # end of this function still fires for unsupported SQL) and from a
+    # blank/absent WHERE (which _require_where_for_write still rejects).
+    if re.match(r"^1\s*=\s*1$", cond):
+        return {}
+
     # IS NULL / IS NOT NULL
     m = re.match(r"^(\w+)\s+IS\s+NOT\s+NULL$", cond, re.IGNORECASE)
     if m:
