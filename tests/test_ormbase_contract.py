@@ -97,3 +97,23 @@ def test_a_deleted_model_is_absent_from_find_and_count(db):
 
     assert BaseWidget.find(1) is None
     assert BaseWidget.count() == 0
+
+
+# ── Invariant: save() returns False, never raises, on a real constraint
+# violation -- characterises the write-path fail-loud fix's ripple boundary.
+# Python's Database.insert() already raises on a driver error (it is a thin
+# wrapper over execute(), which never catches), and ORM.save() already wraps
+# its insert() call in try/except and converts the raise to False; this pins
+# that contract so it can never silently regress into save() raising. ────────
+
+def test_save_on_constraint_violation_returns_false(db):
+    db.execute("CREATE UNIQUE INDEX idx_basewidget_name_unique ON basewidget (name)")
+    BaseWidget(name="alpha", qty=1).save()
+    assert BaseWidget.count() == 1
+
+    duplicate = BaseWidget(name="alpha", qty=2)  # UNIQUE(name) collides
+    result = duplicate.save()  # must NOT raise
+
+    assert result is False
+    assert BaseWidget.count() == 1            # nothing written
+    assert duplicate.get_error() is not None  # cause recorded, not swallowed
