@@ -193,8 +193,9 @@ class Request:
             files = {}
             fields = {}
             for key, value in req.body.items():
-                if isinstance(value, dict) and "filename" in value:
-                    # Content stays as raw bytes — no base64 encoding
+                if _is_file_value(value):
+                    # Content stays as raw bytes — no base64 encoding. A repeated
+                    # field name is a list of descriptors (no silent drop).
                     files[key] = value
                 else:
                     fields[key] = value
@@ -443,12 +444,22 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
             continue
 
         if filename:
-            result[name] = {
+            descriptor = {
                 "filename": filename,
                 "type": file_type,
                 "content": bytes(content),
                 "size": len(content),
             }
+            # Repeated field name -> collect ALL descriptors into a list; never
+            # silently keep only the last (the multi-file data-loss bug). A
+            # single occurrence stays a plain descriptor (backward compatible).
+            existing = result.get(name)
+            if isinstance(existing, list):
+                existing.append(descriptor)
+            elif isinstance(existing, dict) and "filename" in existing:
+                result[name] = [existing, descriptor]
+            else:
+                result[name] = descriptor
         else:
             result[name] = content.decode(errors="replace")
 
@@ -456,3 +467,60 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
             break
 
     return result
+
+
+def _is_file_value(value) -> bool:
+    """True when a parsed multipart entry is a file (or a list of files).
+
+    A file entry is a descriptor dict carrying a ``filename`` key, or a
+    non-empty list of such descriptors (a repeated field name). Everything else
+    is a plain form field.
+    """
+    if isinstance(value, dict):
+        return "filename" in value
+    if isinstance(value, list):
+        return bool(value) and isinstance(value[0], dict) and "filename" in value[0]
+    return False
+
+
+def save_upload(file: dict, target_dir: str, filename: str | None = None) -> str:
+    """Persist an uploaded file's content inside ``target_dir`` under a SAFE name.
+
+    The client-supplied filename is untrusted. Directory components are stripped
+    (so ``../../evil`` or ``/etc/passwd`` becomes ``evil`` / ``passwd``), a NUL
+    byte or an unusable name (``''``/``.``/``..``) is refused, and the resolved
+    path is confined to ``target_dir`` (realpath containment) so an upload can
+    never write outside it.
+
+    :param file: an uploaded-file descriptor (``request.files[name]``) carrying
+                 at least ``content`` (raw bytes); ``filename`` is used when the
+                 ``filename`` argument is not given.
+    :param target_dir: the directory to write into (created if missing).
+    :param filename: an explicit name to use instead of the client filename.
+    :return: the absolute path written.
+    :raises ValueError: when the derived name is unsafe or would escape.
+    """
+    raw = filename if filename is not None else file.get("filename", "")
+    if not isinstance(raw, str):
+        raw = str(raw or "")
+    if "\x00" in raw:
+        raise ValueError("upload filename contains a null byte")
+    # Reduce to a single path segment, handling BOTH separators so a Windows
+    # "..\\..\\evil" cannot smuggle a directory part past a POSIX basename.
+    base = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    if base in ("", ".", ".."):
+        raise ValueError(f"upload filename is not a usable name: {raw!r}")
+    os.makedirs(target_dir, exist_ok=True)
+    dest = os.path.join(target_dir, base)
+    # Defence in depth: the resolved parent of the destination must be exactly
+    # the resolved target dir (guards a pre-existing symlink at target/base).
+    real_dir = os.path.realpath(target_dir)
+    real_parent = os.path.realpath(os.path.dirname(dest))
+    if real_parent != real_dir:
+        raise ValueError(f"refusing to write outside {target_dir!r}: {raw!r}")
+    content = file.get("content", b"")
+    if isinstance(content, str):
+        content = content.encode()
+    with open(dest, "wb") as handle:
+        handle.write(content)
+    return dest
