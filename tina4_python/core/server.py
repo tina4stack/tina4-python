@@ -1634,8 +1634,14 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
             # the key can be recovered a character at a time.
             if Auth.validate_api_key(_token):
                 _auth_ok = True
-            elif Auth.valid_token_static(_token):
-                _auth_ok = True
+            else:
+                _payload = Auth.valid_token_static(_token)
+                if _payload:
+                    _auth_ok = True
+                    # Stash the authenticated payload on the request
+                    # (REQ-PY-NO-USER, 3.13.99) — a handler/downstream
+                    # middleware reads it back via request.user.
+                    request.user = _payload
         except Exception:
             pass
     # Fall back to formToken in request body (frond.js sends token here)
@@ -1645,8 +1651,10 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
         if _form_token:
             try:
                 from tina4_python.auth import Auth
-                if Auth.valid_token_static(_form_token):
+                _payload = Auth.valid_token_static(_form_token)
+                if _payload:
                     _auth_ok = True
+                    request.user = _payload
                     # Return a FreshToken header so frond.js can use
                     # the Authorization header on subsequent requests
                     from tina4_python.auth import refresh_token as _refresh
@@ -1663,8 +1671,10 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
             if _session_token:
                 try:
                     from tina4_python.auth import Auth
-                    if Auth.valid_token_static(_session_token):
+                    _payload = Auth.valid_token_static(_session_token)
+                    if _payload:
                         _auth_ok = True
+                        request.user = _payload
                 except Exception:
                     pass
     if not _auth_ok:
@@ -2333,7 +2343,7 @@ async def _stage_dispatch_route(ctx: DispatchContext) -> None:
         return None
 
     ctx.request._route_params = params
-    ctx.request.merge_route_params()
+    ctx.request.attach_route_params()
     # Expose the matched handler so before_* middleware (e.g. CsrfMiddleware)
     # can read handler metadata such as _noauth.
     ctx.request._handler = route.get("handler")

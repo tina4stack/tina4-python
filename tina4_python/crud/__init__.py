@@ -136,12 +136,14 @@ class AutoCrud:
             try:
                 # Primary names: limit / offset
                 # Compat names: per_page / page (PHP/Ruby/Node style)
-                limit = int(request.params.get("limit", request.params.get("per_page", 10)))
-                offset = int(request.params.get("offset", 0))
+                # Pagination is a QUERY-STRING concern, not a route param
+                # (REQ-PARAM-POLLUTION, 3.13.99 — request.params is route-only).
+                limit = int(request.query.get("limit", request.query.get("per_page", 10)))
+                offset = int(request.query.get("offset", 0))
                 # page/per_page compat: if page is provided, derive offset from it
-                if "page" in request.params and "offset" not in request.params:
-                    page = int(request.params.get("page", 1))
-                    per_page = int(request.params.get("per_page", limit))
+                if "page" in request.query and "offset" not in request.query:
+                    page = int(request.query.get("page", 1))
+                    per_page = int(request.query.get("per_page", limit))
                     # PAGE-DEC-01: clamp page < 1 -> page 1 BEFORE deriving offset,
                     # so offset=(page-1)*per_page can never go negative (a page=0/
                     # negative request used to hand PostgreSQL a negative OFFSET -

@@ -738,8 +738,8 @@ async def _api_queue(request, response):
     """Queue status and jobs — works with any backend (lite, kafka, mongo, rabbitmq)."""
     try:
         from tina4_python.queue import Queue, queue_base_path
-        topic = request.params.get("topic", "default") if hasattr(request, "params") else "default"
-        status_filter = request.params.get("status", None) if hasattr(request, "params") else None
+        topic = request.query.get("topic", "default") if hasattr(request, "query") else "default"
+        status_filter = request.query.get("status", None) if hasattr(request, "query") else None
         queue = Queue(topic=topic)
 
         # Stats
@@ -824,7 +824,7 @@ async def _api_queue_dead_letters(request, response):
     """
     try:
         from tina4_python.queue import queue_base_path
-        topic = request.params.get("topic", "default") if hasattr(request, "params") else "default"
+        topic = request.query.get("topic", "default") if hasattr(request, "query") else "default"
         jobs = _read_queue_dir(os.path.join(queue_base_path(), topic, "failed"), "dead_letter")
         return response({"jobs": jobs, "count": len(jobs), "topic": topic})
     except Exception as e:
@@ -854,8 +854,8 @@ async def _api_mailbox(request, response):
     """List dev mailbox messages."""
     from tina4_python.messenger import DevMailbox
     mailbox = DevMailbox()
-    folder = request.params.get("folder", None) if hasattr(request, "params") else None
-    limit = int(request.params.get("limit", "50")) if hasattr(request, "params") else 50
+    folder = request.query.get("folder", None) if hasattr(request, "query") else None
+    limit = int(request.query.get("limit", "50")) if hasattr(request, "query") else 50
     messages = mailbox.inbox(limit=limit, folder=folder)
     return response({
         "messages": messages,
@@ -869,7 +869,7 @@ async def _api_mailbox_read(request, response):
     """Read a specific mailbox message."""
     from tina4_python.messenger import DevMailbox
     mailbox = DevMailbox()
-    msg_id = request.params.get("id", "") if hasattr(request, "params") else ""
+    msg_id = request.query.get("id", "") if hasattr(request, "query") else ""
     if not msg_id:
         return response({"error": "id required"}, 400)
     msg = mailbox.read(msg_id)
@@ -900,9 +900,9 @@ async def _api_mailbox_clear(request, response):
 
 async def _api_messages(request, response):
     """Get tracked messages."""
-    category = request.params.get("category", None) if hasattr(request, "params") else None
-    level = request.params.get("level", None) if hasattr(request, "params") else None
-    limit = int(request.params.get("limit", "100")) if hasattr(request, "params") else 100
+    category = request.query.get("category", None) if hasattr(request, "query") else None
+    level = request.query.get("level", None) if hasattr(request, "query") else None
+    limit = int(request.query.get("limit", "100")) if hasattr(request, "query") else 100
     messages = MessageLog.get(category=category, level=level, limit=limit)
     return response({"messages": messages, "counts": MessageLog.count()})
 
@@ -1011,7 +1011,7 @@ async def _api_table_info(request, response):
     """Get table columns and sample data."""
     try:
         from tina4_python.database import Database
-        table = request.params.get("name", "") if hasattr(request, "params") else ""
+        table = request.query.get("name", "") if hasattr(request, "query") else ""
         if not table:
             return response({"error": "name required"}, 400)
 
@@ -1068,9 +1068,9 @@ async def _api_queue_replay(request, response):
 
 async def _api_messages_search(request, response):
     """Search message log by keyword."""
-    keyword = request.params.get("q", "") if hasattr(request, "params") else ""
-    category = request.params.get("category", None) if hasattr(request, "params") else None
-    limit = int(request.params.get("limit", "100")) if hasattr(request, "params") else 100
+    keyword = request.query.get("q", "") if hasattr(request, "query") else ""
+    category = request.query.get("category", None) if hasattr(request, "query") else None
+    limit = int(request.query.get("limit", "100")) if hasattr(request, "query") else 100
 
     if not keyword:
         return response({"error": "q parameter required"}, 400)
@@ -1158,9 +1158,9 @@ async def _api_seed_table(request, response):
 
 async def _api_requests(request, response):
     """Get captured HTTP requests."""
-    limit = int(request.params.get("limit", "50")) if hasattr(request, "params") else 50
-    method = request.params.get("method", None) if hasattr(request, "params") else None
-    status_min = request.params.get("status_min", None) if hasattr(request, "params") else None
+    limit = int(request.query.get("limit", "50")) if hasattr(request, "query") else 50
+    method = request.query.get("method", None) if hasattr(request, "query") else None
+    status_min = request.query.get("status_min", None) if hasattr(request, "query") else None
     reqs = RequestInspector.get(limit=limit, method=method,
                                 status_min=int(status_min) if status_min else None)
     return response({"requests": reqs, "stats": RequestInspector.stats()})
@@ -1355,9 +1355,9 @@ async def _proxy_to_supervisor(request, response, downstream_path: str):
     base = _supervisor_base_url()
     qs = ""
     try:
-        if hasattr(request, "params") and request.params:
+        if hasattr(request, "query") and request.query:
             from urllib.parse import urlencode
-            qs = "?" + urlencode(request.params)
+            qs = "?" + urlencode(request.query)
     except Exception:
         qs = ""
     target = f"{base}{downstream_path}{qs}"
@@ -2189,7 +2189,7 @@ async def _api_metrics_file(request, response):
     """Per-file detail metrics."""
     from tina4_python.dev_admin.metrics import file_detail, MetricsEngineError
 
-    path = request.params.get("path", "")
+    path = request.query.get("path", "")
     if not path:
         return response({"error": "Missing path parameter"}, 400)
     try:
@@ -2446,7 +2446,7 @@ async def _api_files(request, response):
         path — relative directory path (default: project root)
     """
     import os, subprocess
-    rel = (request.params.get("path") or "").strip("/")
+    rel = (request.query.get("path") or "").strip("/")
     base = os.getcwd()
     target = os.path.normpath(os.path.join(base, rel))
 
@@ -2598,7 +2598,7 @@ async def _api_file_read(request, response):
     previously-open tabs from localStorage that no longer exist.
     """
     import os
-    rel = (request.params.get("path") or "").strip("/")
+    rel = (request.query.get("path") or "").strip("/")
     if not rel:
         return response({"error": "path required", "path": "", "content": "", "language": "text", "size": 0}, 400)
 
@@ -2667,7 +2667,7 @@ async def _api_file_raw(request, response):
         path — relative file path
     """
     import os, mimetypes
-    rel = (request.params.get("path") or "").strip("/")
+    rel = (request.query.get("path") or "").strip("/")
     if not rel:
         return response({"error": "path required"}, 400)
 
@@ -2809,8 +2809,8 @@ async def _api_deps_search(request, response):
     Query params: q (search term), registry (pypi|npm|packagist|rubygems|crates)
     """
     import urllib.request, json
-    query = request.params.get("q", "").strip()
-    registry = request.params.get("registry", "pypi")
+    query = request.query.get("q", "").strip()
+    registry = request.query.get("registry", "pypi")
     if not query:
         return response({"packages": []})
 

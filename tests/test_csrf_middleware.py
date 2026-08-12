@@ -117,7 +117,7 @@ def _dispatch(method="POST", *, body=None, headers=None, params=None,
     }
     request = Request.from_scope(scope, raw_body)
     request._route_params = route_params
-    request.merge_route_params()
+    request.attach_route_params()
     # The real dispatch path sets request._handler before middleware runs so
     # before_csrf can read handler metadata (e.g. _noauth). Mirror that here.
     request._handler = route.get("handler")

@@ -67,22 +67,39 @@ class CaseInsensitiveDict(dict):
             self[k] = v
 
 
+# Core wire-derived fields, set once while the Request is built (from_scope())
+# and never reassigned afterward — REQ-IMMUTABILITY-DIVERGE (3.13.99). PHP's
+# `readonly` properties and Ruby's writer-less attr_reader/lazy getters are
+# already at this posture (the reference); Python and Node were "fully
+# mutable" and both close the gap this release. NOT included: `params`
+# (attached by the router AFTER from_scope() returns), `session`/`user`
+# (stashed by middleware over the request's lifetime), and the `_`-prefixed
+# dispatch-internal fields.
+_READONLY_FIELDS = frozenset((
+    "method", "path", "url", "scheme", "query_string", "query", "headers",
+    "body", "raw_body", "cookies", "files", "ip", "remote_ip", "content_type",
+))
+
+
 class Request:
     """Parsed HTTP request — everything a route handler needs."""
 
     __slots__ = (
         "method", "path", "url", "scheme", "query_string", "params", "query",
         "headers", "body", "raw_body", "cookies", "files", "ip", "remote_ip",
-        "content_type", "session", "_route_params", "_handler",
+        "content_type", "session", "user", "_route_params", "_handler", "_frozen",
     )
 
     def __init__(self):
+        self._frozen = False            # See __setattr__ — flipped True at the end
+                                        # of from_scope(), the real construction path.
         self.method: str = "GET"
         self.path: str = "/"
         self.url: str = "/"
         self.scheme: str = "http"       # Native connection scheme (see is_secure_scheme)
         self.query_string: str = ""
-        self.params: dict = {}          # Query string + route params merged
+        self.params: dict = {}          # Route params ONLY (never query/body — REQ-PARAM-POLLUTION,
+                                        # 3.13.99). Attached by the router via attach_route_params().
         self.query: dict = {}           # Query string params only (separate from route params)
         self.headers: dict = CaseInsensitiveDict()  # Case-insensitive HTTP headers
         self.body: dict | str | None = None  # Parsed body
@@ -93,11 +110,30 @@ class Request:
         self.remote_ip: str = ""        # Raw socket peer (never X-Forwarded-For) — for trust decisions
         self.content_type: str = ""
         self.session = None             # Set by session middleware
+        self.user = None                # Authenticated payload — set by auth middleware
+                                        # after token validation (REQ-PY-NO-USER, 3.13.99).
         self._route_params: dict = {}   # Dynamic route params ({id}, etc.)
         self._handler = None            # Matched route handler — set by dispatch
                                         # before middleware runs, so before_*
                                         # middleware (e.g. CsrfMiddleware) can read
                                         # handler metadata like _noauth.
+
+    def __setattr__(self, name, value):
+        """Block reassigning a core wire-derived field once the request is built.
+
+        Mutable during __init__/from_scope() (``_frozen`` is False until the very
+        end of from_scope()); once built, a handler that does
+        ``request.method = "..."`` / ``request.headers = {...}`` etc. now raises,
+        instead of silently mutating shared request state mid-pipeline
+        (REQ-IMMUTABILITY-DIVERGE). ``params``/``session``/``user`` and the
+        ``_``-prefixed dispatch fields stay writable — the router and middleware
+        legitimately set them after construction.
+        """
+        if name in _READONLY_FIELDS and getattr(self, "_frozen", False):
+            raise AttributeError(
+                f"Request.{name} is read-only once built (REQ-IMMUTABILITY-DIVERGE)"
+            )
+        object.__setattr__(self, name, value)
 
     def is_secure_scheme(self) -> bool:
         """True when the client's request scheme is https.
@@ -170,11 +206,12 @@ class Request:
                 f"TINA4_MAX_UPLOAD_SIZE ({TINA4_MAX_UPLOAD_SIZE} bytes)"
             )
 
-        # Parse query params
+        # Parse query params. `params` is NOT seeded here — it is route-only
+        # (REQ-PARAM-POLLUTION, 3.13.99) and is attached later, by the router,
+        # via attach_route_params(). Client query values live in `query` alone.
         if req.query_string:
             parsed = parse_qs(req.query_string, keep_blank_values=True)
             req.query = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
-            req.params = dict(req.query)  # params starts as copy of query, route params merge later
 
         # Parse cookies
         cookie_header = req.headers.get("cookie", "")
@@ -202,20 +239,48 @@ class Request:
             req.files = files
             req.body = fields
 
+        # Construction complete — core wire-derived fields are now read-only
+        # (see __setattr__ / _READONLY_FIELDS). `params` is attached later by
+        # the router (attach_route_params()) and stays writable.
+        req._frozen = True
+
         return req
 
-    def merge_route_params(self):
-        """Merge route params into params dict (route params take priority)."""
-        if self._route_params:
-            self.params.update(self._route_params)
+    def attach_route_params(self):
+        """Set `params` to the matched route's params — ROUTE-ONLY.
+
+        Client query/body values never enter `params` (REQ-PARAM-POLLUTION,
+        3.13.99 — a param-pollution/security fix): a route `/{id}` hit with
+        `?id=other` yields `params["id"]` == the route value; the client value
+        is only ever in `query`. Called by the dispatcher once a route matches
+        (`_route_params` is set first), replacing the old `merge_route_params`
+        (which folded a query-seeded `params` dict together with route values).
+        """
+        self.params = dict(self._route_params)
 
     def param(self, key: str, default=None):
-        """Get a route parameter (from URL path). Alias for params[key]."""
-        return self.params.get(key, self._route_params.get(key, default))
+        """Get a value by key: the matched ROUTE param first, then the query string.
+
+        A read convenience only — `params` and `query` stay separate
+        collections (REQ-PARAM-POLLUTION); a route value always wins over a
+        client-supplied query value of the same name. Mirrors PHP's/Node's
+        `param()`.
+        """
+        if key in self.params:
+            return self.params[key]
+        return self.query.get(key, default)
 
     def header(self, name: str) -> str | None:
-        """Get a specific header value by name (case-insensitive)."""
-        return self.headers.get(name.lower().replace("-", "_"), self.headers.get(name.lower(), None))
+        """Get a specific header value by name (case-insensitive).
+
+        Case-insensitive only — no dash/underscore normalisation
+        (REQ-HEADER-DASH-DIVERGE, 3.13.99): `header("X-Custom")` and
+        `header("x-custom")` resolve the same header; `header("x_custom")`
+        does NOT also match `X-Custom` (it used to, via a `-`->`_` remap this
+        release removes to match the PHP/Node reference — case-fold only,
+        matching RFC 7230 §3.2, which does not treat `-`/`_` as equivalent).
+        """
+        return self.headers.get(name.lower(), None)
 
     def bearer_token(self) -> str | None:
         """Extract the Bearer token from the Authorization header."""

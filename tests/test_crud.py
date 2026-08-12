@@ -109,24 +109,33 @@ def _make_widget_model():
     return Widget
 
 
-def _request(method, path, *, params=None, body=None):
+def _request(method, path, *, query=None, route_params=None, body=None):
+    # params is ROUTE-ONLY (REQ-PARAM-POLLUTION, 3.13.99) — query-string-style
+    # test input goes in `query`, real route segments (from Router.match) in
+    # `params`/`_route_params`. Never merged.
     req = Request()
     req.method = method
     req.path = path
-    merged = dict(params or {})
-    req.params = merged
-    req._route_params = merged
+    req.query = dict(query or {})
+    routed = dict(route_params or {})
+    req._route_params = routed
+    req.params = routed
     req.body = body
     return req
 
 
 def _invoke(method, path, *, params=None, body=None):
     """Match the route on the Router and invoke the registered handler exactly
-    as the dispatcher does. Returns (status_code, parsed_json_body)."""
+    as the dispatcher does. Returns (status_code, parsed_json_body).
+
+    ``params=`` here is QUERY-STRING-style test input (e.g. pagination
+    limit/offset on a route with no {} segments) — it becomes request.query.
+    The route's OWN params come from Router.match and become request.params;
+    the two are never merged (REQ-PARAM-POLLUTION, 3.13.99).
+    """
     route, route_params = Router.match(method, path)
     assert route is not None, f"no route registered for {method} {path}"
-    all_params = {**(params or {}), **route_params}
-    req = _request(method, path, params=all_params, body=body)
+    req = _request(method, path, query=params, route_params=route_params, body=body)
     resp = Response()
     out = asyncio.run(route["handler"](req, resp))
     payload = json.loads(out.content) if out.content else None

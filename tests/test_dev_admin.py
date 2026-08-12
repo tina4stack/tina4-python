@@ -410,7 +410,7 @@ class TestAPIHandlers:
         MessageLog.log("test", "Hello world")
         MessageLog.log("test", "Goodbye moon")
         from tina4_python.dev_admin import _api_messages_search
-        mock_req.params = {"q": "hello"}
+        mock_req.query = {"q": "hello"}
         result = await _api_messages_search(mock_req, mock_resp)
         assert result["count"] == 1
         assert "Hello" in result["messages"][0]["message"]
@@ -418,7 +418,7 @@ class TestAPIHandlers:
     @pytest.mark.asyncio
     async def test_messages_search_empty_query(self, mock_req, mock_resp):
         from tina4_python.dev_admin import _api_messages_search
-        mock_req.params = {"q": ""}
+        mock_req.query = {"q": ""}
         result = await _api_messages_search(mock_req, mock_resp)
         assert "error" in result
 

@@ -1226,8 +1226,8 @@ def _gen_route(name: str, flags: dict, *, emit_test: bool = True):
 @get("/api/{route_path}")
 async def list_{route_path}(request, response):
     """List all {route_path} with pagination."""
-    page = int(request.params.get("page", 1))
-    per_page = int(request.params.get("per_page", 20))
+    page = int(request.query.get("page", 1))
+    per_page = int(request.query.get("per_page", 20))
     offset = (page - 1) * per_page
     records, total = {model}.where("1=1", limit=per_page, offset=offset, with_count=True)
     return response({{

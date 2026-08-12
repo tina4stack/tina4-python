@@ -598,8 +598,14 @@ class CsrfMiddleware:
             if bearer_token and auth.valid_token(bearer_token):
                 return request, response
 
-        # Reject if token is in query string (security risk — log warning)
-        query = getattr(request, "params", None) or getattr(request, "query", None) or {}
+        # Reject if token is in query string (security risk — log warning).
+        # Read the QUERY STRING only, never request.params: params is
+        # route-only (REQ-PARAM-POLLUTION, 3.13.99), so on a parameterized
+        # write route (e.g. PUT /api/orders/{id}) it is a non-empty, truthy
+        # dict that would short-circuit an `or` fallback and never reach the
+        # real query string — silently letting a smuggled ?formToken= past
+        # this check on exactly the routes that have route params.
+        query = getattr(request, "query", None) or {}
         if isinstance(query, dict) and query.get("formToken"):
             CsrfMiddleware._logger.warning(
                 "CSRF token found in query string — rejected for security. "
