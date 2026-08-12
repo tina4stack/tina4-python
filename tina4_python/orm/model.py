@@ -633,8 +633,6 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
-        table_sql = self._get_table_sql()
-        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         if pk_value is None:
             raise ValueError("Cannot delete: no primary key value")
@@ -662,8 +660,6 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
-        table_sql = self._get_table_sql()
-        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         if pk_value is None:
             raise ValueError("Cannot delete: no primary key value")
@@ -686,11 +682,7 @@ class ORM(metaclass=ORMMeta):
             raise RuntimeError("Model does not support soft delete")
 
         db = self._get_db()
-        pk = self._get_pk()
-        pk_value = getattr(self, pk)
         table = self._get_table()
-        table_sql = self._get_table_sql()
-        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         db.start_transaction()
         try:
