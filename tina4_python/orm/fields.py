@@ -224,6 +224,32 @@ def BlobField(**kwargs):
 def NumericField(**kwargs):
     return _make_field(float, "NumericField", **kwargs)
 
+def DecimalField(*, precision: int = 10, scale: int = 2, **kwargs):
+    """A fixed-precision numeric column that emits a real ``DECIMAL(p, s)``.
+
+    ``FloatField`` / ``NumericField`` map to the engine's floating type
+    (``REAL``) — fast, but binary floating point cannot represent every
+    decimal fraction exactly, so they are the wrong choice for MONEY. Reach for
+    ``DecimalField`` when the column must keep an exact scale: it emits a real
+    ``DECIMAL(precision, scale)`` column (identical on PostgreSQL, MySQL, MSSQL,
+    Firebird and SQLite), so the database stores the value at the declared
+    scale instead of a floating approximation.
+
+    The in-memory Python representation is a ``float`` (the documented default —
+    it round-trips through every driver and binds on SQLite, which cannot bind a
+    ``Decimal``); the fixed scale lives in the COLUMN. For end-to-end exact
+    arithmetic, store the amount in minor units (an ``IntegerField`` of cents)
+    or hand the column a ``str``/``Decimal`` your driver accepts.
+
+        class Invoice(ORM):
+            id     = IntegerField(primary_key=True, auto_increment=True)
+            amount = DecimalField(precision=12, scale=4)   # DECIMAL(12,4)
+    """
+    f = _make_field(float, "DecimalField", **kwargs)
+    f.precision = precision
+    f.scale = scale
+    return f
+
 class JSONField(Field):
     """A column that stores a JSON document (a ``dict`` or a ``list``).
 

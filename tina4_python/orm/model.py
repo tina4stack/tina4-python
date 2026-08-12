@@ -489,29 +489,41 @@ class ORM(metaclass=ORMMeta):
         # apply (e.g. NOT NULL DEFAULT '') instead of emitting an explicit NULL
         # that violates the constraint. Unused on the UPDATE path.
         insert_omit = set()
-        for name, field in self._fields.items():
-            if field.auto_increment and pk_value is None:
-                continue  # Skip auto-increment on insert
-            value = getattr(self, name)
-            # v3.13.11 (issue #50): resolve callable values at write time
-            # too, in case the user set ``self.created_at = lambda: ...``
-            # directly. Defensive — Field.validate() already handles this
-            # for the normal __init__ + _populate paths.
-            if callable(value) and not isinstance(value, type):
-                value = value()
-            if value is not None or not field.auto_increment:
-                # Use field_mapping for the column name, fall back to field.column
-                db_col = self.field_mapping.get(name, field.column)
-                # Serialize to the column's storage form: identity for most
-                # fields, JSON string for JSONField (see Field.to_db).
-                data[db_col] = field.to_db(value)
-                # #165: a None value the caller never assigned is an UNSET
-                # column — omit it from the INSERT so the DB DEFAULT applies.
-                # A resolved ORM default (non-None) is still written; a value
-                # the caller explicitly set to None is still written as NULL
-                # (its field name is in _assigned_fields).
-                if value is None and name not in self._assigned_fields:
-                    insert_omit.add(db_col)
+        # A field's to_db() serialization can fail loud — the commonest case is a
+        # JSONField handed a value that is not JSON-serializable (a set, a custom
+        # object). The write-path contract, identical in all four frameworks, is:
+        # save() returns False + logs the cause (never raises out of save(), never
+        # silently persists a bad row). So a serialization error while BUILDING the
+        # row is caught here, recorded on last_error, logged, and turned into a
+        # False return before any transaction is opened.
+        try:
+            for name, field in self._fields.items():
+                if field.auto_increment and pk_value is None:
+                    continue  # Skip auto-increment on insert
+                value = getattr(self, name)
+                # v3.13.11 (issue #50): resolve callable values at write time
+                # too, in case the user set ``self.created_at = lambda: ...``
+                # directly. Defensive — Field.validate() already handles this
+                # for the normal __init__ + _populate paths.
+                if callable(value) and not isinstance(value, type):
+                    value = value()
+                if value is not None or not field.auto_increment:
+                    # Use field_mapping for the column name, fall back to field.column
+                    db_col = self.field_mapping.get(name, field.column)
+                    # Serialize to the column's storage form: identity for most
+                    # fields, JSON string for JSONField (see Field.to_db).
+                    data[db_col] = field.to_db(value)
+                    # #165: a None value the caller never assigned is an UNSET
+                    # column — omit it from the INSERT so the DB DEFAULT applies.
+                    # A resolved ORM default (non-None) is still written; a value
+                    # the caller explicitly set to None is still written as NULL
+                    # (its field name is in _assigned_fields).
+                    if value is None and name not in self._assigned_fields:
+                        insert_omit.add(db_col)
+        except (ValueError, TypeError) as exc:
+            self.last_error = str(exc)
+            Log.error(f"{type(self).__name__}.save() refused: {exc}")
+            return False
 
         # v3.13.11 (issue #50): pick INSERT vs UPDATE on row existence
         # for non-auto-increment PKs. Auto-increment keeps the legacy
@@ -1082,6 +1094,13 @@ class ORM(metaclass=ORMMeta):
                 sql_type = "TEXT"
             elif kind in ("NumericField", "FloatField"):
                 sql_type = "REAL"
+            elif kind == "DecimalField":
+                # A fixed-precision column: emit a real DECIMAL(p, s) so the
+                # engine keeps the declared scale instead of a floating
+                # approximation. Valid syntax on PG/MySQL/MSSQL/Firebird/SQLite.
+                precision = getattr(field_obj, "precision", 10)
+                scale = getattr(field_obj, "scale", 2)
+                sql_type = f"DECIMAL({precision},{scale})"
             elif kind == "BooleanField":
                 sql_type = bool_sql
             elif kind == "DateTimeField":
@@ -1145,7 +1164,12 @@ class ORM(metaclass=ORMMeta):
             if pk_cols:
                 col_defs.append(f"PRIMARY KEY ({', '.join(pk_cols)})")
 
-        sql = f"CREATE TABLE IF NOT EXISTS {table_sql} ({', '.join(col_defs)})"
+        # MSSQL and Firebird reject `IF NOT EXISTS` on CREATE TABLE (a syntax
+        # error). The `db.table_exists(table)` guard above already returns early
+        # when the table is present, so `IF NOT EXISTS` is pure redundancy on
+        # every engine and simply omitted where it does not parse.
+        if_not_exists = "" if engine in ("mssql", "sqlserver", "firebird") else "IF NOT EXISTS "
+        sql = f"CREATE TABLE {if_not_exists}{table_sql} ({', '.join(col_defs)})"
 
         # Translate auto-increment syntax for the current engine
         engine = db.get_database_type()

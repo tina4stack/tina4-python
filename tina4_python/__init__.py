@@ -106,6 +106,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "TextField": ("tina4_python.orm", "TextField"),
     "BlobField": ("tina4_python.orm", "BlobField"),
     "NumericField": ("tina4_python.orm", "NumericField"),
+    "DecimalField": ("tina4_python.orm", "DecimalField"),
     "JSONField": ("tina4_python.orm", "JSONField"),
     "ForeignKeyField": ("tina4_python.orm", "ForeignKeyField"),
     "IntField": ("tina4_python.orm", "IntField"),
