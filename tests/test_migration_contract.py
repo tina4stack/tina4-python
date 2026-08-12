@@ -123,6 +123,18 @@ def _firebird() -> Database:
     return Database(FIREBIRD_URL)
 
 
+def _clean_ledger_row(db: Database, migration_name: str) -> None:
+    """Best-effort delete of a stale tina4_migration row. On a genuinely
+    fresh database/engine the tracking table itself may not exist yet
+    (nothing has called migrate() there before) -- that is not a real
+    failure, just nothing to clean up."""
+    try:
+        db.execute("DELETE FROM tina4_migration WHERE migration_name = ?", [migration_name])
+        db.commit()
+    except Exception:
+        pass
+
+
 # ── ledger-row-commits-atomically-with-ddl ──────────────────────────────────
 
 
@@ -164,8 +176,8 @@ class TestLedgerRowCommitsAtomicallyWithDdl:
         )
         db = _mysql()
         db.execute("DROP TABLE IF EXISTS mig_mysql_atomic")
-        db.execute("DELETE FROM tina4_migration WHERE migration_name = '000001_mysql_atomic'")
         db.commit()
+        _clean_ledger_row(db, "000001_mysql_atomic")
         try:
             with pytest.raises(RuntimeError):
                 Migration(db, str(mig_dir)).migrate()
@@ -187,8 +199,8 @@ class TestLedgerRowCommitsAtomicallyWithDdl:
             )
         finally:
             db.execute("DROP TABLE IF EXISTS mig_mysql_atomic")
-            db.execute("DELETE FROM tina4_migration WHERE migration_name = '000001_mysql_atomic'")
             db.commit()
+            _clean_ledger_row(db, "000001_mysql_atomic")
             db.close()
 
 
@@ -212,8 +224,8 @@ class TestMidfileFailureRollsBackOnTransactionalDdl:
         )
         db = _pg()
         db.execute("DROP TABLE IF EXISTS mig_pg_midfile")
-        db.execute("DELETE FROM tina4_migration WHERE migration_name = '000001_pg_midfile'")
         db.commit()
+        _clean_ledger_row(db, "000001_pg_midfile")
         try:
             with pytest.raises(RuntimeError):
                 Migration(db, str(mig_dir)).migrate()
@@ -229,8 +241,8 @@ class TestMidfileFailureRollsBackOnTransactionalDdl:
             assert row is None, "no ledger row for a fully-rolled-back file"
         finally:
             db.execute("DROP TABLE IF EXISTS mig_pg_midfile")
-            db.execute("DELETE FROM tina4_migration WHERE migration_name = '000001_pg_midfile'")
             db.commit()
+            _clean_ledger_row(db, "000001_pg_midfile")
             db.close()
 
 
