@@ -639,6 +639,25 @@ class ORM(metaclass=ORMMeta):
         self._persisted = True
         return self
 
+    @classmethod
+    def _soft_delete_column(cls) -> str:
+        """DB column backing the soft-delete flag, honouring ``field_mapping``.
+
+        The soft-delete finder filter and the ``delete``/``restore`` writes must
+        address the SAME column. ``field_mapping`` remaps a Python attribute to
+        its DB column (SOFTDEL-PY-FILTER-MAPPING), so a model that remaps
+        ``is_deleted`` filters and writes on the mapped column, not the literal.
+        Defaults to ``is_deleted`` when unmapped, so ordinary models are
+        unaffected.
+        """
+        return cls.field_mapping.get("is_deleted", "is_deleted")
+
+    @classmethod
+    def _soft_delete_filter(cls) -> str:
+        """SQL predicate that excludes soft-deleted rows (``field_mapping``-aware)."""
+        col = cls._soft_delete_column()
+        return f"({col} = 0 OR {col} IS NULL)"
+
     def delete(self) -> bool:
         """Delete this record (soft or hard)."""
         db = self._get_db()
@@ -653,7 +672,7 @@ class ORM(metaclass=ORMMeta):
         try:
             if self.soft_delete:
                 where, where_params = self._pk_where()
-                db.update(table, {"is_deleted": 1}, where, where_params)
+                db.update(table, {self._soft_delete_column(): 1}, where, where_params)
                 self.is_deleted = 1
             else:
                 where, where_params = self._pk_where()
@@ -699,7 +718,7 @@ class ORM(metaclass=ORMMeta):
         db.start_transaction()
         try:
             where, where_params = self._pk_where()
-            db.update(table, {"is_deleted": 0}, where, where_params)
+            db.update(table, {self._soft_delete_column(): 0}, where, where_params)
             self.is_deleted = 0
             db.commit()
         except Exception:
@@ -748,7 +767,7 @@ class ORM(metaclass=ORMMeta):
 
         sql = f"SELECT * FROM {table_sql} WHERE {pk_col} = ?"
         if cls.soft_delete:
-            sql += " AND (is_deleted = 0 OR is_deleted IS NULL)"
+            sql += f" AND {cls._soft_delete_filter()}"
 
         return cls.select_one(sql, [pk_value], include=include)
 
@@ -798,7 +817,7 @@ class ORM(metaclass=ORMMeta):
                 params.append(value)
 
         if cls.soft_delete:
-            conditions.append("(is_deleted = 0 OR is_deleted IS NULL)")
+            conditions.append(cls._soft_delete_filter())
 
         sql = f"SELECT * FROM {table_sql}"
         if conditions:
@@ -873,7 +892,7 @@ class ORM(metaclass=ORMMeta):
 
         sql = f"SELECT * FROM {table_sql}"
         if cls.soft_delete:
-            sql += " WHERE (is_deleted = 0 OR is_deleted IS NULL)"
+            sql += f" WHERE {cls._soft_delete_filter()}"
         if order_by:
             sql += f" ORDER BY {order_by}"
 
@@ -904,7 +923,7 @@ class ORM(metaclass=ORMMeta):
             table_sql = cls._get_table_sql()
             sql = f"SELECT * FROM {table_sql}"
             if cls.soft_delete:
-                sql += " WHERE is_deleted = 0 OR is_deleted IS NULL"
+                sql += f" WHERE {cls._soft_delete_filter()}"
         result = db.fetch(sql, params, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
         if include:
@@ -942,7 +961,7 @@ class ORM(metaclass=ORMMeta):
 
         sql = f"SELECT * FROM {table_sql} WHERE {filter_sql}"
         if cls.soft_delete:
-            sql = f"SELECT * FROM {table_sql} WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
+            sql = f"SELECT * FROM {table_sql} WHERE ({filter_sql}) AND {cls._soft_delete_filter()}"
         if order_by:
             sql += f" ORDER BY {order_by}"
 
@@ -956,7 +975,7 @@ class ORM(metaclass=ORMMeta):
             if cls.soft_delete:
                 count_sql = (
                     f"SELECT COUNT(*) AS n FROM {table_sql} "
-                    f"WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
+                    f"WHERE ({filter_sql}) AND {cls._soft_delete_filter()}"
                 )
             count_row = db.fetch_one(count_sql, params)
             total = int(count_row["n"]) if count_row else len(instances)
@@ -983,7 +1002,7 @@ class ORM(metaclass=ORMMeta):
 
         where_parts = []
         if cls.soft_delete:
-            where_parts.append("(is_deleted = 0 OR is_deleted IS NULL)")
+            where_parts.append(cls._soft_delete_filter())
         if conditions:
             where_parts.append(f"({conditions})")
 
@@ -1154,6 +1173,22 @@ class ORM(metaclass=ORMMeta):
                     parts.append(f"DEFAULT {default_val}")
 
             col_defs.append(" ".join(parts))
+
+        # SOFTDEL-DEC-02: a soft_delete model needs an is_deleted flag column,
+        # but create_table only knew about DECLARED fields — so a
+        # soft_delete=True model that never declared is_deleted built a table
+        # with NO such column, and every soft-delete read/write then errored on
+        # the missing column. Inject it here (INTEGER 0/1, default 0),
+        # field_mapping-aware, unless the model already declares it, so the
+        # generated schema always matches the soft-delete behaviour.
+        if cls.soft_delete:
+            sd_col = cls._soft_delete_column()
+            declared_cols = {
+                cls.field_mapping.get(name, fo.column or name)
+                for name, fo in cls._fields.items()
+            }
+            if sd_col not in declared_cols:
+                col_defs.append(f"{sd_col} INTEGER DEFAULT 0")
 
         # A COMPOSITE key is declared ONCE, at table level. Per-column inline
         # PRIMARY KEY (above) is suppressed when the key spans more than one

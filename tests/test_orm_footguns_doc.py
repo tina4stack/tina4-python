@@ -46,8 +46,11 @@ class ArticleGood(ORM):
 
 
 class ArticleBad(ORM):
-    # Soft-delete DONE WRONG: soft_delete=True but is_deleted is NOT declared.
-    # create_table() never injects it, so the column is absent.
+    # soft_delete=True but is_deleted is NOT declared. Since SOFTDEL-DEC-02
+    # create_table() INJECTS the is_deleted column for a soft-delete model, so
+    # this no-manual-column model gets a usable schema and the full soft-delete
+    # lifecycle works (the old footgun — a table with no is_deleted column — is
+    # closed).
     table_name = "articles_bad"
     soft_delete = True
     id = IntegerField(primary_key=True, auto_increment=True)
@@ -142,19 +145,23 @@ class TestDeleteRestoreRaise:
             u.restore()
 
 
-# ── Footgun: soft_delete WITHOUT is_deleted is broken; WITH it works ──
+# ── SOFTDEL-DEC-02: soft_delete WITHOUT a manual is_deleted now works too ──
 
 class TestSoftDeleteNeedsColumn:
-    def test_softdelete_without_is_deleted_column_fails(self, db):
-        """soft_delete=True but no is_deleted field: create_table() does NOT
-        inject the column, so the soft-delete read/write path breaks."""
+    def test_softdelete_without_is_deleted_column_is_injected(self, db):
+        """soft_delete=True with NO declared is_deleted: create_table() now
+        INJECTS the is_deleted column (SOFTDEL-DEC-02), so the soft-delete
+        read/write path works with no manual column declaration."""
         assert ArticleBad.create_table() is True
-        # Prove create_table() never added is_deleted.
+        # create_table() injected the flag column.
         cols = {c["name"] if isinstance(c, dict) else c for c in db.get_columns("articles_bad")}
-        assert "is_deleted" not in cols
-        # all() appends "WHERE is_deleted = 0 ..." -> no such column -> raises.
-        with pytest.raises(Exception):
-            ArticleBad.all()
+        assert "is_deleted" in cols
+        # The full lifecycle runs on the injected schema.
+        a = ArticleBad.create({"title": "Auto"})
+        assert len(ArticleBad.all()) == 1
+        a.delete()                                   # soft: sets is_deleted = 1
+        assert len(ArticleBad.all()) == 0            # excluded by default
+        assert len(ArticleBad.with_trashed()) == 1   # still present in the DB
 
     def test_softdelete_with_is_deleted_column_works(self, db):
         """Declare is_deleted = IntegerField(default=0) and the full soft-delete
