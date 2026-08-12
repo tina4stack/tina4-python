@@ -102,6 +102,23 @@ def camel_to_snake(name: str) -> str:
     return "".join(result)
 
 
+# REL-EAGER-UNBOUNDED: the eager loader builds one placeholder per parent PK in
+# the ``WHERE fk IN (...)`` list. Split the parent PKs into chunks of this size
+# so a very large parent set never yields an unbounded IN list (a query-size /
+# driver parameter-limit risk); each chunk is one query. It is comfortably under
+# SQLite's default 999-variable limit while leaving room for other bound params.
+_EAGER_IN_CHUNK = 500
+# Rows fetched per page when reading a relation's rows, so no relation is ever
+# silently truncated at a fixed cap.
+_EAGER_PAGE_SIZE = 1000
+
+
+def _chunk_list(seq: list, size: int):
+    """Yield successive ``size``-length slices of ``seq``."""
+    for start in range(0, len(seq), size):
+        yield seq[start:start + size]
+
+
 class ORMMeta(type):
     """Metaclass that collects Field definitions and relationship descriptors."""
 
@@ -1403,12 +1420,34 @@ class ORM(metaclass=ORMMeta):
                     continue
 
                 fk = descriptor.foreign_key or f"{cls.__name__.lower()}_id"
-                table = related_cls._get_table()
                 table_sql = related_cls._get_table_sql()
-                placeholders = ",".join("?" for _ in pk_values)
-                sql = f"SELECT * FROM {table_sql} WHERE {fk} IN ({placeholders})"
-                result = db.fetch(sql, pk_values, limit=len(pk_values) * 1000, offset=0)
-                related_records = [related_cls(row) for row in result.records]
+                # REL-SOFTDELETE-TRAVERSAL: a soft-deleted child must not surface
+                # through eager traversal either (parity with lazy + the finders).
+                soft = (
+                    f" AND {related_cls._soft_delete_filter()}"
+                    if getattr(related_cls, "soft_delete", False)
+                    else ""
+                )
+                order_col = related_cls.field_mapping.get(
+                    related_cls._get_pk(), related_cls._fields[related_cls._get_pk()].column
+                )
+                # REL-EAGER-UNBOUNDED: chunk the parent PKs so the IN list stays
+                # bounded, and page each chunk so no relation is truncated.
+                related_records = []
+                for chunk in _chunk_list(pk_values, _EAGER_IN_CHUNK):
+                    placeholders = ",".join("?" for _ in chunk)
+                    sql = (
+                        f"SELECT * FROM {table_sql} WHERE {fk} IN ({placeholders})"
+                        f"{soft} ORDER BY {order_col}"
+                    )
+                    offset = 0
+                    while True:
+                        result = db.fetch(sql, list(chunk), limit=_EAGER_PAGE_SIZE, offset=offset)
+                        batch = result.records
+                        related_records.extend(related_cls(row) for row in batch)
+                        if len(batch) < _EAGER_PAGE_SIZE:
+                            break
+                        offset += _EAGER_PAGE_SIZE
 
                 # Eager load nested relationships on related records
                 if nested:
@@ -1440,13 +1479,22 @@ class ORM(metaclass=ORMMeta):
                     continue
 
                 related_pk = related_cls._get_pk()
-                table = related_cls._get_table()
                 table_sql = related_cls._get_table_sql()
-                placeholders = ",".join("?" for _ in fk_values)
                 pk_col = related_cls.field_mapping.get(related_pk, related_cls._fields[related_pk].column)
-                sql = f"SELECT * FROM {table_sql} WHERE {pk_col} IN ({placeholders})"
-                result = db.fetch(sql, fk_values, limit=len(fk_values) * 10, offset=0)
-                related_records = [related_cls(row) for row in result.records]
+                # REL-SOFTDELETE-TRAVERSAL: a soft-deleted parent is excluded from
+                # belongs_to traversal too (parity with find_by_id).
+                soft = (
+                    f" AND {related_cls._soft_delete_filter()}"
+                    if getattr(related_cls, "soft_delete", False)
+                    else ""
+                )
+                # REL-EAGER-UNBOUNDED: chunk the FK values so the IN list stays bounded.
+                related_records = []
+                for chunk in _chunk_list(fk_values, _EAGER_IN_CHUNK):
+                    placeholders = ",".join("?" for _ in chunk)
+                    sql = f"SELECT * FROM {table_sql} WHERE {pk_col} IN ({placeholders}){soft}"
+                    result = db.fetch(sql, list(chunk), limit=len(chunk), offset=0)
+                    related_records.extend(related_cls(row) for row in result.records)
 
                 if nested:
                     related_cls._eager_load(related_records, nested)

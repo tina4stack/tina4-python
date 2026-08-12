@@ -372,11 +372,16 @@ class ForeignKeyField(Field):
     - ``belongs_to`` on the model that owns the FK
     - ``has_many``   on the referenced model
 
+    Relationships are READ-SIDE-ONLY (REL-DEC-01): declaring a ``ForeignKeyField``
+    wires up traversal accessors, but the framework emits NO DB-level
+    ``REFERENCES`` / ``ON DELETE`` clause. Referential integrity is the
+    migration/DDL's job (consistent with the no-foreign-key Firebird rule), so
+    deleting a parent does NOT cascade to children at the engine level — enforce
+    that with hand-written DDL if you need it.
+
     Args:
         to:           The referenced model class (or its name as a string for
                       forward references).  Required.
-        on_delete:    Cascade behaviour string ('CASCADE', 'SET NULL', etc.) —
-                      stored as metadata for DDL generation.
         related_name: Name for the ``has_many`` accessor on the referenced model.
                       Defaults to ``<owning_model_lower>s``
                       (e.g. Post → ``posts``).
@@ -396,10 +401,20 @@ class ForeignKeyField(Field):
             #   post.comments    → [Comment, ...]
     """
 
-    def __init__(self, to=None, on_delete: str = None, related_name: str = None, **kwargs):
+    def __init__(self, to=None, related_name: str = None, **kwargs):
+        # REL-DEC-01: relationships are READ-SIDE-ONLY. The framework emits no
+        # DB-level FK / ON DELETE clause, so the old ``on_delete=`` parameter
+        # silently did NOTHING (a phantom API). It is dropped: passing it now
+        # fails loudly instead of implying a cascade that never happens. Enforce
+        # referential integrity in your migration DDL instead.
+        if "on_delete" in kwargs:
+            raise ValueError(
+                "ForeignKeyField no longer accepts on_delete: Tina4 relationships "
+                "are read-side-only and emit no ON DELETE / REFERENCES clause. "
+                "Enforce referential integrity in your migration DDL instead."
+            )
         super().__init__(int, **kwargs)
         self.references = to            # model class or string name
-        self.on_delete = on_delete
         self.related_name = related_name
         self.kind = "ForeignKeyField"
 
@@ -411,6 +426,13 @@ BoolField = BooleanField
 
 
 # ── Relationship Descriptors ────────────────────────────────────
+
+# REL-EAGER-UNBOUNDED: lazy has_many pages through children in blocks of this
+# size so a parent with more than one page of children never loses the tail.
+# Before, the lazy load passed a silent ``limit=1000`` and truncated with no
+# signal; now it pages until a short block, so every child is reachable.
+_LAZY_PAGE_SIZE = 1000
+
 
 class RelationshipDescriptor:
     """Base descriptor for ORM relationships. Lazy-loads on first access."""
@@ -478,9 +500,28 @@ class HasManyDescriptor(RelationshipDescriptor):
         fk = self.foreign_key or f"{obj.__class__.__name__.lower()}_id"
         table = related_cls._get_table()
         db = obj._get_db()
-        sql = f"SELECT * FROM {table} WHERE {fk} = ?"
-        result = db.fetch(sql, [pk_value], limit=1000, offset=0)
-        return [related_cls(row) for row in result.records]
+        where = f"{fk} = ?"
+        # REL-SOFTDELETE-TRAVERSAL: a soft-deleted child must not surface through
+        # parent.children, consistent with the finders' default exclusion.
+        if getattr(related_cls, "soft_delete", False):
+            where += f" AND {related_cls._soft_delete_filter()}"
+        # Order by the child PK so OFFSET paging is stable across pages.
+        order_col = related_cls.field_mapping.get(
+            related_cls._get_pk(), related_cls._fields[related_cls._get_pk()].column
+        )
+        sql = f"SELECT * FROM {table} WHERE {where} ORDER BY {order_col}"
+        # REL-EAGER-UNBOUNDED: page through ALL children rather than silently
+        # truncating at a fixed cap.
+        records = []
+        offset = 0
+        while True:
+            result = db.fetch(sql, [pk_value], limit=_LAZY_PAGE_SIZE, offset=offset)
+            batch = result.records
+            records.extend(batch)
+            if len(batch) < _LAZY_PAGE_SIZE:
+                break
+            offset += _LAZY_PAGE_SIZE
+        return [related_cls(row) for row in records]
 
 
 class HasOneDescriptor(RelationshipDescriptor):
@@ -495,7 +536,11 @@ class HasOneDescriptor(RelationshipDescriptor):
         fk = self.foreign_key or f"{obj.__class__.__name__.lower()}_id"
         table = related_cls._get_table()
         db = obj._get_db()
-        sql = f"SELECT * FROM {table} WHERE {fk} = ? LIMIT 1"
+        sql = f"SELECT * FROM {table} WHERE {fk} = ?"
+        # REL-SOFTDELETE-TRAVERSAL: exclude a soft-deleted related row.
+        if getattr(related_cls, "soft_delete", False):
+            sql += f" AND {related_cls._soft_delete_filter()}"
+        sql += " LIMIT 1"
         row = db.fetch_one(sql, [pk_value])
         return related_cls(row) if row else None
 
