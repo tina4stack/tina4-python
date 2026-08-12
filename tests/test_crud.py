@@ -259,16 +259,16 @@ def test_create_inserts_row_and_returns_201_with_body(db):
     assert float(row["price"]) == 9.99
 
 
-def test_create_with_missing_required_field_returns_400_and_inserts_nothing(db):
-    """Validation fires before the driver: a missing required field yields 400
-    with the field error, and NO row is written."""
+def test_create_with_missing_required_field_returns_422_and_inserts_nothing(db):
+    """Validation fires before the driver: a missing required field yields 422
+    (CRUD-DEC-01 — was 400) with the field error, and NO row is written."""
     Widget = _make_widget_model()
     Widget.create_table()
     db.commit()
     AutoCrud.register(Widget)
 
     status, body = _invoke("POST", "/api/crud_widget", body={"price": 1.0})
-    assert status == 400
+    assert status == 422
     assert body["error"] == "Validation failed"
     assert any("name" in d for d in body["detail"])
 
