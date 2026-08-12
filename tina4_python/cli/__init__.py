@@ -862,14 +862,14 @@ def _migrate_status(args):
     if completed:
         print("\nCompleted migrations:")
         for m in completed:
-            print(f"  [batch {m['batch']}] {m['migration_id']}  ({m['executed_at']})")
+            print(f"  [batch {m['batch']}] {m['migration_name']}  ({m['executed_at']})")
     else:
         print("\nNo completed migrations.")
 
     if pending:
         print("\nPending migrations:")
         for m in pending:
-            print(f"  {m['migration_id']}  ({m['description']})")
+            print(f"  {m['migration_name']}  ({m['description']})")
     else:
         print("\nNo pending migrations.")
 
