@@ -167,6 +167,47 @@ class Field:
 
         return value
 
+    def validate_value(self, name: str, value) -> list[str]:
+        """Collect canonical constraint-violation messages for *value* (empty = valid).
+
+        Feature 19 (VALID-TWO-MESSAGES): this is the ENFORCEMENT surface that
+        ``ORM.validate()``/``save()`` use. It emits the SAME field-prefixed
+        wording as the request-body ``Validator`` -- "<field> is required",
+        "<field> must be at most N characters", "<field> does not match the
+        required format" -- so a client keying on a message matches either
+        validator. It never coerces and never raises: the coercion-oriented
+        :meth:`validate` above is the read-path type-normaliser and is unchanged.
+        """
+        errors: list[str] = []
+        blank = value is None or (isinstance(value, str) and value.strip() == "")
+        # required short-circuits -- no other rule adds signal on a missing value
+        # (parity with the request Validator's early continue and PHP/Ruby ORM).
+        if self.required and self.default is None and blank:
+            errors.append(f"{name} is required")
+            return errors
+        if value is None:
+            return errors
+
+        if isinstance(value, str):
+            if self.min_length is not None and len(value) < self.min_length:
+                errors.append(f"{name} must be at least {self.min_length} characters")
+            if self.max_length is not None and len(value) > self.max_length:
+                errors.append(f"{name} must be at most {self.max_length} characters")
+            if self.regex is not None and not self.regex.match(value):
+                errors.append(f"{name} does not match the required format")
+
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if self.min_value is not None and value < self.min_value:
+                errors.append(f"{name} must be at least {self.min_value}")
+            if self.max_value is not None and value > self.max_value:
+                errors.append(f"{name} must be at most {self.max_value}")
+
+        if self.choices is not None and value not in self.choices:
+            allowed_json = _json.dumps(self.choices, separators=(",", ":"))
+            errors.append(f"{name} must be one of {allowed_json}")
+
+        return errors
+
     def to_db(self, value):
         """Serialize an in-memory value to the form the driver should store.
 

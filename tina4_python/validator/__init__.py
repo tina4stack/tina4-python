@@ -19,6 +19,7 @@ Usage:
     if not validator.is_valid():
         return response.error("VALIDATION_FAILED", validator.errors()[0]["message"], 400)
 """
+import json
 import re
 
 
@@ -140,9 +141,14 @@ class Validator:
         if value is None:
             return self
         if value not in allowed:
+            # Canonical wording (VALID-TWO-MESSAGES): the allowed set is rendered
+            # as compact JSON so every framework prints the SAME list -- Node
+            # JSON.stringify, PHP json_encode, Ruby to_json and this all emit
+            # ["admin","user","guest"] (no spaces), never a language-specific repr.
+            allowed_json = json.dumps(allowed, separators=(",", ":"))
             self._errors.append({
                 "field": field,
-                "message": f"{field} must be one of {allowed}",
+                "message": f"{field} must be one of {allowed_json}",
             })
         return self
 

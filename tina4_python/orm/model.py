@@ -1438,14 +1438,18 @@ class ORM(metaclass=ORMMeta):
     # ── Validation ──────────────────────────────────────────────
 
     def validate(self) -> list[str]:
-        """Validate all fields. Returns list of error messages (empty = valid)."""
+        """Validate all fields. Returns list of error messages (empty = valid).
+
+        Feature 19: each message uses the canonical request-Validator vocabulary
+        ("<field> is required", "<field> must be at most N characters", ...) via
+        ``Field.validate_value`` so the ORM validator and the request-body
+        ``Validator`` speak ONE message language (VALID-TWO-MESSAGES). An invalid
+        model never reaches the driver -- ``save()`` enforces this list.
+        """
         errors = []
         for name, field in self._fields.items():
             value = getattr(self, name)
-            try:
-                field.validate(value)
-            except ValueError as e:
-                errors.append(str(e))
+            errors.extend(field.validate_value(name, value))
         return errors
 
     def get_error(self) -> str | None:
