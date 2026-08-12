@@ -87,14 +87,27 @@ class TestNoAutoTableCreate:
         assert u.get_error() is None
 
 
-# ── Footgun: constructor RAISES (the 500-vs-4xx trap) vs save() returns False ──
+# ── Feature 26 / LOAD-DEC-01: constructor hydrates, save() alone enforces ──
+#
+# Pre-3.13.99 the constructor validated on the READ path (_populate ->
+# field.validate()) and RAISED for a bad value — an unhandled 500 if it
+# wrapped request.body, AND a stored row that failed a (possibly later-
+# tightened) constraint aborted the whole select(). LOAD-DEC-01 fixed this:
+# _populate now calls field.coerce() (type coercion + JSON parse only), never
+# field.validate() (business constraints). The two tests below used to pin
+# the OLD raising behaviour; they now pin the FIXED, non-raising one. The
+# write-path gate is unchanged and still covered by
+# test_set_then_save_returns_false_recoverable below.
 
 class TestConstructorRaisesVsSaveReturnsFalse:
-    def test_construct_with_required_none_raises(self, db):
-        """Model({"required": None}) validates on the READ path (_populate) and
-        RAISES ValueError — an unhandled 500 if it wraps request.body."""
-        with pytest.raises(ValueError):
-            FUser({"name": None})
+    def test_construct_with_required_none_no_longer_raises(self, db):
+        """Model({"required": None}) hydrates through _populate -> field.coerce(),
+        which no longer re-enforces business constraints (LOAD-DEC-01, feature 26)
+        — it used to RAISE ValueError here (an unhandled 500 if it wrapped
+        request.body). save() is still the enforcement gate (see
+        test_set_then_save_returns_false_recoverable)."""
+        user = FUser({"name": None})
+        assert user.name is None
 
     def test_construct_non_dict_raises_typeerror(self, db):
         """A non-dict / non-JSON-string positional arg raises TypeError."""
@@ -108,11 +121,26 @@ class TestConstructorRaisesVsSaveReturnsFalse:
         assert FUser(None).name is None
         assert FUser().is_active is True             # default applied
 
-    def test_read_path_choices_constraint_raises_on_construct(self, db):
-        """Field constraints (choices/regex/length) validate on _populate too —
-        an out-of-choices value raises at construction, not at save()."""
-        with pytest.raises(ValueError):
-            FUser({"name": "Bob", "role": "superadmin"})   # not in choices
+    def test_read_path_choices_constraint_no_longer_raises_on_construct(self, db):
+        """Field constraints (choices/regex/length) are WRITE-path-only rules
+        now (LOAD-DEC-01, feature 26) — _populate uses field.coerce(), which
+        skips them, so an out-of-choices value hydrates instead of raising at
+        construction. save() still rejects it (see
+        test_read_path_choices_constraint_still_rejected_on_save)."""
+        user = FUser({"name": "Bob", "role": "superadmin"})   # not in choices
+        assert user.role == "superadmin"
+
+    def test_read_path_choices_constraint_still_rejected_on_save(self, db):
+        """The write-path gate is untouched by LOAD-DEC-01: ORM.validate()
+        (called by save()) still rejects an out-of-choices value — this is
+        the 'write path stays intact' half of the contract."""
+        FUser.create_table()
+        user = FUser({"name": "Bob"})
+        user.role = "superadmin"                      # raw setattr, not through Field
+        errors = user.validate()
+        assert any("role" in e for e in errors)
+        assert user.save() is False
+        assert "role" in user.get_error()
 
     def test_set_then_save_returns_false_recoverable(self, db):
         """The recoverable path: build valid, null the required field by

@@ -67,43 +67,31 @@ class Field:
             return d()
         return d
 
-    def validate(self, value):
-        """Validate and coerce value to the field type."""
-        if value is None:
-            if self.required and self.default is None:
-                raise ValueError(f"Field '{self.name}' is required")
-            return self._resolve_default()
+    def _coerce_type(self, value):
+        """Cast a non-None *value* to the field's declared Python type.
 
-        # v3.13.11 (issue #50): if the user stored a callable as the field
-        # value (e.g. ``default=lambda: datetime.now()`` reached us without
-        # being resolved on instance init), evaluate it now so the driver
-        # gets a real value, not the function object. Types are excluded —
-        # ``default=int`` is almost never intended to mean "call int()".
-        if callable(value) and not isinstance(value, type):
-            value = value()
-            if value is None:
-                return None
+        Drivers return values in different shapes per engine:
 
-        # Type coercion.
-        #
-        # `validate()` runs on BOTH the write path (user input from routes/forms)
-        # and the read path (rows coming back from the database driver). Drivers
-        # return values in different shapes per engine:
-        #
-        #   engine        datetime column     bool column    numeric column
-        #   --------      ----------------    -----------    --------------
-        #   SQLite        str                 int (0/1)      float / int
-        #   PostgreSQL    datetime            bool           Decimal
-        #   MySQL         datetime            int (0/1)      Decimal
-        #   MSSQL         datetime            bool           Decimal
-        #   Firebird      datetime            int (0/1)      Decimal
-        #
-        # So the rule is: if the driver already handed us the right type,
-        # accept it as-is. Otherwise coerce. This avoids the classic crash
-        # `datetime(datetime_instance)` that hit every PostgreSQL ORM read.
-        #
-        # Care is needed around `bool` being a subclass of `int` in Python —
-        # we handle those two paths explicitly before the generic fast path.
+          engine        datetime column     bool column    numeric column
+          --------      ----------------    -----------    --------------
+          SQLite        str                 int (0/1)      float / int
+          PostgreSQL    datetime            bool           Decimal
+          MySQL         datetime            int (0/1)      Decimal
+          MSSQL         datetime            bool           Decimal
+          Firebird      datetime            int (0/1)      Decimal
+
+        So the rule is: if the driver already handed us the right type,
+        accept it as-is. Otherwise coerce. This avoids the classic crash
+        `datetime(datetime_instance)` that hit every PostgreSQL ORM read.
+
+        Care is needed around `bool` being a subclass of `int` in Python —
+        we handle those two paths explicitly before the generic fast path.
+
+        Shared by :meth:`validate` (write path) and :meth:`coerce` (read
+        path) — the SAME type coercion applies to both; only business-rule
+        enforcement (required/length/range/regex/choices/custom validator)
+        differs between them (LOAD-DEC-01).
+        """
         try:
             # BooleanField receiving an int (e.g. SQLite 0/1) → cast to bool
             if self.field_type is bool and isinstance(value, int) and not isinstance(value, bool):
@@ -125,6 +113,58 @@ class Field:
             raise ValueError(
                 f"Field '{self.name}': cannot convert {value!r} to {self.field_type.__name__}"
             ) from e
+        return value
+
+    def coerce(self, value):
+        """Type-coerce *value* for HYDRATION (the read path) — LOAD-DEC-01.
+
+        Runs the same type coercion as :meth:`validate` (str -> datetime,
+        int -> bool, JSON parse via subclass overrides, ...) but never
+        re-enforces business constraints: required/length/range/regex/
+        choices/a custom validator. Those are write-path rules (feature 19);
+        re-running them on every read meant a stored row that violated a
+        constraint — or one TIGHTENED after the row was written — raised out
+        of ``cls(row)`` and aborted the entire ``select()``, not just the
+        offending row. A finder must always be able to read what a previous,
+        looser write already persisted.
+        """
+        if value is None:
+            return self._resolve_default()
+
+        if callable(value) and not isinstance(value, type):
+            value = value()
+            if value is None:
+                return None
+
+        return self._coerce_type(value)
+
+    def validate(self, value):
+        """Validate and coerce value to the field type — the WRITE path.
+
+        Re-enforces every business constraint (required/length/range/regex/
+        choices/custom validator) in addition to type coercion. Used by
+        ``save()`` (via :meth:`validate_value`'s sibling enforcement) and by
+        any caller assigning a NEW value to a field (e.g. AutoCrud's PUT
+        handler). For hydrating a row already in the database, use
+        :meth:`coerce` instead (LOAD-DEC-01) — re-validating on every read is
+        what made a stored row unreadable the moment a constraint tightened.
+        """
+        if value is None:
+            if self.required and self.default is None:
+                raise ValueError(f"Field '{self.name}' is required")
+            return self._resolve_default()
+
+        # v3.13.11 (issue #50): if the user stored a callable as the field
+        # value (e.g. ``default=lambda: datetime.now()`` reached us without
+        # being resolved on instance init), evaluate it now so the driver
+        # gets a real value, not the function object. Types are excluded —
+        # ``default=int`` is almost never intended to mean "call int()".
+        if callable(value) and not isinstance(value, type):
+            value = value()
+            if value is None:
+                return None
+
+        value = self._coerce_type(value)
 
         # String length constraints
         if isinstance(value, str):
@@ -328,15 +368,12 @@ class JSONField(Field):
         d = super()._resolve_default()
         return _copy.deepcopy(d) if isinstance(d, (dict, list)) else d
 
-    def validate(self, value):
-        # None -> required check + default (mirrors base Field).
-        if value is None:
-            if self.required and self.default is None:
-                raise ValueError(f"Field '{self.name}' is required")
-            return self._resolve_default()
-
-        # A driver returns a JSON string (SQLite/TEXT) or an already-parsed
-        # dict/list (PostgreSQL JSONB, MySQL JSON). Normalize to a Python object.
+    def _parse_json(self, value):
+        """Normalize a driver JSON string/bytes (or an already-parsed
+        dict/list from a native-JSON engine) to a Python object. Shared by
+        :meth:`coerce` (read path) and :meth:`validate` (write path) —
+        JSON parsing is type coercion, not a business constraint, so it runs
+        on BOTH paths (LOAD-DEC-01/LOAD-JSON-ONLY)."""
         if isinstance(value, (bytes, bytearray)):
             value = value.decode("utf-8")
         if isinstance(value, str):
@@ -348,6 +385,26 @@ class JSONField(Field):
             raise ValueError(
                 f"Field '{self.name}': expected a dict or list, got {type(value).__name__}"
             )
+        return value
+
+    def coerce(self, value):
+        """Read-path hydration (LOAD-DEC-01): parse JSON, skip the custom
+        validator and the required check — a stored row must still hydrate
+        even if a constraint was tightened after it was written."""
+        if value is None:
+            return self._resolve_default()
+        return self._parse_json(value)
+
+    def validate(self, value):
+        # None -> required check + default (mirrors base Field).
+        if value is None:
+            if self.required and self.default is None:
+                raise ValueError(f"Field '{self.name}' is required")
+            return self._resolve_default()
+
+        # A driver returns a JSON string (SQLite/TEXT) or an already-parsed
+        # dict/list (PostgreSQL JSONB, MySQL JSON). Normalize to a Python object.
+        value = self._parse_json(value)
         if self.validator is not None:
             self.validator(value)
         return value

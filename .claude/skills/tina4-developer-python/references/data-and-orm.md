@@ -453,32 +453,6 @@ User({"name": "Alice"}).save()
   silently and no row lands. Note `create_table()` builds DDL from **declared fields
   only** (it injects nothing — see soft-delete's `is_deleted`). `model.py:786`.
 
-### Constructing a model from untrusted input can 500 — the read-path validation trap
-
-The **constructor validates on the read path** (`__init__` → `_populate` →
-`field.validate`, `model.py:230`), and that validation **raises** — the opposite of
-`save()`. `Model({"field": <bad value>})` raises `ValueError` (required field set to
-`None`, a `choices`/`regex`/length violation, an un-coercible type); a non-dict,
-non-JSON-string positional arg raises `TypeError` (`model.py:203`). So building a model
-straight from `request.body` turns a *client* mistake into an **unhandled 500** instead
-of a 4xx.
-
-```python
-# SAFE — build empty, assign, then save() (which returns False, not raises)
-user = User()
-user.name = request.body.get("name")
-user.email = request.body.get("email")
-if not user.save():                       # bad input -> False -> return 422 yourself
-    return response({"error": user.get_error()}, 422)
-
-# ...or wrap the construct in try/except and map ValueError/TypeError -> 4xx.
-```
-
-* **Breaks:** `User(request.body)` on untrusted input — a missing required field or a
-  bad enum value raises out of the constructor and the request 500s.
-  `Model(None)` and `Model()` are **safe** (defaults only, no raise); only a dict/arg
-  carrying a *bad value* raises.
-
 ### `delete()` / `restore()` DO raise — the asymmetry
 
 Unlike `save()`, the delete family fails **loud**: `delete()` / `force_delete()` raise
@@ -496,17 +470,44 @@ if user:
 * **Breaks:** `Model(...).delete()` on an unsaved instance (`id is None`) → `ValueError`,
   not `False`. `model.py:453` (`delete`), `:497` (`restore`), `:477` (`force_delete`).
 
-### Field constraints validate on the READ path too
+### Hydration coerces types but never re-enforces business constraints
 
-`field.validate()` runs when **hydrating rows from the database**, not just on input
-(every `find`/`all`/`where`/`select` builds instances via `cls(row)` → `_populate` →
-`validate`). A row already in the table that violates a current constraint
-(`max_length`, `choices`, an un-parseable `JSONField`, a bad datetime) **raises on
-read**. Tightening a constraint can therefore break reads of existing data.
+Every read path — `find`/`all`/`where`/`select`/`load()`, and building a model
+directly from a dict/JSON string (`__init__` → `_populate`, `model.py:286`) — calls
+`field.coerce()` (`fields.py`), NOT `field.validate()`. `coerce()` runs the SAME type
+coercion as the write path (a string → `datetime`, `int` 0/1 → `bool`, a JSON
+string/bytes → a native `dict`/`list`) but never re-enforces `required`/`length`/
+`range`/`regex`/`choices`/a custom validator — those are write-path-only rules
+(feature 19, `ORM.validate()` → `field.validate_value()`, called by `save()`). A row
+already in the table always hydrates, even if it violates a constraint, or one was
+TIGHTENED after the row was written — a single non-conforming row (or cell) no longer
+aborts the whole `select()`.
 
-* **Breaks:** adding `choices=[...]` / a shorter `max_length` to a field with rows that
-  don't satisfy it — the next query that loads those rows raises `ValueError`.
-  `fields.py:70`.
+```python
+# A stored row that no longer satisfies `role`'s choices still hydrates — it does
+# NOT raise and does NOT abort the surrounding select().
+user = User.find(42)          # role="superadmin", but choices=["admin","user"] now
+user.role                     # "superadmin" — read back as-is, no raise
+
+# Building straight from untrusted input is likewise safe — it no longer turns a
+# bad request body into an unhandled 500 (the old constructor-vs-save() asymmetry
+# this section used to document is gone: both paths are now non-raising for a
+# constraint violation).
+user = User(request.body)     # a missing required field / bad choice does NOT raise
+if not user.save():           # the WRITE-path gate (ORM.validate()) still rejects it
+    return response({"error": user.get_error()}, 422)
+```
+
+* **What still raises:** a genuinely un-coercible type — `IntegerField` handed
+  `"not_a_number"`, a `JSONField` handed unparsable JSON text — still raises
+  `ValueError` (that's type coercion failing, not a business rule). A non-dict,
+  non-JSON-string positional arg to the constructor still raises `TypeError`
+  (`model.py:256`).
+* **What changed:** `save()` remains the ONLY place `required`/`length`/`range`/
+  `regex`/`choices` are enforced — hydration and plain construction never enforce
+  them. `Model(None)` / `Model()` were always safe (defaults only); now a dict/JSON
+  carrying a *bad value* is safe too — only a value that cannot be TYPE-coerced still
+  raises.
 
 ### Bind a database before any ORM or QueryBuilder call
 

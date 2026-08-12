@@ -284,10 +284,16 @@ class ORM(metaclass=ORMMeta):
         object.__setattr__(self, name, value)
 
     def _populate(self, data: dict):
-        """Set field values from a dict.
+        """Set field values from a dict — the READ/hydration path.
 
         Applies reverse field_mapping so DB column names are converted
-        to Python attribute names before assignment.
+        to Python attribute names before assignment. Uses ``field.coerce()``
+        (type coercion + JSON parse only), NOT ``field.validate()`` — a row
+        already persisted must always hydrate, even if it violates a
+        business constraint (required/length/range/regex/choices) or one
+        was tightened after the row was written (LOAD-PY-REVALIDATE /
+        LOAD-DEC-01). Business-constraint enforcement stays on the write
+        path (``ORM.validate()`` / ``save()``, feature 19) — unaffected.
         """
         # Build reverse mapping: db_column -> python_attribute
         reverse = {v: k for k, v in self.field_mapping.items()} if self.field_mapping else {}
@@ -297,7 +303,7 @@ class ORM(metaclass=ORMMeta):
             attr = reverse.get(key, key)
             if attr in self._fields:
                 field = self._fields[attr]
-                setattr(self, attr, field.validate(value))
+                setattr(self, attr, field.coerce(value))
             else:
                 # Allow extra attributes (from joined queries, etc.)
                 setattr(self, attr, value)
