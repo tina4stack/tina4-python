@@ -10,12 +10,40 @@ SQL-first: you write the queries, ORM maps and manages the data.
         email = Field(str)
 """
 from __future__ import annotations
+import re
 from typing import TYPE_CHECKING, Self
 from tina4_python.orm.fields import Field, RelationshipDescriptor
 from tina4_python.core.cache import Cache
 
-# Module-level query cache — shared across all ORM models
+# Module-level query cache — shared across ALL ORM models, so a write on one
+# model busts a cross-table query cached on another (CACHE-DEC-01).
 _query_cache = Cache(default_ttl=0, max_size=500)
+
+# Identifier after a FROM / JOIN keyword (optionally schema-qualified and quoted).
+# Used to tag a cached query by every table it touches so a write to any of them
+# busts it (CACHE-DEC-01). An alias after the table name is deliberately ignored.
+_CACHE_TABLE_RE = re.compile(
+    r'\b(?:FROM|JOIN)\s+([`"\[]?[A-Za-z_][\w$]*[`"\]]?(?:\.[`"\[]?[A-Za-z_][\w$]*[`"\]]?)?)',
+    re.IGNORECASE,
+)
+
+
+def _tables_in_sql(sql: str) -> set[str]:
+    """Table names a query reads FROM / JOINs — lowercased, schema-stripped.
+
+    Best-effort: for each FROM/JOIN keyword it takes the following identifier,
+    drops any quoting (backticks, double quotes, square brackets) and schema
+    prefix (public.users -> users), and ignores the alias. A cached query is
+    tagged with these tables so a write to any one of them invalidates it.
+    """
+    tables: set[str] = set()
+    for match in _CACHE_TABLE_RE.finditer(sql or ""):
+        name = match.group(1).strip('`"[]')
+        if "." in name:
+            name = name.rsplit(".", 1)[-1].strip('`"[]')
+        if name:
+            tables.add(name.lower())
+    return tables
 
 # Global database reference — set via bind_database()
 _database = None
@@ -624,6 +652,8 @@ class ORM(metaclass=ORMMeta):
         except Exception:
             db.rollback()
             raise
+        # Bust cached reads of any table this write touched (CACHE-DEC-01).
+        self.clear_cache()
         return True
 
     def force_delete(self) -> bool:
@@ -646,6 +676,8 @@ class ORM(metaclass=ORMMeta):
         except Exception:
             db.rollback()
             raise
+        # Bust cached reads of any table this write touched (CACHE-DEC-01).
+        self.clear_cache()
         return True
 
     def restore(self) -> bool:
@@ -669,6 +701,8 @@ class ORM(metaclass=ORMMeta):
         except Exception:
             db.rollback()
             raise
+        # Bust cached reads of any table this write touched (CACHE-DEC-01).
+        self.clear_cache()
         return True
 
     # ── Finders ─────────────────────────────────────────────────
@@ -1142,22 +1176,49 @@ class ORM(metaclass=ORMMeta):
     # ── Cached Queries ────────────────────────────────────────
 
     @classmethod
+    def _cache_tags(cls, sql: str = None) -> list[str]:
+        """Every table a cached query touches: this model's table plus every
+        FROM/JOIN table in ``sql`` (see :func:`_tables_in_sql`). A write to any
+        of these busts the entry, so a cross-table JOIN cached here is
+        invalidated when the OTHER table's model writes (CACHE-DEC-01)."""
+        tags = {cls._get_table().lower()}
+        tags |= _tables_in_sql(sql)
+        return list(tags)
+
+    @classmethod
     def cached(cls, sql: str, params: list = None, ttl: int = 60,
                limit: int = 100, offset: int = 0, include: list = None) -> list[Self]:
-        """SQL query with result caching. Returns array of ORM objects."""
+        """SQL query with result caching. Returns array of ORM objects.
+
+        Invalidation (CACHE-DEC-01): the entry is tagged by every table the query
+        touches (this model's table plus any FROM/JOIN tables), so a write through
+        the ORM (save/delete/force_delete/restore) to ANY of those tables busts
+        it. ``ttl <= 0`` means NO-CACHE — the query runs and the rows are returned
+        but nothing is stored, so every read hits the database (it is NOT an
+        infinite-lived entry)."""
+        # ttl <= 0 is NO-CACHE: run it live, store nothing, read nothing.
+        if ttl <= 0:
+            return cls.select(sql, params, limit=limit, offset=offset, include=include)
+
         cache_key = f"{cls.__name__}:{Cache.query_key(sql, params)}:{limit}:{offset}"
         cached = _query_cache.get(cache_key)
         if cached is not None:
             return cached
 
         result = cls.select(sql, params, limit=limit, offset=offset, include=include)
-        _query_cache.set(cache_key, result, ttl=ttl, tags=[cls.__name__])
+        _query_cache.set(cache_key, result, ttl=ttl, tags=cls._cache_tags(sql))
         return result
 
     @classmethod
     def clear_cache(cls) -> None:
-        """Clear all cached query results for this model."""
-        _query_cache.clear_tag(cls.__name__)
+        """Invalidate every cached query that touches this model's table.
+
+        Tag-scoped, NOT a wholesale flush: a cached JOIN on another model that
+        reads this table is busted too (it carries this table's tag), while a
+        query that never touches this table is left intact. Called after every
+        ORM write (save/delete/force_delete/restore) so a read-after-write never
+        serves a stale/deleted row (CACHE-DEC-01)."""
+        _query_cache.clear_tag(cls._get_table().lower())
 
     @classmethod
     def clear_rel_cache(cls) -> None:
