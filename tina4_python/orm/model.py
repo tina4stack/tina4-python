@@ -1358,17 +1358,43 @@ class ORM(metaclass=ORMMeta):
         row = self._get_db().fetch_one(sql, [pk_value])
         return related_class(row) if row else None
 
-    def has_many(self, related_class, foreign_key: str = None, limit: int = 100, offset: int = 0) -> list[Self]:
-        """Load multiple related records (imperative style)."""
+    def has_many(self, related_class, foreign_key: str = None, limit: int = None, offset: int = 0) -> list[Self]:
+        """Load multiple related records (imperative style).
+
+        IMPREL-PY-CAP: with no explicit ``limit`` this returns the WHOLE set,
+        paging in blocks exactly like the lazy descriptor (feature 21) instead of
+        the old silent 100-row cap -- so the same relationship yields the same
+        row count whether accessed imperatively or lazily. An explicit ``limit``
+        still pages (explicit, never silent).
+        """
+        from tina4_python.orm.fields import _LAZY_PAGE_SIZE
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         fk = foreign_key or f"{self.__class__.__name__.lower()}_id"
-        table = related_class._get_table()
         table_sql = related_class._get_table_sql()
+        # Order by the child PK so OFFSET paging is stable across pages (parity
+        # with the lazy descriptor's SQL).
+        order_col = related_class.field_mapping.get(
+            related_class._get_pk(), related_class._fields[related_class._get_pk()].column
+        )
+        sql = f"SELECT * FROM {table_sql} WHERE {fk} = ? ORDER BY {order_col}"
+        db = self._get_db()
 
-        sql = f"SELECT * FROM {table_sql} WHERE {fk} = ?"
-        result = self._get_db().fetch(sql, [pk_value], limit=limit, offset=offset)
-        return [related_class(row) for row in result.records]
+        if limit is not None:
+            result = db.fetch(sql, [pk_value], limit=limit, offset=offset)
+            return [related_class(row) for row in result.records]
+
+        # No explicit limit -> page through ALL rows (uncapped, parity with lazy).
+        records = []
+        page_offset = offset
+        while True:
+            result = db.fetch(sql, [pk_value], limit=_LAZY_PAGE_SIZE, offset=page_offset)
+            batch = result.records
+            records.extend(batch)
+            if len(batch) < _LAZY_PAGE_SIZE:
+                break
+            page_offset += _LAZY_PAGE_SIZE
+        return [related_class(row) for row in records]
 
     def belongs_to(self, related_class, foreign_key: str = None) -> Self | None:
         """Load the parent record (imperative style)."""
