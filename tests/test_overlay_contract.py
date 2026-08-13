@@ -58,6 +58,12 @@ AUTH_SECRET = "sekret-auth-71c2"
 COOKIE_SECRET = "sekret-cookie-4d8e"
 PASSWORD_SECRET = "hunter2-9a1f"
 
+# Same reasoning for the self-throw-guard case (test 4 below): a named constant
+# kept away from any test body, so it can never coincide with a legitimate
+# source-context panel — the exact failure mode this marker replaces (see
+# _UnrenderablePoison and test_a_throwing_overlay_render_still_returns_a_safe_500).
+POISON_MARKER = "POISON-MARKER-overlay-self-throw-6c2f"
+
 
 def _secret_request():
     """Build the (scope, body) carrying a bearer token, a session cookie and a
@@ -194,27 +200,37 @@ class _UnrenderablePoison:
     really fails on this genuinely-unrenderable input."""
 
     def __str__(self):
-        raise RuntimeError("poison __str__ exploded")
+        raise RuntimeError(POISON_MARKER)
 
     __repr__ = __str__
 
 
 def test_a_throwing_overlay_render_still_returns_a_safe_500(monkeypatch):
-    """Dev mode: the handler leaves an unrenderable value on the request, so the
-    overlay render raises. The dispatch guard must still return a safe 500 (no
-    exception propagates, no detail leaks). Removing the guard makes server.handle
-    RAISE instead of returning a 500."""
+    """Dev mode: the handler enriches ``request.params`` with an unrenderable value.
+    ``params`` is router-attached and stays mutable under REQ-IMMUTABILITY-DIVERGE
+    (only the wire-derived fields — ``body`` among them — are frozen once built), so
+    this assignment succeeds and the handler's own exception reaches the overlay.
+    Rendering the Request Details panel then calls ``str()`` on the poison value and
+    raises. The dispatch guard must still return a safe 500 (no exception
+    propagates, no detail leaks). Removing the guard makes server.handle RAISE
+    instead of returning a 500.
+
+    (Injecting via ``request.body`` here would raise at the ASSIGNMENT itself —
+    REQ-IMMUTABILITY-DIVERGE — before the handler's intended ``raise``, which is a
+    different, already-covered failure mode, not the overlay self-throw this test
+    targets.)
+    """
     monkeypatch.setenv("TINA4_DEBUG", "true")
 
     @route_get("/overlay-poison")
     async def _boom(request, response):
-        request.body = {"note": _UnrenderablePoison()}
+        request.params["poison"] = _UnrenderablePoison()
         raise RuntimeError("handler boom marker")
 
     response = _dispatch(_scope(path="/overlay-poison"))
     body = (response.content or b"").decode("utf-8", "replace")
 
     assert response.status_code == 500, "dispatch must still serve a 500 when the overlay throws"
-    assert "poison __str__ exploded" not in body
+    assert POISON_MARKER not in body
     assert "handler boom marker" not in body
     assert "Traceback" not in body
