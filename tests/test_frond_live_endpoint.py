@@ -12,7 +12,20 @@ from tina4_python.frond import Frond, live_source, live_endpoint
 
 
 def _register_route_module():
-    import tina4_python.core.server  # noqa: F401  (registers /__frond/live/{name} at import)
+    # A plain `import` is a cached no-op once tina4_python.core.server has
+    # been imported anywhere in the process — and by the time this test runs
+    # in the FULL suite, dozens of other files already called Router.clear()
+    # to isolate their own route registrations (isolation/state-leak: the
+    # framework's own built-in routes, like this one, never get restored
+    # afterward). importlib.reload() re-runs the module body for real, which
+    # re-executes `Router.add("GET", "/__frond/live/{name}", ...)` — safe,
+    # because Router.add has replace semantics for an identical (method, path)
+    # pair (see its docstring), so this never creates a duplicate. Same idiom
+    # already used by TestHealthPath.test_default_health_path_registered in
+    # tests/test_env_vars.py for the identical hazard.
+    import importlib
+    import tina4_python.core.server as srv
+    importlib.reload(srv)
 
 
 def _fresh():

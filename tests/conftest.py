@@ -107,6 +107,29 @@ def pytest_runtest_makereport(item, call):
         )
 
 
+# ── Log state isolation (every test gets a clean, unconfigured logger) ────
+#
+# tina4_python.debug.Log is a process-wide singleton: Log.configure() sets ONE
+# class-level _snapshot object, and it stays whatever the last caller in the
+# SAME pytest process left it as -- Log.reset() is the only thing that clears
+# it. A per-FILE gate only ever runs its own tests, so a test that calls
+# Log.configure(level="error"/"warning") and never restores it is invisible
+# there; in the FULL suite, whatever test happens to run next inherits that
+# leftover level/format/output and can fail for a reason that has nothing to
+# do with its own assertions -- a shared-state leak, not a real regression in
+# whatever test trips over it. Resetting before AND after every test (the same
+# pattern test_log_contract.py / test_logger_fixture_contract.py already use
+# locally) makes each test's Log configuration self-contained: the next use
+# anywhere just resolves a fresh snapshot from whatever the environment says
+# at that moment, exactly like a freshly-imported process would see.
+@pytest.fixture(autouse=True)
+def _tina4_log_state_isolation():
+    from tina4_python.debug import Log
+    Log.reset()
+    yield
+    Log.reset()
+
+
 # ── Real child-server boot (shared by every test that spawns one) ─────────
 #
 # Four test files each carried their own copy of this, and each copy had the
