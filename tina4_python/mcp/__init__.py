@@ -566,7 +566,16 @@ def _get_default_server() -> McpServer:
     """
     global _default_server
     if _default_server is None:
-        _default_server = McpServer("/__dev/mcp", name="Tina4 Dev Tools")
+        # VERSION-DEC-01 (feature 130): the built-in dev server's serverInfo
+        # must report the SAME version every other surface does (health,
+        # banner, dashboard), not the constructor's generic "1.0.0" default --
+        # found by direct verification against this live source, not assumed
+        # correct from the "Python is the reference" default. A user's OWN
+        # custom McpServer(path, name=...) (no version= kwarg) is unaffected --
+        # that default stays "1.0.0" for app authors who have not set their
+        # own tool-server version.
+        from tina4_python import __version__
+        _default_server = McpServer("/__dev/mcp", name="Tina4 Dev Tools", version=__version__)
         try:
             from .tools import register_dev_tools
             register_dev_tools(_default_server)
