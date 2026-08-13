@@ -334,9 +334,9 @@ class Router:
 
             Router.get("/api/data", handler).secure().cache()
         """
-        # Apply group prefix
+        # Apply group prefix — normalized per RG-DEC-01 (PHP's grammar).
         if cls._group_prefix:
-            path = cls._group_prefix + path
+            path = _join_group_path(cls._group_prefix, path)
 
         # Merge group middleware with route-level middleware and handler-level middleware
         handler_mw = getattr(handler, "_middleware", [])
@@ -559,6 +559,27 @@ _TYPE_CASTS = {
     "float":   float,
     "number":  float,
 }
+
+
+_SLASH_RUN = re.compile(r"/+")
+
+
+def _join_group_path(prefix: str, path: str) -> str:
+    """Join a route-group prefix with a route's own path.
+
+    Feature 32 (RG-DEC-01): ports PHP's normalization grammar verbatim
+    (``Tina4/Router.php`` ``addRoute`` — the reference) so Python converges
+    with PHP/Ruby/Node instead of bare-concatenating. One separator between
+    prefix and path, a single leading slash, no trailing slash, and any run
+    of slashes collapsed to one — so ``group("/api")`` + ``get("users")``,
+    ``get("/users")``, and ``group("/api/")`` + ``get("/users")`` all resolve
+    to the SAME ``/api/users``. Before this fix, ``path = cls._group_prefix +
+    path`` bare-concatenated, so ``group("/api")`` + ``get("users")`` silently
+    mis-registered at ``/apiusers``.
+    """
+    full = prefix + "/" + path.lstrip("/")
+    full = "/" + full.strip("/")
+    return _SLASH_RUN.sub("/", full)
 
 
 def _cast_param(value: str, type_hint: str | None):
