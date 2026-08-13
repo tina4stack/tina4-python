@@ -899,16 +899,16 @@ def test_forked_child_discards_inherited_logger_state(tmp_path):
 
 
 def test_inaccessible_selected_sink_fails_configuration(tmp_path):
+    # Parent is a FILE, so creating a sink dir under it is ENOTDIR -- a hard
+    # failure even for root. A chmod 0o500 dir is bypassed by root's
+    # CAP_DAC_OVERRIDE, so the lab (which runs the suite as root) must not
+    # depend on it, or the sink would succeed and this negative would not fire.
     unwritable = tmp_path / "unwritable"
-    unwritable.mkdir()
-    os.chmod(unwritable, 0o500)  # read+execute, no write
-    try:
-        with pytest.raises(LogConfigurationError) as exc:
-            Log.configure(output="file", log_dir=str(unwritable / "nested"))
-        assert exc.value.operation == "open"
-        assert exc.value.sink is not None
-    finally:
-        os.chmod(unwritable, 0o700)
+    unwritable.write_text("")  # a regular file, not a directory
+    with pytest.raises(LogConfigurationError) as exc:
+        Log.configure(output="file", log_dir=str(unwritable / "nested"))
+    assert exc.value.operation == "open"
+    assert exc.value.sink is not None
 
 
 def test_non_strict_write_failure_disables_sink_and_diagnoses_once(tmp_path, capsys):
