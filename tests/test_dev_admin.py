@@ -771,3 +771,36 @@ class TestSQLiteLimitDedup:
         result = db.fetch("SELECT * FROM items")
         assert len(result.records) == 30  # 30 items, all returned (under 100 limit)
         db.close()
+
+
+class TestGroundingSnapshot:
+    """FREE-TOKEN trial: _grounding_snapshot reports which credential the coder
+    uses so the panel can nudge unregistered users to sign up. Real env/.env —
+    no mocks (monkeypatch sets real process env + a real cwd)."""
+
+    def test_free_when_no_personal_token(self, monkeypatch, tmp_path):
+        from tina4_python.dev_admin import _grounding_snapshot
+        monkeypatch.chdir(tmp_path)  # empty dir → no .env token
+        monkeypatch.delenv("TINA4_MCP_TOKEN", raising=False)
+        snap = _grounding_snapshot()
+        assert snap["source"] == "free"
+        assert snap["configured"] is False
+        assert snap["last4"] == ""
+
+    def test_personal_when_token_in_env(self, monkeypatch, tmp_path):
+        from tina4_python.dev_admin import _grounding_snapshot
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("TINA4_MCP_TOKEN", "t4_my_own_1234")
+        snap = _grounding_snapshot()
+        assert snap["source"] == "personal"
+        assert snap["configured"] is True
+        assert snap["last4"] == "1234"
+
+    def test_personal_from_env_file(self, monkeypatch, tmp_path):
+        from tina4_python.dev_admin import _grounding_snapshot
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("TINA4_MCP_TOKEN", raising=False)
+        (tmp_path / ".env").write_text("TINA4_MCP_TOKEN=t4_from_file_9xyz\n")
+        snap = _grounding_snapshot()
+        assert snap["source"] == "personal"
+        assert snap["last4"] == "9xyz"

@@ -3592,8 +3592,15 @@ def _upsert_env_var(key: str, value: str) -> None:
 def _grounding_snapshot() -> dict:
     token = _resolve_env("TINA4_MCP_TOKEN", "")
     url = _resolve_env("TINA4_MCP_URL", "") or _MCP_DEFAULT_URL
+    # source: the developer's own token → "personal"; otherwise the coder runs
+    # on the shared FREE-TOKEN trial the Rust agent falls back to → "free",
+    # which drives the panel's "register for your own" nudge. (Disabling the
+    # free rung is an agent-side concern; the panel always advertises the trial
+    # when no personal token is set.)
+    source = "personal" if token else "free"
     return {
         "configured": bool(token),
+        "source": source,
         "last4": token[-4:] if token else "",
         "url": url,
     }
