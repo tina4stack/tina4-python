@@ -103,6 +103,77 @@ class _LoopContext(dict):
 # found unsupported, use the interpreter) in Frond._compiled_fn.
 _COMPILE_UNSET = object()
 
+# Hard cap on the TEMPLATE caches -- _compiled, _compiled_strings and
+# _compiled_fn (ADR-0004, parity with PHP/Ruby/Node TEMPLATE_CACHE_MAX) --
+# and on _fragment_cache (the {% cache %} tag's runtime store: a rendered
+# fragment is a whole HTML string, the same order of magnitude as a compiled
+# template, not a small per-expression descriptor).
+#
+# An entry here is a token list plus an AST plus (for _compiled_fn) an eval'd
+# render closure, orders of magnitude bigger than one expression descriptor,
+# so the cap sits well below MEMO_CACHE_MAX. 256 is far above any real
+# application's template count, so a normal app never evicts. The cap exists
+# for the workloads that genuinely grow without limit for the life of a
+# worker: render_string() keys on md5(source), so an app that builds template
+# strings dynamically adds an entry per distinct string; in dev the
+# compiled-fn key is 'dev:' + md5(source), so every edit to a template file
+# adds one; and a fragment cache keyed on a dynamic value (a page id, a user
+# id) adds one entry per distinct key.
+TEMPLATE_CACHE_MAX = 256
+
+# Hard cap on every per-expression memo cache that is NOT already bounded by
+# a module-level ``@lru_cache(maxsize=1024)`` (ADR-0004). ``_split_dotted``,
+# ``_has_low_precedence_op``, ``_expr_descriptor`` and ``_split_on_pipe`` are
+# pure functions and already use that decorator directly; ``_filter_chain_cache``
+# is an INSTANCE dict (its callers are bound methods, and lru_cache on a bound
+# method pins ``self`` alive forever, so it cannot use the decorator) and was
+# left as a plain unbounded dict. Same number as the decorator's cap, applied
+# via the manual helper below -- not a new number, the SAME one this file
+# already uses four times over. Mirrors PHP's MEMO_CACHE_MAX and Ruby's
+# MEMO_CACHE_MAX.
+MEMO_CACHE_MAX = 1024
+
+
+def _cap_cache(cache: dict, max_entries: int) -> None:
+    """Keep a memo cache bounded. Call immediately before inserting a new entry.
+
+    Eviction is insertion-ordered (oldest first), not true LRU: a Python dict
+    (3.7+) preserves insertion order, so dropping from the front is cheap,
+    whereas refreshing recency on every cache HIT would add writes to the
+    hottest path in a render and cost more than it saves. Half the cache is
+    dropped at once so the sweep amortises to O(1) per insert.
+
+    Evicting can never change what a render produces: every read site treats
+    a miss as "recompute", so a swept entry is rebuilt on next use.
+    """
+    if len(cache) < max_entries:
+        return
+    drop = max_entries // 2
+    for key in list(cache.keys())[:drop]:
+        del cache[key]
+
+
+def _sweep_expired_cache(cache: dict) -> None:
+    """Drop every TTL-expired entry from a fragment cache: key -> (html, expires_at).
+
+    ``_cap_cache`` bounds a cache by SIZE (insertion order, oldest first) but
+    says nothing about STALENESS: a key that expired and is never visited
+    again would otherwise sit in the dict, still counted against the cap,
+    until something else finally evicts it. An app keying fragments on a
+    dynamic value (a page id, a user id) can churn through many such keys, so
+    staleness has to be swept on its own schedule, not just bounded by count.
+
+    Called on every ``{% cache %}`` render (cheap: bounded by
+    TEMPLATE_CACHE_MAX entries, so at most 256 comparisons) rather than only
+    for the key being read, so an unrelated key's expiry is cleaned up as a
+    side effect of ANY fragment-cache render, not just a future hit on that
+    same key.
+    """
+    now = time.time()
+    expired = [key for key, (_html, expires_at) in cache.items() if expires_at <= now]
+    for key in expired:
+        del cache[key]
+
 # ── Pre-compiled regexes for hot-path operations ───────────────
 _METHOD_CALL_RE = re.compile(r"^(\w+)\s*\((.*)?\)$", re.DOTALL)
 _FUNC_CALL_RE = re.compile(r"^([\w.]+)\s*\((.*)?\)$", re.DOTALL)
@@ -1773,6 +1844,7 @@ class Frond:
         ast = parse(tokens)
         if not debug_mode:
             expires_at = (time.time() + self._cache_ttl) if self._cache_ttl > 0 else 0
+            _cap_cache(self._compiled, TEMPLATE_CACHE_MAX)
             self._compiled[template] = (tokens, ast, expires_at)
             # Prod: the compiled fn is stable per template name (files don't
             # change under a running prod worker), so key it by name.
@@ -1795,6 +1867,7 @@ class Frond:
         if cached is None:
             tokens = _tokenize(source)
             cached = (tokens, parse(tokens))
+            _cap_cache(self._compiled_strings, TEMPLATE_CACHE_MAX)
             self._compiled_strings[key] = cached
         return self._execute_cached(cached[0], cached[1], context, compile_key=key)
 
@@ -1858,6 +1931,7 @@ class Frond:
             return cached
         from tina4_python.frond.compiler import compile_template
         fn = compile_template(ast)
+        _cap_cache(self._compiled_fn, TEMPLATE_CACHE_MAX)
         self._compiled_fn[compile_key] = fn
         return fn
 
@@ -2186,11 +2260,21 @@ class Frond:
         return self._eval_var_inner(expr, context)
 
     def _cached_filter_chain(self, expr: str):
-        """Return parsed filter chain from cache, or parse and cache."""
+        """Return parsed filter chain from cache, or parse and cache.
+
+        ``self._filter_chain_cache`` is an INSTANCE dict (this is a bound
+        method), so it cannot use the module-level ``@lru_cache(maxsize=1024)``
+        the sibling pure-function parsers use (that decorator on a bound
+        method pins ``self`` alive for the life of the cache). Bounded here
+        with the same MEMO_CACHE_MAX via the manual cap helper instead
+        (ADR-0004) — a template that builds expression strings dynamically
+        must not grow this dict without limit for the life of a worker.
+        """
         cached = self._filter_chain_cache.get(expr)
         if cached is not None:
             return cached
         result = _parse_filter_chain(expr)
+        _cap_cache(self._filter_chain_cache, MEMO_CACHE_MAX)
         self._filter_chain_cache[expr] = result
         return result
 
@@ -2622,6 +2706,8 @@ class Frond:
         cache_key = m.group(1) if m else "default"
         ttl = int(m.group(2)) if m and m.group(2) else 60
 
+        _sweep_expired_cache(self._fragment_cache)
+
         # Check cache — a live entry means the body is never rendered
         cached = self._fragment_cache.get(cache_key)
         if cached:
@@ -2631,6 +2717,7 @@ class Frond:
 
         # Render and cache
         rendered = self._render_nodes(node.body, context)
+        _cap_cache(self._fragment_cache, TEMPLATE_CACHE_MAX)
         self._fragment_cache[cache_key] = (rendered, time.time() + ttl)
         return rendered
 
