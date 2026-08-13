@@ -107,6 +107,29 @@ def pytest_runtest_makereport(item, call):
         )
 
 
+# ── Log state isolation (every test gets a clean, unconfigured logger) ────
+#
+# tina4_python.debug.Log is a process-wide singleton: Log.configure() sets ONE
+# class-level _snapshot object, and it stays whatever the last caller in the
+# SAME pytest process left it as -- Log.reset() is the only thing that clears
+# it. A per-FILE gate only ever runs its own tests, so a test that calls
+# Log.configure(level="error"/"warning") and never restores it is invisible
+# there; in the FULL suite, whatever test happens to run next inherits that
+# leftover level/format/output and can fail for a reason that has nothing to
+# do with its own assertions -- a shared-state leak, not a real regression in
+# whatever test trips over it. Resetting before AND after every test (the same
+# pattern test_log_contract.py / test_logger_fixture_contract.py already use
+# locally) makes each test's Log configuration self-contained: the next use
+# anywhere just resolves a fresh snapshot from whatever the environment says
+# at that moment, exactly like a freshly-imported process would see.
+@pytest.fixture(autouse=True)
+def _tina4_log_state_isolation():
+    from tina4_python.debug import Log
+    Log.reset()
+    yield
+    Log.reset()
+
+
 # ── Real child-server boot (shared by every test that spawns one) ─────────
 #
 # Four test files each carried their own copy of this, and each copy had the
@@ -217,7 +240,7 @@ def _child_output(proc) -> str:
 
 def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
                       boot_timeout: float = 25.0, unset_env=(), ready=None,
-                      log_dir=None, new_session: bool = False):
+                      log_dir=None, new_session: bool = False, fixed_port=None):
     """Start a REAL child server and wait until it is ready.
 
     write_app(project_dir, port) writes app.py (and anything else) for that port.
@@ -237,6 +260,11 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
     a test can ``os.killpg(proc.pid, ...)`` without signalling the pytest runner
     that spawned it. Required for any test that signals the server.
 
+    fixed_port pins the base port instead of picking a random free one. Needed
+    whenever the CALLER must coordinate a sibling port around the base (e.g. the
+    dual-port suite pre-binds base+1000 to prove a busy AI port is skipped
+    non-fatally, and cannot know which base a random free_port() would choose).
+
     Returns (proc, port); the caller terminates proc in a finally block.
     """
     is_ready = ready or port_open
@@ -245,7 +273,7 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
     failures = []
 
     for attempt in range(1, attempts + 1):
-        port = free_port()
+        port = fixed_port if fixed_port is not None else free_port()
         proj = tmp_path / f"srv_{port}"
         (proj / "src" / "routes").mkdir(parents=True, exist_ok=True)
         write_app(proj, port)

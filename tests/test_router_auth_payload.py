@@ -1,47 +1,48 @@
 """
 Integration tests verifying that after the validToken() → bool refactor,
 AuthMiddleware.before_request correctly:
-  - Populates request.auth with the actual payload dict (not True)
+  - Populates request.user with the actual payload dict (not True)
   - Returns 401 for missing or invalid Bearer tokens
-  - Returns the request unchanged (with .auth set) for valid tokens
+  - Returns the request unchanged (with .user set) for valid tokens
+
+These tests drive AuthMiddleware.before_request against a REAL Request (built
+via Request.from_scope(), the same path a live ASGI connection takes) and a
+REAL Response — no request/response doubles. Before 3.13.99 this suite used a
+bare MockRequest with no __slots__, which let `request.auth = ...` "work" even
+though the real Request class had no `auth` slot at all: AuthMiddleware.
+before_request raised AttributeError on every successful authentication
+against a real request, and the mock hid it completely (a project no-mock-
+testing violation this rewrite closes). REQ-PY-NO-USER (3.13.99) adds a
+mutable `user` slot to Request and fixes AuthMiddleware to assign it (the
+mock's `.auth` never matched the field name every other Tina4 language uses).
 
 Run: .venv/bin/python -m pytest tests/test_router_auth_payload.py -v
 """
 
-import os
 import pytest
-from tina4_python.auth import Auth, AuthMiddleware, get_token
+
+from tina4_python.auth import Auth, AuthMiddleware
+from tina4_python.core.request import Request
+from tina4_python.core.response import Response
 
 SECRET = "test-router-auth-secret"
 
 
-# ── Minimal mock objects ──────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
 
-class MockRequest:
-    """Minimal request stub — just headers dict and auth attribute."""
-
-    def __init__(self, headers: dict):
-        self.headers = headers
-        self.auth = None
-
-
-class MockResponse:
-    """
-    Minimal response callable.
-
-    When called as response(body, status) it records the status and returns
-    itself so the middleware can return (request, response) normally.
-    When called with no arguments (checked as is) it represents an unset response.
-    """
-
-    def __init__(self):
-        self.status_code = 200
-        self._called = False
-
-    def __call__(self, body=None, status: int = 200):
-        self.status_code = status
-        self._called = True
-        return self
+def _real_request(headers: dict) -> Request:
+    """Build a REAL Request via the production from_scope() construction path."""
+    header_list = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/__auth_payload_probe",
+        "query_string": b"",
+        "headers": header_list,
+        "client": ("127.0.0.1", 0),
+        "scheme": "http",
+    }
+    return Request.from_scope(scope, body=b"")
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -59,23 +60,23 @@ class TestAuthMiddlewarePayload:
     def test_valid_bearer_attaches_payload_dict(self):
         """
         A valid Bearer token must attach the decoded payload dict to
-        request.auth — NOT True (the bool returned by valid_token).
+        request.user — NOT True (the bool returned by valid_token).
         """
         auth = Auth(secret=SECRET, expires_in=60)
         token = auth.get_token({"sub": "test-user"})
 
-        request = MockRequest(headers={"authorization": f"Bearer {token}"})
-        response = MockResponse()
+        request = _real_request(headers={"authorization": f"Bearer {token}"})
+        response = Response()
 
         req_out, res_out = AuthMiddleware.before_request(request, response)
 
-        assert isinstance(req_out.auth, dict), (
-            f"request.auth should be a dict, got {type(req_out.auth).__name__!r} "
-            f"(value: {req_out.auth!r}). "
+        assert isinstance(req_out.user, dict), (
+            f"request.user should be a dict, got {type(req_out.user).__name__!r} "
+            f"(value: {req_out.user!r}). "
             "Did validToken() change to return bool and break payload assignment?"
         )
-        assert req_out.auth.get("sub") == "test-user", (
-            f"request.auth['sub'] should be 'test-user', got {req_out.auth.get('sub')!r}"
+        assert req_out.user.get("sub") == "test-user", (
+            f"request.user['sub'] should be 'test-user', got {req_out.user.get('sub')!r}"
         )
 
     def test_valid_bearer_does_not_return_401(self):
@@ -83,8 +84,8 @@ class TestAuthMiddlewarePayload:
         auth = Auth(secret=SECRET, expires_in=60)
         token = auth.get_token({"sub": "test-user", "role": "admin"})
 
-        request = MockRequest(headers={"authorization": f"Bearer {token}"})
-        response = MockResponse()
+        request = _real_request(headers={"authorization": f"Bearer {token}"})
+        response = Response()
 
         _req_out, res_out = AuthMiddleware.before_request(request, response)
 
@@ -94,8 +95,8 @@ class TestAuthMiddlewarePayload:
 
     def test_invalid_bearer_returns_401(self):
         """A fake/garbage token must produce a 401 response."""
-        request = MockRequest(headers={"authorization": "Bearer garbage.token.here"})
-        response = MockResponse()
+        request = _real_request(headers={"authorization": "Bearer garbage.token.here"})
+        response = Response()
 
         _req_out, res_out = AuthMiddleware.before_request(request, response)
 
@@ -105,8 +106,8 @@ class TestAuthMiddlewarePayload:
 
     def test_missing_bearer_returns_401(self):
         """A request with no Authorization header must produce a 401 response."""
-        request = MockRequest(headers={})
-        response = MockResponse()
+        request = _real_request(headers={})
+        response = Response()
 
         _req_out, res_out = AuthMiddleware.before_request(request, response)
 
@@ -119,12 +120,12 @@ class TestAuthMiddlewarePayload:
         auth = Auth(secret=SECRET, expires_in=60)
         token = auth.get_token({"sub": "test-user", "role": "editor", "org": "tina4"})
 
-        request = MockRequest(headers={"authorization": f"Bearer {token}"})
-        response = MockResponse()
+        request = _real_request(headers={"authorization": f"Bearer {token}"})
+        response = Response()
 
         req_out, _res_out = AuthMiddleware.before_request(request, response)
 
-        assert isinstance(req_out.auth, dict)
-        assert req_out.auth.get("sub") == "test-user"
-        assert req_out.auth.get("role") == "editor"
-        assert req_out.auth.get("org") == "tina4"
+        assert isinstance(req_out.user, dict)
+        assert req_out.user.get("sub") == "test-user"
+        assert req_out.user.get("role") == "editor"
+        assert req_out.user.get("org") == "tina4"

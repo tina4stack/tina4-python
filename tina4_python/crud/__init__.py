@@ -34,6 +34,41 @@ import sys
 from tina4_python.core.router import Router
 from tina4_python.debug import Log
 
+# PAGE-DEC-01: the maximum per-page size the list handler will honour, no matter
+# what a caller asks for via ?limit=/?per_page=. 100 is not an arbitrary pick -
+# it is the SAME row cap ORM.all()/select()/where()/db.fetch() already default to
+# ("the one row cap the whole family shares", tina4_python/orm/model.py), and the
+# number Node's AutoCrud shares via its own DEFAULT_ROW_CAP constant. Without this
+# a client could request the whole table in one query (?limit=1000000).
+MAX_PER_PAGE = 100
+
+
+# CRUD-MASS-ASSIGNMENT: the columns a write BODY is allowed to set. A client
+# body is never trusted verbatim — only fields the model DECLARES pass
+# through; `is_deleted` is never client-writable (soft-delete is mutated only
+# by delete()/restore(), never by a POST/PUT body); and the primary key is
+# never taken from the body except a genuinely natural (non-auto-increment)
+# key on CREATE, where a caller-chosen key is the documented way to create a
+# row. Everywhere else the PK is stripped: on an auto-increment CREATE the
+# database assigns the id (a client-supplied id used to silently turn a
+# create into an overwrite — or a no-op update reported as 201 — of an
+# unrelated existing row); on UPDATE the row is addressed by the URL `{id}`
+# alone, so a body copy of the PK can never redirect the write to a
+# different row than the one the route matched.
+def _allow_listed_data(model_class, data, *, is_create: bool) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    pk = model_class._get_pk()
+    pk_field = model_class._fields.get(pk)
+    strip_pk = pk_field is not None and (not is_create or pk_field.auto_increment)
+    return {
+        key: value
+        for key, value in data.items()
+        if key in model_class._fields
+        and key != "is_deleted"
+        and not (strip_pk and key == pk)
+    }
+
 
 class AutoCrud:
     """Auto-generate REST endpoints from ORM model classes."""
@@ -101,15 +136,26 @@ class AutoCrud:
             try:
                 # Primary names: limit / offset
                 # Compat names: per_page / page (PHP/Ruby/Node style)
-                limit = int(request.params.get("limit", request.params.get("per_page", 10)))
-                offset = int(request.params.get("offset", 0))
+                # Pagination is a QUERY-STRING concern, not a route param
+                # (REQ-PARAM-POLLUTION, 3.13.99 — request.params is route-only).
+                limit = int(request.query.get("limit", request.query.get("per_page", 10)))
+                offset = int(request.query.get("offset", 0))
                 # page/per_page compat: if page is provided, derive offset from it
-                if "page" in request.params and "offset" not in request.params:
-                    page = int(request.params.get("page", 1))
-                    per_page = int(request.params.get("per_page", limit))
+                if "page" in request.query and "offset" not in request.query:
+                    page = int(request.query.get("page", 1))
+                    per_page = int(request.query.get("per_page", limit))
+                    # PAGE-DEC-01: clamp page < 1 -> page 1 BEFORE deriving offset,
+                    # so offset=(page-1)*per_page can never go negative (a page=0/
+                    # negative request used to hand PostgreSQL a negative OFFSET -
+                    # a driver error - and silently misbehave on SQLite, while the
+                    # envelope reported page:0). Cap per_page BEFORE the same
+                    # derivation so the offset lines up with the size actually used.
+                    page = max(1, page)
+                    per_page = min(per_page, MAX_PER_PAGE)
                     offset = (page - 1) * per_page
                     limit = per_page
                 else:
+                    limit = min(limit, MAX_PER_PAGE)  # PAGE-DEC-01: cap an oversized ?limit=
                     page = (offset // limit) + 1 if limit else 1
             except (ValueError, TypeError):
                 limit = 10
@@ -159,15 +205,34 @@ class AutoCrud:
 
         # ── POST /api/{table} — create new record ────────────────
         async def create_handler(request, response, _cls=model_class):
-            data = request.body if isinstance(request.body, dict) else {}
-            record = _cls(data)
+            raw_data = request.body if isinstance(request.body, dict) else {}
+            # CRUD-MASS-ASSIGNMENT: allow-list before the body ever reaches
+            # the model (guards is_deleted + strips the PK — see above).
+            data = _allow_listed_data(_cls, raw_data, is_create=True)
+            try:
+                record = _cls(data)
+            except (ValueError, TypeError) as e:
+                # A field that cannot even be COERCED to its declared type
+                # (e.g. a string where an int is required) is a client input
+                # error too — 422 with the cause, never an uncaught 500.
+                return response({"error": "Validation failed", "detail": [str(e)]}, 422)
+            # CRUD-VALIDATION-STATUS (CRUD-DEC-01): a validation failure is a
+            # CLIENT error — 422 with the field errors, never a 500/400.
             errors = record.validate()
             if errors:
-                return response({"error": "Validation failed", "detail": errors}, 400)
+                return response({"error": "Validation failed", "detail": errors}, 422)
             try:
-                record.save()
+                saved = record.save()
             except Exception as e:
                 return response({"error": "Failed to create record", "detail": str(e)}, 500)
+            # save() is documented to never raise — it returns False on a
+            # genuine driver failure (NOT NULL, duplicate key, ...). Honour
+            # that contract so a failed save can never report 201.
+            if saved is False:
+                return response(
+                    {"error": "Failed to create record", "detail": record.get_error() or "save failed"},
+                    500,
+                )
             return response(record.to_dict(), 201)
 
         create_handler.__name__ = f"autocrud_create_{table}"
@@ -188,20 +253,38 @@ class AutoCrud:
             if record is None:
                 return response({"error": "Not Found"}, 404)
 
-            data = request.body if isinstance(request.body, dict) else {}
-            for key, value in data.items():
-                if key in record._fields:
-                    field = record._fields[key]
-                    setattr(record, key, field.validate(value))
+            raw_data = request.body if isinstance(request.body, dict) else {}
+            # CRUD-MASS-ASSIGNMENT: allow-list (guards is_deleted + strips the
+            # PK — the row is addressed by the URL {id}, never by the body).
+            data = _allow_listed_data(_cls, raw_data, is_create=False)
+            # CRUD-PUT-NOVALIDATE: partial-update mode — only the keys the
+            # caller supplied are touched (via coerce(), the same read-path
+            # type coercion the constructor uses); every untouched field
+            # keeps the value `find()` just loaded, which was already valid.
+            # A value that cannot even be coerced (wrong type) is a 422, not
+            # an uncaught exception (field.validate() used to raise here).
+            try:
+                record._populate(data)
+            except (ValueError, TypeError) as e:
+                return response({"error": "Validation failed", "detail": [str(e)]}, 422)
 
+            # CRUD-VALIDATION-STATUS (CRUD-DEC-01): re-validates the WHOLE
+            # record (untouched fields already satisfy their own rules, so
+            # this is exactly a partial-update check) — 422 with field
+            # errors, never a 500/400.
             errors = record.validate()
             if errors:
-                return response({"error": "Validation failed", "detail": errors}, 400)
+                return response({"error": "Validation failed", "detail": errors}, 422)
 
             try:
-                record.save()
+                saved = record.save()
             except Exception as e:
                 return response({"error": "Failed to update record", "detail": str(e)}, 500)
+            if saved is False:
+                return response(
+                    {"error": "Failed to update record", "detail": record.get_error() or "save failed"},
+                    500,
+                )
             return response(record.to_dict())
 
         update_handler.__name__ = f"autocrud_update_{table}"

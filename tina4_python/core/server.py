@@ -25,7 +25,7 @@ from tina4_python.core.request import (
 from tina4_python.core.response import Response
 from tina4_python.core.router import Router
 from tina4_python.core.middleware import CorsMiddleware, RateLimiter
-from tina4_python.debug import Log, set_request_id
+from tina4_python.debug import Log, set_request_id, get_request_id, sanitize_request_id, clear_request_id
 from tina4_python import __version__
 
 # Middleware singletons — created once on import
@@ -229,6 +229,31 @@ def _start_background_tasks(executor, shutdown) -> list:
             continue
         runners.append(runner)
     return runners
+
+
+def _spin_up_background_tasks(shutdown):
+    """Build the shared thread-pool executor and start every registered task.
+
+    Returns ``(executor, runners)`` so the caller can cancel the runners and
+    shut the pool down on stop. This is the ONE place background tasks are
+    started, called by BOTH the built-in dev server (``_serve``) AND the
+    production ASGI lifespan (``app``) — so ``background()`` actually runs under
+    uvicorn/hypercorn/granian, not only the built-in loop. Before this, the
+    lifespan started nothing, so a task scheduled via ``background()`` was a
+    SILENT NO-OP in the common production deployment (BG-PY-PROD-NOOP).
+
+    ``max_workers`` is one per registered task (floor 2) — sound only because a
+    task never overlaps itself (see ``background_tick_loop``), so the pool
+    cannot be starved by a slow sync callback.
+    """
+    import concurrent.futures
+
+    executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=max(background_task_count(), 2),
+        thread_name_prefix="tina4_bg",
+    )
+    runners = _start_background_tasks(executor, shutdown)
+    return executor, runners
 
 
 async def background_tick_loop(callback, interval: float, executor, shutdown):
@@ -621,6 +646,30 @@ def _render_error_page(status_code: int, path: str, request_id: str, error_messa
             pass
 
     return None
+
+
+_ERROR_CODE_NAMES = {
+    403: "FORBIDDEN", 404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED", 500: "INTERNAL_SERVER_ERROR",
+}
+_ERROR_MESSAGES = {
+    403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 500: "Internal Server Error",
+}
+
+
+def _json_error_body(status_code: int, request_id: str, message: str | None = None) -> dict:
+    """The ONE JSON error envelope for a negotiated 403/404/500 (ERR-DEC-02).
+
+    Reuses the existing ``error_response()`` envelope (``error: true, code,
+    message, status``) already shared by CSRF and app-level
+    ``response.error()`` calls, plus ``request_id`` for correlation
+    (feature 43, ERR-404-REQUESTID) -- the SAME shape PHP/Ruby/Node build.
+    """
+    from tina4_python.core.response import error_response
+
+    code = _ERROR_CODE_NAMES.get(status_code, f"HTTP_{status_code}")
+    body = error_response(code, message or _ERROR_MESSAGES.get(status_code, "Error"), status_code)
+    body["request_id"] = request_id
+    return body
 
 
 _template_cache: dict[str, str] | None = None
@@ -1491,6 +1540,20 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
             and (handler_info[0] == "*" or request.method == handler_info[0])
         )
         if method_ok:
+            # DEVADMIN-DEC-01/02: fail-closed same-origin + loopback gate on
+            # every /__dev write, before the handler runs. Closes drive-by CSRF
+            # (a cross-origin page POSTing to /file/save then /reload) and a
+            # network-exposed debug box. Scoped to /__dev so the deliberately
+            # cross-origin /__feedback widget is unaffected; GET/HEAD/OPTIONS are
+            # safe and skip the gate.
+            if (request.method not in ("GET", "HEAD", "OPTIONS")
+                    and request.path.startswith("/__dev")):
+                from tina4_python.dev_admin import _dev_mutation_denial
+                _denial = _dev_mutation_denial(request)
+                if _denial is not None:
+                    response.status(_denial[0]).json({"ok": False, "error": _denial[1]})
+                    _cors.apply(request, response)
+                    return response
             try:
                 def _resp(data, code=200, content_type=None):
                     # content_type overrides the auto-detected MIME —
@@ -1595,8 +1658,14 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
             # the key can be recovered a character at a time.
             if Auth.validate_api_key(_token):
                 _auth_ok = True
-            elif Auth.valid_token_static(_token):
-                _auth_ok = True
+            else:
+                _payload = Auth.valid_token_static(_token)
+                if _payload:
+                    _auth_ok = True
+                    # Stash the authenticated payload on the request
+                    # (REQ-PY-NO-USER, 3.13.99) — a handler/downstream
+                    # middleware reads it back via request.user.
+                    request.user = _payload
         except Exception:
             pass
     # Fall back to formToken in request body (frond.js sends token here)
@@ -1606,8 +1675,10 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
         if _form_token:
             try:
                 from tina4_python.auth import Auth
-                if Auth.valid_token_static(_form_token):
+                _payload = Auth.valid_token_static(_form_token)
+                if _payload:
                     _auth_ok = True
+                    request.user = _payload
                     # Return a FreshToken header so frond.js can use
                     # the Authorization header on subsequent requests
                     from tina4_python.auth import refresh_token as _refresh
@@ -1624,8 +1695,10 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
             if _session_token:
                 try:
                     from tina4_python.auth import Auth
-                    if Auth.valid_token_static(_session_token):
+                    _payload = Auth.valid_token_static(_session_token)
+                    if _payload:
                         _auth_ok = True
+                        request.user = _payload
                 except Exception:
                     pass
     if not _auth_ok:
@@ -1958,22 +2031,46 @@ def _handle_route_error(
             )
         except Exception:
             pass
-        from tina4_python.debug.error_overlay import render_error_overlay
-        overlay_html = render_error_overlay(error, request)
-        response.status(500).html(overlay_html)
+        # OVERLAY-DEC-03: guard the dev-overlay render. The call site sits INSIDE
+        # this catch, so if the overlay itself throws (a malformed frame, a
+        # source-read edge, an unrenderable request value) it would double-fault
+        # out of dispatch. Wrap it and fall back to the same safe production page,
+        # so a broken overlay still yields a bounded 500 — never a crashed handler.
+        try:
+            from tina4_python.debug.error_overlay import render_error_overlay
+            overlay_html = render_error_overlay(error, request)
+            response.status(500).html(overlay_html)
+        except Exception as overlay_err:
+            try:
+                Log.warning(
+                    f"Error overlay render failed, serving the safe page: "
+                    f"{type(overlay_err).__name__}: {overlay_err}"
+                )
+            except Exception:
+                pass
+            _render_negotiated_500(request, response, request_id)
     else:
         # Production: NO traceback in the body. The trace is logged via
         # Log.error above; clients only see the generic page + request_id.
-        html = _render_error_page(500, request.path, request_id, "")
-        if html:
-            response.status(500).html(html)
-        else:
-            response.status(500).json({
-                "error": "Internal Server Error",
-                "request_id": request_id,
-                "status": 500,
-            })
+        _render_negotiated_500(request, response, request_id)
     return response
+
+
+def _render_negotiated_500(request: Request, response: Response, request_id: str) -> None:
+    """The safe production 500: HTML-vs-JSON negotiated on Accept (ERR-DEC-02).
+
+    ``error_message`` is ALWAYS empty here (CWE-209 -- never touch this: a
+    JSON client's ``message`` field stays the generic ``"Internal Server
+    Error"`` too, never the real exception).
+    """
+    if request.wants_json():
+        response.status(500).json(_json_error_body(500, request_id))
+        return
+    html = _render_error_page(500, request.path, request_id, "")
+    if html:
+        response.status(500).html(html)
+    else:
+        response.status(500).json(_json_error_body(500, request_id))
 
 
 def _handle_no_route(request: Request, response: Response, request_id: str) -> Response:
@@ -2000,16 +2097,18 @@ def _handle_no_route(request: Request, response: Response, request_id: str) -> R
         response.html(html)
     elif request.path == "/" and _is_dev_mode():
         response.html(_render_landing_page())
+    elif request.wants_json():
+        # ERR-DEC-02: a JSON API client gets the JSON error body directly --
+        # no need to even try the HTML template. ERR-404-REQUESTID: the id
+        # rides in the body now too (the response header already carries it
+        # unconditionally, feature 43).
+        response.status(404).json(_json_error_body(404, request_id))
     else:
         html = _render_error_page(404, request.path, request_id)
         if html:
             response.status(404).html(html)
         else:
-            response.status(404).json({
-                "error": "Not Found",
-                "path": request.path,
-                "status": 404,
-            })
+            response.status(404).json(_json_error_body(404, request_id))
     return response
 
 
@@ -2114,10 +2213,14 @@ async def _stage_start_timer(ctx: DispatchContext) -> None:
     reaches ``_finalize_response``, so neither is timed today.
     """
     import time as _time
-    from tina4_python.dotenv import is_truthy
+    # OVERLAY-DEC-04: unify the debug gate on the overlay module's
+    # ``is_debug_mode()`` so the error-overlay gate (via ``ctx.is_dev`` ->
+    # ``_handle_route_error``) has ONE definition, instead of the server
+    # recomputing ``is_truthy(TINA4_DEBUG)`` separately. Same value today.
+    from tina4_python.debug.error_overlay import is_debug_mode
 
     ctx.req_start = _time.perf_counter()
-    ctx.is_dev = is_truthy(os.environ.get("TINA4_DEBUG", ""))
+    ctx.is_dev = is_debug_mode()
     return None
 
 
@@ -2267,7 +2370,7 @@ async def _stage_dispatch_route(ctx: DispatchContext) -> None:
         return None
 
     ctx.request._route_params = params
-    ctx.request.merge_route_params()
+    ctx.request.attach_route_params()
     # Expose the matched handler so before_* middleware (e.g. CsrfMiddleware)
     # can read handler metadata such as _noauth.
     ctx.request._handler = route.get("handler")
@@ -2544,6 +2647,21 @@ _RESPONSE_STAGES = (
 )
 
 
+def _resolve_request_id(request: Request) -> str:
+    """Honour a well-formed inbound X-Request-ID (sanitized), else generate one.
+
+    sanitize_request_id rejects a CR/LF-bearing, over-long or illegal-charset
+    value outright, so an attacker-controlled header can never inject a second
+    response header or forge a log line (RID-PY-INJECTION). Pulled out of
+    ``handle()`` on its own (feature 43 added this fallback after the dispatch
+    extraction's branch-count ceiling was set): it has to run BEFORE
+    ``DispatchContext`` exists, so it cannot become a stage, but it can still
+    live outside the runner like every other decision the extraction moved out
+    - see test_dispatch_pipeline.py::test_the_god_function_does_not_come_back.
+    """
+    return sanitize_request_id(request.headers.get("x-request-id")) or str(uuid.uuid4())[:8]
+
+
 async def handle(request: Request) -> Response:
     """Dispatch a pre-built Request through the Tina4 router and return a Response.
 
@@ -2556,34 +2674,41 @@ async def handle(request: Request) -> Response:
     over ``_PRE_MATCH_STAGES``, ``_POST_MATCH_STAGES``, ``_FALLBACK_STAGES``
     and ``_RESPONSE_STAGES``.
     """
-    request_id = request.headers.get("x-request-id", str(uuid.uuid4())[:8])
+    request_id = _resolve_request_id(request)
     set_request_id(request_id)
-    _init_session(request)
+    try:
+        _init_session(request)
 
-    response = Response()
-    response.header("x-request-id", request_id)
+        response = Response()
+        response.header("x-request-id", request_id)
 
-    ctx = DispatchContext(request, response, request_id)
+        ctx = DispatchContext(request, response, request_id)
 
-    for stage in _PRE_MATCH_STAGES:
-        answered = await stage(ctx)
-        if answered is not None:
-            # Sent AS IS: these branches bypass the HEAD strip and finalize,
-            # exactly as they did when each was a bare `return`.
-            return answered
+        for stage in _PRE_MATCH_STAGES:
+            answered = await stage(ctx)
+            if answered is not None:
+                # Sent AS IS: these branches bypass the HEAD strip and finalize,
+                # exactly as they did when each was a bare `return`.
+                return answered
 
-    for stage in _POST_MATCH_STAGES:
-        await stage(ctx)
+        for stage in _POST_MATCH_STAGES:
+            await stage(ctx)
 
-    if ctx.route is None:
-        for stage in _FALLBACK_STAGES:
-            if stage(ctx):
-                break
+        if ctx.route is None:
+            for stage in _FALLBACK_STAGES:
+                if stage(ctx):
+                    break
 
-    for stage in _RESPONSE_STAGES:
-        stage(ctx)
+        for stage in _RESPONSE_STAGES:
+            stage(ctx)
 
-    return ctx.response
+        return ctx.response
+    finally:
+        # The request pipeline installs the id before its first log and
+        # clears it in `finally` after its last (Decision 12 / LOG-Q03), so an
+        # overlapping request can never observe a stale id from a request that
+        # already finished.
+        clear_request_id()
 
 def asgi(root_dir: str = "src"):
     """Build the ASGI application, with routes discovered.
@@ -2641,6 +2766,31 @@ async def _send_payload_too_large(send, received: int, limit: int) -> None:
     await send({"type": "http.response.body", "body": payload, "more_body": False})
 
 
+def _strip_weak_etag_prefix(tag: str) -> str:
+    """Strip an optional leading ``W/`` weak-validator prefix (RFC 7232 S2.3)."""
+    tag = tag.strip()
+    return tag[2:] if tag.startswith("W/") else tag
+
+
+def _etag_matches(if_none_match: str, etag: str) -> bool:
+    """Match an ``If-None-Match`` header value against ``etag``.
+
+    RFC 7232 S3.2 weak comparison: an optional ``W/`` prefix is ignored on
+    both sides, the header may carry a comma-separated candidate list, and
+    ``*`` matches any current representation. This used to be an exact
+    full-string compare (CE-INM-SEMANTICS) — out of step with the RFC-7232
+    matching PHP/Ruby/Node already use for their conditional-GET paths.
+    """
+    if not etag:
+        return False
+    target = _strip_weak_etag_prefix(etag)
+    for candidate in if_none_match.split(","):
+        candidate = candidate.strip()
+        if candidate == "*" or _strip_weak_etag_prefix(candidate) == target:
+            return True
+    return False
+
+
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
     if scope["type"] == "lifespan":
@@ -2648,12 +2798,30 @@ async def app(scope: dict, receive, send):
         # It used to return after the first message, which made the shutdown
         # branch below unreachable: the app coroutine had already finished by
         # the time the server sent lifespan.shutdown.
+        #
+        # These live across the whole server lifetime (the coroutine spans both
+        # events), so the tasks started at startup are the ones stopped at
+        # shutdown.
+        lifespan_shutdown = None
+        lifespan_executor = None
+        lifespan_runners = []
         while True:
             msg = await receive()
             if msg["type"] == "lifespan.startup":
                 import time
                 global _start_time
                 _start_time = time.time()
+                # Start registered background tasks on the PRODUCTION server's
+                # event loop. Without this, background() was a SILENT NO-OP under
+                # uvicorn/hypercorn/granian (BG-PY-PROD-NOOP): tasks were
+                # registered but only the built-in dev server's _serve() ever
+                # started them. The lifespan runs on the same loop the ASGI
+                # server serves requests on, so the tasks tick alongside real
+                # traffic — and stop on lifespan.shutdown below.
+                lifespan_shutdown = asyncio.Event()
+                lifespan_executor, lifespan_runners = _spin_up_background_tasks(
+                    lifespan_shutdown
+                )
                 await send({"type": "lifespan.startup.complete"})
             elif msg["type"] == "lifespan.shutdown":
                 # The only shutdown hook that fires on the production path.
@@ -2661,9 +2829,19 @@ async def app(scope: dict, receive, send):
                 # signal as its run() returns, so the process dies inside the
                 # starter and nothing after it ever executes — a `finally` there
                 # is unreachable. uvicorn drains requests and closes sockets
-                # itself; the ORM-bound connections are the part only Tina4
-                # knows about, so this is where they get closed.
+                # itself; the background tasks and ORM-bound connections are the
+                # part only Tina4 knows about, so this is where they are stopped.
+                if lifespan_shutdown is not None:
+                    lifespan_shutdown.set()
+                for runner in lifespan_runners:
+                    runner.cancel()
+                if lifespan_executor is not None:
+                    lifespan_executor.shutdown(wait=False, cancel_futures=True)
                 _close_bound_databases()
+                Log.info("Server stopped.")
+                # Graceful shutdown owns the final reset() call (Decision 24 /
+                # LOG-I02) on the ASGI lifespan path too.
+                Log.reset()
                 await send({"type": "lifespan.shutdown.complete"})
                 return
             else:
@@ -2759,7 +2937,6 @@ async def app(scope: dict, receive, send):
             stream_headers.append((b"set-cookie", cookie_str.encode()))
         await send({"type": "http.response.start", "status": response.status_code, "headers": stream_headers})
 
-        import asyncio
         source = response._stream_source
         try:
             if hasattr(source, "__aiter__"):
@@ -2810,35 +2987,44 @@ async def app(scope: dict, receive, send):
     except Exception:
         pass  # Injection is best-effort — never break the response.
 
-    # ETag check — 304 Not Modified
+    # ETag / Last-Modified check — 304 Not Modified
     if_none_match = request.headers.get("if-none-match", "")
     accept_encoding = request.headers.get("accept-encoding", "")
     headers = response.build_headers(accept_encoding)
 
     etag = ""
+    last_modified = ""
     for name, value in headers:
         if name == b"etag":
             etag = value.decode()
-            break
-    if if_none_match and if_none_match == etag:
-        await send({"type": "http.response.start", "status": 304, "headers": []})
+        elif name == b"last-modified":
+            last_modified = value.decode()
+
+    # A 304 MUST echo the validators it would have carried on 200 (RFC 9110
+    # S15.4.5), so an intermediary cache can refresh freshness from the empty
+    # body alone. CE-PY-304-DROPS-VALIDATORS: this used to send an EMPTY
+    # header list on every 304, silently dropping ETag/Last-Modified while
+    # PHP/Ruby/Node preserved them.
+    validator_headers = []
+    if etag:
+        validator_headers.append((b"etag", etag.encode()))
+    if last_modified:
+        validator_headers.append((b"last-modified", last_modified.encode()))
+
+    # If-None-Match takes precedence over If-Modified-Since (RFC 9110 13.1.3).
+    if if_none_match and _etag_matches(if_none_match, etag):
+        await send({"type": "http.response.start", "status": 304, "headers": validator_headers})
         await send({"type": "http.response.body", "body": b""})
         return
 
     # If-Modified-Since -> 304, for responses carrying a Last-Modified (static
-    # assets). If-None-Match takes precedence (RFC 9110 13.1.3), so this only
-    # runs when the client sent no ETag validator.
+    # assets). Only runs when the client sent no ETag validator.
     if not if_none_match:
         if_modified_since = request.headers.get("if-modified-since", "")
-        last_modified = ""
-        for name, value in headers:
-            if name == b"last-modified":
-                last_modified = value.decode()
-                break
         if if_modified_since and last_modified:
             try:
                 if parsedate_to_datetime(last_modified) <= parsedate_to_datetime(if_modified_since):
-                    await send({"type": "http.response.start", "status": 304, "headers": []})
+                    await send({"type": "http.response.start", "status": 304, "headers": validator_headers})
                     await send({"type": "http.response.body", "body": b""})
                     return
             except (TypeError, ValueError):
@@ -2848,20 +3034,67 @@ async def app(scope: dict, receive, send):
     await send({"type": "http.response.body", "body": response.content})
 
 
+def _has_hidden_segment(path: str) -> bool:
+    """Whether any '/'-segment of ``path`` is hidden (begins with a dot).
+
+    Refuses a dotfile (``.env``, ``.git/config``, ``.htpasswd``); a ``..`` segment
+    also begins with a dot, so this doubles as a belt on traversal.
+    """
+    return any(seg.startswith(".") for seg in path.split("/") if seg)
+
+
+def _confined_static_path(base_dir: Path, relative: str) -> Path | None:
+    """Resolve ``relative`` under ``base_dir``, confined the way PHP's reference
+    guard is (ADR-0050): return the REAL path only when it is a regular file whose
+    resolved location stays under the resolved base dir (so a symlink or a
+    sibling-prefix escape is refused) and names no dotfile segment. Else ``None``.
+
+    ``Path.resolve`` follows symlinks and ``relative_to`` is separator-aware, so a
+    symlink pointing outside, a ``publicsecret`` sibling-prefix and a ``..`` escape
+    all fail containment — a bare lexical ``..`` check would miss the symlink.
+    """
+    try:
+        real_dir = base_dir.resolve(strict=True)
+        real_path = (base_dir / relative).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None
+    if not real_path.is_file():
+        return None
+    try:
+        rel = real_path.relative_to(real_dir)
+    except ValueError:
+        return None  # escapes the public root (symlink, sibling-prefix or ..)
+    if _has_hidden_segment(rel.as_posix()):
+        return None  # a symlink pointing AT a dotfile inside the public dir
+    return real_path
+
+
 def _try_static(path: str) -> Response | None:
     """Serve static files. Searches multiple directories.
 
-    Search order (first match wins):
+    Search order (first match wins), unified across the four frameworks
+    (ST-SEARCHDIR-DIVERGE):
     1. TINA4_PUBLIC_DIR env var (if set)
     2. public/           (simple, IDE-friendly)
     3. src/public/       (nested convention)
-    4. tina4_python/public/  (framework built-in assets)
+    4. tina4_python/public/  (framework built-in assets, always last)
+
+    Every candidate is confined under its search dir with a realpath +
+    trailing-separator check and a dotfile block (ADR-0050), so a ``..`` escape, a
+    symlink pointing outside the public dir, a sibling-prefix dir and a dotfile
+    (``.env``/``.git``) are all refused.
 
     Index resolution: when ``path`` is ``/`` or ends with ``/``, the lookup
     appends ``index.html`` so a Vite/SPA build with ``src/public/index.html``
     serves at the matching URL — no custom ``@get("/")`` route needed.
     """
     clean = path.lstrip("/")
+
+    # Security: refuse an up-level segment or a dotfile before touching the
+    # filesystem (defense in depth; the realpath confinement below is what
+    # actually stops a symlink escape).
+    if _has_hidden_segment(clean):
+        return None
 
     # The framework ships the Swagger UI as STATIC assets under
     # tina4_python/public/swagger/. Static serving is independent of the gated
@@ -2880,32 +3113,37 @@ def _try_static(path: str) -> Response | None:
     # in src/public/ Just Work without a custom root route.
     if clean == "" or clean.endswith("/"):
         clean = clean + "index.html"
-    custom = os.environ.get("TINA4_PUBLIC_DIR")
-    candidates = []
-    if custom:
-        candidates.append(Path(custom) / clean)
-    candidates.append(Path("public") / clean)
-    candidates.append(Path("src/public") / clean)
-    # Framework built-in assets (tina4.min.js, frond.min.js, tina4.min.css, tina4-dev-admin.min.js, etc.)
-    candidates.append(Path(__file__).resolve().parent.parent / "public" / clean)
 
-    for file_path in candidates:
-        if file_path.is_file():
-            resp = Response()
-            resp.file(str(file_path))
-            # Static assets may be cached but must be revalidated on every use,
-            # so a redeployed file reaches the browser on the next load without a
-            # manual hard refresh. The response already carries an ETag
-            # (build_headers) and the pipeline answers If-None-Match with a 304,
-            # so revalidation is a cheap round-trip, not a re-download. A
-            # Last-Modified is added too (pipeline honours If-Modified-Since ->
-            # 304) so the validators match the other frameworks.
-            resp.header("cache-control", "no-cache, must-revalidate")
-            resp.header(
-                "last-modified",
-                formatdate(file_path.stat().st_mtime, usegmt=True),
-            )
-            return resp
+    search_dirs: list[Path] = []
+    custom = os.environ.get("TINA4_PUBLIC_DIR")
+    if custom:
+        search_dirs.append(Path(custom))
+    search_dirs.append(Path("public"))
+    search_dirs.append(Path("src/public"))
+    # Framework built-in assets (tina4.min.js, frond.min.js, tina4.min.css, tina4-dev-admin.min.js, etc.)
+    search_dirs.append(Path(__file__).resolve().parent.parent / "public")
+
+    for base_dir in search_dirs:
+        real_path = _confined_static_path(base_dir, clean)
+        if real_path is None:
+            continue
+        resp = Response()
+        resp.file(str(real_path))
+        stat = real_path.stat()
+        # Static assets may be cached but must be revalidated on every use, so
+        # a redeployed file reaches the browser on the next load without a
+        # manual hard refresh. The ETag is a cheap weak size+mtime validator
+        # (CE-DEC-02) — the SAME pinned format PHP/Ruby/Node use for a static
+        # file, so a client behind a reverse proxy sees an identical validator
+        # regardless of backend language. It is set here, before
+        # build_headers() runs, so build_headers() never overwrites it with
+        # its strong content-hash ETag (that one is for dynamic responses).
+        # Last-Modified is added too (the pipeline honours If-Modified-Since
+        # -> 304) so both validators match the other frameworks.
+        resp.header("cache-control", "no-cache, must-revalidate")
+        resp.header("etag", f'W/"{stat.st_size}-{int(stat.st_mtime)}"')
+        resp.header("last-modified", formatdate(stat.st_mtime, usegmt=True))
+        return resp
     return None
 
 
@@ -2939,7 +3177,10 @@ def _write_broken(request: Request, error: Exception):
 
     data = {
         "timestamp": ts.isoformat(),
-        "request_id": request.headers.get("x-request-id", ""),
+        # The canonical, already-sanitized id for THIS request (set by dispatch),
+        # not the raw inbound header — so the stored .broken record can never
+        # carry an attacker-injected value and matches the logs + response header.
+        "request_id": get_request_id() or "",
         "error_type": error_type,
         "message": str(error),
         "location": location,
@@ -3002,66 +3243,30 @@ def _find_production_server():
 
 
 def _kill_port(port: int) -> None:
-    """Kill whatever process is listening on *port*.
+    """Reclaim *port* from a stale Tina4 dev server via the shared, guarded path.
 
-    Uses lsof on macOS/Linux and netstat + taskkill on Windows.
-    Raises RuntimeError if the port cannot be freed.
+    This is the runtime bind-failure fallback. It used to SIGTERM whatever held
+    the port with NONE of the CLI's guards -- no identity check, no container
+    guard, no PID-safety filter -- so a foreign holder (another dev server, a
+    database) was killed on any bind failure. It now routes through the SAME
+    identity-checked helper the CLI uses (TAKEOVER-DEC-02), so only a
+    PID-file-confirmed Tina4 dev server is ever signalled.
+
+    Raises RuntimeError when the port is held by a non-Tina4 process (or takeover
+    is opted out / disabled outside dev), so the bind fails loudly with a clear
+    message instead of killing an innocent process.
     """
-    import subprocess
-    import time
+    from tina4_python.core.port_takeover import (
+        take_over_port, is_dev, no_takeover_opted_out,
+    )
 
-    print(f"  Port {port} in use — killing existing process...")
-
-    if sys.platform == "win32":
-        # Find PID via netstat
-        try:
-            result = subprocess.run(
-                ["netstat", "-ano"],
-                capture_output=True, text=True, timeout=5
-            )
-            pid = None
-            for line in result.stdout.splitlines():
-                if f":{port}" in line and ("LISTENING" in line or "ESTABLISHED" in line):
-                    parts = line.split()
-                    if parts:
-                        pid = parts[-1]
-                        break
-            if pid and pid.isdigit():
-                subprocess.run(["taskkill", "/PID", pid, "/F"], timeout=5)
-        except Exception as e:
-            raise RuntimeError(f"Could not free port {port}: {e}") from e
-    else:
-        # macOS / Linux — use lsof
-        try:
-            result = subprocess.run(
-                ["lsof", "-ti", f":{port}"],
-                capture_output=True, text=True, timeout=5
-            )
-            pids = result.stdout.strip().splitlines()
-            if not pids:
-                return  # Nothing found — port may have freed itself
-            for pid_str in pids:
-                pid_str = pid_str.strip()
-                if pid_str.isdigit():
-                    os.kill(int(pid_str), signal.SIGTERM)
-        except FileNotFoundError:
-            # lsof not available — try fuser
-            try:
-                result = subprocess.run(
-                    ["fuser", f"{port}/tcp"],
-                    capture_output=True, text=True, timeout=5
-                )
-                for pid_str in result.stdout.split():
-                    if pid_str.isdigit():
-                        os.kill(int(pid_str), signal.SIGTERM)
-            except Exception as e:
-                raise RuntimeError(f"Could not free port {port}: {e}") from e
-        except Exception as e:
-            raise RuntimeError(f"Could not free port {port}: {e}") from e
-
-    # Give the OS a moment to reclaim the port
-    time.sleep(0.5)
-    print(f"  Port {port} freed")
+    result = take_over_port(port, dev=is_dev(), no_takeover=no_takeover_opted_out())
+    if result.reclaimed:
+        print(f"  {result.message}")
+        return
+    if result.refused:
+        raise RuntimeError(result.message)
+    # NOTHING / SKIPPED_CONTAINER: nothing to reclaim -- let the real bind decide.
 
 
 def _find_available_port(start: int, max_tries: int = 10) -> int:
@@ -3098,7 +3303,14 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
     Returns:
         (host, port) tuple with resolved values.
     """
-    default_host = "0.0.0.0"
+    # DEVADMIN-DEC-02: in dev/serve mode the dashboard exposes an unauthenticated
+    # file/SQL/RCE surface, so the DEFAULT bind is loopback, not 0.0.0.0. Only the
+    # default changes: production is unaffected (it passes an explicit host - the
+    # Docker CMD `app.py 0.0.0.0:PORT`, or uvicorn --host - which wins here, and
+    # prod does not set TINA4_DEBUG), and a developer who WANTS network exposure
+    # sets TINA4_HOST=0.0.0.0 to override deliberately.
+    from tina4_python.dotenv import is_truthy
+    default_host = "127.0.0.1" if is_truthy(os.environ.get("TINA4_DEBUG", "")) else "0.0.0.0"
     default_port = 7146
 
     # Host: CLI flag > TINA4_HOST env > HOST env > default.
@@ -3409,15 +3621,13 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     from tina4_python.auth import ensure_dev_secret
     ensure_dev_secret()
 
-    # Init logger
-    is_production = os.environ.get("TINA4_ENV", "development") == "production"
-    # v3.13.14: default level is INFO (was ERROR). ERROR-by-default meant a
-    # deployed app that logged at info/debug appeared silent — operators
-    # "weren't getting logs". INFO shows request/startup/warn/error without
-    # debug noise, and matches PHP/Ruby/Node defaults. Override per-deploy
-    # with TINA4_LOG_LEVEL.
-    log_level = os.environ.get("TINA4_LOG_LEVEL", "info")
-    Log.configure(level=log_level, production=is_production)
+    # Init logger. Bootstrap invents NO explicit defaults (LOG-I01 / Decision
+    # 17): call configure() with no arguments so level/format/output all
+    # resolve purely from TINA4_LOG_* env + the framework default, exactly
+    # like any other first-use caller. Passing computed values here as
+    # explicit arguments would leak them into the "argument" precedence tier
+    # and make an operator's env unable to override the framework's own guess.
+    Log.configure()
 
     # Install a top-level exception hook so uncaught exceptions bubbling
     # out of anything (a route handler, a background task, the event
@@ -3462,14 +3672,35 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     route_count = len(Router.get_routes())
     Log.info(f"Discovered {route_count} routes")
 
+    # CSRF: attach the middleware when TINA4_CSRF is enabled (OFF by default —
+    # a default app has no CSRF gate; TINA4_CSRF=true gates every write route).
+    from tina4_python.core.middleware import attach_csrf_from_env
+    if attach_csrf_from_env():
+        Log.info("CSRF protection enabled (TINA4_CSRF) — CsrfMiddleware attached")
+
+    # Security headers: register in the default chain UNCONDITIONALLY
+    # (secure-by-default, SECHDR-DEC-01). Unlike CSRF this needs no opt-in — a
+    # default app ships X-Frame-Options/X-Content-Type-Options/CSP/etc. with no
+    # code change. HSTS stays HTTPS-only. Idempotent.
+    from tina4_python.core.middleware import attach_security_headers
+    attach_security_headers()
+
     # Apply pending DB migrations on startup (non-breaking — see helper).
     _auto_migrate_on_startup()
 
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
 
-    # Claim the requested port — kill whatever is on it if needed
+    # Claim the requested port — reclaim it only from a stale Tina4 dev server
     port = _find_available_port(port)
+
+    # Record THIS process as the Tina4 dev server on this port, so a later
+    # `tina4 serve` can identify it as reclaimable (the identity signal behind
+    # TAKEOVER-DEC-01). Removed on clean exit; a fresh bind overwrites a stale one.
+    from tina4_python.core.port_takeover import write_pidfile, remove_pidfile
+    write_pidfile(port)
+    import atexit
+    atexit.register(remove_pidfile, port)
 
     # Detect production server (unless TINA4_DEBUG is true)
     from tina4_python.dotenv import is_truthy
@@ -3684,17 +3915,11 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             except NotImplementedError:
                 pass  # Windows
 
-        # Start registered background tasks as asyncio tasks.
-        # Sync callbacks run in a thread pool so they CANNOT block the event loop.
-        # max_workers is one per registered task — sound only because a task never
-        # overlaps itself (see background_tick_loop), so tasks cannot starve each
-        # other of workers.
-        import concurrent.futures
-        _executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=max(background_task_count(), 2),
-            thread_name_prefix="tina4_bg",
-        )
-        bg_tasks = _start_background_tasks(_executor, shutdown)
+        # Start registered background tasks as asyncio tasks. Sync callbacks run
+        # in a thread pool so they CANNOT block the event loop. The SAME helper
+        # runs under the production ASGI lifespan (see app()), so a background()
+        # task behaves identically on the built-in and production servers.
+        _executor, bg_tasks = _spin_up_background_tasks(shutdown)
 
         await shutdown.wait()
 
@@ -3741,6 +3966,10 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         _close_bound_databases()
         _executor.shutdown(wait=False, cancel_futures=True)
         Log.info("Server stopped.")
+        # Graceful shutdown owns the final call to reset() (Decision 24 /
+        # LOG-I02): flush+close owned sinks AFTER the shutdown record above is
+        # written, exactly once.
+        Log.reset()
 
     try:
         asyncio.run(_serve())

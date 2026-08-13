@@ -783,7 +783,11 @@ class AuthMiddleware:
         token = auth_header[7:]
         if not Auth.valid_token_static(token):
             return request, response({"error": "Invalid token"}, 401)
-        request.auth = Auth.get_payload_static(token)
+        # Stash the payload on request.user (REQ-PY-NO-USER, 3.13.99 — the
+        # field every other framework already exposes). This used to assign
+        # request.auth, which __slots__ has never declared, so this branch
+        # raised AttributeError on every SUCCESSFUL authentication.
+        request.user = Auth.get_payload_static(token)
         return request, response
 
 

@@ -40,6 +40,45 @@ from tina4_python.core.rate_limiter import RateLimiter  # noqa: F401 — re-expo
 from tina4_python.core.response import Response
 
 
+def _render_forbidden(request, response) -> None:
+    """The 403 a middleware gets when it says no without saying what to send.
+
+    ERR-DEC-01/ERR-403-SPLIT: routed through the SAME negotiated renderer as
+    404/500 (``server._render_error_page`` + ``server._json_error_body``), so
+    a middleware refusal looks like every other error page -- a user
+    template if the app ships one, the framework's ``403.twig`` otherwise,
+    negotiated JSON for an API client. Lazy import: ``server`` imports this
+    module at load time, so importing it back at module scope would be
+    circular; by the time a real request reaches here both modules are
+    fully loaded (the same pattern ``before_csrf`` already uses).
+    """
+    from tina4_python.core.server import _render_error_page, _json_error_body
+    from tina4_python.debug import get_request_id
+
+    request_id = get_request_id() or ""
+    accept = ""
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        accept = headers.get("accept", "") or ""
+
+    if request is not None and hasattr(request, "wants_json"):
+        wants_json = request.wants_json()
+    else:
+        from tina4_python.core.request import accept_prefers_json
+        wants_json = accept_prefers_json(accept)
+
+    if wants_json:
+        response.status(403).json(_json_error_body(403, request_id))
+        return
+
+    path = getattr(request, "path", "") or ""
+    html = _render_error_page(403, path, request_id)
+    if html:
+        response.status(403).html(html)
+    else:
+        response.status(403).json(_json_error_body(403, request_id))
+
+
 class Middleware:
     """Standardized middleware orchestrator.
 
@@ -127,7 +166,7 @@ class Middleware:
             return result[0], result[1], False
         if result is False:
             if response.status_code == 200 and not response.content:
-                response.status(403).json({"error": "Forbidden", "status": 403})
+                _render_forbidden(request, response)
             return request, response, True
         return request, response, False
 
@@ -455,6 +494,11 @@ class RateLimiterMiddleware:
 class SecurityHeadersMiddleware:
     """Injects security headers on every response.
 
+    Secure-by-default (SECHDR-DEC-01): the framework registers this in the
+    default middleware chain at boot via ``attach_security_headers`` (called
+    unconditionally from ``server.run``/``server.start``), so a default Tina4 app
+    ships the security headers with no opt-in. HSTS is HTTPS-only.
+
     Configurable via environment variables:
         TINA4_FRAME_OPTIONS        — X-Frame-Options (default: SAMEORIGIN)
         TINA4_HSTS                 — Strict-Transport-Security max-age value
@@ -466,31 +510,47 @@ class SecurityHeadersMiddleware:
 
     @staticmethod
     def before_security(request, response):
-        """Set security headers before the route handler runs."""
+        """Set security headers before the route handler runs.
+
+        Registered in the default chain (secure-by-default, SECHDR-DEC-01), so a
+        default app emits these headers with no opt-in. Header names use the
+        canonical Title-Case spelling shared with PHP/Ruby/Node — HTTP header
+        names are case-insensitive, so this is purely so the four frameworks are
+        byte-identical on the wire.
+        """
         response.header(
-            "x-frame-options",
+            "X-Frame-Options",
             os.environ.get("TINA4_FRAME_OPTIONS", "SAMEORIGIN"),
         )
-        response.header("x-content-type-options", "nosniff")
+        response.header("X-Content-Type-Options", "nosniff")
 
+        # HSTS is HTTPS-only (SECHDR-DEC-02). A downgrade-protection header on a
+        # plain-HTTP response is inert at best and ships a bad max-age on an
+        # unencrypted scheme at worst, so emit it ONLY when TINA4_HSTS is set AND
+        # the client request is HTTPS. is_secure_scheme() honours
+        # x-forwarded-proto then the native scheme — the same single source of
+        # truth the session cookie's Secure flag uses. Defensive getattr keeps a
+        # non-Request (e.g. a bare test double) from turning every response into a
+        # 500 now that this runs on every request.
         hsts = os.environ.get("TINA4_HSTS", "")
-        if hsts:
+        is_https = bool(getattr(request, "is_secure_scheme", lambda: False)())
+        if hsts and is_https:
             response.header(
-                "strict-transport-security",
+                "Strict-Transport-Security",
                 f"max-age={hsts}; includeSubDomains",
             )
 
         response.header(
-            "content-security-policy",
+            "Content-Security-Policy",
             os.environ.get("TINA4_CSP", "default-src 'self'"),
         )
         response.header(
-            "referrer-policy",
+            "Referrer-Policy",
             os.environ.get("TINA4_REFERRER_POLICY", "strict-origin-when-cross-origin"),
         )
-        response.header("x-xss-protection", "0")
+        response.header("X-XSS-Protection", "0")
         response.header(
-            "permissions-policy",
+            "Permissions-Policy",
             os.environ.get(
                 "TINA4_PERMISSIONS_POLICY",
                 "camera=(), microphone=(), geolocation=()",
@@ -503,16 +563,25 @@ class SecurityHeadersMiddleware:
 class CsrfMiddleware:
     """CSRF token validation middleware.
 
-    Off by default — only active when TINA4_CSRF=true in .env or when
-    registered explicitly via Router.use(CsrfMiddleware).
+    Off by default. Set ``TINA4_CSRF=true`` (or ``1``/``yes``/``on``) in the
+    environment and the framework auto-attaches this middleware at boot (see
+    ``attach_csrf_from_env``); or register it explicitly via
+    ``Router.use(CsrfMiddleware)``. Once attached, ``TINA4_CSRF=false`` (or
+    ``0``/``no``) is the kill switch that disables enforcement again.
 
     Behaviour:
         - Skips GET, HEAD, OPTIONS requests.
         - Skips routes marked @noauth().
+        - Fails CLOSED: with TINA4_SECRET unset the signing secret resolves to
+          blank (there is NO built-in default), and a blank HMAC key is
+          publicly reproducible — so no token can be trusted and every write is
+          rejected (403). This is the SEC-01 no-default-secret guarantee.
         - Skips requests with a valid Authorization: Bearer header (API clients).
         - Checks request.body["formToken"] then request.headers["X-Form-Token"].
         - Rejects if token found in request.query["formToken"] (log warning, 403).
-        - Validates token with Auth.valid_token using SECRET env var.
+        - Validates token with Auth.valid_token using the resolved SECRET, and
+          enforces that the token's ``type`` claim is ``"form"`` — a non-form
+          JWT presented in the formToken slot is rejected.
         - If token payload has session_id, verifies it matches request.session.session_id.
         - Returns 403 with response.error("CSRF_INVALID", ...) on failure.
     """
@@ -540,9 +609,24 @@ class CsrfMiddleware:
         if handler and getattr(handler, "_noauth", False):
             return request, response
 
-        # Skip requests with valid Bearer token (API clients)
-        auth_header = ""
+        # Resolve the signing secret ONCE, fail-closed (blank when TINA4_SECRET
+        # is unset — there is NO built-in default). A blank HMAC key is publicly
+        # reproducible, so a token signed with it (or with the retired public
+        # 'tina4-default-secret') is a forgery: reject every write rather than
+        # validate against a guessable key. SEC-01, fail closed hard.
+        from tina4_python.auth import Auth as _CsrfAuth, _resolve_secret
+        secret = _resolve_secret()
+        if not secret:
+            return request, response.error(
+                "CSRF_INVALID",
+                "CSRF token cannot be validated: TINA4_SECRET is not set",
+                403,
+            )
+        auth = _CsrfAuth(secret=secret)
+
+        # Skip requests with a valid Bearer token (API clients)
         headers = getattr(request, "headers", {})
+        auth_header = ""
         if isinstance(headers, dict):
             auth_header = headers.get("authorization", headers.get("Authorization", ""))
         elif hasattr(headers, "get"):
@@ -550,15 +634,17 @@ class CsrfMiddleware:
 
         if auth_header.startswith("Bearer "):
             bearer_token = auth_header[7:].strip()
-            if bearer_token:
-                from tina4_python.auth import Auth as _CsrfAuth, _resolve_secret
-                secret = _resolve_secret()
-                auth = _CsrfAuth(secret=secret)
-                if auth.valid_token(bearer_token):
-                    return request, response
+            if bearer_token and auth.valid_token(bearer_token):
+                return request, response
 
-        # Reject if token is in query string (security risk — log warning)
-        query = getattr(request, "params", None) or getattr(request, "query", None) or {}
+        # Reject if token is in query string (security risk — log warning).
+        # Read the QUERY STRING only, never request.params: params is
+        # route-only (REQ-PARAM-POLLUTION, 3.13.99), so on a parameterized
+        # write route (e.g. PUT /api/orders/{id}) it is a non-empty, truthy
+        # dict that would short-circuit an `or` fallback and never reach the
+        # real query string — silently letting a smuggled ?formToken= past
+        # this check on exactly the routes that have route params.
+        query = getattr(request, "query", None) or {}
         if isinstance(query, dict) and query.get("formToken"):
             CsrfMiddleware._logger.warning(
                 "CSRF token found in query string — rejected for security. "
@@ -589,10 +675,7 @@ class CsrfMiddleware:
                 403,
             )
 
-        # Validate the token
-        from tina4_python.auth import Auth as _CsrfAuth, _resolve_secret
-        secret = _resolve_secret()
-        auth = _CsrfAuth(secret=secret)
+        # Validate the token signature / expiry
         if not auth.valid_token(token):
             return request, response.error(
                 "CSRF_INVALID",
@@ -601,6 +684,16 @@ class CsrfMiddleware:
             )
 
         payload = auth.get_payload(token) or {}
+
+        # Enforce the form-token TYPE — a valid signature is not enough: a
+        # non-form JWT (e.g. an auth/session token) must never be accepted in
+        # the formToken slot.
+        if payload.get("type") != "form":
+            return request, response.error(
+                "CSRF_INVALID",
+                "Invalid or missing form token",
+                403,
+            )
 
         # Session binding — if token has session_id, verify it matches
         token_session_id = payload.get("session_id")
@@ -620,6 +713,41 @@ class CsrfMiddleware:
                 )
 
         return request, response
+
+
+def attach_csrf_from_env() -> bool:
+    """Auto-attach ``CsrfMiddleware`` when ``TINA4_CSRF`` is enabled in the env.
+
+    CSRF is OFF by default: with ``TINA4_CSRF`` unset the middleware is never
+    attached, so a default app has no CSRF gate. Setting ``TINA4_CSRF`` to a
+    truthy value (``true``/``1``/``yes``/``on``, case-insensitive) attaches it
+    globally at boot so every state-changing route is gated — the env flag is
+    the switch, no code change needed. Idempotent (``Middleware.use`` de-dupes).
+    Returns True when the middleware is now attached.
+
+    The framework calls this once during ``server.run``/``server.start``; a
+    ``false``/``0``/``no`` value still lets an explicit ``Router.use`` opt-in be
+    disabled at runtime by the kill switch in ``before_csrf``.
+    """
+    value = os.environ.get("TINA4_CSRF", "").strip().lower()
+    if value in ("true", "1", "yes", "on"):
+        Middleware.use(CsrfMiddleware)
+        return True
+    return False
+
+
+def attach_security_headers() -> bool:
+    """Register ``SecurityHeadersMiddleware`` in the default chain (secure-by-default).
+
+    Unlike CSRF (opt-in via ``TINA4_CSRF``) this is UNCONDITIONAL: a default Tina4
+    app ships the security headers with no opt-in — the SECHDR-DEC-01 posture that
+    closes the SECHDR-OFF-BY-DEFAULT gap (the middleware existed with good defaults
+    but was never registered). Idempotent (``Middleware.use`` de-dupes). The
+    framework calls this once during ``server.run``/``server.start``. Returns True
+    (always attached).
+    """
+    Middleware.use(SecurityHeadersMiddleware)
+    return True
 
 
 class RequestLoggerMiddleware:

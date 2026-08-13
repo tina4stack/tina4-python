@@ -3,7 +3,6 @@ import os
 import pytest
 from tina4_python.debug.error_overlay import (
     render_error_overlay,
-    render_production_error,
     is_debug_mode,
 )
 
@@ -91,30 +90,6 @@ class TestRenderErrorOverlay:
         assert "Stack Trace" in html
         assert "<details" in html
         assert "open" in html
-
-
-class TestRenderProductionError:
-    """Tests for render_production_error()."""
-
-    def test_returns_html_string(self):
-        html = render_production_error()
-        assert isinstance(html, str)
-        assert html.startswith("<!DOCTYPE html>")
-
-    def test_contains_status_code(self):
-        html = render_production_error(404, "Not Found")
-        assert "404" in html
-        assert "Not Found" in html
-
-    def test_does_not_contain_stack_trace(self):
-        html = render_production_error()
-        assert "Stack Trace" not in html
-        assert "traceback" not in html.lower()
-
-    def test_default_500(self):
-        html = render_production_error()
-        assert "500" in html
-        assert "Internal Server Error" in html
 
 
 class TestIsDebugMode:

@@ -10,12 +10,12 @@ import re
 from urllib.parse import urlparse
 from tina4_python.database.database_url import url_credentials
 from tina4_python.database.adapter import (
-    DatabaseAdapter, DatabaseResult, SQLTranslator,
+    DatabaseAdapter, DatabaseResult, SQLTranslator, SqlCrudMixin,
     call_with_deadline, connect_deadline, driver_connect_timeout_seconds,
 )
 
 
-class MSSQLAdapter(DatabaseAdapter):
+class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # The marker is the whole of what MSSQL's CRUD used to justify overriding.
     PARAM_MARKER = "%s"
@@ -121,15 +121,24 @@ class MSSQLAdapter(DatabaseAdapter):
                 pass
 
         if returning_cols and last_id:
-            table = self._extract_table(sql)
-            if returning_cols.strip() == "*":
-                fetch_sql = f"SELECT * FROM {table} WHERE id = %s"
-            else:
-                fetch_sql = f"SELECT {returning_cols} FROM {table} WHERE id = %s"
-            cursor.execute(fetch_sql, (last_id,))
-            row = cursor.fetchone()
-            if row:
-                records = [dict(row)]
+            # MSSQL has no RETURNING: emulate it by re-selecting the inserted row
+            # by the table's REAL primary key - never a hardcoded `id`
+            # (MSSQL-RETURNING-ID, the same defect feature 10 fixed in mysql.py and
+            # shared with firebird.py). A model whose PK is not named `id` used to
+            # raise "Invalid column name 'id'". The identifier is bracket-quoted
+            # (embedded `]` escaped), not interpolated raw.
+            table = self._unquote_ident(self._extract_table(sql))
+            pk = self._returning_pk(table)
+            if pk:
+                cols = "*" if returning_cols.strip() == "*" else returning_cols
+                fetch_sql = (
+                    f"SELECT {cols} FROM {self._quote_mssql_ident(table)} "
+                    f"WHERE {self._quote_mssql_ident(pk)} = %s"
+                )
+                cursor.execute(fetch_sql, (last_id,))
+                row = cursor.fetchone()
+                if row:
+                    records = [dict(row)]
 
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
@@ -285,6 +294,47 @@ class MSSQLAdapter(DatabaseAdapter):
 
     def get_database_type(self) -> str:
         return "mssql"
+
+    # -- RETURNING emulation (real primary key) ------------------------
+
+    def _unquote_ident(self, token: str) -> str:
+        """Strip SQL Server bracket-quoting from a table token so it can be
+        re-quoted / introspected. ``[t]`` -> ``t`` (``]]`` -> ``]``); a bare
+        ``t`` is returned unchanged. Mirrors the Python MySQL adapter's
+        ``_unquote_ident`` (feature 10) for the RETURNING re-select."""
+        t = (token or "").strip()
+        if len(t) >= 2 and t[0] == "[" and t[-1] == "]":
+            return t[1:-1].replace("]]", "]")
+        return t
+
+    def _quote_mssql_ident(self, name: str) -> str:
+        """Bracket-quote a (possibly schema-qualified) identifier, ESCAPING an
+        embedded ``]``. The RETURNING re-select takes an identifier, not a bind
+        parameter; strict-quoting makes a crafted name one escaped identifier
+        instead of interpolating it raw."""
+        schema, table = self._split_schema(name)
+
+        def q(part: str) -> str:
+            return "[" + part.replace("]", "]]") + "]"
+
+        return q(table) if schema is None else f"{q(schema)}.{q(table)}"
+
+    def _returning_pk(self, table: str) -> str | None:
+        """The table's single PRIMARY KEY column, for RETURNING emulation.
+
+        SQL Server has no RETURNING, so the provider re-selects the inserted row
+        by its REAL primary key - never a hardcoded ``id`` (MSSQL-RETURNING-ID).
+        Introspected via :meth:`get_columns` and cached per table. Returns
+        ``None`` when the table has no single-column PK (a composite or key-less
+        table degrades to no re-select rather than a wrong one)."""
+        cache = self.__dict__.setdefault("_returning_pk_cache", {})
+        if table not in cache:
+            try:
+                pks = [c["name"] for c in self.get_columns(table) if c.get("primary_key")]
+            except Exception:
+                pks = []
+            cache[table] = pks[0] if len(pks) == 1 else None
+        return cache[table]
 
     # -- SQL Translation -----------------------------------------------
 

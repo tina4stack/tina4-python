@@ -97,6 +97,15 @@ def _imap_fail(method: str, exc: Exception) -> "MessengerConnectionError":
     return MessengerConnectionError(f"IMAP {method} failed: {exc}")
 
 
+def _parse_mail_redirect_list(raw: str) -> list[str]:
+    """Parse TINA4_MAIL_REDIRECT_TO (MAIL-DEC-01): comma-separated addresses,
+    each trimmed, blanks dropped. Empty/unset -> [] (redirect off, no
+    behaviour change)."""
+    if not raw:
+        return []
+    return [addr.strip() for addr in raw.split(",") if addr.strip()]
+
+
 class Messenger:
     """SMTP email client using Python stdlib."""
 
@@ -243,6 +252,22 @@ class Messenger:
                 from_address=self.from_address, from_name=self.from_name,
                 attachments=attachments,
             )
+
+        # TINA4_MAIL_REDIRECT_TO (MAIL-DEC-01): the REAL-SEND path only --
+        # capture already returned above, so this never touches the capture
+        # branch. When the list is non-empty, replace every recipient with the
+        # redirect list (so ONLY the dev list receives the mail, never the real
+        # recipients) and preserve the originals in a header. Subject/body/
+        # attachments are untouched; send()'s return shape is unchanged. Read
+        # fresh per call, matching _should_capture()'s own env-read style.
+        redirect_to = _parse_mail_redirect_list(os.environ.get("TINA4_MAIL_REDIRECT_TO", ""))
+        if redirect_to:
+            original_to = ", ".join(to_list + cc_list + bcc_list)
+            to_list = redirect_to
+            cc_list = []
+            bcc_list = []
+            headers = dict(headers or {})
+            headers["X-Tina4-Original-To"] = original_to
 
         has_attachments = bool(attachments)
         has_text_alt = text is not None and html

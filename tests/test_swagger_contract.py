@@ -518,3 +518,106 @@ def test_operation_ids_are_stable_and_distinct(monkeypatch):
         document = fetch_openapi_document()
         assert document["paths"]["/__health"]["get"]["operationId"] == "get___health"
         assert document["paths"]["/health"]["get"]["operationId"] == "get_health"
+
+
+# ── 11. spec-reflects-a-route-added-after-boot ───────────────────────────────
+
+def test_spec_reflects_a_route_added_after_boot(monkeypatch):
+    """Invariant: spec-reflects-a-route-added-after-boot.
+    Human stem: spec reflects a route added after boot.
+
+    The document reflects a route registered AFTER an earlier fetch — the spec
+    must re-read the LIVE route table every time, never a snapshot frozen at
+    server boot. Node's generator closed over a boot-time `router.getRoutes()`
+    capture (SWAG-NODE-BOOT-SNAPSHOT); Python/PHP/Ruby always re-read live
+    routes, and this pins that for Python too.
+    """
+    clean_swagger_env(monkeypatch)
+    monkeypatch.setenv("TINA4_SWAGGER_ENABLED", "true")
+
+    with isolated_routes():
+        register_get("/contract/before-boot")
+        document_before = fetch_openapi_document()
+        assert "/contract/before-boot" in document_before["paths"]
+        assert "/contract/late-added" not in document_before["paths"], (
+            "premise broken: the late route must not exist before it is registered"
+        )
+
+        # Simulate a hot-reload registering a NEW route after the first fetch —
+        # exactly what DevReload does mid-process.
+        register_get("/contract/late-added")
+        document_after = fetch_openapi_document()
+        assert "/contract/late-added" in document_after["paths"], (
+            "the document must reflect a route registered after an earlier fetch, "
+            "not a snapshot taken before it existed"
+        )
+        assert "/contract/before-boot" in document_after["paths"], (
+            "the earlier route must still be documented too"
+        )
+
+
+# ── 12. internal-feedback-route-is-never-in-the-spec ─────────────────────────
+
+def test_internal_feedback_route_is_never_in_the_spec(monkeypatch):
+    """Invariant: internal-feedback-route-is-never-in-the-spec.
+    Human stem: internal feedback route never in the spec.
+
+    /__feedback/* is excluded by the SAME shared internal-prefix rule as
+    /swagger and /__dev, regardless of how or when it was registered.
+    Node's /__feedback/* was kept out of the spec only by BOOT ORDERING
+    (swagger snapshotted routes before DevAdmin registered the feedback
+    routes), not by its exclusion list — a reorder would have published it
+    (SWAG-NODE-FEEDBACK-LEAK). This proves the RULE catches it here even
+    though Python dispatches /__feedback outside the router in practice.
+    """
+    clean_swagger_env(monkeypatch)
+    monkeypatch.setenv("TINA4_SWAGGER_ENABLED", "true")
+
+    with isolated_routes():
+        register_get("/contract/app-route")
+        register_get("/__feedback/widget.js")
+        register_write("/__feedback/api/turn")
+        document = fetch_openapi_document()
+
+        paths = document["paths"]
+        assert "/contract/app-route" in paths, "the application route must be documented"
+        assert "/__feedback/widget.js" not in paths, "/__feedback must be excluded regardless of registration"
+        assert "/__feedback/api/turn" not in paths, "/__feedback must be excluded regardless of registration"
+        for path_key in paths:
+            assert not path_key.startswith("/__feedback"), path_key
+
+
+# ── 13. secured-op-per-op-shape-is-identical ──────────────────────────────────
+
+def test_secured_op_per_op_shape_is_identical(monkeypatch):
+    """Invariant: secured-op-per-op-shape-is-identical.
+    Human stem: secured op per-op shape identical.
+
+    A secured operation's security + 401 + summary/tags shape is byte-identical
+    across all four frameworks (SWAG-401-SHAPE + SWAG-SHAPE-DRIFT). Python used
+    to emit NO 401 on a secured op and omitted summary/tags entirely on an
+    undecorated route; PHP/Ruby/Node always populated them. The negative
+    control (an explicitly-public op) proves summary/tags populate regardless
+    of security, and that no description is fabricated either way.
+    """
+    clean_swagger_env(monkeypatch)
+    monkeypatch.setenv("TINA4_SWAGGER_ENABLED", "true")
+
+    with isolated_routes():
+        register_write("/contract/shape-item")                 # secured by default, undecorated
+        register_write("/contract/shape-public", public=True)  # explicitly public, undecorated
+        document = fetch_openapi_document()
+
+        secured = document["paths"]["/contract/shape-item"]["post"]
+        assert secured["security"] == [{"bearerAuth": []}]
+        assert secured["responses"]["401"] == {"description": "Unauthorized"}
+        assert secured["summary"] == "POST /contract/shape-item"
+        assert secured["tags"] == ["contract"]
+        assert "description" not in secured, "an undecorated operation must not fabricate a description"
+
+        public = document["paths"]["/contract/shape-public"]["post"]
+        assert "security" not in public, "an explicitly-public op documents no security"
+        assert "401" not in public["responses"], "an explicitly-public op documents no 401"
+        assert public["summary"] == "POST /contract/shape-public", "summary populates regardless of security"
+        assert public["tags"] == ["contract"], "tags populate regardless of security"
+        assert "description" not in public

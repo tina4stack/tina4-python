@@ -1,19 +1,29 @@
 # Tina4 Debug — Rich error overlay for development mode.
 """
-Renders a professional, syntax-highlighted HTML error page when an unhandled
-exception occurs in a route handler.
+Renders a rich HTML error page (exception type + message, the full stack with a
+seven-line source window per frame, request details, and the environment) when an
+unhandled exception reaches the server dispatch in development.
 
-    from tina4_python.debug.error_overlay import render_error_overlay
+    from tina4_python.debug.error_overlay import render_error_overlay, is_debug_mode
 
     try:
         handler(request, response)
     except Exception as exc:
-        html = render_error_overlay(exc, request_info={"method": "GET", "url": "/api/users"})
+        if is_debug_mode():
+            html = render_error_overlay(exc, request)
 
-Only activate when TINA4_DEBUG is true.  In production, call
-render_production_error() instead for a safe, generic error page.
+Dev-only: the caller gates this on ``is_debug_mode()`` (``TINA4_DEBUG``). The
+production 500 is NOT rendered here — the server dispatch renders ``errors/500.twig``
+with an empty ``error_message`` (CWE-209), so the exception detail stays in the
+server log only, never in the response body.
+
+Sensitive request fields (``Authorization`` / ``Cookie`` / ``Set-Cookie`` headers and
+password-like body/param keys) are redacted even in the dev overlay, the frame count
+is capped, and the caller wraps this render in a guard, so a broken overlay or a
+recursive stack still yields a bounded, safe 500.
 """
 import os
+import re
 import sys
 import html as html_mod
 import traceback
@@ -37,6 +47,23 @@ _ERROR_LINE_BG = "rgba(243,139,168,0.15)"
 
 _CONTEXT_LINES = 7  # lines above/below the error line
 
+# OVERLAY-DEC-03: cap the rendered frames so a deep/recursive stack
+# (a RecursionError-class trace of thousands of frames) yields a bounded page
+# with one source-file read per SHOWN frame, not an unbounded one.
+_MAX_FRAMES = 50
+
+# OVERLAY-DEC-02: request fields whose KEY matches this are masked in the dev
+# overlay, so a bearer token, cookie or submitted password is never rendered in
+# cleartext even when TINA4_DEBUG is on. Matched case-insensitively on the field
+# name (``Authorization``/``Cookie``/``Set-Cookie`` headers via authorization|cookie;
+# ``password``/``token``/``secret``/``api_key`` body/param keys via the rest). Over-
+# matching (a benign field containing "key") is the SAFE direction in a dev tool:
+# over-masking hides nothing that matters, under-masking leaks a secret.
+_SENSITIVE_KEY_RE = re.compile(
+    r"password|passwd|secret|token|authorization|cookie|key", re.IGNORECASE
+)
+_REDACTED = "[redacted]"
+
 
 def _read_source_lines(filename: str, lineno: int, context: int = _CONTEXT_LINES) -> list[tuple[int, str, bool]]:
     """Read source lines around *lineno*.  Returns list of (line_number, text, is_error_line)."""
@@ -53,6 +80,17 @@ def _read_source_lines(filename: str, lineno: int, context: int = _CONTEXT_LINES
 
 def _escape(text: str) -> str:
     return html_mod.escape(str(text))
+
+
+def _redact(key: str, value: str) -> str:
+    """Mask a sensitive request value (OVERLAY-DEC-02).
+
+    Returns ``[redacted]`` when *key* names a secret field (an
+    ``Authorization``/``Cookie``/``Set-Cookie`` header or a
+    ``password``/``token``/``secret``/``key``-like body/param key), otherwise the
+    value unchanged. The escape happens AFTER this, so the mask itself is inert.
+    """
+    return _REDACTED if _SENSITIVE_KEY_RE.search(str(key)) else value
 
 
 def _format_source_block(filename: str, lineno: int) -> str:
@@ -168,9 +206,20 @@ def render_error_overlay(exception: BaseException, request: Any = None) -> str:
     # against the "browser cached an old overlay, then the AI rewrote
     # the file" confusion where displayed source no longer matches
     # what actually raised the error.
+    # OVERLAY-DEC-03: cap the rendered frames. A recursive stack of thousands of
+    # frames would otherwise do one source-file read per frame and emit an
+    # unbounded page; render only the innermost _MAX_FRAMES and note the rest.
+    ordered = list(reversed(tb))
     frames_html = ""
-    for frame in reversed(tb):
+    for frame in ordered[:_MAX_FRAMES]:
         frames_html += _format_frame(frame, captured_at=captured_at)
+    hidden = len(ordered) - _MAX_FRAMES
+    if hidden > 0:
+        frames_html += (
+            f'<div style="color:{_SUBTEXT};padding:8px 0;font-size:13px;">'
+            f'&#8230; {hidden} more stack frames hidden (truncated at {_MAX_FRAMES})'
+            f"</div>"
+        )
 
     # ── Request info ──
     request_pairs: list[tuple[str, str]] = []
@@ -188,11 +237,12 @@ def render_error_overlay(exception: BaseException, request: Any = None) -> str:
             elif isinstance(v, dict):
                 if v:
                     for hk, hv in v.items():
-                        request_pairs.append((f"{k}.{hk}", str(hv)))
+                        pair_key = f"{k}.{hk}"
+                        request_pairs.append((pair_key, _redact(pair_key, str(hv))))
                 else:
                     request_pairs.append((str(k), "(empty)"))
             else:
-                request_pairs.append((str(k), str(v)))
+                request_pairs.append((str(k), _redact(str(k), str(v))))
 
     request_section = _collapsible("Request Details", _table(request_pairs)) if request_pairs else ""
 
@@ -235,30 +285,6 @@ body{{background:{_BG};color:{_TEXT};font-family:-apple-system,BlinkMacSystemFon
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid {_OVERLAY};color:{_SUBTEXT};font-size:12px;">
     Tina4 Debug Overlay &mdash; This page is only shown in debug mode. Set TINA4_DEBUG=false in production.
   </div>
-</div>
-</body>
-</html>"""
-
-
-def render_production_error(status_code: int = 500, message: str = "Internal Server Error") -> str:
-    """Render a safe, generic error page for production use."""
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>{status_code} — {_escape(message)}</title>
-<style>
-*{{margin:0;padding:0;box-sizing:border-box;}}
-body{{background:{_BG};color:{_TEXT};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-display:flex;justify-content:center;align-items:center;min-height:100vh;text-align:center;}}
-</style>
-</head>
-<body>
-<div>
-  <h1 style="font-size:72px;color:{_RED};margin-bottom:16px;">{status_code}</h1>
-  <p style="font-size:20px;color:{_SUBTEXT};">{_escape(message)}</p>
-  <p style="margin-top:24px;font-size:14px;color:{_OVERLAY};">Tina4 Python</p>
 </div>
 </body>
 </html>"""

@@ -10,12 +10,40 @@ SQL-first: you write the queries, ORM maps and manages the data.
         email = Field(str)
 """
 from __future__ import annotations
+import re
 from typing import TYPE_CHECKING, Self
 from tina4_python.orm.fields import Field, RelationshipDescriptor
 from tina4_python.core.cache import Cache
 
-# Module-level query cache — shared across all ORM models
+# Module-level query cache — shared across ALL ORM models, so a write on one
+# model busts a cross-table query cached on another (CACHE-DEC-01).
 _query_cache = Cache(default_ttl=0, max_size=500)
+
+# Identifier after a FROM / JOIN keyword (optionally schema-qualified and quoted).
+# Used to tag a cached query by every table it touches so a write to any of them
+# busts it (CACHE-DEC-01). An alias after the table name is deliberately ignored.
+_CACHE_TABLE_RE = re.compile(
+    r'\b(?:FROM|JOIN)\s+([`"\[]?[A-Za-z_][\w$]*[`"\]]?(?:\.[`"\[]?[A-Za-z_][\w$]*[`"\]]?)?)',
+    re.IGNORECASE,
+)
+
+
+def _tables_in_sql(sql: str) -> set[str]:
+    """Table names a query reads FROM / JOINs — lowercased, schema-stripped.
+
+    Best-effort: for each FROM/JOIN keyword it takes the following identifier,
+    drops any quoting (backticks, double quotes, square brackets) and schema
+    prefix (public.users -> users), and ignores the alias. A cached query is
+    tagged with these tables so a write to any one of them invalidates it.
+    """
+    tables: set[str] = set()
+    for match in _CACHE_TABLE_RE.finditer(sql or ""):
+        name = match.group(1).strip('`"[]')
+        if "." in name:
+            name = name.rsplit(".", 1)[-1].strip('`"[]')
+        if name:
+            tables.add(name.lower())
+    return tables
 
 # Global database reference — set via bind_database()
 _database = None
@@ -72,6 +100,23 @@ def camel_to_snake(name: str) -> str:
             result.append("_")
         result.append(c.lower())
     return "".join(result)
+
+
+# REL-EAGER-UNBOUNDED: the eager loader builds one placeholder per parent PK in
+# the ``WHERE fk IN (...)`` list. Split the parent PKs into chunks of this size
+# so a very large parent set never yields an unbounded IN list (a query-size /
+# driver parameter-limit risk); each chunk is one query. It is comfortably under
+# SQLite's default 999-variable limit while leaving room for other bound params.
+_EAGER_IN_CHUNK = 500
+# Rows fetched per page when reading a relation's rows, so no relation is ever
+# silently truncated at a fixed cap.
+_EAGER_PAGE_SIZE = 1000
+
+
+def _chunk_list(seq: list, size: int):
+    """Yield successive ``size``-length slices of ``seq``."""
+    for start in range(0, len(seq), size):
+        yield seq[start:start + size]
 
 
 class ORMMeta(type):
@@ -239,10 +284,16 @@ class ORM(metaclass=ORMMeta):
         object.__setattr__(self, name, value)
 
     def _populate(self, data: dict):
-        """Set field values from a dict.
+        """Set field values from a dict — the READ/hydration path.
 
         Applies reverse field_mapping so DB column names are converted
-        to Python attribute names before assignment.
+        to Python attribute names before assignment. Uses ``field.coerce()``
+        (type coercion + JSON parse only), NOT ``field.validate()`` — a row
+        already persisted must always hydrate, even if it violates a
+        business constraint (required/length/range/regex/choices) or one
+        was tightened after the row was written (LOAD-PY-REVALIDATE /
+        LOAD-DEC-01). Business-constraint enforcement stays on the write
+        path (``ORM.validate()`` / ``save()``, feature 19) — unaffected.
         """
         # Build reverse mapping: db_column -> python_attribute
         reverse = {v: k for k, v in self.field_mapping.items()} if self.field_mapping else {}
@@ -252,7 +303,7 @@ class ORM(metaclass=ORMMeta):
             attr = reverse.get(key, key)
             if attr in self._fields:
                 field = self._fields[attr]
-                setattr(self, attr, field.validate(value))
+                setattr(self, attr, field.coerce(value))
             else:
                 # Allow extra attributes (from joined queries, etc.)
                 setattr(self, attr, value)
@@ -461,29 +512,41 @@ class ORM(metaclass=ORMMeta):
         # apply (e.g. NOT NULL DEFAULT '') instead of emitting an explicit NULL
         # that violates the constraint. Unused on the UPDATE path.
         insert_omit = set()
-        for name, field in self._fields.items():
-            if field.auto_increment and pk_value is None:
-                continue  # Skip auto-increment on insert
-            value = getattr(self, name)
-            # v3.13.11 (issue #50): resolve callable values at write time
-            # too, in case the user set ``self.created_at = lambda: ...``
-            # directly. Defensive — Field.validate() already handles this
-            # for the normal __init__ + _populate paths.
-            if callable(value) and not isinstance(value, type):
-                value = value()
-            if value is not None or not field.auto_increment:
-                # Use field_mapping for the column name, fall back to field.column
-                db_col = self.field_mapping.get(name, field.column)
-                # Serialize to the column's storage form: identity for most
-                # fields, JSON string for JSONField (see Field.to_db).
-                data[db_col] = field.to_db(value)
-                # #165: a None value the caller never assigned is an UNSET
-                # column — omit it from the INSERT so the DB DEFAULT applies.
-                # A resolved ORM default (non-None) is still written; a value
-                # the caller explicitly set to None is still written as NULL
-                # (its field name is in _assigned_fields).
-                if value is None and name not in self._assigned_fields:
-                    insert_omit.add(db_col)
+        # A field's to_db() serialization can fail loud — the commonest case is a
+        # JSONField handed a value that is not JSON-serializable (a set, a custom
+        # object). The write-path contract, identical in all four frameworks, is:
+        # save() returns False + logs the cause (never raises out of save(), never
+        # silently persists a bad row). So a serialization error while BUILDING the
+        # row is caught here, recorded on last_error, logged, and turned into a
+        # False return before any transaction is opened.
+        try:
+            for name, field in self._fields.items():
+                if field.auto_increment and pk_value is None:
+                    continue  # Skip auto-increment on insert
+                value = getattr(self, name)
+                # v3.13.11 (issue #50): resolve callable values at write time
+                # too, in case the user set ``self.created_at = lambda: ...``
+                # directly. Defensive — Field.validate() already handles this
+                # for the normal __init__ + _populate paths.
+                if callable(value) and not isinstance(value, type):
+                    value = value()
+                if value is not None or not field.auto_increment:
+                    # Use field_mapping for the column name, fall back to field.column
+                    db_col = self.field_mapping.get(name, field.column)
+                    # Serialize to the column's storage form: identity for most
+                    # fields, JSON string for JSONField (see Field.to_db).
+                    data[db_col] = field.to_db(value)
+                    # #165: a None value the caller never assigned is an UNSET
+                    # column — omit it from the INSERT so the DB DEFAULT applies.
+                    # A resolved ORM default (non-None) is still written; a value
+                    # the caller explicitly set to None is still written as NULL
+                    # (its field name is in _assigned_fields).
+                    if value is None and name not in self._assigned_fields:
+                        insert_omit.add(db_col)
+        except (ValueError, TypeError) as exc:
+            self.last_error = str(exc)
+            Log.error(f"{type(self).__name__}.save() refused: {exc}")
+            return False
 
         # v3.13.11 (issue #50): pick INSERT vs UPDATE on row existence
         # for non-auto-increment PKs. Auto-increment keeps the legacy
@@ -599,14 +662,31 @@ class ORM(metaclass=ORMMeta):
         self._persisted = True
         return self
 
+    @classmethod
+    def _soft_delete_column(cls) -> str:
+        """DB column backing the soft-delete flag, honouring ``field_mapping``.
+
+        The soft-delete finder filter and the ``delete``/``restore`` writes must
+        address the SAME column. ``field_mapping`` remaps a Python attribute to
+        its DB column (SOFTDEL-PY-FILTER-MAPPING), so a model that remaps
+        ``is_deleted`` filters and writes on the mapped column, not the literal.
+        Defaults to ``is_deleted`` when unmapped, so ordinary models are
+        unaffected.
+        """
+        return cls.field_mapping.get("is_deleted", "is_deleted")
+
+    @classmethod
+    def _soft_delete_filter(cls) -> str:
+        """SQL predicate that excludes soft-deleted rows (``field_mapping``-aware)."""
+        col = cls._soft_delete_column()
+        return f"({col} = 0 OR {col} IS NULL)"
+
     def delete(self) -> bool:
         """Delete this record (soft or hard)."""
         db = self._get_db()
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
-        table_sql = self._get_table_sql()
-        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         if pk_value is None:
             raise ValueError("Cannot delete: no primary key value")
@@ -615,7 +695,7 @@ class ORM(metaclass=ORMMeta):
         try:
             if self.soft_delete:
                 where, where_params = self._pk_where()
-                db.update(table, {"is_deleted": 1}, where, where_params)
+                db.update(table, {self._soft_delete_column(): 1}, where, where_params)
                 self.is_deleted = 1
             else:
                 where, where_params = self._pk_where()
@@ -624,6 +704,8 @@ class ORM(metaclass=ORMMeta):
         except Exception:
             db.rollback()
             raise
+        # Bust cached reads of any table this write touched (CACHE-DEC-01).
+        self.clear_cache()
         return True
 
     def force_delete(self) -> bool:
@@ -632,8 +714,6 @@ class ORM(metaclass=ORMMeta):
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         table = self._get_table()
-        table_sql = self._get_table_sql()
-        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         if pk_value is None:
             raise ValueError("Cannot delete: no primary key value")
@@ -646,6 +726,8 @@ class ORM(metaclass=ORMMeta):
         except Exception:
             db.rollback()
             raise
+        # Bust cached reads of any table this write touched (CACHE-DEC-01).
+        self.clear_cache()
         return True
 
     def restore(self) -> bool:
@@ -654,21 +736,19 @@ class ORM(metaclass=ORMMeta):
             raise RuntimeError("Model does not support soft delete")
 
         db = self._get_db()
-        pk = self._get_pk()
-        pk_value = getattr(self, pk)
         table = self._get_table()
-        table_sql = self._get_table_sql()
-        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
 
         db.start_transaction()
         try:
             where, where_params = self._pk_where()
-            db.update(table, {"is_deleted": 0}, where, where_params)
+            db.update(table, {self._soft_delete_column(): 0}, where, where_params)
             self.is_deleted = 0
             db.commit()
         except Exception:
             db.rollback()
             raise
+        # Bust cached reads of any table this write touched (CACHE-DEC-01).
+        self.clear_cache()
         return True
 
     # ── Finders ─────────────────────────────────────────────────
@@ -710,7 +790,7 @@ class ORM(metaclass=ORMMeta):
 
         sql = f"SELECT * FROM {table_sql} WHERE {pk_col} = ?"
         if cls.soft_delete:
-            sql += " AND (is_deleted = 0 OR is_deleted IS NULL)"
+            sql += f" AND {cls._soft_delete_filter()}"
 
         return cls.select_one(sql, [pk_value], include=include)
 
@@ -760,7 +840,7 @@ class ORM(metaclass=ORMMeta):
                 params.append(value)
 
         if cls.soft_delete:
-            conditions.append("(is_deleted = 0 OR is_deleted IS NULL)")
+            conditions.append(cls._soft_delete_filter())
 
         sql = f"SELECT * FROM {table_sql}"
         if conditions:
@@ -835,7 +915,7 @@ class ORM(metaclass=ORMMeta):
 
         sql = f"SELECT * FROM {table_sql}"
         if cls.soft_delete:
-            sql += " WHERE (is_deleted = 0 OR is_deleted IS NULL)"
+            sql += f" WHERE {cls._soft_delete_filter()}"
         if order_by:
             sql += f" ORDER BY {order_by}"
 
@@ -866,7 +946,7 @@ class ORM(metaclass=ORMMeta):
             table_sql = cls._get_table_sql()
             sql = f"SELECT * FROM {table_sql}"
             if cls.soft_delete:
-                sql += " WHERE is_deleted = 0 OR is_deleted IS NULL"
+                sql += f" WHERE {cls._soft_delete_filter()}"
         result = db.fetch(sql, params, limit=limit, offset=offset)
         instances = [cls(row) for row in result.records]
         if include:
@@ -904,7 +984,7 @@ class ORM(metaclass=ORMMeta):
 
         sql = f"SELECT * FROM {table_sql} WHERE {filter_sql}"
         if cls.soft_delete:
-            sql = f"SELECT * FROM {table_sql} WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
+            sql = f"SELECT * FROM {table_sql} WHERE ({filter_sql}) AND {cls._soft_delete_filter()}"
         if order_by:
             sql += f" ORDER BY {order_by}"
 
@@ -918,7 +998,7 @@ class ORM(metaclass=ORMMeta):
             if cls.soft_delete:
                 count_sql = (
                     f"SELECT COUNT(*) AS n FROM {table_sql} "
-                    f"WHERE ({filter_sql}) AND (is_deleted = 0 OR is_deleted IS NULL)"
+                    f"WHERE ({filter_sql}) AND {cls._soft_delete_filter()}"
                 )
             count_row = db.fetch_one(count_sql, params)
             total = int(count_row["n"]) if count_row else len(instances)
@@ -945,7 +1025,7 @@ class ORM(metaclass=ORMMeta):
 
         where_parts = []
         if cls.soft_delete:
-            where_parts.append("(is_deleted = 0 OR is_deleted IS NULL)")
+            where_parts.append(cls._soft_delete_filter())
         if conditions:
             where_parts.append(f"({conditions})")
 
@@ -1056,6 +1136,13 @@ class ORM(metaclass=ORMMeta):
                 sql_type = "TEXT"
             elif kind in ("NumericField", "FloatField"):
                 sql_type = "REAL"
+            elif kind == "DecimalField":
+                # A fixed-precision column: emit a real DECIMAL(p, s) so the
+                # engine keeps the declared scale instead of a floating
+                # approximation. Valid syntax on PG/MySQL/MSSQL/Firebird/SQLite.
+                precision = getattr(field_obj, "precision", 10)
+                scale = getattr(field_obj, "scale", 2)
+                sql_type = f"DECIMAL({precision},{scale})"
             elif kind == "BooleanField":
                 sql_type = bool_sql
             elif kind == "DateTimeField":
@@ -1110,6 +1197,22 @@ class ORM(metaclass=ORMMeta):
 
             col_defs.append(" ".join(parts))
 
+        # SOFTDEL-DEC-02: a soft_delete model needs an is_deleted flag column,
+        # but create_table only knew about DECLARED fields — so a
+        # soft_delete=True model that never declared is_deleted built a table
+        # with NO such column, and every soft-delete read/write then errored on
+        # the missing column. Inject it here (INTEGER 0/1, default 0),
+        # field_mapping-aware, unless the model already declares it, so the
+        # generated schema always matches the soft-delete behaviour.
+        if cls.soft_delete:
+            sd_col = cls._soft_delete_column()
+            declared_cols = {
+                cls.field_mapping.get(name, fo.column or name)
+                for name, fo in cls._fields.items()
+            }
+            if sd_col not in declared_cols:
+                col_defs.append(f"{sd_col} INTEGER DEFAULT 0")
+
         # A COMPOSITE key is declared ONCE, at table level. Per-column inline
         # PRIMARY KEY (above) is suppressed when the key spans more than one
         # column, because two inline primary keys is invalid DDL on every engine.
@@ -1119,7 +1222,12 @@ class ORM(metaclass=ORMMeta):
             if pk_cols:
                 col_defs.append(f"PRIMARY KEY ({', '.join(pk_cols)})")
 
-        sql = f"CREATE TABLE IF NOT EXISTS {table_sql} ({', '.join(col_defs)})"
+        # MSSQL and Firebird reject `IF NOT EXISTS` on CREATE TABLE (a syntax
+        # error). The `db.table_exists(table)` guard above already returns early
+        # when the table is present, so `IF NOT EXISTS` is pure redundancy on
+        # every engine and simply omitted where it does not parse.
+        if_not_exists = "" if engine in ("mssql", "sqlserver", "firebird") else "IF NOT EXISTS "
+        sql = f"CREATE TABLE {if_not_exists}{table_sql} ({', '.join(col_defs)})"
 
         # Translate auto-increment syntax for the current engine
         engine = db.get_database_type()
@@ -1142,22 +1250,49 @@ class ORM(metaclass=ORMMeta):
     # ── Cached Queries ────────────────────────────────────────
 
     @classmethod
+    def _cache_tags(cls, sql: str = None) -> list[str]:
+        """Every table a cached query touches: this model's table plus every
+        FROM/JOIN table in ``sql`` (see :func:`_tables_in_sql`). A write to any
+        of these busts the entry, so a cross-table JOIN cached here is
+        invalidated when the OTHER table's model writes (CACHE-DEC-01)."""
+        tags = {cls._get_table().lower()}
+        tags |= _tables_in_sql(sql)
+        return list(tags)
+
+    @classmethod
     def cached(cls, sql: str, params: list = None, ttl: int = 60,
                limit: int = 100, offset: int = 0, include: list = None) -> list[Self]:
-        """SQL query with result caching. Returns array of ORM objects."""
+        """SQL query with result caching. Returns array of ORM objects.
+
+        Invalidation (CACHE-DEC-01): the entry is tagged by every table the query
+        touches (this model's table plus any FROM/JOIN tables), so a write through
+        the ORM (save/delete/force_delete/restore) to ANY of those tables busts
+        it. ``ttl <= 0`` means NO-CACHE — the query runs and the rows are returned
+        but nothing is stored, so every read hits the database (it is NOT an
+        infinite-lived entry)."""
+        # ttl <= 0 is NO-CACHE: run it live, store nothing, read nothing.
+        if ttl <= 0:
+            return cls.select(sql, params, limit=limit, offset=offset, include=include)
+
         cache_key = f"{cls.__name__}:{Cache.query_key(sql, params)}:{limit}:{offset}"
         cached = _query_cache.get(cache_key)
         if cached is not None:
             return cached
 
         result = cls.select(sql, params, limit=limit, offset=offset, include=include)
-        _query_cache.set(cache_key, result, ttl=ttl, tags=[cls.__name__])
+        _query_cache.set(cache_key, result, ttl=ttl, tags=cls._cache_tags(sql))
         return result
 
     @classmethod
     def clear_cache(cls) -> None:
-        """Clear all cached query results for this model."""
-        _query_cache.clear_tag(cls.__name__)
+        """Invalidate every cached query that touches this model's table.
+
+        Tag-scoped, NOT a wholesale flush: a cached JOIN on another model that
+        reads this table is busted too (it carries this table's tag), while a
+        query that never touches this table is left intact. Called after every
+        ORM write (save/delete/force_delete/restore) so a read-after-write never
+        serves a stale/deleted row (CACHE-DEC-01)."""
+        _query_cache.clear_tag(cls._get_table().lower())
 
     @classmethod
     def clear_rel_cache(cls) -> None:
@@ -1229,17 +1364,43 @@ class ORM(metaclass=ORMMeta):
         row = self._get_db().fetch_one(sql, [pk_value])
         return related_class(row) if row else None
 
-    def has_many(self, related_class, foreign_key: str = None, limit: int = 100, offset: int = 0) -> list[Self]:
-        """Load multiple related records (imperative style)."""
+    def has_many(self, related_class, foreign_key: str = None, limit: int = None, offset: int = 0) -> list[Self]:
+        """Load multiple related records (imperative style).
+
+        IMPREL-PY-CAP: with no explicit ``limit`` this returns the WHOLE set,
+        paging in blocks exactly like the lazy descriptor (feature 21) instead of
+        the old silent 100-row cap -- so the same relationship yields the same
+        row count whether accessed imperatively or lazily. An explicit ``limit``
+        still pages (explicit, never silent).
+        """
+        from tina4_python.orm.fields import _LAZY_PAGE_SIZE
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         fk = foreign_key or f"{self.__class__.__name__.lower()}_id"
-        table = related_class._get_table()
         table_sql = related_class._get_table_sql()
+        # Order by the child PK so OFFSET paging is stable across pages (parity
+        # with the lazy descriptor's SQL).
+        order_col = related_class.field_mapping.get(
+            related_class._get_pk(), related_class._fields[related_class._get_pk()].column
+        )
+        sql = f"SELECT * FROM {table_sql} WHERE {fk} = ? ORDER BY {order_col}"
+        db = self._get_db()
 
-        sql = f"SELECT * FROM {table_sql} WHERE {fk} = ?"
-        result = self._get_db().fetch(sql, [pk_value], limit=limit, offset=offset)
-        return [related_class(row) for row in result.records]
+        if limit is not None:
+            result = db.fetch(sql, [pk_value], limit=limit, offset=offset)
+            return [related_class(row) for row in result.records]
+
+        # No explicit limit -> page through ALL rows (uncapped, parity with lazy).
+        records = []
+        page_offset = offset
+        while True:
+            result = db.fetch(sql, [pk_value], limit=_LAZY_PAGE_SIZE, offset=page_offset)
+            batch = result.records
+            records.extend(batch)
+            if len(batch) < _LAZY_PAGE_SIZE:
+                break
+            page_offset += _LAZY_PAGE_SIZE
+        return [related_class(row) for row in records]
 
     def belongs_to(self, related_class, foreign_key: str = None) -> Self | None:
         """Load the parent record (imperative style)."""
@@ -1291,12 +1452,34 @@ class ORM(metaclass=ORMMeta):
                     continue
 
                 fk = descriptor.foreign_key or f"{cls.__name__.lower()}_id"
-                table = related_cls._get_table()
                 table_sql = related_cls._get_table_sql()
-                placeholders = ",".join("?" for _ in pk_values)
-                sql = f"SELECT * FROM {table_sql} WHERE {fk} IN ({placeholders})"
-                result = db.fetch(sql, pk_values, limit=len(pk_values) * 1000, offset=0)
-                related_records = [related_cls(row) for row in result.records]
+                # REL-SOFTDELETE-TRAVERSAL: a soft-deleted child must not surface
+                # through eager traversal either (parity with lazy + the finders).
+                soft = (
+                    f" AND {related_cls._soft_delete_filter()}"
+                    if getattr(related_cls, "soft_delete", False)
+                    else ""
+                )
+                order_col = related_cls.field_mapping.get(
+                    related_cls._get_pk(), related_cls._fields[related_cls._get_pk()].column
+                )
+                # REL-EAGER-UNBOUNDED: chunk the parent PKs so the IN list stays
+                # bounded, and page each chunk so no relation is truncated.
+                related_records = []
+                for chunk in _chunk_list(pk_values, _EAGER_IN_CHUNK):
+                    placeholders = ",".join("?" for _ in chunk)
+                    sql = (
+                        f"SELECT * FROM {table_sql} WHERE {fk} IN ({placeholders})"
+                        f"{soft} ORDER BY {order_col}"
+                    )
+                    offset = 0
+                    while True:
+                        result = db.fetch(sql, list(chunk), limit=_EAGER_PAGE_SIZE, offset=offset)
+                        batch = result.records
+                        related_records.extend(related_cls(row) for row in batch)
+                        if len(batch) < _EAGER_PAGE_SIZE:
+                            break
+                        offset += _EAGER_PAGE_SIZE
 
                 # Eager load nested relationships on related records
                 if nested:
@@ -1328,13 +1511,22 @@ class ORM(metaclass=ORMMeta):
                     continue
 
                 related_pk = related_cls._get_pk()
-                table = related_cls._get_table()
                 table_sql = related_cls._get_table_sql()
-                placeholders = ",".join("?" for _ in fk_values)
                 pk_col = related_cls.field_mapping.get(related_pk, related_cls._fields[related_pk].column)
-                sql = f"SELECT * FROM {table_sql} WHERE {pk_col} IN ({placeholders})"
-                result = db.fetch(sql, fk_values, limit=len(fk_values) * 10, offset=0)
-                related_records = [related_cls(row) for row in result.records]
+                # REL-SOFTDELETE-TRAVERSAL: a soft-deleted parent is excluded from
+                # belongs_to traversal too (parity with find_by_id).
+                soft = (
+                    f" AND {related_cls._soft_delete_filter()}"
+                    if getattr(related_cls, "soft_delete", False)
+                    else ""
+                )
+                # REL-EAGER-UNBOUNDED: chunk the FK values so the IN list stays bounded.
+                related_records = []
+                for chunk in _chunk_list(fk_values, _EAGER_IN_CHUNK):
+                    placeholders = ",".join("?" for _ in chunk)
+                    sql = f"SELECT * FROM {table_sql} WHERE {pk_col} IN ({placeholders}){soft}"
+                    result = db.fetch(sql, list(chunk), limit=len(chunk), offset=0)
+                    related_records.extend(related_cls(row) for row in result.records)
 
                 if nested:
                     related_cls._eager_load(related_records, nested)
@@ -1361,14 +1553,18 @@ class ORM(metaclass=ORMMeta):
     # ── Validation ──────────────────────────────────────────────
 
     def validate(self) -> list[str]:
-        """Validate all fields. Returns list of error messages (empty = valid)."""
+        """Validate all fields. Returns list of error messages (empty = valid).
+
+        Feature 19: each message uses the canonical request-Validator vocabulary
+        ("<field> is required", "<field> must be at most N characters", ...) via
+        ``Field.validate_value`` so the ORM validator and the request-body
+        ``Validator`` speak ONE message language (VALID-TWO-MESSAGES). An invalid
+        model never reaches the driver -- ``save()`` enforces this list.
+        """
         errors = []
         for name, field in self._fields.items():
             value = getattr(self, name)
-            try:
-                field.validate(value)
-            except ValueError as e:
-                errors.append(str(e))
+            errors.extend(field.validate_value(name, value))
         return errors
 
     def get_error(self) -> str | None:

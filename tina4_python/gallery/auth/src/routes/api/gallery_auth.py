@@ -115,7 +115,7 @@ async def gallery_login(request, response):
 @noauth()
 @get("/api/gallery/auth/verify")
 async def gallery_verify(request, response):
-    token = request.params.get("token", "")
+    token = request.query.get("token", "")
     auth = Auth()
     is_valid = auth.valid_token(token)
     return response({"valid": is_valid})

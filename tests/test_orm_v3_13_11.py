@@ -223,45 +223,11 @@ class TestBooleanFieldDDL:
             f"SQLite BooleanField should map to INTEGER, DDL: {ddl}"
         )
 
-    @pytest.mark.parametrize(
-        "engine,expected",
-        [
-            ("postgres", "BOOLEAN"),
-            ("mysql", "BOOLEAN"),
-            ("mssql", "BIT"),
-            ("sqlite", "INTEGER"),
-            ("firebird", "INTEGER"),
-        ],
-    )
-    def test_engine_dispatch(self, db, engine, expected, monkeypatch):
-        """create_table must pick the right SQL type per engine."""
-        bind_database(db)
-
-        class Flagged(ORM):
-            id = IntegerField(primary_key=True, auto_increment=True)
-            active = BooleanField(default=True)
-
-        # Monkeypatch get_database_type — we can't easily spin up every
-        # engine, but the dispatch logic is what we're testing here.
-        # We also stub execute so the rendered DDL goes nowhere (SQLite
-        # would reject "active BIT" etc.).
-        captured = {}
-
-        def fake_execute(sql, params=None):
-            captured["sql"] = sql
-            return True
-
-        def fake_table_exists(_t):
-            return False
-
-        monkeypatch.setattr(db, "get_database_type", lambda: engine)
-        monkeypatch.setattr(db, "execute", fake_execute)
-        monkeypatch.setattr(db, "table_exists", fake_table_exists)
-
-        Flagged.create_table()
-
-        assert "sql" in captured, "create_table must call db.execute"
-        # The column line should include the expected SQL type.
-        assert expected in captured["sql"], (
-            f"engine={engine}: expected '{expected}' in DDL, got:\n{captured['sql']}"
-        )
+    # NOTE (feature 18, FIELD-DEC-02): the cross-engine BooleanField/JSONField/
+    # DecimalField DDL dispatch used to be covered here by a MOCK test
+    # (``test_engine_dispatch``) that patched over ``get_database_type`` and
+    # ``execute`` and asserted the SQL STRING — a no-mock-rule violation that
+    # never proved a real engine accepts the DDL. It has been DELETED and
+    # replaced by ``tests/test_ormfields_contract.py``, which actually CREATEs
+    # the table on real PostgreSQL / MySQL / MSSQL / Firebird and reads the
+    # column type back from the engine's own catalog.

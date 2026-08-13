@@ -238,7 +238,7 @@ Tina4 provides a full toolkit. Before writing custom code, check if the framewor
 | Static file serving | Put files in `src/public/` — auto-served |
 | Translations / i18n | `I18n` from `tina4_python.i18n` |
 | HTML generation in code | `HTMLElement` from `tina4_python.HtmlElement` |
-| Inline testing | `@tests`, `assert_equal`, `assert_raises` from `tina4_python.Testing` |
+| Inline testing | `@tests`, `expect_equal`, `expect_raises` from `tina4_python.Testing` |
 | Event system | `on`, `emit`, `once`, `off` from `tina4_python.core.events` |
 | AI assistant context | `detect_ai`, `install_context` from `tina4_python.ai` |
 | Response caching | `ResponseCache`, `cache_stats`, `clear_cache` from `tina4_python.cache` |
@@ -357,7 +357,7 @@ tina4_python/               # Core framework package (v3.0.0)
 ├── dotenv/                 # .env file loader
 ├── cli/                    # CLI commands
 ├── HtmlElement.py          # Programmatic HTML builder (HTMLElement, add_html_helpers)
-├── Testing.py              # Inline testing framework (tests, assert_equal, run_all)
+├── Testing.py              # Inline testing framework (tests, expect_equal, run_all)
 ├── templates/              # Built-in framework templates (Twig)
 ├── public/                 # Built-in static assets
 └── scss/                   # Built-in SCSS
@@ -973,7 +973,7 @@ uv run tina4python migrate
 - Files are executed in **numeric-prefix order** (`9_` before `10_`) and split on the `;` delimiter. A file without a numeric/timestamp prefix logs a warning — its order is undefined
 - State is tracked in the `tina4_migration` table (auto-created per engine, canonical columns `id, migration_name VARCHAR(500) NOT NULL UNIQUE, description VARCHAR(500), batch INTEGER NOT NULL DEFAULT 1, executed_at VARCHAR(50) NOT NULL, passed INTEGER NOT NULL DEFAULT 1` — identical across all four frameworks). A migration is **applied** when a row exists for it with `passed = 1` (the applied-read is `WHERE passed = 1`). `migrate()` writes **only `passed = 1` rows**: on a failure the file's transaction is rolled back and **no row is written** for it (it is NOT recorded as `passed=0`), and `migrate()` raises. The public `record_migration(name, batch, passed=...)` API can write a `passed=0` row; any `passed=0` row (including one carried over from a v2 table) is treated as **not applied**, so it is reported pending. A leftover `passed=0` row (a prior failure or a v2 carry-over) **re-applies cleanly**: on the next `migrate()` the success path deletes any existing row for that `migration_name` before writing the fresh `passed=1` row, so the migration runs again instead of colliding on the unique `migration_name` — the bookkeeping table holds at most one row per migration with its latest state. The v2->v3 upgrade logs a warning naming any `passed=0` rows so you know which ones will re-run.
 - **Each migration FILE is wrapped in its own transaction**: on a failure the file rolls back and `migrate()` **raises** (it does not write `passed=0`, delete anything, or `sys.exit`). Already-applied files stay applied — fix the bad file and re-run. The explicit `tina4 migrate` CLI surfaces the raise as a non-zero exit; startup auto-migration logs it and the service still boots (see TINA4_AUTO_MIGRATE above).
-- **Atomicity caveat:** per-file transactions are truly atomic only on engines with **transactional DDL (PostgreSQL)**. MySQL, Firebird, and SQLite auto-commit DDL, so a multi-statement migration that fails midway on those engines leaves earlier statements applied — keep one logical change per file. CREATE TABLE / ALTER-ADD are made idempotent on Firebird/MSSQL (existence-checked) so a re-run doesn't error.
+- **Atomicity caveat:** per-file transactions are truly atomic on engines with **transactional DDL (PostgreSQL, and SQLite)**. SQLite's DDL is transactional too (autocommit is off inside `start_transaction()`), so a multi-statement migration that fails midway on SQLite rolls back cleanly, including any `CREATE TABLE` that already ran in the same file — proven by `tests/test_migration.py::TestMigratePositive::test_partial_failure_rolls_back`. MySQL and Firebird **auto-commit DDL**, so the same failure on those two engines leaves earlier statements applied — keep one logical change per file there. CREATE TABLE / ALTER-ADD are made idempotent on Firebird/MSSQL (existence-checked) so a re-run doesn't error.
 
 ### Engine-specific DDL patterns
 
@@ -1369,11 +1369,11 @@ Supports all HTML tags, void tags (`<br>`, `<img>`, `<input>`, etc.), and auto-e
 Tina4 includes a decorator-based test framework for inline test cases:
 
 ```python
-from tina4_python.Testing import tests, assert_equal, assert_raises
+from tina4_python.Testing import tests, expect_equal, expect_raises
 
 @tests(
-    assert_equal((5, 3), 8),
-    assert_raises(ValueError, (None,))
+    expect_equal((5, 3), 8),
+    expect_raises(ValueError, (None,))
 )
 def add(a, b=None):
     if b is None:
@@ -1383,7 +1383,7 @@ def add(a, b=None):
 
 Run all decorated tests:
 ```bash
-uv run tina4python test                     # Discovers @tests in src/**/*.py
+uv run tina4python test                     # Discovers @tests in src/**/*.py, real exit code
 ```
 
 Or programmatically:
@@ -1542,16 +1542,14 @@ container.get("unknown")           # KeyError: service not registered: unknown
 Rich, syntax-highlighted HTML error overlay for development mode. Shows stack traces with source code context, request details, and environment info.
 
 ```python
-from tina4_python.debug.error_overlay import render_error_overlay, render_production_error, is_debug_mode
+from tina4_python.debug.error_overlay import render_error_overlay, is_debug_mode
 
-# Check if overlay should be shown
+# Dev only — the caller gates the overlay on is_debug_mode()
 if is_debug_mode():    # True when TINA4_DEBUG is true
-    html = render_error_overlay(exception, request=request)
-else:
-    html = render_production_error(status_code=500, message="Internal Server Error")
+    html = render_error_overlay(exception, request)
 ```
 
-The error overlay is automatically activated when `TINA4_DEBUG=true`. In production, `render_production_error()` returns a safe, generic error page with no stack traces or source code.
+The error overlay is dev-only (gated on `is_debug_mode()`/`TINA4_DEBUG`). The production 500 is NOT rendered here — the server dispatch renders `errors/500.twig` with an empty `error_message` (CWE-209), so the exception detail stays in the server log only. Sensitive request fields (Authorization / Cookie / Set-Cookie headers and password-like body/param keys) are redacted even in the overlay, the frame count is capped, and the caller guards the render.
 
 ## HtmlElement — Programmatic HTML Builder
 
@@ -1587,14 +1585,14 @@ HTMLElement("img", {"src": "/logo.png"})  # <img src="/logo.png">
 Attach test assertions directly to functions with the `@tests` decorator. Tests are registered globally and run via CLI or programmatically.
 
 ```python
-from tina4_python.Testing import tests, assert_equal, assert_raises, assert_true, assert_false, run_all
+from tina4_python.Testing import tests, expect_equal, expect_raises, expect_true, expect_false, run_all
 
 @tests(
-    assert_equal((5, 3), 8),           # add(5, 3) == 8
-    assert_equal((0, 0), 0),           # add(0, 0) == 0
-    assert_raises(ValueError, (None,)), # add(None) raises ValueError
-    assert_true((1, 1)),               # add(1, 1) is truthy
-    assert_false((0, 0)),              # add(0, 0) is falsy
+    expect_equal((5, 3), 8),           # add(5, 3) == 8
+    expect_equal((0, 0), 0),           # add(0, 0) == 0
+    expect_raises(ValueError, (None,)), # add(None) raises ValueError
+    expect_true((1, 1)),               # add(1, 1) is truthy
+    expect_false((0, 0)),              # add(0, 0) is falsy
 )
 def add(a, b=None):
     if b is None:

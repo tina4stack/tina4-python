@@ -51,7 +51,7 @@ def _resolve_version() -> str:
     #
     # test_version_constant.py now asserts this literal equals the pyproject
     # version, so the release bump cannot leave it behind again.
-    return "3.13.97"
+    return "3.13.99"
 
 
 __version__ = _resolve_version()
@@ -106,6 +106,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "TextField": ("tina4_python.orm", "TextField"),
     "BlobField": ("tina4_python.orm", "BlobField"),
     "NumericField": ("tina4_python.orm", "NumericField"),
+    "DecimalField": ("tina4_python.orm", "DecimalField"),
     "JSONField": ("tina4_python.orm", "JSONField"),
     "ForeignKeyField": ("tina4_python.orm", "ForeignKeyField"),
     "IntField": ("tina4_python.orm", "IntField"),
@@ -148,9 +149,12 @@ _LAZY: dict[str, tuple[str, str]] = {
     "StorageBackend": ("tina4_python.realtime.storage", "StorageBackend"),
     "LocalStorage": ("tina4_python.realtime.storage", "LocalStorage"),
     "S3Storage": ("tina4_python.realtime.storage", "S3Storage"),
-    # Inline testing
+    # Inline testing (decorator/descriptor surface — expect_* builders)
     "tests": ("tina4_python.Testing", "tests"),
-    "assert_equal_inline": ("tina4_python.Testing", "assert_equal"),
+    "expect_equal": ("tina4_python.Testing", "expect_equal"),
+    "expect_raises": ("tina4_python.Testing", "expect_raises"),
+    "expect_true": ("tina4_python.Testing", "expect_true"),
+    "expect_false": ("tina4_python.Testing", "expect_false"),
 }
 
 

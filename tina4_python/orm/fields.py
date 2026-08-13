@@ -67,43 +67,31 @@ class Field:
             return d()
         return d
 
-    def validate(self, value):
-        """Validate and coerce value to the field type."""
-        if value is None:
-            if self.required and self.default is None:
-                raise ValueError(f"Field '{self.name}' is required")
-            return self._resolve_default()
+    def _coerce_type(self, value):
+        """Cast a non-None *value* to the field's declared Python type.
 
-        # v3.13.11 (issue #50): if the user stored a callable as the field
-        # value (e.g. ``default=lambda: datetime.now()`` reached us without
-        # being resolved on instance init), evaluate it now so the driver
-        # gets a real value, not the function object. Types are excluded —
-        # ``default=int`` is almost never intended to mean "call int()".
-        if callable(value) and not isinstance(value, type):
-            value = value()
-            if value is None:
-                return None
+        Drivers return values in different shapes per engine:
 
-        # Type coercion.
-        #
-        # `validate()` runs on BOTH the write path (user input from routes/forms)
-        # and the read path (rows coming back from the database driver). Drivers
-        # return values in different shapes per engine:
-        #
-        #   engine        datetime column     bool column    numeric column
-        #   --------      ----------------    -----------    --------------
-        #   SQLite        str                 int (0/1)      float / int
-        #   PostgreSQL    datetime            bool           Decimal
-        #   MySQL         datetime            int (0/1)      Decimal
-        #   MSSQL         datetime            bool           Decimal
-        #   Firebird      datetime            int (0/1)      Decimal
-        #
-        # So the rule is: if the driver already handed us the right type,
-        # accept it as-is. Otherwise coerce. This avoids the classic crash
-        # `datetime(datetime_instance)` that hit every PostgreSQL ORM read.
-        #
-        # Care is needed around `bool` being a subclass of `int` in Python —
-        # we handle those two paths explicitly before the generic fast path.
+          engine        datetime column     bool column    numeric column
+          --------      ----------------    -----------    --------------
+          SQLite        str                 int (0/1)      float / int
+          PostgreSQL    datetime            bool           Decimal
+          MySQL         datetime            int (0/1)      Decimal
+          MSSQL         datetime            bool           Decimal
+          Firebird      datetime            int (0/1)      Decimal
+
+        So the rule is: if the driver already handed us the right type,
+        accept it as-is. Otherwise coerce. This avoids the classic crash
+        `datetime(datetime_instance)` that hit every PostgreSQL ORM read.
+
+        Care is needed around `bool` being a subclass of `int` in Python —
+        we handle those two paths explicitly before the generic fast path.
+
+        Shared by :meth:`validate` (write path) and :meth:`coerce` (read
+        path) — the SAME type coercion applies to both; only business-rule
+        enforcement (required/length/range/regex/choices/custom validator)
+        differs between them (LOAD-DEC-01).
+        """
         try:
             # BooleanField receiving an int (e.g. SQLite 0/1) → cast to bool
             if self.field_type is bool and isinstance(value, int) and not isinstance(value, bool):
@@ -125,6 +113,58 @@ class Field:
             raise ValueError(
                 f"Field '{self.name}': cannot convert {value!r} to {self.field_type.__name__}"
             ) from e
+        return value
+
+    def coerce(self, value):
+        """Type-coerce *value* for HYDRATION (the read path) — LOAD-DEC-01.
+
+        Runs the same type coercion as :meth:`validate` (str -> datetime,
+        int -> bool, JSON parse via subclass overrides, ...) but never
+        re-enforces business constraints: required/length/range/regex/
+        choices/a custom validator. Those are write-path rules (feature 19);
+        re-running them on every read meant a stored row that violated a
+        constraint — or one TIGHTENED after the row was written — raised out
+        of ``cls(row)`` and aborted the entire ``select()``, not just the
+        offending row. A finder must always be able to read what a previous,
+        looser write already persisted.
+        """
+        if value is None:
+            return self._resolve_default()
+
+        if callable(value) and not isinstance(value, type):
+            value = value()
+            if value is None:
+                return None
+
+        return self._coerce_type(value)
+
+    def validate(self, value):
+        """Validate and coerce value to the field type — the WRITE path.
+
+        Re-enforces every business constraint (required/length/range/regex/
+        choices/custom validator) in addition to type coercion. Used by
+        ``save()`` (via :meth:`validate_value`'s sibling enforcement) and by
+        any caller assigning a NEW value to a field (e.g. AutoCrud's PUT
+        handler). For hydrating a row already in the database, use
+        :meth:`coerce` instead (LOAD-DEC-01) — re-validating on every read is
+        what made a stored row unreadable the moment a constraint tightened.
+        """
+        if value is None:
+            if self.required and self.default is None:
+                raise ValueError(f"Field '{self.name}' is required")
+            return self._resolve_default()
+
+        # v3.13.11 (issue #50): if the user stored a callable as the field
+        # value (e.g. ``default=lambda: datetime.now()`` reached us without
+        # being resolved on instance init), evaluate it now so the driver
+        # gets a real value, not the function object. Types are excluded —
+        # ``default=int`` is almost never intended to mean "call int()".
+        if callable(value) and not isinstance(value, type):
+            value = value()
+            if value is None:
+                return None
+
+        value = self._coerce_type(value)
 
         # String length constraints
         if isinstance(value, str):
@@ -166,6 +206,47 @@ class Field:
             self.validator(value)
 
         return value
+
+    def validate_value(self, name: str, value) -> list[str]:
+        """Collect canonical constraint-violation messages for *value* (empty = valid).
+
+        Feature 19 (VALID-TWO-MESSAGES): this is the ENFORCEMENT surface that
+        ``ORM.validate()``/``save()`` use. It emits the SAME field-prefixed
+        wording as the request-body ``Validator`` -- "<field> is required",
+        "<field> must be at most N characters", "<field> does not match the
+        required format" -- so a client keying on a message matches either
+        validator. It never coerces and never raises: the coercion-oriented
+        :meth:`validate` above is the read-path type-normaliser and is unchanged.
+        """
+        errors: list[str] = []
+        blank = value is None or (isinstance(value, str) and value.strip() == "")
+        # required short-circuits -- no other rule adds signal on a missing value
+        # (parity with the request Validator's early continue and PHP/Ruby ORM).
+        if self.required and self.default is None and blank:
+            errors.append(f"{name} is required")
+            return errors
+        if value is None:
+            return errors
+
+        if isinstance(value, str):
+            if self.min_length is not None and len(value) < self.min_length:
+                errors.append(f"{name} must be at least {self.min_length} characters")
+            if self.max_length is not None and len(value) > self.max_length:
+                errors.append(f"{name} must be at most {self.max_length} characters")
+            if self.regex is not None and not self.regex.match(value):
+                errors.append(f"{name} does not match the required format")
+
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if self.min_value is not None and value < self.min_value:
+                errors.append(f"{name} must be at least {self.min_value}")
+            if self.max_value is not None and value > self.max_value:
+                errors.append(f"{name} must be at most {self.max_value}")
+
+        if self.choices is not None and value not in self.choices:
+            allowed_json = _json.dumps(self.choices, separators=(",", ":"))
+            errors.append(f"{name} must be one of {allowed_json}")
+
+        return errors
 
     def to_db(self, value):
         """Serialize an in-memory value to the form the driver should store.
@@ -224,6 +305,32 @@ def BlobField(**kwargs):
 def NumericField(**kwargs):
     return _make_field(float, "NumericField", **kwargs)
 
+def DecimalField(*, precision: int = 10, scale: int = 2, **kwargs):
+    """A fixed-precision numeric column that emits a real ``DECIMAL(p, s)``.
+
+    ``FloatField`` / ``NumericField`` map to the engine's floating type
+    (``REAL``) — fast, but binary floating point cannot represent every
+    decimal fraction exactly, so they are the wrong choice for MONEY. Reach for
+    ``DecimalField`` when the column must keep an exact scale: it emits a real
+    ``DECIMAL(precision, scale)`` column (identical on PostgreSQL, MySQL, MSSQL,
+    Firebird and SQLite), so the database stores the value at the declared
+    scale instead of a floating approximation.
+
+    The in-memory Python representation is a ``float`` (the documented default —
+    it round-trips through every driver and binds on SQLite, which cannot bind a
+    ``Decimal``); the fixed scale lives in the COLUMN. For end-to-end exact
+    arithmetic, store the amount in minor units (an ``IntegerField`` of cents)
+    or hand the column a ``str``/``Decimal`` your driver accepts.
+
+        class Invoice(ORM):
+            id     = IntegerField(primary_key=True, auto_increment=True)
+            amount = DecimalField(precision=12, scale=4)   # DECIMAL(12,4)
+    """
+    f = _make_field(float, "DecimalField", **kwargs)
+    f.precision = precision
+    f.scale = scale
+    return f
+
 class JSONField(Field):
     """A column that stores a JSON document (a ``dict`` or a ``list``).
 
@@ -261,15 +368,12 @@ class JSONField(Field):
         d = super()._resolve_default()
         return _copy.deepcopy(d) if isinstance(d, (dict, list)) else d
 
-    def validate(self, value):
-        # None -> required check + default (mirrors base Field).
-        if value is None:
-            if self.required and self.default is None:
-                raise ValueError(f"Field '{self.name}' is required")
-            return self._resolve_default()
-
-        # A driver returns a JSON string (SQLite/TEXT) or an already-parsed
-        # dict/list (PostgreSQL JSONB, MySQL JSON). Normalize to a Python object.
+    def _parse_json(self, value):
+        """Normalize a driver JSON string/bytes (or an already-parsed
+        dict/list from a native-JSON engine) to a Python object. Shared by
+        :meth:`coerce` (read path) and :meth:`validate` (write path) —
+        JSON parsing is type coercion, not a business constraint, so it runs
+        on BOTH paths (LOAD-DEC-01/LOAD-JSON-ONLY)."""
         if isinstance(value, (bytes, bytearray)):
             value = value.decode("utf-8")
         if isinstance(value, str):
@@ -281,6 +385,26 @@ class JSONField(Field):
             raise ValueError(
                 f"Field '{self.name}': expected a dict or list, got {type(value).__name__}"
             )
+        return value
+
+    def coerce(self, value):
+        """Read-path hydration (LOAD-DEC-01): parse JSON, skip the custom
+        validator and the required check — a stored row must still hydrate
+        even if a constraint was tightened after it was written."""
+        if value is None:
+            return self._resolve_default()
+        return self._parse_json(value)
+
+    def validate(self, value):
+        # None -> required check + default (mirrors base Field).
+        if value is None:
+            if self.required and self.default is None:
+                raise ValueError(f"Field '{self.name}' is required")
+            return self._resolve_default()
+
+        # A driver returns a JSON string (SQLite/TEXT) or an already-parsed
+        # dict/list (PostgreSQL JSONB, MySQL JSON). Normalize to a Python object.
+        value = self._parse_json(value)
         if self.validator is not None:
             self.validator(value)
         return value
@@ -305,11 +429,16 @@ class ForeignKeyField(Field):
     - ``belongs_to`` on the model that owns the FK
     - ``has_many``   on the referenced model
 
+    Relationships are READ-SIDE-ONLY (REL-DEC-01): declaring a ``ForeignKeyField``
+    wires up traversal accessors, but the framework emits NO DB-level
+    ``REFERENCES`` / ``ON DELETE`` clause. Referential integrity is the
+    migration/DDL's job (consistent with the no-foreign-key Firebird rule), so
+    deleting a parent does NOT cascade to children at the engine level — enforce
+    that with hand-written DDL if you need it.
+
     Args:
         to:           The referenced model class (or its name as a string for
                       forward references).  Required.
-        on_delete:    Cascade behaviour string ('CASCADE', 'SET NULL', etc.) —
-                      stored as metadata for DDL generation.
         related_name: Name for the ``has_many`` accessor on the referenced model.
                       Defaults to ``<owning_model_lower>s``
                       (e.g. Post → ``posts``).
@@ -329,10 +458,20 @@ class ForeignKeyField(Field):
             #   post.comments    → [Comment, ...]
     """
 
-    def __init__(self, to=None, on_delete: str = None, related_name: str = None, **kwargs):
+    def __init__(self, to=None, related_name: str = None, **kwargs):
+        # REL-DEC-01: relationships are READ-SIDE-ONLY. The framework emits no
+        # DB-level FK / ON DELETE clause, so the old ``on_delete=`` parameter
+        # silently did NOTHING (a phantom API). It is dropped: passing it now
+        # fails loudly instead of implying a cascade that never happens. Enforce
+        # referential integrity in your migration DDL instead.
+        if "on_delete" in kwargs:
+            raise ValueError(
+                "ForeignKeyField no longer accepts on_delete: Tina4 relationships "
+                "are read-side-only and emit no ON DELETE / REFERENCES clause. "
+                "Enforce referential integrity in your migration DDL instead."
+            )
         super().__init__(int, **kwargs)
         self.references = to            # model class or string name
-        self.on_delete = on_delete
         self.related_name = related_name
         self.kind = "ForeignKeyField"
 
@@ -344,6 +483,13 @@ BoolField = BooleanField
 
 
 # ── Relationship Descriptors ────────────────────────────────────
+
+# REL-EAGER-UNBOUNDED: lazy has_many pages through children in blocks of this
+# size so a parent with more than one page of children never loses the tail.
+# Before, the lazy load passed a silent ``limit=1000`` and truncated with no
+# signal; now it pages until a short block, so every child is reachable.
+_LAZY_PAGE_SIZE = 1000
+
 
 class RelationshipDescriptor:
     """Base descriptor for ORM relationships. Lazy-loads on first access."""
@@ -411,9 +557,28 @@ class HasManyDescriptor(RelationshipDescriptor):
         fk = self.foreign_key or f"{obj.__class__.__name__.lower()}_id"
         table = related_cls._get_table()
         db = obj._get_db()
-        sql = f"SELECT * FROM {table} WHERE {fk} = ?"
-        result = db.fetch(sql, [pk_value], limit=1000, offset=0)
-        return [related_cls(row) for row in result.records]
+        where = f"{fk} = ?"
+        # REL-SOFTDELETE-TRAVERSAL: a soft-deleted child must not surface through
+        # parent.children, consistent with the finders' default exclusion.
+        if getattr(related_cls, "soft_delete", False):
+            where += f" AND {related_cls._soft_delete_filter()}"
+        # Order by the child PK so OFFSET paging is stable across pages.
+        order_col = related_cls.field_mapping.get(
+            related_cls._get_pk(), related_cls._fields[related_cls._get_pk()].column
+        )
+        sql = f"SELECT * FROM {table} WHERE {where} ORDER BY {order_col}"
+        # REL-EAGER-UNBOUNDED: page through ALL children rather than silently
+        # truncating at a fixed cap.
+        records = []
+        offset = 0
+        while True:
+            result = db.fetch(sql, [pk_value], limit=_LAZY_PAGE_SIZE, offset=offset)
+            batch = result.records
+            records.extend(batch)
+            if len(batch) < _LAZY_PAGE_SIZE:
+                break
+            offset += _LAZY_PAGE_SIZE
+        return [related_cls(row) for row in records]
 
 
 class HasOneDescriptor(RelationshipDescriptor):
@@ -428,7 +593,11 @@ class HasOneDescriptor(RelationshipDescriptor):
         fk = self.foreign_key or f"{obj.__class__.__name__.lower()}_id"
         table = related_cls._get_table()
         db = obj._get_db()
-        sql = f"SELECT * FROM {table} WHERE {fk} = ? LIMIT 1"
+        sql = f"SELECT * FROM {table} WHERE {fk} = ?"
+        # REL-SOFTDELETE-TRAVERSAL: exclude a soft-deleted related row.
+        if getattr(related_cls, "soft_delete", False):
+            sql += f" AND {related_cls._soft_delete_filter()}"
+        sql += " LIMIT 1"
         row = db.fetch_one(sql, [pk_value])
         return related_cls(row) if row else None
 

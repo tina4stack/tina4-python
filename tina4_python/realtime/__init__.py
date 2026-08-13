@@ -412,11 +412,11 @@ def realtime(prefix: str = "", *, media: RtcMediaBackend = None,
 
 
 def _form_value(request, name):
-    """Read a non-file form field from a multipart body (or query/route params)."""
+    """Read a non-file form field from a multipart body (or the query string)."""
     body = request.body
     if isinstance(body, dict) and name in body:
         return body[name]
-    return request.params.get(name)
+    return request.query.get(name)
 
 
 def _store_upload(store, channel_id, upload) -> dict:

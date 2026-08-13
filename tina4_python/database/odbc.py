@@ -10,7 +10,7 @@ Requires: pip install pyodbc
 import re
 
 from tina4_python.database.adapter import (
-    DatabaseAdapter, DatabaseResult,
+    DatabaseAdapter, DatabaseResult, SqlCrudMixin,
     call_with_deadline, connect_deadline, driver_connect_timeout_seconds,
 )
 
@@ -37,13 +37,17 @@ def _odbc_server_and_port(connection_string: str) -> tuple[str, str]:
     return "(odbc)", "(unknown)"
 
 
-class ODBCAdapter(DatabaseAdapter):
+class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
     """Generic ODBC database driver using pyodbc."""
 
     def __init__(self):
         super().__init__()
         self._conn = None
         self._cursor = None
+        # The connected DBMS name (SQL_DBMS_NAME), cached at connect. Drives the
+        # driver-aware last-insert-id: @@IDENTITY is a SQL-Server-ism, not a
+        # generic ODBC feature.
+        self._dbms_name = ""
 
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect via ODBC.
@@ -52,6 +56,11 @@ class ODBCAdapter(DatabaseAdapter):
         - DSN-based: "DSN=MyDSN;UID=user;PWD=pass"
         - Driver-based: "DRIVER={ODBC Driver};SERVER=host;DATABASE=db;UID=user;PWD=pass"
         - URL form: "odbc:///DSN=MyDSN" (prefix stripped by Database class)
+
+        ``username``/``password`` are honoured: ODBC has no separate-credentials
+        API (pyodbc.connect() reads only the string), so when the caller passes
+        them and the string does not already carry UID/PWD they are appended.
+        This adapter used to ignore them, silently dropping the caller's creds.
         """
         try:
             import pyodbc
@@ -66,6 +75,13 @@ class ODBCAdapter(DatabaseAdapter):
         # Strip URL prefix if present
         if connection_string.startswith("odbc:///"):
             connection_string = connection_string[8:]
+
+        # Honour the credential params: append UID/PWD when given and not already
+        # embedded in the string (case-insensitive check).
+        if username and not re.search(r"(?:^|;)\s*UID\s*=", connection_string, re.IGNORECASE):
+            connection_string += f";UID={username}"
+        if password and not re.search(r"(?:^|;)\s*PWD\s*=", connection_string, re.IGNORECASE):
+            connection_string += f";PWD={password}"
 
         # pyodbc's timeout= sets SQL_ATTR_LOGIN_TIMEOUT, the ODBC-standard login
         # bound — but whether it is honoured is up to whichever ODBC driver sits
@@ -85,6 +101,12 @@ class ODBCAdapter(DatabaseAdapter):
                 timeout_seconds,
             )
 
+        # Cache the DBMS name so the last-insert-id path stays driver-aware.
+        try:
+            self._dbms_name = self._conn.getinfo(pyodbc.SQL_DBMS_NAME) or ""
+        except Exception:
+            self._dbms_name = ""
+
     def close(self):
         if self._conn:
             self._conn.close()
@@ -95,28 +117,46 @@ class ODBCAdapter(DatabaseAdapter):
         cursor = self._conn.cursor()
         cursor.execute(sql, params or [])
 
-        records = []
-        last_id = None
+        # The affected count of THIS statement, read BEFORE any secondary query:
+        # a follow-up SELECT on the same cursor overwrites rowcount. The old code
+        # read rowcount AFTER a `SELECT @@IDENTITY`, so the INSERT's real count
+        # was lost (and on a non-SQL-Server target the failed SELECT left it -1).
+        affected_rows = cursor.rowcount
 
-        # Try to get last inserted ID
-        try:
-            row = cursor.execute("SELECT @@IDENTITY AS id").fetchone()
-            if row:
-                last_id = row[0]
-        except Exception:
-            pass
+        last_id = self._read_last_insert_id(cursor, sql)
 
         if not self._conn.autocommit and self._autocommit:
             self._conn.commit()
 
         return DatabaseResult(
-            records=records,
+            records=[],
             count=0,
-            affected_rows=cursor.rowcount,
+            affected_rows=affected_rows,
             last_id=last_id,
             sql=sql,
             adapter=self,
         )
+
+    def _read_last_insert_id(self, cursor, sql: str):
+        """Best-effort last-insert-id, driver-aware.
+
+        ``SELECT @@IDENTITY`` is a SQL-Server-ism, not a generic ODBC feature.
+        Running it after EVERY statement (as this adapter used to) errored on any
+        non-SQL-Server source and - because the failed SELECT ran on the same
+        cursor - clobbered the INSERT's rowcount. It is now attempted ONLY after
+        an INSERT and ONLY when the connected DBMS is SQL Server; every other
+        target returns None (no generic last-insert-id exists - callers use
+        RETURNING or an explicit key).
+        """
+        if not sql.lstrip().upper().startswith("INSERT"):
+            return None
+        if "SQL SERVER" not in (self._dbms_name or "").upper():
+            return None
+        try:
+            row = cursor.execute("SELECT @@IDENTITY AS id").fetchone()
+            return row[0] if row else None
+        except Exception:
+            return None
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
@@ -205,16 +245,34 @@ class ODBCAdapter(DatabaseAdapter):
     def get_columns(self, table: str) -> list[dict]:
         cursor = self._conn.cursor()
         columns = cursor.columns(table=table).fetchall()
+        # Real PK, from the ODBC catalog (SQLPrimaryKeys) - not the old `False`
+        # stub. Feature 4's filterless-write guard reads primary_key, so without
+        # this a PK-keyed `update(table, data)` on ODBC could not introspect the
+        # key and threw.
+        pk_columns = self._primary_key_columns(table)
         return [
             {
                 "name": col.column_name,
                 "type": col.type_name,
                 "nullable": col.nullable == 1,
                 "default": col.column_def,
-                "primary_key": False,  # Would need additional query
+                "primary_key": col.column_name.lower() in pk_columns,
             }
             for col in columns
         ]
+
+    def _primary_key_columns(self, table: str) -> set:
+        """The table's primary-key columns from the ODBC catalog (SQLPrimaryKeys),
+        lower-cased for case-insensitive matching. Empty on any target that does
+        not report them - the write-guard then requires an explicit filter."""
+        try:
+            cursor = self._conn.cursor()
+            return {
+                row.column_name.lower()
+                for row in cursor.primaryKeys(table=table).fetchall()
+            }
+        except Exception:
+            return set()
 
     def get_database_type(self) -> str:
         return "odbc"

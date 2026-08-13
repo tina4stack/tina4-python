@@ -222,19 +222,22 @@ def _point_the_real_logger_at(directory: Path, monkeypatch) -> _RealLogSink:
 
 @pytest.fixture
 def log_sink(tmp_path, monkeypatch):
-    """Point the REAL logger at a real file, then put it back."""
+    """Point the REAL logger at a real file, then put it back.
+
+    The 3.14 logger-conformance refactor (tina4_python/debug/__init__.py)
+    replaced the old per-attribute state (``_writer``/``_error_writer``/
+    ``_stdout_enabled``/``_file_enabled``/``_format_mode``/``_level``/
+    ``_is_production``) with one atomic ``_Snapshot`` object on
+    ``Log._snapshot``. Saving/restoring that single reference is the
+    equivalent save-and-restore against the shipped internals.
+    """
     from tina4_python.debug import Log
 
-    saved = {
-        name: getattr(Log, name)
-        for name in ("_writer", "_error_writer", "_stdout_enabled",
-                     "_file_enabled", "_format_mode", "_level", "_is_production")
-    }
+    saved_snapshot = Log._snapshot
 
     yield _point_the_real_logger_at(tmp_path / "logs", monkeypatch)
 
-    for name, value in saved.items():
-        setattr(Log, name, value)
+    Log._snapshot = saved_snapshot
 
 
 @pytest.fixture

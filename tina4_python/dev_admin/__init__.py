@@ -24,6 +24,88 @@ from tina4_python import __version__
 from tina4_python.database.database_url import redact_url
 
 
+# ── Dev-admin mutation security (feature 127, DEVADMIN-DEC-01/02/03) ──────────
+# The dashboard can write files, run SQL and install packages, so it must assume
+# the developer ALSO browses the web. Two fail-closed gates guard every /__dev
+# write, and a secret denylist guards the file-read surface.
+
+_DEV_SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+#: The MCP surface carries its own richer loopback+token+remote gate
+#: (_mcp_request_allowed → 404), so the REST loopback gate skips these prefixes
+#: and lets the MCP gate govern (keeps the mcp/call refusal a 404, not a 403).
+_DEV_MCP_PREFIXES = ("/__dev/api/mcp", "/__dev/mcp")
+#: Private-key / credential basenames the file endpoints must never serve.
+_DEV_SECRET_BASENAMES = frozenset({
+    ".env", ".envrc", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+})
+_DEV_SECRET_SUFFIXES = (".pem", ".key", ".pfx", ".p12", ".keystore", ".jks")
+
+
+def _dev_same_origin_ok(request) -> bool:
+    """Fail-closed same-origin check for a dev-admin mutation (DEVADMIN-DEC-01).
+
+    A drive-by CSRF is a BROWSER cross-origin request, and a modern browser
+    always sends ``Sec-Fetch-Site`` (and any browser sends ``Origin`` on a
+    cross-origin POST), so:
+
+    - ``Sec-Fetch-Site`` present -> trust the browser's own classification
+      (``cross-site`` is refused; ``same-origin`` / ``same-site`` / ``none`` ok).
+    - else ``Origin`` present -> require it to match the request Host.
+    - else neither header -> not a browser cross-origin request at all (curl, a
+      test client, a server-side caller); it cannot be a drive-by, so it is
+      allowed here and the loopback gate still constrains the peer.
+    """
+    headers = getattr(request, "headers", None) or {}
+    sec_fetch_site = (headers.get("sec-fetch-site") or "").strip().lower()
+    if sec_fetch_site:
+        return sec_fetch_site in ("same-origin", "same-site", "none")
+    origin = (headers.get("origin") or "").strip()
+    if origin:
+        netloc = origin.split("://", 1)[1] if "://" in origin else origin
+        host = (headers.get("host") or "").strip()
+        return bool(host) and netloc.lower() == host.lower()
+    return True
+
+
+def _dev_mutation_denial(request):
+    """Return ``(status, error)`` to REFUSE a dev-admin write, or ``None`` to allow.
+
+    Two independent fail-closed gates on every /__dev mutation:
+      DEVADMIN-DEC-01  same-origin (all writes, incl. mcp/call) - drive-by CSRF.
+      DEVADMIN-DEC-02  loopback peer (all writes EXCEPT the MCP surface, which
+                       carries its own gate) - a network-exposed debug box.
+    """
+    if not _dev_same_origin_ok(request):
+        return (403, "dev-admin: refused (cross-origin request)")
+    path = getattr(request, "path", "") or ""
+    if not path.startswith(_DEV_MCP_PREFIXES):
+        from tina4_python.mcp import is_loopback
+        remote_ip = getattr(request, "remote_ip", "") or ""
+        if not (is_loopback(remote_ip) or _mcp_token_ok(request)):
+            return (403, "dev-admin: refused (non-loopback peer)")
+    return None
+
+
+def _is_secret_path(rel: str) -> bool:
+    """True when ``rel`` names secret material the file endpoints must never
+    serve (DEVADMIN-DEC-03): ``.env`` / ``.env.*`` (the ``.env.example`` template
+    is allowed), anything under ``.git/`` or ``secrets/``, and private keys."""
+    norm = (rel or "").replace("\\", "/").strip("/").lower()
+    if not norm:
+        return False
+    parts = norm.split("/")
+    if any(p in (".git", "secrets") for p in parts):
+        return True
+    base = parts[-1]
+    if base == ".env.example":
+        return False
+    if base == ".env" or base.startswith(".env."):
+        return True
+    if base in _DEV_SECRET_BASENAMES:
+        return True
+    return base.endswith(_DEV_SECRET_SUFFIXES)
+
+
 class MessageLog:
     """In-memory message log for dev mode tracking.
 
@@ -656,8 +738,8 @@ async def _api_queue(request, response):
     """Queue status and jobs — works with any backend (lite, kafka, mongo, rabbitmq)."""
     try:
         from tina4_python.queue import Queue, queue_base_path
-        topic = request.params.get("topic", "default") if hasattr(request, "params") else "default"
-        status_filter = request.params.get("status", None) if hasattr(request, "params") else None
+        topic = request.query.get("topic", "default") if hasattr(request, "query") else "default"
+        status_filter = request.query.get("status", None) if hasattr(request, "query") else None
         queue = Queue(topic=topic)
 
         # Stats
@@ -742,7 +824,7 @@ async def _api_queue_dead_letters(request, response):
     """
     try:
         from tina4_python.queue import queue_base_path
-        topic = request.params.get("topic", "default") if hasattr(request, "params") else "default"
+        topic = request.query.get("topic", "default") if hasattr(request, "query") else "default"
         jobs = _read_queue_dir(os.path.join(queue_base_path(), topic, "failed"), "dead_letter")
         return response({"jobs": jobs, "count": len(jobs), "topic": topic})
     except Exception as e:
@@ -772,8 +854,8 @@ async def _api_mailbox(request, response):
     """List dev mailbox messages."""
     from tina4_python.messenger import DevMailbox
     mailbox = DevMailbox()
-    folder = request.params.get("folder", None) if hasattr(request, "params") else None
-    limit = int(request.params.get("limit", "50")) if hasattr(request, "params") else 50
+    folder = request.query.get("folder", None) if hasattr(request, "query") else None
+    limit = int(request.query.get("limit", "50")) if hasattr(request, "query") else 50
     messages = mailbox.inbox(limit=limit, folder=folder)
     return response({
         "messages": messages,
@@ -787,7 +869,7 @@ async def _api_mailbox_read(request, response):
     """Read a specific mailbox message."""
     from tina4_python.messenger import DevMailbox
     mailbox = DevMailbox()
-    msg_id = request.params.get("id", "") if hasattr(request, "params") else ""
+    msg_id = request.query.get("id", "") if hasattr(request, "query") else ""
     if not msg_id:
         return response({"error": "id required"}, 400)
     msg = mailbox.read(msg_id)
@@ -818,9 +900,9 @@ async def _api_mailbox_clear(request, response):
 
 async def _api_messages(request, response):
     """Get tracked messages."""
-    category = request.params.get("category", None) if hasattr(request, "params") else None
-    level = request.params.get("level", None) if hasattr(request, "params") else None
-    limit = int(request.params.get("limit", "100")) if hasattr(request, "params") else 100
+    category = request.query.get("category", None) if hasattr(request, "query") else None
+    level = request.query.get("level", None) if hasattr(request, "query") else None
+    limit = int(request.query.get("limit", "100")) if hasattr(request, "query") else 100
     messages = MessageLog.get(category=category, level=level, limit=limit)
     return response({"messages": messages, "counts": MessageLog.count()})
 
@@ -929,7 +1011,7 @@ async def _api_table_info(request, response):
     """Get table columns and sample data."""
     try:
         from tina4_python.database import Database
-        table = request.params.get("name", "") if hasattr(request, "params") else ""
+        table = request.query.get("name", "") if hasattr(request, "query") else ""
         if not table:
             return response({"error": "name required"}, 400)
 
@@ -986,9 +1068,9 @@ async def _api_queue_replay(request, response):
 
 async def _api_messages_search(request, response):
     """Search message log by keyword."""
-    keyword = request.params.get("q", "") if hasattr(request, "params") else ""
-    category = request.params.get("category", None) if hasattr(request, "params") else None
-    limit = int(request.params.get("limit", "100")) if hasattr(request, "params") else 100
+    keyword = request.query.get("q", "") if hasattr(request, "query") else ""
+    category = request.query.get("category", None) if hasattr(request, "query") else None
+    limit = int(request.query.get("limit", "100")) if hasattr(request, "query") else 100
 
     if not keyword:
         return response({"error": "q parameter required"}, 400)
@@ -1076,9 +1158,9 @@ async def _api_seed_table(request, response):
 
 async def _api_requests(request, response):
     """Get captured HTTP requests."""
-    limit = int(request.params.get("limit", "50")) if hasattr(request, "params") else 50
-    method = request.params.get("method", None) if hasattr(request, "params") else None
-    status_min = request.params.get("status_min", None) if hasattr(request, "params") else None
+    limit = int(request.query.get("limit", "50")) if hasattr(request, "query") else 50
+    method = request.query.get("method", None) if hasattr(request, "query") else None
+    status_min = request.query.get("status_min", None) if hasattr(request, "query") else None
     reqs = RequestInspector.get(limit=limit, method=method,
                                 status_min=int(status_min) if status_min else None)
     return response({"requests": reqs, "stats": RequestInspector.stats()})
@@ -1273,9 +1355,9 @@ async def _proxy_to_supervisor(request, response, downstream_path: str):
     base = _supervisor_base_url()
     qs = ""
     try:
-        if hasattr(request, "params") and request.params:
+        if hasattr(request, "query") and request.query:
             from urllib.parse import urlencode
-            qs = "?" + urlencode(request.params)
+            qs = "?" + urlencode(request.query)
     except Exception:
         qs = ""
     target = f"{base}{downstream_path}{qs}"
@@ -2107,7 +2189,7 @@ async def _api_metrics_file(request, response):
     """Per-file detail metrics."""
     from tina4_python.dev_admin.metrics import file_detail, MetricsEngineError
 
-    path = request.params.get("path", "")
+    path = request.query.get("path", "")
     if not path:
         return response({"error": "Missing path parameter"}, 400)
     try:
@@ -2159,8 +2241,16 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     and a close button.
     """
     import sys
+    from html import escape as _html_escape
     from tina4_python.core.server import _ai_port_ctx
     python_version = sys.version.split()[0]
+    # DEVADMIN-DEC-04: the toolbar is injected into every text/html response
+    # (including 404s), so the reflected request path/method MUST be HTML-escaped
+    # or a crafted path reflects <script> that runs in the dev-server origin and
+    # can then drive every /__dev mutation route. (PHP already escapes; parity.)
+    method = _html_escape(str(method), quote=True)
+    path = _html_escape(str(path), quote=True)
+    matched_pattern = _html_escape(str(matched_pattern), quote=True)
     poll_interval_ms = int(os.environ.get("TINA4_DEV_POLL_INTERVAL", "3000"))
     no_reload = os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes") or _ai_port_ctx.get()
 
@@ -2356,7 +2446,7 @@ async def _api_files(request, response):
         path — relative directory path (default: project root)
     """
     import os, subprocess
-    rel = (request.params.get("path") or "").strip("/")
+    rel = (request.query.get("path") or "").strip("/")
     base = os.getcwd()
     target = os.path.normpath(os.path.join(base, rel))
 
@@ -2423,8 +2513,12 @@ async def _api_files(request, response):
             full = os.path.join(target, name)
             entry_rel = os.path.relpath(full, base).replace("\\", "/")
 
+            # DEVADMIN-DEC-03: never surface secrets in the listing (.env, keys,
+            # .git/, secrets/). The .env.example template is safe to show.
+            if _is_secret_path(entry_rel):
+                continue
             # Skip hidden dirs and noise
-            if name.startswith(".") and name not in (".env", ".env.example"):
+            if name.startswith(".") and name != ".env.example":
                 continue
             if name in ("__pycache__", "node_modules", "vendor", ".git",
                         "venv", ".venv", "dist", "target", ".tina4"):
@@ -2504,9 +2598,13 @@ async def _api_file_read(request, response):
     previously-open tabs from localStorage that no longer exist.
     """
     import os
-    rel = (request.params.get("path") or "").strip("/")
+    rel = (request.query.get("path") or "").strip("/")
     if not rel:
         return response({"error": "path required", "path": "", "content": "", "language": "text", "size": 0}, 400)
+
+    # DEVADMIN-DEC-03: never serve secret material (.env, keys, .git/, secrets/).
+    if _is_secret_path(rel):
+        return response({"error": "Refused: secret file", "path": rel, "content": "", "language": "text", "size": 0}, 403)
 
     base = os.getcwd()
     target = os.path.normpath(os.path.join(base, rel))
@@ -2569,9 +2667,13 @@ async def _api_file_raw(request, response):
         path — relative file path
     """
     import os, mimetypes
-    rel = (request.params.get("path") or "").strip("/")
+    rel = (request.query.get("path") or "").strip("/")
     if not rel:
         return response({"error": "path required"}, 400)
+
+    # DEVADMIN-DEC-03: never serve secret material (.env, keys, .git/, secrets/).
+    if _is_secret_path(rel):
+        return response({"error": "Refused: secret file"}, 403)
 
     base = os.getcwd()
     target = os.path.normpath(os.path.join(base, rel))
@@ -2707,8 +2809,8 @@ async def _api_deps_search(request, response):
     Query params: q (search term), registry (pypi|npm|packagist|rubygems|crates)
     """
     import urllib.request, json
-    query = request.params.get("q", "").strip()
-    registry = request.params.get("registry", "pypi")
+    query = request.query.get("q", "").strip()
+    registry = request.query.get("registry", "pypi")
     if not query:
         return response({"packages": []})
 
@@ -2984,6 +3086,13 @@ async def _api_mcp_call(request, response):
     through `handle_message` — we already know the name and args, no
     need to round-trip through JSON-RPC framing.
     """
+    # DEVADMIN-DEC-05 / MCP-02: two-layer gate, identical to every other MCP
+    # surface (tools-list, the JSON-RPC endpoint, the SSE stream): a disallowed
+    # caller gets 404 BEFORE any tool runs. Without this, a remote unauthenticated
+    # caller on a TINA4_DEBUG=true 0.0.0.0-bound server could invoke every tool
+    # (database_execute, file_write). Uses the RAW socket peer, never XFF.
+    if not _mcp_request_allowed(request):
+        return response({"ok": False, "error": "MCP forbidden"}, 404)
     body = request.body or {}
     if not isinstance(body, dict):
         return response({"ok": False, "error": "body must be a JSON object"}, 400)
@@ -3483,8 +3592,15 @@ def _upsert_env_var(key: str, value: str) -> None:
 def _grounding_snapshot() -> dict:
     token = _resolve_env("TINA4_MCP_TOKEN", "")
     url = _resolve_env("TINA4_MCP_URL", "") or _MCP_DEFAULT_URL
+    # source: the developer's own token → "personal"; otherwise the coder runs
+    # on the shared FREE-TOKEN trial the Rust agent falls back to → "free",
+    # which drives the panel's "register for your own" nudge. (Disabling the
+    # free rung is an agent-side concern; the panel always advertises the trial
+    # when no personal token is set.)
+    source = "personal" if token else "free"
     return {
         "configured": bool(token),
+        "source": source,
         "last4": token[-4:] if token else "",
         "url": url,
     }

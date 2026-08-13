@@ -11,6 +11,49 @@ from urllib.parse import parse_qs, unquote
 TINA4_MAX_UPLOAD_SIZE = int(os.environ.get("TINA4_MAX_UPLOAD_SIZE", 10_485_760))
 
 
+def accept_prefers_json(accept_header: str) -> bool:
+    """Content negotiation for an error response (feature 42, ERR-DEC-02).
+
+    ``Accept: application/json`` (an API client) prefers JSON; a browser
+    Accept (``text/html``, ``*/*``, or no header at all) prefers HTML. A
+    mixed Accept header — a real browser's
+    ``text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8`` —
+    is resolved by q-value: whichever of the two media types this function
+    cares about is weighted higher wins; a tie or neither present defaults
+    to HTML, the historical/back-compatible behaviour for an unspecified
+    client. This is the ONE shared decision reused by the 403/404/500 error
+    paths, ported with the same algorithm to PHP/Ruby/Node so a JSON API
+    client sees the SAME negotiated shape everywhere (ERR-403-SPLIT).
+    """
+    if not accept_header:
+        return False
+    best_json_q = -1.0
+    best_html_q = -1.0
+    for part in accept_header.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        segments = part.split(";")
+        media = segments[0].strip().lower()
+        q = 1.0
+        for param in segments[1:]:
+            param = param.strip()
+            if param.startswith("q="):
+                try:
+                    q = float(param[2:])
+                except ValueError:
+                    q = 1.0
+        if media == "application/json":
+            best_json_q = max(best_json_q, q)
+        elif media in ("text/html", "*/*", "application/xhtml+xml"):
+            best_html_q = max(best_html_q, q)
+    if best_json_q < 0:
+        return False
+    if best_html_q < 0:
+        return True
+    return best_json_q > best_html_q
+
+
 class PayloadTooLarge(Exception):
     """Raised when request body exceeds TINA4_MAX_UPLOAD_SIZE."""
     pass
@@ -67,22 +110,39 @@ class CaseInsensitiveDict(dict):
             self[k] = v
 
 
+# Core wire-derived fields, set once while the Request is built (from_scope())
+# and never reassigned afterward — REQ-IMMUTABILITY-DIVERGE (3.13.99). PHP's
+# `readonly` properties and Ruby's writer-less attr_reader/lazy getters are
+# already at this posture (the reference); Python and Node were "fully
+# mutable" and both close the gap this release. NOT included: `params`
+# (attached by the router AFTER from_scope() returns), `session`/`user`
+# (stashed by middleware over the request's lifetime), and the `_`-prefixed
+# dispatch-internal fields.
+_READONLY_FIELDS = frozenset((
+    "method", "path", "url", "scheme", "query_string", "query", "headers",
+    "body", "raw_body", "cookies", "files", "ip", "remote_ip", "content_type",
+))
+
+
 class Request:
     """Parsed HTTP request — everything a route handler needs."""
 
     __slots__ = (
         "method", "path", "url", "scheme", "query_string", "params", "query",
         "headers", "body", "raw_body", "cookies", "files", "ip", "remote_ip",
-        "content_type", "session", "_route_params", "_handler",
+        "content_type", "session", "user", "_route_params", "_handler", "_frozen",
     )
 
     def __init__(self):
+        self._frozen = False            # See __setattr__ — flipped True at the end
+                                        # of from_scope(), the real construction path.
         self.method: str = "GET"
         self.path: str = "/"
         self.url: str = "/"
         self.scheme: str = "http"       # Native connection scheme (see is_secure_scheme)
         self.query_string: str = ""
-        self.params: dict = {}          # Query string + route params merged
+        self.params: dict = {}          # Route params ONLY (never query/body — REQ-PARAM-POLLUTION,
+                                        # 3.13.99). Attached by the router via attach_route_params().
         self.query: dict = {}           # Query string params only (separate from route params)
         self.headers: dict = CaseInsensitiveDict()  # Case-insensitive HTTP headers
         self.body: dict | str | None = None  # Parsed body
@@ -93,11 +153,30 @@ class Request:
         self.remote_ip: str = ""        # Raw socket peer (never X-Forwarded-For) — for trust decisions
         self.content_type: str = ""
         self.session = None             # Set by session middleware
+        self.user = None                # Authenticated payload — set by auth middleware
+                                        # after token validation (REQ-PY-NO-USER, 3.13.99).
         self._route_params: dict = {}   # Dynamic route params ({id}, etc.)
         self._handler = None            # Matched route handler — set by dispatch
                                         # before middleware runs, so before_*
                                         # middleware (e.g. CsrfMiddleware) can read
                                         # handler metadata like _noauth.
+
+    def __setattr__(self, name, value):
+        """Block reassigning a core wire-derived field once the request is built.
+
+        Mutable during __init__/from_scope() (``_frozen`` is False until the very
+        end of from_scope()); once built, a handler that does
+        ``request.method = "..."`` / ``request.headers = {...}`` etc. now raises,
+        instead of silently mutating shared request state mid-pipeline
+        (REQ-IMMUTABILITY-DIVERGE). ``params``/``session``/``user`` and the
+        ``_``-prefixed dispatch fields stay writable — the router and middleware
+        legitimately set them after construction.
+        """
+        if name in _READONLY_FIELDS and getattr(self, "_frozen", False):
+            raise AttributeError(
+                f"Request.{name} is read-only once built (REQ-IMMUTABILITY-DIVERGE)"
+            )
+        object.__setattr__(self, name, value)
 
     def is_secure_scheme(self) -> bool:
         """True when the client's request scheme is https.
@@ -119,6 +198,15 @@ class Request:
         if forwarded:
             return forwarded.split(",")[0].strip().lower() == "https"
         return (self.scheme or "").lower() == "https"
+
+    def wants_json(self) -> bool:
+        """True when this request's Accept header prefers a JSON response.
+
+        The shared content-negotiation rule (feature 42, ERR-DEC-02): an API
+        client sending ``Accept: application/json`` gets a JSON error body;
+        a browser gets the HTML error page. See ``accept_prefers_json``.
+        """
+        return accept_prefers_json(self.headers.get("accept", ""))
 
     @classmethod
     def from_scope(cls, scope: dict, body: bytes = b"") -> "Request":
@@ -170,11 +258,12 @@ class Request:
                 f"TINA4_MAX_UPLOAD_SIZE ({TINA4_MAX_UPLOAD_SIZE} bytes)"
             )
 
-        # Parse query params
+        # Parse query params. `params` is NOT seeded here — it is route-only
+        # (REQ-PARAM-POLLUTION, 3.13.99) and is attached later, by the router,
+        # via attach_route_params(). Client query values live in `query` alone.
         if req.query_string:
             parsed = parse_qs(req.query_string, keep_blank_values=True)
             req.query = {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
-            req.params = dict(req.query)  # params starts as copy of query, route params merge later
 
         # Parse cookies
         cookie_header = req.headers.get("cookie", "")
@@ -193,28 +282,57 @@ class Request:
             files = {}
             fields = {}
             for key, value in req.body.items():
-                if isinstance(value, dict) and "filename" in value:
-                    # Content stays as raw bytes — no base64 encoding
+                if _is_file_value(value):
+                    # Content stays as raw bytes — no base64 encoding. A repeated
+                    # field name is a list of descriptors (no silent drop).
                     files[key] = value
                 else:
                     fields[key] = value
             req.files = files
             req.body = fields
 
+        # Construction complete — core wire-derived fields are now read-only
+        # (see __setattr__ / _READONLY_FIELDS). `params` is attached later by
+        # the router (attach_route_params()) and stays writable.
+        req._frozen = True
+
         return req
 
-    def merge_route_params(self):
-        """Merge route params into params dict (route params take priority)."""
-        if self._route_params:
-            self.params.update(self._route_params)
+    def attach_route_params(self):
+        """Set `params` to the matched route's params — ROUTE-ONLY.
+
+        Client query/body values never enter `params` (REQ-PARAM-POLLUTION,
+        3.13.99 — a param-pollution/security fix): a route `/{id}` hit with
+        `?id=other` yields `params["id"]` == the route value; the client value
+        is only ever in `query`. Called by the dispatcher once a route matches
+        (`_route_params` is set first), replacing the old `merge_route_params`
+        (which folded a query-seeded `params` dict together with route values).
+        """
+        self.params = dict(self._route_params)
 
     def param(self, key: str, default=None):
-        """Get a route parameter (from URL path). Alias for params[key]."""
-        return self.params.get(key, self._route_params.get(key, default))
+        """Get a value by key: the matched ROUTE param first, then the query string.
+
+        A read convenience only — `params` and `query` stay separate
+        collections (REQ-PARAM-POLLUTION); a route value always wins over a
+        client-supplied query value of the same name. Mirrors PHP's/Node's
+        `param()`.
+        """
+        if key in self.params:
+            return self.params[key]
+        return self.query.get(key, default)
 
     def header(self, name: str) -> str | None:
-        """Get a specific header value by name (case-insensitive)."""
-        return self.headers.get(name.lower().replace("-", "_"), self.headers.get(name.lower(), None))
+        """Get a specific header value by name (case-insensitive).
+
+        Case-insensitive only — no dash/underscore normalisation
+        (REQ-HEADER-DASH-DIVERGE, 3.13.99): `header("X-Custom")` and
+        `header("x-custom")` resolve the same header; `header("x_custom")`
+        does NOT also match `X-Custom` (it used to, via a `-`->`_` remap this
+        release removes to match the PHP/Node reference — case-fold only,
+        matching RFC 7230 §3.2, which does not treat `-`/`_` as equivalent).
+        """
+        return self.headers.get(name.lower(), None)
 
     def bearer_token(self) -> str | None:
         """Extract the Bearer token from the Authorization header."""
@@ -443,12 +561,22 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
             continue
 
         if filename:
-            result[name] = {
+            descriptor = {
                 "filename": filename,
                 "type": file_type,
                 "content": bytes(content),
                 "size": len(content),
             }
+            # Repeated field name -> collect ALL descriptors into a list; never
+            # silently keep only the last (the multi-file data-loss bug). A
+            # single occurrence stays a plain descriptor (backward compatible).
+            existing = result.get(name)
+            if isinstance(existing, list):
+                existing.append(descriptor)
+            elif isinstance(existing, dict) and "filename" in existing:
+                result[name] = [existing, descriptor]
+            else:
+                result[name] = descriptor
         else:
             result[name] = content.decode(errors="replace")
 
@@ -456,3 +584,60 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
             break
 
     return result
+
+
+def _is_file_value(value) -> bool:
+    """True when a parsed multipart entry is a file (or a list of files).
+
+    A file entry is a descriptor dict carrying a ``filename`` key, or a
+    non-empty list of such descriptors (a repeated field name). Everything else
+    is a plain form field.
+    """
+    if isinstance(value, dict):
+        return "filename" in value
+    if isinstance(value, list):
+        return bool(value) and isinstance(value[0], dict) and "filename" in value[0]
+    return False
+
+
+def save_upload(file: dict, target_dir: str, filename: str | None = None) -> str:
+    """Persist an uploaded file's content inside ``target_dir`` under a SAFE name.
+
+    The client-supplied filename is untrusted. Directory components are stripped
+    (so ``../../evil`` or ``/etc/passwd`` becomes ``evil`` / ``passwd``), a NUL
+    byte or an unusable name (``''``/``.``/``..``) is refused, and the resolved
+    path is confined to ``target_dir`` (realpath containment) so an upload can
+    never write outside it.
+
+    :param file: an uploaded-file descriptor (``request.files[name]``) carrying
+                 at least ``content`` (raw bytes); ``filename`` is used when the
+                 ``filename`` argument is not given.
+    :param target_dir: the directory to write into (created if missing).
+    :param filename: an explicit name to use instead of the client filename.
+    :return: the absolute path written.
+    :raises ValueError: when the derived name is unsafe or would escape.
+    """
+    raw = filename if filename is not None else file.get("filename", "")
+    if not isinstance(raw, str):
+        raw = str(raw or "")
+    if "\x00" in raw:
+        raise ValueError("upload filename contains a null byte")
+    # Reduce to a single path segment, handling BOTH separators so a Windows
+    # "..\\..\\evil" cannot smuggle a directory part past a POSIX basename.
+    base = raw.replace("\\", "/").rsplit("/", 1)[-1]
+    if base in ("", ".", ".."):
+        raise ValueError(f"upload filename is not a usable name: {raw!r}")
+    os.makedirs(target_dir, exist_ok=True)
+    dest = os.path.join(target_dir, base)
+    # Defence in depth: the resolved parent of the destination must be exactly
+    # the resolved target dir (guards a pre-existing symlink at target/base).
+    real_dir = os.path.realpath(target_dir)
+    real_parent = os.path.realpath(os.path.dirname(dest))
+    if real_parent != real_dir:
+        raise ValueError(f"refusing to write outside {target_dir!r}: {raw!r}")
+    content = file.get("content", b"")
+    if isinstance(content, str):
+        content = content.encode()
+    with open(dest, "wb") as handle:
+        handle.write(content)
+    return dest

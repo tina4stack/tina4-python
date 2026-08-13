@@ -24,6 +24,12 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, HTTPRedirectHandler, HTTPSHandler, build_opener
 from urllib.error import HTTPError, URLError
 
+# Safe: importing the tina4_python.api submodule always fully initializes the
+# tina4_python package first, and __version__ is set near the very top of
+# tina4_python/__init__.py, well before Api (a LAZY-loaded name) is ever
+# touched -- no circular import.
+from tina4_python import __version__
+
 
 # Statuses that warrant an automatic retry when ``max_retries`` > 0: rate-limit
 # (429) plus the transient server-side 5xx family. 4xx client errors (401,
@@ -382,7 +388,14 @@ class Api:
 
     def _build_request(self, method: str, url: str, body, content_type: str,
                        extra_headers: dict | None = None) -> Request:
-        headers = dict(self._headers)
+        # VERSION-DEC-03 (feature 130): every outbound request carries a
+        # default ``Tina4/<version>`` User-Agent. ``self._headers`` is merged
+        # in AFTER the default, and ``extra_headers`` after that, so a
+        # caller-supplied User-Agent (via the constructor's ``headers=``,
+        # ``add_headers()``, or a per-call ``extra_headers``) always wins --
+        # this is a default, never a clobber.
+        headers = {"User-Agent": f"Tina4/{__version__}"}
+        headers.update(self._headers)
         if self.auth_header:
             headers["Authorization"] = self.auth_header
 

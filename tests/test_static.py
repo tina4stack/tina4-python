@@ -1,4 +1,5 @@
 # Tests for static file serving in tina4_python.core.server (v3)
+import os
 import pytest
 import mimetypes
 from pathlib import Path
@@ -269,3 +270,73 @@ class TestStaticCacheControl:
 
         status, _, body = await drive([(b"if-modified-since", b"Wed, 01 Jan 2020 00:00:00 GMT")])
         assert status == 200 and body
+
+
+class TestStaticContractFeature41:
+    """Feature 41 shared contract (static_contract.json): realpath + separator
+    confinement (ADR-0050), the dotfile block, and TINA4_PUBLIC_DIR honoured -
+    proven through the real _try_static path with REAL files and a REAL symlink,
+    no mocks. TINA4_PUBLIC_DIR is the first search dir, so it gives every case an
+    absolute, controlled public root that exercises the same confinement helper."""
+
+    def test_a_legit_asset_is_served_with_its_content_type(self, tmp_path, monkeypatch):
+        pub = tmp_path / "pub"
+        (pub / "css").mkdir(parents=True)
+        (pub / "css" / "app.css").write_text("body{color:green}")
+        monkeypatch.setenv("TINA4_PUBLIC_DIR", str(pub))
+
+        resp = _try_static("/css/app.css")
+        assert resp is not None
+        assert resp.status_code == 200
+        assert resp.content == b"body{color:green}"
+        assert "css" in resp.content_type
+
+    def test_a_dot_dot_traversal_path_is_refused(self, tmp_path, monkeypatch):
+        pub = tmp_path / "pub"
+        pub.mkdir()
+        (tmp_path / "secret.env").write_text("TINA4_SECRET=leaked")
+        monkeypatch.setenv("TINA4_PUBLIC_DIR", str(pub))
+
+        assert _try_static("/css/../../secret.env") is None
+
+    def test_a_symlink_escaping_the_public_dir_is_refused(self, tmp_path, monkeypatch):
+        # A real secret OUTSIDE the public dir, reached by a real symlink placed
+        # INSIDE it. A lexical `..` check cannot see this; realpath containment must.
+        pub = tmp_path / "pub"
+        pub.mkdir()
+        secret = tmp_path / "outside-secret.txt"
+        secret.write_text("SUPER SECRET")
+        os.symlink(secret, pub / "leak.txt")
+        monkeypatch.setenv("TINA4_PUBLIC_DIR", str(pub))
+
+        assert _try_static("/leak.txt") is None
+
+    def test_a_dotenv_file_is_refused(self, tmp_path, monkeypatch):
+        pub = tmp_path / "pub"
+        pub.mkdir()
+        (pub / ".env").write_text("TINA4_SECRET=leaked")
+        monkeypatch.setenv("TINA4_PUBLIC_DIR", str(pub))
+
+        assert _try_static("/.env") is None
+
+    def test_a_dotgit_file_is_refused(self, tmp_path, monkeypatch):
+        pub = tmp_path / "pub"
+        (pub / ".git").mkdir(parents=True)
+        (pub / ".git" / "config").write_text("[core]")
+        monkeypatch.setenv("TINA4_PUBLIC_DIR", str(pub))
+
+        assert _try_static("/.git/config") is None
+
+    def test_tina4_public_dir_env_relocates_the_root(self, tmp_path, monkeypatch):
+        # A public root chosen purely by TINA4_PUBLIC_DIR; the working directory
+        # deliberately has no app public/, so a hit proves the env override.
+        custom = tmp_path / "custom"
+        custom.mkdir()
+        (custom / "brand.css").write_text(".brand{color:teal}")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("TINA4_PUBLIC_DIR", str(custom))
+
+        resp = _try_static("/brand.css")
+        assert resp is not None
+        assert resp.status_code == 200
+        assert resp.content == b".brand{color:teal}"

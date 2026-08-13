@@ -200,8 +200,12 @@ class TestLogFile:
         assert not (tmp_path / "error.log").exists()
 
     def test_custom_file_used(self, monkeypatch, tmp_path):
+        # Decision (tina4_python/debug/__init__.py module docstring): naming a
+        # file via TINA4_LOG_FILE does NOT by itself enable the file sink any
+        # more -- TINA4_LOG_OUTPUT (or TINA4_DEBUG) has to turn file output on.
         monkeypatch.setenv("TINA4_LOG_FILE", "custom.log")
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "file")
         from tina4_python.debug import Log
         Log.configure(log_dir=str(tmp_path))
         Log.info("hello")
@@ -209,22 +213,46 @@ class TestLogFile:
 
 
 class TestLogFormat:
-    def test_default_format_is_text(self, monkeypatch, tmp_path):
+    # Decision 3 (tina4_python/debug/__init__.py module docstring): format
+    # defaults to JSON, and is TEXT only when TINA4_DEBUG is truthy -- the old
+    # "text unless TINA4_LOG_FORMAT=json" default is superseded. Black-box
+    # against the public surface only (Log._format_line no longer exists):
+    # configure stdout output and read back what Log.info() actually printed.
+    def test_default_format_is_text_in_dev(self, monkeypatch, tmp_path, capsys):
         monkeypatch.delenv("TINA4_LOG_FORMAT", raising=False)
+        monkeypatch.setenv("TINA4_DEBUG", "true")
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "stdout")
         from tina4_python.debug import Log
         Log.configure(log_dir=str(tmp_path))
-        line = Log._format_line("info", "hello")
-        # Text format: "[INFO   ] hello", not JSON
+        Log.info("hello")
+        line = capsys.readouterr().out.strip()
+        # Text format: "...[INFO    ] hello", not JSON
         assert "[INFO" in line
-        assert not line.lstrip().startswith("{")
+        assert not line.startswith("{")
 
-    def test_json_format_when_set(self, monkeypatch, tmp_path):
+    def test_default_format_is_json_outside_dev(self, monkeypatch, tmp_path, capsys):
+        monkeypatch.delenv("TINA4_LOG_FORMAT", raising=False)
+        monkeypatch.delenv("TINA4_DEBUG", raising=False)
+        monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "stdout")
+        from tina4_python.debug import Log
+        Log.configure(log_dir=str(tmp_path))
+        Log.info("hello")
+        line = capsys.readouterr().out.strip()
+        import json as _json
+        parsed = _json.loads(line)
+        assert parsed["level"] == "INFO"
+        assert parsed["message"] == "hello"
+
+    def test_json_format_when_set(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setenv("TINA4_LOG_FORMAT", "json")
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "stdout")
         from tina4_python.debug import Log
         Log.configure(log_dir=str(tmp_path))
-        line = Log._format_line("info", "hello")
+        Log.info("hello")
+        line = capsys.readouterr().out.strip()
         import json as _json
         parsed = _json.loads(line)
         assert parsed["level"] == "INFO"
@@ -236,7 +264,7 @@ class TestLogOutput:
         monkeypatch.setenv("TINA4_LOG_OUTPUT", "stdout")
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
         from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="info", production=False)
+        Log.configure(log_dir=str(tmp_path), level="info")
         Log.info("hello")
         out = capsys.readouterr().out
         assert "hello" in out
@@ -245,7 +273,7 @@ class TestLogOutput:
         monkeypatch.setenv("TINA4_LOG_OUTPUT", "file")
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
         from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="info", production=False)
+        Log.configure(log_dir=str(tmp_path), level="info")
         Log.info("silent-on-stdout")
         out = capsys.readouterr().out
         assert "silent-on-stdout" not in out
@@ -255,7 +283,7 @@ class TestLogOutput:
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
         monkeypatch.setenv("TINA4_LOG_FILE", "both.log")
         from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="info", production=False)
+        Log.configure(log_dir=str(tmp_path), level="info")
         Log.info("everywhere")
         out = capsys.readouterr().out
         assert "everywhere" in out
@@ -269,7 +297,7 @@ class TestLogCritical:
         monkeypatch.delenv("TINA4_LOG_CRITICAL", raising=False)
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
         from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="info", production=False)
+        Log.configure(log_dir=str(tmp_path), level="info")
         Log.critical("always logged")
         out = capsys.readouterr().out
         assert "always logged" in out
@@ -278,23 +306,34 @@ class TestLogCritical:
         # critical (4) outranks error (3): visible even at level=error
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
         from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="error", production=False)
+        Log.configure(log_dir=str(tmp_path), level="error")
         Log.critical("top severity")
         out = capsys.readouterr().out
         assert "top severity" in out
 
 
 class TestLogRotation:
-    """Dedicated tests for the new RotatingFileHandler-based rotation."""
+    """Dedicated tests for the new RotatingFileHandler-based rotation.
+
+    TINA4_LOG_ROTATE_SIZE now has a hard floor: MIN_ROTATE_SIZE (1024 bytes,
+    see tina4_python/debug/__init__.py) — a value below it is a configuration
+    error, not a smaller-but-legal rotation threshold. The old tiny values
+    here (150/200/0 bytes) all now raise LogConfigurationError before a
+    single line is written, so the rotation cases use 1024 (the smallest
+    legal size) with enough log lines to still cross it comfortably, and the
+    old "0 disables rotation" case is replaced with a test that locks in the
+    real behaviour: below the floor is refused, loudly, naming the minimum.
+    """
 
     def test_rotation_triggers_at_size(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TINA4_LOG_FILE", "rot.log")
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
-        monkeypatch.setenv("TINA4_LOG_ROTATE_SIZE", "200")  # tiny — bytes
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "file")
+        monkeypatch.setenv("TINA4_LOG_ROTATE_SIZE", "1024")  # the minimum legal size
         monkeypatch.setenv("TINA4_LOG_ROTATE_KEEP", "3")
         from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="info", production=False)
-        # Each line is well over 50 bytes, so 50 lines guarantees > 200 B.
+        Log.configure(log_dir=str(tmp_path), level="info")
+        # Each line is well over 50 bytes, so 50 lines guarantees > 1024 B.
         for i in range(50):
             Log.info(f"rotation-line-{i}")
         rotated = list(tmp_path.glob("rot.log*"))
@@ -306,28 +345,25 @@ class TestLogRotation:
     def test_rotate_keep_caps_backups(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TINA4_LOG_FILE", "keep.log")
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
-        monkeypatch.setenv("TINA4_LOG_ROTATE_SIZE", "150")
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "file")
+        monkeypatch.setenv("TINA4_LOG_ROTATE_SIZE", "1024")
         monkeypatch.setenv("TINA4_LOG_ROTATE_KEEP", "2")
         from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="info", production=False)
+        Log.configure(log_dir=str(tmp_path), level="info")
         for i in range(200):
             Log.info(f"keep-line-{i}-padding-padding-padding-padding")
         backups = sorted(tmp_path.glob("keep.log.*"))
         # backupCount=2 means at most keep.log.1 and keep.log.2 — i.e. <= 2.
         assert len(backups) <= 2
 
-    def test_rotate_size_zero_disables(self, monkeypatch, tmp_path):
+    def test_rotate_size_below_minimum_raises(self, monkeypatch, tmp_path):
         monkeypatch.setenv("TINA4_LOG_FILE", "norot.log")
         monkeypatch.setenv("TINA4_LOG_DIR", str(tmp_path))
+        monkeypatch.setenv("TINA4_LOG_OUTPUT", "file")
         monkeypatch.setenv("TINA4_LOG_ROTATE_SIZE", "0")
-        from tina4_python.debug import Log
-        Log.configure(log_dir=str(tmp_path), level="info", production=False)
-        for i in range(100):
-            Log.info(f"no-rotation-line-{i}-padding-padding-padding")
-        backups = list(tmp_path.glob("norot.log.*"))
-        assert backups == []
-        # The single file just keeps growing.
-        assert (tmp_path / "norot.log").stat().st_size > 200
+        from tina4_python.debug import Log, LogConfigurationError
+        with pytest.raises(LogConfigurationError, match="TINA4_LOG_ROTATE_SIZE"):
+            Log.configure(log_dir=str(tmp_path), level="info")
 
 
 # ── TINA4_SESSION_* ──────────────────────────────────────────────

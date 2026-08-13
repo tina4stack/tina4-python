@@ -7,9 +7,11 @@
 # contract intact: it returns ``self | False`` and NEVER raises. Any *other*
 # driver error (e.g. NOT NULL) keeps its raw cause with no bogus hint.
 #
-# These also lock in the constructor-vs-save() asymmetry the docs describe:
-# an explicit ``None`` on a required field RAISES at construction, but the same
-# state reached via a setter makes save() return False (loud, not fatal).
+# These also lock in the construction/save() contract (LOAD-DEC-01, feature 26,
+# 3.13.99): an explicit ``None`` on a required field no longer RAISES at
+# construction (hydration coerces types only, per LOAD-PY-REVALIDATE) — the
+# SAME state reached via a setter, or via the constructor, makes save() return
+# False (loud, not fatal). save() is the ONE enforcement gate now.
 #
 # Engine-agnostic — real temp SQLite, no mocks.
 import pytest
@@ -175,22 +177,40 @@ class TestContractPreserved:
         assert NnUser.count() == 0                     # rolled back
 
 
-# ── 4. Asymmetry lock-in: constructor RAISES / save() returns False ──
+# ── 4. LOAD-DEC-01 (feature 26): constructor hydrates, save() alone enforces ──
 
 
 class TestConstructorVsSaveAsymmetry:
-    def test_constructor_raises_on_explicit_none_required(self, db):
-        """Passing an explicit None for a required field RAISES at construction
-        — the model never gets built."""
-        with pytest.raises(ValueError) as exc:
-            AsymUser({"name": None})
-        assert "required" in str(exc.value).lower()
+    def test_constructor_no_longer_raises_on_explicit_none_required(self, db):
+        """LOAD-DEC-01 (feature 26, 3.13.99): the constructor hydrates via
+        field.coerce(), which no longer re-enforces required/length/range/
+        choices — an explicit None on a required field builds fine now
+        (it used to RAISE ValueError here). save() is still the ONE
+        enforcement gate (see
+        test_save_returns_false_when_required_field_nulled_via_setter and
+        test_save_returns_false_when_required_field_none_via_constructor)."""
+        user = AsymUser({"name": None})
+        assert user.name is None
+
+    def test_save_returns_false_when_required_field_none_via_constructor(self, db, capsys):
+        """The write-path gate is untouched by LOAD-DEC-01: building straight
+        from a dict with a required field explicitly None still makes save()
+        return False (never raises) with the cause recoverable — construction
+        and the setter path now behave identically."""
+        u = AsymUser({"name": None})                  # builds fine (no raise)
+
+        result = u.save()                             # must NOT raise
+
+        assert result is False
+        err = u.get_error()
+        assert err == u.last_error
+        assert err is not None and "required" in err.lower()
+        assert AsymUser.count() == 0                   # never reached the driver
 
     def test_save_returns_false_when_required_field_nulled_via_setter(self, db, capsys):
         """The SAME None reached through a setter is loud-but-not-fatal:
         Model() builds, then setting the required field to None makes save()
-        return False (never raises) with the validation cause recoverable —
-        proving the constructor-vs-save() asymmetry."""
+        return False (never raises) with the validation cause recoverable."""
         u = AsymUser()                                # builds fine (no raise)
         u.name = None                                 # now violates required=True
 

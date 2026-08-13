@@ -117,7 +117,15 @@ _DRIVERS: dict[str, type] = {}
 
 
 def register_driver(scheme: str, adapter_class: type):
-    """Register a database adapter for a URL scheme."""
+    """Register a database adapter for a URL scheme.
+
+    ADR-0044 / DBA-S02: fails loud, at registration, when the class does not
+    implement every required adapter capability — instead of failing later
+    with a bare AttributeError on whichever call path happens to touch the
+    gap first.
+    """
+    from tina4_python.database.adapter import validate_adapter
+    validate_adapter(adapter_class, scheme)
     _DRIVERS[scheme] = adapter_class
 
 
@@ -805,9 +813,16 @@ class Database:
         if table not in self._pk_cache:
             try:
                 columns = self._get_adapter().get_columns(table)
-                self._pk_cache[table] = [
-                    c["name"] for c in columns if c.get("primary_key")
-                ]
+                pk_columns = [c for c in columns if c.get("primary_key")]
+                # ADR-0044 amendment: sort by primary_key_position so a composite
+                # PRIMARY KEY (b, a) returns ["b", "a"] (declared key order), not
+                # table-column order. A column whose adapter doesn't report a
+                # position (None) sorts last, stable among themselves.
+                pk_columns.sort(
+                    key=lambda c: (c.get("primary_key_position") is None,
+                                    c.get("primary_key_position") or 0)
+                )
+                self._pk_cache[table] = [c["name"] for c in pk_columns]
             except Exception:  # noqa: BLE001 - a missing table is not an error here
                 self._pk_cache[table] = []
         return self._pk_cache[table]
@@ -1269,10 +1284,18 @@ class Database:
         )
 
     def _sequence_next_generic(self, adapter, seq_name: str, table: str, pk_column: str) -> int:
-        """Fallback atomic-ish path (read-then-insert avoided via best effort).
+        """Fallback ATOMIC sequence-next for any engine routed here (the
+        PostgreSQL sequence-table fallback, ODBC, and other engines without a
+        native sequence).
 
-        Used only for engines not otherwise special-cased. Seeds if absent,
-        then increments and reads on the pinned connection.
+        The increment and the read are ONE statement — ``UPDATE ...
+        current_value = current_value + 1 ... RETURNING current_value`` — so two
+        concurrent callers can never read the same post-increment value. The old
+        path did the ``UPDATE`` then a SEPARATE ``SELECT current_value``: between
+        the two, another caller could increment and commit, so both callers read
+        the same value and returned a DUPLICATE id (a TOCTOU). Seeds the row
+        (insert-if-absent) BEFORE the atomic increment, so there is no
+        read-then-insert gap.
         """
         seed = self._sequence_seed_value(adapter, table, pk_column)
         try:
@@ -1284,19 +1307,19 @@ class Database:
         except Exception:
             # Row likely already exists (PK conflict) — fine, keep going.
             self.rollback()
-        adapter.execute(
+        # Single atomic increment-and-return. PostgreSQL (the engine that reaches
+        # this fallback) supports UPDATE ... RETURNING, so the value we read is
+        # exactly the one this statement wrote — no separate-SELECT race window.
+        result = adapter.execute(
             "UPDATE tina4_sequences SET current_value = current_value + 1 "
-            "WHERE seq_name = ?",
+            "WHERE seq_name = ? RETURNING current_value",
             [seq_name],
         )
         self.commit()
-        row = adapter.fetch_one(
-            "SELECT current_value FROM tina4_sequences WHERE seq_name = ?",
-            [seq_name],
-        )
-        if not row:
-            raise RuntimeError(f"get_next_id: sequence row '{seq_name}' missing")
-        return int(row["current_value"])
+        records = getattr(result, "records", None)
+        if records:
+            return int(records[0]["current_value"])
+        raise RuntimeError(f"get_next_id: sequence row '{seq_name}' missing")
 
     def get_next_id(self, table: str, pk_column: str = "id", generator_name: str = None) -> int:
         """Get the next available ID for a table.
@@ -1319,6 +1342,16 @@ class Database:
         """
         engine = self.get_database_type()
 
+        if engine == "mongodb":
+            # MongoDB gets a DEDICATED atomic path: the adapter's
+            # findOneAndUpdate($inc) on a counters collection, which is
+            # monotonic and concurrency-safe. It is NEVER routed through the
+            # relational tina4_sequences fallback, whose arithmetic
+            # ``current_value + 1`` UPDATE has no MongoDB translation (the
+            # increment would be silently dropped and every call return the same
+            # id — a duplicate-key generator).
+            return self._get_adapter().get_next_id(table, pk_column)
+
         if engine == "firebird":
             gen_name = generator_name or f"GEN_{table.upper()}_ID"
             # Create generator if it doesn't exist
@@ -1334,25 +1367,41 @@ class Database:
 
         if engine == "postgresql":
             seq_name = generator_name or f"{table}_{pk_column}_seq"
+            # Fast path: the sequence already exists — nextval() is atomic.
             try:
                 row = self.fetch_one(f"SELECT nextval('{seq_name}') AS next_id")
                 if row and row.get("next_id") is not None:
                     return int(row["next_id"])
             except Exception:
-                pass  # Sequence doesn't exist
+                pass  # Sequence doesn't exist — create it idempotently below.
 
-            # Auto-create sequence seeded from MAX
+            # First use: create the sequence IDEMPOTENTLY (CREATE SEQUENCE IF NOT
+            # EXISTS), seeded from MAX(pk). Two concurrent first-callers therefore
+            # share ONE sequence — the loser's create is a no-op, not an error, so
+            # it never falls to the tina4_sequences table and draws a DUPLICATE id
+            # from a second, independent counter (the first-use race).
             try:
                 max_row = self.fetch_one(
                     f"SELECT COALESCE(MAX({pk_column}), 0) AS max_id FROM {table}"
                 )
                 start = int(max_row["max_id"]) + 1 if max_row else 1
-                self.execute(f"CREATE SEQUENCE {seq_name} START WITH {start}")
+                self.execute(
+                    f"CREATE SEQUENCE IF NOT EXISTS {seq_name} START WITH {start}"
+                )
                 self.commit()
-                row = self.fetch_one(f"SELECT nextval('{seq_name}') AS next_id")
-                return int(row["next_id"]) if row else start
             except Exception:
-                pass  # Fall through to sequence table
+                # A concurrent creator won the catalog race — the sequence exists
+                # now; draw from it below rather than the racy table path.
+                pass
+
+            # ALWAYS draw from the sequence now that it exists. Never fall to the
+            # sequence table just because our own CREATE lost the race.
+            try:
+                row = self.fetch_one(f"SELECT nextval('{seq_name}') AS next_id")
+                if row and row.get("next_id") is not None:
+                    return int(row["next_id"])
+            except Exception:
+                pass  # Truly cannot use a sequence — last-resort table below.
 
         # SQLite / MySQL / MSSQL / PostgreSQL fallback — atomic sequence table
         seq_key = generator_name or f"{table}.{pk_column}"

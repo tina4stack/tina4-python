@@ -52,6 +52,16 @@ import re
 _REGISTERED_SCHEMES: dict[str, dict] = {}
 _REGISTERED_SCHEMAS: dict[str, dict] = {}
 
+# Framework-internal route prefixes that are NEVER part of an application's
+# public API document. SHARED across all four frameworks (SWAG-EXCLUSION-NOT-SHARED,
+# ADR-0004) so the exclusion is one rule everywhere, not three mechanisms: the dev
+# tools (/swagger, /__dev), the feedback widget (/__feedback), and the built-in
+# AI/RAG service probes (/ai, /rag, /vision, /embed, /image). Python dispatches
+# these OUTSIDE the router today, so most never reach _included() in practice —
+# the list is here so the RULE holds regardless of how a given route got
+# registered, not because of where each internal happens to be wired.
+_INTERNAL_PREFIXES = ("/swagger", "/__dev", "/__feedback", "/ai", "/rag", "/vision", "/embed", "/image")
+
 
 def description(text: str = "", detail: str = "", params: dict | None = None,
                 query: dict | None = None):
@@ -421,7 +431,7 @@ class Swagger:
     def _included(self, raw_path: str) -> bool:
         """Path-filter a raw route path. Framework internals are always
         excluded; then TINA4_SWAGGER_INCLUDE (allow-list) / _EXCLUDE apply."""
-        for internal in ("/swagger", "/__dev"):
+        for internal in _INTERNAL_PREFIXES:
             if raw_path == internal or raw_path.startswith(internal + "/"):
                 return False
         if self.include_prefixes and not any(
@@ -506,6 +516,22 @@ class Swagger:
                 models[model.__name__] = model
                 ref = f"#/components/schemas/{model.__name__}"
 
+            # summary/tags are ALWAYS populated (SWAG-SHAPE-DRIFT, ADR-0004) —
+            # PHP/Ruby/Node never omit them, so an undecorated route used to be
+            # the one shape Python left out. An explicit @summary/@tags wins;
+            # otherwise a "METHOD /path" summary and a first-path-segment tag
+            # match the other three frameworks' fallback.
+            operation["summary"] = (
+                getattr(handler, "_swagger_summary", None) if handler else None
+            ) or f"{method.upper()} {route['path']}"
+            op_tags = (
+                getattr(handler, "_swagger_tags", None) if handler else None
+            ) or [self._infer_tag(route["path"])]
+            operation["tags"] = op_tags
+            for t in op_tags:
+                if t not in used_tags:
+                    used_tags.append(t)
+
             # Extract metadata from handler decorators
             if handler:
                 desc = getattr(handler, "_swagger_description", None)
@@ -514,13 +540,6 @@ class Swagger:
                     operation["description"] = "\n\n".join(
                         p for p in (desc, detail) if p
                     )
-                if hasattr(handler, "_swagger_summary"):
-                    operation["summary"] = handler._swagger_summary
-                if hasattr(handler, "_swagger_tags"):
-                    operation["tags"] = handler._swagger_tags
-                    for t in handler._swagger_tags:
-                        if t not in used_tags:
-                            used_tags.append(t)
                 if hasattr(handler, "_swagger_deprecated"):
                     operation["deprecated"] = True
 
@@ -623,6 +642,14 @@ class Swagger:
                     [{self.default_scheme: []}], schemes
                 )
 
+            # A secured operation documents a 401 (SWAG-401-SHAPE, ADR-0004,
+            # OWNER-DECISIONS.md 2026-08-11: "secured swagger ops document a
+            # 401 (Python adds it)"). PHP/Ruby/Node already did this; Python was
+            # the gap. setdefault so an explicit @example_response(401, ...) is
+            # never clobbered.
+            if operation.get("security"):
+                operation["responses"].setdefault("401", {"description": "Unauthorized"})
+
             spec["paths"][path][method] = operation
 
         # components.schemas from any ORM models referenced by handlers
@@ -676,6 +703,17 @@ class Swagger:
             p = cls._segment_param(seg)
             out.append("{" + p[0] + "}" if p else seg)
         return "/".join(out)
+
+    @staticmethod
+    def _infer_tag(path: str) -> str:
+        """Default tag from a route path: the first non-empty segment, or
+        'default' for a bare path-param/root. Parity with PHP's inferTag /
+        Ruby's extract_tag (SWAG-SHAPE-DRIFT) — undecorated routes always get
+        a tag, never an omitted key."""
+        segments = [s for s in path.split("/") if s]
+        if not segments or segments[0].startswith("{"):
+            return "default"
+        return segments[0]
 
     @staticmethod
     def _operation_id(method: str, path: str) -> str:

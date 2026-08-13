@@ -128,8 +128,8 @@ def _fields_or_default(fields_str: str) -> list[tuple[str, str]]:
 def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
     """Parse --key value and --flag from args. Returns (flags, positional)."""
     # Boolean-only flags that never take a value argument
-    boolean_flags = {"no-browser", "no-reload", "production", "managed", "all", "clear", "json",
-                     "public", "no-migration", "once"}
+    boolean_flags = {"no-browser", "no-reload", "no-kill", "production", "managed", "all", "clear",
+                     "json", "public", "no-migration", "once"}
 
     flags = {}
     positional = []
@@ -221,87 +221,37 @@ def _parse_every(every: str) -> int:
         return 60
 
 
-def _in_container() -> bool:
-    """True when this process is running inside a container.
-
-    Reclaiming a port makes sense on a dev machine, where a previous
-    ``tina4 serve`` may still hold it. Inside a container the server IS the
-    container, so there is never a stale sibling to reclaim from -- and trying
-    is actively dangerous (see ``_kill_process_on_port``).
-    """
-    if os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv"):
-        return True
-    try:
-        with open("/proc/1/cgroup", "r", encoding="utf-8", errors="replace") as fh:
-            blob = fh.read()
-        return "docker" in blob or "containerd" in blob or "kubepods" in blob
-    except OSError:
-        return False
-
-
-def selectable_pids(lsof_output: str, me: int, my_group: int | None = None) -> list[int]:
-    """The PIDs from ``lsof -ti`` output that are safe to signal.
-
-    Pure so the safety rule can be tested directly. An unvalidated parse is a
-    footgun with real teeth: when ``lsof`` is present but prints a different
-    shape than ``-ti`` implies, a non-numeric field coerces to 0, and
-    signalling PID 0 sends the signal to EVERY process in the caller's own
-    process group -- the server kills itself. That is exactly what happened in
-    a container, where the log read "Killed existing process on port 7148
-    (PID: 1 ...)" and the container exited 143.
-
-    So: accept only all-digit tokens, and never PID 0 (our process group),
-    PID 1 (init), ourselves, or our own process group.
-    """
-    pids = []
-    for token in lsof_output.split():
-        if not token.isdigit():
-            continue              # never coerce junk into a PID
-        pid = int(token)
-        if pid <= 1 or pid == me:
-            continue              # 0 = our process group, 1 = init, me = suicide
-        if my_group is not None and pid == my_group:
-            continue
-        if pid not in pids:
-            pids.append(pid)
-    return pids
+# The port-takeover safety logic (identity check, PID safety filter, container
+# guard, dev gate, opt-out) lives in ONE shared module so the CLI path here and
+# the runtime bind-failure fallback in core/server.py cannot diverge
+# (TAKEOVER-DEC-02). `selectable_pids` and `_in_container` are re-exported so
+# their existing callers/tests keep resolving `tina4_python.cli.selectable_pids`.
+from tina4_python.core.port_takeover import (  # noqa: E402
+    selectable_pids,
+    in_container as _in_container,
+    take_over_port,
+    is_dev,
+    no_takeover_opted_out,
+)
 
 
 def _kill_process_on_port(port: int) -> bool:
-    """Kill any process listening on the given port. Returns True if killed.
+    """Reclaim *port* from a stale Tina4 dev server, only when it is safe.
 
-    Skipped entirely in a container, where the server IS the container and
-    there is no stale sibling to reclaim from. The PID safety rule lives in
-    :func:`selectable_pids`.
+    Routes through the shared identity-checked takeover (TAKEOVER-DEC-01/02):
+    a holder is signalled ONLY when a Tina4 dev server recorded its PID in the
+    per-port PID file. A foreign holder is left running and a clear message is
+    printed; takeover is also skipped in a container, outside dev mode, and when
+    opted out (`TINA4_NO_TAKEOVER` / `tina4 serve --no-kill`).
+
+    Returns True only when a Tina4 holder was actually signalled.
     """
-    if _in_container():
-        return False
-    try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return False
-
-        me = os.getpid()
-        my_group = os.getpgrp() if hasattr(os, "getpgrp") else None
-        killed = []
-        for pid in selectable_pids(result.stdout, me, my_group):
-            try:
-                os.kill(pid, signal.SIGTERM)
-                killed.append(str(pid))
-            except (ProcessLookupError, PermissionError):
-                pass
-
-        if not killed:
-            return False
-        import time
-        time.sleep(0.5)
-        print(f"  ⚠ Killed existing process on port {port} (PID: {', '.join(killed)})")
+    result = take_over_port(port, dev=is_dev(), no_takeover=no_takeover_opted_out())
+    if result.reclaimed:
+        print(f"  ⚠ {result.message}")
         return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
+    if result.refused and result.message:
+        print(f"  {result.message}")
     return False
 
 
@@ -834,7 +784,12 @@ def _serve(args):
     # --no-reload flag
     no_reload = "no-reload" in flags
 
-    # Kill existing process on port
+    # --no-kill opts out of port takeover for the whole process, so the CLI path
+    # here AND the runtime bind-failure fallback both honour it (TAKEOVER-DEC-03).
+    if "no-kill" in flags:
+        os.environ["TINA4_NO_TAKEOVER"] = "true"
+
+    # Reclaim the port from a stale Tina4 dev server only (identity-checked).
     port = cli_port or int(os.environ.get("PORT", os.environ.get("TINA4_PORT", "7146")))
     _kill_process_on_port(port)
 
@@ -907,14 +862,14 @@ def _migrate_status(args):
     if completed:
         print("\nCompleted migrations:")
         for m in completed:
-            print(f"  [batch {m['batch']}] {m['migration_id']}  ({m['executed_at']})")
+            print(f"  [batch {m['batch']}] {m['migration_name']}  ({m['executed_at']})")
     else:
         print("\nNo completed migrations.")
 
     if pending:
         print("\nPending migrations:")
         for m in pending:
-            print(f"  {m['migration_id']}  ({m['description']})")
+            print(f"  {m['migration_name']}  ({m['description']})")
     else:
         print("\nNo pending migrations.")
 
@@ -977,10 +932,70 @@ def _routes(args):
     print(f"\n{len(routes)} route(s) registered.")
 
 
+def _run_inline_tests(root: Path) -> bool:
+    """Discover ``@tests``-decorated functions under ``src/`` and run them.
+
+    Returns True if any inline test FAILED or ERRORED (so the caller can exit
+    non-zero), False if everything passed or there were no inline tests.
+
+    Only files whose text contains ``@tests`` are imported — a source file
+    without an inline test is never executed, so ``tina4 test`` cannot run a
+    scanned file's arbitrary side effect. This is the ``@tests`` decorator
+    surface wired to a real exit code (INLINE-DEC-01).
+    """
+    import importlib.util
+
+    from tina4_python.Testing import reset, run_all
+
+    src = root / "src"
+    if not src.is_dir():
+        return False
+
+    reset()
+    discovered = 0
+    for path in sorted(src.rglob("*.py")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if "@tests" not in text:
+            continue
+        discovered += 1
+        module_name = "tina4_inline_" + re.sub(r"\W", "_", str(path.relative_to(root)))
+        spec = importlib.util.spec_from_file_location(module_name, str(path))
+        if spec is None or spec.loader is None:
+            continue
+        try:
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as exc:  # noqa: BLE001 — report and keep going
+            print(f"  ! could not import {path.relative_to(root)}: {exc}")
+
+    if discovered == 0:
+        return False
+
+    results = run_all()
+    return (results["failed"] + results["errors"]) > 0
+
+
 def _test(args):
-    """Run the test suite."""
-    result = subprocess.run([sys.executable, "-m", "pytest", "tests/"] + args)
-    sys.exit(result.returncode)
+    """Run the inline ``@tests`` suite AND the pytest suite; exit non-zero if either fails.
+
+    The inline stage discovers ``@tests``-decorated functions under ``src/`` and
+    runs them with a real exit code (INLINE-DEC-01) — the batteries-included flow
+    the docs advertise. The pytest stage still runs the ``tests/`` suite when that
+    directory exists (preserving the python#96 exit-code contract), so a project
+    that keeps its tests in ``tests/`` is unaffected.
+    """
+    inline_failed = _run_inline_tests(Path.cwd())
+
+    pytest_code = 0
+    if Path("tests").is_dir():
+        pytest_code = subprocess.run(
+            [sys.executable, "-m", "pytest", "tests/"] + args
+        ).returncode
+
+    sys.exit(1 if (inline_failed or pytest_code) else 0)
 
 
 def _build(args):
@@ -1211,8 +1226,8 @@ def _gen_route(name: str, flags: dict, *, emit_test: bool = True):
 @get("/api/{route_path}")
 async def list_{route_path}(request, response):
     """List all {route_path} with pagination."""
-    page = int(request.params.get("page", 1))
-    per_page = int(request.params.get("per_page", 20))
+    page = int(request.query.get("page", 1))
+    per_page = int(request.query.get("per_page", 20))
     offset = (page - 1) * per_page
     records, total = {model}.where("1=1", limit=per_page, offset=offset, with_count=True)
     return response({{

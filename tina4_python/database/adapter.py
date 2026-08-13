@@ -519,11 +519,103 @@ class DatabaseResult:
         return result
 
 
+#: ADR-0044 (feature 3, adapter_contract.json): the exact fourteen adapter
+#: capabilities. None is optional; a registered adapter missing one of these
+#: fails loud at registration (see validate_adapter below), never at the first
+#: unlucky call. Kept as data so the shared conformance fixture can check the
+#: DECLARED interface against this list instead of re-deriving it.
+REQUIRED_CAPABILITIES = (
+    "connect", "close", "get_database_type",
+    "execute", "execute_many", "fetch", "fetch_one",
+    "start_transaction", "commit", "rollback", "autocommit",
+    "get_tables", "get_columns", "table_exists",
+)
+
+#: ADR-0044: engine-neutral composition that must NOT be part of the adapter
+#: boundary — it belongs on the public Database facade (CRUD SQL building) or
+#: is not a required capability at all (diagnostics that duplicate an existing
+#: channel). See SqlCrudMixin below for where insert/update/delete now live.
+NOT_REQUIRED_ON_ADAPTER = (
+    "query", "insert", "update", "delete", "truncate", "fetch_all",
+    "create_table", "add_column", "last_insert_id", "error", "sql_translation",
+)
+
+
+class AdapterContractError(TypeError):
+    """A registered adapter does not satisfy the Tina4 database adapter contract.
+
+    Raised at registration time (DatabaseAdapter.validate / Database._create_adapter),
+    naming the adapter and the missing capability, instead of failing later with a
+    bare AttributeError on whichever call path happens to touch the gap first
+    (DBA-S02: "incomplete adapter registration fails loud").
+    """
+
+
+class UnsupportedAtomicBatchError(RuntimeError):
+    """A provider/deployment cannot guarantee an atomic multi-row batch.
+
+    ADR-0044 / DBA-P02: a provider unable to guarantee atomic batch writes must
+    reject the operation before the first write rather than silently degrading to
+    partial durability (the standalone-MongoDB-without-a-replica-set case). Raised
+    by DatabaseAdapter.execute_many before any row is written when the adapter's
+    own `supports_atomic_batch` is False and the batch has more than one row.
+    """
+
+
+#: The subset of REQUIRED_CAPABILITIES whose DatabaseAdapter body is PURELY
+#: `raise NotImplementedError` — no usable behaviour at all. `execute_many` is
+#: deliberately excluded: its base body is a complete, working generic
+#: implementation (row-at-a-time inside one owned transaction) that every
+#: built-in adapter is free to inherit as-is or override for native batching,
+#: so merely existing (inherited or not) is sufficient. `autocommit` is
+#: handled separately below (it is a property, not a plain method).
+_PURELY_ABSTRACT_CAPABILITIES = frozenset(REQUIRED_CAPABILITIES) - {"execute_many", "autocommit"}
+
+
+def validate_adapter(adapter_class: type, name: str = "") -> None:
+    """Fail loud when a class does not declare every required capability.
+
+    Reflects the CLASS (so a driver author sees the gap before anyone connects).
+    For the purely-abstract capabilities this checks the member was actually
+    OVERRIDDEN (not left as the raising NotImplementedError stub inherited from
+    DatabaseAdapter) — mirrors Ruby's DatabaseAdapter.implemented_by?. For
+    `execute_many` (which has a real, usable generic default) and `autocommit`
+    (a property), simple presence is sufficient.
+    """
+    label = name or getattr(adapter_class, "__name__", str(adapter_class))
+    missing = []
+    for capability in REQUIRED_CAPABILITIES:
+        member = getattr(adapter_class, capability, None)
+        if member is None or not (callable(member) or isinstance(member, property)):
+            missing.append(capability)
+            continue
+        if capability == "autocommit":
+            # A native boolean property, readable AND writable.
+            if not isinstance(member, property) or member.fset is None:
+                missing.append(capability)
+            continue
+        if capability in _PURELY_ABSTRACT_CAPABILITIES:
+            owner = getattr(member, "__qualname__", "")
+            if owner.startswith("DatabaseAdapter.") and not owner.startswith(f"{label}."):
+                # Still the raising base-class stub — never overridden.
+                missing.append(capability)
+    if missing:
+        raise AdapterContractError(
+            f"adapter '{label}' does not implement the required Tina4 database "
+            f"adapter contract capabilities: {', '.join(missing)} "
+            f"(ADR-0044 / plan/v3/fixtures/adapter_contract.json)"
+        )
+
+
 class DatabaseAdapter:
     """Base class for all database drivers.
 
     Every method raises NotImplementedError — drivers must implement all of them.
-    The interface is deliberately minimal: 13 methods cover everything.
+    The interface is deliberately minimal: fourteen methods cover everything
+    (REQUIRED_CAPABILITIES above; ADR-0044). Engine-neutral CRUD composition
+    (insert/update/delete) is NOT here — see SqlCrudMixin, which every built-in
+    SQL adapter mixes in separately so the DECLARED adapter interface stays exactly
+    the fourteen capabilities while every adapter still works identically.
 
     Autocommit is ON by default: a standalone write (execute/insert/update/delete
     made outside an explicit transaction) commits on its own connection before
@@ -538,6 +630,12 @@ class DatabaseAdapter:
         self._autocommit = os.environ.get(
             "TINA4_AUTOCOMMIT", "true"
         ).lower() in ("true", "1", "yes")
+        # ADR-0044 / DBA-P02: every built-in adapter can guarantee an atomic
+        # multi-row batch. A deployment that genuinely cannot (a standalone
+        # MongoDB without a replica set is the motivating real case) sets this
+        # False so execute_many rejects BEFORE the first write instead of
+        # silently providing partial durability.
+        self._supports_atomic_batch = True
 
     @property
     def autocommit(self) -> bool:
@@ -546,6 +644,14 @@ class DatabaseAdapter:
     @autocommit.setter
     def autocommit(self, value: bool):
         self._autocommit = value
+
+    @property
+    def supports_atomic_batch(self) -> bool:
+        return self._supports_atomic_batch
+
+    @supports_atomic_batch.setter
+    def supports_atomic_batch(self, value: bool):
+        self._supports_atomic_batch = value
 
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Establish connection to the database."""
@@ -571,6 +677,13 @@ class DatabaseAdapter:
         rows = params_list or []
         if not rows:
             return DatabaseResult(affected_rows=0)
+        if not self._supports_atomic_batch and len(rows) > 1:
+            raise UnsupportedAtomicBatchError(
+                f"provider {self.get_database_type()!r} cannot guarantee an atomic "
+                f"batch write on this deployment (required deployment capability: "
+                f"a transaction-capable configuration) — rejected before the first "
+                f"write rather than risking partial durability"
+            )
         # Run the whole batch in ONE transaction on ONE connection so it is
         # atomic AND affected_rows/last_id are reliable. In autocommit mode each
         # standalone execute() commits on its own (possibly different, pooled)
@@ -855,6 +968,84 @@ class DatabaseAdapter:
             return filter_sql
         return SQLTranslator.placeholder_style(filter_sql, self.PARAM_MARKER)
 
+    def start_transaction(self):
+        """Begin a transaction."""
+        raise NotImplementedError
+
+    def commit(self):
+        """Commit the current transaction."""
+        raise NotImplementedError
+
+    def rollback(self):
+        """Roll back the current transaction."""
+        raise NotImplementedError
+
+    def table_exists(self, name: str) -> bool:
+        """Check if a table exists."""
+        raise NotImplementedError
+
+    def get_tables(self) -> list[str]:
+        """List all table names in the database."""
+        raise NotImplementedError
+
+    def get_columns(self, table: str) -> list[dict]:
+        """Get column definitions for a table.
+
+        Returns list of dicts with keys: name, type, nullable, default, primary_key
+        """
+        raise NotImplementedError
+
+    def get_database_type(self) -> str:
+        """Return the driver name (e.g., 'sqlite', 'postgresql')."""
+        raise NotImplementedError
+
+    # ── SQL Translation Layer ──────────────────────────────────────
+    # Translates portable SQL into engine-specific syntax so users
+    # can write one SQL dialect and run on any supported engine.
+
+    def _translate_sql(self, sql: str) -> str:
+        """Translate portable SQL to engine-specific syntax.
+
+        Base implementation is a no-op. Drivers override to handle quirks
+        like LIMIT→ROWS...TO (Firebird), CONCAT vs ||, etc.
+        """
+        return sql
+
+    def _supports_returning(self) -> bool:
+        """Whether the engine natively supports RETURNING clauses."""
+        return False
+
+    @staticmethod
+    def _extract_table(sql: str) -> str:
+        """Extract the table name from an INSERT/UPDATE/DELETE statement."""
+        sql_upper = sql.strip().upper()
+        if sql_upper.startswith("INSERT"):
+            m = re.search(r"INSERT\s+INTO\s+(\S+)", sql, re.IGNORECASE)
+        elif sql_upper.startswith("UPDATE"):
+            m = re.search(r"UPDATE\s+(\S+)", sql, re.IGNORECASE)
+        elif sql_upper.startswith("DELETE"):
+            m = re.search(r"DELETE\s+FROM\s+(\S+)", sql, re.IGNORECASE)
+        else:
+            m = None
+        return m.group(1) if m else "unknown"
+
+
+class SqlCrudMixin:
+    """Engine-neutral INSERT/UPDATE/DELETE composition — NOT part of the
+    declared DatabaseAdapter interface (ADR-0044, DBA-S03: adapter-required-
+    boundary excludes engine-neutral composition).
+
+    Building ``INSERT INTO x (a, b) VALUES (?, ?)`` from a dict is not
+    engine-specific work — it was reimplemented identically in all six SQL
+    adapters until this was extracted. Every built-in SQL adapter mixes this
+    in ALONGSIDE ``DatabaseAdapter`` (``class SQLiteAdapter(SqlCrudMixin,
+    DatabaseAdapter)``), so every adapter still has a fully working
+    ``insert``/``update``/``delete`` — reflecting the DECLARED interface
+    (``DatabaseAdapter`` alone) no longer shows them, because they were never
+    defined there. MongoDB does not mix this in: it does not build SQL at all,
+    and keeps its own native insert/update/delete.
+    """
+
     def insert(self, table: str, data: dict | list) -> DatabaseResult:
         """Insert one or more rows.
 
@@ -862,12 +1053,6 @@ class DatabaseAdapter:
             table: Table name.
             data: A dict (single row) or a list of dicts (multiple rows).
                   List of dicts uses execute_many internally for efficiency.
-
-        Building an INSERT is not engine-specific work. This used to be
-        reimplemented in all six SQL adapters, identical except for the
-        parameter marker and PostgreSQL's RETURNING - both of which are now
-        seams above. MongoDB still overrides it, because it does not build SQL
-        at all.
         """
         if isinstance(data, list):
             if not data:
@@ -941,67 +1126,6 @@ class DatabaseAdapter:
         if filter_sql:
             sql += f" WHERE {self._marked_filter(filter_sql)}"
         return self.execute(sql, params or [])
-
-    def start_transaction(self):
-        """Begin a transaction."""
-        raise NotImplementedError
-
-    def commit(self):
-        """Commit the current transaction."""
-        raise NotImplementedError
-
-    def rollback(self):
-        """Roll back the current transaction."""
-        raise NotImplementedError
-
-    def table_exists(self, name: str) -> bool:
-        """Check if a table exists."""
-        raise NotImplementedError
-
-    def get_tables(self) -> list[str]:
-        """List all table names in the database."""
-        raise NotImplementedError
-
-    def get_columns(self, table: str) -> list[dict]:
-        """Get column definitions for a table.
-
-        Returns list of dicts with keys: name, type, nullable, default, primary_key
-        """
-        raise NotImplementedError
-
-    def get_database_type(self) -> str:
-        """Return the driver name (e.g., 'sqlite', 'postgresql')."""
-        raise NotImplementedError
-
-    # ── SQL Translation Layer ──────────────────────────────────────
-    # Translates portable SQL into engine-specific syntax so users
-    # can write one SQL dialect and run on any supported engine.
-
-    def _translate_sql(self, sql: str) -> str:
-        """Translate portable SQL to engine-specific syntax.
-
-        Base implementation is a no-op. Drivers override to handle quirks
-        like LIMIT→ROWS...TO (Firebird), CONCAT vs ||, etc.
-        """
-        return sql
-
-    def _supports_returning(self) -> bool:
-        """Whether the engine natively supports RETURNING clauses."""
-        return False
-
-    @staticmethod
-    def _extract_table(sql: str) -> str:
-        """Extract the table name from an INSERT/UPDATE/DELETE statement."""
-        sql_upper = sql.strip().upper()
-        if sql_upper.startswith("INSERT"):
-            m = re.search(r"INSERT\s+INTO\s+(\S+)", sql, re.IGNORECASE)
-        elif sql_upper.startswith("UPDATE"):
-            m = re.search(r"UPDATE\s+(\S+)", sql, re.IGNORECASE)
-        elif sql_upper.startswith("DELETE"):
-            m = re.search(r"DELETE\s+FROM\s+(\S+)", sql, re.IGNORECASE)
-        else:
-            m = None
-        return m.group(1) if m else "unknown"
 
 
 # ── SQL Translation Rules ──────────────────────────────────────

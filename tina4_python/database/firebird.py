@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlparse, unquote, parse_qs
 from tina4_python.database.database_url import url_credentials
 from tina4_python.database.adapter import (
-    DatabaseAdapter, DatabaseResult, SQLTranslator,
+    DatabaseAdapter, DatabaseResult, SQLTranslator, SqlCrudMixin,
     call_with_deadline, connect_deadline,
 )
 
@@ -116,7 +116,7 @@ except ImportError:
         _driver_name = None
 
 
-class FirebirdAdapter(DatabaseAdapter):
+class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
     """Firebird database driver using firebird-driver or fdb."""
 
     # Substring markers (lowercased) that identify a dead-socket Firebird
@@ -132,6 +132,13 @@ class FirebirdAdapter(DatabaseAdapter):
         "connection is not active",
         "broken pipe",
     )
+
+    # Firebird has no generic last-insert-id, so db.insert() appends RETURNING *
+    # to trigger the generator-based emulation below (execute() strips it and
+    # reads GEN_<TABLE>_ID), giving db.insert().last_id the real new key. Without
+    # this the base class's empty INSERT_RETURNING meant a plain db.insert()
+    # returned last_id=None on Firebird (FB-LASTID-GAP).
+    INSERT_RETURNING = " RETURNING *"
 
     def __init__(self):
         super().__init__()
@@ -286,6 +293,12 @@ class FirebirdAdapter(DatabaseAdapter):
         cursor = self._conn.cursor()
         cursor = self._safe_cursor_execute(cursor, sql, params)
 
+        # Capture the write's affected-row count NOW. firebird-driver's rowcount
+        # reflects the LAST statement executed on the cursor, so the generator
+        # re-select below (another execute on this same cursor) would otherwise
+        # clobber the INSERT/UPDATE/DELETE count (FB-AFFECTED-FAB).
+        affected = cursor.rowcount if cursor.rowcount >= 0 else 0
+
         records = []
         last_id = None
 
@@ -294,7 +307,10 @@ class FirebirdAdapter(DatabaseAdapter):
             # Use a generator/sequence approach to find the last ID.
             sql_upper = sql.strip().upper()
             if sql_upper.startswith("INSERT"):
-                table = self._extract_table(sql)
+                # Unquote the table the facade quoted (`"FBC_THING"` -> FBC_THING)
+                # so GEN_<TABLE>_ID and get_columns() see the real relation name;
+                # the malformed `GEN_"FBC_THING"_ID` silently failed the emulation.
+                table = self._unquote_ident(self._extract_table(sql))
                 try:
                     # Try to get the last inserted row by querying the generator
                     gen_name = f"GEN_{table.upper()}_ID"
@@ -302,20 +318,28 @@ class FirebirdAdapter(DatabaseAdapter):
                     row = cursor.fetchone()
                     if row:
                         last_id = row[0]
-                        if returning_cols.strip() == "*":
-                            fetch_sql = f"SELECT * FROM {table} WHERE id = ?"
-                        else:
-                            fetch_sql = f"SELECT {returning_cols} FROM {table} WHERE id = ?"
-                        cursor.execute(fetch_sql, [last_id])
-                        desc = cursor.description
-                        row = cursor.fetchone()
-                        if row and desc:
-                            col_names = [FirebirdAdapter._column_name(d[0]) for d in desc]
-                            records = [dict(zip(col_names, row))]
+                        # Re-select the inserted row by the table's REAL primary
+                        # key, never a hardcoded `id` (FB-RETURNING-ID). A table
+                        # whose PK is not named `id` raised a Firebird 'Dynamic
+                        # SQL Error' from `WHERE id = ?` -- the same defect+fix
+                        # features 10/11 applied to mysql.py and mssql.py. A
+                        # composite / key-less table degrades to the generator
+                        # last-id with no re-select rather than a wrong one.
+                        pk = self._returning_pk(table)
+                        if pk:
+                            cols = "*" if returning_cols.strip() == "*" else returning_cols
+                            fetch_sql = (
+                                f"SELECT {cols} FROM {self.quote_identifier(table)} "
+                                f"WHERE {self.quote_identifier(pk)} = ?"
+                            )
+                            cursor.execute(fetch_sql, [last_id])
+                            desc = cursor.description
+                            row = cursor.fetchone()
+                            if row and desc:
+                                col_names = [FirebirdAdapter._column_name(d[0]) for d in desc]
+                                records = [dict(zip(col_names, row))]
                 except Exception:
                     pass
-
-        affected = cursor.rowcount if cursor.rowcount >= 0 else 0
 
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
@@ -575,6 +599,39 @@ class FirebirdAdapter(DatabaseAdapter):
 
     def get_database_type(self) -> str:
         return "firebird"
+
+    @staticmethod
+    def _unquote_ident(token: str) -> str:
+        """Strip surrounding double-quotes (unescaping doubled ones) from a table
+        token the facade quoted, so it can be re-introspected + re-quoted. The
+        facade builds ``INSERT INTO "FBC_THING" ...``; this yields ``FBC_THING``
+        so ``GEN_FBC_THING_ID`` and ``get_columns("FBC_THING")`` resolve."""
+        token = (token or "").strip()
+        if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+            return token[1:-1].replace('""', '"')
+        return token
+
+    def _returning_pk(self, table: str) -> str | None:
+        """The table's single PRIMARY KEY column, for the RETURNING re-select.
+
+        Firebird 2.1+ has native RETURNING but this adapter emulates it for
+        consistency, so an INSERT ... RETURNING re-selects the just-inserted row
+        -- by its REAL primary key, never a hardcoded ``id`` (FB-RETURNING-ID).
+        A table whose PK is not named ``id`` used to raise a Firebird 'Dynamic
+        SQL Error' from ``WHERE id = ?``. Introspected via :meth:`get_columns`
+        and cached per table. Returns ``None`` for a composite or key-less table
+        (which degrades to the generator last-id with no re-select rather than a
+        wrong one). The same defect+fix feature 10 applied to mysql.py and
+        feature 11 to mssql.py.
+        """
+        cache = self.__dict__.setdefault("_returning_pk_cache", {})
+        if table not in cache:
+            try:
+                pks = [c["name"] for c in self.get_columns(table) if c.get("primary_key")]
+            except Exception:  # noqa: BLE001 - no introspection => no re-select
+                pks = []
+            cache[table] = pks[0] if len(pks) == 1 else None
+        return cache[table]
 
     # -- SQL Translation -----------------------------------------------
 

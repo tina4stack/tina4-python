@@ -19,7 +19,7 @@ Active Record ORM with SQL-first paradigm.
 from tina4_python.orm.fields import (
     Field,
     IntegerField, StringField, BooleanField, FloatField,
-    DateTimeField, TextField, BlobField, NumericField, JSONField,
+    DateTimeField, TextField, BlobField, NumericField, DecimalField, JSONField,
     ForeignKeyField,
     IntField, StrField, BoolField,  # short aliases
     has_many, has_one, belongs_to,  # relationship descriptors
@@ -31,7 +31,7 @@ __all__ = [
     "Field",
     # Verbose (preferred)
     "IntegerField", "StringField", "BooleanField", "FloatField",
-    "DateTimeField", "TextField", "BlobField", "NumericField", "JSONField",
+    "DateTimeField", "TextField", "BlobField", "NumericField", "DecimalField", "JSONField",
     "ForeignKeyField",
     # Short aliases (backwards compat)
     "IntField", "StrField", "BoolField",

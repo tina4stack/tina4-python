@@ -60,35 +60,135 @@ class SQLTranslator:
             return re.sub(r"^(SELECT)\b", rf"\1 TOP {limit}", body, flags=re.IGNORECASE)
         return sql
 
+    # ── Literal-safe rewriting ──────────────────────────────────────
+    #
+    # A dialect rewrite (|| -> CONCAT, TRUE -> 1, ILIKE -> LOWER LIKE) must NEVER
+    # touch text inside a string literal, a quoted identifier or a comment: a
+    # column value of 'a||b', a label 'TRUE', or a LIKE pattern that mentions
+    # ILIKE is DATA, not SQL. Each transform masks every literal/identifier/
+    # comment to an opaque token, rewrites the masked SQL, then restores the
+    # tokens, so the rewrite only ever sees real SQL structure. This is the same
+    # guarantee the placeholder path already had; it now covers concat/bool/ilike.
+
+    _MASK_RE = re.compile(r"\x00(\d+)\x00")
+
+    @staticmethod
+    def _mask_literals(sql: str):
+        """Replace string literals, quoted identifiers and comments with opaque
+        ``\\x00N\\x00`` tokens. Returns ``(masked_sql, literals)`` where
+        ``literals[N]`` is the original text. Doubled-quote escapes (``''`` ``""``
+        `````` `` ``````) are handled, so an embedded quote never ends the span early.
+        """
+        out = []
+        literals = []
+        i, n = 0, len(sql)
+        while i < n:
+            ch = sql[i]
+            nxt = sql[i + 1] if i + 1 < n else ""
+            if ch in ("'", '"', "`"):
+                start = i
+                i += 1
+                while i < n:
+                    if sql[i] == ch:
+                        if i + 1 < n and sql[i + 1] == ch:
+                            i += 2
+                            continue
+                        i += 1
+                        break
+                    i += 1
+                out.append(f"\x00{len(literals)}\x00")
+                literals.append(sql[start:i])
+                continue
+            if ch == "-" and nxt == "-":
+                start = i
+                while i < n and sql[i] != "\n":
+                    i += 1
+                out.append(f"\x00{len(literals)}\x00")
+                literals.append(sql[start:i])
+                continue
+            if ch == "/" and nxt == "*":
+                start = i
+                i += 2
+                while i < n and not (sql[i] == "*" and i + 1 < n and sql[i + 1] == "/"):
+                    i += 1
+                i = min(i + 2, n)
+                out.append(f"\x00{len(literals)}\x00")
+                literals.append(sql[start:i])
+                continue
+            out.append(ch)
+            i += 1
+        return "".join(out), literals
+
+    @staticmethod
+    def _restore_literals(masked: str, literals) -> str:
+        """Inverse of :meth:`_mask_literals`."""
+        return SQLTranslator._MASK_RE.sub(lambda m: literals[int(m.group(1))], masked)
+
+    # A concat/ilike operand: a masked literal-or-identifier token, a simple
+    # function call, a (qualified) identifier, a placeholder, or a number. The
+    # function-call args exclude ``|`` so a nested ``||`` never splits the chain.
+    _CONCAT_PRIMARY = (
+        r"(?:\x00\d+\x00"
+        r"|[A-Za-z_][\w$]*\s*\([^()|]*\)"
+        r"|[A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)*"
+        r"|:[A-Za-z_]\w*|\$\d+|\?|%s"
+        r"|\d+(?:\.\d+)?)"
+    )
+    _CONCAT_CHAIN = re.compile(
+        _CONCAT_PRIMARY + r"(?:\s*\|\|\s*" + _CONCAT_PRIMARY + r")+"
+    )
+    _ILIKE_RE = re.compile(
+        r"(" + _CONCAT_PRIMARY + r")\s+ILIKE\s+(" + _CONCAT_PRIMARY + r")",
+        re.IGNORECASE,
+    )
+
     @staticmethod
     def concat_pipes_to_func(sql: str) -> str:
-        """Convert || concatenation to CONCAT() for MySQL/MSSQL.
+        """Convert ``||`` string concatenation to ``CONCAT(...)`` for MySQL/MSSQL.
 
-        'a' || 'b' || 'c'  →  CONCAT('a', 'b', 'c')
+        Rewrites ONLY ``||`` operators joining expression operands OUTSIDE any
+        string literal or comment, and only the operand chain — never the whole
+        statement::
+
+            SELECT a || b FROM t   ->  SELECT CONCAT(a, b) FROM t
+            WHERE data = 'a||b'    ->  WHERE data = 'a||b'   (literal untouched)
         """
         if "||" not in sql:
             return sql
-        # Only transform outside of string literals — simple approach
-        parts = re.split(r"\|\|", sql)
-        if len(parts) > 1:
-            return "CONCAT(" + ", ".join(p.strip() for p in parts) + ")"
-        return sql
+        masked, literals = SQLTranslator._mask_literals(sql)
+        if "||" not in masked:
+            return sql  # every || was inside a literal or comment
+        rewritten = SQLTranslator._CONCAT_CHAIN.sub(
+            lambda m: "CONCAT(" + ", ".join(re.split(r"\s*\|\|\s*", m.group(0))) + ")",
+            masked,
+        )
+        return SQLTranslator._restore_literals(rewritten, literals)
 
     @staticmethod
     def boolean_to_int(sql: str) -> str:
-        """Convert TRUE/FALSE to 1/0 for engines without boolean type."""
-        sql = re.sub(r"\bTRUE\b", "1", sql, flags=re.IGNORECASE)
-        sql = re.sub(r"\bFALSE\b", "0", sql, flags=re.IGNORECASE)
-        return sql
+        """Convert bare ``TRUE``/``FALSE`` to ``1``/``0`` for engines without a
+        boolean type. A ``TRUE``/``FALSE`` INSIDE a string literal is data and is
+        left untouched (``WHERE label = 'TRUE'`` is preserved)."""
+        if not re.search(r"\b(?:TRUE|FALSE)\b", sql, re.IGNORECASE):
+            return sql
+        masked, literals = SQLTranslator._mask_literals(sql)
+        masked = re.sub(r"\bTRUE\b", "1", masked, flags=re.IGNORECASE)
+        masked = re.sub(r"\bFALSE\b", "0", masked, flags=re.IGNORECASE)
+        return SQLTranslator._restore_literals(masked, literals)
 
     @staticmethod
     def ilike_to_like(sql: str) -> str:
-        """Convert ILIKE to LOWER() LIKE LOWER() for engines without ILIKE."""
-        def _replace(m):
-            col = m.group(1).strip()
-            val = m.group(2).strip()
-            return f"LOWER({col}) LIKE LOWER({val})"
-        return re.sub(r"(\S+)\s+ILIKE\s+(\S+)", _replace, sql, flags=re.IGNORECASE)
+        """Convert ``col ILIKE pattern`` to ``LOWER(col) LIKE LOWER(pattern)`` for
+        engines without ``ILIKE``. The pattern operand is captured whole (a
+        multi-word ``'%two words%'`` survives), and an ``ILIKE`` INSIDE a string
+        literal is left untouched."""
+        if "ilike" not in sql.lower():
+            return sql
+        masked, literals = SQLTranslator._mask_literals(sql)
+        rewritten = SQLTranslator._ILIKE_RE.sub(
+            lambda m: f"LOWER({m.group(1)}) LIKE LOWER({m.group(2)})", masked
+        )
+        return SQLTranslator._restore_literals(rewritten, literals)
 
     @staticmethod
     def auto_increment_syntax(sql: str, engine: str) -> str:
@@ -96,12 +196,23 @@ class SQLTranslator:
         if engine == "mysql":
             return sql.replace("AUTOINCREMENT", "AUTO_INCREMENT")
         if engine == "postgresql":
-            # INTEGER ... AUTOINCREMENT → SERIAL
+            # INTEGER PRIMARY KEY AUTOINCREMENT → SERIAL PRIMARY KEY
+            # BIGINT  PRIMARY KEY AUTOINCREMENT → BIGSERIAL PRIMARY KEY
+            # A 64-bit key needs BIGSERIAL: a plain BIGINT with the keyword merely
+            # stripped has no sequence and cannot auto-increment (an insert with no
+            # id then fails the NOT NULL primary key).
             sql = re.sub(
-                r"INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT",
+                r"\bBIGINT\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b",
+                "BIGSERIAL PRIMARY KEY",
+                sql, flags=re.IGNORECASE,
+            )
+            sql = re.sub(
+                r"\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b",
                 "SERIAL PRIMARY KEY",
                 sql, flags=re.IGNORECASE,
             )
+            # Any leftover AUTOINCREMENT is not valid PostgreSQL syntax.
+            sql = re.sub(r"\s*\bAUTOINCREMENT\b", "", sql, flags=re.IGNORECASE)
             return sql
         if engine == "mssql":
             return re.sub(

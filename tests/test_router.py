@@ -328,7 +328,7 @@ class TestTypedParamCoercion:
         _, params = Router.match("GET", "/coerce/req/99")
         req = Request()
         req._route_params = params
-        req.merge_route_params()
+        req.attach_route_params()
         assert req.param("id") == 99
         assert isinstance(req.param("id"), int)
 
