@@ -54,6 +54,7 @@
     "MYSQL": ["URL", "HOST", "PORT", "USERNAME", "PASSWORD", "DB"],
     "MSSQL": ["URL", "HOST", "PORT", "USERNAME", "PASSWORD", "DB"],
     "FIREBIRD": ["URL", "HOST", "PORT", "USERNAME", "PASSWORD", "PATH"],
+    "ODBC": ["DSN", "AUTH_DSN", "USERNAME", "PASSWORD"],
     "MONGO": ["URI", "HOST", "PORT"],
     "REDIS": ["URL", "HOST", "PORT"],
     "VALKEY": ["URL", "HOST", "PORT"],

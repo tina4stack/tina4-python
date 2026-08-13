@@ -55,13 +55,14 @@ def test_card_radius_is_resolved(name):
     """POSITIVE: mixed units (rem - px) cannot fold, so a real calc() is correct."""
     assert re.search(r"calc\(0?\.5rem - 1px\)", read(name)), f"{name} lost the card radius"
 
-
-def test_shipped_css_matches_the_vendored_scss_source():
-    """The vendored SCSS must be the source the shipped CSS was built from."""
-    scss = (Path(__file__).resolve().parent.parent / "tina4_python" / "scss"
-            / "tina4css" / "_grid.scss").read_text(encoding="utf-8")
-    assert "$grid-gutter" in scss, "vendored _grid.scss lost the gutter variable"
-    # The source legitimately uses `calc($grid-gutter / 2)`; the compiler resolves
-    # it. What must never happen is that form reaching the shipped CSS.
-    assert "calc($grid-gutter / 2)" in scss
-    assert "calc($grid-gutter / 2)" not in read("tina4.css")
+# test_shipped_css_matches_the_vendored_scss_source removed (3.13.99): commit
+# 386cd6d "chore(scss): remove the bundled tina4css SCSS source from the
+# framework" deliberately deleted tina4_python/scss/tina4css/*.scss (dead
+# weight -- source-only, no compiler, never compiled or served at runtime, an
+# exact duplicate of the canonical source now owned by the tina4-css repo and
+# compiled by the Rust CLI). This test compared the shipped CSS against that
+# now-removed vendored copy, so its premise no longer holds. The regression it
+# guarded against (a leaked "$variable" or "calc($var)" reaching the shipped
+# CSS, and the gutter/radius values silently going missing) is still fully
+# covered by the four tests above, which read the REAL shipped artifact
+# directly and would fail on an empty or reverted file just the same.

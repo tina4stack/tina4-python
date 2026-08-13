@@ -152,7 +152,13 @@ class TestRequestIdLogCorrelation:
             log_text = (tmp_path / "tina4.log").read_text()
             marker_lines = [ln for ln in log_text.splitlines() if "rid-log-marker" in ln]
             assert marker_lines, "the handler's log line was never written to the file"
-            assert any("[corr-9f8e7d]" in ln for ln in marker_lines), (
+            # Decision 3 (tina4_python/debug/__init__.py): format defaults to
+            # JSON outside TINA4_DEBUG, so the correlation id is the
+            # "request_id" field -- the bracketed "[id]" rendering only
+            # happens in TEXT format (covered separately by
+            # test_log_contract.py's per-format encoding tests).
+            parsed_lines = [json.loads(ln) for ln in marker_lines]
+            assert any(entry.get("request_id") == "corr-9f8e7d" for entry in parsed_lines), (
                 f"log line does not carry the request id: {marker_lines!r}"
             )
         finally:

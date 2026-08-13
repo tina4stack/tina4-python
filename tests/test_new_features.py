@@ -124,13 +124,31 @@ class TestMultiDatabase:
 # ── Enhanced Validation Tests ─────────────────────────────────
 
 class TestEnhancedValidation:
+    # LOAD-DEC-01 / feature 19 (tina4_python/orm/model.py `_populate`
+    # docstring): hydration (the constructor -> _populate) uses
+    # field.coerce() only, never field.validate()/validate_value() — a row
+    # already in the database must always hydrate even if it now violates a
+    # tightened constraint. Business-constraint enforcement moved entirely to
+    # the WRITE path (ORM.validate() / save()), so construction no longer
+    # raises on an invalid value. These tests now call .validate() explicitly
+    # and assert on the canonical Feature-19 message vocabulary
+    # ("<field> is required", "<field> must be at least/at most N ...",
+    # "<field> does not match the required format", "<field> must be one of
+    # ...") that Field.validate_value() emits — the same wording the
+    # request-body Validator uses (VALID-TWO-MESSAGES).
     def test_min_length(self, db):
-        with pytest.raises(ValueError, match="minimum length"):
-            User({"name": "", "email": "a@b.com"})
+        # name has min_length=1 AND required=True, so an empty string is
+        # caught by the "required" short-circuit before length is even
+        # checked (blank == missing, by design) — exercise min_length in
+        # isolation on a fresh field instead of through the shared User model.
+        field = StrField(min_length=3)
+        errors = field.validate_value("username", "ab")
+        assert any("username" in e and "at least 3" in e for e in errors)
 
     def test_max_length(self, db):
-        with pytest.raises(ValueError, match="maximum length"):
-            User({"name": "A" * 51, "email": "a@b.com"})
+        user = User({"name": "A" * 51, "email": "a@b.com"})
+        errors = user.validate()
+        assert any("name" in e and "at most 50" in e for e in errors)
 
     def test_regex_valid(self, db):
         user = User({"name": "Alice", "email": "alice@example.com"})
@@ -138,8 +156,9 @@ class TestEnhancedValidation:
         assert len(errors) == 0
 
     def test_regex_invalid(self, db):
-        with pytest.raises(ValueError, match="pattern"):
-            User({"name": "Alice", "email": "not-an-email"})
+        user = User({"name": "Alice", "email": "not-an-email"})
+        errors = user.validate()
+        assert any("email" in e and "does not match" in e for e in errors)
 
     def test_choices_valid(self, db):
         user = User({"name": "Alice", "email": "a@b.com", "role": "admin"})
@@ -147,16 +166,19 @@ class TestEnhancedValidation:
         assert len(errors) == 0
 
     def test_choices_invalid(self, db):
-        with pytest.raises(ValueError, match="must be one of"):
-            User({"name": "Alice", "email": "a@b.com", "role": "superadmin"})
+        user = User({"name": "Alice", "email": "a@b.com", "role": "superadmin"})
+        errors = user.validate()
+        assert any("role" in e and "must be one of" in e for e in errors)
 
     def test_min_value(self, db):
-        with pytest.raises(ValueError, match="minimum value"):
-            User({"name": "Alice", "email": "a@b.com", "age": -1})
+        user = User({"name": "Alice", "email": "a@b.com", "age": -1})
+        errors = user.validate()
+        assert any("age" in e and "at least" in e for e in errors)
 
     def test_max_value(self, db):
-        with pytest.raises(ValueError, match="maximum value"):
-            User({"name": "Alice", "email": "a@b.com", "age": 200})
+        user = User({"name": "Alice", "email": "a@b.com", "age": 200})
+        errors = user.validate()
+        assert any("age" in e and "at most" in e for e in errors)
 
     def test_custom_validator(self):
         def no_spaces(v):
