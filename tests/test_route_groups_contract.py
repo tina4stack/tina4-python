@@ -27,6 +27,10 @@ async def _ok(request, response):
     return response({"ok": True})
 
 
+async def _echo_id(request, response):
+    return response({"id": request.params.get("id")})
+
+
 class _CountingMiddleware:
     """An ordinary group middleware. It does NOT do auth."""
 
@@ -120,4 +124,46 @@ class TestRouteGroupsWriteAuthGate:
         assert response.status == 401, (
             "group middleware silently opened a secured write route under "
             f"the normalized join - got {response.status}"
+        )
+
+
+class TestRouterLiteralPathEscaping:
+    """Real-bug audit (3.13.99): CONFIRMED broken in PHP, CODE WINS here.
+
+    Python's own _compile_pattern() (core/router.py) already re.escape()s
+    every literal path segment before it reaches the compiled regex, so a
+    route path containing a literal regex metacharacter matches ONLY that
+    literal path — this suite is a lock-in against a future regression,
+    proven with the SAME real dispatch/TestClient every other case in this
+    file uses, not merely read from source.
+    """
+
+    def test_literal_regex_metacharacters_in_a_route_path_match_themselves(self):
+        Router.get("/__router_literal/blocked-xss(1)", _ok)
+        Router.get("/__router_literal/files/report.pdf", _ok)
+        Router.get("/__router_literal/products/{id}", _echo_id)
+
+        client = TestClient()
+
+        assert client.get("/__router_literal/blocked-xss(1)").status == 200, (
+            "a literal ( ) in a route path must match its own exact path"
+        )
+        assert client.get("/__router_literal/blocked-xss1").status == 404, (
+            "the de-parenthesised form must NOT also match - the parens "
+            "are literal, not a capture group"
+        )
+
+        assert client.get("/__router_literal/files/report.pdf").status == 200, (
+            "a literal . in a route path must match its own exact path"
+        )
+        assert client.get("/__router_literal/files/reportXpdf").status == 404, (
+            "a literal . must not behave as a regex any-char wildcard"
+        )
+
+        # Negative control: an ordinary {param} route must keep capturing.
+        param_response = client.get("/__router_literal/products/42")
+        assert param_response.status == 200
+        assert param_response.json()["id"] == "42", (
+            "a genuine {param} route must still capture correctly "
+            "alongside the escaping fix"
         )
