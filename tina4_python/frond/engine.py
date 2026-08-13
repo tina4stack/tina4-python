@@ -135,6 +135,28 @@ _SPACELESS_RE = re.compile(r">\s+<")
 _STRIPTAGS_RE = re.compile(r"<[^>]+>")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _EXTENDS_RE = re.compile(r"\{%[-\s]*extends\s+[\"'](.+?)[\"']\s*[-]?%\}")
+
+
+def _extends_target(source: str) -> str:
+    """Return this template's OWN ``{% extends %}`` parent name, or ``""``.
+
+    A template may extend at most one parent. Before 3.13.100 a SECOND
+    ``{% extends %}`` tag anywhere in the source was silently invisible: only
+    the first (leading) occurrence was ever matched, and the rest of the
+    child's non-block content -- including the second extends tag -- was
+    already discarded the same way ordinary non-block child content is
+    discarded during inheritance. That hid what is almost always a mistake
+    (a copy-paste, a bad merge) with zero signal. Raise clearly instead, the
+    same policy 3.13.89 applied to an unknown tag.
+    """
+    matches = _EXTENDS_RE.findall(source)
+    if len(matches) > 1:
+        raise ValueError(
+            f'Frond: template has {len(matches)} "{{% extends %}}" tags -- '
+            "a template can extend only one parent"
+        )
+    match = _EXTENDS_RE.match(source.lstrip())
+    return match.group(1) if match else ""
 _BLOCK_RE = re.compile(
     r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}(.*?)\{%[-\s]*endblock\s*[-]?%\}",
     re.DOTALL,
@@ -1871,9 +1893,8 @@ class Frond:
                              template: str = None, compile_key: str = None) -> str:
         """Execute with the source, its tokens and its AST all available."""
         # Handle extends first
-        extends_match = _EXTENDS_RE.match(source.lstrip())
-        if extends_match:
-            parent_name = extends_match.group(1)
+        parent_name = _extends_target(source)
+        if parent_name:
             parent_source = self._load(parent_name)
             child_blocks = self._extract_blocks(source)
             return self._render_with_blocks(parent_source, context, child_blocks)
@@ -1886,9 +1907,8 @@ class Frond:
     def _execute(self, source: str, context: dict) -> str:
         """Execute template source against context."""
         # Handle extends first
-        extends_match = _EXTENDS_RE.match(source.lstrip())
-        if extends_match:
-            parent_name = extends_match.group(1)
+        parent_name = _extends_target(source)
+        if parent_name:
             parent_source = self._load(parent_name)
 
             # Extract blocks from child
@@ -1954,9 +1974,8 @@ class Frond:
         the parent block's content (standard Twig/Jinja2 behavior).
         """
         # --- Multi-level extends: check if parent itself extends a grandparent ---
-        extends_match = _EXTENDS_RE.match(parent_source.lstrip())
-        if extends_match:
-            grandparent_name = extends_match.group(1)
+        grandparent_name = _extends_target(parent_source)
+        if grandparent_name:
             grandparent_source = self._load(grandparent_name)
 
             # Extract block defaults defined in the parent template

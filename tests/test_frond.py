@@ -506,6 +506,42 @@ class TestSetIncludeExtends:
         assert "<h1>My Page</h1>" in result
         assert "<div>Hello</div>" in result
 
+    def test_extends_single_still_works(self, engine, tpl_dir):
+        """Positive lock-in: one {% extends %} tag renders exactly as before."""
+        (tpl_dir / "base.html").write_text("<h1>{% block title %}Default{% endblock %}</h1>")
+        (tpl_dir / "page.html").write_text('{% extends "base.html" %}{% block title %}Solo{% endblock %}')
+        result = engine.render("page.html", {})
+        assert result == "<h1>Solo</h1>"
+
+    def test_extends_twice_raises(self, engine, tpl_dir):
+        """3.13.100: a SECOND {% extends %} tag raises instead of being
+        silently discarded.
+
+        Before the fix, only the first (leading) {% extends %} was ever
+        matched by the source-level regex; the second tag -- along with the
+        rest of the child's non-block content -- was silently dropped the
+        same way ordinary child content outside a block always is. The
+        author's second extends target was invisible with no error, which is
+        confusing and almost always a mistake. Mirrors the unknown-tag-raises
+        policy (3.13.89): fail loud instead of guessing.
+        """
+        (tpl_dir / "base_a.html").write_text("A {% block content %}{% endblock %}")
+        (tpl_dir / "base_b.html").write_text("B {% block content %}{% endblock %}")
+        (tpl_dir / "double.html").write_text(
+            '{% extends "base_a.html" %}\n'
+            '{% extends "base_b.html" %}\n'
+            '{% block content %}X{% endblock %}'
+        )
+        with pytest.raises(ValueError, match=r'2 "\{% extends %\}" tags'):
+            engine.render("double.html", {})
+
+    def test_extends_twice_raises_via_render_string(self, engine, tpl_dir):
+        """The same double-extends guard applies on the render_string() path."""
+        (tpl_dir / "base_a.html").write_text("A")
+        (tpl_dir / "base_b.html").write_text("B")
+        with pytest.raises(ValueError, match=r'2 "\{% extends %\}" tags'):
+            engine.render_string('{% extends "base_a.html" %}{% extends "base_b.html" %}', {})
+
     def test_extends_default_block(self, engine, tpl_dir):
         (tpl_dir / "base.html").write_text("{% block title %}Default Title{% endblock %}")
         (tpl_dir / "page.html").write_text('{% extends "base.html" %}')
