@@ -2647,6 +2647,21 @@ _RESPONSE_STAGES = (
 )
 
 
+def _resolve_request_id(request: Request) -> str:
+    """Honour a well-formed inbound X-Request-ID (sanitized), else generate one.
+
+    sanitize_request_id rejects a CR/LF-bearing, over-long or illegal-charset
+    value outright, so an attacker-controlled header can never inject a second
+    response header or forge a log line (RID-PY-INJECTION). Pulled out of
+    ``handle()`` on its own (feature 43 added this fallback after the dispatch
+    extraction's branch-count ceiling was set): it has to run BEFORE
+    ``DispatchContext`` exists, so it cannot become a stage, but it can still
+    live outside the runner like every other decision the extraction moved out
+    - see test_dispatch_pipeline.py::test_the_god_function_does_not_come_back.
+    """
+    return sanitize_request_id(request.headers.get("x-request-id")) or str(uuid.uuid4())[:8]
+
+
 async def handle(request: Request) -> Response:
     """Dispatch a pre-built Request through the Tina4 router and return a Response.
 
@@ -2659,11 +2674,7 @@ async def handle(request: Request) -> Response:
     over ``_PRE_MATCH_STAGES``, ``_POST_MATCH_STAGES``, ``_FALLBACK_STAGES``
     and ``_RESPONSE_STAGES``.
     """
-    # Honour a well-formed inbound X-Request-ID (sanitized), else generate one.
-    # sanitize_request_id rejects a CR/LF-bearing, over-long or illegal-charset
-    # value outright, so an attacker-controlled header can never inject a second
-    # response header or forge a log line (RID-PY-INJECTION).
-    request_id = sanitize_request_id(request.headers.get("x-request-id")) or str(uuid.uuid4())[:8]
+    request_id = _resolve_request_id(request)
     set_request_id(request_id)
     try:
         _init_session(request)
