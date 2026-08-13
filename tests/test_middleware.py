@@ -257,7 +257,7 @@ class MockReqLog:
 class TestRequestLoggerMiddleware:
     def test_after_log_emits_via_tina4_log(self, capsys):
         from tina4_python.debug import Log
-        Log.configure(level="info", production=False)
+        Log.configure(level="info")
         req = MockReqLog("GET", "/api/widgets")
         resp = MockResponse()
         resp.status_code = 200
@@ -270,7 +270,7 @@ class TestRequestLoggerMiddleware:
 
     def test_after_log_includes_elapsed_ms(self, capsys):
         from tina4_python.debug import Log
-        Log.configure(level="info", production=False)
+        Log.configure(level="info")
         req = MockReqLog("POST", "/api/orders")
         resp = MockResponse()
         resp.status_code = 201

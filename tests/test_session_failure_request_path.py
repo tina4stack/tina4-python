@@ -125,11 +125,13 @@ def log_sink(tmp_path, monkeypatch):
     monkeypatch.setenv("TINA4_LOG_FORMAT", "json")
     monkeypatch.setenv("TINA4_LOG_LEVEL", "debug")
 
-    saved = {
-        name: getattr(Log, name)
-        for name in ("_writer", "_error_writer", "_stdout_enabled",
-                     "_file_enabled", "_format_mode", "_level", "_is_production")
-    }
+    # The 3.14 logger-conformance refactor (tina4_python/debug/__init__.py)
+    # replaced the old per-attribute state (_writer/_error_writer/
+    # _stdout_enabled/_file_enabled/_format_mode/_level/_is_production) with
+    # one atomic _Snapshot object on Log._snapshot. Saving/restoring that
+    # single reference is the equivalent save-and-restore against the
+    # shipped internals.
+    saved_snapshot = Log._snapshot
     Log.configure(log_dir=str(log_dir), level="debug")
 
     sink = _RealLogSink(log_dir)
@@ -145,8 +147,7 @@ def log_sink(tmp_path, monkeypatch):
 
     yield sink
 
-    for name, value in saved.items():
-        setattr(Log, name, value)
+    Log._snapshot = saved_snapshot
 
 
 @pytest.fixture(autouse=True)

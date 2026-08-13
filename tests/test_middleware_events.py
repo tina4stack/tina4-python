@@ -76,7 +76,7 @@ class TestEventListenerIsolation:
         """The listener error must be LOGGED (event name + error), never
         silently swallowed."""
         from tina4_python.debug import Log
-        Log.configure(level="warning", production=False)
+        Log.configure(level="warning")
 
         @on("evt.logged")
         def boom():
@@ -253,7 +253,7 @@ class TestMiddlewareThrow:
         produce a clean 500 — never an unhandled crash. The handler is
         skipped."""
         from tina4_python.debug import Log
-        Log.configure(level="error", production=False)
+        Log.configure(level="error")
 
         class Mw:
             @staticmethod
@@ -273,7 +273,7 @@ class TestMiddlewareThrow:
         """A throwing after_* is logged + converted to 500; later after_*
         still run."""
         from tina4_python.debug import Log
-        Log.configure(level="error", production=False)
+        Log.configure(level="error")
         ran = []
 
         class Mw:
