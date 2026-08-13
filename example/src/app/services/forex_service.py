@@ -5,7 +5,7 @@ Uses the free frankfurter.app API (no key required).
 """
 import time
 from tina4_python.api import Api
-from tina4_python.Testing import tests, assert_true, assert_equal
+from tina4_python.Testing import tests, expect_true, expect_equal
 
 # Supported currencies for the store
 CURRENCIES = {
@@ -60,10 +60,10 @@ def _fallback_rates(base="USD"):
 
 
 @tests(
-    assert_equal((10.0, 0.92), 9.2),
-    assert_equal((100.0, 18.12), 1812.0),
-    assert_equal((0.0, 5.0), 0.0),
-    assert_true((49.99, 1.0)),  # same currency returns truthy (non-zero)
+    expect_equal((10.0, 0.92), 9.2),
+    expect_equal((100.0, 18.12), 1812.0),
+    expect_equal((0.0, 5.0), 0.0),
+    expect_true((49.99, 1.0)),  # same currency returns truthy (non-zero)
 )
 def convert(price, rate):
     """Convert a USD price to another currency."""

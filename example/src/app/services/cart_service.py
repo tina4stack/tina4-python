@@ -2,7 +2,7 @@
 
 Demonstrates: ORM lookups, session helpers, inline @tests.
 """
-from tina4_python.Testing import tests, assert_equal, assert_true
+from tina4_python.Testing import tests, expect_equal, expect_true
 from src.orm.product import Product
 
 
@@ -51,9 +51,9 @@ def get_cart_total(session):
 
 
 @tests(
-    assert_equal((_EmptySession(),), 0),
-    assert_equal((_CartSession({"1": 2, "3": 5}),), 7),
-    assert_equal((_CartSession({}),), 0),
+    expect_equal((_EmptySession(),), 0),
+    expect_equal((_CartSession({"1": 2, "3": 5}),), 7),
+    expect_equal((_CartSession({}),), 0),
 )
 def cart_count(session):
     """Return total number of items in cart."""
@@ -62,9 +62,9 @@ def cart_count(session):
 
 
 @tests(
-    assert_equal((10.0, 1.0), 10.0),
-    assert_equal((25.50, 0.85), 21.68),
-    assert_equal((100.0, 0.0), 0.0),
+    expect_equal((10.0, 1.0), 10.0),
+    expect_equal((25.50, 0.85), 21.68),
+    expect_equal((100.0, 0.0), 0.0),
 )
 def convert_price(price, rate):
     """Convert a price using a forex rate."""
