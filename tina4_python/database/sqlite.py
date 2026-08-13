@@ -7,7 +7,9 @@ import datetime
 import re
 import sqlite3
 import threading
-from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
+from tina4_python.database.adapter import (
+    DatabaseAdapter, DatabaseResult, SqlCrudMixin, UnsupportedAtomicBatchError,
+)
 
 
 # ── Explicit datetime/date adapters (Python 3.12+ deprecation) ─────────
@@ -31,7 +33,7 @@ sqlite3.register_adapter(datetime.datetime, lambda value: value.isoformat(sep=" 
 sqlite3.register_adapter(datetime.date, lambda value: value.isoformat())
 
 
-class SQLiteAdapter(DatabaseAdapter):
+class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
     """SQLite database driver using Python stdlib."""
 
     # Class-level write lock shared across all SQLiteAdapter instances in the
@@ -57,7 +59,14 @@ class SQLiteAdapter(DatabaseAdapter):
         is no connect to bound. The ``timeout`` below is a different thing
         entirely — how long to wait for ANOTHER WRITER'S LOCK — and repurposing
         it would break write contention, not add a connect bound.
+
+        Idempotent (ADR-0044, DBA-L01): calling connect() on an adapter that is
+        already connected does not open a second hidden native connection — it
+        was previously unconditional, so a second connect() silently leaked the
+        first sqlite3.Connection.
         """
+        if self._conn is not None:
+            return
         self._conn = sqlite3.connect(
             connection_string,
             check_same_thread=False,
@@ -127,15 +136,34 @@ class SQLiteAdapter(DatabaseAdapter):
         WHOLE batch back (all-or-nothing) instead of leaving the rows applied
         before the failure in an open, uncommitted transaction. Mirrors the base
         DatabaseAdapter.execute_many owns-transaction guard and the other engines.
+
+        Transaction bracketing goes through self.start_transaction()/commit()/
+        rollback() (not a raw self._conn.execute("BEGIN"/...)) — the SAME
+        adapter-level primitives an explicit db.start_transaction() uses. This
+        is not just DRY: it is what makes transaction ownership OBSERVABLE
+        (ADR-0044 DBA-T01/T02 — an instrumented adapter counts these calls),
+        and it is where the begin/rollback both wrap symmetrically.
         """
         sql = self._translate_sql(sql)
         rows = params_list or []
+        if not rows:
+            # ADR-0044 (DBA-B01): empty input is a successful no-op — it opens
+            # no transaction and performs no write. Pre-existing gap: this
+            # native override began a transaction even for zero rows.
+            return DatabaseResult(affected_rows=0, last_id=None)
+        if not self.supports_atomic_batch and len(rows) > 1:
+            raise UnsupportedAtomicBatchError(
+                f"provider {self.get_database_type()!r} cannot guarantee an atomic "
+                f"batch write on this deployment (required deployment capability: "
+                f"a transaction-capable configuration) — rejected before the first "
+                f"write rather than risking partial durability"
+            )
 
         # Own (and commit/rollback) the batch transaction only for a standalone
         # write in autocommit mode — never inside a caller's explicit transaction.
         standalone = self.autocommit and not self._in_transaction
-        if standalone and not self._conn.in_transaction:
-            self._conn.execute("BEGIN")
+        if standalone:
+            self.start_transaction()
 
         try:
             self._conn.executemany(sql, rows)
@@ -149,15 +177,15 @@ class SQLiteAdapter(DatabaseAdapter):
         except Exception:
             # Roll the partial batch back so nothing is left half-applied, then
             # FAIL LOUD (re-raise) — parity with execute() and the other engines.
-            if standalone and self._conn.in_transaction:
+            if standalone:
                 try:
-                    self._conn.execute("ROLLBACK")
+                    self.rollback()
                 except Exception:
                     pass
             raise
 
-        if standalone and self._conn.in_transaction:
-            self._conn.execute("COMMIT")
+        if standalone:
+            self.commit()
 
         return DatabaseResult(
             affected_rows=affected,
@@ -165,7 +193,19 @@ class SQLiteAdapter(DatabaseAdapter):
         )
 
     def fetch(self, sql: str, params: list = None,
-              limit: int = 100, offset: int = 0) -> DatabaseResult:
+              limit: int = 100, offset: int = 0, raw: bool = False) -> DatabaseResult | list[dict]:
+        # ADR-0044: `raw=True` returns the bare native list of records with NO
+        # pagination envelope and NO count probe -- the adapter-level fetch
+        # primitive the contract describes. Default False is UNCHANGED existing
+        # behaviour (a paginated DatabaseResult) for every existing caller;
+        # this is additive so the hot read path (ORM/migrations/dev-admin) is
+        # not touched.
+        if raw:
+            sql_raw = self._strip_trailing_semicolons(sql)
+            cursor = self._conn.execute(sql_raw, params or [])
+            columns = [d[0] for d in cursor.description] if cursor.description else []
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
         # v3.13.12: strip trailing `;` before wrapping — see DatabaseAdapter.
         sql = self._strip_trailing_semicolons(sql)
         # Count total rows (without LIMIT/OFFSET). The COUNT probe is
@@ -272,6 +312,12 @@ class SQLiteAdapter(DatabaseAdapter):
                 "nullable": not row["notnull"],
                 "default": row["dflt_value"],
                 "primary_key": bool(row["pk"]),
+                # ADR-0044 amendment (Feature 5 Decision 7, 2026-08-10): null for a
+                # non-key column; for a composite key, SQLite's own PRAGMA `pk`
+                # value IS the 1-based declared position within PRIMARY KEY (...),
+                # not table-column order — e.g. PRIMARY KEY (b, a) reports b=1, a=2
+                # regardless of which column was declared first in the table.
+                "primary_key_position": row["pk"] if row["pk"] else None,
             }
             for row in cursor.fetchall()
         ]

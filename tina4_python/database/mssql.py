@@ -10,12 +10,12 @@ import re
 from urllib.parse import urlparse
 from tina4_python.database.database_url import url_credentials
 from tina4_python.database.adapter import (
-    DatabaseAdapter, DatabaseResult, SQLTranslator,
+    DatabaseAdapter, DatabaseResult, SQLTranslator, SqlCrudMixin,
     call_with_deadline, connect_deadline, driver_connect_timeout_seconds,
 )
 
 
-class MSSQLAdapter(DatabaseAdapter):
+class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # The marker is the whole of what MSSQL's CRUD used to justify overriding.
     PARAM_MARKER = "%s"

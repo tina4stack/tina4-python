@@ -10,7 +10,7 @@ Requires: pip install pyodbc
 import re
 
 from tina4_python.database.adapter import (
-    DatabaseAdapter, DatabaseResult,
+    DatabaseAdapter, DatabaseResult, SqlCrudMixin,
     call_with_deadline, connect_deadline, driver_connect_timeout_seconds,
 )
 
@@ -37,7 +37,7 @@ def _odbc_server_and_port(connection_string: str) -> tuple[str, str]:
     return "(odbc)", "(unknown)"
 
 
-class ODBCAdapter(DatabaseAdapter):
+class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
     """Generic ODBC database driver using pyodbc."""
 
     def __init__(self):

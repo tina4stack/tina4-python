@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlparse, unquote, parse_qs
 from tina4_python.database.database_url import url_credentials
 from tina4_python.database.adapter import (
-    DatabaseAdapter, DatabaseResult, SQLTranslator,
+    DatabaseAdapter, DatabaseResult, SQLTranslator, SqlCrudMixin,
     call_with_deadline, connect_deadline,
 )
 
@@ -116,7 +116,7 @@ except ImportError:
         _driver_name = None
 
 
-class FirebirdAdapter(DatabaseAdapter):
+class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
     """Firebird database driver using firebird-driver or fdb."""
 
     # Substring markers (lowercased) that identify a dead-socket Firebird

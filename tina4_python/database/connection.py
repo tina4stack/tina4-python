@@ -117,7 +117,15 @@ _DRIVERS: dict[str, type] = {}
 
 
 def register_driver(scheme: str, adapter_class: type):
-    """Register a database adapter for a URL scheme."""
+    """Register a database adapter for a URL scheme.
+
+    ADR-0044 / DBA-S02: fails loud, at registration, when the class does not
+    implement every required adapter capability — instead of failing later
+    with a bare AttributeError on whichever call path happens to touch the
+    gap first.
+    """
+    from tina4_python.database.adapter import validate_adapter
+    validate_adapter(adapter_class, scheme)
     _DRIVERS[scheme] = adapter_class
 
 
@@ -805,9 +813,16 @@ class Database:
         if table not in self._pk_cache:
             try:
                 columns = self._get_adapter().get_columns(table)
-                self._pk_cache[table] = [
-                    c["name"] for c in columns if c.get("primary_key")
-                ]
+                pk_columns = [c for c in columns if c.get("primary_key")]
+                # ADR-0044 amendment: sort by primary_key_position so a composite
+                # PRIMARY KEY (b, a) returns ["b", "a"] (declared key order), not
+                # table-column order. A column whose adapter doesn't report a
+                # position (None) sorts last, stable among themselves.
+                pk_columns.sort(
+                    key=lambda c: (c.get("primary_key_position") is None,
+                                    c.get("primary_key_position") or 0)
+                )
+                self._pk_cache[table] = [c["name"] for c in pk_columns]
             except Exception:  # noqa: BLE001 - a missing table is not an error here
                 self._pk_cache[table] = []
         return self._pk_cache[table]

@@ -11,12 +11,12 @@ import re
 from urllib.parse import urlparse
 from tina4_python.database.database_url import url_credentials
 from tina4_python.database.adapter import (
-    DatabaseAdapter, DatabaseResult, SQLTranslator,
+    DatabaseAdapter, DatabaseResult, SQLTranslator, SqlCrudMixin,
     connect_deadline, driver_connect_timeout_seconds,
 )
 
 
-class PostgreSQLAdapter(DatabaseAdapter):
+class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
     """PostgreSQL database driver using psycopg2."""
 
     # PostgreSQL is the only engine wanting RETURNING on an INSERT; that plus
