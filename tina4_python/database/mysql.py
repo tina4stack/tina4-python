@@ -177,6 +177,19 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         cursor.execute(paginated_sql, paginated_params)  # FAILS LOUD
         rows = [dict(row) for row in cursor.fetchall()]
 
+        # mysql-connector connects with autocommit=False (see connect()), so
+        # under InnoDB's default REPEATABLE READ a plain SELECT still opens an
+        # implicit transaction — MySQL does not distinguish reads from writes
+        # at the transaction-start boundary. execute() already closes this out
+        # (see its own commit gate above); fetch()/fetch_one() were the two
+        # methods that left it dangling, so a standalone read immediately
+        # followed by an explicit start_transaction() raised "Transaction
+        # already in progress" on the connector even though the caller never
+        # opened one. Mirror execute()'s exact gate: only when NOT already
+        # inside an explicit application transaction and autocommit is on.
+        if not self._in_transaction and self.autocommit:
+            self._conn.commit()
+
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
@@ -185,6 +198,11 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         cursor = self._conn.cursor(dictionary=True)
         cursor.execute(sql, params or [])
         row = cursor.fetchone()
+        # See the matching comment in fetch() above: close out the implicit
+        # transaction a plain SELECT opens under autocommit=False so a
+        # standalone fetch_one() never blocks a later explicit start_transaction().
+        if not self._in_transaction and self.autocommit:
+            self._conn.commit()
         return dict(row) if row else None
 
     def start_transaction(self):
