@@ -151,7 +151,7 @@ def test_postgres_batch_insert_list_of_dicts():
 # reachable. This is why the batch runs for real in CI (MySQL/MSSQL provisioned
 # in #262) instead of skipping on the absent *_URL — previously it keyed only on
 # TINA4_TEST_MYSQL_URL, which CI does not set, so the gate failed the run.
-_MYSQL_HOST = os.environ.get("TINA4_TEST_MYSQL_HOST", "localhost")
+_MYSQL_HOST = os.environ.get("TINA4_TEST_MYSQL_HOST", "127.0.0.1")
 _MYSQL_PORT = int(os.environ.get("TINA4_TEST_MYSQL_PORT", "3306"))
 _MYSQL_USER = os.environ.get("TINA4_TEST_MYSQL_USERNAME", "root")
 _MYSQL_PASS = os.environ.get("TINA4_TEST_MYSQL_PASSWORD", "")

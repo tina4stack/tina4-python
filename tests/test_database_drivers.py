@@ -47,7 +47,7 @@ def _pg_url() -> str:
 # db "tina4_test". Skips automatically when nothing is listening; under
 # TINA4_REQUIRE_SERVICES the conftest gate turns that skip into a failure
 # (MySQL is in the provisioned keyword list since 3.13.44).
-MYSQL_HOST = os.environ.get("TINA4_TEST_MYSQL_HOST", "localhost")
+MYSQL_HOST = os.environ.get("TINA4_TEST_MYSQL_HOST", "127.0.0.1")
 MYSQL_PORT = int(os.environ.get("TINA4_TEST_MYSQL_PORT", "3306"))
 MYSQL_USER = os.environ.get("TINA4_TEST_MYSQL_USERNAME", "tina4")
 MYSQL_PASS = os.environ.get("TINA4_TEST_MYSQL_PASSWORD", "tina4")
