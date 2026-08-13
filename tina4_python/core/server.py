@@ -25,7 +25,7 @@ from tina4_python.core.request import (
 from tina4_python.core.response import Response
 from tina4_python.core.router import Router
 from tina4_python.core.middleware import CorsMiddleware, RateLimiter
-from tina4_python.debug import Log, set_request_id, get_request_id, sanitize_request_id
+from tina4_python.debug import Log, set_request_id, get_request_id, sanitize_request_id, clear_request_id
 from tina4_python import __version__
 
 # Middleware singletons — created once on import
@@ -2665,32 +2665,39 @@ async def handle(request: Request) -> Response:
     # response header or forge a log line (RID-PY-INJECTION).
     request_id = sanitize_request_id(request.headers.get("x-request-id")) or str(uuid.uuid4())[:8]
     set_request_id(request_id)
-    _init_session(request)
+    try:
+        _init_session(request)
 
-    response = Response()
-    response.header("x-request-id", request_id)
+        response = Response()
+        response.header("x-request-id", request_id)
 
-    ctx = DispatchContext(request, response, request_id)
+        ctx = DispatchContext(request, response, request_id)
 
-    for stage in _PRE_MATCH_STAGES:
-        answered = await stage(ctx)
-        if answered is not None:
-            # Sent AS IS: these branches bypass the HEAD strip and finalize,
-            # exactly as they did when each was a bare `return`.
-            return answered
+        for stage in _PRE_MATCH_STAGES:
+            answered = await stage(ctx)
+            if answered is not None:
+                # Sent AS IS: these branches bypass the HEAD strip and finalize,
+                # exactly as they did when each was a bare `return`.
+                return answered
 
-    for stage in _POST_MATCH_STAGES:
-        await stage(ctx)
+        for stage in _POST_MATCH_STAGES:
+            await stage(ctx)
 
-    if ctx.route is None:
-        for stage in _FALLBACK_STAGES:
-            if stage(ctx):
-                break
+        if ctx.route is None:
+            for stage in _FALLBACK_STAGES:
+                if stage(ctx):
+                    break
 
-    for stage in _RESPONSE_STAGES:
-        stage(ctx)
+        for stage in _RESPONSE_STAGES:
+            stage(ctx)
 
-    return ctx.response
+        return ctx.response
+    finally:
+        # The request pipeline installs the id before its first log and
+        # clears it in `finally` after its last (Decision 12 / LOG-Q03), so an
+        # overlapping request can never observe a stale id from a request that
+        # already finished.
+        clear_request_id()
 
 def asgi(root_dir: str = "src"):
     """Build the ASGI application, with routes discovered.
@@ -2820,6 +2827,10 @@ async def app(scope: dict, receive, send):
                 if lifespan_executor is not None:
                     lifespan_executor.shutdown(wait=False, cancel_futures=True)
                 _close_bound_databases()
+                Log.info("Server stopped.")
+                # Graceful shutdown owns the final reset() call (Decision 24 /
+                # LOG-I02) on the ASGI lifespan path too.
+                Log.reset()
                 await send({"type": "lifespan.shutdown.complete"})
                 return
             else:
@@ -3599,15 +3610,13 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     from tina4_python.auth import ensure_dev_secret
     ensure_dev_secret()
 
-    # Init logger
-    is_production = os.environ.get("TINA4_ENV", "development") == "production"
-    # v3.13.14: default level is INFO (was ERROR). ERROR-by-default meant a
-    # deployed app that logged at info/debug appeared silent — operators
-    # "weren't getting logs". INFO shows request/startup/warn/error without
-    # debug noise, and matches PHP/Ruby/Node defaults. Override per-deploy
-    # with TINA4_LOG_LEVEL.
-    log_level = os.environ.get("TINA4_LOG_LEVEL", "info")
-    Log.configure(level=log_level, production=is_production)
+    # Init logger. Bootstrap invents NO explicit defaults (LOG-I01 / Decision
+    # 17): call configure() with no arguments so level/format/output all
+    # resolve purely from TINA4_LOG_* env + the framework default, exactly
+    # like any other first-use caller. Passing computed values here as
+    # explicit arguments would leak them into the "argument" precedence tier
+    # and make an operator's env unable to override the framework's own guess.
+    Log.configure()
 
     # Install a top-level exception hook so uncaught exceptions bubbling
     # out of anything (a route handler, a background task, the event
@@ -3946,6 +3955,10 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         _close_bound_databases()
         _executor.shutdown(wait=False, cancel_futures=True)
         Log.info("Server stopped.")
+        # Graceful shutdown owns the final call to reset() (Decision 24 /
+        # LOG-I02): flush+close owned sinks AFTER the shutdown record above is
+        # written, exactly once.
+        Log.reset()
 
     try:
         asyncio.run(_serve())
