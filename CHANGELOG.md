@@ -10,6 +10,78 @@ This file is deliberately NOT a copy of those notes. Duplicating them is exactly
 changelog rots into claiming a version that was never cut, so this file records only
 UNRELEASED work. When a version ships, its notes go to the release notes above.
 
+### Breaking: `request.params` is route-params-only
+
+`request.params` used to merge the query string and the route params, so a client-supplied
+`?id=` could shadow the real route parameter. Client input now lives only in `request.query`
+and `request.body`; `request.params` holds route params and nothing else. `Request` gains a
+mutable `user` field, a malformed JSON body returns the raw string it failed to parse, and
+`header()` lookup is case-fold only (it no longer also converts `-` to `_`).
+
+**Migration.** Replace any `request.params[...]` read of a client-supplied value with
+`request.query[...]` or `request.body[...]`.
+
+### Breaking: security headers, CSRF, and the dev server default on
+
+`Content-Security-Policy: default-src 'self'` and the other security headers now emit by
+default (relax with `TINA4_CSP`; HSTS on HTTPS via `TINA4_HSTS`). `TINA4_CSRF=true` now
+actually attaches the CSRF middleware instead of being inert, and a blank `TINA4_SECRET`
+fails closed instead of minting a forgeable public-default token. The dev server binds
+`127.0.0.1` by default (`TINA4_HOST=0.0.0.0` to expose it), refuses a cross-origin `/__dev`
+mutation, and never serves `.env` through the file endpoints.
+
+**Migration.** Set `TINA4_CSP` if you depend on inline scripts or a third-party CDN. Set
+`TINA4_HOST=0.0.0.0` if you need the dev server reachable from another machine.
+
+### Breaking: Mongo, Firebird, and file-upload footguns closed
+
+An unparseable/unsupported MongoDB WHERE now raises instead of silently matching every
+document (a DELETE/UPDATE with no WHERE is rejected); `truncate()` on Mongo now actually
+empties the collection. Firebird's `db.insert().last_id` / `db.update()`/`db.delete()`
+`.affected_rows` return real values instead of `None`/`0`. A repeated multipart file field
+now yields a list instead of silently dropping every upload but the last; the safe-save
+helper rejects `..`/absolute filenames. Frond `{% include %}`/`{% extends %}`/`{% import %}`
+now raise on a path that escapes the templates directory.
+
+**Migration.** Add an explicit WHERE to any Mongo query relying on the old match-all
+fallback, or call `truncate()`. Handle `request.files[x]` as a list when multiple files can
+share a field name.
+
+### Breaking: ORM write-path and AutoCrud parity fixes
+
+`create_table()` injects `is_deleted` for a `soft_delete = True` model automatically. A
+soft-deleted child no longer appears through relationship traversal, lazy or eager; the
+phantom `on_delete=` foreign-key parameter is removed and raises a clear "read-side-only"
+error. The imperative `has_many` cap changes from a silent 100 to the whole result set. A
+REST list `?page` below 1 clamps to page 1; `?limit`/`?per_page` caps at 100. Loading a row
+no longer re-enforces write-path constraints. AutoCrud returns `422` (was `400`) on an
+invalid create/update, and never accepts `is_deleted` or a client-supplied primary key in
+the write body. `seed_table`'s `seed` parameter is removed and raises on a non-default
+value. The validation message vocabulary is unified; `in_list` renders a compact JSON list.
+
+**Migration.** Seed your own `FakeData` instance instead of `seed_table(seed=...)`. Update
+any code branching on the removed `on_delete=` behaviour or the old `has_many` 100-row cap.
+
+### Breaking: response and dev-tooling fixes
+
+Python's `403` now negotiates HTML vs JSON like `404`/`500`, and its `304` carries `ETag` +
+`Last-Modified` with an RFC-7232 `If-None-Match`. The static-file `ETag` format is unified to
+`W/"<size>-<mtime>"` across all four frameworks. A route group's prefix join is normalized.
+The inline `@tests` descriptor builders are renamed `assert_*` -> `expect_*`
+(`expect_equal`/`expect_raises`/`expect_true`/`expect_false`); `tina4 python test` now
+discovers and runs them with a real exit code. `TestResponse` preserves duplicate headers.
+`MySQLAdapter` no longer leaves an implicit transaction open after a plain `fetch()`, which
+used to collide with a following `start_transaction()`.
+
+**Migration.** Rename any `assert_*` descriptor call to `expect_*`. Expect every cache to
+revalidate once after upgrade, since the static-file ETag format changed.
+
+### Breaking: `rollback` is fail-safe migrations (parity note for Python readers)
+
+PHP, Ruby, and Node's `rollback` is fail-safe now too, matching Python's existing behaviour:
+a missing `.down.sql` file or a failed down script raises and leaves the `tina4_migration`
+ledger row in place. No change to Python's own behaviour.
+
 ### Breaking: `Api.send()` renamed to `Api.send_request()`
 
 The generic "pick the HTTP verb at call time" method was `send()` in Python
