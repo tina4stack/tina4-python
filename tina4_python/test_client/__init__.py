@@ -27,17 +27,37 @@ import asyncio
 class TestResponse:
     """Wraps what the ASGI app sent with a clean test-friendly API."""
 
-    __slots__ = ("status", "body", "headers", "content_type")
+    __slots__ = ("status", "body", "headers", "content_type", "_header_list")
 
     def __init__(self, status: int, headers: list[tuple[bytes, bytes]], body: bytes):
         self.status: int = status
         self.body: bytes = body
+        # ASGI hands back a LIST of (name, value) pairs, and a real response can
+        # legitimately repeat a header (two Set-Cookie, two Vary). `_header_list`
+        # preserves every pair in emission order so a duplicate is assertable via
+        # get_all(); `headers` stays the back-compat single-value view (last value
+        # per name, iteration order — unchanged shape for every existing reader).
+        # (TC-HEADER-COLLAPSE, TC-DEC-02 — this used to collapse the list straight
+        # into the dict below and the raw pairs were never kept.)
+        self._header_list: list[tuple[str, str]] = []
         self.headers: dict = {}
         for name, value in headers:
             key = name.decode().lower() if isinstance(name, (bytes, bytearray)) else str(name).lower()
             val = value.decode() if isinstance(value, (bytes, bytearray)) else str(value)
+            self._header_list.append((key, val))
             self.headers[key] = val
         self.content_type: str = self.headers.get("content-type", "")
+
+    def get_all(self, name: str) -> list[str]:
+        """Every value sent for ``name`` (case-insensitive), in emission order.
+
+        A header sent once returns a one-item list; a header never sent returns
+        an empty list. This is the one place a duplicate response header (two
+        ``Set-Cookie``, two ``Vary``) is visible — ``headers[name]`` always
+        collapses to the LAST value, same as before.
+        """
+        key = name.lower()
+        return [v for k, v in self._header_list if k == key]
 
     def json(self) -> dict | list | None:
         """Parse body as JSON."""
