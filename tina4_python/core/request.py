@@ -11,6 +11,49 @@ from urllib.parse import parse_qs, unquote
 TINA4_MAX_UPLOAD_SIZE = int(os.environ.get("TINA4_MAX_UPLOAD_SIZE", 10_485_760))
 
 
+def accept_prefers_json(accept_header: str) -> bool:
+    """Content negotiation for an error response (feature 42, ERR-DEC-02).
+
+    ``Accept: application/json`` (an API client) prefers JSON; a browser
+    Accept (``text/html``, ``*/*``, or no header at all) prefers HTML. A
+    mixed Accept header — a real browser's
+    ``text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8`` —
+    is resolved by q-value: whichever of the two media types this function
+    cares about is weighted higher wins; a tie or neither present defaults
+    to HTML, the historical/back-compatible behaviour for an unspecified
+    client. This is the ONE shared decision reused by the 403/404/500 error
+    paths, ported with the same algorithm to PHP/Ruby/Node so a JSON API
+    client sees the SAME negotiated shape everywhere (ERR-403-SPLIT).
+    """
+    if not accept_header:
+        return False
+    best_json_q = -1.0
+    best_html_q = -1.0
+    for part in accept_header.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        segments = part.split(";")
+        media = segments[0].strip().lower()
+        q = 1.0
+        for param in segments[1:]:
+            param = param.strip()
+            if param.startswith("q="):
+                try:
+                    q = float(param[2:])
+                except ValueError:
+                    q = 1.0
+        if media == "application/json":
+            best_json_q = max(best_json_q, q)
+        elif media in ("text/html", "*/*", "application/xhtml+xml"):
+            best_html_q = max(best_html_q, q)
+    if best_json_q < 0:
+        return False
+    if best_html_q < 0:
+        return True
+    return best_json_q > best_html_q
+
+
 class PayloadTooLarge(Exception):
     """Raised when request body exceeds TINA4_MAX_UPLOAD_SIZE."""
     pass
@@ -155,6 +198,15 @@ class Request:
         if forwarded:
             return forwarded.split(",")[0].strip().lower() == "https"
         return (self.scheme or "").lower() == "https"
+
+    def wants_json(self) -> bool:
+        """True when this request's Accept header prefers a JSON response.
+
+        The shared content-negotiation rule (feature 42, ERR-DEC-02): an API
+        client sending ``Accept: application/json`` gets a JSON error body;
+        a browser gets the HTML error page. See ``accept_prefers_json``.
+        """
+        return accept_prefers_json(self.headers.get("accept", ""))
 
     @classmethod
     def from_scope(cls, scope: dict, body: bytes = b"") -> "Request":

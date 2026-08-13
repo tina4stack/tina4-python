@@ -40,6 +40,45 @@ from tina4_python.core.rate_limiter import RateLimiter  # noqa: F401 — re-expo
 from tina4_python.core.response import Response
 
 
+def _render_forbidden(request, response) -> None:
+    """The 403 a middleware gets when it says no without saying what to send.
+
+    ERR-DEC-01/ERR-403-SPLIT: routed through the SAME negotiated renderer as
+    404/500 (``server._render_error_page`` + ``server._json_error_body``), so
+    a middleware refusal looks like every other error page -- a user
+    template if the app ships one, the framework's ``403.twig`` otherwise,
+    negotiated JSON for an API client. Lazy import: ``server`` imports this
+    module at load time, so importing it back at module scope would be
+    circular; by the time a real request reaches here both modules are
+    fully loaded (the same pattern ``before_csrf`` already uses).
+    """
+    from tina4_python.core.server import _render_error_page, _json_error_body
+    from tina4_python.debug import get_request_id
+
+    request_id = get_request_id() or ""
+    accept = ""
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        accept = headers.get("accept", "") or ""
+
+    if request is not None and hasattr(request, "wants_json"):
+        wants_json = request.wants_json()
+    else:
+        from tina4_python.core.request import accept_prefers_json
+        wants_json = accept_prefers_json(accept)
+
+    if wants_json:
+        response.status(403).json(_json_error_body(403, request_id))
+        return
+
+    path = getattr(request, "path", "") or ""
+    html = _render_error_page(403, path, request_id)
+    if html:
+        response.status(403).html(html)
+    else:
+        response.status(403).json(_json_error_body(403, request_id))
+
+
 class Middleware:
     """Standardized middleware orchestrator.
 
@@ -127,7 +166,7 @@ class Middleware:
             return result[0], result[1], False
         if result is False:
             if response.status_code == 200 and not response.content:
-                response.status(403).json({"error": "Forbidden", "status": 403})
+                _render_forbidden(request, response)
             return request, response, True
         return request, response, False
 

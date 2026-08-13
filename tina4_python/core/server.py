@@ -648,6 +648,30 @@ def _render_error_page(status_code: int, path: str, request_id: str, error_messa
     return None
 
 
+_ERROR_CODE_NAMES = {
+    403: "FORBIDDEN", 404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED", 500: "INTERNAL_SERVER_ERROR",
+}
+_ERROR_MESSAGES = {
+    403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 500: "Internal Server Error",
+}
+
+
+def _json_error_body(status_code: int, request_id: str, message: str | None = None) -> dict:
+    """The ONE JSON error envelope for a negotiated 403/404/500 (ERR-DEC-02).
+
+    Reuses the existing ``error_response()`` envelope (``error: true, code,
+    message, status``) already shared by CSRF and app-level
+    ``response.error()`` calls, plus ``request_id`` for correlation
+    (feature 43, ERR-404-REQUESTID) -- the SAME shape PHP/Ruby/Node build.
+    """
+    from tina4_python.core.response import error_response
+
+    code = _ERROR_CODE_NAMES.get(status_code, f"HTTP_{status_code}")
+    body = error_response(code, message or _ERROR_MESSAGES.get(status_code, "Error"), status_code)
+    body["request_id"] = request_id
+    return body
+
+
 _template_cache: dict[str, str] | None = None
 
 
@@ -2024,28 +2048,29 @@ def _handle_route_error(
                 )
             except Exception:
                 pass
-            html = _render_error_page(500, request.path, request_id, "")
-            if html:
-                response.status(500).html(html)
-            else:
-                response.status(500).json({
-                    "error": "Internal Server Error",
-                    "request_id": request_id,
-                    "status": 500,
-                })
+            _render_negotiated_500(request, response, request_id)
     else:
         # Production: NO traceback in the body. The trace is logged via
         # Log.error above; clients only see the generic page + request_id.
-        html = _render_error_page(500, request.path, request_id, "")
-        if html:
-            response.status(500).html(html)
-        else:
-            response.status(500).json({
-                "error": "Internal Server Error",
-                "request_id": request_id,
-                "status": 500,
-            })
+        _render_negotiated_500(request, response, request_id)
     return response
+
+
+def _render_negotiated_500(request: Request, response: Response, request_id: str) -> None:
+    """The safe production 500: HTML-vs-JSON negotiated on Accept (ERR-DEC-02).
+
+    ``error_message`` is ALWAYS empty here (CWE-209 -- never touch this: a
+    JSON client's ``message`` field stays the generic ``"Internal Server
+    Error"`` too, never the real exception).
+    """
+    if request.wants_json():
+        response.status(500).json(_json_error_body(500, request_id))
+        return
+    html = _render_error_page(500, request.path, request_id, "")
+    if html:
+        response.status(500).html(html)
+    else:
+        response.status(500).json(_json_error_body(500, request_id))
 
 
 def _handle_no_route(request: Request, response: Response, request_id: str) -> Response:
@@ -2072,16 +2097,18 @@ def _handle_no_route(request: Request, response: Response, request_id: str) -> R
         response.html(html)
     elif request.path == "/" and _is_dev_mode():
         response.html(_render_landing_page())
+    elif request.wants_json():
+        # ERR-DEC-02: a JSON API client gets the JSON error body directly --
+        # no need to even try the HTML template. ERR-404-REQUESTID: the id
+        # rides in the body now too (the response header already carries it
+        # unconditionally, feature 43).
+        response.status(404).json(_json_error_body(404, request_id))
     else:
         html = _render_error_page(404, request.path, request_id)
         if html:
             response.status(404).html(html)
         else:
-            response.status(404).json({
-                "error": "Not Found",
-                "path": request.path,
-                "status": 404,
-            })
+            response.status(404).json(_json_error_body(404, request_id))
     return response
 
 
