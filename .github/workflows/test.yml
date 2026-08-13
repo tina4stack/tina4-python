@@ -90,6 +90,13 @@ jobs:
       TINA4_TEST_PG_DB: tina4_py
       TINA4_TEST_PG_URL: postgres://tina4:tina4@localhost:55432/tina4_py
       TINA4_TEST_MONGO_URI: mongodb://localhost:27017
+      # test_docstore_substitutability.py's reachability probe dials HOST/PORT
+      # directly (not just the URI) and defaults HOST to a lab-only private IP,
+      # so without these the probe fails in CI and its 12 real-Mongo cases skip
+      # even though the mongo service above is healthy and TINA4_TEST_MONGO_URI
+      # is correct.
+      TINA4_TEST_MONGO_HOST: localhost
+      TINA4_TEST_MONGO_PORT: '27017'
       TINA4_TEST_REDIS_URL: redis://localhost:6379
       TINA4_TEST_VALKEY_URL: redis://localhost:6380
       TINA4_TEST_RABBITMQ_URL: amqp://guest:guest@localhost:5672
@@ -115,6 +122,22 @@ jobs:
       TINA4_TEST_MSSQL_USERNAME: sa
       TINA4_TEST_MSSQL_PASSWORD: 'TinaSQL123!Secure'
       TINA4_TEST_MSSQL_DB: tina4_test
+      # ODBC (feature 13): unixODBC + the PostgreSQL Unicode driver (installed
+      # below), pointed at the postgres service above via a dedicated
+      # `tina4_odbc` database (also created below). AUTH_DSN carries no UID/PWD
+      # so the credentials-as-params case exercises them separately.
+      TINA4_TEST_ODBC_DSN: 'DRIVER={PostgreSQL Unicode};SERVER=127.0.0.1;PORT=55432;DATABASE=tina4_odbc;UID=tina4;PWD=tina4'
+      TINA4_TEST_ODBC_AUTH_DSN: 'DRIVER={PostgreSQL Unicode};SERVER=127.0.0.1;PORT=55432;DATABASE=tina4_odbc'
+      TINA4_TEST_ODBC_USERNAME: tina4
+      TINA4_TEST_ODBC_PASSWORD: tina4
+      # Firebird 5.0.2, started as a plain container below (same coordinates as
+      # the dedicated `firebird` job) so the MANY more Firebird-conditioned
+      # cases in this job's full suite (column case, commit-without-transaction,
+      # table-exists, migrations, ORM fields, seeder, adapter conformance) run
+      # for real here too, instead of only the two files the dedicated job covers.
+      TINA4_TEST_FIREBIRD_URL: firebird://SYSDBA:masterkey@localhost:3050//var/lib/firebird/data/test.fdb
+      TINA4_TEST_FIREBIRD_USERNAME: SYSDBA
+      TINA4_TEST_FIREBIRD_PASSWORD: masterkey
       # Turn a missing provisioned service into a hard failure (no green skips).
       TINA4_REQUIRE_SERVICES: '1'
 
@@ -172,6 +195,27 @@ jobs:
           done
           echo "Kafka did not become ready in 60s"; docker logs tina4-kafka | tail -40; exit 1
 
+      # Firebird 5.0.2, in the main job too (mirrors the dedicated `firebird`
+      # job's docker-run pattern below). A plain container, not a `services:`
+      # block, for the same reason as that job: GitHub's health-check cannot
+      # wait for Firebird's first-boot database creation cleanly. FAIL the job
+      # if it never accepts a query, so this coverage has teeth.
+      - name: Start Firebird 5.0.2
+        run: |
+          docker run -d --name tina4-firebird -p 3050:3050 \
+            -e FIREBIRD_ROOT_PASSWORD=masterkey \
+            -e FIREBIRD_DATABASE=test.fdb \
+            firebirdsql/firebird:5.0.2
+          echo "Waiting for Firebird to accept connections on :3050 ..."
+          for i in $(seq 1 30); do
+            if docker exec tina4-firebird /opt/firebird/bin/isql -user SYSDBA -password masterkey \
+                 /var/lib/firebird/data/test.fdb -q -o /dev/null <<<'SELECT 1 FROM RDB$DATABASE;' 2>/dev/null; then
+              echo "Firebird ready after ${i} attempt(s)"; exit 0
+            fi
+            sleep 2
+          done
+          echo "Firebird did not become ready in time"; docker logs tina4-firebird | tail -40; exit 1
+
       # MQTT 3.1.1: Mosquitto (1883 anon / 1884 auth / 8883 TLS). The vendored
       # script generates certs + a password file, starts Mosquitto, and FAILS the
       # job if it does not come up - so the MQTT tests never skip green. EMQX (the
@@ -181,6 +225,31 @@ jobs:
         run: |
           MQTT_REQUIRE_EMQX=false bash tests/mqtt-infra.sh "$RUNNER_TEMP/tina4-mqtt-infra"
           echo "TINA4_TEST_MQTT_CA_FILE=$RUNNER_TEMP/tina4-mqtt-infra/certs/ca.crt" >> "$GITHUB_ENV"
+
+      # System-level pieces `uv sync --extra test` cannot install (it only
+      # installs the PYTHON clients, pyodbc + firebird-driver, both already
+      # declared in the `test` extra): unixODBC (the driver manager pyodbc's
+      # wheel links against — libodbc.so.2) + the PostgreSQL Unicode ODBC
+      # driver, and libfbclient (firebird-driver loads libfbclient.so.2 via
+      # ctypes at runtime). The driver path is discovered rather than
+      # hardcoded, so a runner image change cannot silently break odbcinst.ini.
+      - name: Install ODBC + Firebird system packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends unixodbc odbc-postgresql firebird-dev
+          DRIVER_PATH=$(dpkg -L odbc-postgresql | grep -E 'psqlodbcw\.so$' | head -1)
+          if [ -z "$DRIVER_PATH" ]; then
+            echo "::error::psqlodbcw.so not found in the odbc-postgresql package - cannot write odbcinst.ini"
+            dpkg -L odbc-postgresql
+            exit 1
+          fi
+          echo "PostgreSQL Unicode driver at: $DRIVER_PATH"
+          sudo tee /etc/odbcinst.ini > /dev/null <<EOF
+          [PostgreSQL Unicode]
+          Description = PostgreSQL ODBC driver (Unicode)
+          Driver = $DRIVER_PATH
+          EOF
+          cat /etc/odbcinst.ini
 
       - name: Install dependencies
         # `--extra test` is the DECLARED client set (pyproject
@@ -204,6 +273,42 @@ jobs:
             sleep 2
           done
           echo "MSSQL never became ready to create tina4_test"; exit 1
+
+      # The postgres service above only creates `tina4_py` (POSTGRES_DB); the
+      # live ODBC tests connect to a dedicated `tina4_odbc` database so a
+      # DROP/CREATE TABLE in that suite can never collide with tina4_py's data.
+      # POSTGRES_USER is the bootstrap superuser, so `tina4` can CREATE DATABASE
+      # itself -- idempotent so a re-run of this step is harmless.
+      - name: Create ODBC PostgreSQL database (tina4_odbc)
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec -e PGPASSWORD=tina4 "$(docker ps -qf ancestor=postgres:16)" psql -U tina4 -d tina4_py -tc \
+                 "SELECT 1 FROM pg_database WHERE datname = 'tina4_odbc'" 2>/dev/null | grep -q 1; then
+              echo "tina4_odbc database already present"; exit 0
+            fi
+            if docker exec -e PGPASSWORD=tina4 "$(docker ps -qf ancestor=postgres:16)" psql -U tina4 -d tina4_py -c \
+                 "CREATE DATABASE tina4_odbc" 2>/dev/null; then
+              echo "tina4_odbc database ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "Postgres never became ready to create tina4_odbc"; exit 1
+
+      # test_session_database_engines.py's cross-engine round trip connects
+      # MySQL to a literal `tina4` database (mirroring the lab, which provisions
+      # MySQL with a `tina4` schema directly), not `tina4_test`. MYSQL_DATABASE
+      # above only creates + grants `tina4_test`, so create the second schema
+      # and grant it explicitly, as root, once the server is healthy.
+      - name: Create additional MySQL database (tina4)
+        run: |
+          for i in $(seq 1 30); do
+            if docker exec "$(docker ps -qf ancestor=mysql:8)" mysql -uroot -ptina4 \
+                 -e "CREATE DATABASE IF NOT EXISTS tina4; GRANT ALL PRIVILEGES ON tina4.* TO 'tina4'@'%'; FLUSH PRIVILEGES;" 2>/dev/null; then
+              echo "tina4 database ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "MySQL never became ready to create the tina4 database"; exit 1
 
       # Metrics is measured by the NATIVE engine in the tina4 Rust CLI (ADR-0002)
       # and has no in-framework fallback, so these files need that binary on PATH
@@ -291,18 +396,22 @@ jobs:
         if: always()
         run: echo "Test run completed with exit code $?"
 
-  # Firebird 5.0.2 in its own job. The main `test` job above deliberately does
-  # NOT provision Firebird (TINA4_REQUIRE_SERVICES excludes it), which is right
-  # for that already-heavy multi-service runner. The consequence was that Python
-  # was the ONLY framework with no Firebird CI at all - PHP, Ruby and Node each
-  # already run one - so the live Firebird tests only ever ran by hand. Two real
-  # bugs (identifier folding, primary_key hardcoded false) reached production
-  # through exactly that gap. This job stands up a REAL Firebird, installs
-  # firebird-driver against libfbclient, and RUNS the live tests. NO-SILENT-SKIP
-  # guards fail the job if the tests report pending/skipped instead of passing -
-  # an unset URL, an unreachable server or a missing driver would otherwise leave
-  # them green. This is the Python twin of Ruby's `fb`-gem guard and PHP's
-  # `php -m | grep interbase` teeth.
+      - name: Stop Firebird
+        if: always()
+        run: docker rm -f tina4-firebird || true
+
+  # Firebird 5.0.2 ALSO in its own dedicated job. The main `test` job above now
+  # provisions Firebird too (see "Start Firebird 5.0.2" and the
+  # TINA4_TEST_FIREBIRD_* env above), so the full suite's many Firebird-
+  # conditioned cases run there for real. This job is kept as a second,
+  # independent NO-SILENT-SKIP guard focused on the two files where two real
+  # bugs (identifier folding, primary_key hardcoded false) previously reached
+  # production - PHP, Ruby and Node each already run a dedicated Firebird job,
+  # so Python keeps its twin rather than relying solely on the main job. It
+  # stands up a REAL Firebird, installs firebird-driver against libfbclient, and
+  # RUNS the live tests: an unset URL, an unreachable server or a missing driver
+  # fails the job instead of leaving it green. This is the Python twin of Ruby's
+  # `fb`-gem guard and PHP's `php -m | grep interbase` teeth.
   firebird:
     runs-on: ubuntu-latest
     env:

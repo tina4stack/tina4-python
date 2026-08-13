@@ -58,9 +58,20 @@ _SERVICE_KEYWORDS = (
 # so -- exactly like Firebird -- an ODBC skip is a genuinely-unprovisioned skip
 # and must stay green. Add it the day an ODBC service is provisioned.
 _UNAVAILABLE_HINTS = (
-    "not reachable", "unreachable", "not running", "not set",
+    "not reachable", "no reachable", "unreachable", "not running", "not set",
     "not installed", "could not connect", "not available", "refused",
 )
+# "no reachable" (as opposed to "not reachable") is its own phrasing used by
+# several provisioned-service skips -- test_docstore_substitutability.py's
+# MongoDB cases, and the postgres/mysql/mssql cases in test_migration_contract,
+# test_mysqlprovider_contract, test_mssqlprovider_contract, test_nextid_contract,
+# test_pgprovider_contract, and test_seeder_contract. Without this hint, an
+# UNAVAILABLE provisioned service in one of those files would skip green
+# instead of failing loud under TINA4_REQUIRE_SERVICES -- the exact gap that
+# MEASURABLY hid 12 real MongoDB substitutability tests (test_docstore_
+# substitutability.py defaulted TINA4_TEST_MONGO_HOST to a lab-only private IP,
+# unreachable from CI, so its own reachability probe silently failed and none
+# of the "mongo" keyword matches below ever got the chance to fire).
 
 
 def _truthy(value):
