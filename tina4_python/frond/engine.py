@@ -232,6 +232,13 @@ _BLOCK_RE = re.compile(
     r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}(.*?)\{%[-\s]*endblock\s*[-]?%\}",
     re.DOTALL,
 )
+# Open/close halves of _BLOCK_RE, used standalone by the depth-aware scanners
+# (_extract_blocks, _substitute_blocks) that pair an open tag with its
+# matching close by counting depth rather than the first endblock found --
+# see _substitute_blocks for why a flat single-regex pass truncates a block
+# that nests another block inside it.
+_BLOCK_OPEN_RE = re.compile(r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}")
+_BLOCK_CLOSE_RE = re.compile(r"\{%[-\s]*endblock\s*[-]?%\}")
 
 
 # ── Ternary helpers ────────────────────────────────────────────
@@ -2000,8 +2007,8 @@ class Frond:
         a single non-greedy regex (which fails on nested block tags).
         """
         blocks = {}
-        block_open = re.compile(r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}")
-        block_close = re.compile(r"\{%[-\s]*endblock\s*[-]?%\}")
+        block_open = _BLOCK_OPEN_RE
+        block_close = _BLOCK_CLOSE_RE
 
         pos = 0
         while pos < len(source):
@@ -2035,6 +2042,101 @@ class Frond:
                 pos = content_start  # malformed, skip forward
 
         return blocks
+
+    def _substitute_blocks(self, source: str, blocks: dict, context: dict) -> str:
+        """Depth-aware block substitution against ``source`` (typically the
+        fully-resolved root template).
+
+        A single non-greedy regex pass (``_BLOCK_RE.sub``) pairs an OUTER
+        block's open tag with the FIRST ``{% endblock %}`` found -- which,
+        when the outer block wraps a NESTED ``{% block %}``, is the nested
+        block's own close tag, not the outer's. That silently truncates the
+        outer block's captured content and drops everything after the inner
+        endblock (the root-nested-block content-loss bug). This scans with
+        an open/close depth counter instead (mirroring ``_extract_blocks``),
+        so an outer block always captures its FULL body, nested child
+        blocks included.
+
+        The content chosen for each block -- the child override in
+        ``blocks`` if present, else the block's own default body -- is then
+        recursively substituted against the SAME ``blocks`` map before being
+        tokenized and rendered, so a block nested inside another block
+        resolves correctly regardless of which template in the inheritance
+        chain declared the nesting (the root, an intermediate, however many
+        levels deep).
+
+        ``{{ parent() }}`` / ``{{ super() }}`` inside a block still render
+        that block's OWN default content at this level (lazy, on first
+        call) -- unaffected by the depth-aware scan.
+        """
+        block_open = _BLOCK_OPEN_RE
+        block_close = _BLOCK_CLOSE_RE
+        engine = self
+        length = len(source)
+        pieces = []
+        pos = 0
+
+        while pos < length:
+            m_open = block_open.search(source, pos)
+            if not m_open:
+                pieces.append(source[pos:])
+                break
+
+            pieces.append(source[pos:m_open.start()])  # untouched text before the tag
+
+            name = m_open.group(1)
+            content_start = m_open.end()
+            depth = 1
+            scan = content_start
+            close_match = None
+
+            while depth > 0 and scan < length:
+                next_open = block_open.search(source, scan)
+                next_close = block_close.search(source, scan)
+
+                if next_close is None:
+                    break  # malformed — no matching endblock
+
+                if next_open and next_open.start() < next_close.start():
+                    depth += 1
+                    scan = next_open.end()
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        close_match = next_close
+                    else:
+                        scan = next_close.end()
+
+            if close_match is None:
+                # Malformed template (no matching endblock) — keep the rest
+                # verbatim rather than lose it, the same leniency
+                # _extract_blocks applies to this case.
+                pieces.append(source[m_open.start():])
+                pos = length
+                break
+
+            parent_content = source[content_start:close_match.start()]
+            block_source = blocks.get(name, parent_content)
+            resolved_source = engine._substitute_blocks(block_source, blocks, context)
+
+            rendered_parent = None
+
+            def get_parent(_default=parent_content):
+                nonlocal rendered_parent
+                if rendered_parent is None:
+                    rendered_parent = SafeString(
+                        engine._render_tokens(_tokenize(_default), context)
+                    )
+                return rendered_parent
+
+            block_ctx = dict(context)
+            block_ctx["parent"] = get_parent
+            block_ctx["super"] = get_parent
+
+            pieces.append(engine._render_tokens(_tokenize(resolved_source), block_ctx))
+            pos = close_match.end()
+
+        return "".join(pieces)
 
     def _render_with_blocks(self, parent_source: str, context: dict, child_blocks: dict) -> str:
         """Render parent template, replacing blocks with child content.
@@ -2077,36 +2179,10 @@ class Frond:
             return self._render_with_blocks(grandparent_source, context, merged_blocks)
 
         # --- Leaf parent (no extends) — resolve blocks and render ---
-        engine = self
-
-        def replace_block(m):
-            name = m.group(1)
-            parent_content = m.group(2)
-            block_source = child_blocks.get(name, parent_content)
-
-            # Make parent() and super() available inside child blocks
-            # They return the rendered parent block content
-            rendered_parent = None
-
-            def get_parent():
-                nonlocal rendered_parent
-                if rendered_parent is None:
-                    rendered_parent = SafeString(
-                        engine._render_tokens(_tokenize(parent_content), context)
-                    )
-                return rendered_parent
-
-            # Inject parent/super into a block-local context
-            block_ctx = dict(context)
-            block_ctx["parent"] = get_parent
-            block_ctx["super"] = get_parent
-
-            return engine._render_tokens(_tokenize(block_source), block_ctx)
-
-        pattern = _BLOCK_RE
-
-        # First pass: replace blocks
-        result = pattern.sub(replace_block, parent_source)
+        # First pass: depth-aware block substitution (handles a block nested
+        # inside another block at ANY level of the chain, including the root
+        # itself — see _substitute_blocks).
+        result = self._substitute_blocks(parent_source, child_blocks, context)
         # Second pass: render remaining tokens (text, vars outside blocks)
         return self._render_tokens(_tokenize(result), context)
 

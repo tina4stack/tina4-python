@@ -633,6 +633,52 @@ class TestSetIncludeExtends:
         assert "<section>" in result
         assert "LEAF" in result
 
+    def test_root_nested_block_survives_final_substitution(self, engine, tpl_dir):
+        """Regression (3.13.100): a {% block %} the ROOT template nests INSIDE
+        another {% block %} used to vanish, wrapper and all.
+
+        The final block-substitution pass against the resolved root source
+        used a non-depth-aware regex (_BLOCK_RE), so the OUTER block's open
+        tag paired with the FIRST {% endblock %} -- the NESTED block's own
+        close tag -- truncating the outer block's captured content and
+        dropping everything after the inner endblock. Before the fix this
+        rendered "<section></section>" (both the wrapper's own placement
+        AND the leaf's override lost); the wrapper only survived here
+        because it happens to sit before the truncation point, not because
+        it was handled correctly. Mutation check: reverting
+        _substitute_blocks to a flat `_BLOCK_RE.sub` reproduces exactly
+        that "<section></section>".
+        """
+        (tpl_dir / "root.html").write_text(
+            '{% block body %}<section>{% block inner %}{% endblock %}</section>{% endblock %}'
+        )
+        (tpl_dir / "mid.html").write_text(
+            '{% extends "root.html" %}{% block inner %}MID{% endblock %}'
+        )
+        (tpl_dir / "leaf.html").write_text(
+            '{% extends "mid.html" %}{% block inner %}LEAF{% endblock %}'
+        )
+        result = engine.render("leaf.html", {})
+        assert result == "<section>LEAF</section>"
+
+    def test_root_nested_block_intermediate_override_survives(self, engine, tpl_dir):
+        """3-level chain where the ROOT nests blocks AND an INTERMEDIATE
+        template overrides the nested block without the leaf touching it
+        again -- the full structure (root's wrapper + mid's override) must
+        reach the final render untouched by the leaf.
+        """
+        (tpl_dir / "root.html").write_text(
+            '{% block body %}<section>{% block inner %}{% endblock %}</section>{% endblock %}'
+        )
+        (tpl_dir / "mid.html").write_text(
+            '{% extends "root.html" %}{% block inner %}MID{% endblock %}'
+        )
+        (tpl_dir / "leaf.html").write_text(
+            '{% extends "mid.html" %}{% block unrelated %}unused{% endblock %}'
+        )
+        result = engine.render("leaf.html", {})
+        assert result == "<section>MID</section>"
+
     def test_two_level_extends_default_block(self, engine, tpl_dir):
         """Child defines a block, grandchild doesn't override it — default should show."""
         (tpl_dir / "base.html").write_text(
