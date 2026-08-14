@@ -103,6 +103,77 @@ class _LoopContext(dict):
 # found unsupported, use the interpreter) in Frond._compiled_fn.
 _COMPILE_UNSET = object()
 
+# Hard cap on the TEMPLATE caches -- _compiled, _compiled_strings and
+# _compiled_fn (ADR-0004, parity with PHP/Ruby/Node TEMPLATE_CACHE_MAX) --
+# and on _fragment_cache (the {% cache %} tag's runtime store: a rendered
+# fragment is a whole HTML string, the same order of magnitude as a compiled
+# template, not a small per-expression descriptor).
+#
+# An entry here is a token list plus an AST plus (for _compiled_fn) an eval'd
+# render closure, orders of magnitude bigger than one expression descriptor,
+# so the cap sits well below MEMO_CACHE_MAX. 256 is far above any real
+# application's template count, so a normal app never evicts. The cap exists
+# for the workloads that genuinely grow without limit for the life of a
+# worker: render_string() keys on md5(source), so an app that builds template
+# strings dynamically adds an entry per distinct string; in dev the
+# compiled-fn key is 'dev:' + md5(source), so every edit to a template file
+# adds one; and a fragment cache keyed on a dynamic value (a page id, a user
+# id) adds one entry per distinct key.
+TEMPLATE_CACHE_MAX = 256
+
+# Hard cap on every per-expression memo cache that is NOT already bounded by
+# a module-level ``@lru_cache(maxsize=1024)`` (ADR-0004). ``_split_dotted``,
+# ``_has_low_precedence_op``, ``_expr_descriptor`` and ``_split_on_pipe`` are
+# pure functions and already use that decorator directly; ``_filter_chain_cache``
+# is an INSTANCE dict (its callers are bound methods, and lru_cache on a bound
+# method pins ``self`` alive forever, so it cannot use the decorator) and was
+# left as a plain unbounded dict. Same number as the decorator's cap, applied
+# via the manual helper below -- not a new number, the SAME one this file
+# already uses four times over. Mirrors PHP's MEMO_CACHE_MAX and Ruby's
+# MEMO_CACHE_MAX.
+MEMO_CACHE_MAX = 1024
+
+
+def _cap_cache(cache: dict, max_entries: int) -> None:
+    """Keep a memo cache bounded. Call immediately before inserting a new entry.
+
+    Eviction is insertion-ordered (oldest first), not true LRU: a Python dict
+    (3.7+) preserves insertion order, so dropping from the front is cheap,
+    whereas refreshing recency on every cache HIT would add writes to the
+    hottest path in a render and cost more than it saves. Half the cache is
+    dropped at once so the sweep amortises to O(1) per insert.
+
+    Evicting can never change what a render produces: every read site treats
+    a miss as "recompute", so a swept entry is rebuilt on next use.
+    """
+    if len(cache) < max_entries:
+        return
+    drop = max_entries // 2
+    for key in list(cache.keys())[:drop]:
+        del cache[key]
+
+
+def _sweep_expired_cache(cache: dict) -> None:
+    """Drop every TTL-expired entry from a fragment cache: key -> (html, expires_at).
+
+    ``_cap_cache`` bounds a cache by SIZE (insertion order, oldest first) but
+    says nothing about STALENESS: a key that expired and is never visited
+    again would otherwise sit in the dict, still counted against the cap,
+    until something else finally evicts it. An app keying fragments on a
+    dynamic value (a page id, a user id) can churn through many such keys, so
+    staleness has to be swept on its own schedule, not just bounded by count.
+
+    Called on every ``{% cache %}`` render (cheap: bounded by
+    TEMPLATE_CACHE_MAX entries, so at most 256 comparisons) rather than only
+    for the key being read, so an unrelated key's expiry is cleaned up as a
+    side effect of ANY fragment-cache render, not just a future hit on that
+    same key.
+    """
+    now = time.time()
+    expired = [key for key, (_html, expires_at) in cache.items() if expires_at <= now]
+    for key in expired:
+        del cache[key]
+
 # ── Pre-compiled regexes for hot-path operations ───────────────
 _METHOD_CALL_RE = re.compile(r"^(\w+)\s*\((.*)?\)$", re.DOTALL)
 _FUNC_CALL_RE = re.compile(r"^([\w.]+)\s*\((.*)?\)$", re.DOTALL)
@@ -135,10 +206,39 @@ _SPACELESS_RE = re.compile(r">\s+<")
 _STRIPTAGS_RE = re.compile(r"<[^>]+>")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _EXTENDS_RE = re.compile(r"\{%[-\s]*extends\s+[\"'](.+?)[\"']\s*[-]?%\}")
+
+
+def _extends_target(source: str) -> str:
+    """Return this template's OWN ``{% extends %}`` parent name, or ``""``.
+
+    A template may extend at most one parent. Before 3.13.100 a SECOND
+    ``{% extends %}`` tag anywhere in the source was silently invisible: only
+    the first (leading) occurrence was ever matched, and the rest of the
+    child's non-block content -- including the second extends tag -- was
+    already discarded the same way ordinary non-block child content is
+    discarded during inheritance. That hid what is almost always a mistake
+    (a copy-paste, a bad merge) with zero signal. Raise clearly instead, the
+    same policy 3.13.89 applied to an unknown tag.
+    """
+    matches = _EXTENDS_RE.findall(source)
+    if len(matches) > 1:
+        raise ValueError(
+            f'Frond: template has {len(matches)} "{{% extends %}}" tags -- '
+            "a template can extend only one parent"
+        )
+    match = _EXTENDS_RE.match(source.lstrip())
+    return match.group(1) if match else ""
 _BLOCK_RE = re.compile(
     r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}(.*?)\{%[-\s]*endblock\s*[-]?%\}",
     re.DOTALL,
 )
+# Open/close halves of _BLOCK_RE, used standalone by the depth-aware scanners
+# (_extract_blocks, _substitute_blocks) that pair an open tag with its
+# matching close by counting depth rather than the first endblock found --
+# see _substitute_blocks for why a flat single-regex pass truncates a block
+# that nests another block inside it.
+_BLOCK_OPEN_RE = re.compile(r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}")
+_BLOCK_CLOSE_RE = re.compile(r"\{%[-\s]*endblock\s*[-]?%\}")
 
 
 # ── Ternary helpers ────────────────────────────────────────────
@@ -1690,14 +1790,13 @@ class Frond:
         """Register a custom filter.
 
         Callable as a classmethod (``Frond.add_filter("money", fn)``) or
-        as an instance method (``engine.add_filter("money", fn)``). The
-        filter is persisted at class level so new instances created by
-        hot-reload inherit it automatically; when called on an existing
-        instance, that instance's local filter map also receives the
-        addition immediately.
+        as an instance method (``engine.add_filter("money", fn)``). Class
+        calls are process-global; instance calls affect that engine only.
+        tina4: ADR-0052.
         """
-        cls._class_filters[name] = fn
-        if instance is not None:
+        if instance is None:
+            cls._class_filters[name] = fn
+        else:
             instance._filters[name] = fn
 
     @_ClassOrInstanceMethod
@@ -1707,8 +1806,9 @@ class Frond:
         Callable as classmethod or instance method. See ``add_filter`` for the
         dual-call semantics.
         """
-        cls._class_globals[name] = value
-        if instance is not None:
+        if instance is None:
+            cls._class_globals[name] = value
+        else:
             instance._globals[name] = value
 
     @_ClassOrInstanceMethod
@@ -1718,8 +1818,9 @@ class Frond:
         Callable as classmethod or instance method. See ``add_filter`` for the
         dual-call semantics.
         """
-        cls._class_tests[name] = fn
-        if instance is not None:
+        if instance is None:
+            cls._class_tests[name] = fn
+        else:
             instance._tests[name] = fn
 
     def render(self, template: str, data: dict = None) -> str:
@@ -1751,6 +1852,7 @@ class Frond:
         ast = parse(tokens)
         if not debug_mode:
             expires_at = (time.time() + self._cache_ttl) if self._cache_ttl > 0 else 0
+            _cap_cache(self._compiled, TEMPLATE_CACHE_MAX)
             self._compiled[template] = (tokens, ast, expires_at)
             # Prod: the compiled fn is stable per template name (files don't
             # change under a running prod worker), so key it by name.
@@ -1773,6 +1875,7 @@ class Frond:
         if cached is None:
             tokens = _tokenize(source)
             cached = (tokens, parse(tokens))
+            _cap_cache(self._compiled_strings, TEMPLATE_CACHE_MAX)
             self._compiled_strings[key] = cached
         return self._execute_cached(cached[0], cached[1], context, compile_key=key)
 
@@ -1836,6 +1939,7 @@ class Frond:
             return cached
         from tina4_python.frond.compiler import compile_template
         fn = compile_template(ast)
+        _cap_cache(self._compiled_fn, TEMPLATE_CACHE_MAX)
         self._compiled_fn[compile_key] = fn
         return fn
 
@@ -1871,9 +1975,8 @@ class Frond:
                              template: str = None, compile_key: str = None) -> str:
         """Execute with the source, its tokens and its AST all available."""
         # Handle extends first
-        extends_match = _EXTENDS_RE.match(source.lstrip())
-        if extends_match:
-            parent_name = extends_match.group(1)
+        parent_name = _extends_target(source)
+        if parent_name:
             parent_source = self._load(parent_name)
             child_blocks = self._extract_blocks(source)
             return self._render_with_blocks(parent_source, context, child_blocks)
@@ -1886,9 +1989,8 @@ class Frond:
     def _execute(self, source: str, context: dict) -> str:
         """Execute template source against context."""
         # Handle extends first
-        extends_match = _EXTENDS_RE.match(source.lstrip())
-        if extends_match:
-            parent_name = extends_match.group(1)
+        parent_name = _extends_target(source)
+        if parent_name:
             parent_source = self._load(parent_name)
 
             # Extract blocks from child
@@ -1906,8 +2008,8 @@ class Frond:
         a single non-greedy regex (which fails on nested block tags).
         """
         blocks = {}
-        block_open = re.compile(r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}")
-        block_close = re.compile(r"\{%[-\s]*endblock\s*[-]?%\}")
+        block_open = _BLOCK_OPEN_RE
+        block_close = _BLOCK_CLOSE_RE
 
         pos = 0
         while pos < len(source):
@@ -1942,6 +2044,101 @@ class Frond:
 
         return blocks
 
+    def _substitute_blocks(self, source: str, blocks: dict, context: dict) -> str:
+        """Depth-aware block substitution against ``source`` (typically the
+        fully-resolved root template).
+
+        A single non-greedy regex pass (``_BLOCK_RE.sub``) pairs an OUTER
+        block's open tag with the FIRST ``{% endblock %}`` found -- which,
+        when the outer block wraps a NESTED ``{% block %}``, is the nested
+        block's own close tag, not the outer's. That silently truncates the
+        outer block's captured content and drops everything after the inner
+        endblock (the root-nested-block content-loss bug). This scans with
+        an open/close depth counter instead (mirroring ``_extract_blocks``),
+        so an outer block always captures its FULL body, nested child
+        blocks included.
+
+        The content chosen for each block -- the child override in
+        ``blocks`` if present, else the block's own default body -- is then
+        recursively substituted against the SAME ``blocks`` map before being
+        tokenized and rendered, so a block nested inside another block
+        resolves correctly regardless of which template in the inheritance
+        chain declared the nesting (the root, an intermediate, however many
+        levels deep).
+
+        ``{{ parent() }}`` / ``{{ super() }}`` inside a block still render
+        that block's OWN default content at this level (lazy, on first
+        call) -- unaffected by the depth-aware scan.
+        """
+        block_open = _BLOCK_OPEN_RE
+        block_close = _BLOCK_CLOSE_RE
+        engine = self
+        length = len(source)
+        pieces = []
+        pos = 0
+
+        while pos < length:
+            m_open = block_open.search(source, pos)
+            if not m_open:
+                pieces.append(source[pos:])
+                break
+
+            pieces.append(source[pos:m_open.start()])  # untouched text before the tag
+
+            name = m_open.group(1)
+            content_start = m_open.end()
+            depth = 1
+            scan = content_start
+            close_match = None
+
+            while depth > 0 and scan < length:
+                next_open = block_open.search(source, scan)
+                next_close = block_close.search(source, scan)
+
+                if next_close is None:
+                    break  # malformed — no matching endblock
+
+                if next_open and next_open.start() < next_close.start():
+                    depth += 1
+                    scan = next_open.end()
+                else:
+                    depth -= 1
+                    if depth == 0:
+                        close_match = next_close
+                    else:
+                        scan = next_close.end()
+
+            if close_match is None:
+                # Malformed template (no matching endblock) — keep the rest
+                # verbatim rather than lose it, the same leniency
+                # _extract_blocks applies to this case.
+                pieces.append(source[m_open.start():])
+                pos = length
+                break
+
+            parent_content = source[content_start:close_match.start()]
+            block_source = blocks.get(name, parent_content)
+            resolved_source = engine._substitute_blocks(block_source, blocks, context)
+
+            rendered_parent = None
+
+            def get_parent(_default=parent_content):
+                nonlocal rendered_parent
+                if rendered_parent is None:
+                    rendered_parent = SafeString(
+                        engine._render_tokens(_tokenize(_default), context)
+                    )
+                return rendered_parent
+
+            block_ctx = dict(context)
+            block_ctx["parent"] = get_parent
+            block_ctx["super"] = get_parent
+
+            pieces.append(engine._render_tokens(_tokenize(resolved_source), block_ctx))
+            pos = close_match.end()
+
+        return "".join(pieces)
+
     def _render_with_blocks(self, parent_source: str, context: dict, child_blocks: dict) -> str:
         """Render parent template, replacing blocks with child content.
 
@@ -1954,9 +2151,8 @@ class Frond:
         the parent block's content (standard Twig/Jinja2 behavior).
         """
         # --- Multi-level extends: check if parent itself extends a grandparent ---
-        extends_match = _EXTENDS_RE.match(parent_source.lstrip())
-        if extends_match:
-            grandparent_name = extends_match.group(1)
+        grandparent_name = _extends_target(parent_source)
+        if grandparent_name:
             grandparent_source = self._load(grandparent_name)
 
             # Extract block defaults defined in the parent template
@@ -1984,36 +2180,10 @@ class Frond:
             return self._render_with_blocks(grandparent_source, context, merged_blocks)
 
         # --- Leaf parent (no extends) — resolve blocks and render ---
-        engine = self
-
-        def replace_block(m):
-            name = m.group(1)
-            parent_content = m.group(2)
-            block_source = child_blocks.get(name, parent_content)
-
-            # Make parent() and super() available inside child blocks
-            # They return the rendered parent block content
-            rendered_parent = None
-
-            def get_parent():
-                nonlocal rendered_parent
-                if rendered_parent is None:
-                    rendered_parent = SafeString(
-                        engine._render_tokens(_tokenize(parent_content), context)
-                    )
-                return rendered_parent
-
-            # Inject parent/super into a block-local context
-            block_ctx = dict(context)
-            block_ctx["parent"] = get_parent
-            block_ctx["super"] = get_parent
-
-            return engine._render_tokens(_tokenize(block_source), block_ctx)
-
-        pattern = _BLOCK_RE
-
-        # First pass: replace blocks
-        result = pattern.sub(replace_block, parent_source)
+        # First pass: depth-aware block substitution (handles a block nested
+        # inside another block at ANY level of the chain, including the root
+        # itself — see _substitute_blocks).
+        result = self._substitute_blocks(parent_source, child_blocks, context)
         # Second pass: render remaining tokens (text, vars outside blocks)
         return self._render_tokens(_tokenize(result), context)
 
@@ -2167,11 +2337,21 @@ class Frond:
         return self._eval_var_inner(expr, context)
 
     def _cached_filter_chain(self, expr: str):
-        """Return parsed filter chain from cache, or parse and cache."""
+        """Return parsed filter chain from cache, or parse and cache.
+
+        ``self._filter_chain_cache`` is an INSTANCE dict (this is a bound
+        method), so it cannot use the module-level ``@lru_cache(maxsize=1024)``
+        the sibling pure-function parsers use (that decorator on a bound
+        method pins ``self`` alive for the life of the cache). Bounded here
+        with the same MEMO_CACHE_MAX via the manual cap helper instead
+        (ADR-0004) — a template that builds expression strings dynamically
+        must not grow this dict without limit for the life of a worker.
+        """
         cached = self._filter_chain_cache.get(expr)
         if cached is not None:
             return cached
         result = _parse_filter_chain(expr)
+        _cap_cache(self._filter_chain_cache, MEMO_CACHE_MAX)
         self._filter_chain_cache[expr] = result
         return result
 
@@ -2603,6 +2783,8 @@ class Frond:
         cache_key = m.group(1) if m else "default"
         ttl = int(m.group(2)) if m and m.group(2) else 60
 
+        _sweep_expired_cache(self._fragment_cache)
+
         # Check cache — a live entry means the body is never rendered
         cached = self._fragment_cache.get(cache_key)
         if cached:
@@ -2612,6 +2794,7 @@ class Frond:
 
         # Render and cache
         rendered = self._render_nodes(node.body, context)
+        _cap_cache(self._fragment_cache, TEMPLATE_CACHE_MAX)
         self._fragment_cache[cache_key] = (rendered, time.time() + ttl)
         return rendered
 

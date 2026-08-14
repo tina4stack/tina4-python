@@ -67,14 +67,29 @@ def _skills_ref() -> str:
         return "main"
 
 
-def _fetch_bytes(url: str) -> "bytes | None":
+def _fetch_bytes(url: str, attempts: int = 5) -> "bytes | None":
+    # raw.githubusercontent.com returns an intermittent 503 under load (a freshly
+    # cut tag is "cold" until GitHub warms its CDN), so a single failed fetch out of
+    # the ~30 an install makes should not abort it. Retry a transient status
+    # (429 / 5xx) and connection errors; a permanent 404 is never retried.
+    import time
     import urllib.error
     import urllib.request
-    try:
-        with urllib.request.urlopen(url, timeout=15) as resp:
-            return resp.read()
-    except (urllib.error.URLError, OSError):
-        return None
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=15) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (429, 500, 502, 503, 504) and attempt < attempts - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            return None
+        except (urllib.error.URLError, OSError):
+            if attempt < attempts - 1:
+                time.sleep(2 * (attempt + 1))
+                continue
+            return None
+    return None
 
 
 def install_skills(root: str = ".", targets: "list[Path] | None" = None) -> list[str]:

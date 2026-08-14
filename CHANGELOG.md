@@ -6,9 +6,25 @@ number means the same thing everywhere.
 **The authoritative release notes for every shipped version live in the documentation:**
 https://tina4.com/python/36-releases
 
-This file is deliberately NOT a copy of those notes. Duplicating them is exactly how a
-changelog rots into claiming a version that was never cut, so this file records only
-UNRELEASED work. When a version ships, its notes go to the release notes above.
+This file records framework-specific changes. The release notes above remain the
+authority for shipped versions.
+
+## 3.13.100 (unreleased)
+
+### Breaking: Frond instance extensions stay local
+
+Calling `add_filter`, `add_global`, or `add_test` on a Frond instance now changes
+that renderer only. Register on `Frond` itself when every later instance must
+inherit the extension.
+
+- Reject a second `{% extends %}` tag instead of replacing the first parent without warning.
+- Preserve nested root blocks through a depth-aware final substitution pass.
+- Bound template, fragment, and expression caches, with TTL sweeps for stale entries.
+- Retry transient AI skill-download failures.
+- Activate the tina4-js skill for `tina4js` and `Tina4 JS` spellings as well as `tina4-js`.
+- Keep `pyproject.toml`, `uv.lock`, the packaged fallback, and the AI-facing guide on one version.
+
+## 3.13.99
 
 ### Breaking: `request.params` is route-params-only
 
