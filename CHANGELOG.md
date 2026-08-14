@@ -9,6 +9,22 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.101
+
+### Breaking: metrics has one owner
+
+- Remove the framework `metrics` command and local quick census. Use the native `tina4 metrics` CLI.
+- Keep dev-admin metrics as a thin `/metrics/full` and `/metrics/file` JSON handoff to that CLI.
+
+### App-facing AI client
+
+- Add zero-dependency `Ai.chat`, `Ai.complete`, and `Ai.embed`.
+- Support local/OpenAI-compatible, OpenAI, and Anthropic chat providers.
+- Normalize chat responses, stream ordered deltas, and preserve embedding cardinality.
+- Fail closed on missing hosted-provider keys, verify TLS, redact sensitive failures, and
+  distinguish bounded connection and total-request timeouts.
+- Retry only transient connection, HTTP 429, and HTTP 5xx failures, never a partial stream.
+
 ## 3.13.100
 
 ### Breaking: Frond instance extensions stay local

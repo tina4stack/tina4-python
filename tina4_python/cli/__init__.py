@@ -521,93 +521,6 @@ def _console(args=None):
     code.interact(banner=banner, local=local_vars)
 
 
-# ── Metrics ───────────────────────────────────────────────────────────
-
-def _metrics(args):
-    """Report top code-quality offenders (complexity, size, maintainability, tests).
-
-    tina4python metrics                       # human report, scans src/ (or framework)
-    tina4python metrics --top 10              # only the worst 10
-    tina4python metrics --path tina4_python   # scan a specific directory
-    tina4python metrics --json                # machine-readable for CI
-    tina4python metrics --fail-on warn        # exit 1 if any warn/error offender
-    tina4python metrics --fail-on error       # exit 1 only on error-severity
-    """
-    import json
-    from tina4_python.dev_admin import metrics as _m
-
-    flags, _ = _parse_flags(args)
-
-    top = int(flags["top"]) if "top" in flags and str(flags["top"]).isdigit() else 20
-    as_json = "json" in flags
-    path = flags.get("path", "src")
-    fail_on = flags.get("fail-on")
-    if fail_on not in (None, "warn", "error"):
-        print(f"  invalid --fail-on '{fail_on}' (use warn or error)")
-        sys.exit(2)
-
-    result = _m.offenders(path, top=top)
-    summary = result["summary"]
-    found = result["offenders"]
-
-    if "error" in summary:
-        print(f"  metrics error: {summary['error']}")
-        sys.exit(2)
-
-    # Decide exit code from the FULL offender set, not just the printed top-N.
-    # full_analysis is cached, so this reuses the same analysis.
-    all_offenders = _m.offenders(path, top=summary["total_offenders"] or 1)["offenders"]
-    severities = {o["severity"] for o in all_offenders}
-    exit_code = 0
-    if fail_on == "warn" and ({"warn", "error"} & severities):
-        exit_code = 1
-    elif fail_on == "error" and ("error" in severities):
-        exit_code = 1
-
-    if as_json:
-        print(json.dumps({"summary": summary, "offenders": found}, indent=2))
-        sys.exit(exit_code)
-
-    # ── Human report ──────────────────────────────────────────────────
-    use_color = sys.stdout.isatty()
-
-    def _c(text, code):
-        return f"\033[{code}m{text}\033[0m" if use_color else text
-
-    sev_color = {"error": "31", "warn": "33", "info": "2"}  # red / yellow / dim
-
-    print()
-    print(f"  Tina4 Metrics — {summary['scan_mode']} scan ({summary['scan_root']})")
-    print(f"  files: {summary['files_analyzed']}   "
-          f"functions: {summary['total_functions']}   "
-          f"avg complexity: {summary['avg_complexity']}   "
-          f"avg maintainability: {summary['avg_maintainability']}")
-    print(f"  offenders: {summary['total_offenders']} total"
-          + (f" (showing top {len(found)})" if found else ""))
-    print()
-
-    if not found:
-        print("  " + _c("✓ no offenders — clean", "32"))
-        print()
-        sys.exit(exit_code)
-
-    # Compute a column width for the file:line cell so the table lines up.
-    locs = [f"{o['file']}:{o['line']}" for o in found]
-    loc_w = max(len("FILE:LINE"), max(len(s) for s in locs))
-    kind_w = max(len("KIND"), max(len(o["kind"]) for o in found))
-
-    header = f"  {'#':>3}  {'SEVERITY':<8}  {'KIND':<{kind_w}}  {'FILE:LINE':<{loc_w}}  DETAIL"
-    print(_c(header, "1"))
-    print("  " + "-" * (len(header) - 2))
-    for i, o in enumerate(found, 1):
-        sev = o["severity"]
-        sev_cell = _c(f"{sev:<8}", sev_color[sev])
-        print(f"  {i:>3}  {sev_cell}  {o['kind']:<{kind_w}}  "
-              f"{locs[i - 1]:<{loc_w}}  {o['detail']}")
-    print()
-    sys.exit(exit_code)
-
-
 # ── Init ──────────────────────────────────────────────────────────────
 
 def _init(args):
@@ -3283,7 +3196,6 @@ COMMANDS = {
     "ai":               {"handler": _ai,               "usage": "[--all]", "summary": "Install AI coding assistant context"},
     "generate":         {"handler": _generate,         "usage": "<what> <name> [options]", "subcommands": list(GENERATORS), "summary": "Generate scaffolding (see Generators below)"},
     "console":          {"handler": _console,          "summary": "Start interactive REPL with framework loaded"},
-    "metrics":          {"handler": _metrics,          "usage": "[--top N] [--json] [--fail-on warn|error] [--path DIR]", "summary": "Rank top code-quality offenders"},
     "commands":         {"handler": _commands,         "usage": "[--json]", "summary": "List available commands (add --json for machine form)"},
     "help":             {"handler": _help,             "summary": "Show this help"},
 }

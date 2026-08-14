@@ -51,7 +51,7 @@ def _resolve_version() -> str:
     #
     # test_version_constant.py now asserts this literal equals the pyproject
     # version, so the release bump cannot leave it behind again.
-    return "3.13.100"
+    return "3.13.101"
 
 
 __version__ = _resolve_version()
@@ -133,6 +133,14 @@ _LAZY: dict[str, tuple[str, str]] = {
     "Container": ("tina4_python.container", "Container"),
     # HTTP client
     "Api": ("tina4_python.api", "Api"),
+    # App-facing AI client (ADR-0053)
+    "Ai": ("tina4_python.ai", "Ai"),
+    "ChatResponse": ("tina4_python.ai", "ChatResponse"),
+    "AiError": ("tina4_python.ai", "AiError"),
+    "AiConfigError": ("tina4_python.ai", "AiConfigError"),
+    "AiHTTPError": ("tina4_python.ai", "AiHTTPError"),
+    "AiTimeoutError": ("tina4_python.ai", "AiTimeoutError"),
+    "AiParseError": ("tina4_python.ai", "AiParseError"),
     # SOAP / WSDL
     "WSDL": ("tina4_python.wsdl", "WSDL"),
     "wsdl_operation": ("tina4_python.wsdl", "wsdl_operation"),

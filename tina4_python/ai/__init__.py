@@ -15,6 +15,16 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .client import (
+    Ai,
+    AiConfigError,
+    AiError,
+    AiHTTPError,
+    AiParseError,
+    AiTimeoutError,
+    ChatResponse,
+)
+
 
 # Ordered list of supported AI tools
 AI_TOOLS = [

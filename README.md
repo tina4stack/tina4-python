@@ -532,6 +532,21 @@ api = Api("https://api.example.com", auth_header="Bearer xyz")
 result = api.send_request("/users/42")
 ```
 
+### AI Client
+
+```python
+from tina4_python import Ai
+
+reply = Ai.chat([{"role": "user", "content": "Summarise this text"}])
+text = Ai.complete("Give me a title")
+vector = Ai.embed("semantic search text")
+
+for delta in Ai.chat([{"role": "user", "content": "Stream this"}], stream=True):
+    print(delta, end="")
+```
+
+Configure `TINA4_AI_PROVIDER` as `local`, `openai`, or `anthropic`. Hosted providers require `TINA4_AI_KEY`; local OpenAI-compatible endpoints do not.
+
 ### Data Seeder
 
 ```python

@@ -20,11 +20,8 @@ import pytest
 
 from tina4_python.dev_admin.metrics import (
     MetricsEngineError,
-    engine_path,
     file_detail,
     full_analysis,
-    offenders,
-    quick_metrics,
 )
 
 pytestmark = pytest.mark.skipif(
@@ -62,10 +59,6 @@ def project(tmp_path):
 
 
 # ── the engine is present and names itself ───────────────────────────
-
-
-def test_engine_path_resolves_the_binary():
-    assert engine_path() is not None, "the CLI must be discoverable on PATH"
 
 
 def test_full_analysis_is_stamped_as_coming_from_the_cli(project):
@@ -113,18 +106,6 @@ def test_most_complex_functions_is_display_capped_at_15(project):
     assert len(result["most_complex_functions"]) <= 15
 
 
-# ── offenders: the gate reads the uncapped set ────────────────────────
-
-
-def test_offenders_reports_the_true_total_not_the_returned_slice(project):
-    result = offenders(str(project / "src"), top=1)
-    assert len(result["offenders"]) <= 1
-    # total_offenders describes the WHOLE set, and --fail-on reads that same set
-    # inside the CLI, so a truncated display can never weaken the gate.
-    assert "total_offenders" in result["summary"]
-    assert result["summary"]["engine"] == "tina4-cli"
-
-
 # ── per-file detail ──────────────────────────────────────────────────
 
 
@@ -133,6 +114,9 @@ def test_file_detail_describes_one_file(project):
     assert detail["path"].endswith("orders.py")
     assert detail["loc"] >= 1
     assert detail["engine"] == "tina4-cli"
+    assert detail["function_count"] >= 1
+    assert isinstance(detail["functions"], list)
+    assert any(function["name"].endswith("total") for function in detail["functions"])
 
 
 def test_a_class_referenced_by_a_test_is_reported_as_tested(project):
@@ -171,15 +155,3 @@ def test_the_error_names_the_fix():
     from tina4_python.dev_admin.metrics import _INSTALL_HINT
 
     assert "install.sh" in _INSTALL_HINT or "tina4.com" in _INSTALL_HINT
-
-
-# ── the census stays in-process ──────────────────────────────────────
-
-
-def test_quick_metrics_needs_no_subprocess(project):
-    """quick_metrics is the instant path the dashboard hits on every load. It
-    parses no code and must not shell out: the engine takes about a second on a
-    hundred files, which would be a visible regression there."""
-    result = quick_metrics(str(project / "src"))
-    assert result["total_loc"] >= 1
-    assert "engine" not in result, "the census is local by design, not an engine call"

@@ -550,7 +550,6 @@ def get_api_handlers() -> dict:
         "/__dev/api/mtime": ("GET", _api_mtime),
         "/__dev/api/reload": ("POST", _api_reload),
         "/__dev/api/version-check": ("GET", _api_version_check),
-        "/__dev/api/metrics": ("GET", _api_metrics),
         "/__dev/api/metrics/full": ("GET", _api_metrics_full),
         "/__dev/api/metrics/file": ("GET", _api_metrics_file),
         "/__dev/api/graphql/schema": ("GET", _api_graphql_schema),
@@ -2160,12 +2159,6 @@ async def _api_version_check(request, response):
     except Exception:
         pass  # Offline or timeout — return current as latest
     return response({"current": current, "latest": latest})
-
-
-async def _api_metrics(request, response):
-    """Quick metrics — instant file scan."""
-    from tina4_python.dev_admin.metrics import quick_metrics
-    return response(quick_metrics())
 
 
 async def _api_metrics_full(request, response):
