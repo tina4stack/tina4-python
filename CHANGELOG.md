@@ -9,7 +9,7 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
-## 3.13.100 (unreleased)
+## 3.13.100
 
 ### Breaking: Frond instance extensions stay local
 
