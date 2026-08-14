@@ -97,6 +97,12 @@ def _isolate_frond_registry():
 
 
 class TestFrondClassmethodProxies:
+    def test_class_registration_is_process_global(self):
+        from tina4_python.frond import Frond
+
+        Frond.add_filter("class_filter", lambda value: f"class:{value}")
+        assert Frond()._filters["class_filter"]("value") == "class:value"
+
     def test_add_filter_callable_on_class(self):
         from tina4_python.frond import Frond
 
@@ -106,18 +112,16 @@ class TestFrondClassmethodProxies:
         assert "upper_x" in engine._filters
         assert engine._filters["upper_x"]("hi") == "HI"
 
-    def test_add_filter_callable_on_instance(self):
+    def test_instance_filter_registration_is_instance_local(self):
         from tina4_python.frond import Frond
 
         engine = Frond()
         engine.add_filter("instance_x", lambda v: f"[{v}]")
         # Instance has it
         assert engine._filters["instance_x"]("y") == "[y]"
-        # Class-level registry also got it
-        assert "instance_x" in Frond._class_filters
-        # And NEW instances pick it up
+        assert "instance_x" not in Frond._class_filters
         engine_2 = Frond()
-        assert "instance_x" in engine_2._filters
+        assert "instance_x" not in engine_2._filters
 
     def test_add_global_callable_on_class(self):
         from tina4_python.frond import Frond
@@ -126,13 +130,14 @@ class TestFrondClassmethodProxies:
         engine = Frond()
         assert engine._globals["APP_NAME"] == "ParityApp"
 
-    def test_add_global_callable_on_instance(self):
+    def test_instance_global_registration_is_instance_local(self):
         from tina4_python.frond import Frond
 
         engine = Frond()
         engine.add_global("INST_GLOBAL", 42)
         assert engine._globals["INST_GLOBAL"] == 42
-        assert Frond._class_globals["INST_GLOBAL"] == 42
+        assert "INST_GLOBAL" not in Frond._class_globals
+        assert "INST_GLOBAL" not in Frond()._globals
 
     def test_add_test_callable_on_class(self):
         from tina4_python.frond import Frond
@@ -142,12 +147,14 @@ class TestFrondClassmethodProxies:
         assert engine._tests["positive"](5) is True
         assert engine._tests["positive"](-1) is False
 
-    def test_add_test_callable_on_instance(self):
+    def test_instance_test_registration_is_instance_local(self):
         from tina4_python.frond import Frond
 
         engine = Frond()
         engine.add_test("starts_with_a", lambda s: s.startswith("a"))
         assert "starts_with_a" in engine._tests
+        assert "starts_with_a" not in Frond._class_tests
+        assert "starts_with_a" not in Frond()._tests
 
 
 # ─── @GraphQL.resolve decorator ───────────────────────────────────────────

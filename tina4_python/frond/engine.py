@@ -1790,14 +1790,13 @@ class Frond:
         """Register a custom filter.
 
         Callable as a classmethod (``Frond.add_filter("money", fn)``) or
-        as an instance method (``engine.add_filter("money", fn)``). The
-        filter is persisted at class level so new instances created by
-        hot-reload inherit it automatically; when called on an existing
-        instance, that instance's local filter map also receives the
-        addition immediately.
+        as an instance method (``engine.add_filter("money", fn)``). Class
+        calls are process-global; instance calls affect that engine only.
+        tina4: ADR-0052.
         """
-        cls._class_filters[name] = fn
-        if instance is not None:
+        if instance is None:
+            cls._class_filters[name] = fn
+        else:
             instance._filters[name] = fn
 
     @_ClassOrInstanceMethod
@@ -1807,8 +1806,9 @@ class Frond:
         Callable as classmethod or instance method. See ``add_filter`` for the
         dual-call semantics.
         """
-        cls._class_globals[name] = value
-        if instance is not None:
+        if instance is None:
+            cls._class_globals[name] = value
+        else:
             instance._globals[name] = value
 
     @_ClassOrInstanceMethod
@@ -1818,8 +1818,9 @@ class Frond:
         Callable as classmethod or instance method. See ``add_filter`` for the
         dual-call semantics.
         """
-        cls._class_tests[name] = fn
-        if instance is not None:
+        if instance is None:
+            cls._class_tests[name] = fn
+        else:
             instance._tests[name] = fn
 
     def render(self, template: str, data: dict = None) -> str:
