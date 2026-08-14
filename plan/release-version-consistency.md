@@ -2,13 +2,14 @@
 
 ## Outcome
 
-Every Python package version source reports `3.13.100`.
+Every Python package and AI-facing version source reports `3.13.100`.
 
 ## Scope
 
 - [x] Compare `pyproject.toml`, `uv.lock`, and the packaged fallback literal.
 - [x] Prove the existing consistency regression fails.
 - [x] Update the lockfile and fallback literal.
+- [x] Update the current-version markers in the AI-facing guide.
 - [x] Re-run the focused regression.
 
 ## Parity
@@ -18,10 +19,12 @@ Every Python package version source reports `3.13.100`.
 | `pyproject.toml` | ✅ `3.13.100` |
 | `uv.lock` | ✅ `3.13.100` |
 | packaged fallback | ✅ `3.13.100` |
+| AI-facing guide | ✅ `3.13.100` |
 
 ## Tests
 
 - [x] `uv run pytest -q tests/test_version_constant.py`
+- [x] Version consistency + fallback regressions: 5 passed, 0 failed.
 
 ## Bugs
 
