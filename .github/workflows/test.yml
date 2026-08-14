@@ -253,6 +253,16 @@ jobs:
           EOF
           cat /etc/odbcinst.ini
 
+      - name: Install native Tina4 CLI 3.8.71
+        run: |
+          cli_dir="$(mktemp -d)"
+          trap 'rm -rf "$cli_dir"' EXIT
+          curl -fsSLo "$cli_dir/tina4" https://github.com/tina4stack/tina4/releases/download/v3.8.71/tina4-linux-amd64
+          curl -fsSLo "$cli_dir/SHA256SUMS" https://github.com/tina4stack/tina4/releases/download/v3.8.71/SHA256SUMS
+          (cd "$cli_dir" && grep ' tina4-linux-amd64$' SHA256SUMS | sha256sum -c -)
+          sudo install -m 0755 "$cli_dir/tina4" /usr/local/bin/tina4
+          tina4 --version
+
       - name: Install dependencies
         # `--extra test` is the DECLARED client set (pyproject
         # [project.optional-dependencies].test). It replaces an ad-hoc
@@ -312,22 +322,10 @@ jobs:
           done
           echo "MySQL never became ready to create the tina4 database"; exit 1
 
-      # Metrics is measured by the NATIVE engine in the tina4 Rust CLI (ADR-0002)
-      # and has no in-framework fallback, so these files need that binary on PATH
-      # and simply cannot run here. The engine is tested where it lives -
-      # tina4stack/tina4 src/metrics.rs, exercised by `cargo test` in its own CI -
-      # so excluding them loses no coverage; installing a second toolchain in four
-      # framework pipelines to re-test one Rust binary would only duplicate it.
-      # They still run locally for anyone with the CLI installed.
+      # ADR-0054: the framework owns only the handoff. CI installs the released
+      # native engine above and proves that boundary instead of excluding it.
       - name: Run tests
-        run: |
-          uv run pytest tests/ -v \
-            --ignore=tests/test_metrics_cli.py \
-            --ignore=tests/test_metrics_collector.py \
-            --ignore=tests/test_metrics_dispatch_pipeline.py \
-            --ignore=tests/test_metrics_engine.py \
-            --ignore=tests/test_metrics_nested_complexity.py \
-            --ignore=tests/test_metrics_offender_cap.py
+        run: uv run pytest tests/ -v
 
       # ADR-0024 rule 4: the ZERO-DEPENDENCY default counts double, because it
       # is the provider every developer starts on. `uv sync --extra test`
