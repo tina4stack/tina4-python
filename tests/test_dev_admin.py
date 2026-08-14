@@ -306,7 +306,7 @@ class TestGetAPIHandlers:
         # this number intentionally when a new /__dev/api route
         # lands so review catches silent growth.
         #
-        # Current: 41 base + 13 (file I/O × 6, deps × 2, git × 1,
+        # Current: 40 base + 13 (file I/O × 6, deps × 2, git × 1,
         #          mcp REST shim × 2, scaffold × 2) + 7 (ollama proxy
         #          alias, 5 service-health probes, thoughts stub) + 6 (5
         #          supervise/* proxies + /execute) + 5 (docs/search,
@@ -319,9 +319,10 @@ class TestGetAPIHandlers:
         #          /__dev/mcp, /__dev/mcp/message, /__dev/mcp/sse) = 79,
         #          + 5 dev-admin parity endpoints (grounding/status,
         #          grounding/token grounding-token proxy; migrate, test,
-        #          seed/run scaffold run-chips) = 84.
+        #          seed/run scaffold run-chips) = 83. The former quick
+        #          metrics endpoint moved to the native CLI in 3.13.101.
         handlers = get_api_handlers()
-        assert len(handlers) == 84
+        assert len(handlers) == 83
 
     def test_mcp_jsonrpc_endpoint_registered(self):
         # The MCP transport surface real clients speak — must be mounted so
