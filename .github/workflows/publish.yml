@@ -26,17 +26,26 @@ jobs:
       - name: Install dependencies
         run: pip install uv
 
-      - name: Set version from tag
+      - name: Verify tag matches source version
         run: |
           VERSION="${GITHUB_REF_NAME}"
-          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
-          echo "Building version $VERSION"
+          SOURCE_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          RUNTIME_VERSION="$(PYTHONPATH=. python -c 'import tina4_python; print(tina4_python.__version__)')"
+          test "$SOURCE_VERSION" = "$VERSION" || {
+            echo "::error::Tag $VERSION does not match pyproject.toml $SOURCE_VERSION"
+            exit 1
+          }
+          test "$RUNTIME_VERSION" = "$VERSION" || {
+            echo "::error::Tag $VERSION does not match runtime $RUNTIME_VERSION"
+            exit 1
+          }
+          echo "Building verified version $VERSION"
 
       - name: Build package
         run: uv build
 
       - name: Publish to PyPI
-        run: uv publish || echo "Already published — skipping"
+        run: uv publish
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
