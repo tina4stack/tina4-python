@@ -643,86 +643,64 @@ def _expr_descriptor(expr: str, has_filters: bool):
     operator" — fall through to the function-call / ``_resolve`` path, which stays
     inline in :func:`_eval_expr` because its callable check is context-dependent.
     """
-    # Array literal: ["a", "b", "c"] or [1, 2, 3]
+    for detector in _EXPRESSION_DETECTORS:
+        descriptor = detector(expr, has_filters)
+        if descriptor is not None:
+            return descriptor
+    return ("tail",)
+
+
+def _split_literal_items(inner: str, opening: str, closing: str) -> list[str]:
+    """Split collection members without splitting nested collections."""
+    items = []
+    current = ""
+    in_q = None
+    depth = 0
+    for ch in inner:
+        if ch in ('"', "'") and in_q is None:
+            in_q = ch
+        elif ch == in_q:
+            in_q = None
+        elif ch in opening and in_q is None:
+            depth += 1
+        elif ch in closing and in_q is None:
+            depth -= 1
+        elif ch == "," and in_q is None and depth == 0:
+            items.append(current.strip())
+            current = ""
+            continue
+        current += ch
+    if current.strip():
+        items.append(current.strip())
+    return items
+
+
+def _describe_collection(expr: str, _has_filters: bool):
+    """Describe array and dictionary literals."""
     if expr.startswith("[") and expr.endswith("]"):
         inner = expr[1:-1].strip()
-        if not inner:
-            return ("array", [])
-        # Split on commas, respecting quotes
-        items = []
-        current = ""
-        in_q = None
-        depth = 0
-        for ch in inner:
-            if ch in ('"', "'") and in_q is None:
-                in_q = ch
-                current += ch
-            elif ch == in_q:
-                in_q = None
-                current += ch
-            elif ch == "[" and in_q is None:
-                depth += 1
-                current += ch
-            elif ch == "]" and in_q is None:
-                depth -= 1
-                current += ch
-            elif ch == "," and in_q is None and depth == 0:
-                items.append(current.strip())
-                current = ""
-            else:
-                current += ch
-        if current.strip():
-            items.append(current.strip())
-        return ("array", items)
-
-    # Dict literal: {"key": "value", ...}
+        return ("array", _split_literal_items(inner, "[", "]") if inner else [])
     if expr.startswith("{") and expr.endswith("}"):
         inner = expr[1:-1].strip()
         if not inner:
             return ("dict", [])
-        # Split on commas, respecting quotes and nesting
-        pairs = []
-        current = ""
-        in_q = None
-        depth = 0
-        for ch in inner:
-            if ch in ('"', "'") and in_q is None:
-                in_q = ch
-                current += ch
-            elif ch == in_q:
-                in_q = None
-                current += ch
-            elif ch in ("{", "[") and in_q is None:
-                depth += 1
-                current += ch
-            elif ch in ("}", "]") and in_q is None:
-                depth -= 1
-                current += ch
-            elif ch == "," and in_q is None and depth == 0:
-                pairs.append(current.strip())
-                current = ""
-            else:
-                current += ch
-        if current.strip():
-            pairs.append(current.strip())
+        pairs = _split_literal_items(inner, "{[", "}]")
         kv = []
         for pair in pairs:
             colon_pos = _find_outside_quotes(pair, ":")
             if colon_pos > 0:
                 kv.append((pair[:colon_pos].strip(), pair[colon_pos + 1:].strip()))
         return ("dict", kv)
+    return None
 
-    # String literal — only match if the entire expression is a single quoted
-    # string with no unescaped matching quotes inside (avoids catching
-    # expressions like 'yes' if x else 'no').
+
+def _describe_primary(expr: str, _has_filters: bool):
+    """Describe literals and a fully parenthesized sub-expression."""
     if len(expr) >= 2:
         q = expr[0]
         if q in ('"', "'") and expr.endswith(q) and q not in expr[1:-1]:
             return ("str", expr[1:-1])
-
-    # Parenthesized sub-expression: (expr) — strip parens and evaluate inner
     if expr.startswith("(") and expr.endswith(")"):
-        # Verify matching parens (not just any parens)
         depth = 0
         matched = True
         for i, ch in enumerate(expr):
@@ -735,8 +713,11 @@ def _expr_descriptor(expr: str, has_filters: bool):
                 break
         if matched:
             return ("paren", expr[1:-1])
+    return None
 
-    # Ternary: condition ? "yes" : "no" — quote-aware
+
+def _describe_conditional(expr: str, _has_filters: bool):
+    """Describe ternary, inline-if, and null-coalescing expressions."""
     q_pos = _find_outside_quotes(expr, "?")
     if q_pos > 0:
         rest = expr[q_pos + 1:]
@@ -744,66 +725,152 @@ def _expr_descriptor(expr: str, has_filters: bool):
         if c_pos >= 0:
             return ("ternary", expr[:q_pos].strip(),
                     rest[:c_pos].strip(), rest[c_pos + 1:].strip())
-
-    # Jinja2-style inline if: value if condition else other_value — quote-aware
     if_pos = _find_outside_quotes(expr, " if ")
     if if_pos >= 0:
         else_pos = _find_outside_quotes(expr, " else ")
         if else_pos > if_pos:
             return ("inline_if", expr[:if_pos].strip(),
                     expr[if_pos + 4:else_pos].strip(), expr[else_pos + 6:].strip())
-
-    # Null coalescing: value ?? "default"
     nc_pos = _find_outside_quotes(expr, "??")
     if nc_pos >= 0:
         return ("coalesce", expr[:nc_pos].strip(), expr[nc_pos + 2:].strip())
+    return None
 
-    # String concatenation with ~
+
+def _describe_binary(expr: str, _has_filters: bool):
+    """Describe concat, comparison, logical, and arithmetic expressions."""
     tilde_pos = _find_outside_quotes(expr, "~")
     if tilde_pos >= 0:
         return ("concat", _split_outside_quotes(expr, "~"))
-
-    # Comparison / logical operators -> _eval_comparison, the SAME evaluator
-    # {% if %} uses, so a condition means the same thing in a condition and in
-    # an output expression.
-    #
-    # A LEADING unary ``not`` needs its own check: every operator in the tuple
-    # below is matched WITH surrounding spaces, so ``not x`` (nothing to its
-    # left) matched none of them, fell through to the ``_resolve`` tail, and was
-    # looked up as a variable literally named "not x" -- found nothing, rendered
-    # EMPTY. ``{% if not x %}`` and ``x and not y`` always worked; only the
-    # standalone ``{{ not x }}`` was dropped, and before booleans rendered
-    # lowercase a dropped expression and ``False -> ''`` looked identical, which
-    # is why it survived. Fixed in 3.13.87 alongside the boolean contract.
     if expr.startswith("not "):
         return ("comparison",)
     for op in (" not in ", " in ", " is not ", " is ", "!=", "==", ">=", "<=", ">", "<", " and ", " or ", " not "):
         if _find_outside_quotes(expr, op) >= 0:
             return ("comparison",)
-
-    # Arithmetic operators: +, -, *, /, //, %, ** (lowest to highest precedence)
-    # Check for +/- first (lower precedence), then *//, then %, then **
     for op in (" + ", " - ", " * ", " // ", " / ", " % ", " ** "):
         pos = _find_outside_quotes(expr, op)
         if pos >= 0:
             return ("arith", op.strip(),
                     expr[:pos].strip(), expr[pos + len(op):].strip())
+    return None
 
-    # Filter pipe (Twig ``|``): the highest-precedence binary operator, so it
-    # is resolved LAST here — after ~, comparisons and arithmetic have already
-    # been split off — which makes ``|`` bind TIGHTER than all of them at any
-    # nesting depth (issue #171). Only fires when the engine threaded its bound
-    # applier in; the many internal callers pass None and skip it. A pipe inside
-    # quotes/parens is not top-level (``_parse_filter_chain`` respects both), so
-    # ``{{ (x|f) ~ y }}`` and ``{{ items|join(' ~ ') }}`` resolve correctly.
+
+def _describe_filter(expr: str, has_filters: bool):
+    """Describe a top-level Twig filter chain when filter support is active."""
     if has_filters:
         var_name, pipe_filters = _parse_filter_chain(expr)
         if pipe_filters:
             return ("pipe", var_name, pipe_filters)
+    return None
 
-    # No top-level operator — function call / _resolve tail (kept inline in
-    # _eval_expr because its callable check is context-dependent).
-    return ("tail",)
+
+_EXPRESSION_DETECTORS = (
+    _describe_collection,
+    _describe_primary,
+    _describe_conditional,
+    _describe_binary,
+    _describe_filter,
+)
+
+
+def _eval_array(_expr, desc, context, apply_filters):
+    return [_eval_expr(item, context, apply_filters) for item in desc[1]]
+
+
+def _eval_dict(_expr, desc, context, apply_filters):
+    return {
+        _eval_expr(key, context, apply_filters): _eval_expr(value, context, apply_filters)
+        for key, value in desc[1]
+    }
+
+
+def _eval_primary(_expr, desc, context, apply_filters):
+    if desc[0] == "str":
+        return desc[1]
+    return _eval_expr(desc[1], context, apply_filters)
+
+
+def _eval_conditional(_expr, desc, context, apply_filters):
+    _, condition, when_true, when_false = desc
+    branch = when_true if _eval_expr(condition, context, apply_filters) else when_false
+    return _eval_expr(branch, context, apply_filters)
+
+
+def _eval_inline_if(_expr, desc, context, apply_filters):
+    _, when_true, condition, when_false = desc
+    branch = when_true if _eval_expr(condition, context, apply_filters) else when_false
+    return _eval_expr(branch, context, apply_filters)
+
+
+def _eval_coalesce(_expr, desc, context, apply_filters):
+    value = _eval_expr(desc[1], context, apply_filters)
+    return _eval_expr(desc[2], context, apply_filters) if value is None else value
+
+
+def _eval_concat(_expr, desc, context, apply_filters):
+    return "".join(str(_eval_expr(part, context, apply_filters) or "") for part in desc[1])
+
+
+def _eval_arithmetic(_expr, desc, context, apply_filters):
+    operator, left, right = desc[1:]
+    try:
+        left_value = _eval_expr(left, context, apply_filters)
+        right_value = _eval_expr(right, context, apply_filters)
+        left_num = float(left_value) if left_value is not None else 0
+        right_num = float(right_value) if right_value is not None else 0
+        if left_num == int(left_num) and right_num == int(right_num) and operator != "/":
+            left_num, right_num = int(left_num), int(right_num)
+        operations = {
+            "+": lambda: left_num + right_num,
+            "-": lambda: left_num - right_num,
+            "*": lambda: left_num * right_num,
+            "//": lambda: left_num // right_num if right_num != 0 else 0,
+            "/": lambda: left_num / right_num if right_num != 0 else 0,
+            "%": lambda: left_num % right_num if right_num != 0 else 0,
+            "**": lambda: left_num ** right_num,
+        }
+        return operations[operator]()
+    except (ValueError, TypeError):
+        return None
+
+
+def _eval_pipe(_expr, desc, context, apply_filters):
+    base = _eval_expr(desc[1], context, apply_filters)
+    return apply_filters(base, desc[2], context)
+
+
+def _eval_function_call(expr, context, apply_filters):
+    match = _FUNC_CALL_RE.match(expr)
+    if not match:
+        return False, None
+    name, raw_args = match.group(1), match.group(2) or ""
+    if "." in name:
+        owner_name, member = name.rsplit(".", 1)
+        owner = _resolve(owner_name, context)
+        if isinstance(owner, dict):
+            function = owner.get(member)
+        else:
+            function = getattr(owner, member, None) if owner is not None else None
+    else:
+        function = context.get(name) or _resolve(name, context)
+    if not callable(function):
+        return False, None
+    args = [_eval_expr(arg, context, apply_filters) for arg in _split_args(raw_args)] if raw_args.strip() else []
+    return True, function(*args)
+
+
+_EXPRESSION_EVALUATORS = {
+    "array": _eval_array,
+    "dict": _eval_dict,
+    "str": _eval_primary,
+    "paren": _eval_primary,
+    "ternary": _eval_conditional,
+    "inline_if": _eval_inline_if,
+    "coalesce": _eval_coalesce,
+    "concat": _eval_concat,
+    "arith": _eval_arithmetic,
+    "pipe": _eval_pipe,
+}
 
 
 def _eval_expr(expr: str, context: dict, apply_filters=None):
@@ -821,150 +888,16 @@ def _eval_expr(expr: str, context: dict, apply_filters=None):
     """
     expr = expr.strip()
 
-    # Structural analysis (which top-level operator this expression splits on
-    # and where) is invariant across renders, so it is computed once and cached
-    # by _expr_descriptor keyed on (expr, has_filters). Only the value
-    # resolution below runs every call. The dispatch order below is IDENTICAL to
-    # the linear branch order it replaced — same precedence, same behaviour.
     desc = _expr_descriptor(expr, apply_filters is not None)
     kind = desc[0]
-
-    # Array literal: ["a", "b", "c"] or [1, 2, 3]
-    if kind == "array":
-        return [_eval_expr(item, context, apply_filters) for item in desc[1]]
-
-    # Dict literal: {"key": "value", ...}
-    if kind == "dict":
-        result = {}
-        for key_expr, val_expr in desc[1]:
-            key = _eval_expr(key_expr, context, apply_filters)
-            val = _eval_expr(val_expr, context, apply_filters)
-            result[key] = val
-        return result
-
-    # String literal
-    if kind == "str":
-        return desc[1]
-
-    # Parenthesized sub-expression: (expr) — evaluate inner
-    if kind == "paren":
-        return _eval_expr(desc[1], context, apply_filters)
-
-    # Ternary: condition ? "yes" : "no"
-    if kind == "ternary":
-        _, cond_part, true_part, false_part = desc
-        cond = _eval_expr(cond_part, context, apply_filters)
-        if cond:
-            return _eval_expr(true_part, context, apply_filters)
-        return _eval_expr(false_part, context, apply_filters)
-
-    # Jinja2-style inline if: value if condition else other_value
-    if kind == "inline_if":
-        _, value_part, cond_part, else_part = desc
-        cond = _eval_expr(cond_part, context, apply_filters)
-        if cond:
-            return _eval_expr(value_part, context, apply_filters)
-        return _eval_expr(else_part, context, apply_filters)
-
-    # Null coalescing: value ?? "default"
-    if kind == "coalesce":
-        _, left, right = desc
-        val = _eval_expr(left, context, apply_filters)
-        if val is None:
-            return _eval_expr(right, context, apply_filters)
-        return val
-
-    # String concatenation with ~
-    if kind == "concat":
-        return "".join(str(_eval_expr(p, context, apply_filters) or "") for p in desc[1])
-
-    # Comparison operators for if conditions
     if kind == "comparison":
         return _eval_comparison(expr, context)
-
-    # Arithmetic operators: +, -, *, /, //, %, **
-    if kind == "arith":
-        _, op_s, left, right = desc
-        l_val = _eval_expr(left, context, apply_filters)
-        r_val = _eval_expr(right, context, apply_filters)
-        try:
-            l_num = float(l_val) if l_val is not None else 0
-            r_num = float(r_val) if r_val is not None else 0
-            # Preserve int type when both operands are int-like
-            if l_num == int(l_num) and r_num == int(r_num) and op_s not in ("/",):
-                l_num, r_num = int(l_num), int(r_num)
-            if op_s == "+":
-                return l_num + r_num
-            elif op_s == "-":
-                return l_num - r_num
-            elif op_s == "*":
-                return l_num * r_num
-            elif op_s == "//":
-                return l_num // r_num if r_num != 0 else 0
-            elif op_s == "/":
-                return l_num / r_num if r_num != 0 else 0
-            elif op_s == "%":
-                return l_num % r_num if r_num != 0 else 0
-            elif op_s == "**":
-                return l_num ** r_num
-        except (ValueError, TypeError):
-            return None
-
-    # Filter pipe (Twig ``|``): the highest-precedence binary operator, resolved
-    # only when the engine threaded its bound applier in (has_filters). See
-    # _expr_descriptor / issue #171 for the precedence rationale.
-    if kind == "pipe":
-        _, var_name, pipe_filters = desc
-        base = _eval_expr(var_name, context, apply_filters)
-        return apply_filters(base, pipe_filters, context)
-
-    # kind == "tail": no top-level operator — fall through to the
-    # function-call / _resolve path below.
-
-    # Function call: name("arg1", "arg2") or obj.method("arg1")
-    fn_match = _FUNC_CALL_RE.match(expr)
-    if fn_match:
-        fn_name = fn_match.group(1)
-        raw_args = fn_match.group(2) or ""
-        # For dotted names like obj.method, resolve the object then get the method
-        if "." in fn_name:
-            parts = fn_name.rsplit(".", 1)
-            obj = _resolve(parts[0], context)
-            if obj is None:
-                fn = None
-            elif isinstance(obj, dict):
-                fn = obj.get(parts[1])
-            elif hasattr(obj, parts[1]):
-                fn = getattr(obj, parts[1])
-            else:
-                fn = None
-        else:
-            fn = context.get(fn_name) or _resolve(fn_name, context)
-        if callable(fn):
-            if raw_args.strip():
-                # Split args manually, evaluate each as expression
-                parts = []
-                current = ""
-                in_q = None
-                for ch in raw_args:
-                    if ch in ('"', "'") and not in_q:
-                        in_q = ch
-                        current += ch
-                    elif ch == in_q:
-                        in_q = None
-                        current += ch
-                    elif ch == "," and not in_q:
-                        parts.append(current.strip())
-                        current = ""
-                    else:
-                        current += ch
-                if current.strip():
-                    parts.append(current.strip())
-                eval_args = [_eval_expr(a, context, apply_filters) for a in parts]
-            else:
-                eval_args = []
-            return fn(*eval_args)
-
+    evaluator = _EXPRESSION_EVALUATORS.get(kind)
+    if evaluator is not None:
+        return evaluator(expr, desc, context, apply_filters)
+    called, value = _eval_function_call(expr, context, apply_filters)
+    if called:
+        return value
     return _resolve(expr, context)
 
 
