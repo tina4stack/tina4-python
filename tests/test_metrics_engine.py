@@ -89,7 +89,7 @@ def test_full_analysis_carries_every_field_the_dashboard_reads(project):
 
     assert result["files_analyzed"] >= 1
     first = result["file_metrics"][0]
-    for key in ("path", "loc", "avg_complexity", "maintainability", "has_tests"):
+    for key in ("path", "loc", "avg_complexity", "maintainability", "has_referencing_test"):
         assert key in first, f"missing per-file field {key}"
 
 
@@ -119,14 +119,15 @@ def test_file_detail_describes_one_file(project):
     assert any(function["name"].endswith("total") for function in detail["functions"])
 
 
-def test_a_class_referenced_by_a_test_is_reported_as_tested(project):
+def test_a_class_referenced_by_a_test_reports_a_test_reference(project):
     """The class-symbol signal. tests/test_orders.py imports Order, and that is
     what makes orders.py tested. Fixed in the CLI (stage 3 of module_has_tests);
     asserted from here so the framework cannot regress against an older engine
     without a test saying so."""
     result = full_analysis(str(project / "src"))
     orders = next(f for f in result["file_metrics"] if f["path"].endswith("orders.py"))
-    assert orders["has_tests"] is True
+    assert orders["has_referencing_test"] is True
+    assert "has_tests" not in orders
 
 
 # ── no fallback: failure is loud ─────────────────────────────────────

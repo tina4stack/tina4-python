@@ -12,7 +12,7 @@ class MetricsEngineError(RuntimeError):
 
 _TIMEOUT_SECONDS = 60
 _SUMMARY_KEYS = ("files_analyzed", "total_functions", "avg_complexity", "avg_maintainability")
-_FILE_KEYS = ("path", "loc", "avg_complexity", "maintainability", "has_tests")
+_FILE_KEYS = ("path", "loc", "avg_complexity", "maintainability", "has_referencing_test")
 _FUNCTION_KEYS = ("name", "file", "line", "complexity", "loc")
 _INSTALL_HINT = "update the native tina4 CLI: https://tina4.com/cli"
 _last_scan_root = ""
