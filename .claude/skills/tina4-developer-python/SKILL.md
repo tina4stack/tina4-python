@@ -264,7 +264,8 @@ my-app/
 
 Start a project:
 ```bash
-tina4py init
+tina4 init python my-app
+cd my-app
 ```
 
 Run the dev server:
@@ -279,7 +280,8 @@ browser auto-open, and hot reload. Running `python app.py` directly skips all of
 The CLI passes `--managed` to the framework server. The framework refuses to start without it.
 To bypass (e.g. Docker, CI), set `TINA4_OVERRIDE_CLIENT=true` in `.env`.
 
-The Python alias `tina4py serve` also works.
+The framework-specific `tina4py` command is a fallback for low-level framework work. It is not
+the default project entry point.
 
 That's it. You get SCSS compilation, hot reload, debug overlay, and Swagger docs at `/swagger`
 automatically.
@@ -813,7 +815,7 @@ statement as a Scope item.** Translate it first:
 4. **MASTER.md stays the dashboard** — complex programmes are *many small feature plans*, not one
    novel-length plan.
 
-Bad: `- [ ] Build checkout`  
+Bad: `- [ ] Build checkout`
 Good:
 ```markdown
 ## Scope
