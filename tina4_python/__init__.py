@@ -144,6 +144,10 @@ _LAZY: dict[str, tuple[str, str]] = {
     "AiHTTPError": ("tina4_python.ai", "AiHTTPError"),
     "AiTimeoutError": ("tina4_python.ai", "AiTimeoutError"),
     "AiParseError": ("tina4_python.ai", "AiParseError"),
+    # Provider-neutral OpenID Connect SSO (ADR-0056)
+    "Sso": ("tina4_python.sso", "Sso"),
+    "SSO": ("tina4_python.sso", "SSO"),
+    "SsoError": ("tina4_python.sso", "SsoError"),
     # SOAP / WSDL
     "WSDL": ("tina4_python.wsdl", "WSDL"),
     "wsdl_operation": ("tina4_python.wsdl", "wsdl_operation"),
