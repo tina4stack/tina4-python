@@ -506,7 +506,10 @@ class Session:
 
     def all(self) -> dict:
         """Get all session data."""
-        return dict(self._data)
+        return {
+            key: value for key, value in self._data.items()
+            if key not in {"_tina4_sso", "_tina4_sso_pending"}
+        }
 
     def clear(self):
         """Clear all session data."""

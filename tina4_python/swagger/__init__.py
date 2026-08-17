@@ -411,6 +411,15 @@ class Swagger:
                 "name": self.api_key_name,
                 "in": self.api_key_in if self.api_key_in in ("header", "query", "cookie") else "header",
             }
+        sso_issuer = os.environ.get("TINA4_SSO_ISSUER", "").rstrip("/")
+        if sso_issuer:
+            schemes["oidc"] = {
+                "type": "openIdConnect",
+                "openIdConnectUrl": f"{sso_issuer}/.well-known/openid-configuration",
+            }
+            schemes["ssoSession"] = {
+                "type": "apiKey", "in": "cookie", "name": "tina4_session",
+            }
         # Registered schemes win (let an app override bearerAuth or add oauth2).
         schemes.update(_REGISTERED_SCHEMES)
         return schemes
@@ -638,8 +647,11 @@ class Swagger:
             if sec is not None:
                 operation["security"] = self._sanitize_security(sec, schemes) if sec else []
             elif route.get("auth_required", False):
+                requirements = [{self.default_scheme: []}]
+                if self.default_scheme == "bearerAuth" and "ssoSession" in schemes:
+                    requirements.append({"ssoSession": []})
                 operation["security"] = self._sanitize_security(
-                    [{self.default_scheme: []}], schemes
+                    requirements, schemes
                 )
 
             # A secured operation documents a 401 (SWAG-401-SHAPE, ADR-0004,

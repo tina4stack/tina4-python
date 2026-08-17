@@ -11,6 +11,7 @@ import pytest
 # driver skips now fail the gate too.
 _SERVICE_KEYWORDS = (
     "postgres", "postgresql", "psycopg2",
+    "postgis",          # spatial engine (own container, port 55433)
     "mysql",            # also matches "mysql-connector-python"
     "mssql", "sqlserver", "pymssql",
     "redis", "valkey", "memcached",
@@ -92,7 +93,7 @@ def pytest_runtest_makereport(item, call):
     """When TINA4_REQUIRE_SERVICES is set, turn a skip caused by a PROVISIONED
     service being unavailable into a hard FAILURE.
 
-    CI provisions PostgreSQL, MySQL, MSSQL, Redis, Valkey, Memcached, MongoDB,
+    CI provisions PostgreSQL, PostGIS, MySQL, MSSQL, Redis, Valkey, Memcached, MongoDB,
     RabbitMQ, and Kafka and sets every canonical test-service URL (see
     tests/fixtures/test_env_contract.json), so these integration
     tests must run. A skip that names one of those services (or its client

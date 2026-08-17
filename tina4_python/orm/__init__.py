@@ -20,11 +20,12 @@ from tina4_python.orm.fields import (
     Field,
     IntegerField, StringField, BooleanField, FloatField,
     DateTimeField, TextField, BlobField, NumericField, DecimalField, JSONField,
-    ForeignKeyField,
+    PointField, ForeignKeyField,
     IntField, StrField, BoolField,  # short aliases
     has_many, has_one, belongs_to,  # relationship descriptors
 )
-from tina4_python.orm.model import ORM, bind_database
+from tina4_python.orm.point import Point
+from tina4_python.orm.model import ORM, bind_database, feature_collection
 
 __all__ = [
     "ORM", "bind_database",
@@ -32,9 +33,11 @@ __all__ = [
     # Verbose (preferred)
     "IntegerField", "StringField", "BooleanField", "FloatField",
     "DateTimeField", "TextField", "BlobField", "NumericField", "DecimalField", "JSONField",
-    "ForeignKeyField",
+    "PointField", "ForeignKeyField",
     # Short aliases (backwards compat)
     "IntField", "StrField", "BoolField",
     # Relationships
     "has_many", "has_one", "belongs_to",
+    # Spatial
+    "Point", "feature_collection",
 ]

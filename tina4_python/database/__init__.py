@@ -11,7 +11,11 @@ SQL-first database layer. One interface, many drivers.
     row = db.fetch_one("SELECT * FROM users WHERE id = ?", [42])
     db.execute("INSERT INTO users (name) VALUES (?)", ["Alice"])
 """
-from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, SQLTranslator
+from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
+from tina4_python.database.sql_translator import SQLTranslator, SpatialNotSupportedError
 from tina4_python.database.connection import Database
 
-__all__ = ["Database", "DatabaseAdapter", "DatabaseResult", "SQLTranslator"]
+__all__ = [
+    "Database", "DatabaseAdapter", "DatabaseResult", "SQLTranslator",
+    "SpatialNotSupportedError",
+]

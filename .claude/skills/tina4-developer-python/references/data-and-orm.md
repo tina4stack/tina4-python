@@ -1,5 +1,29 @@
 # Data, ORM & Database (Python)
 
+## GIS and PostGIS
+
+Use `PointField` for geographic points. Coordinates are always `(longitude, latitude)`, while
+radius and returned distance use metres.
+
+```python
+from tina4_python.orm import Point, PointField
+
+location = PointField()
+site.location = Point(18.4241, -33.9249)
+
+nearby = (
+    ChargePoint.query()
+    .within_distance("location", (18.42, -33.92), 5_000)
+    .select_distance("location", (18.42, -33.92))
+    .order_by_distance("location", (18.42, -33.92))
+    .get()
+)
+```
+
+PostGIS stores the field as `geography(Point,4326)` and creates a GiST index. Unsupported engines
+fail instead of storing fake spatial text. `Point.parse()` accepts coordinate pairs, WKT/EWKT,
+GeoJSON, or WKB/EWKB; `to_feature()` and `feature_collection()` return map-ready GeoJSON.
+
 ## Defining Models
 
 Drop a model file in `src/orm/` and it's auto-registered. **Models use field objects, not

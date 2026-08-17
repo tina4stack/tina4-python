@@ -1691,8 +1691,16 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
     if not _auth_ok:
         _session = getattr(request, "session", None)
         if _session:
+            # A provider-verified OIDC identity is handed into the SAME auth
+            # gate as JWT. Provider credentials stay in the reserved Session
+            # value and never enter request.user.
+            _sso = _session.get("_tina4_sso")
+            _sso_identity = _sso.get("identity") if isinstance(_sso, dict) else None
+            if isinstance(_sso_identity, dict) and _sso_identity.get("issuer") and _sso_identity.get("subject"):
+                _auth_ok = True
+                request.user = _sso_identity
             _session_token = _session.get("token") if _session else ""
-            if _session_token:
+            if not _auth_ok and _session_token:
                 try:
                     from tina4_python.auth import Auth
                     _payload = Auth.valid_token_static(_session_token)
@@ -3669,6 +3677,10 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
     # Auto-discover routes
     _auto_discover("src")
+    # Configuration-first OIDC: canonical routes appear only when configured,
+    # after app discovery so collisions fail loudly rather than overwrite.
+    from tina4_python.sso import Sso as _Sso
+    _Sso.mount_configured()
     route_count = len(Router.get_routes())
     Log.info(f"Discovered {route_count} routes")
 

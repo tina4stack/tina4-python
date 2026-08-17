@@ -422,6 +422,131 @@ class JSONField(Field):
             raise ValueError(f"Field '{self.name}': value is not JSON-serializable") from e
 
 
+class PointField(Field):
+    """A column that stores a single geographic point, SRID-aware.
+
+    You work with a :class:`~tina4_python.orm.point.Point` value object; the ORM
+    writes EWKT on save and parses the engine's (HEX)EWKB back into a ``Point``
+    on load, so ``model.location.lat`` always works regardless of engine wire
+    format.
+
+    Assignment accepts any of these and normalises to ``Point``::
+
+        site.location = (18.4241, -33.9249)                            # (lon, lat) tuple
+        site.location = "POINT(18.4241 -33.9249)"                       # WKT
+        site.location = "SRID=4326;POINT(18.4241 -33.9249)"             # EWKT
+        site.location = {"type": "Point", "coordinates": [18.42, -33.9]}  # GeoJSON
+
+    Reading it back gives the value object::
+
+        site.location.lon       # 18.4241
+        site.location.lat       # -33.9249
+        site.location.wkt       # 'POINT(18.4241 -33.9249)'
+        site.location.geojson   # {'type': 'Point', 'coordinates': [18.4241, -33.9249]}
+
+    ``to_dict()`` / ``to_json()`` / ``response()`` emit the GeoJSON form, so a
+    map front end consumes a Tina4 route with no translation layer.
+
+    **Engine support is PostGIS-first and never silently wrong.** The column DDL
+    is ``geography(Point,<srid>)`` on PostgreSQL, and
+    :meth:`~tina4_python.orm.model.ORM.create_table` also creates a GiST index
+    for it. On any engine without spatial support, ``create_table()`` raises
+    :class:`~tina4_python.database.adapter.SpatialNotSupportedError` naming that
+    engine rather than creating a wrong column type.
+
+    Usage::
+
+        class ChargePoint(ORM):
+            id       = IntegerField(primary_key=True, auto_increment=True)
+            name     = StringField()
+            location = PointField()          # geography(Point,4326) + GiST index
+
+        ChargePoint({"name": "V&A", "location": (18.4241, -33.9249)}).save()
+
+        near = ChargePoint.query() \\
+            .within_distance("location", (18.42, -33.92), 5000) \\
+            .order_by_distance("location", (18.42, -33.92)) \\
+            .get()
+
+    Args:
+        srid: Spatial reference id for the column. Defaults to 4326 (WGS 84).
+        spatial_index: Create the engine's spatial index for this column in
+            ``create_table()``. Defaults to True — a radius query without one
+            is a full table scan.
+    """
+
+    def __init__(self, srid: int = None, spatial_index: bool = True, **kwargs):
+        from tina4_python.orm.point import DEFAULT_SRID, Point
+        super().__init__(Point, **kwargs)
+        self.kind = "PointField"
+        self.srid = DEFAULT_SRID if srid is None else int(srid)
+        self.spatial_index = spatial_index
+
+    def _resolve_default(self):
+        # ORM.__init__ seeds attributes straight from _resolve_default (it does
+        # not route through validate), so coerce here too — otherwise a
+        # ``default=(lon, lat)`` would leave ``model.location`` as a raw tuple on
+        # an unsaved instance and ``.lat`` would fail.
+        from tina4_python.orm.point import Point
+
+        default = super()._resolve_default()
+        if default is None:
+            return default
+        return self._parse_point(default)
+
+    def _parse_point(self, value):
+        from tina4_python.orm.point import Point
+
+        try:
+            point = Point.parse(value, self.srid)
+        except ValueError as e:
+            raise ValueError(f"Field '{self.name}': {e}") from e
+        if point.srid != self.srid:
+            raise ValueError(
+                f"Field '{self.name}' expects SRID {self.srid}; received {point.srid}. "
+                "Tina4 never silently reprojects or restamps spatial data."
+            )
+        return point
+
+    def coerce(self, value):
+        """Hydrate/assign through the Point parser, not ``Point(value)``."""
+        return None if value is None else self._parse_point(value)
+
+    def validate(self, value):
+        """Coerce any supported point representation into a ``Point``.
+
+        Runs on BOTH the write path (tuple / WKT / GeoJSON from a route) and the
+        read path (the engine's HEXEWKB), which is what makes the column
+        round-trip identically no matter how it was assigned.
+        """
+        from tina4_python.orm.point import Point
+
+        if value is None:
+            if self.required and self.default is None:
+                raise ValueError(f"Field '{self.name}' is required")
+            default = self._resolve_default()
+            return None if default is None else Point.parse(default, self.srid)
+
+        point = self._parse_point(value)
+
+        if self.validator is not None:
+            self.validator(point)
+        return point
+
+    def to_db(self, value):
+        """Serialise to EWKT — ``SRID=4326;POINT(lon lat)``.
+
+        EWKT carries the SRID with the geometry, so the engine never has to
+        assume one, and it is accepted verbatim by PostGIS geography input. The
+        value is bound as a normal parameter; it is never formatted into SQL.
+        """
+        from tina4_python.orm.point import Point
+
+        if value is None:
+            return None
+        return self._parse_point(value).ewkt
+
+
 class ForeignKeyField(Field):
     """Integer field that references another model's primary key.
 

@@ -51,7 +51,7 @@ def _resolve_version() -> str:
     #
     # test_version_constant.py now asserts this literal equals the pyproject
     # version, so the release bump cannot leave it behind again.
-    return "3.13.103"
+    return "3.13.104"
 
 
 __version__ = _resolve_version()
@@ -108,6 +108,9 @@ _LAZY: dict[str, tuple[str, str]] = {
     "NumericField": ("tina4_python.orm", "NumericField"),
     "DecimalField": ("tina4_python.orm", "DecimalField"),
     "JSONField": ("tina4_python.orm", "JSONField"),
+    "PointField": ("tina4_python.orm", "PointField"),
+    "Point": ("tina4_python.orm", "Point"),
+    "feature_collection": ("tina4_python.orm", "feature_collection"),
     "ForeignKeyField": ("tina4_python.orm", "ForeignKeyField"),
     "IntField": ("tina4_python.orm", "IntField"),
     "StrField": ("tina4_python.orm", "StrField"),
@@ -141,6 +144,10 @@ _LAZY: dict[str, tuple[str, str]] = {
     "AiHTTPError": ("tina4_python.ai", "AiHTTPError"),
     "AiTimeoutError": ("tina4_python.ai", "AiTimeoutError"),
     "AiParseError": ("tina4_python.ai", "AiParseError"),
+    # Provider-neutral OpenID Connect SSO (ADR-0056)
+    "Sso": ("tina4_python.sso", "Sso"),
+    "SSO": ("tina4_python.sso", "SSO"),
+    "SsoError": ("tina4_python.sso", "SsoError"),
     # SOAP / WSDL
     "WSDL": ("tina4_python.wsdl", "WSDL"),
     "wsdl_operation": ("tina4_python.wsdl", "wsdl_operation"),
