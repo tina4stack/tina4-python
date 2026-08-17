@@ -3,7 +3,7 @@ name: tina4-developer-python
 description: >
   Use whenever a developer is building a Python application with the Tina4 framework
   (tina4-python). Trigger when the user wants to create routes, define ORM models, write Frond
-  templates, set up authentication, use the queue system, configure databases, deploy with
+  templates, set up JWT or OpenID Connect SSO, use GIS/PostGIS, use the queue system, configure databases, deploy with
   Docker, or any other app-development task in a tina4-python project. Also trigger when a
   project's directory structure matches a Tina4 Python app (app.py, src/routes/, src/orm/,
   src/templates/) or the user mentions building something with tina4 in Python, even casually
@@ -629,13 +629,13 @@ Read these when you need detailed patterns for a specific area:
   Swagger docs. Read this for any HTTP/API work.
 
 - **`references/data-and-orm.md`** — ORM models (field objects), database connections,
-  migrations, seeding, queries, relationships, pagination. Read this for any data work.
+  migrations, seeding, queries, relationships, pagination, GIS and PostGIS. Read this for any data work.
 
 - **`references/templates-and-frontend.md`** — Frond templates, live blocks, frond.js helper,
   forms, CRUD tables, WebSocket. Read this for any UI/frontend work.
 
-- **`references/auth-and-services.md`** — JWT authentication, sessions, queue system, email,
-  GraphQL, events, caching, i18n. Read this for auth or background services.
+- **`references/auth-and-services.md`** — JWT authentication, provider-neutral OpenID Connect
+  SSO, sessions, queue system, email, GraphQL, events, caching, i18n. Read this for auth or background services.
 
 - **`references/deployment.md`** — Docker base image, Dockerfile recipes for every database
   driver, Docker Compose, environment variables, production checklist. Read this for ANY
