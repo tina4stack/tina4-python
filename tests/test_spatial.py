@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
@@ -94,6 +95,16 @@ CPT_TO_BBOX_CORNER_METRES = 114_999.96
 # HEXEWKB exactly as PostGIS returns SRID=4326;POINT(18.4241 -33.9249) on a
 # plain SELECT — the read path every ORM query (SELECT *) goes through.
 CAPE_TOWN_HEXEWKB = "0101000020E6100000CD3B4ED1916C324003098A1F63F640C0"
+GIS_CONTRACT = json.loads((Path(__file__).parent / "fixtures" / "gis_contract.json").read_text(encoding="utf-8"))
+
+
+def test_shared_gis_fixture_is_loaded_and_applied():
+    assert GIS_CONTRACT["adr"] == "ADR-0057"
+    for case in GIS_CONTRACT["accepted_point_forms"]:
+        assert Point.parse(case["value"]).geojson == case["expected"]
+    for case in GIS_CONTRACT["invalid_points"]:
+        with pytest.raises(ValueError):
+            SpatialSite({"name": case["name"], "location": case["value"]})
 
 
 # ── Real PostGIS connection ─────────────────────────────────────────
@@ -1460,28 +1471,24 @@ class TestSridMismatchIsRejected:
         assert point.ewkt == "SRID=4269;POINT(18.4241 -33.9249)"
 
     def test_a_geographic_srid_that_is_not_the_columns_is_refused(self, gis_db):
-        site = SpatialSite(
-            {"name": "wrong srid", "location": "SRID=4269;POINT(18.4241 -33.9249)"}
-        )
-
-        assert site.save() is False
-
-        assert "srid" in (site.last_error or "").lower()
+        with pytest.raises(ValueError, match="expects SRID 4326"):
+            SpatialSite(
+                {"name": "wrong srid", "location": "SRID=4269;POINT(18.4241 -33.9249)"}
+            )
         assert SpatialSite.count() == 0
 
     def test_a_projected_srid_is_refused_by_the_geography_column(self, gis_db):
-        site = SpatialSite(
-            {"name": "web mercator", "location": "SRID=3857;POINT(2050000 -4020000)"}
-        )
-
-        assert site.save() is False
-
+        with pytest.raises(ValueError, match="expects SRID 4326"):
+            SpatialSite(
+                {"name": "web mercator", "location": "SRID=3857;POINT(2050000 -4020000)"}
+            )
         assert SpatialSite.count() == 0
 
     def test_nothing_was_reprojected_and_stored_under_another_name(self, gis_db):
-        SpatialSite(
-            {"name": "wrong srid", "location": "SRID=4269;POINT(18.4241 -33.9249)"}
-        ).save()
+        with pytest.raises(ValueError, match="expects SRID 4326"):
+            SpatialSite(
+                {"name": "wrong srid", "location": "SRID=4269;POINT(18.4241 -33.9249)"}
+            )
 
         # The classic silent-reprojection failure would leave a row here that a
         # radius query then finds at the "right" place.
@@ -1493,10 +1500,6 @@ class TestSridMismatchIsRejected:
     def test_the_matching_srid_stores_fine_on_the_same_connection(self, gis_db):
         # Positive control, and it proves the refusal did not poison the
         # connection for the next write.
-        SpatialSite(
-            {"name": "wrong srid", "location": "SRID=4269;POINT(18.4241 -33.9249)"}
-        ).save()
-
         assert SpatialSite(
             {"name": "Cape Town", "location": "SRID=4326;POINT(18.4241 -33.9249)"}
         ).save()

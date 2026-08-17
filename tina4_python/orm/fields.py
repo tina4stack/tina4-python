@@ -490,9 +490,27 @@ class PointField(Field):
         from tina4_python.orm.point import Point
 
         default = super()._resolve_default()
-        if default is None or isinstance(default, Point):
+        if default is None:
             return default
-        return Point.parse(default, self.srid)
+        return self._parse_point(default)
+
+    def _parse_point(self, value):
+        from tina4_python.orm.point import Point
+
+        try:
+            point = Point.parse(value, self.srid)
+        except ValueError as e:
+            raise ValueError(f"Field '{self.name}': {e}") from e
+        if point.srid != self.srid:
+            raise ValueError(
+                f"Field '{self.name}' expects SRID {self.srid}; received {point.srid}. "
+                "Tina4 never silently reprojects or restamps spatial data."
+            )
+        return point
+
+    def coerce(self, value):
+        """Hydrate/assign through the Point parser, not ``Point(value)``."""
+        return None if value is None else self._parse_point(value)
 
     def validate(self, value):
         """Coerce any supported point representation into a ``Point``.
@@ -509,10 +527,7 @@ class PointField(Field):
             default = self._resolve_default()
             return None if default is None else Point.parse(default, self.srid)
 
-        try:
-            point = Point.parse(value, self.srid)
-        except ValueError as e:
-            raise ValueError(f"Field '{self.name}': {e}") from e
+        point = self._parse_point(value)
 
         if self.validator is not None:
             self.validator(point)
@@ -529,9 +544,7 @@ class PointField(Field):
 
         if value is None:
             return None
-        if not isinstance(value, Point):
-            value = Point.parse(value, self.srid)
-        return value.ewkt
+        return self._parse_point(value).ewkt
 
 
 class ForeignKeyField(Field):

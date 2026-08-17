@@ -48,7 +48,9 @@ class SQLTranslator:
             f"{feature} is not supported on the '{name}' database engine. "
             "Tina4 GIS support is PostGIS-first: use PostgreSQL with the "
             "PostGIS extension (CREATE EXTENSION postgis). Tina4 will not "
-            "replace a spatial query with an approximate latitude/longitude query."
+            "replace a spatial query with an approximate latitude/longitude query. "
+            "If the application needs storage only and no GIS behavior, declare "
+            "separate longitude and latitude FloatField columns instead."
         )
 
     @classmethod

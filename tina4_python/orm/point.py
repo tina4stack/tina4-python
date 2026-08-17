@@ -30,6 +30,7 @@ every entry point accepts exactly the same value shapes:
 """
 import re as _re
 import struct as _struct
+import math as _math
 
 # WGS 84 — the SRID the entire web (GPS, GeoJSON, OpenStreetMap, Google Maps)
 # speaks. GeoJSON (RFC 7946) mandates it, so it is the only sane default.
@@ -84,6 +85,13 @@ class Point:
     __slots__ = ("_lon", "_lat", "_srid")
 
     def __init__(self, lon, lat, srid: int = DEFAULT_SRID):
+        if isinstance(lon, bool) or isinstance(lat, bool):
+            raise ValueError(
+                f"Point: longitude and latitude must be numbers, got "
+                f"lon={lon!r}, lat={lat!r}"
+            )
+        if isinstance(srid, bool):
+            raise ValueError(f"Point: srid must be an integer, got {srid!r}")
         try:
             lon = float(lon)
             lat = float(lat)
@@ -96,6 +104,8 @@ class Point:
             srid = int(srid)
         except (TypeError, ValueError) as e:
             raise ValueError(f"Point: srid must be an integer, got {srid!r}") from e
+        if not _math.isfinite(lon) or not _math.isfinite(lat):
+            raise ValueError("Point: longitude and latitude must be finite numbers")
 
         # Only range-check when we know the units are degrees. A projected SRID
         # (metres, feet) has no such bounds, so validating there would be wrong.
