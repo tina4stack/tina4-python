@@ -249,7 +249,10 @@ def test_security_mirrors_the_runtime_gate(monkeypatch):
 
         # Document side.
         assert "security" in secure_operation, "a secured write must document security"
-        assert secure_operation["security"] == [{"bearerAuth": []}]
+        expected_security = [{"bearerAuth": []}]
+        if "ssoSession" in document.get("components", {}).get("securitySchemes", {}):
+            expected_security.append({"ssoSession": []})
+        assert secure_operation["security"] == expected_security
         assert "security" not in public_operation, "an explicitly-public write must document none"
 
         # Runtime side — the SAME flag, proven by the live server's answer.
@@ -609,7 +612,10 @@ def test_secured_op_per_op_shape_is_identical(monkeypatch):
         document = fetch_openapi_document()
 
         secured = document["paths"]["/contract/shape-item"]["post"]
-        assert secured["security"] == [{"bearerAuth": []}]
+        expected_security = [{"bearerAuth": []}]
+        if "ssoSession" in document.get("components", {}).get("securitySchemes", {}):
+            expected_security.append({"ssoSession": []})
+        assert secured["security"] == expected_security
         assert secured["responses"]["401"] == {"description": "Unauthorized"}
         assert secured["summary"] == "POST /contract/shape-item"
         assert secured["tags"] == ["contract"]
