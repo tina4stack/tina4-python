@@ -547,9 +547,23 @@ class LiteBackend:
     def retry(self, job: Job, delay_seconds: int = 0):
         """Explicit re-queue requested by the caller (job.retry()).
 
-        Always re-enqueues regardless of the retry limit — this is a manual
-        override, distinct from the automatic fail() path.
+        Always re-enqueues regardless of the retry limit -- this is a manual
+        override, distinct from the automatic fail() path. Cleans up BOTH the
+        reservation record and any dead-letter file for this id, so a caller
+        who iterates dead_letters() and calls .retry() on each doesn't leave
+        the dead-letter directory carrying duplicates (PY-12-05, 3.13.105).
+        Aligns with retry_job(id) which had always unlinked the dead-letter
+        file -- two spellings of the same intent that previously diverged.
         """
         self._clear_reservation(job.id)
+        # Drop any dead-letter file for this id BEFORE the re-queue -- if this
+        # job came from dead_letters() it lives in _failed_dir() and would
+        # otherwise stay on disk while a fresh pending file appears in
+        # _queue_dir(), so the next dead_letters() call reports the job again
+        # and a consumer processes it twice.
+        try:
+            os.unlink(os.path.join(self._failed_dir(), f"{job.id}.queue-data"))
+        except FileNotFoundError:
+            pass
         job.attempts += 1
         self._requeue(job, delay_seconds=delay_seconds, error=None)

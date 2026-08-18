@@ -530,9 +530,14 @@ queue = Queue(topic="tasks", visibility_timeout=300)
 queue.push(data: dict, priority=0, delay_seconds=0) -> int
 queue.pop() -> Job | None
 queue.size(status="pending") -> int
-queue.purge(status="completed")
+# size() status vocabulary: "pending" (waiting for pop -- includes retryable-
+# but-attempted); "reserved" (in-flight); "completed"; "failed"/"dead"/
+# "dead_letter" are ALIASES for the dead-letter count (matches len(dead_letters()));
+# retryable-but-attempted jobs are listed by failed() but count under "pending".
+queue.purge(status="completed") -> int
 queue.retry_failed() -> int
-queue.dead_letters() -> list[dict]
+queue.failed() -> list[dict]           # retryable-but-attempted (0 < attempts < max_retries) -- live in pending queue
+queue.dead_letters() -> list[Job]      # terminal failures (attempts >= max_retries) -- same set counted by size("failed"/"dead"/"dead_letter")
 queue.produce(topic, data, priority=0, delay_seconds=0)  # Push to a specific topic
 queue.consume(topic=None, job_id=None, poll_interval=1.0)   # Long-running generator; sleeps when empty. poll_interval=0 for single-pass drain.
 queue.close() -> None   # Release the backend connection. No-op on the file backend, idempotent, discard the queue afterwards.

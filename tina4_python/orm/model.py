@@ -1363,12 +1363,24 @@ class ORM(metaclass=ORMMeta):
     def clear_cache(cls) -> None:
         """Invalidate every cached query that touches this model's table.
 
-        Tag-scoped, NOT a wholesale flush: a cached JOIN on another model that
-        reads this table is busted too (it carries this table's tag), while a
-        query that never touches this table is left intact. Called after every
-        ORM write (save/delete/force_delete/restore) so a read-after-write never
-        serves a stale/deleted row (CACHE-DEC-01)."""
+        Tag-scoped in the ORM layer (a cached JOIN on another model that reads
+        this table is busted too because it carries this table's tag; a query
+        that never touches this table is left intact), then cascaded to the
+        DB layer on this model's bound connection so an out-of-band write /
+        deliberate refresh / race-with-another-process cannot leave stale rows
+        in db.fetch()'s persistent cache. Called after every ORM write
+        (save/delete/force_delete/restore) so a read-after-write never serves
+        a stale/deleted row (CACHE-DEC-01). PY-06-22 (3.13.105) added the
+        DB-layer cascade -- previously the two cache layers disagreed
+        under TINA4_AUTO_CACHING=true + TINA4_DB_CACHE=true."""
         _query_cache.clear_tag(cls._get_table().lower())
+        try:
+            cls._get_db().cache_clear()
+        except Exception:
+            # A resolvable DB is not guaranteed at every clear_cache call
+            # site (module-import time in odd bootstraps, tests that mutate
+            # bindings); never let a cache-clear crash a save/delete.
+            pass
 
     @classmethod
     def clear_rel_cache(cls) -> None:
