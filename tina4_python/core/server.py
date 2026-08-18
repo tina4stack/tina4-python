@@ -468,6 +468,13 @@ def _auto_discover(root_dir: str = "src"):
             pass
 
 
+def discover_routes(root_dir: str = "src/routes"):
+    """Discover application routes without booting the application server."""
+    _auto_discover(root_dir)
+    from tina4_python.core.router import Router
+    return Router.get_routes()
+
+
 def _record_broken_import(py_file: Path, error: Exception) -> None:
     """Write a .broken sentinel so /health and the dev dashboard surface
     auto-discover failures instead of burying them in the console."""
