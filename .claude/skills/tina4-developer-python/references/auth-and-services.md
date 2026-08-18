@@ -25,7 +25,7 @@ identity = sso.identity(request.session)
 ```
 
 Use a provider recipe only to find its standards-based issuer and client settings. The runtime API
-stays provider-neutral. In 3.13.104, introspection is the supported verification mode; `jwks` fails
+stays provider-neutral. As of 3.13.105, introspection is the supported verification mode; `jwks` fails
 during configuration until the application supplies a cryptography capability.
 
 ## JWT Authentication
@@ -362,7 +362,7 @@ there is no `| trans` template filter:
 from tina4_python.i18n import I18n
 
 i18n = I18n()                                   # reads TINA4_LOCALE / src/locales
-i18n.set_locale(request.params.get("lang", "en"))
+i18n.set_locale(request.query.get("lang", "en"))    # route has no {lang} param → read from ?lang=
 
 @get("/")
 async def home(request, response):

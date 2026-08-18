@@ -178,8 +178,8 @@ docker run -d \
 | `TINA4_DEBUG` | `false` (set in base image) | Disable debug mode |
 | `TINA4_NO_BROWSER` | `true` (base image) | Prevent browser open |
 | `PYTHONUNBUFFERED` | `1` (base image) | Flush stdout for Docker logs |
-| `HOST` | `0.0.0.0` (base image) | Bind address |
-| `PORT` | `7146` | Listen port |
+| `TINA4_HOST` | `0.0.0.0` (base image) | Bind address (unprefixed `HOST` is accepted as a fallback) |
+| `TINA4_PORT` | `7146` | Listen port (unprefixed `PORT` is accepted as a fallback) |
 
 ## Production Checklist
 

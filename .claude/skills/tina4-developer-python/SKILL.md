@@ -782,8 +782,10 @@ The base image ships with **SQLite only**. To add PostgreSQL, MySQL, MSSQL, or F
 
 ```bash
 tina4py build                              # Build Docker image
-tina4py stage                              # Build + push + deploy (~30s)
-tina4py deploy promote staging production  # Promote to production
+# `stage` and `deploy promote` are Rust `tina4` CLI verbs (external), not
+# `tina4py` — `tina4py deploy <target>` accepts docker / systemd / nginx / cpanel
+# and stops there. For staging-and-promote flows, use the external `tina4`
+# client directly.
 ```
 
 The app includes a health check at `/health` that Kubernetes probes can use.
