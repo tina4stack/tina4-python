@@ -316,6 +316,79 @@ async def background_tick_loop(callback, interval: float, executor, shutdown):
 _discovered_mtimes: dict[str, float] = {}
 
 
+def _cascade_reload_dependents(reloaded: str, root_pkg: str, visited: set[str]) -> None:
+    """After re-importing ``reloaded``, re-import any other in-scope module that
+    still holds a stale ``from <reloaded> import Foo`` reference.
+
+    Fixes https://github.com/tina4stack/tina4-python/issues/102 (hot reload
+    does not re-register ORM field metadata). Root cause: ``_auto_discover``
+    reloads the CHANGED module (say ``src.orm.Todo``) by ``del sys.modules[.]``
+    + ``importlib.import_module(.)``, which builds a fresh class object. But a
+    route module that did ``from src.orm.Todo import Todo`` at ITS first import
+    captured a reference to the OLD class, and unless that module ALSO
+    re-executes, its ``Todo(...)`` call still uses the old class -- with the
+    old ``_fields`` -- so a newly added column is silently absent from
+    ``to_dict()`` output. The DATA is written to the DB correctly (the ORM
+    knows the field via the new class), and the API just lies about it.
+
+    Detection: for every in-scope module already in ``sys.modules``, walk its
+    namespace and look for any attribute whose ``__module__`` matches the
+    reloaded module's name. That's the fingerprint of a ``from X import Y``
+    binding into an unchanged file. Re-import that file so its ``from`` binds
+    to the fresh class. Recurse (a dependent may itself be depended on).
+
+    Bounded to the discovery scope (``root_pkg`` and its subpackages) so we
+    never delete a framework or third-party module. ``visited`` breaks cycles
+    and prevents re-doing a module we already refreshed in this cascade.
+    """
+    # Snapshot: mutating sys.modules during the walk would break iteration.
+    for other_name in list(sys.modules):
+        if other_name in visited:
+            continue
+        if other_name == reloaded:
+            continue
+        if other_name != root_pkg and not other_name.startswith(root_pkg + "."):
+            continue
+        other = sys.modules.get(other_name)
+        if other is None or not hasattr(other, "__dict__"):
+            continue
+        # Any attribute whose __module__ names the reloaded module is a
+        # ``from X import Y`` binding into this file -- it is stale.
+        try:
+            attrs = vars(other)
+        except Exception:
+            continue
+        stale = False
+        for attr_name, attr in attrs.items():
+            if attr_name.startswith("__"):
+                continue
+            if getattr(attr, "__module__", None) == reloaded:
+                stale = True
+                break
+        if not stale:
+            continue
+        try:
+            from tina4_python.core.router import Router
+            Router.remove_routes_for_module(other_name)
+            del sys.modules[other_name]
+            importlib.import_module(other_name)
+            # Record so the next mtime tick sees this reload as authoritative.
+            try:
+                other_path = getattr(sys.modules[other_name], "__file__", None)
+                if other_path:
+                    _discovered_mtimes[other_name] = Path(other_path).stat().st_mtime
+            except OSError:
+                pass
+            visited.add(other_name)
+            Log.info(f"Cascaded reload of dependent module: {other_name}")
+            # A module that imported from `reloaded` may itself be imported
+            # from by yet another module. Cascade the same detection on THIS
+            # module now that its class objects are fresh.
+            _cascade_reload_dependents(other_name, root_pkg, visited)
+        except Exception as exc:
+            Log.error(f"Cascade reload failed for {other_name}: {exc}")
+
+
 def _auto_discover(root_dir: str = "src"):
     """Auto-import all .py files in ``root_dir`` to trigger route decorators.
 
@@ -444,6 +517,14 @@ def _auto_discover(root_dir: str = "src"):
                         f"Reloaded changed module: {module_name}"
                         + (f" (dropped {dropped} stale route(s))" if dropped else "")
                     )
+                    # Cascade to any in-scope module that captured a
+                    # ``from <module_name> import Foo`` binding at ITS first
+                    # import -- that binding still points at the OLD class
+                    # object we just replaced, so the dependent silently uses
+                    # stale field metadata / stale globals until it too
+                    # re-executes. See _cascade_reload_dependents above and
+                    # issue #102.
+                    _cascade_reload_dependents(module_name, root_pkg, {module_name})
                 else:
                     # Out-of-scope module changed — record mtime so we don't
                     # keep re-evaluating it, but do not re-import it.
