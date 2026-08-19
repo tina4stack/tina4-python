@@ -9,6 +9,47 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.105
+
+Bug release. Route inspection stops touching the app; Firebird's migration
+ledger tolerates whatever case the driver hands back; PHP loses a colon-in-
+filename that broke Windows checkouts.
+
+### Route inspection scans, never boots
+
+- `tina4 routes` now walks canonical route files and never executes the
+  application entrypoint or starts the server. Feature 115 / ADR-0058.
+- Fixes the case where `tina4 routes --override` would boot the app on the
+  same port and kill whatever process was already holding it (tina4-python
+  issue #104).
+
+### Firebird migration ledger is case-agnostic
+
+- `tina4_migration` reads and writes work regardless of the case the
+  Firebird driver returns for the `migration_name` column.
+- Uses the atomic sequence table pattern already in place for other engines.
+
+### Route registration log tells the truth about @noauth / @secured
+
+- `@noauth()` and `@secured()` emit a corrective `Route auth updated:` line
+  when they flip the flag on a route that `@post` / `@get` already logged.
+- Fixes tina4-python issue #103, where a public `@noauth() @post(...)` route
+  logged `auth=required` at startup and misled a reader (human or AI) into
+  reporting a false security bug.
+- Python-only; PHP/Ruby/Node don't log an auth field at register time.
+
+### Hot reload reaches dependent modules
+
+- `_auto_discover` now cascades a re-import to every in-scope module that
+  captured a `from X import Y` binding from the changed module, so a route
+  file that did `from src.orm.Todo import Todo` picks up an added field
+  without a server restart.
+- Fixes tina4-python issue #102, where a newly added ORM column was silently
+  dropped from `to_dict()` output after hot reload -- the DB write was
+  correct, the API just lied about the shape.
+- Recursive with a visited-set (transitive dependents refresh, cycles are
+  safe), bounded to the discovery scope, fail-loud.
+
 ## 3.13.103
 
 ### Metrics reports what it can prove

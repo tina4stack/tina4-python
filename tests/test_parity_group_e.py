@@ -15,6 +15,17 @@ import pytest
 # ─── ai.detect_ai / detect_ai_names / install_context / status_report ─────
 
 
+@pytest.fixture(autouse=True)
+def _sandbox_home_for_ai_installer(tmp_path, monkeypatch):
+    """install_context()/install_skills() write to BOTH the target root AND
+    Path.home()/.claude/skills (global install, by design). In a shared test
+    environment that second write races other tests and can hit a stale root-
+    owned file from a prior sudo run -- a per-test HOME redirects the global
+    install to a throwaway dir, so each test's Path.home() is exclusive to
+    that test."""
+    monkeypatch.setenv("HOME", str(tmp_path / "_test_home"))
+
+
 class TestAINewFunctions:
     def test_detect_ai_returns_list_of_dicts(self, tmp_path):
         from tina4_python.ai import detect_ai

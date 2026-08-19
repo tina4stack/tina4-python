@@ -93,9 +93,26 @@ class MongoBackend:
             return 0
         return self._backend.size(self._topic)
 
-    def purge(self, status: str = "completed"):
-        if status == "pending":
-            self._backend.clear(self._topic)
+    def purge(self, status: str = "completed") -> int:
+        """Delete every doc in this queue whose status matches.
+
+        Pre-3.13.105 (PY-12-08) this returned None (not a count), swallowed
+        every status other than ``pending``, and even for ``pending`` called
+        ``clear()`` which delete_many({"topic": topic}) -- nuking ALL statuses
+        under that topic, not just pending. Now every status is honoured, the
+        dead-letter states route to the ``.dead_letter`` topic namespace, and
+        every path returns ``deleted_count`` so a caller can log/assert what
+        was purged.
+        """
+        self._backend._ensure_connected()
+        if status in ("dead", "dead_letter", "failed"):
+            dl_topic = f"{self._topic}.dead_letter"
+            result = self._backend._collection.delete_many({"topic": dl_topic})
+        else:
+            result = self._backend._collection.delete_many(
+                {"topic": self._topic, "status": status}
+            )
+        return result.deleted_count
 
     def retry_failed(self, max_retries: int = None) -> int:
         # Accept max_retries to match the LiteBackend contract (Queue passes it
@@ -154,16 +171,57 @@ class MongoBackend:
                 for d in docs]
 
     def retry_job(self, job_id: str, delay_seconds: int = 0) -> bool:
-        """Reset a failed job back to pending by ID."""
+        """Revive a specific dead-letter job by ID back to the pending queue.
+
+        Pre-3.13.105 this searched
+        ``{_id: job_id, topic: self._topic, status: "failed"}`` -- three
+        separate reasons that filter could never match a dead letter:
+
+          * ``dead_letter()`` writes a NEW doc with a fresh ``_id`` (the
+            original job id is preserved on the doc's ``data.id`` field), so
+            ``_id: job_id`` never hit.
+          * The dead-letter topic is ``f"{topic}.dead_letter"``, not
+            ``self._topic``.
+          * Dead letters carry ``status="dead"`` (the original doc under
+            ``self._topic`` is ``status="completed"`` after the ack).
+
+        The corrected flow looks the doc up in the dead-letter namespace by
+        the original id, deletes the dead-letter record, and re-enqueues the
+        original as pending -- upserting on the small chance the original
+        completed doc has been purged, so a retry after a housekeeping run
+        still works. Mirrors LiteBackend.retry_job() and matches
+        Queue.retry(id) callers' expectation that retry always revives if a
+        dead letter exists for the id.
+        """
         self._backend._ensure_connected()
-        available = _now() if delay_seconds == 0 else _future(delay_seconds)
-        result = self._backend._collection.update_one(
-            {"_id": job_id, "topic": self._topic, "status": "failed"},
-            {"$set": {"status": "pending", "error": None,
-                      "available_at": available},
-             "$inc": {"attempts": 1}},
+        dl_topic = f"{self._topic}.dead_letter"
+        dl_doc = self._backend._collection.find_one(
+            {"topic": dl_topic, "data.id": job_id}
         )
-        return result.modified_count == 1
+        if dl_doc is None:
+            return False
+        # Drop the dead-letter doc first so an interrupted retry never leaves
+        # both a dead-letter and a fresh pending doc for the same id.
+        self._backend._collection.delete_one({"_id": dl_doc["_id"]})
+        available = _now() if delay_seconds <= 0 else _future(delay_seconds)
+        # dead_letter() stored the ORIGINAL enqueue message under the doc's
+        # ``data`` field (see queue_backends/mongo_backend.py::dead_letter);
+        # its ``payload`` key is the enqueue payload the consumer needs.
+        original = dl_doc.get("data") if isinstance(dl_doc.get("data"), dict) else {}
+        payload = original.get("payload", original.get("data", {}))
+        priority = original.get("priority", dl_doc.get("priority", 0))
+        # Upsert: reset the original doc if it still exists, otherwise
+        # re-create it from the dead-letter payload so a purged/gone original
+        # is not silently a retry-no-op.
+        self._backend._collection.update_one(
+            {"_id": job_id, "topic": self._topic},
+            {"$set": {"status": "pending", "error": None,
+                      "available_at": available, "reserved_at": None,
+                      "priority": priority, "payload": payload},
+             "$inc": {"attempts": 1}},
+            upsert=True,
+        )
+        return True
 
     def clear(self) -> int:
         # The only one of this adapter's six _collection users that forgot to

@@ -825,13 +825,8 @@ def _seed(args):
 
 def _routes(args):
     """List all registered routes."""
-    if Path("app.py").exists():
-        sys.path.insert(0, str(Path.cwd()))
-        import importlib
-        importlib.import_module("app")
-
-    from tina4_python.core.router import Router
-    routes = Router.get_routes()
+    from tina4_python.core import discover_routes
+    routes = discover_routes("src/routes")
     if not routes:
         print("No routes registered.")
         return

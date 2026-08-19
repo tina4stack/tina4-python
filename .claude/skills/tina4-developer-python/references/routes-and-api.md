@@ -86,8 +86,13 @@ Access via `request.params`:
 # GET /search?q=hello&page=2
 @get("/search")
 async def search(request, response):
-    query = request.params.get("q", "")
-    page = int(request.params.get("page", 1))
+    query = request.query.get("q", "")
+    page = int(request.query.get("page", 1))
+    # `request.params` is ROUTE PARAMS ONLY (e.g. `{id}` in `/api/users/{id}`),
+    # not the query string. Query values live on `request.query`. Since v3.13.99
+    # this split has been strict — `.params.get("q")` on a route with no `{q}`
+    # param silently returns the default and never sees `?q=…`. If you want
+    # both surfaces, `request.param(key, default)` reads them in order.
 ```
 
 ## Middleware

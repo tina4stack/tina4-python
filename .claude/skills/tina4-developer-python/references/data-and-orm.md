@@ -366,9 +366,13 @@ firebird://user:password@localhost:3050/mydb
 mongodb://user:password@localhost:27017/mydb
 ```
 
-> **SQLite URLs: use `sqlite:data/app.db` (scheme-only) or the URL form `sqlite:///data/app.db`
-> (three slashes).** Do **not** write `sqlite://data/app.db` (two slashes) — `urlparse` reads
-> `data` as the host and drops it, so you end up pointing at `app.db` in the wrong place.
+> **SQLite URLs: `sqlite:data/app.db` (scheme-only), `sqlite:///data/app.db`
+> (three slashes, relative) and `sqlite:////var/data/app.db` (four slashes,
+> absolute) are the canonical forms — the SQLAlchemy convention, identical in
+> all four Tina4 frameworks.** The two-slash form `sqlite://data/app.db` is a
+> legacy alias that still works (the sequential-strip parser at
+> `database/connection.py:390-408` maps it to `"data/app.db"` — no longer
+> drops the path via `urlparse`). Prefer the canonical spellings for new code.
 
 ```python
 from tina4_python.database import Database
@@ -402,7 +406,7 @@ CREATE TABLE users (
 ## Seeding
 
 ```bash
-tina4 seed:create "initial users"   # creates a seed file
+tina4 generate seeder Users         # creates a seed file for the Users model
 tina4 seed                           # runs all seeds
 ```
 

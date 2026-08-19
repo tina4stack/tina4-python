@@ -141,7 +141,7 @@ services:
       - "7146:7146"
     environment:
       - TINA4_DEBUG=false
-      - JWT_SECRET=${JWT_SECRET}
+      - TINA4_SECRET=${TINA4_SECRET}
       - TINA4_DATABASE_URL=sqlite:///data/app.db
     volumes:
       - app-data:/app/data
@@ -163,7 +163,7 @@ Pass secrets at runtime, never bake them into images:
 ```bash
 docker run -d \
   -p 7146:7146 \
-  -e JWT_SECRET=your-secret \
+  -e TINA4_SECRET=your-secret \
   -e TINA4_DATABASE_URL=sqlite:///data/app.db \
   -e TINA4_DEBUG=false \
   -v $(pwd)/data:/app/data \
@@ -178,15 +178,15 @@ docker run -d \
 | `TINA4_DEBUG` | `false` (set in base image) | Disable debug mode |
 | `TINA4_NO_BROWSER` | `true` (base image) | Prevent browser open |
 | `PYTHONUNBUFFERED` | `1` (base image) | Flush stdout for Docker logs |
-| `HOST` | `0.0.0.0` (base image) | Bind address |
-| `PORT` | `7146` | Listen port |
+| `TINA4_HOST` | `0.0.0.0` (base image) | Bind address (unprefixed `HOST` is accepted as a fallback) |
+| `TINA4_PORT` | `7146` | Listen port (unprefixed `PORT` is accepted as a fallback) |
 
 ## Production Checklist
 
 1. Use `tina4stack/tina4-python:v3` as the base
 2. Mount a volume for `/app/data` (SQLite database, sessions, queue)
 3. Set `TINA4_DEBUG=false`
-4. Pass `JWT_SECRET` via environment variable (not `.env` in the image)
+4. Pass `TINA4_SECRET` via environment variable (not `.env` in the image)
 5. Add a health-check endpoint at `/health`
 6. Configure the Docker restart policy (`unless-stopped` or `always`)
 7. Set up log rotation via the Docker logging driver

@@ -22,6 +22,7 @@ configuration path is exercised, not replaced.
 """
 import contextlib
 import os
+import re
 import socket
 import threading
 import time
@@ -132,7 +133,7 @@ def assert_bound_fired(excinfo, elapsed, host, port):
     """The contract for an expiry: host, port, elapsed seconds, and the variable.
 
     A bare driver timeout message names none of these, which is why the wrapper
-    exists — an operator has to be able to tell "our bound fired" apart from
+    exists -- an operator has to be able to tell "our bound fired" apart from
     "the database rejected us" from the message alone.
     """
     message = str(excinfo.value)
@@ -140,11 +141,29 @@ def assert_bound_fired(excinfo, elapsed, host, port):
     assert str(port) in message, message
     assert CONNECT_TIMEOUT_VARIABLE in message, message
     assert "timed out after" in message, message
-    # The elapsed seconds are real, not a restatement of the configured bound.
-    assert f"{elapsed:.0f}" in message or f"{elapsed:.1f}s" in message, (message, elapsed)
-    assert elapsed >= TEST_BOUND_SECONDS, f"fired EARLY at {elapsed:.2f}s"
+
+    # The elapsed seconds are real, not a hardcoded zero and not a restatement
+    # of the configured bound label. Extract the wrapper's OWN reported elapsed
+    # from the message (formatted "N.Ns") and hold IT to the bounds -- comparing
+    # the OUTER clock to the message drifts on drivers whose error propagation
+    # adds cleanup time (mysql-connector adds ~0.7s after aborting), and that
+    # gap is not a framework bug: the wrapper's clock stops the moment the
+    # driver raises, before Python-level exception unwinding.
+    match = re.search(r"timed out after (\d+\.\d+)s", message)
+    assert match, f"message must format the reported elapsed as 'N.Ns': {message}"
+    reported = float(match.group(1))
+    assert reported >= TEST_BOUND_SECONDS, (
+        f"reported elapsed {reported}s < configured bound {TEST_BOUND_SECONDS}s "
+        f"-- the wrapper fired EARLY: {message}"
+    )
+    assert reported <= elapsed + 0.05, (
+        f"reported elapsed {reported}s > outer clock {elapsed:.2f}s + 0.05 -- "
+        f"the wrapper cannot report a time that is later than the test's own "
+        f"stopwatch: {message}"
+    )
+    assert elapsed >= TEST_BOUND_SECONDS, f"outer clock fired EARLY at {elapsed:.2f}s"
     assert elapsed < TEST_BOUND_SECONDS + OVERSHOOT_ALLOWANCE_SECONDS, (
-        f"took {elapsed:.2f}s — the bound did not fire"
+        f"outer clock took {elapsed:.2f}s -- the bound did not fire"
     )
 
 

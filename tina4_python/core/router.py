@@ -817,9 +817,23 @@ def noauth():
     def decorator(fn):
         fn._noauth = True
         # If route was already registered (decorator applied after @get/@post),
-        # update the route dict directly.
+        # update the route dict directly AND log the corrected state. The
+        # documented decorator order puts @noauth() ABOVE @get/@post, which
+        # means Python's bottom-up application runs @post first — so
+        # `_register_route` fires its "auth=required" line for a route that
+        # will be public a microsecond later. Without the corrective line
+        # below, the earlier log reads as definitive and misleads anyone
+        # reading startup output (issue #103: an AI reviewer drafted a false
+        # critical-security finding after reading the misleading line).
         if hasattr(fn, "_route_ref"):
-            fn._route_ref._route["auth_required"] = False
+            route = fn._route_ref._route
+            was_required = route.get("auth_required", False)
+            route["auth_required"] = False
+            if was_required:
+                Log.debug(
+                    f"Route auth updated: {route['method']} {route['path']} "
+                    f"(auth=public via @noauth)"
+                )
         return fn
     return decorator
 
@@ -828,10 +842,19 @@ def secured():
     """Require auth on a GET route (which is public by default)."""
     def decorator(fn):
         fn._secured = True
-        # If route was already registered (decorator applied after @get/@post),
-        # update the route dict directly.
+        # See @noauth() above: emit a corrective log line if we flip the flag
+        # on an already-registered route so a reader of the startup log sees
+        # the true final auth state after every decorator has applied
+        # (issue #103).
         if hasattr(fn, "_route_ref"):
-            fn._route_ref._route["auth_required"] = True
+            route = fn._route_ref._route
+            was_public = not route.get("auth_required", True)
+            route["auth_required"] = True
+            if was_public:
+                Log.debug(
+                    f"Route auth updated: {route['method']} {route['path']} "
+                    f"(auth=required via @secured)"
+                )
         # Same for a WebSocket route registered by @websocket() below this one.
         if hasattr(fn, "_ws_route_ref"):
             fn._ws_route_ref["auth_required"] = True

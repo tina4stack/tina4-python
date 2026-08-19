@@ -182,7 +182,20 @@ class Queue:
                 processed += 1
 
     def size(self, status: str = "pending") -> int:
-        """Count jobs by status."""
+        """Count jobs by status.
+
+        ``"pending"`` counts jobs waiting to be popped -- INCLUDES retryable-
+        but-attempted ones, because they live in the pending queue under the
+        auto-retry lifecycle (see failed()).
+        ``"reserved"`` counts jobs a consumer has popped but not yet
+        completed/failed (in-flight against the visibility timeout).
+        ``"completed"`` counts jobs the consumer has finished successfully.
+        ``"failed"``, ``"dead"``, ``"dead_letter"`` are ALIASES that all count
+        the dead-letter store -- jobs whose attempts >= max_retries and that
+        have given up. Use dead_letters() to list them. Retryable-but-
+        attempted jobs are NOT counted by size("failed"); use failed() to
+        list them or size("pending") to include them in a total.
+        """
         return self._backend.size(status)
 
     def purge(self, status: str, max_retries: int = None) -> int:
@@ -194,14 +207,27 @@ class Queue:
         return self._backend.retry_failed(max_retries=max_retries if max_retries is not None else self.max_retries)
 
     def failed(self) -> list[dict]:
-        """Get jobs that failed but are still eligible for retry."""
+        """Get jobs that failed at least once but are still being retried
+        (0 < attempts < max_retries). These live in the pending queue under
+        the auto-retry lifecycle (fail() re-queues them with an incremented
+        attempts count and a retry_backoff delay) so pop() picks them up
+        again. They are NOT counted by size("failed") -- that alias counts
+        the dead-letter store, matching dead_letters(). To include retryable-
+        failed jobs in a total, use size("pending"). Terminal failures are
+        returned by dead_letters()."""
         return self._backend.failed()
 
     def dead_letters(self, max_retries: int = None) -> list[Job]:
-        """Get jobs that exceeded max retries.
+        """Get jobs that exceeded max_retries -- terminal failures.
+
+        Same set counted by size("failed") / size("dead") / size("dead_letter")
+        (three aliases for the dead-letter store). To LIST retryable-but-
+        attempted jobs (attempts > 0 AND attempts < max_retries) that are
+        still being auto-retried, use failed() -- those live in the pending
+        queue and are NOT dead letters.
 
         Returns ``Job`` objects with the failure reason on ``.error``,
-        not raw dicts — so callers can iterate uniformly with the rest
+        not raw dicts -- so callers can iterate uniformly with the rest
         of the queue API (``for job in queue.consume()``).
 
             for job in queue.dead_letters():
@@ -228,13 +254,22 @@ class Queue:
         ]
 
     def retry(self, job_id: str = None, delay_seconds: int = 0) -> bool:
-        """Retry a failed job by ID, or all dead-letter jobs if no ID given."""
+        """Retry a failed job by ID, or all dead-letter jobs if no ID given.
+
+        The no-arg branch materialises every retry_job() call before returning
+        so ALL dead letters are revived. Pre-3.13.105 (PY-12-04) this branch
+        used ``any(retry_job(j.id) for j in dead)`` -- Python's short-circuit
+        ``any`` stopped iterating as soon as the FIRST job revived, silently
+        leaving the rest in the dead-letter store.
+        """
         if job_id is None:
             dead = self.dead_letters()
             if not dead:
                 return False
-            # dead is now list[Job] — pull the id off each
-            return any(self._backend.retry_job(j.id, delay_seconds) for j in dead)
+            # Materialise: iterate EVERY dead letter, then reduce -- never a
+            # generator inside any().
+            results = [self._backend.retry_job(j.id, delay_seconds) for j in dead]
+            return any(results)
         return self._backend.retry_job(job_id, delay_seconds)
 
     def clear(self) -> int:

@@ -350,25 +350,37 @@ def test_sigterm_exits_with_code_0(tmp_path):
 
 
 def _try_listen(port: int) -> OSError | None:
-    """Try to become the listener on *port* exactly the way a restarting Tina4
-    server would: the same 0.0.0.0 wildcard (see resolve_config's default_host)
-    with SO_REUSEADDR. Returns the OSError on failure, None on success.
+    """Try to become the listener on *port* the way a restarting Tina4 server
+    would. Probes BOTH 127.0.0.1 and 0.0.0.0 with SO_REUSEADDR. Returns the
+    first OSError encountered (port held on at least one interface), or None
+    only when both probes succeed (port truly free).
 
-    Both details matter. SO_REUSEADDR keeps a TIME_WAIT connection this test
-    left behind from reading as a leaked listener, while still being refused by
-    a socket that is genuinely still listening. Binding 127.0.0.1 instead of the
-    wildcard would succeed even against the live server and prove nothing.
+    Both interfaces matter: resolve_config()'s default_host is 127.0.0.1 when
+    TINA4_DEBUG is truthy and 0.0.0.0 otherwise. macOS treats these as
+    independent bind namespaces -- a wildcard bind SUCCEEDS while a socket
+    holds 127.0.0.1 on the same port and vice versa -- so probing only one
+    interface gives a false negative on the other framework mode (this test
+    used to bind only 0.0.0.0, which passed on Linux and silently returned "
+    port free" on macOS every time _boot() ran in debug mode). Linux refuses
+    the cross-interface probe already, so the two-interface probe is a strict
+    superset of what worked before.
+
+    SO_REUSEADDR keeps a TIME_WAIT connection this test left behind from
+    reading as a leaked listener while still being refused by a genuinely
+    live one.
     """
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        listener.bind(("0.0.0.0", port))
-        listener.listen(1)
-        return None
-    except OSError as exc:
-        return exc
-    finally:
-        listener.close()
+    for host in ("127.0.0.1", "0.0.0.0"):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            listener.bind((host, port))
+            listener.listen(1)
+        except OSError as exc:
+            listener.close()
+            return exc
+        finally:
+            listener.close()
+    return None
 
 
 def test_sigterm_releases_the_listening_port(tmp_path):
