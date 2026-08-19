@@ -40,4 +40,4 @@ Python-only: CPython binds `tina4_python.websocket` to the subpackage.
 - cf4d676  fix(websocket): make @websocket usable from the package name
 - 362a679  fix(websocket): correct callable-module rationale
 
-## Status: Local complete. PR blocked: MichaelC8E has no write on tina4stack/tina4-python and no fork; `gh` not logged in.
+## Status: Ready for PR vs v3
