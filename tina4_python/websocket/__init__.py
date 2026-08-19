@@ -966,30 +966,31 @@ __all__ = [
 
 
 # ── `@websocket("/path")` on the package name ───────────────────────────────
-# `tina4_python.websocket` is two things at once: this module, and — to every
-# reader of the docs — the route decorator that sits beside @get/@post in
-# core.router. Python binds a submodule onto its parent package as soon as the
-# submodule is imported, so the name resolved to this module and
+# `tina4_python.websocket` is two things at once: this RFC 6455 subpackage,
+# and — to every reader of the docs — the route decorator beside @get/@post.
+# Python binds a submodule onto its parent as soon as the submodule loads, so
 #
 #     from tina4_python import websocket
-#
 #     @websocket("/ws")            # TypeError: 'module' object is not callable
-#     async def chat(...): ...
 #
-# took the whole route file down at import time.
+# died at decorate time and auto-discovery dropped every route from that line
+# onward.
 #
-# Re-exporting the decorator from tina4_python/__init__.py cannot win that
-# race: whenever anything imports this subpackage, the import machinery
-# rebinds the attribute over it. Making the module itself callable is the one
-# fix that keeps both surfaces intact — `from tina4_python.websocket import
-# WebSocketServer` still resolves, and `@websocket("/ws")` now reaches
-# core.router.websocket. The import is deferred to call time so this module
-# stays free of a core.router dependency at import.
+# A re-export in tina4_python/__init__.py AFTER core.server has already loaded
+# this subpackage is stable (importlib setattr happens on first load only).
+# That still fails the other public surface: `import tina4_python.websocket as
+# ws` would then return the function, so `ws.WebSocketServer` breaks. Making
+# this module callable keeps both: the package name decorates, and the
+# subpackage stays a module. Forward *args/**kwargs so this spelling cannot
+# drift from core.router.websocket. Guard sys.modules — a loader that execs
+# this file without registering it must not KeyError.
 class _CallableWebSocketModule(_ModuleType):
-    def __call__(self, path: str):
+    def __call__(self, *args, **kwargs):
         from tina4_python.core.router import websocket as _websocket_route
 
-        return _websocket_route(path)
+        return _websocket_route(*args, **kwargs)
 
 
-_sys.modules[__name__].__class__ = _CallableWebSocketModule
+_self = _sys.modules.get(__name__)
+if _self is not None:
+    _self.__class__ = _CallableWebSocketModule

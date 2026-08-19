@@ -264,7 +264,7 @@ async def contact(request, response):
 
 ### Server
 ```python
-from tina4_python.core.router import websocket
+from tina4_python import websocket
 
 @websocket("/ws/chat")
 async def chat(connection):
@@ -273,8 +273,9 @@ async def chat(connection):
         await connection.broadcast(message.data)
 ```
 
-> Import `websocket` from `tina4_python.core.router` — it is not re-exported from the top-level
-> `tina4_python` package.
+> `from tina4_python import websocket` is the documented form (the subpackage is
+> callable and forwards to `core.router.websocket`). `from tina4_python.core.router
+> import websocket` still works and is the spelling mypy/pyright accept.
 
 ### Client (frond.js)
 ```javascript
