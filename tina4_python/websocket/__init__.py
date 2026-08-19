@@ -22,6 +22,8 @@ import os
 import uuid
 import time
 from typing import Callable
+import sys as _sys
+from types import ModuleType as _ModuleType
 
 MAGIC_STRING = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -961,3 +963,33 @@ __all__ = [
     "OP_TEXT", "OP_BINARY", "OP_CLOSE", "OP_PING", "OP_PONG",
     "CLOSE_NORMAL", "CLOSE_GOING_AWAY", "CLOSE_PROTOCOL_ERROR", "CLOSE_TOO_LARGE",
 ]
+
+
+# ── `@websocket("/path")` on the package name ───────────────────────────────
+# `tina4_python.websocket` is two things at once: this module, and — to every
+# reader of the docs — the route decorator that sits beside @get/@post in
+# core.router. Python binds a submodule onto its parent package as soon as the
+# submodule is imported, so the name resolved to this module and
+#
+#     from tina4_python import websocket
+#
+#     @websocket("/ws")            # TypeError: 'module' object is not callable
+#     async def chat(...): ...
+#
+# took the whole route file down at import time.
+#
+# Re-exporting the decorator from tina4_python/__init__.py cannot win that
+# race: whenever anything imports this subpackage, the import machinery
+# rebinds the attribute over it. Making the module itself callable is the one
+# fix that keeps both surfaces intact — `from tina4_python.websocket import
+# WebSocketServer` still resolves, and `@websocket("/ws")` now reaches
+# core.router.websocket. The import is deferred to call time so this module
+# stays free of a core.router dependency at import.
+class _CallableWebSocketModule(_ModuleType):
+    def __call__(self, path: str):
+        from tina4_python.core.router import websocket as _websocket_route
+
+        return _websocket_route(path)
+
+
+_sys.modules[__name__].__class__ = _CallableWebSocketModule
