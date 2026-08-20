@@ -356,6 +356,16 @@ class ServiceRunner:
 
         for svc in self.services:
             svc["running"] = False
+            instance = svc.get("instance")
+            if instance is not None and hasattr(instance, "stop") and callable(instance.stop):
+                try:
+                    instance.stop()
+                except Exception as exc:
+                    _get_log().error(
+                        "Error stopping service instance",
+                        name=svc.get("name"),
+                        error=str(exc),
+                    )
 
         # Give threads a moment to finish
         for t in self._threads:

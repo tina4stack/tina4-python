@@ -4,7 +4,7 @@ import threading
 import pytest
 from datetime import datetime
 from tina4_python.service import (
-    ServiceRunner, ServiceContext, parse_cron, cron_matches, _field_matches,
+    Service, ServiceRunner, ServiceContext, parse_cron, cron_matches, _field_matches,
 )
 
 
@@ -263,3 +263,118 @@ class TestServiceRunnerDiscover:
         runner = ServiceRunner()
         discovered = runner.discover(str(tmp_path))
         assert discovered == []
+
+
+class TestServiceRunnerClassBasedServiceStop:
+
+    @pytest.mark.slow
+    def test_stop_stops_class_based_service_and_reclaims_thread(self):
+        class LoopingService(Service):
+            def __init__(self):
+                super().__init__()
+                self.count = 0
+
+            def run(self):
+                while not self.should_stop():
+                    self.count += 1
+                    time.sleep(0.01)
+
+        svc = LoopingService()
+        runner = ServiceRunner()
+        runner.register_service("looping-svc", svc)
+        runner.start()
+
+        time.sleep(0.05)
+        assert svc.count > 0
+
+        start_time = time.time()
+        runner.stop()
+        elapsed = time.time() - start_time
+
+        # (a) stop() returns well under 5 s join timeout
+        assert elapsed < 2.0
+
+        # (b) counter stops climbing after stop() returns
+        count_at_stop = svc.count
+        time.sleep(0.05)
+        assert svc.count == count_at_stop
+
+        # (c) no svc-<name> thread is left in threading.enumerate()
+        thread_names = [t.name for t in threading.enumerate()]
+        assert "svc-looping-svc" not in thread_names
+
+    def test_stop_handles_raising_service_instance_stop(self):
+        class ServiceA(Service):
+            def __init__(self):
+                super().__init__()
+                self.count = 0
+
+            def run(self):
+                while not self.should_stop():
+                    self.count += 1
+                    time.sleep(0.01)
+
+            def stop(self):
+                super().stop()
+                raise RuntimeError("Boom in service A stop")
+
+        class ServiceB(Service):
+            def __init__(self):
+                super().__init__()
+                self.count = 0
+
+            def run(self):
+                while not self.should_stop():
+                    self.count += 1
+                    time.sleep(0.01)
+
+        svca = ServiceA()
+        svcb = ServiceB()
+        runner = ServiceRunner()
+        runner.register_service("service-a", svca)
+        runner.register_service("service-b", svcb)
+        runner.start()
+
+        time.sleep(0.05)
+        assert svca.count > 0
+        assert svcb.count > 0
+
+        # stop() should not raise even if svca.stop() raises
+        runner.stop()
+
+        # service B's counter stopped climbing after stop() returned
+        count_b_at_stop = svcb.count
+        time.sleep(0.05)
+        assert svcb.count == count_b_at_stop
+
+        # neither svc- thread survives in threading.enumerate()
+        thread_names = [t.name for t in threading.enumerate()]
+        assert "svc-service-a" not in thread_names
+        assert "svc-service-b" not in thread_names
+
+    def test_plain_callable_stops_via_stop_event(self):
+        count = [0]
+
+        def worker(ctx):
+            while not ctx.stop_event.is_set():
+                count[0] += 1
+                time.sleep(0.01)
+
+        runner = ServiceRunner()
+        runner.register("callable-worker", worker, daemon=True)
+        runner.start()
+
+        time.sleep(0.05)
+        assert count[0] > 0
+
+        start_time = time.time()
+        runner.stop()
+        elapsed = time.time() - start_time
+
+        assert elapsed < 2.0
+        count_at_stop = count[0]
+        time.sleep(0.05)
+        assert count[0] == count_at_stop
+        thread_names = [t.name for t in threading.enumerate()]
+        assert "svc-callable-worker" not in thread_names
+
