@@ -74,6 +74,11 @@ from tina4_python.core.router import (  # noqa: E402, F401
     noauth, secured, cached, middleware, template,
     Router, RouteGroup,
 )
+# websocket is not in that tuple. The tina4_python.websocket *subpackage* is
+# itself callable (see tina4_python/websocket/__init__.py) so
+# `from tina4_python import websocket` reaches core.router.websocket without
+# turning `import tina4_python.websocket as ws` into a function. A re-export
+# here would do the latter.
 from tina4_python.core.constants import (  # noqa: E402, F401
     HTTP_OK, HTTP_CREATED, HTTP_ACCEPTED, HTTP_NO_CONTENT,
     HTTP_MOVED, HTTP_REDIRECT, HTTP_NOT_MODIFIED,

@@ -15,6 +15,16 @@ Bug release. Route inspection stops touching the app; Firebird's migration
 ledger tolerates whatever case the driver hands back; PHP loses a colon-in-
 filename that broke Windows checkouts.
 
+### `@websocket` works from the package name
+
+- `from tina4_python import websocket` is callable. The `tina4_python.websocket`
+  subpackage is a callable module that forwards to `core.router.websocket`, so
+  the documented landing-page form no longer raises `TypeError: 'module' object
+  is not callable` and auto-discovery no longer drops the rest of that route
+  file. `from tina4_python.websocket import WebSocketServer` is unchanged.
+- Python-only (import machinery binds the subpackage onto the parent name).
+  PHP/Ruby/Node have no same-name collision.
+
 ### Route inspection scans, never boots
 
 - `tina4 routes` now walks canonical route files and never executes the
