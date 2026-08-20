@@ -930,6 +930,114 @@ class TestSharedCacheAuthorization:
         assert header_of(out, "X-Cache") == "HIT"
 
 
+class TestNoStoreAndPrivate:
+    """RFC 9111 s3: "no-store" forbids storage in ANY cache and "private"
+    forbids it in a shared one.
+
+    Neither was honoured before 3.13.108, so a handler had no way at all to keep
+    a response out of this cache — setting the correct standard header did
+    nothing and the body was still replayed to the next caller of that URL.
+    """
+
+    @pytest.mark.parametrize("directive", ["no-store", "private", "no-cache"])
+    def test_a_response_refusing_storage_is_not_stored(self, directive):
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        first = make_request(url=f"/api/secret/{directive}")
+        resp = make_response(body='{"token": "ALICE-SECRET"}')
+        resp.header("Cache-Control", directive)
+        cache.before_cache(first, resp)
+        cache.after_cache(first, resp)
+
+        later = make_request(url=f"/api/secret/{directive}")
+        out = serve(cache, later, make_response())
+        assert "ALICE-SECRET" not in body_of(out)
+
+    def test_the_directive_is_read_as_a_token_not_a_substring(self):
+        """``no-cache="Set-Cookie"`` is still no-cache; a value must not hide it."""
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        first = make_request(url="/api/qualified")
+        resp = make_response(body='{"token": "ALICE-SECRET"}')
+        resp.header("Cache-Control", 'no-cache="Set-Cookie"')
+        cache.before_cache(first, resp)
+        cache.after_cache(first, resp)
+
+        out = serve(cache, make_request(url="/api/qualified"), make_response())
+        assert "ALICE-SECRET" not in body_of(out)
+
+
+class TestSessionCookieIsolation:
+    """RFC 9111 s3, applied to the caller identified by a session rather than by
+    an Authorization header.
+
+    The key is method + URL, so storing a response built for a signed-in caller
+    replays it to whoever requests that URL next. Tina4's own session mechanism
+    is a cookie, so guarding Authorization alone left every session-authenticated
+    page replayable — reachable on a stock install through the documented
+    ``middleware=["ResponseCache:300"]`` form.
+    """
+
+    def test_one_sessions_response_is_not_replayed_to_another(self):
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        alice = make_request(url="/api/me", headers={"Cookie": "session=ALICE"})
+        alice_resp = make_response(body='{"user": "ALICE", "cart_total": "R 1499.00"}')
+        cache.before_cache(alice, alice_resp)
+        cache.after_cache(alice, alice_resp)
+
+        bob = make_request(url="/api/me", headers={"Cookie": "session=BOB"})
+        assert "ALICE" not in body_of(serve(cache, bob, make_response()))
+
+        anon = make_request(url="/api/me")
+        assert "ALICE" not in body_of(serve(cache, anon, make_response()))
+
+    def test_a_response_installing_a_session_is_not_stored(self):
+        """Set-Cookie on the way out marks the body as built for one caller."""
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        first = make_request(url="/api/login-landing")
+        resp = make_response(body='{"welcome": "ALICE"}')
+        resp.header("Set-Cookie", "session=ALICE; Path=/; HttpOnly")
+        cache.before_cache(first, resp)
+        cache.after_cache(first, resp)
+
+        out = serve(cache, make_request(url="/api/login-landing"), make_response())
+        assert "ALICE" not in body_of(out)
+
+    def test_a_cookie_bearing_request_still_caches_when_marked_public(self):
+        """The same s3.5 escape hatch the Authorization path already honours."""
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        req = make_request(url="/api/products", headers={"Cookie": "session=ALICE"})
+        resp = make_response(body='{"products": []}')
+        resp.header("Cache-Control", "public, max-age=60")
+        cache.before_cache(req, resp)
+        cache.after_cache(req, resp)
+
+        later = make_request(url="/api/products", headers={"Cookie": "session=BOB"})
+        assert body_of(serve(cache, later, make_response())) == '{"products": []}'
+
+    def test_traffic_without_cookies_is_unaffected(self):
+        """Positive control: the ordinary public GET path keeps its hit rate."""
+        cache = ResponseCache(ttl=60)
+        cache.clear_cache()
+
+        req = make_request(url="/api/anon")
+        resp = make_response(body='{"public": true}')
+        cache.before_cache(req, resp)
+        cache.after_cache(req, resp)
+
+        out = serve(cache, make_request(url="/api/anon"), make_response())
+        assert body_of(out) == '{"public": true}'
+        assert header_of(out, "X-Cache") == "HIT"
+
+
 class TestVary:
     """RFC 9111 s4.1: a stored response with Vary is only reusable when every
     nominated request header matches the request that caused it to be stored."""
