@@ -9,11 +9,9 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
-## 3.13.105
+## 3.13.106
 
-Bug release. Route inspection stops touching the app; Firebird's migration
-ledger tolerates whatever case the driver hands back; PHP loses a colon-in-
-filename that broke Windows checkouts.
+Bug release. `@websocket` is callable when imported from the package name.
 
 ### `@websocket` works from the package name
 
@@ -24,6 +22,12 @@ filename that broke Windows checkouts.
   file. `from tina4_python.websocket import WebSocketServer` is unchanged.
 - Python-only (import machinery binds the subpackage onto the parent name).
   PHP/Ruby/Node have no same-name collision.
+
+## 3.13.105
+
+Bug release. Route inspection stops touching the app; Firebird's migration
+ledger tolerates whatever case the driver hands back; PHP loses a colon-in-
+filename that broke Windows checkouts.
 
 ### Route inspection scans, never boots
 
