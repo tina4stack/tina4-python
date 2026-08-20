@@ -9,6 +9,15 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.107
+
+Feature: RBAC role and permission guards (parity across all four frameworks).
+`role(...)` / `can(...)` route guards read the cryptographically-verified JWT
+`roles` / `permissions` claims — OR within a guard, AND by stacking guards, with
+granted-side wildcards (`posts.*`, `*`) and a legacy singular `role` claim coerced
+to a list. A guarded route implies auth: no or invalid token → 401, authenticated
+but unauthorised → 403; the handler never runs on a miss. Feature 138 / ADR-0058.
+
 ## 3.13.106
 
 Bug release. `@websocket` is callable when imported from the package name.
