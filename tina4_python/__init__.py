@@ -71,7 +71,7 @@ __version__ = _resolve_version()
 # ── CORE (always eager) — every app needs these to boot + serve ──
 from tina4_python.core.router import (  # noqa: E402, F401
     get, post, put, patch, delete, any_method,
-    noauth, secured, cached, middleware, template,
+    noauth, secured, role, can, cached, middleware, template,
     Router, RouteGroup,
 )
 # websocket is not in that tuple. The tina4_python.websocket *subpackage* is

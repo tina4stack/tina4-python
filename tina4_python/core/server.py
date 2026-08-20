@@ -1804,6 +1804,22 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
             "status": 401,
         })
         return True
+    # ── RBAC guards (Feature 138): authorization AFTER authentication ──
+    # Auth passed (401 already ruled out above). If the route carries role/
+    # permission guards, the verified payload (request.user) must satisfy them,
+    # else 403 — authenticated but forbidden. An API-key auth leaves request.user
+    # unset, so it carries no roles and is correctly forbidden from a guarded route.
+    _req_roles = route.get("required_roles") or []
+    _req_perms = route.get("required_perms") or []
+    if _req_roles or _req_perms:
+        from tina4_python.core.router import rbac_authorized
+        if not rbac_authorized(getattr(request, "user", None), _req_roles, _req_perms):
+            response.status(403).json({
+                "error": "Forbidden",
+                "message": "You do not have permission to access this resource",
+                "status": 403,
+            })
+            return True
     return False
 
 

@@ -50,6 +50,24 @@ class RouteRef:
         self._route["auth_required"] = False
         return self
 
+    def role(self, *names):
+        """Require the caller to hold ONE of the named roles (OR). Reads the
+        verified JWT ``roles`` claim. Implies auth (a guarded GET still needs a
+        token). Stack ``.role()``/``.can()`` for AND. Feature 138 / ADR-0058."""
+        if names:
+            self._route.setdefault("required_roles", []).append(tuple(names))
+            self._route["auth_required"] = True
+        return self
+
+    def can(self, *permissions):
+        """Require the caller to hold ONE of the named permissions (OR). Reads
+        the verified JWT ``permissions`` claim; granted-side wildcards (``posts.*``,
+        ``*``) satisfy a concrete requirement. Implies auth. Feature 138."""
+        if permissions:
+            self._route.setdefault("required_perms", []).append(tuple(permissions))
+            self._route["auth_required"] = True
+        return self
+
     def cache(self):
         """Mark this route as cacheable."""
         self._route["cached"] = True
@@ -371,6 +389,12 @@ class Router:
             auth_required = False
         elif hasattr(handler, "_secured"):
             auth_required = True
+        elif hasattr(handler, "_required_roles") or hasattr(handler, "_required_perms"):
+            # A role/permission guard (Feature 138) implies auth — a guarded GET
+            # still requires a token. This branch only fires in the unusual
+            # innermost-order case (guard BELOW @get); the documented order puts
+            # the guard ABOVE, where it flips auth_required via the RouteRef.
+            auth_required = True
         else:
             # GET, HEAD, OPTIONS, and ANY are public by default. HEAD and
             # OPTIONS are safe/idempotent introspection methods (RFC 9110
@@ -392,6 +416,11 @@ class Router:
             "module": getattr(handler, "__module__", ""),
             "middleware": effective_middleware,
             "auth_required": auth_required,
+            # RBAC guards (Feature 138): lists of OR-groups; AND across groups.
+            # Populated here for the innermost-order case, and appended to by the
+            # RouteRef.role()/.can() modifiers for the documented guard-above order.
+            "required_roles": list(getattr(handler, "_required_roles", []) or []),
+            "required_perms": list(getattr(handler, "_required_perms", []) or []),
             "cached": options.get("cached", False),
             "cache_max_age": options.get("cache_max_age", 60),
             "swagger_meta": swagger_meta or options.get("swagger_meta", {}),
@@ -860,6 +889,121 @@ def secured():
             fn._ws_route_ref["auth_required"] = True
         return fn
     return decorator
+
+
+# ── RBAC guards (Feature 138 / ADR-0058) ──────────────────────
+# Claim-first authorization on top of the JWT auth gate. @role reads the verified
+# `roles` claim, @can reads `permissions`. Multiple args are OR; stack guards for
+# AND. A guard implies @secured. Roles and permissions are independent claims;
+# the core never expands a role into permissions.
+
+def role(*names):
+    """Require the caller to hold ONE of the named roles (OR). Stack
+    ``@role``/``@can`` for AND. Reads the verified JWT ``roles`` claim (a legacy
+    singular ``role`` string is coerced). Implies ``@secured``."""
+    group = tuple(names)
+
+    def decorator(fn):
+        fn._required_roles = getattr(fn, "_required_roles", []) + [group]
+        if hasattr(fn, "_route_ref"):
+            route = fn._route_ref._route
+            route.setdefault("required_roles", []).append(group)
+            was_public = not route.get("auth_required", True)
+            route["auth_required"] = True
+            if was_public:
+                Log.debug(
+                    f"Route auth updated: {route['method']} {route['path']} "
+                    f"(auth=required via @role)"
+                )
+        return fn
+    return decorator
+
+
+def can(*permissions):
+    """Require the caller to hold ONE of the named permissions (OR). Stack
+    ``@role``/``@can`` for AND. Reads the verified JWT ``permissions`` claim;
+    granted-side wildcards (``posts.*``, ``*``) satisfy a concrete requirement.
+    Implies ``@secured``."""
+    group = tuple(permissions)
+
+    def decorator(fn):
+        fn._required_perms = getattr(fn, "_required_perms", []) + [group]
+        if hasattr(fn, "_route_ref"):
+            route = fn._route_ref._route
+            route.setdefault("required_perms", []).append(group)
+            was_public = not route.get("auth_required", True)
+            route["auth_required"] = True
+            if was_public:
+                Log.debug(
+                    f"Route auth updated: {route['method']} {route['path']} "
+                    f"(auth=required via @can)"
+                )
+        return fn
+    return decorator
+
+
+def _rbac_claim_list(subject, key, legacy=None):
+    """Read a claim as a list of strings from the VERIFIED payload. Coerces a
+    legacy singular string (``role`` -> ``["role"]``). Returns ``[]`` for a
+    missing/None subject or claim."""
+    if not isinstance(subject, dict):
+        return []
+    val = subject.get(key)
+    out = []
+    if isinstance(val, str) and val:
+        out = [val]
+    elif isinstance(val, (list, tuple)):
+        out = [str(x) for x in val if x is not None and str(x) != ""]
+    if not out and legacy:
+        lv = subject.get(legacy)
+        if isinstance(lv, str) and lv:
+            out = [lv]
+        elif isinstance(lv, (list, tuple)):
+            out = [str(x) for x in lv if x is not None and str(x) != ""]
+    return out
+
+
+def _rbac_perm_granted(granted, required):
+    """True if any GRANTED permission satisfies the concrete REQUIRED permission.
+    Wildcards live only on the granted side: ``*`` grants everything; ``posts.*``
+    grants ``posts.<anything...>`` on the dot boundary (never ``users.delete``)."""
+    for g in granted:
+        if g == "*" or g == required:
+            return True
+        if g.endswith(".*") and required.startswith(g[:-1]):
+            return True
+    return False
+
+
+def rbac_authorized(subject, required_roles, required_perms):
+    """Return True if the verified ``subject`` satisfies every guard group.
+
+    AND across groups, OR within a group. ``required_roles`` / ``required_perms``
+    are lists of OR-groups (each ``@role``/``@can`` adds one group). Roles read
+    the ``roles`` claim (legacy singular ``role`` coerced); permissions read
+    ``permissions`` with granted-side wildcards. A missing subject satisfies no
+    group. Feature 138 / ADR-0058."""
+    # NOTE: explicit loops, NOT any(...): this module shadows the builtin `any`
+    # (a route helper), so `any(...)` here would resolve to the wrong callable.
+    roles = _rbac_claim_list(subject, "roles", legacy="role")
+    for group in (required_roles or []):
+        matched = False
+        for r in group:
+            if r in roles:
+                matched = True
+                break
+        if not matched:
+            return False
+    perms = _rbac_claim_list(subject, "permissions")
+    for group in (required_perms or []):
+        matched = False
+        for req in group:
+            if _rbac_perm_granted(perms, req):
+                matched = True
+                break
+        if not matched:
+            return False
+    return True
 
 
 # ── Middleware Decorator ───────────────────────────────────────
