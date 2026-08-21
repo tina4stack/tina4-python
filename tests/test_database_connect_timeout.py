@@ -33,6 +33,7 @@ from tina4_python.database.adapter import (
     CONNECT_TIMEOUT_VARIABLE,
     DEFAULT_CONNECT_TIMEOUT_SECONDS,
     DatabaseConnectTimeout,
+    bound_was_reached,
     call_with_deadline,
     driver_connect_timeout_seconds,
     resolve_connect_timeout,
@@ -266,17 +267,84 @@ def test_framework_message_wins_over_the_drivers_own_timeout_message(
     assert not isinstance(excinfo.value.__cause__, DatabaseConnectTimeout)
 
 
-def test_driver_option_is_never_shorter_than_the_configured_bound():
-    """The invariant that makes the wrapper work.
+def test_driver_option_is_strictly_longer_than_the_configured_bound():
+    """The invariant that makes the wrapper work — and it has to be STRICT.
 
-    If the driver's option were ever SHORTER than our bound, the driver would
-    raise before ``elapsed`` reached the bound, the wrapper would decline to
-    translate it, and a bare driver message would reach the caller. Rounding UP
-    is what prevents that, so it is pinned here across the awkward values.
+    This wrapper runs no competing countdown. It waits for the driver to abort
+    at the DRIVER's deadline and then restates that failure in the framework's
+    words. For that to happen the driver's deadline has to land AFTER ours,
+    which means its option must be strictly greater than our bound — not merely
+    not-shorter.
+
+    ``ceil`` gave equality for every whole-second bound, and the shipped
+    default is whole. Equality is not separation: both deadlines sat on the
+    same instant, and which message reached the caller came down to which clock
+    moved first. An assertion of ``>=`` passes with that bug still in place,
+    which is exactly why this one asserts ``>``.
     """
     for configured in (0.2, 0.5, 1.0, 1.4, 2.0, 2.5, 9.99, 10.0, 30.0):
         option = driver_connect_timeout_seconds(configured)
-        assert option >= configured, (configured, option)
+        assert option > configured, (
+            f"a bound of {configured}s got a driver option of {option}s — the "
+            f"driver can abort at or before our own deadline"
+        )
+
+
+# ── The bound counts as reached on EITHER clock, because the driver uses the other ──
+
+
+def test_bound_reached_on_the_monotonic_reading_is_a_timeout():
+    """The ordinary case: the clocks agree and monotonic alone settles it."""
+    assert bound_was_reached(2.0, 2.0, 2.0)
+    assert bound_was_reached(2.5, 2.5, 2.0)
+
+
+def test_bound_reached_on_the_realtime_reading_alone_is_still_a_timeout():
+    """The case that was leaking the driver's own message to operators.
+
+    libpq measures its ``connect_timeout`` with ``gettimeofday`` —
+    CLOCK_REALTIME — while a duration in Python belongs on
+    ``time.monotonic()``. NTP slews and steps realtime and never touches
+    monotonic, so realtime can reach the bound while a monotonic reading over
+    the very same connect is still short of it. By then the driver has already
+    aborted; returning False here hands the caller libpq's "timeout expired",
+    which names nothing they can tune.
+
+    The numbers are the ones measured against a real wedged PostgreSQL socket
+    with the two clocks made to diverge: the driver gave up 1.56s into a 2s
+    bound, by which time realtime had run on to 2.03s.
+    """
+    assert bound_was_reached(1.56, 2.03, 2.0)
+
+
+def test_a_backward_realtime_step_cannot_hide_a_real_timeout():
+    """Why the monotonic reading stays in the comparison.
+
+    A backward step leaves the realtime reading small, or negative. Trusting
+    realtime alone would then swallow an expiry that really did take the whole
+    bound — so the comparison keeps both and takes the larger.
+    """
+    assert bound_was_reached(2.01, -30.0, 2.0)
+
+
+def test_a_failure_faster_than_the_bound_is_a_timeout_on_neither_clock():
+    """A refusal, bad credentials, an unknown database.
+
+    These arrive in milliseconds on both clocks and have to be re-raised
+    untouched: dressing one up as an expiry sends an operator hunting a network
+    stall that never happened.
+    """
+    assert not bound_was_reached(0.001, 0.001, 2.0)
+    assert not bound_was_reached(1.999, 1.999, 2.0)
+
+
+def test_an_unbounded_connect_is_never_reported_as_a_timeout():
+    """``TINA4_DATABASE_CONNECT_TIMEOUT=0`` means wait forever.
+
+    With no bound there is nothing a failure can have exceeded, however long it
+    took, so the driver's own error must survive untranslated.
+    """
+    assert not bound_was_reached(9999.0, 9999.0, None)
 
 
 # ── NEGATIVE: a fast failure must NOT be dressed up as a timeout ──
