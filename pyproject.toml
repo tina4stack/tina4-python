@@ -21,6 +21,13 @@ firebird = ["firebird-driver>=1.10"]
 mongo = ["pymongo>=4.0"]
 odbc = ["pyodbc>=5.0"]
 
+# Graph engine drivers — install what you need (loaded lazily on first use).
+# The graph core is zero-dependency; a driver is a cost paid only per engine.
+ultipa = ["tina4-ultipa>=0.1"]
+neo4j = ["neo4j>=5.0"]          # the Bolt driver also serves Memgraph
+arango = ["python-arango>=8.0"]
+graph = ["tina4-ultipa>=0.1", "neo4j>=5.0", "python-arango>=8.0"]
+
 # Session backends — install what you need
 redis = ["redis>=5.0"]
 memcache = ["pymemcache>=4.0"]

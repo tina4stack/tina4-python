@@ -19,10 +19,23 @@ provisioning). Governed by ADR-0059 + `tina4-documentation/plan/v3/features/139-
   - [ ] `adapters/ultipa.py` `UltipaGraphAdapter` — wraps `tina4_ultipa.UltipaClient`, builds the portable core in GQL on top of `query`/`execute`; raw pass-through sends GQL directly
 - [ ] PHP / Ruby / Node: port the same module + Ultipa adapter (Python is the reference)
 
-## Parity
-| Feature | Python | PHP | Ruby | Node |
-|---------|--------|-----|------|------|
-| graph module + Ultipa adapter | ✅ proven live | ❌ | ❌ | ❌ |
+## Parity (.111 ships ALL FOUR engines)
+| Engine | Python | PHP | Ruby | Node |
+|--------|--------|-----|------|------|
+| Ultipa (GQL)          | ✅ proven live | 🔄 port | 🔄 port | 🔄 port |
+| Neo4j (Bolt/Cypher)   | ✅ proven live | ❌ | ❌ | ❌ |
+| Memgraph (Bolt/Cypher)| ✅ proven live | ❌ | ❌ | ❌ |
+| ArangoDB (AQL)        | ✅ proven live | ❌ | ❌ | ❌ |
+
+Python reference PROVEN on the lab against ALL FOUR live engines (no mocks):
+`pytest test_graph.py` = **39 passed** parametrised over Ultipa (gqldb 6.2.130,
+:60071), Neo4j 5 (:7687), Memgraph (:7688), ArangoDB (:8529). Engine-specific
+learnings: Ultipa GQL `INSERT..RETURN id(n)` (UUID ids) + quantified path
+`-[]->{1,N}` + EDGE_ID; Bolt/Cypher `CREATE..RETURN id(n)` (int ids) + `[*1..N]`
++ `SET n += $props` (one adapter serves Neo4j AND Memgraph); Arango AQL document
+model (one vertex + one edge collection, `_labels`/`_type` fields, `FOR v IN
+1..N OUTBOUND`, `LIMIT` before `RETURN`). Drivers are optional extras
+(`[ultipa]`/`[neo4j]`/`[arango]`/`[graph]`).
 
 Python reference PROVEN on the lab against live Ultipa community edition
 (gqldb 6.2.130, 192.168.88.99:60071, graph `default`): `test_graph.py` → 12

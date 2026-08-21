@@ -26,8 +26,10 @@ class GraphConnectTimeout(TimeoutError):
 _ENGINE_ADAPTERS = {
     "ultipa": ("tina4_python.graph.adapters.ultipa", "UltipaGraphAdapter",
                "tina4-ultipa", "uv add tina4-ultipa   # or: pip install tina4-ultipa"),
-    # bolt (Neo4j/Memgraph) and arango land in 3.13.112+ — declared so the
-    # factory gives a "coming soon"/install message rather than KeyError.
+    "bolt": ("tina4_python.graph.adapters.bolt", "BoltGraphAdapter",
+             "neo4j", "uv add neo4j   # or: pip install neo4j"),
+    "arango": ("tina4_python.graph.adapters.arango", "ArangoGraphAdapter",
+               "python-arango", "uv add python-arango   # or: pip install python-arango"),
 }
 
 
