@@ -1190,6 +1190,17 @@ def _vary_fields(response) -> list:
     return [f.strip().lower() for f in raw.split(",") if f.strip()]
 
 
+def _cache_control_tokens(carrier) -> set:
+    """The Cache-Control directive names on a request or response, lowercased.
+
+    Parsed as comma-separated tokens with any ``=value`` stripped, rather than by
+    substring search, so ``no-cache="Set-Cookie"`` is recognised as ``no-cache``
+    and a directive name never matches as a fragment of a longer one.
+    """
+    raw = _header_value(carrier, "Cache-Control") or ""
+    return {token.split("=", 1)[0].strip().lower() for token in raw.split(",") if token.strip()}
+
+
 def _shared_cache_allowed(response) -> bool:
     """Does the response carry a directive that lets a shared cache store it?"""
     cc = (_header_value(response, "Cache-Control") or "").lower()
@@ -1373,10 +1384,34 @@ class ResponseCache:
           URL, because the key is method + URL only.
         * s4.1 — "A stored response with a Vary header field value containing a
           member '*' always fails to match", so storing one is pointless.
+
+        The same s3 reasoning applies to two cases the Authorization check alone
+        does not cover, and both were storable before 3.13.108:
+
+        * ``no-store`` forbids storage in any cache and ``private`` forbids it in
+          a shared one. Neither was honoured, so a handler had no way at all to
+          keep a response out of this cache — setting the correct standard header
+          did nothing.
+        * A caller identified by a session cookie is as specific as one carrying
+          Authorization, and Tina4's own session mechanism IS a cookie. Because
+          the key is method + URL, storing such a response replays one signed-in
+          user's page to whoever asks for that URL next. A response that installs
+          a session is per-user by construction for the same reason.
+
+        Both cookie cases stay cacheable when the response opts in explicitly with
+        a shared-cache directive, which is how a genuinely public page served to
+        cookie-bearing browsers keeps its hit rate.
         """
         if "*" in _vary_fields(response):
             return False
+        directives = _cache_control_tokens(response)
+        if directives & {"no-store", "private", "no-cache"}:
+            return False
         if _header_value(request, "Authorization") is not None:
+            return _shared_cache_allowed(response)
+        if _header_value(request, "Cookie") is not None:
+            return _shared_cache_allowed(response)
+        if _header_value(response, "Set-Cookie") is not None:
             return _shared_cache_allowed(response)
         return True
 
