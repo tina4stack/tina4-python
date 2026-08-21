@@ -244,6 +244,91 @@ def test_the_injected_toolbar_escapes_the_request_path(project_dir, monkeypatch)
     assert b"&lt;script&gt;alert(1)&lt;/script&gt;" in bodyb
 
 
+# ── tina4stack #115: CSP-clean dev toolbar (external CSS/JS assets) ───────────
+
+def _content_type(resp_headers):
+    for k, v in resp_headers:
+        if k.lower() == b"content-type":
+            return v.decode()
+    return ""
+
+
+def test_toolbar_css_route_serves_text_css(project_dir, monkeypatch):
+    """GET /__dev/toolbar.css is 200 text/css and non-empty — the external
+    stylesheet that makes the injected toolbar CSP-clean. REAL dispatch through
+    the front controller, no mocks."""
+    monkeypatch.setenv("TINA4_DEBUG", "true")
+
+    status, body, headers = _dispatch("GET", "/__dev/toolbar.css")
+    assert status == 200
+    assert "text/css" in _content_type(headers)
+    assert len(body) > 0
+    assert b"#tina4-dev-toolbar" in body
+
+
+def test_toolbar_js_route_serves_application_javascript(project_dir, monkeypatch):
+    """GET /__dev/toolbar.js is 200 application/javascript and non-empty — the
+    external script wiring every toolbar event via addEventListener. REAL
+    dispatch, no mocks."""
+    monkeypatch.setenv("TINA4_DEBUG", "true")
+
+    status, body, headers = _dispatch("GET", "/__dev/toolbar.js")
+    assert status == 200
+    assert "application/javascript" in _content_type(headers)
+    assert len(body) > 0
+    assert b"addEventListener" in body
+    # Every handler is wired via addEventListener — no inline handler survives.
+    assert b"onclick" not in body
+
+
+def test_injected_toolbar_has_no_inline_style_onclick_or_inline_script(project_dir, monkeypatch):
+    """The toolbar HTML injected into a real text/html response carries NO inline
+    style=, NO onclick=, and NO inline <script> block — only <script src=...>.
+    Anything else is stripped by the strict default-src 'self' CSP. Witness is
+    the ACTUAL wire body of a real dispatched request, not a unit call."""
+    import re
+    monkeypatch.setenv("TINA4_DEBUG", "true")
+
+    _status, bodyb, _headers = _dispatch(
+        "GET", "/some-html-page", headers={"accept": "text/html"})
+    assert b"tina4-dev-toolbar" in bodyb, "toolbar not injected"
+
+    # Isolate the injected toolbar fragment (link + div + external script tag).
+    frag = bodyb[bodyb.index(b'<link rel="stylesheet" href="/__dev/toolbar.css">'):]
+    text = frag.decode("utf-8", errors="replace")
+    assert 'style="' not in text and "style='" not in text, "inline style= in toolbar"
+    assert "onclick" not in text, "inline onclick= in toolbar"
+    # Every <script ...> in the toolbar must be an external src reference —
+    # no inline <script>...</script> block.
+    for tag in re.findall(r"<script[^>]*>", text):
+        assert "src=" in tag, f"inline <script> in toolbar: {tag!r}"
+    assert '<script src="/__dev/toolbar.js"></script>' in text
+
+
+def test_toolbar_reloader_is_data_reload_gated_and_suppressed_on_ai_port(project_dir, monkeypatch):
+    """The reloader is driven by the root div's data-reload attribute: "1" in a
+    normal render, "0" when the AI/stable port context is active — and the JS
+    early-returns unless it reads "1". Mutation proof: flipping the port context
+    flips the emitted attribute."""
+    from tina4_python.dev_admin import render_dev_toolbar, toolbar_js
+    from tina4_python.core.server import _ai_port_ctx
+    monkeypatch.setenv("TINA4_DEBUG", "true")
+    monkeypatch.delenv("TINA4_NO_RELOAD", raising=False)
+
+    normal = render_dev_toolbar("GET", "/", "/", "req-1", 3)
+    assert 'data-reload="1"' in normal
+
+    token = _ai_port_ctx.set(True)
+    try:
+        suppressed = render_dev_toolbar("GET", "/", "/", "req-1", 3)
+    finally:
+        _ai_port_ctx.reset(token)
+    assert 'data-reload="0"' in suppressed
+
+    # The JS refuses to start the reloader unless data-reload is exactly "1".
+    assert "getAttribute('data-reload') !== '1'" in toolbar_js()
+
+
 # ── DEVADMIN-DEC-05: mcp/call tool-execution gate ────────────────────────────
 
 def _bind_probe_db(tmp_path):

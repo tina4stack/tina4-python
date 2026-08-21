@@ -321,8 +321,10 @@ class TestGetAPIHandlers:
         #          grounding/token grounding-token proxy; migrate, test,
         #          seed/run scaffold run-chips) = 83. The former quick
         #          metrics endpoint moved to the native CLI in 3.13.101.
+        #          + 2 (toolbar.css + toolbar.js CSP-clean dev-toolbar
+        #          assets, tina4stack #115) = 85.
         handlers = get_api_handlers()
-        assert len(handlers) == 83
+        assert len(handlers) == 85
 
     def test_mcp_jsonrpc_endpoint_registered(self):
         # The MCP transport surface real clients speak — must be mounted so
