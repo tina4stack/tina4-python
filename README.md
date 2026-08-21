@@ -5,13 +5,12 @@
 <h1 align="center">Tina4 Python</h1>
 
 <p align="center">
-  98 built-in features. Zero dependencies. One import, everything works.
+  Zero dependencies. One import, everything works.
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/tina4-python/"><img src="https://img.shields.io/pypi/v/tina4-python?color=7b1fa2&label=PyPI" alt="PyPI"></a>
-  <img src="https://img.shields.io/badge/tests-2%2C281%20passing-brightgreen" alt="Tests">
-  <img src="https://img.shields.io/badge/features-98-blue" alt="Features">
+  <a href="https://github.com/tina4stack/tina4-python/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/tina4stack/tina4-python/test.yml?label=tests" alt="Tests"></a>
   <img src="https://img.shields.io/badge/dependencies-0-brightgreen" alt="Zero Deps">
   <a href="https://tina4.com"><img src="https://img.shields.io/badge/docs-tina4.com-7b1fa2" alt="Docs"></a>
 </p>
