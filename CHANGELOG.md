@@ -9,6 +9,73 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.114
+
+Feature: the tool loop closes - `Ai.chat` now accepts tools and
+returns tool results (feature 141 / ADR-0061). The 3.13.113 typed
+streaming events (`text_delta` / `tool_call` / `done` / `error`)
+stop being theoretical - a real agent loop can consume them
+provider-neutrally.
+
+### `Ai.chat(tools=[...], tool_choice=...)`
+
+- Two new keyword arguments on `Ai.chat`. `tools` is a neutral list
+  of tool declarations - each `{name, description, parameters}`
+  where `parameters` is a JSON Schema object. The client translates
+  the list to the current provider's outbound body shape:
+  OpenAI/local as `[{type: "function", function: {name, description,
+  parameters}}]`; Anthropic as `[{name, description, input_schema}]`
+  (only the key is renamed - the schema passes through verbatim).
+- `tool_choice` accepts `"auto"`, `"none"`, `"required"`, or
+  `{"name": str}`. Translated per the ADR-0061 table: OpenAI takes
+  the string or `{type: "function", function: {name}}`; Anthropic
+  takes `{type: "auto"}` / `{type: "any"}` / `{type: "tool", name}`.
+  On Anthropic + `"none"` the `tools` field is omitted entirely
+  (Anthropic has no `"none"` mode; omitting tools achieves the same
+  effect).
+
+### Tool-result and assistant-tool_call messages
+
+- `Ai.chat` now accepts a tool-result turn in either the OpenAI form
+  (`{role: "tool", tool_call_id, content}`) or the Anthropic form
+  (a user turn with `{type: "tool_result", tool_use_id, content}`
+  content parts). The client normalises to whichever the current
+  provider expects - so the caller's agent loop stays
+  provider-neutral and never has to branch on
+  `TINA4_AI_PROVIDER`.
+- Assistant messages carrying the previous turn's tool call are
+  accepted in either form too: OpenAI's `{role: "assistant",
+  tool_calls: [...]}` or Anthropic's `{role: "assistant", content:
+  [{type: "tool_use", id, name, input}]}`. Both translate to the
+  provider's native shape (the OpenAI `arguments` JSON string is
+  parsed for Anthropic's `input` object, and Anthropic's `input`
+  object is stringified for OpenAI's `arguments`).
+
+### Validation
+
+- Malformed tool-result parts, tool-choice values, or tool
+  declarations raise `AiConfigError` before any request is sent -
+  no bad wire body leaves the process.
+
+### Contract fixture cases proven
+
+- `ai-tools-openai-body-shape`, `ai-tools-anthropic-body-shape`,
+  `ai-tools-parameters-passthrough-jsonschema`.
+- `ai-tool-choice-auto`, `ai-tool-choice-none`,
+  `ai-tool-choice-required`, `ai-tool-choice-named`.
+- `ai-tool-result-openai-form-passthrough`,
+  `ai-tool-result-anthropic-form-passthrough`,
+  `ai-tool-result-openai-to-anthropic-translation`,
+  `ai-tool-result-anthropic-to-openai-translation`.
+- `ai-agent-loop-openai-round-trip`,
+  `ai-agent-loop-anthropic-round-trip`.
+
+All 13 additions run against a real local HTTP server over a real
+socket in `tests/test_ai_client_contract.py`; the agent-loop tests
+exercise the full round trip (send tools -> receive tool_call ->
+send tool_result -> receive text_delta -> done) end-to-end. No
+mocks, no test doubles - the no-mock rule is unaffected.
+
 ## 3.13.113
 
 Feature: streaming primitives on Api, typed events on Ai.chat, and

@@ -110,16 +110,45 @@ class Ai:
         stream: bool = False,
         timeout: float | None = None,
         provider: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> "ChatResponse | Iterator[AiEvent]":
         """Send a chat completion request.
 
         ``stream=True`` returns an iterator of ``AiEvent`` records
         (``text_delta`` / ``tool_call`` / ``done`` / ``error``) per
         ADR-0060; ``stream=False`` returns a single ``ChatResponse``.
+
+        ``tools`` (ADR-0061) is an optional list of neutral tool
+        declarations - each ``{"name", "description", "parameters"}``
+        where ``parameters`` is a JSON Schema object. The client
+        translates the list to the current provider's outbound body:
+        OpenAI/local gets ``[{"type": "function", "function":
+        {"name", "description", "parameters"}}]``; Anthropic gets
+        ``[{"name", "description", "input_schema"}]``.
+
+        ``tool_choice`` (ADR-0061) is one of ``"auto"``, ``"none"``,
+        ``"required"``, or ``{"name": str}``. The client translates
+        each value to the provider's shape (OpenAI's ``tool_choice``
+        keyword; Anthropic's ``tool_choice`` object). On Anthropic
+        ``"none"`` the ``tools`` field is omitted entirely (Anthropic
+        has no ``"none"`` mode).
+
+        Messages may carry a tool result in either OpenAI form
+        (``{"role": "tool", "tool_call_id", "content"}``) or
+        Anthropic form (a user turn with ``{"type": "tool_result",
+        "tool_use_id", "content"}`` content parts). The client
+        normalises to whichever the current provider expects, so the
+        agent loop stays provider-neutral.
         """
         Ai._validate_messages(messages)
+        Ai._validate_tools(tools)
+        Ai._validate_tool_choice(tool_choice)
         config = Ai._config("chat", model=model, timeout=timeout, provider=provider)
-        body = Ai._chat_body(config, messages, temperature, max_tokens, stream)
+        body = Ai._chat_body(
+            config, messages, temperature, max_tokens, stream,
+            tools=tools, tool_choice=tool_choice,
+        )
         headers = Ai._headers(config)
         if stream:
             return Ai._stream(config, headers, body)
@@ -179,18 +208,103 @@ class Ai:
         for message in messages:
             if not isinstance(message, dict):
                 raise AiConfigError("Each AI message must be an object")
-            if message.get("role") not in {"system", "user", "assistant"}:
+            role = message.get("role")
+            if role not in {"system", "user", "assistant", "tool"}:
                 raise AiConfigError("Each AI message needs a supported role")
+            if role == "tool":
+                # ADR-0061: OpenAI-style tool-result message.
+                tool_call_id = message.get("tool_call_id")
+                if not isinstance(tool_call_id, str) or not tool_call_id:
+                    raise AiConfigError(
+                        "tool message needs a non-empty 'tool_call_id' string")
+                if not isinstance(message.get("content"), str):
+                    raise AiConfigError("tool message needs a string 'content'")
+                continue
+            if role == "assistant" and message.get("tool_calls") is not None:
+                # OpenAI-style assistant tool_calls; content may be None/absent.
+                Ai._validate_tool_calls(message["tool_calls"])
+                content = message.get("content")
+                if content is not None:
+                    Ai._validate_content(content)
+                continue
             Ai._validate_content(message.get("content"))
+
+    @staticmethod
+    def _validate_tool_calls(tool_calls: Any) -> None:
+        """Validate an OpenAI-style assistant.tool_calls list (ADR-0061)."""
+        if not isinstance(tool_calls, list) or not tool_calls:
+            raise AiConfigError("assistant tool_calls must be a non-empty list")
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                raise AiConfigError("Each tool_call must be an object")
+            if not isinstance(tc.get("id"), str) or not tc["id"]:
+                raise AiConfigError(
+                    "tool_call needs a non-empty 'id' string")
+            fn = tc.get("function")
+            if not isinstance(fn, dict):
+                raise AiConfigError("tool_call needs a 'function' object")
+            if not isinstance(fn.get("name"), str) or not fn["name"]:
+                raise AiConfigError(
+                    "tool_call function needs a non-empty 'name' string")
+            args = fn.get("arguments")
+            if not isinstance(args, (str, dict)):
+                raise AiConfigError(
+                    "tool_call function 'arguments' must be a JSON string or object")
+
+    @staticmethod
+    def _validate_tools(tools: Any) -> None:
+        """Validate an outbound tools list (ADR-0061)."""
+        if tools is None:
+            return
+        if not isinstance(tools, list) or not tools:
+            raise AiConfigError(
+                "AI tools must be a non-empty list when provided")
+        for tool in tools:
+            if not isinstance(tool, dict):
+                raise AiConfigError("Each AI tool must be an object")
+            name = tool.get("name")
+            if not isinstance(name, str) or not name:
+                raise AiConfigError(
+                    "Each AI tool needs a non-empty 'name' string")
+            description = tool.get("description")
+            if description is not None and not isinstance(description, str):
+                raise AiConfigError(
+                    "AI tool 'description' must be a string when provided")
+            params = tool.get("parameters")
+            if params is not None and not isinstance(params, dict):
+                raise AiConfigError(
+                    "AI tool 'parameters' must be a JSON Schema object")
+
+    @staticmethod
+    def _validate_tool_choice(tool_choice: Any) -> None:
+        """Validate a tool_choice value (ADR-0061)."""
+        if tool_choice is None:
+            return
+        if isinstance(tool_choice, str):
+            if tool_choice not in ("auto", "none", "required"):
+                raise AiConfigError(
+                    "AI tool_choice string must be 'auto', 'none', or 'required'")
+            return
+        if isinstance(tool_choice, dict):
+            name = tool_choice.get("name")
+            if not isinstance(name, str) or not name:
+                raise AiConfigError(
+                    "AI tool_choice dict needs a non-empty 'name' string")
+            return
+        raise AiConfigError("AI tool_choice must be a string or dict")
 
     @staticmethod
     def _validate_content(content: Any) -> None:
         """Accept a plain string OR a non-empty list of content parts.
 
-        Parts (ADR-0060 multimodal):
+        Parts (ADR-0060 multimodal + ADR-0061 tool-loop):
         - ``{"type": "text",  "text":   <str>}``
         - ``{"type": "image", "source": <str>}``  where ``source`` is a
           ``data:<media_type>;base64,<payload>`` URI or an http(s) URL.
+        - ``{"type": "tool_result", "tool_use_id": <str>, "content": <str>}``
+          (Anthropic-form tool-result inside a user turn).
+        - ``{"type": "tool_use", "id": <str>, "name": <str>, "input": <dict>}``
+          (Anthropic-form assistant tool-call block).
 
         Anything else raises ``AiConfigError`` before the request goes
         out. Both the OpenAI and Anthropic provider builders trust the
@@ -217,8 +331,28 @@ class Ai:
                         or source.startswith("http://")):
                     raise AiConfigError(
                         "image part 'source' must be a data: URI or http(s) URL")
+            elif kind == "tool_result":
+                tool_use_id = part.get("tool_use_id")
+                if not isinstance(tool_use_id, str) or not tool_use_id:
+                    raise AiConfigError(
+                        "tool_result part needs a non-empty 'tool_use_id' string")
+                if not isinstance(part.get("content"), str):
+                    raise AiConfigError(
+                        "tool_result part needs a string 'content'")
+            elif kind == "tool_use":
+                if not isinstance(part.get("id"), str) or not part["id"]:
+                    raise AiConfigError(
+                        "tool_use part needs a non-empty 'id' string")
+                if not isinstance(part.get("name"), str) or not part["name"]:
+                    raise AiConfigError(
+                        "tool_use part needs a non-empty 'name' string")
+                input_val = part.get("input")
+                if input_val is not None and not isinstance(input_val, dict):
+                    raise AiConfigError(
+                        "tool_use part 'input' must be a JSON object")
             else:
-                raise AiConfigError("Content part 'type' must be text or image")
+                raise AiConfigError(
+                    "Content part 'type' must be text, image, tool_result, or tool_use")
 
     @staticmethod
     def _number(name: str, default: str, *, minimum: float, integer: bool = False) -> float | int:
@@ -298,14 +432,37 @@ class Ai:
         temperature: float | None,
         max_tokens: int | None,
         stream: bool,
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        translated = [Ai._translate_message(config.provider, message)
-                      for message in messages]
+        translated: list[dict[str, Any]] = []
+        for message in messages:
+            result = Ai._translate_message(config.provider, message)
+            if isinstance(result, list):
+                translated.extend(result)
+            else:
+                translated.append(result)
         body: dict[str, Any] = {"model": config.model, "messages": translated, "stream": stream}
         if temperature is not None:
             body["temperature"] = temperature
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
+
+        # Tools + tool_choice - ADR-0061. Anthropic has no "none" mode,
+        # so tool_choice='none' on Anthropic OMITS the tools field
+        # entirely (which achieves the same effect: the model cannot
+        # emit a tool_call because it does not know any tool exists).
+        omit_tools_for_anthropic_none = (
+            config.provider == "anthropic" and tool_choice == "none"
+        )
+        if tools and not omit_tools_for_anthropic_none:
+            body["tools"] = Ai._translate_tools(config.provider, tools)
+        if tool_choice is not None:
+            translated_choice = Ai._translate_tool_choice(config.provider, tool_choice)
+            if translated_choice is not None:
+                body["tool_choice"] = translated_choice
+
         if config.provider == "anthropic":
             # System messages are hoisted to the top-level `system` field on
             # Anthropic; only string system content is supported (multimodal
@@ -313,13 +470,13 @@ class Ai:
             system_texts: list[str] = []
             non_system: list[dict[str, Any]] = []
             for message in translated:
-                if message["role"] == "system":
-                    content = message["content"]
+                if message.get("role") == "system":
+                    content = message.get("content")
                     if isinstance(content, str):
                         system_texts.append(content)
                     else:
                         # Extract text parts only; drop images from system prompt.
-                        for part in content:
+                        for part in content or []:
                             if isinstance(part, dict) and part.get("type") == "text":
                                 system_texts.append(part.get("text", ""))
                 else:
@@ -331,33 +488,217 @@ class Ai:
         return body
 
     @staticmethod
-    def _translate_message(provider: str, message: dict[str, Any]) -> dict[str, Any]:
+    def _translate_tools(provider: str, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Translate a neutral tools list to the provider's shape (ADR-0061)."""
+        if provider == "anthropic":
+            return [
+                {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "input_schema": tool.get("parameters") or {},
+                }
+                for tool in tools
+            ]
+        # openai / local (llama.cpp, ollama openai-shim, etc.)
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters") or {},
+                },
+            }
+            for tool in tools
+        ]
+
+    @staticmethod
+    def _translate_tool_choice(provider: str, tool_choice: Any) -> Any:
+        """Translate a Tina4 tool_choice value to the provider's shape (ADR-0061).
+
+        Returns ``None`` when the caller's value maps to "omit the field"
+        for this provider (currently only Anthropic + ``"none"``).
+        """
+        if provider == "anthropic":
+            if tool_choice == "auto":
+                return {"type": "auto"}
+            if tool_choice == "none":
+                # Anthropic has no "none" mode; the effect is achieved by
+                # omitting the `tools` field in _chat_body. No tool_choice
+                # goes on the wire either.
+                return None
+            if tool_choice == "required":
+                return {"type": "any"}
+            if isinstance(tool_choice, dict) and isinstance(tool_choice.get("name"), str):
+                return {"type": "tool", "name": tool_choice["name"]}
+            return None
+        # openai / local
+        if tool_choice in ("auto", "none", "required"):
+            return tool_choice
+        if isinstance(tool_choice, dict) and isinstance(tool_choice.get("name"), str):
+            return {
+                "type": "function",
+                "function": {"name": tool_choice["name"]},
+            }
+        return None
+
+    @staticmethod
+    def _translate_message(
+        provider: str,
+        message: dict[str, Any],
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         """Translate a Tina4-shape message to the provider-native shape.
 
-        String content passes through unchanged in every provider. A
-        list-of-parts message translates image parts to each provider's
-        native shape and leaves text parts alone.
+        Returns a single message dict OR a list of dicts (a user turn
+        carrying multiple Anthropic tool_result parts becomes multiple
+        OpenAI ``role='tool'`` messages, one per part).
+
+        Handles:
+        - String content passthrough on every provider.
+        - Multimodal parts (text/image) translated per provider.
+        - Tool-result messages (OpenAI ``role='tool'`` form or
+          Anthropic user turn with ``tool_result`` parts) normalised
+          to the current provider's shape (ADR-0061).
+        - Assistant tool_calls (OpenAI form) or assistant content
+          with ``tool_use`` parts (Anthropic form) translated per
+          provider (ADR-0061).
         """
+        role = message.get("role")
+
+        # ADR-0061: OpenAI-style tool-result message.
+        if role == "tool":
+            if provider == "anthropic":
+                return {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": message["tool_call_id"],
+                        "content": message["content"],
+                    }],
+                }
+            # openai / local: passthrough, but keep only the wire fields.
+            return {
+                "role": "tool",
+                "tool_call_id": message["tool_call_id"],
+                "content": message["content"],
+            }
+
+        # ADR-0061: assistant tool_calls (OpenAI form).
+        if role == "assistant" and isinstance(message.get("tool_calls"), list):
+            if provider != "anthropic":
+                # openai / local: passthrough.
+                out: dict[str, Any] = {
+                    "role": "assistant",
+                    "tool_calls": message["tool_calls"],
+                }
+                content = message.get("content")
+                if content is None:
+                    out["content"] = None
+                elif isinstance(content, str):
+                    out["content"] = content
+                return out
+            # Anthropic: fold tool_calls into a content list with tool_use parts.
+            parts: list[dict[str, Any]] = []
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                parts.append({"type": "text", "text": content})
+            for tc in message["tool_calls"]:
+                fn = tc.get("function", {})
+                args_val = fn.get("arguments")
+                if isinstance(args_val, str):
+                    try:
+                        parsed = json.loads(args_val) if args_val else {}
+                    except (json.JSONDecodeError, ValueError):
+                        parsed = {}
+                else:
+                    parsed = args_val or {}
+                parts.append({
+                    "type": "tool_use",
+                    "id": tc.get("id"),
+                    "name": fn.get("name"),
+                    "input": parsed,
+                })
+            return {"role": "assistant", "content": parts}
+
+        # ADR-0061: Anthropic-form tool_result parts on a user turn.
+        if role == "user" and isinstance(message.get("content"), list):
+            has_tool_result = any(
+                isinstance(p, dict) and p.get("type") == "tool_result"
+                for p in message["content"]
+            )
+            if has_tool_result:
+                if provider == "anthropic":
+                    # Passthrough — the content shape is native.
+                    return {"role": "user", "content": list(message["content"])}
+                # openai / local: split into one role='tool' message per part.
+                # Non-tool_result parts (e.g. text) are dropped: OpenAI wants
+                # tool_result content on a role='tool' message alone.
+                results: list[dict[str, Any]] = []
+                for part in message["content"]:
+                    if isinstance(part, dict) and part.get("type") == "tool_result":
+                        results.append({
+                            "role": "tool",
+                            "tool_call_id": part["tool_use_id"],
+                            "content": part.get("content", ""),
+                        })
+                return results
+
+        # ADR-0061: Anthropic-form assistant with tool_use content parts.
+        if role == "assistant" and isinstance(message.get("content"), list):
+            has_tool_use = any(
+                isinstance(p, dict) and p.get("type") == "tool_use"
+                for p in message["content"]
+            )
+            if has_tool_use:
+                if provider == "anthropic":
+                    return {"role": "assistant", "content": list(message["content"])}
+                # openai / local: fold tool_use parts into tool_calls.
+                tool_calls: list[dict[str, Any]] = []
+                text_parts: list[str] = []
+                for part in message["content"]:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "tool_use":
+                        tool_calls.append({
+                            "id": part.get("id"),
+                            "type": "function",
+                            "function": {
+                                "name": part.get("name"),
+                                "arguments": json.dumps(part.get("input") or {}),
+                            },
+                        })
+                    elif part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                out = {"role": "assistant", "tool_calls": tool_calls}
+                out["content"] = "".join(text_parts) if text_parts else None
+                return out
+
+        # Default: string content passthrough, absent content preserved,
+        # or multimodal parts translated per provider.
         content = message.get("content")
-        if isinstance(content, str):
+        if isinstance(content, str) or content is None:
             return dict(message)
+
         translated: list[dict[str, Any]] = []
         for part in content or []:
-            kind = part.get("type")
+            kind = part.get("type") if isinstance(part, dict) else None
             if kind == "text":
                 translated.append({"type": "text", "text": part.get("text", "")})
                 continue
-            # kind == "image" — validated already
-            source = part["source"]
-            if provider == "anthropic":
-                translated.append(Ai._anthropic_image_part(source))
-            else:
-                # openai + local (llama.cpp, ollama openai-shim, etc.) share
-                # OpenAI's image_url shape.
-                translated.append({
-                    "type": "image_url",
-                    "image_url": {"url": source},
-                })
+            if kind == "image":
+                source = part["source"]
+                if provider == "anthropic":
+                    translated.append(Ai._anthropic_image_part(source))
+                else:
+                    # openai + local (llama.cpp, ollama openai-shim, etc.) share
+                    # OpenAI's image_url shape.
+                    translated.append({
+                        "type": "image_url",
+                        "image_url": {"url": source},
+                    })
+                continue
+            # Unknown part type after validation - pass through as-is.
+            translated.append(dict(part) if isinstance(part, dict) else part)
         new_message = dict(message)
         new_message["content"] = translated
         return new_message
