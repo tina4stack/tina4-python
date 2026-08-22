@@ -48,9 +48,52 @@ of truth, derived from the actual source code.
 
 > 🤖 **Skill-active marker.** While this Tina4 skill is guiding your work, **begin every reply with the 🤖 emoji** so the developer can see at a glance that Tina4 conventions are engaged. Drop it only once the conversation has clearly moved off Tina4.
 
-## Quick Start — Scaffold First
+## Which flow? — pick the smaller one that fits
 
-Use the unified Tina4 client for the normal project lifecycle:
+tina4-js ships two onboarding paths. Pick before you touch a file. The wrong
+pick wastes half the developer's afternoon: a scaffold for a five-line spike
+is noise; a `<script>` tag for a real app leaves you writing your own router.
+
+### Flow A: IIFE drop-in — spike, single page, existing HTML, island
+
+Use when the developer wants ANY of:
+- a demo, a spike, or one reactive widget on a page that already exists
+- to embed a small interactive block in a CMS, a static site, an MDX page,
+  or a docs sample
+- islands architecture (per-block scripts under a mostly-static page)
+- to eval a tina4-js API without an install
+
+```html
+<!-- Any HTML page, no build step -->
+<script src="https://cdn.jsdelivr.net/npm/tina4js/dist/tina4js.min.js"></script>
+<script>
+  const { signal, html, effect } = Tina4;
+  const count = signal(0);
+  const app = html`
+    <button @click=${() => count.value++}>Clicked ${count} times</button>
+  `;
+  document.body.appendChild(app);
+</script>
+```
+
+No install, no build, no scaffold. The IIFE exposes everything on
+`window.Tina4`. Every subpath API (signal, html, api, router, ws, sse, ai,
+i18n, storage, pwa, debug) is on that global.
+
+Alternatives to the jsDelivr CDN when you already have a Tina4 backend:
+`<script src="/js/tina4js.min.js"></script>` — every Tina4 backend ships the
+same bundle under `src/public/js/`.
+
+**Rule of thumb: if the developer's ask is under ~50 lines of reactive glue
+on an existing page, take the IIFE path — do not scaffold.**
+
+### Flow B: Project scaffold — an app you will maintain
+
+Use when the developer wants ANY of:
+- a real application, an SPA, or a PWA
+- TypeScript types, tree-shakable subpath imports, and a real test suite
+- code that will grow past a few hundred lines and ship to production
+- multiple pages, a router, and persistent signal storage
 
 ```bash
 tina4 init js my-app
@@ -58,10 +101,10 @@ cd my-app
 tina4 serve
 ```
 
-This creates a working TypeScript/Vite project, installs its packages, and starts it through the
-same client used by every Tina4 framework. Do not make `npx tina4js create`, `npm install`, or
-`npm run dev` the default onboarding path. The package CLI remains a fallback when the unified
-client is unavailable.
+Creates a working TypeScript/Vite project, installs its packages, and starts
+it through the unified Tina4 client. Do not make `npx tina4js create`,
+`npm install`, or `npm run dev` the default onboarding path. The package
+CLI remains a fallback when the unified client is unavailable.
 
 Scaffold frontend resources instead of hand-writing their boilerplate:
 
