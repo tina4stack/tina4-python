@@ -9,6 +9,63 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.113
+
+Feature: streaming primitives on Api, typed events on Ai.chat, and
+multimodal content parts (feature 140 / ADR-0060). Breaking change
+for the pre-1.0 `Ai.chat(stream=True)` surface.
+
+### `Api.stream_bytes` / `stream_lines` / `stream_sse`
+
+- Three new methods layer a byte primitive, a UTF-8 line splitter,
+  and an SSE framer on top of the existing zero-dependency HTTP
+  client. Each returns a Python generator; the response body is
+  never buffered whole. `stream_bytes` yields transport-sized chunks
+  as they arrive; `stream_lines` yields one string per LF/CRLF line
+  (with a trailing line without newline delivered on EOF, and
+  multibyte codepoints buffered across chunk boundaries);
+  `stream_sse` yields `SseEvent(data, event, id, retry)` records
+  with `data:` multi-line concatenation, blank-line boundaries,
+  `:` comments dropped, and the `data: [DONE]` sentinel delivered
+  as an ordinary event.
+- `TINA4_API_CONNECT_TIMEOUT` (default 10s) bounds connection
+  establishment; `TINA4_API_TIMEOUT` (default 60s) bounds total
+  streaming duration. Both raise `ApiTimeoutError`. Closing the
+  generator before EOF releases the underlying socket.
+- Transport errors (dropped chunked streams, refused connections)
+  raise `ApiStreamError` with the HTTP status attached when the
+  failure is a non-2xx response header.
+
+### `Ai.chat(stream=True)` yields typed `AiEvent` records
+
+- Breaking: streaming now yields
+  `AiEvent(type='text_delta'|'tool_call'|'done'|'error', ...)`
+  instead of raw text strings. Migration:
+  `for chunk in stream: process(chunk)` becomes
+  `for event in stream:` +
+  `if event.type == 'text_delta': process(event.text)`.
+- Text deltas arrive per wire chunk. Tool-call fragments are
+  aggregated per index/id and emitted once the `arguments` JSON
+  parses cleanly (OpenAI) or the `content_block_stop` fires
+  (Anthropic); malformed args raise `AiParseError`.
+- Exactly one `done` event fires at the end with `finish_reason`
+  and `usage`. A mid-stream failure emits one `error` event in
+  place of `done` and ends the iterator; retries never occur
+  after the first event is yielded.
+- Implemented on top of `Api.stream_sse` — one SSE framer per
+  language, no duplicate wire parser inside `ai/client.py`.
+
+### `Ai.chat` accepts multimodal content parts
+
+- `message.content` may now be a string OR a list of
+  `{type: 'text', text}` / `{type: 'image', source}` parts, where
+  `source` is a `data:<media_type>;base64,<payload>` URI or an
+  `https://`/`http://` URL. Malformed parts raise `AiConfigError`
+  before any request goes out.
+- Provider translation is automatic: OpenAI / local get the
+  `image_url` shape; Anthropic gets a `source` block with
+  `type: 'base64'` or `type: 'url'`.
+
 ## 3.13.107
 
 Feature: RBAC role and permission guards (parity across all four frameworks).

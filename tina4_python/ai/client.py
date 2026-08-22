@@ -47,6 +47,28 @@ class ChatResponse:
 
 
 @dataclass(frozen=True)
+class AiEvent:
+    """One typed event yielded by ``Ai.chat(stream=True)`` (ADR-0060).
+
+    The ``type`` discriminant is one of ``text_delta`` / ``tool_call`` /
+    ``done`` / ``error``. Only the fields relevant to that type are set;
+    everything else stays ``None``. ``done`` fires exactly once after
+    every ``text_delta`` and ``tool_call``; ``error`` fires in place of
+    ``done`` when the stream fails after the first event.
+    """
+
+    type: str
+    text: str | None = None
+    id: str | None = None
+    name: str | None = None
+    args: dict | None = None
+    finish_reason: str | None = None
+    usage: dict | None = None
+    message: str | None = None
+    code: str | None = None
+
+
+@dataclass(frozen=True)
 class _Config:
     provider: str
     url: str
@@ -88,7 +110,13 @@ class Ai:
         stream: bool = False,
         timeout: float | None = None,
         provider: str | None = None,
-    ) -> ChatResponse | Iterator[str]:
+    ) -> "ChatResponse | Iterator[AiEvent]":
+        """Send a chat completion request.
+
+        ``stream=True`` returns an iterator of ``AiEvent`` records
+        (``text_delta`` / ``tool_call`` / ``done`` / ``error``) per
+        ADR-0060; ``stream=False`` returns a single ``ChatResponse``.
+        """
         Ai._validate_messages(messages)
         config = Ai._config("chat", model=model, timeout=timeout, provider=provider)
         body = Ai._chat_body(config, messages, temperature, max_tokens, stream)
@@ -153,8 +181,44 @@ class Ai:
                 raise AiConfigError("Each AI message must be an object")
             if message.get("role") not in {"system", "user", "assistant"}:
                 raise AiConfigError("Each AI message needs a supported role")
-            if not isinstance(message.get("content"), str):
-                raise AiConfigError("Each AI message needs string content")
+            Ai._validate_content(message.get("content"))
+
+    @staticmethod
+    def _validate_content(content: Any) -> None:
+        """Accept a plain string OR a non-empty list of content parts.
+
+        Parts (ADR-0060 multimodal):
+        - ``{"type": "text",  "text":   <str>}``
+        - ``{"type": "image", "source": <str>}``  where ``source`` is a
+          ``data:<media_type>;base64,<payload>`` URI or an http(s) URL.
+
+        Anything else raises ``AiConfigError`` before the request goes
+        out. Both the OpenAI and Anthropic provider builders trust the
+        shape after validation.
+        """
+        if isinstance(content, str):
+            return
+        if not isinstance(content, list) or not content:
+            raise AiConfigError(
+                "Each AI message content must be a string or non-empty list of parts")
+        for part in content:
+            if not isinstance(part, dict):
+                raise AiConfigError("Content parts must be objects")
+            kind = part.get("type")
+            if kind == "text":
+                if not isinstance(part.get("text"), str):
+                    raise AiConfigError("text part must have a string 'text' field")
+            elif kind == "image":
+                source = part.get("source")
+                if not isinstance(source, str) or not source:
+                    raise AiConfigError("image part must have a string 'source' field")
+                if not (source.startswith("data:")
+                        or source.startswith("https://")
+                        or source.startswith("http://")):
+                    raise AiConfigError(
+                        "image part 'source' must be a data: URI or http(s) URL")
+            else:
+                raise AiConfigError("Content part 'type' must be text or image")
 
     @staticmethod
     def _number(name: str, default: str, *, minimum: float, integer: bool = False) -> float | int:
@@ -235,18 +299,92 @@ class Ai:
         max_tokens: int | None,
         stream: bool,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {"model": config.model, "messages": messages, "stream": stream}
+        translated = [Ai._translate_message(config.provider, message)
+                      for message in messages]
+        body: dict[str, Any] = {"model": config.model, "messages": translated, "stream": stream}
         if temperature is not None:
             body["temperature"] = temperature
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
         if config.provider == "anthropic":
-            system = [message["content"] for message in messages if message["role"] == "system"]
-            body["messages"] = [message for message in messages if message["role"] != "system"]
+            # System messages are hoisted to the top-level `system` field on
+            # Anthropic; only string system content is supported (multimodal
+            # in a system prompt is not a real provider capability today).
+            system_texts: list[str] = []
+            non_system: list[dict[str, Any]] = []
+            for message in translated:
+                if message["role"] == "system":
+                    content = message["content"]
+                    if isinstance(content, str):
+                        system_texts.append(content)
+                    else:
+                        # Extract text parts only; drop images from system prompt.
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                system_texts.append(part.get("text", ""))
+                else:
+                    non_system.append(message)
+            body["messages"] = non_system
             body["max_tokens"] = max_tokens if max_tokens is not None else 1024
-            if system:
-                body["system"] = "\n\n".join(system)
+            if system_texts:
+                body["system"] = "\n\n".join(system_texts)
         return body
+
+    @staticmethod
+    def _translate_message(provider: str, message: dict[str, Any]) -> dict[str, Any]:
+        """Translate a Tina4-shape message to the provider-native shape.
+
+        String content passes through unchanged in every provider. A
+        list-of-parts message translates image parts to each provider's
+        native shape and leaves text parts alone.
+        """
+        content = message.get("content")
+        if isinstance(content, str):
+            return dict(message)
+        translated: list[dict[str, Any]] = []
+        for part in content or []:
+            kind = part.get("type")
+            if kind == "text":
+                translated.append({"type": "text", "text": part.get("text", "")})
+                continue
+            # kind == "image" — validated already
+            source = part["source"]
+            if provider == "anthropic":
+                translated.append(Ai._anthropic_image_part(source))
+            else:
+                # openai + local (llama.cpp, ollama openai-shim, etc.) share
+                # OpenAI's image_url shape.
+                translated.append({
+                    "type": "image_url",
+                    "image_url": {"url": source},
+                })
+        new_message = dict(message)
+        new_message["content"] = translated
+        return new_message
+
+    @staticmethod
+    def _anthropic_image_part(source: str) -> dict[str, Any]:
+        """Translate an image source (data:/http(s)) to Anthropic's shape."""
+        if source.startswith("data:"):
+            # data:image/png;base64,<payload>
+            try:
+                header, _, payload = source[len("data:"):].partition(",")
+                media_type, _, encoding = header.partition(";")
+                if encoding != "base64" or not media_type or not payload:
+                    raise ValueError
+            except ValueError:
+                raise AiConfigError(
+                    "image data URI must be data:<media_type>;base64,<payload>") from None
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": payload,
+                },
+            }
+        # http(s):// URL — Anthropic accepts image via URL source.
+        return {"type": "image", "source": {"type": "url", "url": source}}
 
     @staticmethod
     def _connect(config: _Config, deadline: float, body: dict[str, Any], headers: dict[str, str]) -> _TransportResponse:
@@ -377,84 +515,259 @@ class Ai:
             raise AiParseError("AI provider returned a malformed chat response") from None
 
     @staticmethod
-    def _stream_delta(provider: str, data: str) -> tuple[bool, str | None]:
-        if data == "[DONE]":
-            return True, None
-        try:
-            event = json.loads(data)
-            if provider == "anthropic":
-                delta = event.get("delta", {})
-                text = delta.get("text") if event.get("type") == "content_block_delta" else None
-            else:
-                text = event.get("choices", [{}])[0].get("delta", {}).get("content")
-        except (json.JSONDecodeError, IndexError, TypeError, UnicodeDecodeError):
-            raise AiParseError("AI provider returned malformed stream data") from None
-        if text is not None and not isinstance(text, str):
-            raise AiParseError("AI provider returned malformed stream data")
-        return False, text
+    def _stream(config: _Config, headers: dict[str, str], body: dict[str, Any]) -> Iterator["AiEvent"]:
+        """Yield typed ``AiEvent`` records for a streaming chat call (ADR-0060).
 
-    @staticmethod
-    def _stream_data(transport: _TransportResponse, deadline: float) -> Iterator[str]:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise AiTimeoutError("AI total request timeout expired")
-            if transport.connection.sock is not None:
-                transport.connection.sock.settimeout(remaining)
-            line = transport.response.readline()
-            if not line:
-                return
-            stripped = line.decode("utf-8", errors="strict").strip()
-            if stripped.startswith("data:"):
-                yield stripped[5:].strip()
+        Delegates SSE framing to ``Api.stream_sse`` — one framer per
+        language, no duplicate wire parser in the AI module — and
+        translates each ``SseEvent`` into zero or more ``AiEvent``
+        records using ``_StreamAggregator``. Retries are attempted only
+        before the first event; a mid-stream failure emits one
+        ``AiEvent(type='error', ...)`` in place of ``done`` and the
+        iterator ends.
+        """
+        # Local import so the api submodule is loaded lazily (matches the
+        # rest of tina4_python's lazy-load posture).
+        from tina4_python.api import Api, ApiStreamError, ApiTimeoutError
 
-    @staticmethod
-    def _stream(config: _Config, headers: dict[str, str], body: dict[str, Any]) -> Iterator[str]:
-        def iterator() -> Iterator[str]:
-            deadline = time.monotonic() + config.total_timeout
+        stream_headers = {**headers, "accept": "text/event-stream"}
+        # A private Api instance keeps SSL / cookies / redirect handling
+        # in one place. The Ai timeouts win — Api's env defaults do not
+        # apply here because we pass them explicitly.
+        transport_api = Api()
+
+        def iterator() -> Iterator[AiEvent]:
             yielded = False
             for attempt in range(config.max_retries + 1):
-                transport: _TransportResponse | None = None
+                aggregator = _StreamAggregator(config.provider)
+                sse_iter = None
                 try:
-                    stream_headers = {**headers, "accept": "text/event-stream"}
-                    transport = Ai._connect(config, deadline, body, stream_headers)
-                    response = transport.response
-                    if response.status < 200 or response.status >= 300:
-                        status = response.status
-                        response.read()
-                        error = AiHTTPError(f"AI provider returned HTTP {status}", status=status)
-                        if (status == 429 or status >= 500) and attempt < config.max_retries:
-                            delay = Ai._retry_delay(response, deadline)
-                            transport.close()
-                            transport = None
-                            if delay:
-                                time.sleep(delay)
-                            continue
-                        raise error
-                    completed = False
-                    for data in Ai._stream_data(transport, deadline):
-                        completed, text = Ai._stream_delta(config.provider, data)
-                        if completed:
-                            break
-                        if text is not None:
-                            yielded = True
-                            yield text
-                    if completed:
-                        return
-                    raise AiParseError("AI provider stream ended before [DONE]")
-                except (AiHTTPError, AiTimeoutError):
-                    if yielded or attempt >= config.max_retries:
-                        raise
-                except (socket.timeout, OSError, http.client.HTTPException) as exc:
-                    error: AiError = (
-                        AiTimeoutError("AI total request timeout expired")
-                        if isinstance(exc, socket.timeout)
-                        else AiHTTPError(f"AI transport failed ({type(exc).__name__})")
+                    sse_iter = transport_api.stream_sse(
+                        config.url,
+                        method="POST",
+                        body=body,
+                        content_type="application/json",
+                        extra_headers=stream_headers,
+                        timeout=config.total_timeout,
+                        connect_timeout=config.connect_timeout,
                     )
-                    if yielded or attempt >= config.max_retries:
-                        raise error from None
+                    stream_ended_cleanly = False
+                    for sse_event in sse_iter:
+                        if sse_event.data == "[DONE]":
+                            for ai_event in aggregator.finalize():
+                                yielded = True
+                                yield ai_event
+                            stream_ended_cleanly = True
+                            return
+                        for ai_event in aggregator.feed(sse_event):
+                            yielded = True
+                            yield ai_event
+                    if not stream_ended_cleanly:
+                        # Provider ended the stream without a [DONE]
+                        # sentinel — that is normal for Anthropic
+                        # (message_stop is the finalizer) and equivalent
+                        # to a clean end for any provider whose sagas we
+                        # exhaust. Emit done from whatever state we have.
+                        for ai_event in aggregator.finalize():
+                            yielded = True
+                            yield ai_event
+                        return
+                except ApiStreamError as exc:
+                    status = exc.status
+                    if yielded:
+                        yield AiEvent(
+                            type="error",
+                            message="AI stream dropped",
+                            code=f"http_{status}" if status else "transport",
+                        )
+                        return
+                    # Pre-first-event failure: retry only on 429/5xx.
+                    if (status is not None and (status == 429 or status >= 500)
+                            and attempt < config.max_retries):
+                        continue
+                    if status is not None:
+                        raise AiHTTPError(
+                            f"AI provider returned HTTP {status}",
+                            status=status) from None
+                    # No status = connect/drop error. Retry within budget.
+                    if attempt < config.max_retries:
+                        continue
+                    raise AiHTTPError("AI transport failed") from None
+                except ApiTimeoutError:
+                    if yielded:
+                        yield AiEvent(
+                            type="error",
+                            message="AI stream timed out",
+                            code="timeout",
+                        )
+                        return
+                    if attempt < config.max_retries:
+                        continue
+                    raise AiTimeoutError(
+                        "AI total request timeout expired") from None
+                except AiParseError as exc:
+                    # Malformed tool-call args or invalid stream data —
+                    # per ADR-0060, tool-call JSON parse failures raise
+                    # ``AiParseError`` (not an error event). We terminate
+                    # by re-raising so the caller sees the exception.
+                    if yielded:
+                        # But if we already yielded, surface it as an
+                        # error event so the iterator finishes cleanly.
+                        yield AiEvent(
+                            type="error",
+                            message=str(exc),
+                            code="parse",
+                        )
+                        return
+                    raise
                 finally:
-                    if transport is not None:
-                        transport.close()
-
+                    if sse_iter is not None:
+                        close = getattr(sse_iter, "close", None)
+                        if callable(close):
+                            close()
         return iterator()
+
+
+class _StreamAggregator:
+    """Turn provider SSE frames into typed ``AiEvent`` records (ADR-0060).
+
+    OpenAI streams tool-call arguments as text fragments spread across
+    many chunks; Anthropic wraps them in ``content_block_*`` events. We
+    buffer the fragments per tool-call index and emit ONE ``tool_call``
+    event when the fragments together form parseable JSON. Text deltas
+    pass through as they arrive.
+    """
+
+    def __init__(self, provider: str):
+        self.provider = provider
+        # Keyed by tool_call index (OpenAI) or block index (Anthropic).
+        self._tool_calls: dict[int, dict[str, Any]] = {}
+        self._emitted: set[int] = set()
+        self._finish_reason: str | None = None
+        self._usage: dict[str, Any] | None = None
+
+    def feed(self, sse_event: Any) -> list["AiEvent"]:
+        raw = sse_event.data
+        if not raw:
+            return []
+        try:
+            event = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            # Malformed frame — a provider that emits garbage between
+            # data lines should not stop the stream; but we can't act
+            # on it either. Ignore.
+            return []
+        if self.provider == "anthropic":
+            return self._feed_anthropic(event)
+        return self._feed_openai_style(event)
+
+    def finalize(self) -> list["AiEvent"]:
+        out = list(self._flush_pending_tool_calls())
+        out.append(AiEvent(
+            type="done",
+            finish_reason=self._finish_reason or "stop",
+            usage=self._usage,
+        ))
+        return out
+
+    def _feed_openai_style(self, event: dict[str, Any]) -> list["AiEvent"]:
+        out: list[AiEvent] = []
+        # Some providers emit a lone usage frame at the end.
+        if event.get("usage"):
+            self._usage = event["usage"]
+        choices = event.get("choices") or []
+        if not choices:
+            return out
+        choice = choices[0]
+        delta = choice.get("delta") or {}
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            out.append(AiEvent(type="text_delta", text=content))
+        for fragment in delta.get("tool_calls") or []:
+            if not isinstance(fragment, dict):
+                continue
+            idx = fragment.get("index", 0)
+            slot = self._tool_calls.setdefault(
+                idx, {"id": None, "name": None, "args_buf": ""})
+            if fragment.get("id"):
+                slot["id"] = fragment["id"]
+            fn = fragment.get("function") or {}
+            if fn.get("name"):
+                slot["name"] = fn["name"]
+            args_frag = fn.get("arguments")
+            if isinstance(args_frag, str):
+                slot["args_buf"] += args_frag
+        finish = choice.get("finish_reason")
+        if finish:
+            self._finish_reason = finish
+            out.extend(self._flush_pending_tool_calls())
+        return out
+
+    def _feed_anthropic(self, event: dict[str, Any]) -> list["AiEvent"]:
+        out: list[AiEvent] = []
+        etype = event.get("type")
+        if etype == "content_block_start":
+            block = event.get("content_block") or {}
+            if block.get("type") == "tool_use":
+                idx = event.get("index", 0)
+                self._tool_calls[idx] = {
+                    "id": block.get("id"),
+                    "name": block.get("name"),
+                    "args_buf": "",
+                }
+        elif etype == "content_block_delta":
+            delta = event.get("delta") or {}
+            dtype = delta.get("type")
+            if dtype == "text_delta":
+                text = delta.get("text")
+                if isinstance(text, str) and text:
+                    out.append(AiEvent(type="text_delta", text=text))
+            elif dtype == "input_json_delta":
+                idx = event.get("index", 0)
+                slot = self._tool_calls.get(idx)
+                if slot is not None:
+                    frag = delta.get("partial_json")
+                    if isinstance(frag, str):
+                        slot["args_buf"] += frag
+        elif etype == "content_block_stop":
+            idx = event.get("index", 0)
+            if idx in self._tool_calls and idx not in self._emitted:
+                out.extend(self._emit_tool_call(idx))
+        elif etype == "message_delta":
+            delta = event.get("delta") or {}
+            if delta.get("stop_reason"):
+                self._finish_reason = delta["stop_reason"]
+            if event.get("usage"):
+                self._usage = event["usage"]
+        elif etype == "message_stop":
+            # done is emitted by finalize() at end of stream.
+            pass
+        return out
+
+    def _emit_tool_call(self, idx: int) -> list["AiEvent"]:
+        slot = self._tool_calls[idx]
+        if idx in self._emitted:
+            return []
+        buf = slot.get("args_buf") or ""
+        try:
+            args = json.loads(buf) if buf else {}
+        except (json.JSONDecodeError, ValueError):
+            raise AiParseError(
+                f"AI tool_call arguments failed to parse for '"
+                f"{slot.get('name') or 'tool'}'") from None
+        if not isinstance(args, dict):
+            raise AiParseError("AI tool_call arguments must decode to an object")
+        self._emitted.add(idx)
+        return [AiEvent(
+            type="tool_call",
+            id=slot.get("id") or "",
+            name=slot.get("name") or "",
+            args=args,
+        )]
+
+    def _flush_pending_tool_calls(self) -> list["AiEvent"]:
+        out: list[AiEvent] = []
+        for idx in sorted(self._tool_calls):
+            if idx not in self._emitted:
+                out.extend(self._emit_tool_call(idx))
+        return out

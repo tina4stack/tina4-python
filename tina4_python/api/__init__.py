@@ -18,8 +18,12 @@ import json
 import ssl
 import time
 import base64
+import http.client
 import secrets
+import socket
 import mimetypes
+from dataclasses import dataclass
+from typing import Iterator
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, HTTPRedirectHandler, HTTPSHandler, build_opener
 from urllib.error import HTTPError, URLError
@@ -40,9 +44,58 @@ _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 # body never lands in memory in one piece.
 _DOWNLOAD_CHUNK_SIZE = 64 * 1024
 
+# Read chunk size for stream_bytes / stream_lines / stream_sse. The generator
+# yields whatever the transport hands back per read; this bounds the buffer.
+_STREAM_CHUNK_SIZE = 8 * 1024
+
 # Headers dropped when a redirect crosses to a different origin — a bearer token
 # or a session cookie must never be handed to a host you didn't authenticate to.
 _STRIP_ON_CROSS_ORIGIN = frozenset({"authorization", "cookie"})
+
+
+class ApiTimeoutError(TimeoutError):
+    """A ``stream_*`` call exceeded TINA4_API_CONNECT_TIMEOUT or TINA4_API_TIMEOUT."""
+
+
+class ApiStreamError(RuntimeError):
+    """A ``stream_*`` call failed at the transport layer (dropped, refused, HTTP error).
+
+    ``status`` is the HTTP status code when the failure is a non-2xx response
+    header; ``None`` for a connect/read failure with no HTTP response.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.status = status
+
+
+@dataclass(frozen=True)
+class SseEvent:
+    """One decoded Server-Sent-Event frame yielded by ``Api.stream_sse``.
+
+    - ``data`` is the concatenated payload of every ``data:`` line in the frame
+      (multiple ``data:`` lines join with ``\\n``, per the WHATWG SSE spec).
+    - ``event`` / ``id`` are captured verbatim when present, else ``None``.
+    - ``retry`` is captured as an ``int`` when the ``retry:`` value parses,
+      else ``None``.
+    """
+
+    data: str
+    event: str | None = None
+    id: str | None = None
+    retry: int | None = None
+
+
+def _stream_env_timeout(name: str, default: float) -> float:
+    """Read a positive-float timeout from an env var; fall back on garbage."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 def _same_origin(url_a: str, url_b: str) -> bool:
@@ -344,6 +397,328 @@ class Api:
         except Exception as exc:
             return {"http_code": None, "headers": {}, "error": str(exc), "path": None}
 
+    # ── streaming primitives (ADR-0060) ────────────────────────────────
+    # stream_bytes is the primitive; stream_lines wraps it with UTF-8 +
+    # newline framing; stream_sse wraps stream_lines with SSE framing.
+    # All three return a Python generator over the response body — no
+    # part of the body is ever buffered whole (backpressure = read chunk,
+    # yield chunk, wait for the caller to advance).
+    #
+    # Timeouts: TINA4_API_CONNECT_TIMEOUT bounds establishment,
+    # TINA4_API_TIMEOUT bounds total streaming duration. Both raise
+    # ``ApiTimeoutError`` when exceeded. Both may be overridden per call.
+    # The generator can be closed early (`gen.close()`) — the underlying
+    # socket is released in the finally block.
+    #
+    # These deliberately use ``http.client`` directly rather than urllib:
+    # the AI streaming client already speaks this transport, urllib does
+    # not expose per-connect / per-read timeout independently, and
+    # http.client's ``response.read(n)`` streams cleanly.
+
+    def stream_bytes(self, path: str = "", *, method: str = "GET",
+                     body=None, content_type: str = "application/json",
+                     extra_headers: dict | None = None,
+                     timeout: float | None = None,
+                     connect_timeout: float | None = None,
+                     params: dict | None = None) -> Iterator[bytes]:
+        """Yield the response body in transport-sized chunks.
+
+        The response is NEVER buffered whole; each yield is exactly what
+        the socket produced on one ``read`` call. Iteration ends on EOF
+        and raises ``ApiStreamError`` on a mid-stream drop / non-2xx.
+
+        Timeouts (both apply, both raise ``ApiTimeoutError`` on expiry):
+        - ``connect_timeout`` (or TINA4_API_CONNECT_TIMEOUT, default 10s)
+          bounds establishment of the TCP + TLS handshake.
+        - ``timeout`` (or TINA4_API_TIMEOUT, default 60s) bounds the total
+          time from ``stream_bytes()`` return to the last yielded chunk.
+        """
+        url = self._url(path)
+        if params:
+            url += "?" + urlencode(params)
+        req = self._build_request(method.upper(), url, body, content_type,
+                                  extra_headers)
+        return self._stream_iterator(req, timeout=timeout,
+                                     connect_timeout=connect_timeout)
+
+    def stream_lines(self, path: str = "", **opts) -> Iterator[str]:
+        """Yield one decoded line per element, delimited by ``\\n`` or ``\\r\\n``.
+
+        A trailing line without a final newline is yielded on EOF. An
+        incomplete UTF-8 sequence at a chunk boundary is buffered so the
+        next chunk completes it — a multibyte codepoint never splits.
+        """
+        return self._decode_lines(self.stream_bytes(path, **opts))
+
+    def stream_sse(self, path: str = "", **opts) -> Iterator[SseEvent]:
+        """Yield one ``SseEvent`` per SSE frame.
+
+        Blank line = event boundary. ``data:`` lines concatenate with
+        ``\\n``. ``event:`` / ``id:`` / ``retry:`` fields are captured.
+        Lines beginning with ``:`` are comments and are dropped. The
+        OpenAI ``data: [DONE]`` sentinel is delivered as an ordinary
+        ``SseEvent(data='[DONE]')`` — the caller decides how to treat it
+        — and the iterator ends on the next EOF.
+        """
+        return self._parse_sse(self.stream_lines(path, **opts))
+
+    def _stream_iterator(self, req: Request, *, timeout: float | None,
+                         connect_timeout: float | None) -> Iterator[bytes]:
+        """Real-socket generator behind stream_bytes.
+
+        Kept apart so a caller-injected transport (``self._transport``)
+        can synthesise a stream by wrapping its buffered ``body``. In the
+        canonical urllib/http.client path this opens one connection,
+        checks the status, yields ``resp.read(chunk_size)`` until empty,
+        and closes both the response and the connection on exit — every
+        exit path, including ``gen.close()``.
+        """
+        parsed = urlparse(req.full_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ApiStreamError("stream requires an http or https URL")
+        connect_bound = float(connect_timeout) if connect_timeout is not None \
+            else _stream_env_timeout("TINA4_API_CONNECT_TIMEOUT", 10.0)
+        total_bound = float(timeout) if timeout is not None \
+            else _stream_env_timeout("TINA4_API_TIMEOUT", 60.0)
+        if connect_bound <= 0:
+            raise ApiStreamError("connect_timeout must be greater than zero")
+        if total_bound <= 0:
+            raise ApiStreamError("timeout must be greater than zero")
+
+        # Transport seam: an injected transport is buffered by contract, so
+        # yield its body as a single chunk. This preserves the ergonomics of
+        # unit-testing an app that calls stream_* without demanding a real
+        # server; framework tests never inject one.
+        if self._transport is not None:
+            result = self._call_transport(req)
+            code = result.get("http_code")
+            error = result.get("error")
+            if error is not None:
+                raise ApiStreamError(str(error))
+            if code is None or code < 200 or code >= 300:
+                raise ApiStreamError(
+                    f"stream failed (HTTP {code})", status=code)
+            self._store_cookies(result.get("headers"))
+            payload = result.get("body")
+            if payload is None:
+                return iter(())
+            if isinstance(payload, str):
+                payload = payload.encode("utf-8")
+            elif not isinstance(payload, (bytes, bytearray)):
+                payload = json.dumps(payload, default=str).encode("utf-8")
+
+            def one_shot():
+                if payload:
+                    yield bytes(payload)
+            return one_shot()
+
+        deadline = time.monotonic() + total_bound
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        if parsed.scheme == "https":
+            context = self._ssl_context or ssl.create_default_context()
+            connection: http.client.HTTPConnection = http.client.HTTPSConnection(
+                parsed.hostname, port,
+                timeout=min(connect_bound, total_bound), context=context)
+        else:
+            connection = http.client.HTTPConnection(
+                parsed.hostname, port, timeout=min(connect_bound, total_bound))
+
+        response: http.client.HTTPResponse | None = None
+        try:
+            try:
+                connection.connect()
+            except (socket.timeout, TimeoutError):
+                raise ApiTimeoutError(
+                    f"connect timeout after {connect_bound:g}s") from None
+            except OSError as exc:
+                raise ApiStreamError(f"connect failed: {exc}") from None
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ApiTimeoutError(f"total timeout after {total_bound:g}s")
+            if connection.sock is not None:
+                connection.sock.settimeout(remaining)
+
+            path_and_query = parsed.path or "/"
+            if parsed.query:
+                path_and_query += "?" + parsed.query
+
+            payload = req.data
+            headers = {k: v for k, v in req.header_items()}
+            try:
+                connection.request(req.get_method(), path_and_query,
+                                   body=payload, headers=headers)
+                response = connection.getresponse()
+            except (socket.timeout, TimeoutError):
+                raise ApiTimeoutError(
+                    f"total timeout after {total_bound:g}s") from None
+            except (OSError, http.client.HTTPException) as exc:
+                raise ApiStreamError(f"transport failed: {exc}") from None
+
+            self._store_cookies(response.headers)
+            status = response.status
+            if status < 200 or status >= 300:
+                raise ApiStreamError(
+                    f"stream failed (HTTP {status})", status=status)
+
+            def chunks():
+                assert response is not None
+                try:
+                    while True:
+                        remaining_now = deadline - time.monotonic()
+                        if remaining_now <= 0:
+                            raise ApiTimeoutError(
+                                f"total timeout after {total_bound:g}s")
+                        if connection.sock is not None:
+                            connection.sock.settimeout(remaining_now)
+                        try:
+                            # read1(): return as soon as one underlying
+                            # syscall yields data. read() would block
+                            # accumulating a full _STREAM_CHUNK_SIZE
+                            # buffer, defeating streaming backpressure
+                            # and the total timeout under slow servers.
+                            chunk = response.read1(_STREAM_CHUNK_SIZE)
+                        except (socket.timeout, TimeoutError):
+                            raise ApiTimeoutError(
+                                f"total timeout after {total_bound:g}s") from None
+                        except http.client.IncompleteRead as exc:
+                            # A chunked-encoding read failed with some
+                            # bytes accumulated. Yield those first so
+                            # the caller's line/SSE parser sees every
+                            # frame that DID arrive, then surface the
+                            # drop as an ApiStreamError on the next
+                            # read. Without this, the last (possibly
+                            # complete) event is discarded silently.
+                            if exc.partial:
+                                yield exc.partial
+                            raise ApiStreamError(
+                                f"transport drop: {exc}") from None
+                        except (OSError, http.client.HTTPException) as exc:
+                            raise ApiStreamError(
+                                f"transport drop: {exc}") from None
+                        if not chunk:
+                            return
+                        yield chunk
+                finally:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                    connection.close()
+
+            return chunks()
+        except BaseException:
+            # Anything raised before we returned the ``chunks()`` generator
+            # (bad status, timeout on the request headers, etc.) means the
+            # caller never gets the generator, so ``chunks()`` finally-close
+            # never runs. Close by hand here.
+            try:
+                if response is not None:
+                    response.close()
+            except Exception:
+                pass
+            connection.close()
+            raise
+
+    @staticmethod
+    def _decode_lines(byte_stream: Iterator[bytes]) -> Iterator[str]:
+        """UTF-8 line splitter for stream_lines.
+
+        Buffers across chunk boundaries so an incomplete UTF-8 codepoint
+        does not raise, and so a line split across two chunks yields as
+        one string. Accepts LF (``\\n``) and CRLF (``\\r\\n``); a lone CR
+        is treated as ordinary text.
+        """
+        raw = bytearray()
+        try:
+            for chunk in byte_stream:
+                if not chunk:
+                    continue
+                raw.extend(chunk)
+                # Drain complete lines, keeping any tail that hasn't seen
+                # a newline for the next round.
+                while True:
+                    newline = raw.find(b"\n")
+                    if newline == -1:
+                        break
+                    line = raw[:newline]
+                    del raw[:newline + 1]
+                    if line.endswith(b"\r"):
+                        line = line[:-1]
+                    yield line.decode("utf-8", errors="replace")
+            if raw:
+                yield bytes(raw).decode("utf-8", errors="replace")
+        finally:
+            # Close the underlying generator if it has one (i.e. our real
+            # stream_bytes). The caller may have consumed everything and
+            # returned normally, or may have raised and cancelled us; in
+            # either case ensure the underlying connection is released.
+            close = getattr(byte_stream, "close", None)
+            if callable(close):
+                close()
+
+    @staticmethod
+    def _parse_sse(line_stream: Iterator[str]) -> Iterator[SseEvent]:
+        """SSE framer for stream_sse.
+
+        Follows the WHATWG SSE contract: blank line = event boundary,
+        multiple ``data:`` lines concatenate with ``\\n``, ``event:`` /
+        ``id:`` / ``retry:`` fields captured, ``:`` prefix = comment
+        (ignored). The OpenAI ``[DONE]`` sentinel is delivered as an
+        ordinary event with data ``"[DONE]"``; the iterator ends on the
+        next EOF.
+        """
+        data_parts: list[str] = []
+        event_name: str | None = None
+        event_id: str | None = None
+        retry_value: int | None = None
+        try:
+            for line in line_stream:
+                if line == "":
+                    if data_parts or event_name or event_id or retry_value is not None:
+                        yield SseEvent(
+                            data="\n".join(data_parts),
+                            event=event_name,
+                            id=event_id,
+                            retry=retry_value,
+                        )
+                    data_parts, event_name, event_id, retry_value = [], None, None, None
+                    continue
+                if line.startswith(":"):
+                    continue
+                if ":" in line:
+                    field, _, value = line.partition(":")
+                    # SSE says a single leading space after the ":" is a
+                    # separator, not part of the value.
+                    if value.startswith(" "):
+                        value = value[1:]
+                else:
+                    field, value = line, ""
+                if field == "data":
+                    data_parts.append(value)
+                elif field == "event":
+                    event_name = value
+                elif field == "id":
+                    event_id = value
+                elif field == "retry":
+                    try:
+                        retry_value = int(value)
+                    except (TypeError, ValueError):
+                        retry_value = None
+            # Trailing frame without a terminating blank line still counts
+            # (the server may close cleanly right after the last data).
+            if data_parts or event_name or event_id or retry_value is not None:
+                yield SseEvent(
+                    data="\n".join(data_parts),
+                    event=event_name,
+                    id=event_id,
+                    retry=retry_value,
+                )
+        finally:
+            close = getattr(line_stream, "close", None)
+            if callable(close):
+                close()
+
     def _url(self, path: str) -> str:
         if path.startswith("http"):
             return path
@@ -550,4 +925,4 @@ class Api:
                     self._cookies[name] = value.strip()
 
 
-__all__ = ["Api"]
+__all__ = ["Api", "SseEvent", "ApiTimeoutError", "ApiStreamError"]

@@ -19,6 +19,7 @@ from .client import (
     Ai,
     AiConfigError,
     AiError,
+    AiEvent,
     AiHTTPError,
     AiParseError,
     AiTimeoutError,
