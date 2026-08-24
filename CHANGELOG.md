@@ -9,6 +9,30 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.116
+
+Test hardening only in Python for this release. tina4-php and
+tina4-ruby port the cooperative-Service-instance stop fix that Python
+already shipped in #118 (ServiceRunner.stop -> instance.stop), so those
+three land together; tina4-nodejs adds it via its own port. No Python
+framework code changes.
+
+### Version-contract test hardening
+
+- `tests/test_version_contract.py`: `_parse_cli_manifest(stdout, context)`
+  helper locates the first `{` in the child's stdout before json.loads,
+  and raises a diagnostic RuntimeError with a 400-char stdout slice on
+  parse failure. `_cli_manifest_version()` now spawns the child with
+  `PYTHONWARNINGS=ignore` and the -c snippet calls
+  `warnings.simplefilter('ignore')` so a stray import-time print or a
+  broken sitecustomize.py can never break the JSON decode with a bare
+  `null is identical to '3.13.X'` message.
+- Two named regression tests: positive (polluted stdout still parses)
+  + negative (no-JSON stdout raises with context).
+
+Parity: sibling PHP / Ruby / Node fixes landing alongside for the
+same defect class.
+
 ## 3.13.115
 
 Parity version bump. No framework code changes in Python for this
