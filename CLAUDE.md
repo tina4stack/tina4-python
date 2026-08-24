@@ -15,7 +15,7 @@ The full discipline lives in `.claude/skills/tina4-maintainer/SKILL.md`; this bl
 
 # Tina4 Python
 
-Version 3.13.114 - Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.115 - Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 

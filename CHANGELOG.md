@@ -9,6 +9,20 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.115
+
+Parity version bump. No framework code changes in Python for this
+release — Python already carried the 3.13.114 tool-loop and typed-
+streaming features. The bundled `tina4-developer-python` skill gains
+a "Project layout" section that codifies the full-stack paradigm
+(never pollute the root with source; split into `backend/` and
+`frontend/` with per-side `plan/` folders; ask the backend framework
+before scaffolding). See tina4-python#122.
+
+Companion release: tina4-nodejs 3.13.115 fixes issue #56 (bundler-
+renamed handler args mapped to the wrong object; every POST body
+read as empty under a bundler); Node-only fix, no Python impact.
+
 ## 3.13.114
 
 Feature: the tool loop closes - `Ai.chat` now accepts tools and
