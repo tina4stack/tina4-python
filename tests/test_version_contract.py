@@ -34,6 +34,7 @@ Api client makes a real outbound request against.
 """
 import http.client
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -96,6 +97,7 @@ def _mcp_initialize_version(host: str, port: int, timeout: float = 10.0) -> str:
 # The real CLI entrypoint, driven exactly as the tina4 client would drive it
 # (mirrors tests/test_cli_commands_manifest.py's _ENTRYPOINT_CODE).
 _CLI_MANIFEST_CODE = (
+    "import warnings; warnings.simplefilter('ignore')\n"
     "import sys\n"
     "sys.argv = ['tina4python', 'commands', '--json']\n"
     "from tina4_python.cli import main\n"
@@ -103,14 +105,70 @@ _CLI_MANIFEST_CODE = (
 )
 
 
+def _parse_cli_manifest(stdout: str, context: str = "") -> dict:
+    """Locate the first `{` in the child's stdout and json.loads from there.
+
+    Defensive against stdout pollution: a stray import-time print, a broken
+    sitecustomize.py, or a third-party module that emits to stdout on import
+    can prepend noise BEFORE the CLI's JSON payload. A bare
+    `json.loads(result.stdout)` then explodes with a message that gives no
+    clue what the child actually printed.
+
+    Raises RuntimeError with a 400-char slice of stdout when no JSON object
+    is found or json.loads fails.
+    """
+    label = f" ({context})" if context else ""
+    stdout_preview = stdout[:400]
+    brace = stdout.find("{")
+    if brace == -1:
+        raise RuntimeError(
+            f"no JSON manifest{label}: child stdout has no `{{`; "
+            f"first 400 chars: {stdout_preview!r}"
+        )
+    try:
+        return json.loads(stdout[brace:])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"CLI manifest is not valid JSON{label}: {exc.msg} "
+            f"at line {exc.lineno} col {exc.colno}; "
+            f"first 400 chars of stdout: {stdout_preview!r}"
+        ) from exc
+
+
 def _cli_manifest_version() -> str:
+    env = {**os.environ, "PYTHONWARNINGS": "ignore"}
     result = subprocess.run(
         [sys.executable, "-c", _CLI_MANIFEST_CODE],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=60, env=env,
     )
     assert result.returncode == 0, f"commands --json exited non-zero; stderr:\n{result.stderr}"
-    manifest = json.loads(result.stdout)
+    manifest = _parse_cli_manifest(result.stdout, "cli_manifest_version")
     return manifest["version"]
+
+
+def test_parse_cli_manifest_survives_leading_stdout_noise():
+    """A stray import-time print or a broken sitecustomize can print to stdout
+    before the CLI's JSON payload. The parser locates the first `{` so the
+    version is still extracted."""
+    polluted = (
+        "UserWarning: something imported and printed\n"
+        "DEBUG: another line\n"
+        '{"framework":"python","version":"3.13.115","commands":[]}'
+    )
+    manifest = _parse_cli_manifest(polluted, "test-fixture")
+    assert manifest["version"] == "3.13.115"
+    assert manifest["framework"] == "python"
+
+    clean = '{"framework":"python","version":"3.13.115","commands":[]}'
+    assert _parse_cli_manifest(clean, "clean")["version"] == "3.13.115"
+
+
+def test_parse_cli_manifest_fails_loudly_when_no_json_present():
+    """A subprocess that failed to emit any JSON must raise a diagnostic
+    RuntimeError that includes the actual stdout, not a bare KeyError."""
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError, match=r"(?i)no.*json|manifest"):
+        _parse_cli_manifest("Traceback: something exploded, no JSON here", "test-negative")
 
 
 def test_runtime_version_equals_the_package_manifest():
