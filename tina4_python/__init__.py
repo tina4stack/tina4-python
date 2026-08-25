@@ -221,3 +221,12 @@ def _preload_from_manifest() -> None:
 
 
 _preload_from_manifest()
+
+
+# ── Import-hint fallback (ADR-0062, agent-experience contract) ──
+# Registered LAST so Python's normal resolution runs first — this finder is
+# only consulted for `tina4_python.<X>` names that every other finder already
+# failed on, which is what keeps it from ever masking a legitimate ImportError
+# raised inside a module that DOES exist. See tina4_python/_import_helper.py.
+from tina4_python._import_helper import install as _install_import_helper  # noqa: E402
+_install_import_helper()
