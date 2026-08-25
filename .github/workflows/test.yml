@@ -226,8 +226,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends unixodbc odbc-postgresql firebird-dev
           DRIVER_PATH=$(dpkg -L odbc-postgresql | grep -E 'psqlodbcw\.so$' | head -1)
+          # dpkg -L can miss it if the runner's package DB lags the install; fall
+          # back to the on-disk driver so a package/runner-image change cannot
+          # silently break odbcinst.ini.
           if [ -z "$DRIVER_PATH" ]; then
-            echo "::error::psqlodbcw.so not found in the odbc-postgresql package - cannot write odbcinst.ini"
+            DRIVER_PATH=$(find /usr/lib /usr/lib64 -name psqlodbcw.so 2>/dev/null | head -1)
+          fi
+          if [ -z "$DRIVER_PATH" ]; then
+            echo "::error::psqlodbcw.so not found via dpkg -L odbc-postgresql or filesystem search"
             dpkg -L odbc-postgresql
             exit 1
           fi
