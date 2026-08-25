@@ -129,7 +129,7 @@ def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
     """Parse --key value and --flag from args. Returns (flags, positional)."""
     # Boolean-only flags that never take a value argument
     boolean_flags = {"no-browser", "no-reload", "no-kill", "production", "managed", "all", "clear",
-                     "json", "public", "no-migration", "once"}
+                     "json", "public", "no-migration", "once", "dry-run", "quote"}
 
     flags = {}
     positional = []
@@ -965,6 +965,254 @@ def _ai(args):
             install_selected(".", selection)
 
 
+# ── Generate resolution envelope (ADR-0062, agent-experience contract) ─────
+#
+# Every `generate model/route/migration/middleware` call ALSO exposes the
+# mapping the framework decided to build — the class name, the (maybe
+# pluralized) table name, every file it will write, and every transformation
+# it applied. An agent (or a human) sees WHAT was chosen without having to
+# reverse-engineer it from the generated files. Emitted as a JSON envelope
+# on `--json`, as a human block on stderr for bare invocations, and skipping
+# every write on `--dry-run` (composable with `--json`).
+#
+# The envelope shape is the SAME across all four language backends and is
+# advertised as `resolution_contract` on the `commands --json` manifest so a
+# caller can programmatically discover the schema version.
+
+# The four generators wired for the envelope. Others (crud, service, queue,
+# validator, seeder, websocket, listener, auth, test, form, view) keep their
+# existing behaviour — this is the minimum surface the plan calls out.
+_RESOLUTION_TARGETS = {"model", "route", "migration", "middleware"}
+
+# Envelope schema version. Bump when the SHAPE changes; adding an optional
+# key on the resolution object is not a break.
+_RESOLUTION_ENVELOPE_VERSION = "1"
+
+
+def _input_fields(flags: dict):
+    """Normalise `--fields` back into the envelope's `input.fields` field.
+
+    A missing / bare / boolean `--fields` maps to null so an agent can rely on
+    the shape; a real "name:string,price:float" value is preserved as-is (the
+    raw text the caller actually supplied).
+    """
+    value = flags.get("fields")
+    if not isinstance(value, str) or not value:
+        return None
+    return value
+
+
+def _resolve_generation(target: str, name: str, flags: dict,
+                        timestamp: str | None = None) -> dict:
+    """Compute the resolution mapping for a generate call. Pure — no writes.
+
+    Called BEFORE the generator runs, so the same envelope drives both --json
+    (emit + write) and --dry-run (emit + skip) without a second walk of the
+    tree. Timestamps for migration filenames are locked at the call site and
+    threaded through the underlying generator via the private `_timestamp`
+    flag, so the envelope path always equals the on-disk filename.
+    """
+    ts = timestamp or datetime.now().strftime("%Y%m%d%H%M%S")
+
+    if target == "model":
+        raw_table = _to_snake(name)
+        table = _to_table(name)
+        transformations = []
+        if raw_table in SQL_RESERVED_TABLE_NAMES and raw_table != table:
+            transformations.append({
+                "kind": "reserved_word_pluralize",
+                "from": raw_table,
+                "to": table,
+                "reason": f"SQL reserved word '{raw_table}' would break CREATE TABLE",
+                "override": (
+                    f"--table {raw_table} --quote (requires quoted-identifier "
+                    "mode, not yet implemented)"
+                ),
+            })
+        migration_filename = f"{ts}_create_{table}.sql"
+        return {
+            "class_name": name,
+            "table_name": table,
+            "file_path": f"src/orm/{name}.py",
+            "migration_path": f"migrations/{migration_filename}",
+            "transformations": transformations,
+            "routes": [],
+            "test_paths": [f"tests/test_{table}_model.py"],
+        }
+
+    if target == "route":
+        route_path = name.lstrip("/")
+        return {
+            "class_name": None,
+            "table_name": None,
+            "file_path": f"src/routes/{route_path}.py",
+            "migration_path": None,
+            "transformations": [],
+            "routes": [
+                f"/api/{route_path}",
+                f"/api/{route_path}/{{id:int}}",
+            ],
+            "test_paths": [f"tests/test_{route_path}.py"],
+        }
+
+    if target == "migration":
+        table = name.removeprefix("create_").removeprefix("add_").removeprefix("drop_")
+        table = _to_snake(table)
+        filename = f"{ts}_{name}.sql"
+        is_create = name.startswith("create_")
+        return {
+            "class_name": None,
+            "table_name": table,
+            "file_path": f"migrations/{filename}",
+            "migration_path": f"migrations/{filename}",
+            "transformations": [],
+            "routes": [],
+            "test_paths": [f"tests/test_{table}_migration.py"] if is_create else [],
+        }
+
+    if target == "middleware":
+        snake = _to_snake(name)
+        return {
+            "class_name": name,
+            "table_name": None,
+            "file_path": f"src/middleware/{snake}.py",
+            "migration_path": None,
+            "transformations": [],
+            "routes": [],
+            "test_paths": [f"tests/test_{snake}.py"],
+        }
+
+    return {}  # never reached; guarded by _RESOLUTION_TARGETS
+
+
+def _actions_from_resolution(target: str, resolution: dict) -> list[str]:
+    """Flat "wrote X" list mirroring what the generators actually write.
+
+    The generators print `  ✓ Created <path>` per file; this reconstructs the
+    same list from the resolution so the envelope's `actions_taken` matches
+    the on-disk effect without having to shadow the generator's own I/O.
+    """
+    actions: list[str] = []
+    file_path = resolution.get("file_path")
+    if file_path:
+        actions.append(f"wrote {file_path}")
+
+    # Migration + its matching .down.sql — _gen_migration writes both.
+    if target == "model" and resolution.get("migration_path"):
+        migration = resolution["migration_path"]
+        actions.append(f"wrote {migration}")
+        actions.append(f"wrote {migration[:-len('.sql')]}.down.sql")
+    if target == "migration" and file_path and file_path.endswith(".sql"):
+        actions.append(f"wrote {file_path[:-len('.sql')]}.down.sql")
+
+    for test_path in resolution.get("test_paths", []):
+        actions.append(f"wrote {test_path}")
+
+    return actions
+
+
+def _format_resolution_block(name: str, target: str, resolution: dict,
+                             dry_run: bool = False) -> str:
+    """Render the human-readable resolution block for stderr on bare calls.
+
+    Same shape as the plan / ADR-0062 example. A generator with no route/table
+    footprint (middleware, route without a matching table) simply omits the
+    lines that don't apply — the block is honest about what was chosen.
+    """
+    suffix = "  (dry-run — nothing written)" if dry_run else ""
+    lines = [f"Generated {target} {name}{suffix}"]
+
+    class_name = resolution.get("class_name")
+    file_path = resolution.get("file_path")
+    if class_name and file_path:
+        lines.append(f"  class      {class_name}  (in {file_path})")
+    elif file_path:
+        lines.append(f"  file       {file_path}")
+
+    pluralize = next(
+        (t for t in resolution.get("transformations", [])
+         if t.get("kind") == "reserved_word_pluralize"),
+        None,
+    )
+    if resolution.get("table_name"):
+        note = ""
+        if pluralize:
+            note = f"  (auto-pluralized: '{pluralize['from']}' is a SQL reserved word)"
+        lines.append(f"  table      {resolution['table_name']}{note}")
+
+    if resolution.get("routes"):
+        lines.append(f"  routes     {', '.join(resolution['routes'])}")
+    if target != "migration" and resolution.get("migration_path"):
+        lines.append(f"  migration  {resolution['migration_path']}")
+
+    if pluralize:
+        lines.append("")
+        lines.append(f"  To keep the raw name '{pluralize['from']}' as the table:")
+        lines.append(
+            f"    tina4 generate {target} {name} "
+            f"--table {pluralize['from']} --quote  "
+            "(opt-in, ADR-0062 forthcoming)"
+        )
+
+    return "\n".join(lines) + "\n"
+
+
+def _emit_resolution(target: str, name: str, flags: dict) -> None:
+    """Handle the --json / --dry-run / bare paths for the 4 wired generators.
+
+    Contract shared by every language (ADR-0062):
+    - --json           → envelope on stdout; nothing else on stdout.
+    - --dry-run        → skip every write; envelope with dry_run=true.
+    - --json + --dry-run → both compose (envelope with actions_taken=[]).
+    - bare             → normal write, then human resolution block on stderr.
+    """
+    import contextlib
+    import io
+    import json as _json
+
+    dry_run = bool(flags.get("dry-run"))
+    want_json = bool(flags.get("json"))
+
+    # Lock the timestamp so the envelope's migration_path and the on-disk
+    # filename agree byte-for-byte (threaded through via `_timestamp` flag).
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    resolution = _resolve_generation(target, name, flags, timestamp=timestamp)
+
+    actions_taken: list[str] = []
+    if not dry_run:
+        # Thread the locked-in timestamp through the underlying generator,
+        # then run it. When --json we swallow the generator's stdout so the
+        # JSON envelope is the SOLE thing on stdout; otherwise we let its
+        # "Created X" lines through as before.
+        generator_flags = dict(flags)
+        generator_flags["_timestamp"] = timestamp
+        handler = GENERATORS[target]["handler"]
+
+        stdout_sink = io.StringIO() if want_json else sys.stdout
+        with contextlib.redirect_stdout(stdout_sink):
+            handler(name, generator_flags)
+
+        actions_taken = _actions_from_resolution(target, resolution)
+
+    envelope = {
+        "command": "generate",
+        "target": target,
+        "input": {"name": name, "fields": _input_fields(flags)},
+        "resolution": resolution,
+        "actions_taken": actions_taken,
+        "dry_run": dry_run,
+    }
+
+    if want_json:
+        print(_json.dumps(envelope, indent=2))
+    else:
+        # Human resolution block always lands on STDERR (per plan): stdout
+        # keeps whatever the generator printed on the bare path, and the
+        # block never contends with a caller parsing stdout.
+        sys.stderr.write(_format_resolution_block(name, target, resolution,
+                                                  dry_run=dry_run))
+
+
 # ── Generate (rich scaffolding) ───────────────────────────────────────
 
 def _generate(args):
@@ -1003,6 +1251,15 @@ def _generate(args):
 
     name = args[1] if len(args) > 1 else ""
     flags, _ = _parse_flags(args[2:] if len(args) > 2 else [])
+
+    # ADR-0062: the four wired generators expose a JSON envelope and a
+    # stderr resolution block on every call, so an agent can see WHAT the
+    # framework decided to build with its input. --json emits the envelope;
+    # --dry-run computes it without writing; bare calls print the human
+    # block to stderr AFTER the normal writes complete.
+    if what in _RESOLUTION_TARGETS:
+        _emit_resolution(what, name, flags)
+        return
 
     # Dispatch from the module-level GENERATORS registry (single source of truth
     # for the generate subcommands; also feeds `_help` and the manifest).
@@ -1385,7 +1642,10 @@ def _gen_migration(name: str, flags: dict = None, *,
     """
     flags = flags or {}
     now = datetime.now()
-    timestamp = now.strftime("%Y%m%d%H%M%S")
+    # ADR-0062: the resolution envelope pre-computes the migration path from a
+    # snapshotted timestamp; if it was supplied via the private `_timestamp`
+    # flag, honour it so envelope and disk agree byte-for-byte.
+    timestamp = flags.get("_timestamp") or now.strftime("%Y%m%d%H%M%S")
     target = Path("migrations")
     target.mkdir(parents=True, exist_ok=True)
 
@@ -3111,7 +3371,18 @@ def _commands_manifest() -> dict:
         if spec.get("args"):
             entry["args"] = list(spec["args"])
         commands.append(entry)
-    return {"framework": "python", "version": __version__, "commands": commands}
+    return {
+        "framework": "python",
+        "version": __version__,
+        "commands": commands,
+        # ADR-0062: agents discover the generate resolution envelope shape
+        # programmatically. A version bump here is a break; adding an
+        # optional envelope key is not.
+        "resolution_contract": {
+            "version": _RESOLUTION_ENVELOPE_VERSION,
+            "envelope": "generate_v1",
+        },
+    }
 
 
 def _commands(args=None):
