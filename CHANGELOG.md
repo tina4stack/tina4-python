@@ -9,6 +9,57 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.117
+
+Agent-experience release. Two paired features (import-hint fallback +
+generate-resolution transparency) attack the same defect class: the
+framework silently transforming input, then failing downstream with a
+message that never names the transformation. See ADR-0062.
+
+### Import-hint fallback (tina4_python.route -> tina4_python.core.router)
+
+- New `tina4_python/_import_helper.py`: a last-resort `sys.meta_path`
+  finder appended AFTER Python's normal resolvers. Wired at the end of
+  `tina4_python/__init__.py`. Zero cost on the happy path (only asked
+  when normal resolution failed). Never masks real errors from inside
+  a module that DOES exist.
+- Suggestions come from a `pkgutil.walk_packages` walk of the real
+  installed tree, cached at install. A framework rename updates the
+  hint automatically. No hand-maintained wrong-guess list.
+- 5 real-subprocess tests: positive-happy, positive-package,
+  negative-hint (`from tina4_python.route import get` names
+  `tina4_python.core.router`), negative-no-match (browsable list),
+  masking-gate (a real module with an intentional missing-third-party
+  import raises the ORIGINAL error, not the hint).
+
+### Generate-command resolution transparency
+
+- `generate model|route|migration|middleware --json` emits a
+  versioned envelope on stdout (nothing else), matching the
+  `generate_v1` contract advertised in `commands --json`.
+- `generate model|route|migration|middleware --dry-run` computes the
+  resolution WITHOUT writing files. Composable with `--json`.
+- Bare `generate model X` prints a human-readable resolution block to
+  stderr naming every transformation, path and warning; files are
+  written as before (existing stdout-parsing scripts unaffected).
+- Reserved-word transformations are surfaced: `generate model Order`
+  now prints "auto-pluralized: 'order' is a SQL reserved word" and
+  the envelope names `transformations[0].kind ==
+  "reserved_word_pluralize"`. The `--table X --quote` override flag
+  path is parsed and named in the envelope's `override` field, but
+  the quoted-identifier ORM mode it opts into is out of scope for
+  this release (tracked at tina4-python#123).
+- `commands --json` gains `"resolution_contract": {"version": "1",
+  "envelope": "generate_v1"}` so agents can discover the contract.
+- 5 real-subprocess tests covering json+dry_run, reserved-word
+  transformation, bare invocation stderr block, reserved-name stderr
+  block, and the manifest advertisement.
+
+Parity: tina4-php, tina4-ruby, tina4-nodejs ship the same two
+features in 3.13.117 through their language-native mechanisms
+(spl_autoload_register / const_missing+require wrap / package.json
+exports wildcard).
+
 ## 3.13.116
 
 Test hardening only in Python for this release. tina4-php and
