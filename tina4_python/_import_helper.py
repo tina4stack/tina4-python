@@ -8,15 +8,25 @@ on — which means we never mask a legitimate ImportError raised deeper inside
 a module that DOES exist. If we're being asked, the module truly does not
 exist under this name.
 
-The suggestion is derived from the REAL installed tree (pkgutil.walk_packages),
-so a rename in the framework updates the hint automatically. There is no
+The suggestion is derived from the REAL installed tree, read from DISK, so a
+rename in the framework updates the hint automatically. There is no
 hand-maintained wrong-guess list.
+
+The tree is enumerated with the filesystem rather than pkgutil.walk_packages()
+on purpose: walk_packages IMPORTS every package it descends into, because
+recursing needs each package's __path__. Doing that here — from
+tina4_python/__init__.py at import time — has two effects, and both are bugs:
+it defeats the lazy subsystem loading, and it binds every subpackage as an
+attribute on tina4_python, which shadows the callables __getattr__ exists to
+provide. That second one is why `realtime` resolved to a module and stopped
+being callable. See tests/test_import_helper_does_not_import_the_tree.py.
 """
 from __future__ import annotations
 
 import importlib
 import pkgutil
 import sys
+from pathlib import Path
 from difflib import get_close_matches
 from importlib.abc import MetaPathFinder
 from typing import Sequence
@@ -40,8 +50,25 @@ class _Tina4ModuleFinder(MetaPathFinder):
     def _walk() -> Sequence[str]:
         try:
             pkg = importlib.import_module("tina4_python")
+            names: list[str] = []
+            for root in pkg.__path__:
+                base = Path(root)
+                for path in base.rglob("*"):
+                    if path.name.startswith((".", "_")) and path.name != "__init__.py":
+                        continue
+                    if path.is_dir():
+                        if (path / "__init__.py").is_file():
+                            names.append(_PREFIX + ".".join(path.relative_to(base).parts))
+                    elif path.suffix == ".py" and path.name != "__init__.py":
+                        rel = path.relative_to(base).with_suffix("")
+                        names.append(_PREFIX + ".".join(rel.parts))
+            if names:
+                return sorted(set(names))
+            # Not a plain directory tree (zipimport, a namespace package): fall
+            # back to the non-importing pkgutil call. Top level only, but
+            # correct. Never walk_packages, which would import.
             return sorted(
-                name for _, name, _ in pkgutil.walk_packages(pkg.__path__, prefix=_PREFIX)
+                name for _, name, _ in pkgutil.iter_modules(pkg.__path__, prefix=_PREFIX)
             )
         except Exception:  # noqa: BLE001 — never let the helper break import
             return ()

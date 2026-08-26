@@ -81,8 +81,12 @@ No install, no build, no scaffold. The IIFE exposes everything on
 i18n, storage, pwa, debug) is on that global.
 
 Alternatives to the jsDelivr CDN when you already have a Tina4 backend:
-`<script src="/js/tina4js.min.js"></script>` — every Tina4 backend ships the
-same bundle under `src/public/js/`.
+`<script src="/js/tina4js.min.js"></script>` — every Tina4 backend serves the
+same bundle at that URL. Use the URL, not a path: where it sits on disk differs
+by language. python and php projects keep it at `src/public/js/`; a nodejs
+project uses `public/js/` (`devAdmin.ts` resolves `process.cwd()/public/js/`);
+ruby serves it out of the gem at `lib/tina4/public/js/` rather than copying it
+into the project.
 
 **Rule of thumb: if the developer's ask is under ~50 lines of reactive glue
 on an existing page, take the IIFE path — do not scaffold.**
