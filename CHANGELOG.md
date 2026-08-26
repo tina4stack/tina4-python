@@ -9,6 +9,55 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.118
+
+Regression fix. 3.13.117 shipped an `_import_helper.py` that called
+`pkgutil.walk_packages(pkg.__path__, prefix=...)` inside the finder's
+`_walk()` step. `walk_packages` IMPORTS every subpackage it descends
+into (recursion needs each subpackage's `__path__`, which is populated
+only after import). The finder is installed from `tina4_python/__init__.py`
+at import time, so on bare `import tina4_python` the finder was constructed,
+which walked, which imported every optional subsystem and bound each
+subpackage as an attribute on the `tina4_python` module. Two effects:
+
+- Lazy loading was defeated. Every optional subsystem loaded on a
+  bare import. `test_lazy_feature_loading.py` was going red.
+- `tina4_python.realtime` resolved to the MODULE, shadowing the
+  callable `__getattr__` was there to provide.
+  `realtime(features=[...])` raised
+  `TypeError: 'module' object is not callable`.
+
+Fix by @MichaelC8E (#124, merged as 79c9ecdf0):
+
+- `tina4_python/_import_helper.py`: `_walk()` now uses
+  `pkgutil.iter_modules(pkg.__path__, prefix=_PREFIX)` (no recursion,
+  no import) plus a filesystem walk under `pkg.__path__` for depth,
+  keyed on `.py` files. No import of the tree.
+- `tests/test_import_helper_does_not_import_the_tree.py`: new
+  regression test that runs each check in a FRESH interpreter
+  subprocess (the defect is about what a single `import tina4_python`
+  does, so it cannot be observed twice in one process). Asserts the
+  set of loaded modules stays small AND that `tina4_python.realtime`
+  is still callable.
+- `scripts/sync-tina4-skills.sh`: two holes closed. `.claude/skills`
+  was the only tree compared (of three); a bare `&&` with no `else`
+  let a missing sibling repo silently drop out. Both fixed. Root
+  cause of eight tracked skill files carrying UTF-8-with-BOM +
+  cp1252 mojibake in the `description` frontmatter (byte-identical
+  across copies, invisible to diff).
+- `CLAUDE.md`: stale version footer.
+
+Result on v3: 20 failures -> 0. 5816 pass, 81 skip.
+
+Companion in-flight: @MichaelC8E's parallel skill-repair PRs on
+tina4-php (#205), tina4-ruby (#44), and tina4-nodejs (#60 merged
+into 3.13.118 as 2b3f9a277). PHP + Ruby CI is queued behind the
+tina4stack runner backlog; those will land in 3.13.119.
+
+Parity: tina4-nodejs, tina4-php, tina4-ruby ship 3.13.118 as
+version-parity bumps (Node carries the merged #60 skill repair too;
+PHP + Ruby stay at their 3.13.117 code and only the version bumps).
+
 ## 3.13.117
 
 Agent-experience release. Two paired features (import-hint fallback +
