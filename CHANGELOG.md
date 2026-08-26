@@ -9,6 +9,25 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.119
+
+Version-parity bump. No Python framework code changes; the version
+aligns with:
+
+- tina4-php 3.13.119 which ships @MichaelC8E's skill-repair PR
+  (tina4-php#205), @cwvermaak-codeinfinity's Messenger AUTH/STARTTLS
+  negotiation fix (tina4-php#204), and my ImportHelper autoload
+  non-throw fix (regression from 3.13.117 where the last-resort
+  spl_autoload_register callback threw and broke class_exists()).
+- tina4-ruby 3.13.119 which ships @MichaelC8E's skill-repair PR
+  (tina4-ruby#44) and my CLAUDE.md footer bump.
+- tina4-nodejs 3.13.119 as a version-parity bump.
+
+Python already carried the 3.13.118 regression fix
+(@MichaelC8E's tina4-python#124 fixed the _import_helper.py
+pre-import defect); no further Python change is required in this
+release.
+
 ## 3.13.118
 
 Regression fix. 3.13.117 shipped an `_import_helper.py` that called
