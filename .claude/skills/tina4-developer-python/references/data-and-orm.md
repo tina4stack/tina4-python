@@ -392,6 +392,17 @@ tina4 migrate                                # runs pending migrations
 > That is the folder the CLI scaffolds and both `tina4 migrate` and the server's
 > startup auto-migrate read from.
 
+> **`tina4 migrate:create <desc>` and `tina4 generate migration <desc>` are the same
+> command with different names.** Since 3.13.121 (ADR-0063) `migrate:create`
+> delegates to `generate migration` with `emit_test=False`, so both surfaces emit
+> the identical `generate_v1_1` envelope (with `edit_hints[]` and `next[]`), the
+> identical `tina4:edit` markers in the generated `.sql` + `.down.sql`, and the
+> identical next-steps block. The only intentional divergence is that
+> `migrate:create` is a single-file operation and never co-emits a test, while
+> `generate migration` composes with `--fields "name:string,price:float"` and
+> co-emits a real apply-up/down test for `create_*` migrations. Neither is
+> deprecated; pick whichever reads better in the command you are typing.
+
 Migration files are versioned SQL. Write standard SQL:
 
 ```sql

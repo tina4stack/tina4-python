@@ -732,14 +732,35 @@ def _migrate(args):
 
 
 def _migrate_create(args):
-    """Create a new migration file."""
+    """Create a new migration file.
+
+    Thin delegation to `_emit_resolution("migration", ...)` — the same code
+    path `tina4python generate migration <desc>` takes — so both CLI surfaces
+    emit the SAME ADR-0063 `generate_v1_1` envelope, the SAME `tina4:edit`
+    markers in the file, and the SAME next-steps block. The only intentional
+    difference is that `migrate:create` never co-emits a test file (a private
+    `_no_test` marker on the flags dict suppresses the test-emit path in
+    `_gen_migration` and drops `test_paths[]` in the resolution), preserving
+    the "just a migration, no test" contract of `migrate:create`. Neither
+    surface is deprecated; both stay first-class producers of the envelope.
+
+    The Python API `create_migration()` in `tina4_python.migration.runner` is
+    unchanged and still callable directly.
+    """
     if not args:
         print("Usage: tina4python migrate:create <description>")
         sys.exit(1)
-    from tina4_python.migration import create_migration
-    desc = " ".join(args)
-    path = create_migration(desc, "migrations")
-    print(f"Created: {path}")
+    # Split flags vs positional so `--json` / `--dry-run` flow through the
+    # envelope emitter (bare word args form the description).
+    flags, positional = _parse_flags(list(args))
+    if not positional:
+        print("Usage: tina4python migrate:create <description>")
+        sys.exit(1)
+    desc = " ".join(positional)
+    # Private marker read by _gen_migration + _resolve_generation to suppress
+    # the co-emitted test — see the `migrate:create` contract above.
+    flags["_no_test"] = True
+    _emit_resolution("migration", desc, flags)
 
 
 def _migrate_rollback(args):
@@ -1189,6 +1210,10 @@ def _resolve_generation(target: str, name: str, flags: dict,
         table = _to_snake(table)
         filename = f"{ts}_{name}.sql"
         is_create = name.startswith("create_")
+        # Private `_no_test` marker (set by `migrate:create`, which is a
+        # single-file operation): drop `test_paths[]` so the envelope
+        # matches the on-disk effect. `_gen_migration` reads the same flag.
+        want_test = is_create and not flags.get("_no_test")
         return {
             "class_name": None,
             "table_name": table,
@@ -1196,7 +1221,7 @@ def _resolve_generation(target: str, name: str, flags: dict,
             "migration_path": f"migrations/{filename}",
             "transformations": [],
             "routes": [],
-            "test_paths": [f"tests/test_{table}_migration.py"] if is_create else [],
+            "test_paths": [f"tests/test_{table}_migration.py"] if want_test else [],
         }
 
     if target == "middleware":
@@ -1862,6 +1887,12 @@ def _gen_migration(name: str, flags: dict = None, *,
     # snapshotted timestamp; if it was supplied via the private `_timestamp`
     # flag, honour it so envelope and disk agree byte-for-byte.
     timestamp = flags.get("_timestamp") or now.strftime("%Y%m%d%H%M%S")
+    # Private `_no_test` marker (set by `migrate:create`, which is a
+    # single-file operation): suppress the co-emitted test regardless of the
+    # keyword default. `_resolve_generation` reads the same marker so the
+    # envelope's `test_paths[]` and the on-disk effect stay in agreement.
+    if flags.get("_no_test"):
+        emit_test = False
     target = Path("migrations")
     target.mkdir(parents=True, exist_ok=True)
 
