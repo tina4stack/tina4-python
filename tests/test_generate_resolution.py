@@ -165,6 +165,11 @@ def test_commands_manifest_advertises_resolution_contract(tmp_path):
     """The `commands --json` manifest advertises the resolution contract's
     schema version so an agent can pin against it and know whether the
     envelope shape it depends on is still current.
+
+    3.13.120 bumped the envelope to v1.1 (ADR-0063 Wave 1): additive
+    `edit_hints[]` + `next[]` on the resolution, plus `test_paths[]`
+    (already in v1) is now surfaced in the human block too. Every v1
+    key is preserved, so consumers can still parse the shape they know.
     """
     result = _run(tmp_path, ["tina4python", "commands", "--json"])
     assert result.returncode == 0, (
@@ -176,5 +181,5 @@ def test_commands_manifest_advertises_resolution_contract(tmp_path):
     assert contract is not None, (
         f"manifest missing resolution_contract: {list(manifest)!r}"
     )
-    assert contract["version"] == "1", contract
-    assert contract["envelope"] == "generate_v1", contract
+    assert contract["version"] == "1.1", contract
+    assert contract["envelope"] == "generate_v1_1", contract

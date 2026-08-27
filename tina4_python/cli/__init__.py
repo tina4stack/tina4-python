@@ -986,7 +986,24 @@ _RESOLUTION_TARGETS = {"model", "route", "migration", "middleware"}
 
 # Envelope schema version. Bump when the SHAPE changes; adding an optional
 # key on the resolution object is not a break.
-_RESOLUTION_ENVELOPE_VERSION = "1"
+#
+# 1.1 (ADR-0063 Wave 1, 3.13.120): additive keys `edit_hints[]` and `next[]`
+# on `resolution`, plus `test_paths[]` (already emitted since v1) is now
+# surfaced in the human stderr block too. Every existing generator template
+# bakes `tina4:edit` markers at first-edit spots so a caller sees exactly
+# where to point a follow-up patch. Old envelope keys are preserved; a v1
+# consumer sees the v1 shape intact and simply ignores the new keys.
+_RESOLUTION_ENVELOPE_VERSION = "1.1"
+_RESOLUTION_ENVELOPE_NAME = "generate_v1_1"
+
+# Marker syntax the generator templates bake in at first-edit spots — accepts
+# a Python (`#`), SQL (`--`), or Twig (`{#`) comment prefix, followed by a
+# short actionable label. The label ends at end-of-line or a closing Twig `#}`.
+# NEVER matches inside a string literal — the compiler regex is a plain textual
+# scan of freshly-written source, but no template contains a matching literal.
+_EDIT_MARKER_RE = re.compile(
+    r"(?:#|--|\{#)\s*tina4:edit\s+([^\n#]+?)\s*(?:#\})?\s*$"
+)
 
 
 def _input_fields(flags: dict):
@@ -1000,6 +1017,118 @@ def _input_fields(flags: dict):
     if not isinstance(value, str) or not value:
         return None
     return value
+
+
+def _scan_edit_hints(root: Path, rel_paths: list[str]) -> list[dict]:
+    """Grep freshly-written files for `tina4:edit` markers (envelope v1.1).
+
+    Reads each `rel_paths` entry under `root`, walks its lines, and returns
+    `[{file, line, label}]` — one entry per marker, in file+line order.
+
+    A missing file is silently skipped: the caller wires this into the
+    envelope path where `actions_taken` is the source of truth for what
+    landed. The scan is text-only — no imports, no parsing — so an edited
+    template that fails to run still yields honest hints.
+    """
+    hints: list[dict] = []
+    for rel in rel_paths:
+        f = root / rel
+        if not f.is_file():
+            continue
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            match = _EDIT_MARKER_RE.search(line)
+            if match:
+                hints.append({
+                    "file": rel,
+                    "line": lineno,
+                    "label": match.group(1).strip(),
+                })
+    return hints
+
+
+def _hint_paths_from_resolution(target: str, resolution: dict) -> list[str]:
+    """The set of paths the caller should scan for `tina4:edit` markers.
+
+    Every path the generator ACTUALLY writes is worth scanning — the model
+    file, the matching migration + down, the middleware file, the co-emitted
+    test — because a marker in any of them names a first-edit spot the
+    developer will hit. Order is stable: primary file, then migration + down,
+    then any test paths declared in the envelope. The hints themselves land
+    in file+line order regardless.
+    """
+    paths: list[str] = []
+    primary = resolution.get("file_path")
+    if primary:
+        paths.append(primary)
+
+    # Model + migration composite: the migration is written by _gen_migration
+    # under the model's own generator, so its markers deserve to surface too.
+    if target == "model" and resolution.get("migration_path"):
+        migration = resolution["migration_path"]
+        paths.append(migration)
+        if migration.endswith(".sql"):
+            paths.append(migration[:-len(".sql")] + ".down.sql")
+
+    # A bare migration also writes its own .down.sql.
+    if target == "migration" and primary and primary.endswith(".sql"):
+        paths.append(primary[:-len(".sql")] + ".down.sql")
+
+    # Co-emitted tests carry their own markers (see the test template).
+    for test_path in resolution.get("test_paths", []):
+        if test_path not in paths:
+            paths.append(test_path)
+    return paths
+
+
+def _next_steps_for(target: str, name: str, resolution: dict, flags: dict) -> list[str]:
+    """Curated actionable next-steps a caller should see after generation.
+
+    Kept short and concrete: what to edit, what to run, how to try it. The
+    entries are per-target because a generic "next steps" list dilutes into
+    noise — a route's next step is `curl`, a middleware's next step is
+    `@middleware(...)` on a real route.
+
+    Placeholders are resolved from the same shape the envelope already
+    reports (class_name, table_name, routes), so a caller can trust the
+    strings match what actually landed on disk.
+    """
+    if target == "model":
+        table = resolution.get("table_name") or _to_table(name)
+        return [
+            f"Edit src/orm/{name}.py to add fields beyond the default `name`",
+            "Apply the migration:      tina4 migrate",
+            f"Scaffold CRUD around it:  tina4 generate crud {name} --skip-model",
+            f"Try it:                   tina4 serve  ->  curl http://localhost:7146/api/{table}",
+        ]
+
+    if target == "route":
+        route_path = name.lstrip("/")
+        first_url = (resolution.get("routes") or [f"/api/{route_path}"])[0]
+        return [
+            f"Edit src/routes/{route_path}.py to customise the handlers",
+            "Start the server:  tina4 serve",
+            f"Try it:            curl http://localhost:7146{first_url}",
+        ]
+
+    if target == "migration":
+        return [
+            "Apply it:              tina4 migrate",
+            "Roll back last batch:  tina4 migrate --rollback",
+            "Inspect the pending:   tina4 migrate --status",
+        ]
+
+    if target == "middleware":
+        snake = _to_snake(name)
+        return [
+            f"Register it on a route with @middleware({name}) in src/routes/",
+            f"Run the co-emitted test:  .venv/bin/python -m pytest tests/test_{snake}.py",
+        ]
+
+    return []
 
 
 def _resolve_generation(target: str, name: str, flags: dict,
@@ -1112,12 +1241,19 @@ def _actions_from_resolution(target: str, resolution: dict) -> list[str]:
 
 
 def _format_resolution_block(name: str, target: str, resolution: dict,
-                             dry_run: bool = False) -> str:
+                             dry_run: bool = False,
+                             edit_hints: list[dict] | None = None,
+                             next_steps: list[str] | None = None) -> str:
     """Render the human-readable resolution block for stderr on bare calls.
 
     Same shape as the plan / ADR-0062 example. A generator with no route/table
     footprint (middleware, route without a matching table) simply omits the
     lines that don't apply — the block is honest about what was chosen.
+
+    ADR-0063 (envelope v1.1) also surfaces `test_paths[]` (was in the envelope
+    since v1, never printed), plus `edit_hints[]` under "Edit these lines:"
+    and `next_steps[]` under "Next:". Each section omits when empty so the
+    block never grows a header without content beneath it.
     """
     suffix = "  (dry-run — nothing written)" if dry_run else ""
     lines = [f"Generated {target} {name}{suffix}"]
@@ -1145,6 +1281,13 @@ def _format_resolution_block(name: str, target: str, resolution: dict,
     if target != "migration" and resolution.get("migration_path"):
         lines.append(f"  migration  {resolution['migration_path']}")
 
+    # ADR-0063: surface test_paths[] in the human block too (it has been in the
+    # envelope since v1 but only the JSON path printed it). Skipped when empty
+    # so a migration without a test file doesn't grow an empty "tests" row.
+    test_paths = resolution.get("test_paths") or []
+    if test_paths:
+        lines.append(f"  tests      {', '.join(test_paths)}")
+
     if pluralize:
         lines.append("")
         lines.append(f"  To keep the raw name '{pluralize['from']}' as the table:")
@@ -1154,21 +1297,47 @@ def _format_resolution_block(name: str, target: str, resolution: dict,
             "(opt-in, ADR-0062 forthcoming)"
         )
 
+    # ADR-0063 additive sections. Each renders only when there is content, so
+    # a target with no markers or no next-steps stays as tight as before.
+    if edit_hints:
+        lines.append("")
+        lines.append("Edit these lines:")
+        # Left-pad the file:line column so labels align — makes scanning easier
+        # when there are three or four hints of different path lengths.
+        addrs = [f"{h['file']}:{h['line']}" for h in edit_hints]
+        width = max(len(a) for a in addrs)
+        for addr, hint in zip(addrs, edit_hints):
+            lines.append(f"  {addr:<{width}}  {hint['label']}")
+
+    if next_steps:
+        lines.append("")
+        lines.append("Next:")
+        for i, step in enumerate(next_steps, start=1):
+            lines.append(f"  {i}. {step}")
+
     return "\n".join(lines) + "\n"
 
 
 def _emit_resolution(target: str, name: str, flags: dict) -> None:
     """Handle the --json / --dry-run / bare paths for the 4 wired generators.
 
-    Contract shared by every language (ADR-0062):
+    Contract shared by every language (ADR-0062, extended by ADR-0063):
     - --json           → envelope on stdout; nothing else on stdout.
     - --dry-run        → skip every write; envelope with dry_run=true.
     - --json + --dry-run → both compose (envelope with actions_taken=[]).
     - bare             → normal write, then human resolution block on stderr.
+
+    Envelope v1.1 (ADR-0063) additively surfaces `resolution.edit_hints[]`
+    (one per `tina4:edit` marker found in freshly-written files) and
+    `resolution.next[]` (curated actionable next-steps per verb). The
+    hints are scanned from disk on the write paths; on --dry-run the
+    generator runs in a throw-away tmpdir so the same scan gives the
+    caller a real preview without touching the working tree.
     """
     import contextlib
     import io
     import json as _json
+    import tempfile
 
     dry_run = bool(flags.get("dry-run"))
     want_json = bool(flags.get("json"))
@@ -1178,21 +1347,55 @@ def _emit_resolution(target: str, name: str, flags: dict) -> None:
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     resolution = _resolve_generation(target, name, flags, timestamp=timestamp)
 
+    handler = GENERATORS[target]["handler"]
+    generator_flags = dict(flags)
+    generator_flags["_timestamp"] = timestamp
+    # `_gen_*` handlers read the primary flags; `--dry-run` / `--json` are
+    # envelope-only concerns, they must not leak into the underlying writer.
+    generator_flags.pop("dry-run", None)
+    generator_flags.pop("json", None)
+
     actions_taken: list[str] = []
-    if not dry_run:
-        # Thread the locked-in timestamp through the underlying generator,
-        # then run it. When --json we swallow the generator's stdout so the
+    edit_hints: list[dict] = []
+
+    hint_paths = _hint_paths_from_resolution(target, resolution)
+
+    if dry_run:
+        # Render into a throw-away tree so the scan sees the SAME bytes the
+        # writer would drop on disk. The envelope's paths still point at the
+        # real project paths (unchanged by the tmpdir chdir) — the caller
+        # can trust `edit_hints[].file` and `resolution.file_path` share a
+        # coordinate space.
+        with tempfile.TemporaryDirectory() as tmp:
+            original_cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                # Suppress the generator's own "Created X" lines — this is a
+                # dry-run, and its "creations" happen in a tmpdir the caller
+                # will never see. `--json` also swallows stdout on the real
+                # write path; this keeps the two paths symmetrical.
+                with contextlib.redirect_stdout(io.StringIO()):
+                    handler(name, generator_flags)
+                edit_hints = _scan_edit_hints(Path(tmp), hint_paths)
+            finally:
+                os.chdir(original_cwd)
+    else:
+        # Real write. When --json we swallow the generator's stdout so the
         # JSON envelope is the SOLE thing on stdout; otherwise we let its
         # "Created X" lines through as before.
-        generator_flags = dict(flags)
-        generator_flags["_timestamp"] = timestamp
-        handler = GENERATORS[target]["handler"]
-
         stdout_sink = io.StringIO() if want_json else sys.stdout
         with contextlib.redirect_stdout(stdout_sink):
             handler(name, generator_flags)
 
         actions_taken = _actions_from_resolution(target, resolution)
+        edit_hints = _scan_edit_hints(Path.cwd(), hint_paths)
+
+    # ADR-0063 additive envelope keys — computed once and reused by the JSON
+    # and human paths so what the caller sees on stderr matches the envelope
+    # byte-for-byte.
+    next_steps = _next_steps_for(target, name, resolution, flags)
+    resolution["edit_hints"] = edit_hints
+    resolution["next"] = next_steps
 
     envelope = {
         "command": "generate",
@@ -1209,8 +1412,12 @@ def _emit_resolution(target: str, name: str, flags: dict) -> None:
         # Human resolution block always lands on STDERR (per plan): stdout
         # keeps whatever the generator printed on the bare path, and the
         # block never contends with a caller parsing stdout.
-        sys.stderr.write(_format_resolution_block(name, target, resolution,
-                                                  dry_run=dry_run))
+        sys.stderr.write(_format_resolution_block(
+            name, target, resolution,
+            dry_run=dry_run,
+            edit_hints=edit_hints,
+            next_steps=next_steps,
+        ))
 
 
 # ── Generate (rich scaffolding) ───────────────────────────────────────
@@ -1294,11 +1501,18 @@ def _gen_model(name: str, flags: dict, *, emit_test: bool = True):
 
     imports = ", ".join(sorted(used_types))
 
-    # Build field lines
-    field_lines = [f"    id = IntegerField(primary_key=True, auto_increment=True)"]
+    # Build field lines. Bracketed by two `tina4:edit` markers (ADR-0063) so
+    # a first-time user sees WHERE to add columns and relationships — the
+    # `id` and `created_at` lines are framework-managed, the block between
+    # is theirs to grow.
+    field_lines = [
+        "    id = IntegerField(primary_key=True, auto_increment=True)",
+        "    # tina4:edit  add fields here",
+    ]
     for fname, ftype in fields:
         info = FIELD_TYPE_MAP.get(ftype, FIELD_TYPE_MAP["string"])
         field_lines.append(f"    {fname} = {info['orm']}()")
+    field_lines.append("    # tina4:edit  add relationships here (e.g. author = ForeignKeyField(to=Author))")
     field_lines.append("    created_at = DateTimeField()")
 
     # Write model file
@@ -1395,6 +1609,7 @@ async def list_{route_path}(request, response):
     per_page = int(request.query.get("per_page", 20))
     offset = (page - 1) * per_page
     records, total = {model}.where("1=1", limit=per_page, offset=offset, with_count=True)
+    # tina4:edit  customise the list projection (filters, ordering, fields)
     return response({{
         "records": [r.to_dict() for r in records],
         "count": total,
@@ -1588,6 +1803,7 @@ def _gen_crud(name: str, flags: dict):
             '{% block content %}\n'
             '<div class="container mt-4">\n'
             f'    <h1>{name}s</h1>\n'
+            '    {# tina4:edit  restrict fields exposed to the API here #}\n'
             '    <table class="table">\n'
             '        <thead>\n'
             '            <tr>\n'
@@ -1671,11 +1887,21 @@ def _gen_migration(name: str, flags: dict = None, *,
             col_lines.append(f"    {fname} {info['sql']}{default}")
         col_lines.append("    created_at TEXT DEFAULT CURRENT_TIMESTAMP")
 
-        up_sql = f"CREATE TABLE IF NOT EXISTS {table} (\n" + ",\n".join(col_lines) + "\n);"
+        # ADR-0063: `tina4:edit` marker between the last column and the closing
+        # paren, placed OUTSIDE the comma-joined column list so the SQL stays
+        # valid. Points a first-time user at where to add columns beyond the
+        # framework-managed id + created_at.
+        up_sql = (
+            f"CREATE TABLE IF NOT EXISTS {table} (\n"
+            + ",\n".join(col_lines)
+            + "\n    -- tina4:edit  add columns beyond id + created_at\n);"
+        )
         down_sql = f"DROP TABLE IF EXISTS {table};"
     else:
-        up_sql = f"-- Write your UP migration SQL here\n-- Example: ALTER TABLE {table} ADD COLUMN new_col TEXT DEFAULT '';"
-        down_sql = f"-- Write your DOWN rollback SQL here\n-- Example: ALTER TABLE {table} DROP COLUMN new_col;"
+        up_sql = (f"-- tina4:edit  write the UP migration SQL\n"
+                  f"-- Example: ALTER TABLE {table} ADD COLUMN new_col TEXT DEFAULT '';")
+        down_sql = (f"-- tina4:edit  write the DOWN rollback SQL\n"
+                    f"-- Example: ALTER TABLE {table} DROP COLUMN new_col;")
 
     content = (
         f"-- Migration: {name}\n"
@@ -1739,12 +1965,14 @@ class {name}:
         Return (request, response) to continue, or
         return (request, response("error", 401)) to block.
         """
+        # tina4:edit  guard the request here (auth check, rate limit, headers)
         Log.info(f"{name}: {{request.method}} {{request.url}}")
         return request, response
 
     @staticmethod
     def after_{snake}(request, response):
         """Runs after the route handler."""
+        # tina4:edit  inject headers or audit the response here
         return request, response
 '''
     path.write_text(content, encoding="utf-8")
@@ -1861,7 +2089,7 @@ class Test{model}:
 
     def test_list_{snake}(self):
         """Test listing {snake}."""
-        # TODO: implement
+        # tina4:edit  add assertions here (real DB, real request — no mocks)
         assert True
 
     def test_get_{singular}(self):
@@ -1902,6 +2130,7 @@ class Test{name.title().replace("_", "")}:
 
     def test_example(self):
         """Example test — replace with real tests."""
+        # tina4:edit  add assertions here (real DB, real request — no mocks)
         assert True
 '''
 
@@ -2463,6 +2692,7 @@ def _gen_service(name: str, flags: dict = None):
         '    """The scheduled task body. `context` is a ServiceContext with\n'
         "    .name, .stop_event and .log; a daemon-style task would loop until\n"
         '    context.stop_event.is_set()."""\n'
+        "    # tina4:edit  main service loop here\n"
         "__BODY__"
         "\n\n"
         "def register(runner: ServiceRunner) -> None:\n"
@@ -2534,6 +2764,7 @@ def _gen_queue(name: str, flags: dict = None):
         "\n"
         "def handle___SLUG__(data: dict):\n"
         '    """Process ONE __TOPIC__ job payload (`data` is Job.data — the pushed dict)."""\n'
+        "    # tina4:edit  handle the job payload here\n"
         "__BODY__"
         "\n\n"
         "def consume___SLUG__(context=None):\n"
@@ -2612,6 +2843,7 @@ def _gen_validator(name: str, flags: dict = None):
         '            return response.error("VALIDATION_FAILED", v.errors()[0]["message"], 400)\n'
         '    """\n'
         "    validator = Validator(data)\n"
+        "    # tina4:edit  add validation rules here\n"
         "__BODY__"
         "    return validator\n"
     )
@@ -2664,6 +2896,7 @@ def _gen_seeder(name: str, flags: dict = None):
         "    need a specific shape here. Each callable receives a FakeData instance:\n"
         '        return {"email": lambda fake: fake.email(), "status": "active"}\n'
         '    """\n'
+        "    # tina4:edit  add seed data here\n"
         "__BODY__"
         "\n\n"
         "def run(db):\n"
@@ -2730,6 +2963,7 @@ def _gen_websocket(name: str, flags: dict = None):
         '    if event == "close":\n'
         "        return\n"
         '    # event == "message"\n'
+        "    # tina4:edit  handle inbound messages here\n"
         "__BODY__"
     )
     content = (
@@ -2781,6 +3015,7 @@ def _gen_listener(name: str, flags: dict = None):
         '@on("__EVENT__")\n'
         "def on___SLUG__(data=None):\n"
         "    \"\"\"React to '__EVENT__'. `data` is whatever emit('__EVENT__', data) passed.\"\"\"\n"
+        "    # tina4:edit  react to the event here\n"
         "__BODY__"
     )
     content = (
@@ -2866,6 +3101,7 @@ def _gen_form(name: str, flags: dict = None):
         '    <h1>{%% if item.id %%}Edit %s{%% else %%}Create %s{%% endif %%}</h1>\n'
         '    <form method="post" action="/api/%s{%% if item.id %%}/{{ item.id }}{%% endif %%}">\n'
         '        {{ form_token() }}\n'
+        '        {# tina4:edit  customise the form fields here #}\n'
         '%s'
         '    <button type="submit" class="btn btn-primary">\n'
         '        {%% if item.id %%}Update{%% else %%}Create{%% endif %%}\n'
@@ -2911,6 +3147,7 @@ def _gen_view(name: str, flags: dict = None):
             '        <h1>%s</h1>\n'
             '        <a href="/%s/create" class="btn btn-primary">Add %s</a>\n'
             '    </div>\n'
+            '    {# tina4:edit  customise the list columns or add filters here #}\n'
             '    <table class="table">\n'
             '        <thead>\n'
             '            <tr>\n'
@@ -2959,6 +3196,7 @@ def _gen_view(name: str, flags: dict = None):
             '            <a href="/%s" class="btn btn-outline-secondary">Back</a>\n'
             '        </div>\n'
             '    </div>\n'
+            '    {# tina4:edit  arrange the detail fields here #}\n'
             '%s\n'
             '</div>\n'
             '{%% endblock %%}\n'
@@ -3009,6 +3247,7 @@ def _gen_auth(name: str = None, flags: dict = None):
             '    user = User.create({\n'
             '        "email": email,\n'
             '        "password": Auth.hash_password(password),\n'
+            '        # tina4:edit  add roles/permissions here\n'
             '        "role": "user",\n'
             '    })\n'
             '    return response({"message": "Registered", "id": user.id}, 201)\n\n\n'
@@ -3375,12 +3614,14 @@ def _commands_manifest() -> dict:
         "framework": "python",
         "version": __version__,
         "commands": commands,
-        # ADR-0062: agents discover the generate resolution envelope shape
-        # programmatically. A version bump here is a break; adding an
-        # optional envelope key is not.
+        # ADR-0062 / ADR-0063: agents discover the generate resolution envelope
+        # shape programmatically. A version bump here is a break; adding an
+        # optional envelope key is not. 1.1 (envelope generate_v1_1) added
+        # `edit_hints[]` and `next[]` on the resolution — every v1 key
+        # preserved, so a v1 consumer keeps working unchanged.
         "resolution_contract": {
             "version": _RESOLUTION_ENVELOPE_VERSION,
-            "envelope": "generate_v1",
+            "envelope": _RESOLUTION_ENVELOPE_NAME,
         },
     }
 
