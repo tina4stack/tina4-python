@@ -506,28 +506,63 @@ def register_dev_tools(server):
         return status(db)
 
     def migration_create(description: str) -> dict:
-        """Create a new migration file. Refuses to create a duplicate
-        for a description whose slug already exists in migrations/ —
-        the AI gets an error pointing at the existing file so it can
-        edit that one rather than spawning a second migration for the
-        same schema change."""
-        from tina4_python.migration import create_migration
+        """Create a new migration file AND return the ADR-0063 `generate_v1_1`
+        envelope so an agent gets the SAME edit_hints[]/next[] guidance a CLI
+        user gets.
+
+        Delegates to the same resolution-aware code path the CLI's
+        `tina4python migrate:create` / `tina4python generate migration` uses.
+        The private `_no_test` flag matches the migrate:create contract (no
+        co-emitted test file — a migration is a single-file operation).
+
+        Refuses to create a duplicate for a description whose slug already
+        exists in migrations/ — returns `{"ok": False, "existing": [...]}`
+        so the AI edits the existing file instead of spawning a second
+        migration for the same schema change. On collision the envelope is
+        NOT emitted (the operation did not run).
+
+        Return shape (MCP wire contract):
+            {"ok": True, "created": "<relative-path>", "resolution": <envelope>}
+                — success. `created` is the primary UP file path (preserves
+                the historical MCP field). `resolution` is the full CLI
+                envelope with `command`, `target`, `input`, nested
+                `resolution` (edit_hints + next + file_path), actions_taken,
+                dry_run.
+            {"ok": False, "error": "...", "existing": [...]}
+                — refused collision. No file was written. Envelope omitted.
+        """
+        import contextlib
+        import io
         import re as _re
+        from datetime import datetime as _dt
+
+        # Slug the description before delegating so the on-disk filename is
+        # well-formed even when the caller passed a natural-language phrase
+        # ("add users"). Matches the historical `create_migration()` behaviour
+        # this tool used to delegate to.
         slug = _re.sub(r"[^a-z0-9]+", "_", (description or "").lower()).strip("_")
+        if not slug:
+            return {
+                "ok": False,
+                "error": "description is empty; provide a short snake_case name",
+            }
+
         mig_dir = project_root / "migrations"
-        if mig_dir.is_dir() and slug:
-            # Compare against existing migration slugs (strip the
-            # leading timestamp and .sql/.down.sql extension). Reuse
-            # if an exact slug OR a clearly-equivalent slug exists.
+        if mig_dir.is_dir():
+            # Compare against existing migration slugs (strip the leading
+            # timestamp and .sql/.down.sql extension). Reuse if an exact
+            # slug OR a clearly-equivalent slug exists.
             existing: list[str] = []
             for p in sorted(mig_dir.glob("*.sql")):
-                name = p.name
+                fname = p.name
                 # Files look like "20260417175842_create_contact_messages_table.sql".
                 # Strip the timestamp prefix (14 digits + underscore) and the suffix.
-                after = _re.sub(r"^\d{14}_", "", name)
+                after = _re.sub(r"^\d{14}_", "", fname)
                 after = _re.sub(r"\.(down\.)?sql$", "", after)
                 existing_slug = _re.sub(r"[^a-z0-9]+", "_", after.lower()).strip("_")
-                if existing_slug == slug or existing_slug == slug + "_table" or slug == existing_slug + "_table":
+                if (existing_slug == slug
+                        or existing_slug == slug + "_table"
+                        or slug == existing_slug + "_table"):
                     existing.append(str(p.relative_to(project_root)))
             if existing:
                 return {
@@ -538,9 +573,52 @@ def register_dev_tools(server):
                     ),
                     "existing": existing,
                 }
-        filename = create_migration(description)
+
+        # Delegate to the same resolution-aware helpers the CLI uses so both
+        # surfaces produce byte-for-byte equivalent envelopes (modulo timestamp
+        # + file paths). Imported lazily to avoid pulling the CLI into every
+        # MCP tool-registration path.
+        from tina4_python.cli import (
+            _actions_from_resolution,
+            _gen_migration,
+            _hint_paths_from_resolution,
+            _input_fields,
+            _next_steps_for,
+            _resolve_generation,
+            _scan_edit_hints,
+        )
+
+        flags = {"_no_test": True}
+        # Lock the timestamp so `resolution.file_path` and the on-disk filename
+        # agree byte-for-byte (threaded to `_gen_migration` via `_timestamp`).
+        timestamp = _dt.now().strftime("%Y%m%d%H%M%S")
+        resolution = _resolve_generation("migration", slug, flags, timestamp=timestamp)
+
+        generator_flags = dict(flags)
+        generator_flags["_timestamp"] = timestamp
+        # Swallow the generator's own "  ✓ Created …" prints — MCP returns
+        # JSON to the caller, never text on stdout.
+        with contextlib.redirect_stdout(io.StringIO()):
+            _gen_migration(slug, generator_flags)
+
+        actions_taken = _actions_from_resolution("migration", resolution)
+        hint_paths = _hint_paths_from_resolution("migration", resolution)
+        edit_hints = _scan_edit_hints(project_root, hint_paths)
+        next_steps = _next_steps_for("migration", slug, resolution, flags)
+        resolution["edit_hints"] = edit_hints
+        resolution["next"] = next_steps
+
+        envelope = {
+            "command": "generate",
+            "target": "migration",
+            "input": {"name": slug, "fields": _input_fields(flags)},
+            "resolution": resolution,
+            "actions_taken": actions_taken,
+            "dry_run": False,
+        }
+        filename = resolution["file_path"]  # "migrations/{ts}_{slug}.sql"
         _record_plan_action("migration", filename, note=description)
-        return {"created": filename}
+        return {"ok": True, "created": filename, "resolution": envelope}
 
     def _record_plan_action(action: str, path: str, note: str = "") -> None:
         """Forward a file event to the active plan's execution ledger.

@@ -392,16 +392,21 @@ tina4 migrate                                # runs pending migrations
 > That is the folder the CLI scaffolds and both `tina4 migrate` and the server's
 > startup auto-migrate read from.
 
-> **`tina4 migrate:create <desc>` and `tina4 generate migration <desc>` are the same
-> command with different names.** Since 3.13.121 (ADR-0063) `migrate:create`
-> delegates to `generate migration` with `emit_test=False`, so both surfaces emit
+> **Three surfaces create a migration — all emit the same `generate_v1_1`
+> envelope.** Since 3.13.121 (ADR-0063) the CLI `tina4 migrate:create <desc>`,
+> the CLI `tina4 generate migration <desc>`, and the MCP dev tool
+> `migration_create(<desc>)` (over `/__dev/mcp`) share ONE code path: they emit
 > the identical `generate_v1_1` envelope (with `edit_hints[]` and `next[]`), the
 > identical `tina4:edit` markers in the generated `.sql` + `.down.sql`, and the
-> identical next-steps block. The only intentional divergence is that
-> `migrate:create` is a single-file operation and never co-emits a test, while
-> `generate migration` composes with `--fields "name:string,price:float"` and
-> co-emits a real apply-up/down test for `create_*` migrations. Neither is
-> deprecated; pick whichever reads better in the command you are typing.
+> identical next-steps block. The MCP tool wraps the envelope in
+> `{"ok": True, "created": <path>, "resolution": <envelope>}` and additionally
+> refuses a duplicate slug (returns `{"ok": False, "existing": [...]}`) so an
+> agent can't spawn a second migration for the same schema change. The only
+> intentional CLI-side divergence is that `migrate:create` is a single-file
+> operation and never co-emits a test, while `generate migration` composes with
+> `--fields "name:string,price:float"` and co-emits a real apply-up/down test
+> for `create_*` migrations. Neither is deprecated; pick whichever reads better
+> in the command you are typing.
 
 Migration files are versioned SQL. Write standard SQL:
 
@@ -712,7 +717,7 @@ in the box. **Need → Tina4 built-in (verified import/idiom) — don't add the 
 | ORM / models | `from tina4_python import ORM, IntegerField, StringField, …, bind_database` *(don't add `sqlalchemy`, `peewee`)* |
 | Fluent queries / JOINs | `from tina4_python.query_builder import QueryBuilder` — `QueryBuilder.from_table(...)` |
 | DB drivers (multi-engine) | `from tina4_python.database import Database` — sqlite built in; postgres/mysql/mssql/firebird/mongodb via extras |
-| Migrations | `tina4 migrate:create` / `tina4 migrate` CLI (or `from tina4_python.migration.runner import Migration, create_migration`) *(don't add `alembic`)* |
+| Migrations | Three surfaces, one envelope: CLI `tina4 migrate:create <desc>`, CLI `tina4 generate migration <desc>`, and MCP `migration_create(<desc>)` on `/__dev/mcp` — all emit the same `generate_v1_1` envelope with `edit_hints[]` + `next[]`. Runner API: `from tina4_python.migration.runner import Migration, create_migration`. Apply with `tina4 migrate` *(don't add `alembic`)* |
 | Templating | `from tina4_python import Frond` (Frond engine) + `response.render("page.twig", {...})`; templates in `src/templates/` *(don't add `jinja2`, `markupsafe`)* |
 | SCSS → CSS | drop `.scss` in `src/scss/` — auto-compiled to `src/public/css/` on `tina4 serve` *(don't add `libsass`, `dart-sass`)* |
 | Input validation | `from tina4_python.validator import Validator` |
