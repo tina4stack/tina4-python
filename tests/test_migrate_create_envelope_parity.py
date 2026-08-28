@@ -106,12 +106,13 @@ def test_migrate_create_and_generate_migration_produce_same_envelope(tmp_path):
     # Resolution parity: paths and next-steps and markers all match. Filenames
     # carry a per-call timestamp so we strip it before comparing paths.
     def _norm(res):
-        clone = dict(res)
-        for key in ("file_path", "migration_path"):
-            value = clone.get(key)
-            if value:
-                clone[key] = re.sub(r"\d{14}_", "TS_", value)
-        return clone
+        # Both subprocesses run seconds apart, so EVERY timestamped filename in
+        # the envelope differs by its 14-digit stamp — not just the top-level
+        # file_path/migration_path but also the nested edit_hints[].file. Strip
+        # the stamp everywhere via a JSON round-trip so the comparison is about
+        # the CONTRACT, not the wall-clock second each subprocess happened to run.
+        blob = json.dumps(res, sort_keys=True)
+        return json.loads(re.sub(r"\d{14}_", "TS_", blob))
 
     assert _norm(mc["resolution"]) == _norm(gm["resolution"])
 
