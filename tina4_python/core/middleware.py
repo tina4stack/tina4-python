@@ -491,6 +491,40 @@ class RateLimiterMiddleware:
         return limiter.check(ip)
 
 
+_CSP_DEFAULT_WARNED: list = []
+
+
+def _csp_default_warn_once() -> None:
+    """Warn once per process that the default CSP is in force (TINA4_CSP unset).
+
+    Secure-by-default keeps ``default-src 'self'`` (SECHDR-DEC-01), but that
+    default is invisible: it blocks runtime-injected inline styles, cross-origin
+    fonts/scripts/CDNs, ``data:`` URIs, and cross-origin WebSocket/XHR (a separate
+    API or LiveKit host) — and the failure surfaces only in the browser at
+    runtime, long after a deploy has gone green. So the framework says so once,
+    naming the escape hatch. It NEVER fails the boot or a request — logging a
+    heads-up must not be the reason ``tina4 serve`` or a production start dies.
+    Fires only when TINA4_CSP is ABSENT; setting it (even to empty) is an explicit
+    opt-in and stays silent.
+    """
+    if _CSP_DEFAULT_WARNED:
+        return
+    _CSP_DEFAULT_WARNED.append(True)
+    message = (
+        "TINA4_CSP is not set, so Tina4 is serving the default Content-Security-Policy "
+        "\"default-src 'self'\" on every response. That default blocks runtime-injected "
+        "inline styles, cross-origin fonts/scripts/CDNs, data: URIs, and cross-origin "
+        "WebSocket/XHR (e.g. a separate API or LiveKit host). If your app uses any of "
+        "these, set TINA4_CSP to a policy that allows them (see https://tina4.com); to "
+        "silence this notice without changing behaviour, set TINA4_CSP=\"default-src 'self'\"."
+    )
+    try:
+        from tina4_python.debug import Log
+        Log.warning(message)
+    except Exception:  # pragma: no cover — logging must never break a request
+        logging.getLogger("tina4").warning(message)
+
+
 class SecurityHeadersMiddleware:
     """Injects security headers on every response.
 
@@ -540,6 +574,8 @@ class SecurityHeadersMiddleware:
                 f"max-age={hsts}; includeSubDomains",
             )
 
+        if os.environ.get("TINA4_CSP") is None:
+            _csp_default_warn_once()
         response.header(
             "Content-Security-Policy",
             os.environ.get("TINA4_CSP", "default-src 'self'"),
