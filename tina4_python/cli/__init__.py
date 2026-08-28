@@ -1003,7 +1003,7 @@ def _ai(args):
 # The four generators wired for the envelope. Others (crud, service, queue,
 # validator, seeder, websocket, listener, auth, test, form, view) keep their
 # existing behaviour — this is the minimum surface the plan calls out.
-_RESOLUTION_TARGETS = {"model", "route", "migration", "middleware"}
+_RESOLUTION_TARGETS = {"model", "route", "migration", "middleware", "queue"}
 
 # Envelope schema version. Bump when the SHAPE changes; adding an optional
 # key on the resolution object is not a break.
@@ -1149,6 +1149,16 @@ def _next_steps_for(target: str, name: str, resolution: dict, flags: dict) -> li
             f"Run the co-emitted test:  .venv/bin/python -m pytest tests/test_{snake}.py",
         ]
 
+    if target == "queue":
+        topic = name.lstrip("/")
+        slug = _to_snake(re.sub(r"[^0-9a-zA-Z]+", "_", topic)).strip("_") or "topic"
+        return [
+            f"Edit src/services/{slug}_consumer.py: implement handle_{slug}(data) to process ONE job",
+            f"Produce a job:  from src.services.{slug}_consumer import publish_{slug}; publish_{slug}({{...}})",
+            f"The consumer is discovered by ServiceRunner (src/services); tina4 serve runs it",
+            f"Run the co-emitted test:  .venv/bin/python -m pytest tests/test_{slug}.py",
+        ]
+
     return []
 
 
@@ -1234,6 +1244,21 @@ def _resolve_generation(target: str, name: str, flags: dict,
             "transformations": [],
             "routes": [],
             "test_paths": [f"tests/test_{snake}.py"],
+        }
+
+    if target == "queue":
+        # Slug computed EXACTLY as _gen_queue does, so the envelope's paths
+        # equal the on-disk filenames byte-for-byte.
+        topic = name.lstrip("/")
+        slug = _to_snake(re.sub(r"[^0-9a-zA-Z]+", "_", topic)).strip("_") or "topic"
+        return {
+            "class_name": None,
+            "table_name": None,
+            "file_path": f"src/services/{slug}_consumer.py",
+            "migration_path": None,
+            "transformations": [],
+            "routes": [],
+            "test_paths": [f"tests/test_{slug}.py"],
         }
 
     return {}  # never reached; guarded by _RESOLUTION_TARGETS

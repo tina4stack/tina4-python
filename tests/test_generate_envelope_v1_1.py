@@ -126,6 +126,57 @@ def test_generate_model_json_dry_run_carries_edit_hints_and_next(tmp_path):
     assert on_disk == [], f"dry-run wrote files: {on_disk!r}"
 
 
+# ── 1b. A LOGIC-shaped generator is wired too: queue carries the fill points ──
+
+def test_generate_queue_json_dry_run_carries_edit_hints_and_next(tmp_path):
+    """`generate queue <topic> --json --dry-run` emits the v1.1 envelope with a
+    populated `edit_hints[]` (the queue-consumer template bakes a `tina4:edit`
+    marker at the job handler) and curated `next[]` steps.
+
+    Before this, `queue` was NOT in `_RESOLUTION_TARGETS`, so `generate queue`
+    printed a bare `Created X` with no envelope and no fill points - a logic-
+    shaped generator that scaffolded a consumer and then went silent about what
+    to edit next. This is the regression that keeps the AI-fill contract on it.
+    """
+    result = _run(tmp_path, ["tina4python", "generate", "queue", "order-emails",
+                             "--json", "--dry-run"])
+    assert result.returncode == 0, (
+        f"exit {result.returncode}; stderr={result.stderr!r}"
+    )
+
+    envelope = json.loads(result.stdout)
+    resolution = envelope["resolution"]
+
+    assert envelope["target"] == "queue"
+    assert envelope["dry_run"] is True
+    assert envelope["actions_taken"] == []
+    assert resolution["file_path"] == "src/services/order_emails_consumer.py"
+    assert resolution["test_paths"] == ["tests/test_order_emails.py"]
+
+    # THE fix: the baked marker surfaces as an edit hint (the AI fill point).
+    hints = resolution["edit_hints"]
+    assert isinstance(hints, list) and hints, (
+        f"queue envelope has no edit_hints - the fill point was not surfaced: {resolution!r}"
+    )
+    for hint in hints:
+        assert set(hint) == {"file", "line", "label"}, hint
+        assert hint["file"] == "src/services/order_emails_consumer.py"
+        assert isinstance(hint["line"], int) and hint["line"] > 0
+        assert isinstance(hint["label"], str) and hint["label"]
+    assert any("job payload" in h["label"] for h in hints), [h["label"] for h in hints]
+
+    # Curated next[] names the file to edit AND the produce/run path.
+    steps = resolution["next"]
+    assert isinstance(steps, list) and steps
+    joined = "\n".join(steps)
+    assert "src/services/order_emails_consumer.py" in joined
+    assert "publish_order_emails" in joined
+
+    on_disk = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*")
+                     if p.is_file())
+    assert on_disk == [], f"dry-run wrote files: {on_disk!r}"
+
+
 # ── 2. Manifest: contract advertises v1.1 / generate_v1_1 ─────────────────
 
 def test_commands_manifest_advertises_v1_1_contract(tmp_path):
