@@ -174,23 +174,21 @@ class DatabaseSessionHandler(SessionHandler):
         # The table is now created on first use, inside that policy.
         self._table_ready = False
 
-    # CREATE TABLE per engine - the only genuinely per-engine SQL in this class.
-    # Firebird has no TEXT type, so the payload is a VARCHAR (ceiling 8191 on that
-    # engine alone), matching PHP/Ruby/Node; it also has no IF NOT EXISTS, which
-    # the table_exists() guard in _ensure_table() already covers. MSSQL uses
-    # NVARCHAR/FLOAT (VARCHAR is not Unicode, TEXT is deprecated). The prior single
-    # "data TEXT" statement failed on Firebird with -607 "source column TEXT does
-    # not exist", so the database session backend never worked there.
+    # The portable statement that shipped for every engine. VARCHAR(255) carries
+    # TEXT affinity and DOUBLE PRECISION an 8-byte float on SQLite; it is DOUBLE
+    # PRECISION (never REAL - REAL is single-precision float4 on PostgreSQL, which
+    # test_session_expiry_contract pins) on the networked engines. Correct on
+    # sqlite/postgres/mysql/mssql, which is why it was never per-engine before.
+    _CREATE_TABLE_DEFAULT = "CREATE TABLE tina4_session (session_id VARCHAR(255) PRIMARY KEY, data TEXT NOT NULL, expires_at DOUBLE PRECISION NOT NULL)"
+    # Firebird is the one engine that needs a different statement: it has NO TEXT
+    # type, so the payload must be a VARCHAR (ceiling 8191 characters on this
+    # engine alone), matching PHP/Ruby/Node. The prior single "data TEXT" CREATE
+    # failed on Firebird with -607 "source column TEXT does not exist", so the
+    # database session backend never worked there. table_exists() below covers
+    # Firebird's lack of IF NOT EXISTS.
     _CREATE_TABLE_SQL = {
-        "sqlite":   "CREATE TABLE tina4_session (session_id TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at REAL NOT NULL)",
-        "postgres": "CREATE TABLE tina4_session (session_id VARCHAR(255) PRIMARY KEY, data TEXT NOT NULL, expires_at DOUBLE PRECISION NOT NULL)",
-        "mysql":    "CREATE TABLE tina4_session (session_id VARCHAR(255) PRIMARY KEY, data TEXT NOT NULL, expires_at DOUBLE NOT NULL)",
-        "mssql":    "CREATE TABLE tina4_session (session_id NVARCHAR(255) NOT NULL PRIMARY KEY, data NVARCHAR(MAX) NOT NULL, expires_at FLOAT NOT NULL)",
         "firebird": "CREATE TABLE tina4_session (session_id VARCHAR(255) NOT NULL PRIMARY KEY, data VARCHAR(8191) NOT NULL, expires_at DOUBLE PRECISION NOT NULL)",
     }
-    # An adapter outside the measured five (odbc, third-party) is no worse off than
-    # before: it gets the portable statement that shipped for every engine.
-    _CREATE_TABLE_DEFAULT = "CREATE TABLE tina4_session (session_id VARCHAR(255) PRIMARY KEY, data TEXT NOT NULL, expires_at DOUBLE PRECISION NOT NULL)"
 
     def _ensure_table(self):
         if self._table_ready:
