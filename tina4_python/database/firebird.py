@@ -646,6 +646,7 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         sql = SQLTranslator.ilike_to_like(sql)
         sql = SQLTranslator.boolean_to_int(sql)
         sql = SQLTranslator.auto_increment_syntax(sql, "firebird")
+        sql = SQLTranslator.ddl_types(sql, "firebird")
         return sql
 
     def _supports_returning(self) -> bool:

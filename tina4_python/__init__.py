@@ -51,7 +51,7 @@ def _resolve_version() -> str:
     #
     # test_version_constant.py now asserts this literal equals the pyproject
     # version, so the release bump cannot leave it behind again.
-    return "3.13.124"
+    return "3.13.125"
 
 
 __version__ = _resolve_version()

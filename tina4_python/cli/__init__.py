@@ -31,8 +31,8 @@ from pathlib import Path
 
 # ── Field type mapping ────────────────────────────────────────────────
 FIELD_TYPE_MAP = {
-    "string":   {"orm": "StringField",   "sql": "TEXT",    "default": "''"},
-    "str":      {"orm": "StringField",   "sql": "TEXT",    "default": "''"},
+    "string":   {"orm": "StringField",   "sql": "VARCHAR(255)", "default": "''"},
+    "str":      {"orm": "StringField",   "sql": "VARCHAR(255)", "default": "''"},
     "int":      {"orm": "IntegerField",  "sql": "INTEGER", "default": "0"},
     "integer":  {"orm": "IntegerField",  "sql": "INTEGER", "default": "0"},
     "float":    {"orm": "NumericField",  "sql": "REAL",    "default": "0"},
@@ -41,7 +41,7 @@ FIELD_TYPE_MAP = {
     "bool":     {"orm": "BooleanField",  "sql": "INTEGER", "default": "0"},
     "boolean":  {"orm": "BooleanField",  "sql": "INTEGER", "default": "0"},
     "text":     {"orm": "TextField",     "sql": "TEXT",    "default": "''"},
-    "datetime": {"orm": "DateTimeField", "sql": "TEXT",    "default": "NULL"},
+    "datetime": {"orm": "DateTimeField", "sql": "TIMESTAMP", "default": "NULL"},
     "blob":     {"orm": "BlobField",     "sql": "BLOB",    "default": "NULL"},
 }
 
@@ -1941,7 +1941,7 @@ def _gen_migration(name: str, flags: dict = None, *,
             info = FIELD_TYPE_MAP.get(ftype, FIELD_TYPE_MAP["string"])
             default = f" DEFAULT {info['default']}" if info["default"] != "NULL" else ""
             col_lines.append(f"    {fname} {info['sql']}{default}")
-        col_lines.append("    created_at TEXT DEFAULT CURRENT_TIMESTAMP")
+        col_lines.append("    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
         # ADR-0063: `tina4:edit` marker between the last column and the closing
         # paren, placed OUTSIDE the comma-joined column list so the SQL stays

@@ -215,8 +215,15 @@ class TestGenerateMigration:
         assert len(files) == 2
         up = [f for f in files if not f.name.endswith(".down.sql")][0]
         content = up.read_text()
-        assert "name TEXT" in content
+        # A string field is VARCHAR(255), NOT SQLite-only TEXT — so the generated
+        # migration is portable (TEXT with a DEFAULT is invalid on MySQL < 8.0.13,
+        # and Firebird has no TEXT at all). Regression guard for the dialect bug.
+        assert "name VARCHAR(255)" in content
+        assert "name TEXT" not in content
         assert "price REAL" in content
+        # created_at is a real timestamp, never TEXT (Firebird -607 on TEXT).
+        assert "created_at TIMESTAMP" in content
+        assert "created_at TEXT" not in content
 
     def test_creates_down_file(self, tmp_project):
         _gen_migration("create_product", {})

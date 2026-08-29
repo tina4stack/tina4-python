@@ -348,6 +348,49 @@ class SQLTranslator:
         return sql
 
     @staticmethod
+    def ddl_types(sql: str, engine: str) -> str:
+        """Translate SQLite-canonical DDL column TYPES + CREATE-TABLE options to
+        the target engine.
+
+        ONLY acts on ``CREATE TABLE`` / ``ALTER TABLE`` statements, so a query or
+        INSERT that happens to contain the word ``TEXT`` (a column name, a string
+        literal) is never rewritten. Complements ``auto_increment_syntax`` (which
+        maps the id keyword) so ONE portable migration — and every
+        ``ORM.create_table()`` DDL, which is also SQLite-canonical — applies on
+        every engine instead of failing on Firebird/MSSQL.
+
+        * Firebird has no ``TEXT`` (-607), no ``REAL``, and no
+          ``CREATE TABLE IF NOT EXISTS``.
+        * MSSQL has no ``CREATE TABLE IF NOT EXISTS`` and its ``TIMESTAMP`` is a
+          rowversion, not a datetime — a ``created_at TIMESTAMP`` there is wrong.
+        * MySQL's ``TIMESTAMP`` carries auto-update / 2038 surprises, so a
+          datetime column maps to ``DATETIME`` (matching ORM.create_table()).
+        """
+        # Gate to DDL only, tolerating leading `-- ...` comment lines / blank
+        # lines that a migration file carries before its CREATE TABLE. A SELECT
+        # or INSERT that merely mentions a type keyword is never rewritten.
+        head = re.sub(r"^(?:\s*--[^\n]*\n)+", "", sql)
+        if not re.match(r"\s*(CREATE\s+TABLE|ALTER\s+TABLE)\b", head, re.IGNORECASE):
+            return sql
+        e = (engine or "").lower()
+        if e == "firebird":
+            sql = re.sub(r"\bIF\s+NOT\s+EXISTS\b", "", sql, flags=re.IGNORECASE)
+            # Map bare TEXT -> BLOB SUB_TYPE TEXT, but leave an existing
+            # "BLOB SUB_TYPE TEXT" intact (it already contains the word TEXT).
+            sql = re.sub(
+                r"\bBLOB\s+SUB_TYPE\s+TEXT\b", "\x00FBTEXT\x00", sql, flags=re.IGNORECASE
+            )
+            sql = re.sub(r"\bTEXT\b", "BLOB SUB_TYPE TEXT", sql, flags=re.IGNORECASE)
+            sql = sql.replace("\x00FBTEXT\x00", "BLOB SUB_TYPE TEXT")
+            sql = re.sub(r"\bREAL\b", "DOUBLE PRECISION", sql, flags=re.IGNORECASE)
+        elif e == "mssql":
+            sql = re.sub(r"\bIF\s+NOT\s+EXISTS\b", "", sql, flags=re.IGNORECASE)
+            sql = re.sub(r"\bTIMESTAMP\b", "DATETIME2", sql, flags=re.IGNORECASE)
+        elif e == "mysql":
+            sql = re.sub(r"\bTIMESTAMP\b", "DATETIME", sql, flags=re.IGNORECASE)
+        return sql
+
+    @staticmethod
     def placeholder_style(sql: str, style: str = "?") -> str:
         """Convert ? placeholders to engine-specific style.
 

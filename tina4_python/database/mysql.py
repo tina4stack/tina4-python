@@ -321,6 +321,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         sql = SQLTranslator.concat_pipes_to_func(sql)
         sql = SQLTranslator.ilike_to_like(sql)
         sql = SQLTranslator.auto_increment_syntax(sql, "mysql")
+        sql = SQLTranslator.ddl_types(sql, "mysql")
         return sql
 
     def _supports_returning(self) -> bool:

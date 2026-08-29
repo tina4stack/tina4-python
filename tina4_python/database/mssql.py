@@ -350,6 +350,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         sql = SQLTranslator.ilike_to_like(sql)
         sql = SQLTranslator.auto_increment_syntax(sql, "mssql")
         sql = SQLTranslator.boolean_to_int(sql)
+        sql = SQLTranslator.ddl_types(sql, "mssql")
         return sql
 
     def _supports_returning(self) -> bool:
