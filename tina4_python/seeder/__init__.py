@@ -66,6 +66,35 @@ _JOB_TITLES = [
 ]
 _CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "ZAR", "INR", "CNY"]
 _CREDIT_CARD_PREFIXES = ["4111", "4242", "5500", "5105"]
+# Product-name vocabulary (adjective + noun). Seeds a `name` column on a
+# product-ish table with "Wireless Keyboard" instead of a person name.
+_PRODUCT_ADJECTIVES = [
+    "Wireless", "Organic", "Premium", "Classic", "Eco", "Smart", "Portable",
+    "Deluxe", "Compact", "Rustic", "Handcrafted", "Vintage", "Modern",
+    "Ergonomic", "Stainless", "Bamboo", "Recycled", "Artisan", "Professional",
+    "Ultra", "Insulated", "Lightweight", "Adjustable", "Foldable",
+]
+_PRODUCT_NOUNS = [
+    "Keyboard", "Coffee Beans", "Backpack", "Water Bottle", "Desk Lamp",
+    "Headphones", "Notebook", "Sneakers", "Sunglasses", "Wallet", "Mug",
+    "Chair", "Blender", "Speaker", "Charger", "Umbrella", "Toothbrush",
+    "Jacket", "Watch", "Kettle", "Picture Frame", "Planter", "Cutlery Set",
+    "Yoga Mat", "Phone Case",
+]
+# A table/model whose name contains any of these gets product names on its
+# generic `name`/`full_name` column instead of a person name.
+_PRODUCT_TABLE_HINTS = (
+    "product", "item", "catalog", "inventory", "goods", "merchandise",
+    "sku", "listing", "stock", "ware",
+)
+
+
+def _is_product_table(table: str) -> bool:
+    """True when the table/model name looks like a product catalogue, so a
+    generic ``name`` column should seed a product name, not a person name.
+    With no table context this is False, so the person-name default is kept
+    (back-compat)."""
+    return any(hint in (table or "").lower() for hint in _PRODUCT_TABLE_HINTS)
 
 
 class FakeData:
@@ -227,7 +256,7 @@ class FakeData:
         d = start + timedelta(seconds=self._rng.randint(0, delta))
         return d.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    def for_field(self, field_def: dict, column_name: str = None):
+    def for_field(self, field_def: dict, column_name: str = None, table: str = None):
         """Generate a fake value from a field definition dict and optional column name.
 
         Args:
@@ -249,7 +278,7 @@ class FakeData:
             if "phone" in col or "tel" in col or "mobile" in col:
                 return self.phone()
             if col in ("full_name", "fullname", "name"):
-                return self.name()
+                return self.product() if _is_product_table(table) else self.name()
             if "first_name" in col or ("first" in col and "name" in col):
                 return self.first_name()
             if "last_name" in col or ("last" in col and "name" in col):
@@ -296,6 +325,11 @@ class FakeData:
 
     def job_title(self) -> str:
         return self._rng.choice(_JOB_TITLES)
+
+    def product(self) -> str:
+        """A plausible product name, e.g. "Wireless Keyboard" or "Organic Coffee
+        Beans". Deterministic under a seed like every other generator."""
+        return f"{self._rng.choice(_PRODUCT_ADJECTIVES)} {self._rng.choice(_PRODUCT_NOUNS)}"
 
     def currency(self) -> str:
         return self._rng.choice(_CURRENCIES)
@@ -362,7 +396,7 @@ class SeedSummary(int):
         return f"SeedSummary(seeded={self.seeded}, failed={self.failed}, errors={self.errors!r})"
 
 
-def _generator_for_column(fake: "FakeData", name: str, col_type: str):
+def _generator_for_column(fake: "FakeData", name: str, col_type: str, table: str = None):
     """Pick a FakeData generator for one column from its name + type.
 
     The shared heuristic behind :func:`auto_field_map`, so the dev-admin
@@ -380,7 +414,7 @@ def _generator_for_column(fake: "FakeData", name: str, col_type: str):
     if "last" in name_lower and "name" in name_lower:
         return fake.last_name
     if "name" in name_lower:
-        return fake.name
+        return fake.product if _is_product_table(table) else fake.name
     if "phone" in name_lower or "tel" in name_lower:
         return fake.phone
     if "url" in name_lower or "link" in name_lower:
@@ -424,7 +458,7 @@ def auto_field_map(db, table: str, fake: "FakeData" = None) -> dict:
         is_pk = col.get("primary_key", col.get("pk", False))
         if is_pk and ("AUTO" in col_type or "SERIAL" in col_type or name.lower() == "id"):
             continue
-        field_map[name] = _generator_for_column(fake, name, col_type)
+        field_map[name] = _generator_for_column(fake, name, col_type, table)
     return field_map
 
 
@@ -584,7 +618,8 @@ def seed_orm(orm_class, count: int = 10,
                 elif name in fk_pools and fk_pools[name]:
                     attrs[name] = fake.choice(fk_pools[name])
                 else:
-                    attrs[name] = _generate_for_field(fake, _field_meta(field), name)
+                    attrs[name] = _generate_for_field(fake, _field_meta(field), name,
+                                                      table=orm_class.__name__)
             _validate_types(fields, attrs, orm_class.__name__, Log)
             obj = orm_class(attrs)
             if obj.save():
@@ -813,7 +848,7 @@ def _topo_sort_models(orm_classes: list) -> list:
     return ordered
 
 
-def _generate_for_field(fake: FakeData, field_def: dict, col: str):
+def _generate_for_field(fake: FakeData, field_def: dict, col: str, table: str = None):
     """Generate a fake value for an ORM field definition + column name."""
     col = col.lower()
     ftype = field_def.get("type", "string")
@@ -842,7 +877,7 @@ def _generate_for_field(fake: FakeData, field_def: dict, col: str):
         if "email" in col:
             return fake.email()
         if col in ("name", "full_name", "fullname"):
-            return fake.name()
+            return fake.product() if _is_product_table(table) else fake.name()
         if "first" in col and "name" in col:
             return fake.first_name()
         if "last" in col and "name" in col:
