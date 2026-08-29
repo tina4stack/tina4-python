@@ -33,6 +33,11 @@ PG_USER = os.environ.get("TINA4_TEST_PG_USERNAME", "tina4")
 PG_PASSWORD = os.environ.get("TINA4_TEST_PG_PASSWORD", "tina4")
 MYSQL_USER = os.environ.get("TINA4_TEST_MYSQL_USERNAME", "root")
 MYSQL_PASSWORD = os.environ.get("TINA4_TEST_MYSQL_PASSWORD", "tina4")
+# Firebird has no TEXT type, so the single "data TEXT" CREATE used to fail on it
+# with -607 and the database session backend never worked there. The lab exports
+# TINA4_TEST_FIREBIRD_URL; when it is set, Firebird MUST be one of the engines
+# that round-trips - excluding it is how the gap hid.
+FB_URL = os.environ.get("TINA4_TEST_FIREBIRD_URL")
 
 
 def _reachable(host: str, port: int) -> bool:
@@ -62,6 +67,11 @@ def test_the_database_session_backend_works_on_every_engine_it_claims(tmp_path):
         "postgres": f"postgres://{PG_USER}:{PG_PASSWORD}@{PG_HOST}:{PG_PORT}/tina4_py",
         "mysql": f"mysql://{MYSQL_USER}:{MYSQL_PASSWORD}@127.0.0.1:3306/tina4",
     }
+    # Firebird when the lab provides it. It folds unquoted identifiers to UPPER and
+    # has no TEXT type, so it exercises both the per-engine DDL (VARCHAR payload)
+    # and the adapter's column-case handling on the read path.
+    if FB_URL:
+        engines["firebird"] = FB_URL
 
     ran, broken = [], []
     for name, url in engines.items():
