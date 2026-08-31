@@ -129,7 +129,7 @@ def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
     """Parse --key value and --flag from args. Returns (flags, positional)."""
     # Boolean-only flags that never take a value argument
     boolean_flags = {"no-browser", "no-reload", "no-kill", "production", "managed", "all", "clear",
-                     "json", "public", "no-migration", "once", "dry-run", "quote"}
+                     "json", "public", "no-migration", "once", "dry-run", "quote", "fix", "no-install"}
 
     flags = {}
     positional = []
@@ -925,6 +925,102 @@ def _test(args):
         ).returncode
 
     sys.exit(1 if (inline_failed or pytest_code) else 0)
+
+
+def _resolve_ruff(root: Path):
+    """Locate a runnable ruff and return its command prefix (a list), or None.
+    Checks PATH first, then the project's own virtualenv (where ``uv add --dev
+    ruff`` puts it) on POSIX and Windows layouts."""
+    on_path = shutil.which("ruff")
+    if on_path:
+        return [on_path]
+    for candidate in (root / ".venv" / "bin" / "ruff", root / ".venv" / "Scripts" / "ruff.exe"):
+        if candidate.is_file():
+            return [str(candidate)]
+    return None
+
+
+def _lint(args):
+    """Lint the project's source. The framework ships NO linter (so a Tina4 app
+    stays zero-dependency); ``tina4 lint`` uses the project's own ``ruff`` and
+    INSTALLS it as a DEV dependency on demand when it is absent. Layers:
+
+    * **ruff present** (on PATH or in the project ``.venv``): run it. ``--fix``
+      runs ``ruff check --fix`` (safe autofixes). ruff reports syntax too, so it
+      is the whole pass when present.
+    * **ruff absent:** silently ``uv add --dev ruff`` -- running ``tina4 lint`` is
+      the consent to add it -- then run it. It lands in the DEV group only, never
+      the app's runtime dependencies. ``--no-install`` skips this.
+    * **Baseline (zero dependency):** the built-in ``compile()`` syntax parse --
+      no execution, no ``.pyc``, no dependency. Used with ``--no-install`` or when
+      the install cannot run (no ``uv`` on PATH, offline).
+
+    Contract (identical across all four frameworks): exit 0 = clean, non-zero =
+    findings; the summary names the tool that ran. Scope is the user's app
+    (``src/`` + ``app.py``), mirroring how ``tina4 test`` runs the project's own
+    tests -- not the framework's code.
+
+        tina4 lint               # ruff (installed dev-only on demand), else baseline
+        tina4 lint --fix         # ruff --fix
+        tina4 lint --no-install  # ruff if already present, else the syntax baseline
+    """
+    flags, _ = _parse_flags(list(args))
+    fix = bool(flags.get("fix"))
+    no_install = bool(flags.get("no-install"))
+    root = Path.cwd()
+
+    py_files = []
+    src = root / "src"
+    if src.is_dir():
+        py_files.extend(sorted(src.rglob("*.py")))
+    if (root / "app.py").is_file():
+        py_files.append(root / "app.py")
+    if not py_files:
+        print("  lint: nothing to lint (no src/ or app.py).")
+        sys.exit(0)
+
+    ruff = _resolve_ruff(root)
+
+    # Silent on-demand install: running `tina4 lint` is the consent to add ruff
+    # as a DEV dependency of the project. --no-install opts out (CI / offline) and
+    # falls through to the zero-dependency baseline. Needs `uv` on PATH.
+    if not ruff and not no_install and shutil.which("uv"):
+        print("  · ruff not found -- adding it as a dev dependency (uv add --dev ruff)...")
+        rc = subprocess.run(["uv", "add", "--dev", "ruff"]).returncode
+        if rc == 0:
+            ruff = _resolve_ruff(root)
+        else:
+            print("  · could not install ruff -- using the zero-dependency syntax baseline.")
+
+    if ruff:
+        cmd = ruff + ["check"] + (["--fix"] if fix else []) + [str(p) for p in py_files]
+        code = subprocess.run(cmd).returncode
+        label = "ruff --fix" if fix else "ruff"
+        if code != 0:
+            print(f"  ✗ lint failed -- {len(py_files)} file(s) [{label}]")
+            sys.exit(1)
+        print(f"  ✓ lint clean -- {len(py_files)} file(s) [{label}]")
+        sys.exit(0)
+
+    # Zero-dependency baseline: built-in compile() syntax parse. No execution,
+    # no bytecode written, no dependency added.
+    if fix:
+        print("  · syntax baseline has no autofix (--no-install, or ruff unavailable).")
+    syntax_errors = 0
+    for pf in py_files:
+        try:
+            compile(pf.read_text(encoding="utf-8", errors="ignore"), str(pf), "exec")
+        except SyntaxError as exc:
+            print(f"  ✗ {pf.relative_to(root)}:{exc.lineno}: {exc.msg}")
+            syntax_errors += 1
+        except OSError as exc:
+            print(f"  ✗ {pf.relative_to(root)}: cannot read ({exc})")
+            syntax_errors += 1
+    if syntax_errors:
+        print(f"  ✗ lint failed -- {syntax_errors} syntax error(s) in {len(py_files)} file(s) [compile]")
+        sys.exit(1)
+    print(f"  ✓ lint clean -- {len(py_files)} file(s) [compile, syntax only]")
+    sys.exit(0)
 
 
 def _build(args):
@@ -3756,6 +3852,7 @@ COMMANDS = {
     "test":             {"handler": _test,             "summary": "Run test suite"},
     "queue":            {"handler": _queue,            "usage": "<work|stats|retry|clear> [topic]", "subcommands": list(_QUEUE_SUBCOMMANDS), "summary": "Run queue workers and manage jobs"},
     "build":            {"handler": _build,            "usage": "[--tag NAME] [--file PATH]", "summary": "Build the deployable Docker image"},
+    "lint":             {"handler": _lint,             "usage": "[--fix] [--no-install]", "summary": "Lint src/ + app.py (installs ruff dev-only on demand; zero-dep syntax baseline with --no-install)"},
     "ai":               {"handler": _ai,               "usage": "[--all]", "summary": "Install AI coding assistant context"},
     "generate":         {"handler": _generate,         "usage": "<what> <name> [options]", "subcommands": list(GENERATORS), "summary": "Generate scaffolding (see Generators below)"},
     "console":          {"handler": _console,          "summary": "Start interactive REPL with framework loaded"},
