@@ -928,12 +928,13 @@ def _test(args):
 
 
 def _resolve_ruff(root: Path):
-    """Locate a runnable ruff and return its command prefix (a list), or None.
-    Checks PATH first, then the project's own virtualenv (where ``uv add --dev
-    ruff`` puts it) on POSIX and Windows layouts."""
-    on_path = shutil.which("ruff")
-    if on_path:
-        return [on_path]
+    """Locate the PROJECT's own ruff and return its command prefix (a list), or
+    None. Only the project virtualenv is consulted (where ``uv add --dev ruff``
+    puts it), on POSIX and Windows layouts -- deliberately NOT a global ruff on
+    PATH: linting must be reproducible from the project's own pinned dev
+    dependency, and a global tool is not the project's choice. When the project
+    has none, the caller installs it dev-only rather than borrowing a stray
+    global one (which would also make a global install non-deterministic)."""
     for candidate in (root / ".venv" / "bin" / "ruff", root / ".venv" / "Scripts" / "ruff.exe"):
         if candidate.is_file():
             return [str(candidate)]
