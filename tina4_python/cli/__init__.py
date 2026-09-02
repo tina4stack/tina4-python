@@ -169,7 +169,7 @@ def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
     """Parse --key value and --flag from args. Returns (flags, positional)."""
     # Boolean-only flags that never take a value argument
     boolean_flags = {"no-browser", "no-reload", "no-kill", "production", "managed", "all", "clear",
-                     "json", "public", "no-migration", "once", "dry-run", "quote", "fix", "no-install"}
+                     "json", "public", "no-migration", "once", "dry-run", "fix", "no-install"}
 
     flags = {}
     positional = []
@@ -1322,8 +1322,8 @@ def _resolve_generation(target: str, name: str, flags: dict,
                 "to": table,
                 "reason": f"SQL reserved word '{raw_table}' would break CREATE TABLE",
                 "override": (
-                    f"--table {raw_table} --quote (requires quoted-identifier "
-                    "mode, not yet implemented)"
+                    "--table-name <name> (table names interpolate unquoted; "
+                    "forcing a reserved name is yours to quote in raw SQL)"
                 ),
             })
         migration_filename = f"{ts}_create_{table}.sql"
@@ -1477,11 +1477,11 @@ def _format_resolution_block(name: str, target: str, resolution: dict,
 
     if pluralize:
         lines.append("")
-        lines.append(f"  To keep the raw name '{pluralize['from']}' as the table:")
+        lines.append("  To set the table name yourself:")
+        lines.append(f"    tina4 generate {target} {name} --table-name <name>")
         lines.append(
-            f"    tina4 generate {target} {name} "
-            f"--table {pluralize['from']} --quote  "
-            "(opt-in, ADR-0062 forthcoming)"
+            f"  Tina4 interpolates table names unquoted; if you force the "
+            f"reserved '{pluralize['from']}', you own the quoting in raw SQL."
         )
 
     # ADR-0063 additive sections. Each renders only when there is content, so

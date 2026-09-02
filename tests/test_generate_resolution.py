@@ -106,7 +106,11 @@ def test_generate_model_reserved_word_names_transformation(tmp_path):
     assert t["from"] == "order"
     assert t["to"] == "orders"
     assert "SQL reserved word" in t["reason"]
-    assert "--table" in t["override"] and "--quote" in t["override"]
+    # #123: the override points at --table-name, never a quoting flag. Tina4
+    # never quotes identifiers (a global storage invariant), so the agent-facing
+    # contract must not advertise a --quote path it will never ship.
+    assert "--table-name" in t["override"]
+    assert "--quote" not in t["override"], t["override"]
 
     assert envelope["resolution"]["table_name"] == "orders"
     assert envelope["dry_run"] is True
@@ -155,6 +159,9 @@ def test_generate_model_reserved_name_prints_pluralize_note_to_stderr(tmp_path):
     assert "auto-pluralized" in stderr, stderr
     assert "SQL reserved word" in stderr, stderr
     assert "'order'" in stderr, stderr
+    # #123: the override the block suggests is --table-name, never a quoting flag.
+    assert "--table-name" in stderr, stderr
+    assert "--quote" not in stderr, stderr
 
     # The real table on disk agrees with the block.
     migrations = list((tmp_path / "migrations").glob("*_create_orders.sql"))
