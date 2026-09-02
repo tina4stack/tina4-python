@@ -15,7 +15,7 @@ The full discipline lives in `.claude/skills/tina4-maintainer/SKILL.md`; this bl
 
 # Tina4 Python
 
-Version 3.13.129 - Lightweight Python web framework. See https://tina4.com for full documentation.
+Version 3.13.130 - Lightweight Python web framework. See https://tina4.com for full documentation.
 
 ## Build & Test
 
@@ -877,7 +877,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - SSE/Streaming via `response.stream()` — Server-Sent Events support for real-time data push. Pass an async generator; framework handles chunked transfer encoding, `text/event-stream` content type, and connection keep-alive
 - MCP server (`tina4_python.mcp`): built-in dev tools auto-start when MCP is a capability of the deployment. Developer API: `McpServer`, `@mcp_tool`, `@mcp_resource`. JSON-RPC 2.0 over SSE. **Security is a two-layer gate (v3.13.40):** `is_enabled()` is a pure capability gate (explicit `TINA4_MCP` wins, else `TINA4_DEBUG`; host-independent), and `is_request_allowed(remote_ip, has_valid_token)` authorises each request on the RAW socket peer (`request.remote_ip`, never X-Forwarded-For): loopback always; a remote caller needs `TINA4_MCP_REMOTE=true` AND a token matching `TINA4_MCP_TOKEN` (fallback `TINA4_API_KEY`; sent as Authorization Bearer / X-MCP-Token / X-Api-Key; no configured token means remote is always denied). All MCP surfaces (REST shim, JSON-RPC, SSE) 404 a disallowed caller. `database_query` is SELECT/WITH-only and rejects stacked statements; the file tools are sandboxed to the project root. `is_localhost()` is informational only, not the gate
 - Tests: 5,063 passing, 0 failures, **0 skipped** — measured 2026-08-06 on the lab (Ubuntu 24.04.4 LTS x86_64, Python 3.13.3, live services, `TINA4_REQUIRE_SERVICES=1`, 456s, run as root). **Firebird is NOT excluded.** The lab provisions a live Firebird 5 (`firebirdsql/firebird:5` on :3050, `TINA4_TEST_FIREBIRD_URL`) and those tests run. What IS deliberate is Firebird's absence from the `TINA4_REQUIRE_SERVICES` keyword gate in `tests/conftest.py`: GitHub CI does not provision Firebird, so a Firebird skip has to stay green *there*. Those are two different things and this line used to conflate them into "excluded by design", which read as "the Firebird tests do not run" — they do. **Nothing skips any more.** The last skip was `tests/test_session_backend_failure.py` `[needs:no-dac-override]`: the suite runs as root, root holds `CAP_DAC_OVERRIDE`, so a write went straight through a 0400 file and no real `EACCES` was reachable — and as root the second `save()` returned `True`, so that skip was hiding a FAILING assertion, not merely an unrunnable one. The test now stops being root for the length of the failing write (`os.seteuid` to `nobody`; the saved uid stays 0, so a `finally` always restores it) and the kernel raises the genuine errno-13 the test asserts. Two parts of that are load-bearing: the log directory is handed to the same uid, because dropping the uid otherwise denies `Log.error` as well and the EACCES under test goes unrecorded (`_LogWriter.write` swallows `OSError` unless `TINA4_LOG_STRICT`); and the fixture root is its own 0755 `mkdtemp` rather than `tmp_path`, whose 0700 root-owned parents make every denial a directory traversal, which would pass for the wrong reason. Re-measure with `.venv/bin/python -m pytest tests/ -q` and quote the summary line, never the exit code
-- Version: 3.13.129
+- Version: 3.13.130
 
 ## Links
 
