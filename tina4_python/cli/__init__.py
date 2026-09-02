@@ -95,6 +95,46 @@ def _to_table(name: str) -> str:
     return table
 
 
+def _resolve_table(name: str, flags: dict | None = None, *, announce: bool = False) -> str:
+    """The table name a generator uses, honouring ``--table-name`` and speaking up
+    instead of renaming silently.
+
+    ``announce`` prints the note/warning; it is True only for ``_gen_model`` (where
+    the table is born). Composite generators (crud) let the model sub-call
+    announce, and generators that target an EXISTING table (route/seeder/form/view)
+    still honour ``--table-name`` but stay quiet so the note is not repeated.
+
+    * ``--table-name <name>`` wins verbatim. If that name is ITSELF a reserved
+      word, warn loudly: Tina4 interpolates table names UNQUOTED, so the ORM's
+      generated SQL will fail on it and quoting it in raw SQL + migrations is now
+      the developer's job (we do not silently quote -- identifier quoting is a
+      global storage invariant, not a local fix).
+    * Otherwise fall back to :func:`_to_table`. When that auto-pluralises a
+      reserved-word class name (``Order`` -> ``orders``), print a one-line note
+      naming the rename and the ``--table-name`` escape hatch, so the developer is
+      informed rather than surprised.
+
+    Called once per generate (``_gen_model`` threads the result into the migration
+    and test), so the note prints once.
+    """
+    flags = flags or {}
+    override = flags.get("table-name")
+    if override and not isinstance(override, bool):
+        if announce and _to_snake(override) in SQL_RESERVED_TABLE_NAMES:
+            print(f"  ! table_name '{override}' is a SQL reserved word. Tina4 interpolates "
+                  f"table names UNQUOTED, so the ORM's generated SQL will fail on it -- "
+                  f"quote it yourself in raw SQL and migrations.")
+        return override
+    bare = _to_snake(name)
+    if bare in SQL_RESERVED_TABLE_NAMES:
+        table = _pluralize_table(bare)
+        if announce:
+            print(f"  · '{bare}' is a SQL reserved word; using table_name '{table}' "
+                  f"(Tina4 interpolates table names unquoted). Override with --table-name <name>.")
+        return table
+    return bare
+
+
 def _parse_fields(fields_str: str) -> list[tuple[str, str]]:
     """Parse 'name:string,price:float' → [('name','string'), ('price','float')]."""
     if not fields_str or not fields_str.strip():
@@ -1273,7 +1313,7 @@ def _resolve_generation(target: str, name: str, flags: dict,
 
     if target == "model":
         raw_table = _to_snake(name)
-        table = _to_table(name)
+        table = _resolve_table(name, flags)
         transformations = []
         if raw_table in SQL_RESERVED_TABLE_NAMES and raw_table != table:
             transformations.append({
@@ -1637,7 +1677,7 @@ def _gen_model(name: str, flags: dict, *, emit_test: bool = True):
     and emit their own broader test instead.
     """
     fields = _fields_or_default(flags.get("fields", ""))
-    table = _to_table(name)
+    table = _resolve_table(name, flags, announce=True)
 
     # Determine which ORM field types we need to import
     used_types = {"IntegerField"}  # always need for id
@@ -1919,7 +1959,7 @@ def _gen_crud(name: str, flags: dict):
     tina4python generate crud Product --fields "name:string,price:float"
     """
     fields = _fields_or_default(flags.get("fields", ""))
-    table = _to_table(name)
+    table = _resolve_table(name, flags)
     route_name = table + "s"  # routes are plural
 
     print(f"\n  Generating CRUD for {name}...\n")
@@ -3017,7 +3057,7 @@ def _gen_seeder(name: str, flags: dict = None):
 
     tina4python generate seeder Product
     """
-    table = _to_table(name)
+    table = _resolve_table(name, flags)
     target = Path("src/seeds")
     target.mkdir(parents=True, exist_ok=True)
     path = target / f"{table}_seeder.py"
@@ -3193,7 +3233,7 @@ def _gen_form(name: str, flags: dict = None):
     """
     flags = flags or {}
     fields = _fields_or_default(flags.get("fields", ""))
-    table = _to_table(name)
+    table = _resolve_table(name, flags)
     route_name = table + "s"
 
     # Input type mapping
@@ -3277,7 +3317,7 @@ def _gen_view(name: str, flags: dict = None):
     """
     flags = flags or {}
     fields = _fields_or_default(flags.get("fields", ""))
-    table = _to_table(name)
+    table = _resolve_table(name, flags)
     route_name = table + "s"
 
     target = Path("src/templates/pages")
@@ -3822,7 +3862,7 @@ def _commands(args=None):
 #                       "subcommands"?: [str]}  # sub-names for the manifest (generate)
 
 GENERATORS = {
-    "model":      {"handler": _gen_model,      "usage": '<Name> [--fields "name:string,price:float"]', "summary": "ORM model + matching migration"},
+    "model":      {"handler": _gen_model,      "usage": '<Name> [--fields "name:string,price:float"] [--table-name <name>]', "summary": "ORM model + matching migration"},
     "route":      {"handler": _gen_route,      "usage": "<name> [--model Name] [--public]",            "summary": "CRUD route file, secure by default (--public opens writes)"},
     "crud":       {"handler": _gen_crud,       "usage": '<Name> [--fields "..."] [--public]',          "summary": "Model + migration + routes + form + view + test"},
     "migration":  {"handler": _gen_migration,  "usage": "<description>",                               "summary": "Timestamped migration file (UP/DOWN)"},
