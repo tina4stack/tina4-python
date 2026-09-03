@@ -402,6 +402,26 @@ class TestGetAPIHandlers:
         assert method == "GET"
 
 
+def _fake_pypi(payload):
+    """Stand in for ``urllib.request.urlopen`` with a canned PyPI body."""
+    import json as _json
+
+    class _Resp:
+        def read(self):
+            return _json.dumps(payload).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def _open(*_args, **_kwargs):
+        return _Resp()
+
+    return _open
+
+
 class TestAPIHandlers:
     """Test API handler functions with mock request/response."""
 
@@ -738,13 +758,85 @@ class TestAPIHandlers:
         assert "OTHER_VAR=keep-me" in written
 
     @pytest.mark.asyncio
-    async def test_version_check_handler(self, mock_req, mock_resp):
+    async def test_version_check_handler(self, mock_req, mock_resp, monkeypatch):
+        """A successful check reports what PyPI published.
+
+        Stubbed rather than live: the old version of this test called PyPI for
+        real and asserted ``latest`` was always a string, which is exactly the
+        bug — offline, the handler invented one.
+        """
+        import urllib.request
         from tina4_python.dev_admin import _api_version_check
+
+        monkeypatch.setattr(
+            urllib.request, "urlopen", _fake_pypi({"info": {"version": "9.9.9"}})
+        )
         result = await _api_version_check(mock_req, mock_resp)
-        assert "current" in result
-        assert "latest" in result
         assert isinstance(result["current"], str)
-        assert isinstance(result["latest"], str)
+        assert result["latest"] == "9.9.9"
+        assert "error" not in result
+
+    @pytest.mark.asyncio
+    async def test_version_check_reports_a_failure_instead_of_claiming_up_to_date(
+        self, mock_req, mock_resp, monkeypatch
+    ):
+        """The toolbar renders ``latest == current`` as "You are up to date!".
+
+        So a check that never reached PyPI must not answer with it. A developer
+        several releases behind, on a machine with no route out, was being told
+        the opposite of the truth.
+        """
+        import urllib.error
+        import urllib.request
+        from tina4_python.dev_admin import _api_version_check
+
+        def explode(*_args, **_kwargs):
+            raise urllib.error.URLError("no route to host")
+
+        monkeypatch.setattr(urllib.request, "urlopen", explode)
+        result = await _api_version_check(mock_req, mock_resp)
+
+        assert result["latest"] is None, (
+            "a check that did not happen must not answer with a version"
+        )
+        assert result["latest"] != result["current"]
+        assert result.get("error"), "the reason has to reach the client"
+
+    @pytest.mark.asyncio
+    async def test_version_check_does_not_invent_a_version_from_an_unreadable_answer(
+        self, mock_req, mock_resp, monkeypatch
+    ):
+        """Reaching PyPI is not the same as learning the version.
+
+        An answer with no version field used to fall back to ``current`` down
+        the same path as being offline, which is the same lie by another route.
+        """
+        import urllib.request
+        from tina4_python.dev_admin import _api_version_check
+
+        monkeypatch.setattr(urllib.request, "urlopen", _fake_pypi({"info": {}}))
+        result = await _api_version_check(mock_req, mock_resp)
+
+        assert result["latest"] is None
+        assert result.get("error")
+
+    def test_toolbar_reads_a_missing_latest_as_a_failed_check(self):
+        """The client half of the same defect.
+
+        The toolbar already had a "Could not check for updates (offline?)"
+        branch, on ``fetch``'s ``.catch``, which could never fire because the
+        server answered 200. It has to act on the null the server now sends.
+        """
+        from tina4_python.dev_admin import toolbar_js
+
+        js = toolbar_js()
+        assert "couldNotCheck" in js, "no branch for a check that did not happen"
+        assert "if (!latest) { couldNotCheck" in js, (
+            "a missing latest must be handled before the up-to-date comparison"
+        )
+        assert js.index("if (!latest)") < js.index("if (latest === current)"), (
+            "the up-to-date branch must not run first — null would fall into it"
+        )
 
     @pytest.mark.asyncio
     async def test_query_multi_statement_rollback(self, mock_req, mock_resp, tmp_path, monkeypatch):

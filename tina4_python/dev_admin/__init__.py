@@ -1933,10 +1933,20 @@ def _route_count() -> int:
 
 
 async def _api_version_check(request, response):
-    """Proxy version check to PyPI to avoid browser CORS errors."""
+    """Proxy the version check to PyPI to avoid browser CORS errors.
+
+    A check that did not happen says so. This used to fall back to
+    ``latest = current`` on any failure, which the toolbar renders as a green
+    "You are up to date!" — so a developer several releases behind, on a
+    machine with no route out, was told the opposite of the truth. The toolbar
+    already had the right message for this case and could never reach it,
+    because the failure arrived as a success.
+
+    ``latest`` is ``None`` when the check could not be made, and ``error``
+    carries the short reason.
+    """
     import urllib.request
     current = __version__
-    latest = current
     try:
         req = urllib.request.Request(
             "https://pypi.org/pypi/tina4-python/json",
@@ -1944,9 +1954,24 @@ async def _api_version_check(request, response):
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode())
-            latest = data.get("info", {}).get("version", current)
-    except Exception:
-        pass  # Offline or timeout — return current as latest
+        latest = data.get("info", {}).get("version")
+        if not latest:
+            # Reached PyPI, got something we cannot read a version out of.
+            return response(
+                {
+                    "current": current,
+                    "latest": None,
+                    "error": "PyPI did not report a version",
+                }
+            )
+    except Exception as exc:
+        return response(
+            {
+                "current": current,
+                "latest": None,
+                "error": "{}: {}".format(type(exc).__name__, exc),
+            }
+        )
     return response({"current": current, "latest": latest})
 
 
@@ -2139,6 +2164,13 @@ def toolbar_js() -> str:
         el.className = 't4-ok';
         el.innerHTML = 'Latest: <strong class="t4-ok">v' + latest + '</strong> &mdash; You are up to date!';
     }
+    // A check that did not happen is not a clean bill of health. The server
+    // sends latest: null when it could not reach PyPI, and saying so is the
+    // whole point -- "up to date" here would be a guess dressed as a fact.
+    function couldNotCheck(el, why) {
+        el.className = 't4-err';
+        el.textContent = 'Could not check for updates' + (why ? ' (' + why + ')' : '');
+    }
     function checkVersion() {
         if (modal.style.display === 'block') { modal.style.display = 'none'; return; }
         modal.style.display = 'block';
@@ -2147,6 +2179,7 @@ def toolbar_js() -> str:
         el.textContent = 'Checking for updates...';
         fetch('/__dev/api/version-check').then(function (r) { return r.json(); }).then(function (d) {
             var latest = d.latest, current = d.current;
+            if (!latest) { couldNotCheck(el, d.error); return; }
             if (latest === current) { upToDate(el, latest); return; }
             var cP = current.split('.').map(Number), lP = latest.split('.').map(Number);
             var isNewer = false, i, c, l;
