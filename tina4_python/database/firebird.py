@@ -280,6 +280,31 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
             self._conn.close()
             self._conn = None
 
+    def __del__(self):
+        # Deterministic teardown when a caller (or a test) drops this adapter
+        # without calling close(). Without it, firebird-driver's OWN Connection
+        # finalizer later runs a rollback on a transaction whose handle is no
+        # longer valid -- "invalid transaction handle (expecting explicit
+        # transaction start)" -- which surfaces as a
+        # PytestUnraisableExceptionWarning (and GC noise in an app). Resolve any
+        # open transaction and detach HERE, so the driver's finalizer finds an
+        # already-closed connection and has nothing left to roll back
+        # (FB-DEL-CLOSE). __del__ can run during interpreter shutdown and on an
+        # already-dead connection, so swallow everything.
+        conn = getattr(self, "_conn", None)
+        if conn is None:
+            return
+        try:
+            if self._active_transaction() is not None:
+                conn.rollback()
+        except Exception:  # noqa: BLE001 - stale/dead handle; nothing to undo
+            pass
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001 - best-effort detach during GC
+            pass
+        self._conn = None
+
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
         sql = self._translate_sql(sql)
 
