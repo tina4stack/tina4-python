@@ -273,7 +273,44 @@ class TestGetAPIHandlers:
         assert "/__dev/api/broken" in handlers
         assert "/__dev/api/websockets" in handlers
         assert "/__dev/api/system" in handlers
-        assert "/__dev/api/chat" in handlers
+
+    def test_agent_chat_endpoints_removed(self):
+        """The agentic chat panel and its CLI-agent proxy were removed from
+        the dev-admin (3.13.132). None of the chat / supervisor / thoughts /
+        threads / execute proxy routes may be registered any more. Negative
+        regression: if any re-appears the dev-admin is proxying to the Rust
+        agent again."""
+        handlers = get_api_handlers()
+        for gone in (
+            "/__dev/api/chat",
+            "/__dev/api/execute",
+            "/__dev/api/thoughts",
+            "/__dev/api/threads",
+            "/__dev/api/threads/*",
+            "/__dev/api/supervise/create",
+            "/__dev/api/supervise/sessions",
+            "/__dev/api/supervise/diff",
+            "/__dev/api/supervise/commit",
+            "/__dev/api/supervise/cancel",
+        ):
+            assert gone not in handlers, f"{gone} should be gone with the agent"
+
+    def test_mcp_and_grounding_and_editor_metrics_kept(self):
+        """The MCP + grounding surface (AI coders use it) and the editor /
+        metrics endpoints (the new landing) survive the agent removal.
+        Positive regression against over-removal."""
+        handlers = get_api_handlers()
+        for kept in (
+            "/__dev/api/grounding/status",   # mcp.tina4.com token config
+            "/__dev/api/grounding/token",
+            "/__dev/api/mcp/tools",          # MCP REST shim
+            "/__dev/api/mcp/call",
+            "/ai/api/chat",                  # inline editor completion proxy
+            "/__dev/api/files",              # code editor / file view (landing)
+            "/__dev/api/file",
+            "/__dev/api/metrics/full",       # metrics view (landing)
+        ):
+            assert kept in handlers, f"{kept} must survive the agent removal"
 
     def test_handler_methods(self):
         handlers = get_api_handlers()
@@ -284,8 +321,8 @@ class TestGetAPIHandlers:
     def test_all_handlers_callable(self):
         handlers = get_api_handlers()
         for path, (method, handler) in handlers.items():
-            # "*" is the any-method wildcard for REST resources where one
-            # handler covers GET/POST/PATCH (e.g. /__dev/api/threads).
+            # "*" is the any-method wildcard where one handler switches on
+            # request.method itself (e.g. the MCP endpoint /__dev/mcp).
             assert method in ("GET", "POST", "*")
             assert callable(handler)
 
@@ -299,32 +336,33 @@ class TestGetAPIHandlers:
         assert "/__dev/api/mailbox/clear" in post_paths
         assert "/__dev/api/messages/clear" in post_paths
         assert "/__dev/api/seed" in post_paths
-        assert "/__dev/api/chat" in post_paths
 
     def test_handler_count(self):
         # Sanity check against accidental endpoint additions. Bump
         # this number intentionally when a new /__dev/api route
         # lands so review catches silent growth.
         #
-        # Current: 40 base + 13 (file I/O × 6, deps × 2, git × 1,
-        #          mcp REST shim × 2, scaffold × 2) + 7 (ollama proxy
-        #          alias, 5 service-health probes, thoughts stub) + 6 (5
-        #          supervise/* proxies + /execute) + 5 (docs/search,
-        #          docs/class, docs/method, docs/index,
+        # Current: 39 base + 13 (file I/O × 6, deps × 2, git × 1,
+        #          mcp REST shim × 2, scaffold × 2) + 6 (ollama proxy
+        #          alias /ai/api/chat + 5 service-health probes) + 5
+        #          (docs/search, docs/class, docs/method, docs/index,
         #          docs/.well-known.json — Live API RAG endpoints
-        #          per plan/v3/22-LIVE-API-RAG.md) + 2 (/threads list
-        #          and /threads/* prefix for the thread sidebar) + 2
+        #          per plan/v3/22-LIVE-API-RAG.md) + 2
         #          (/__feedback/widget.js bundle + /__feedback/api/turn
         #          customer-feedback intake) + 3 (MCP JSON-RPC endpoint:
-        #          /__dev/mcp, /__dev/mcp/message, /__dev/mcp/sse) = 79,
+        #          /__dev/mcp, /__dev/mcp/message, /__dev/mcp/sse) = 68,
         #          + 5 dev-admin parity endpoints (grounding/status,
         #          grounding/token grounding-token proxy; migrate, test,
-        #          seed/run scaffold run-chips) = 83. The former quick
-        #          metrics endpoint moved to the native CLI in 3.13.101.
+        #          seed/run scaffold run-chips) = 73.
         #          + 2 (toolbar.css + toolbar.js CSP-clean dev-toolbar
-        #          assets, tina4stack #115) = 85.
+        #          assets, tina4stack #115) = 75.
+        #
+        # 3.13.132 removed the AGENT chat surface (the CLI-agent proxy):
+        # /__dev/api/chat (base 40→39), /__dev/api/thoughts (dropped the
+        # thoughts stub from the ollama group 7→6), the 5 supervise/* +
+        # /execute proxies (−6), and the 2 /threads routes (−2): 85→75.
         handlers = get_api_handlers()
-        assert len(handlers) == 85
+        assert len(handlers) == 75
 
     def test_mcp_jsonrpc_endpoint_registered(self):
         # The MCP transport surface real clients speak — must be mounted so
@@ -471,35 +509,15 @@ class TestAPIHandlers:
         assert result["framework"] == "tina4-python v3"
 
     @pytest.mark.asyncio
-    async def test_chat_handler_empty_message(self, mock_req, mock_resp):
-        from tina4_python.dev_admin import _api_chat
-        mock_req.body = {"message": ""}
-        result = await _api_chat(mock_req, mock_resp)
-        assert "error" in result
-
-    @pytest.mark.asyncio
-    async def test_chat_supervisor_unreachable_returns_503(self, mock_req, mock_resp, monkeypatch):
-        """When the Rust agent isn't running, /chat returns the standard
-        ``supervisor unavailable`` 503 shape — same as every other
-        supervise/* endpoint — instead of the legacy qwen-direct error.
-
-        Rationale: /chat was rewired to proxy through the Rust agent so
-        the supervisor → planner → coder loop runs against the
-        configured LLM (Anthropic / OpenAI / Tina4 Cloud via
-        ChatSettings). The old qwen-direct path bypassed every model
-        setting and broke the SPA's SSE reader; it's still reachable
-        at /ai/api/chat for users who want it.
-        """
-        # Point the proxy at an unroutable address so urlopen fails fast.
-        monkeypatch.setenv("TINA4_SUPERVISOR_URL", "http://127.0.0.1:1")
-        from tina4_python.dev_admin import _api_chat
-        mock_req.body = {"message": "ping"}
-        result = await _api_chat(mock_req, mock_resp)
-        assert result.get("error") == "supervisor unavailable"
-        assert "hint" in result
-        # The hint mentions the recovery action so the SPA can show
-        # something actionable instead of an empty error.
-        assert "tina4 serve" in result["hint"] or "tina4 agent" in result["hint"] or "TINA4_SUPERVISOR_URL" in result["hint"]
+    async def test_agent_chat_handler_symbols_gone(self):
+        """The CLI-agent proxy handlers were deleted with the agent chat
+        panel (3.13.132). Importing them must fail — a negative regression
+        that the proxy code is truly gone, not merely unrouted."""
+        import tina4_python.dev_admin as d
+        for gone in ("_api_chat", "_api_execute", "_api_thoughts",
+                     "_api_threads", "_api_threads_sub", "_proxy_to_supervisor",
+                     "_api_supervise_create", "_api_supervise_cancel"):
+            assert not hasattr(d, gone), f"{gone} should be removed with the agent"
 
     @pytest.mark.asyncio
     async def test_websockets_handler(self, mock_req, mock_resp):
@@ -807,3 +825,14 @@ class TestGroundingSnapshot:
         snap = _grounding_snapshot()
         assert snap["source"] == "personal"
         assert snap["last4"] == "9xyz"
+
+
+def test_dev_admin_dashboard_suppresses_toolbar_reload():
+    """The dev-admin dashboard reloads itself gently via its SPA, so the injected
+    toolbar's full-page reloader must be suppressed on /__dev pages while app
+    pages keep normal hot-reload (regression: saving a file used to reload the
+    whole dashboard). See render_dev_toolbar / data-reload."""
+    from tina4_python.dev_admin import render_dev_toolbar
+    assert 'data-reload="0"' in render_dev_toolbar("GET", "/__dev", "", "r1", 0)
+    assert 'data-reload="0"' in render_dev_toolbar("GET", "/__dev/x", "", "r1", 0)
+    assert 'data-reload="1"' in render_dev_toolbar("GET", "/", "", "r1", 0)

@@ -499,13 +499,6 @@ def get_api_handlers() -> dict:
         "/__dev/api/websockets": ("GET", _api_websockets),
         "/__dev/api/websockets/disconnect": ("POST", _api_ws_disconnect),
         "/__dev/api/system": ("GET", _api_system),
-        "/__dev/api/chat": ("POST", _api_chat),
-        # Thread CRUD — exact match handles GET (list) + POST (create);
-        # the "/*" key is the prefix-fallback for /threads/{id}[/messages]
-        # which the dev_admin dispatcher routes to _api_threads_sub.
-        # "*" method = handler switches on request.method itself.
-        "/__dev/api/threads":   ("*", _api_threads),
-        "/__dev/api/threads/*": ("*", _api_threads_sub),
         # ── Customer feedback widget (Tier 1: intake-only) ──
         # /__feedback/widget.js — bundle served at top-level so HTML
         # pages can embed without a /__dev path (the widget is for
@@ -529,18 +522,6 @@ def get_api_handlers() -> dict:
         "/embed":  ("GET", _api_service_embed),
         "/image":  ("GET", _api_service_image),
         "/rag":    ("GET", _api_service_rag),
-        # Thoughts — proxied to the rust agent server when it's running.
-        "/__dev/api/thoughts": ("GET", _api_thoughts),
-        # Supervisor orchestration — transparent proxy to the rust
-        # agent server (port = framework port + 2000). When tina4
-        # serve isn't running these respond 503 with a helpful hint
-        # instead of failing silently.
-        "/__dev/api/supervise/create":   ("POST", _api_supervise_create),
-        "/__dev/api/supervise/sessions": ("GET",  _api_supervise_sessions),
-        "/__dev/api/supervise/diff":     ("GET",  _api_supervise_diff),
-        "/__dev/api/supervise/commit":   ("POST", _api_supervise_commit),
-        "/__dev/api/supervise/cancel":   ("POST", _api_supervise_cancel),
-        "/__dev/api/execute":            ("POST", _api_execute),
         "/__dev/api/tool": ("POST", _api_tool),
         "/__dev/api/connections": ("GET", _api_connections),
         "/__dev/api/connections/test": ("POST", _api_connections_test),
@@ -1315,15 +1296,15 @@ async def _api_service_rag(request, response):
 def _supervisor_base_url() -> str:
     """Return the URL of the co-located rust agent server, if any.
 
-    Resolution order (first match wins):
+    Still used by the customer-feedback widget (``/__feedback/api/turn``),
+    which forwards to the agent's ``/feedback/intake``. Resolution order
+    (first match wins):
 
       1. `TINA4_SUPERVISOR_URL` — full URL for non-localhost deployments.
       2. `TINA4_AGENT_PORT` — explicit port override.
       3. `PORT + 2000` — auto-derived. `tina4 serve` exports the
          framework's PORT into the child process AND spawns the agent
-         on `port + 2000` (main.rs::handle_serve). Reading PORT here
-         keeps both sides aligned automatically: Python on 7146 →
-         agent on 9146, Node on 7148 → agent on 9148, etc.
+         on `port + 2000` (main.rs::handle_serve).
       4. Hardcoded 9145 — matches `tina4 agent` standalone's default
          (main.rs::handle_agent), for users running the agent without
          going through `tina4 serve`.
@@ -1341,174 +1322,6 @@ def _supervisor_base_url() -> str:
         return f"http://127.0.0.1:{int(framework_port_str) + 2000}"
 
     return "http://127.0.0.1:9145"
-
-
-async def _proxy_to_supervisor(request, response, downstream_path: str):
-    """Forward a dev-admin request to the rust agent server.
-
-    The SPA's supervisor UI calls paths like ``/__dev/api/supervise/create``;
-    we strip the ``/__dev/api`` prefix and POST/GET the same body+query to
-    the agent server. Returns the agent's response verbatim. When the
-    agent isn't reachable (tina4 serve not running, or bare framework)
-    we respond with a specific 503 so the SPA can show a useful error
-    instead of silently doing nothing.
-    """
-    import urllib.request
-    import urllib.error
-
-    base = _supervisor_base_url()
-    qs = ""
-    try:
-        if hasattr(request, "query") and request.query:
-            from urllib.parse import urlencode
-            qs = "?" + urlencode(request.query)
-    except Exception:
-        qs = ""
-    target = f"{base}{downstream_path}{qs}"
-
-    method = (getattr(request, "method", "GET") or "GET").upper()
-    data = None
-    if method in ("POST", "PUT", "PATCH", "DELETE"):
-        body = getattr(request, "body", None)
-        if isinstance(body, dict):
-            # SPA→agent convention fixup: `/execute` sends plan_file as
-            # a bare filename but the rust agent expects a project-relative
-            # path. Prepend `plan/` when no slash is present.
-            pf = body.get("plan_file")
-            if isinstance(pf, str) and pf and "/" not in pf:
-                body = dict(body)
-                body["plan_file"] = f"plan/{pf}"
-            data = json.dumps(body).encode()
-        elif isinstance(body, list):
-            data = json.dumps(body).encode()
-        elif isinstance(body, str) and body:
-            data = body.encode()
-
-    import asyncio
-
-    req = urllib.request.Request(
-        target,
-        data=data,
-        method=method,
-        headers={"Content-Type": "application/json"},
-    )
-    # /execute and /chat run the multi-agent loop — supervisor +
-    # planner + coder, each a multi-second LLM call. Other
-    # supervise/* calls are metadata-only and return fast, so a
-    # generous shared timeout for the heavy ones is cheaper than
-    # branching on every endpoint.
-    timeout = 600 if downstream_path in ("/execute", "/chat") else 30
-
-    # Open the upstream connection in a thread — urlopen is blocking.
-    # We DON'T read the body here; that's done below either in one shot
-    # (JSON path) or chunk-by-chunk (SSE path) so progress events reach
-    # the SPA live instead of after the whole 30-second supervisor run.
-    try:
-        upstream = await asyncio.to_thread(
-            urllib.request.urlopen, req, None, timeout
-        )
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode() if e.fp else str(e)
-        try:
-            return response(json.loads(err_body), e.code)
-        except Exception:
-            return response({"error": err_body[:300]}, e.code)
-    except Exception as e:
-        return response({
-            "error": "supervisor unavailable",
-            "detail": str(e),
-            "hint": "Run `tina4 serve` (starts the agent server) or set TINA4_SUPERVISOR_URL",
-        }, 503)
-
-    upstream_ct = upstream.headers.get("Content-Type", "") or ""
-
-    # SSE / event-stream: stream chunks through as they arrive. Without
-    # this the SPA sees nothing until the supervisor's entire multi-agent
-    # run completes (30s+), then a wall of events at once — looks like
-    # "Connection failed". urlopen.read(n) is blocking, so each read goes
-    # through asyncio.to_thread to keep the event loop responsive.
-    if "text/event-stream" in upstream_ct.lower():
-        async def _relay():
-            try:
-                while True:
-                    chunk = await asyncio.to_thread(upstream.read, 4096)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                upstream.close()
-        return response.stream(_relay(), "text/event-stream")
-
-    # JSON / other: drain the body and return as before.
-    try:
-        raw = await asyncio.to_thread(upstream.read)
-    finally:
-        upstream.close()
-    try:
-        return response(json.loads(raw))
-    except Exception:
-        return response(raw.decode("utf-8", errors="replace"))
-
-
-async def _api_supervise_create(request, response):
-    """Before forwarding to the rust agent, auto-flesh the current plan
-    if it has zero steps. The SPA sends the user's supervisor-chat
-    message as ``title``/``plan``; we use that as the fleshing prompt.
-    Skipped when the plan already has steps so populated plans aren't
-    polluted. Best-effort — never blocks supervise/create."""
-    try:
-        from tina4_python.dev_admin import plan as _plan
-        current = _plan.current()
-        is_empty = (
-            isinstance(current.get("current"), str)
-            and (current.get("progress") or {}).get("total", 0) == 0
-        )
-        if is_empty:
-            body = getattr(request, "body", None) or {}
-            if isinstance(body, dict):
-                prompt = str(body.get("plan") or body.get("title") or "").strip()
-                if prompt:
-                    _plan.flesh(current["current"], prompt)
-    except Exception:
-        pass  # Fleshing is best-effort.
-    return await _proxy_to_supervisor(request, response, "/supervise/create")
-
-
-async def _api_supervise_sessions(request, response):
-    return await _proxy_to_supervisor(request, response, "/supervise/sessions")
-
-
-async def _api_supervise_diff(request, response):
-    return await _proxy_to_supervisor(request, response, "/supervise/diff")
-
-
-async def _api_supervise_commit(request, response):
-    return await _proxy_to_supervisor(request, response, "/supervise/commit")
-
-
-async def _api_supervise_cancel(request, response):
-    return await _proxy_to_supervisor(request, response, "/supervise/cancel")
-
-
-async def _api_execute(request, response):
-    return await _proxy_to_supervisor(request, response, "/execute")
-
-
-async def _api_thoughts(request, response):
-    """Thoughts — proxied to the rust agent server when it's running,
-    otherwise an empty list so the SPA renders gracefully."""
-    base = _supervisor_base_url()
-    import urllib.request
-    import urllib.error
-    try:
-        with urllib.request.urlopen(f"{base}/thoughts", timeout=5) as r:
-            raw = r.read()
-        try:
-            return response(json.loads(raw))
-        except Exception:
-            return response({"thoughts": []})
-    except Exception:
-        return response({"thoughts": []})
 
 
 async def _api_ai_proxy(request, response):
@@ -1796,56 +1609,6 @@ async def _api_feedback_widget_js(request, response):
         response.header("cache-control", "no-cache, must-revalidate")
         response.header("pragma", "no-cache")
     return response(body, 200, "application/javascript")
-
-
-async def _api_threads(request, response):
-    """Proxy /__dev/api/threads → Rust agent /threads (GET list, POST create).
-
-    Method-multiplexed handler — the dev_admin dispatcher registered this
-    under the "*" method wildcard so one entry point serves both list and
-    create. Anything other than GET/POST gets a 405.
-    """
-    method = (getattr(request, "method", "GET") or "GET").upper()
-    if method not in ("GET", "POST"):
-        return response({"error": "method not allowed"}, 405)
-    return await _proxy_to_supervisor(request, response, "/threads")
-
-
-async def _api_threads_sub(request, response):
-    """Proxy /__dev/api/threads/{id}[/messages] → Rust agent.
-
-    Catches everything beneath /__dev/api/threads/ via the dispatcher's
-    "/*" prefix match. We strip the dev-admin prefix and forward the
-    remaining path verbatim so /__dev/api/threads/abc/messages becomes
-    /threads/abc/messages on the agent side.
-    """
-    path = getattr(request, "path", "") or ""
-    suffix = path[len("/__dev/api"):]  # leaves "/threads/abc[/messages]"
-    if not suffix.startswith("/threads/"):
-        return response({"error": "not found"}, 404)
-    return await _proxy_to_supervisor(request, response, suffix)
-
-
-async def _api_chat(request, response):
-    """Proxy dev-admin chat to the Rust agent server's /chat endpoint.
-
-    The SPA (Chat.ts) POSTs `{message, settings, files?}` and expects an
-    SSE stream of `event: status / message / done` chunks. The Rust agent
-    runs the supervisor → planner → coder loop, calls the configured LLM
-    (Anthropic / OpenAI / Tina4 Cloud — driven by `ChatSettings` from
-    `.tina4/chat/settings.json` or the ANTHROPIC_API_KEY env-var
-    defaults), and streams progress back.
-
-    Earlier versions of this endpoint called qwen on the Tina4 Cloud
-    directly and returned a single JSON blob, which broke the SPA's SSE
-    reader and bypassed every configured model setting. If you want the
-    bare qwen path it's still reachable at /ai/api/chat.
-
-    When `tina4 agent` isn't running, _proxy_to_supervisor returns 503
-    with a helpful hint so the SPA can show a real error instead of
-    silently hanging.
-    """
-    return await _proxy_to_supervisor(request, response, "/chat")
 
 
 async def _api_tool(request, response):
@@ -2282,7 +2045,16 @@ def render_dev_toolbar(method: str, path: str, matched_pattern: str,
     path = _html_escape(str(path), quote=True)
     matched_pattern = _html_escape(str(matched_pattern), quote=True)
     request_id = _html_escape(str(request_id), quote=True)
-    no_reload = os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes") or _ai_port_ctx.get()
+    # The dev-admin dashboard (any /__dev page) owns its OWN gentle reload watcher
+    # inside the SPA (git-status refresh in place), so the toolbar's blunt
+    # location.reload() must be suppressed there -- otherwise saving a file from
+    # the dashboard's editor reloads the whole dashboard and stomps the editing
+    # session. App pages keep the normal hot-reload.
+    no_reload = (
+        os.environ.get("TINA4_NO_RELOAD", "").lower() in ("true", "1", "yes")
+        or _ai_port_ctx.get()
+        or str(path).startswith("/__dev")
+    )
     reload = "0" if no_reload else "1"
 
     return f"""<link rel="stylesheet" href="/__dev/toolbar.css">

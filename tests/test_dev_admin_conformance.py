@@ -373,3 +373,61 @@ def test_a_remote_unauthenticated_mcp_call_is_refused_and_the_tool_does_not_run(
     status_ok, _, _ = _dispatch("POST", "/__dev/api/mcp/call", client=("127.0.0.1", 12345), json=insert)
     assert status_ok == 200
     assert _row_count(db) == 1
+
+
+# ── 3.13.132: the AGENT chat panel + its CLI-agent proxy were removed ─────────
+
+def test_removed_agent_routes_are_absent(project_dir, monkeypatch):
+    """The agentic chat surface (the CLI-agent proxy on framework_port+2000)
+    is GONE. With the dev-admin fully mounted (TINA4_DEBUG=true, loopback,
+    same-origin) every former agent route now 404s — proving the routes were
+    removed, not merely gated. Real dispatch through the ASGI app, no mocks.
+
+    Negative regression: re-register any of these and it stops 404-ing."""
+    monkeypatch.setenv("TINA4_DEBUG", "true")
+
+    # Writes — presented same-origin so the CSRF gate passes; a 404 then means
+    # "no such route", not "blocked" (contrast test_a_same_origin_write_is_allowed
+    # which gets 200 on a route that still exists).
+    for path, payload in (
+        ("/__dev/api/chat", {"message": "hi"}),
+        ("/__dev/api/execute", {"plan_file": "plan/x.md"}),
+        ("/__dev/api/supervise/create", {"title": "t"}),
+        ("/__dev/api/supervise/commit", {"id": "s1"}),
+        ("/__dev/api/supervise/cancel", {"id": "s1"}),
+    ):
+        status, _, _ = _dispatch("POST", path,
+                                 headers={"sec-fetch-site": "same-origin"},
+                                 json=payload)
+        assert status == 404, f"{path} should be gone with the agent (got {status})"
+
+    # Reads — GET former agent routes: also absent.
+    for path in ("/__dev/api/thoughts", "/__dev/api/threads",
+                 "/__dev/api/supervise/sessions", "/__dev/api/supervise/diff?id=s1"):
+        status, _, _ = _dispatch("GET", path)
+        assert status == 404, f"{path} should be gone with the agent (got {status})"
+
+
+def test_mcp_grounding_and_editor_metrics_survive(project_dir, monkeypatch):
+    """Positive control: the endpoints the task says to KEEP (MCP + grounding,
+    used by external AI coders) and the editor/metrics endpoints (the new
+    landing) still dispatch — a 404 here would mean over-removal. Real ASGI
+    dispatch from a loopback peer, no mocks."""
+    monkeypatch.setenv("TINA4_DEBUG", "true")
+
+    # KEEP: MCP REST shim + framework-grounding token config.
+    for path in ("/__dev/api/mcp/tools",
+                 "/__dev/api/grounding/status"):
+        status, _, _ = _dispatch("GET", path)
+        assert status == 200, f"{path} must survive the agent removal (got {status})"
+
+    # KEEP: the editor / file view (the landing) and metrics view. The
+    # metrics/full route computes over the whole project, so it dispatches
+    # regardless of which files the fixture created (metrics/file, by
+    # contrast, 404s on a MISSING file — a content result, not a routing one,
+    # so it is not a route-survival probe).
+    status_files, _, _ = _dispatch("GET", "/__dev/api/files?path=.")
+    assert status_files == 200, f"editor file listing gone (got {status_files})"
+
+    status_metrics, _, _ = _dispatch("GET", "/__dev/api/metrics/full")
+    assert status_metrics != 404, f"metrics/full must survive the agent removal (got {status_metrics})"
