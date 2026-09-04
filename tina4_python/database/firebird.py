@@ -297,7 +297,19 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         # reflects the LAST statement executed on the cursor, so the generator
         # re-select below (another execute on this same cursor) would otherwise
         # clobber the INSERT/UPDATE/DELETE count (FB-AFFECTED-FAB).
-        affected = cursor.rowcount if cursor.rowcount >= 0 else 0
+        #
+        # A DDL statement (CREATE/DROP/ALTER TABLE, etc.) has NO row count:
+        # firebird-driver's `rowcount` probes `get_info(RECORDS)` on the cursor,
+        # which the server answers with an error response for DDL, and the driver
+        # raises `InterfaceError: Result code does not match request code`. Reading
+        # rowcount unconditionally therefore blew up every DDL execute (create_table,
+        # migrations, the live-Firebird test fixtures) -- FB-DDL-ROWCOUNT. Guard it:
+        # DDL (and any statement without a countable result) yields 0 affected rows.
+        try:
+            _row_count = cursor.rowcount
+            affected = _row_count if _row_count >= 0 else 0
+        except Exception:  # noqa: BLE001 - no rowcount on DDL; it is not a write
+            affected = 0
 
         records = []
         last_id = None
