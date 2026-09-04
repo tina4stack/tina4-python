@@ -22,16 +22,25 @@ class RedisSessionHandler(SessionHandler):
     """Redis-backed session handler with TTL support.
 
     Uses `redis` package when available, raw RESP protocol as fallback.
+
+    Valkey is wire-compatible with Redis, so ValkeySessionHandler subclasses this
+    and only changes the env-var prefix and the brand word in messages -- the RESP
+    protocol logic below is shared, not duplicated.
     """
 
+    # Subclasses (Valkey) override these two; every method below is inherited.
+    _ENV = "REDIS"
+    _BRAND = "Redis"
+
     def __init__(self, **config):
-        self._host = config.get("host", os.environ.get("TINA4_SESSION_REDIS_HOST", "localhost"))
-        self._port = int(config.get("port", os.environ.get("TINA4_SESSION_REDIS_PORT", "6379")))
-        self._password = config.get("password") or os.environ.get("TINA4_SESSION_REDIS_PASSWORD") or None
-        self._db = int(config.get("db", os.environ.get("TINA4_SESSION_REDIS_DB", "0")))
+        env = self._ENV
+        self._host = config.get("host", os.environ.get(f"TINA4_SESSION_{env}_HOST", "localhost"))
+        self._port = int(config.get("port", os.environ.get(f"TINA4_SESSION_{env}_PORT", "6379")))
+        self._password = config.get("password") or os.environ.get(f"TINA4_SESSION_{env}_PASSWORD") or None
+        self._db = int(config.get("db", os.environ.get(f"TINA4_SESSION_{env}_DB", "0")))
         self._ttl = int(config.get("ttl", os.environ.get("TINA4_SESSION_TTL", "3600")))
         self._prefix = config.get(
-            "prefix", os.environ.get("TINA4_SESSION_REDIS_PREFIX", "tina4:session:")
+            "prefix", os.environ.get(f"TINA4_SESSION_{env}_PREFIX", "tina4:session:")
         )
 
         self._redis_client = None
@@ -130,12 +139,12 @@ class RedisSessionHandler(SessionHandler):
         if self._password:
             result = self._send_command("AUTH", self._password)
             if result != "OK":
-                raise RuntimeError("Redis authentication failed")
+                raise RuntimeError(f"{self._BRAND} authentication failed")
 
         if self._db > 0:
             result = self._send_command("SELECT", str(self._db))
             if result != "OK":
-                raise RuntimeError(f"Redis SELECT database {self._db} failed")
+                raise RuntimeError(f"{self._BRAND} SELECT database {self._db} failed")
 
     def _close_raw(self):
         if self._socket:
@@ -166,7 +175,7 @@ class RedisSessionHandler(SessionHandler):
         if reply_type == "+":
             return data
         elif reply_type == "-":
-            raise RuntimeError(f"Redis error: {data}")
+            raise RuntimeError(f"{self._BRAND} error: {data}")
         elif reply_type == ":":
             return int(data)
         elif reply_type == "$":
@@ -192,7 +201,7 @@ class RedisSessionHandler(SessionHandler):
         while True:
             char = self._socket.recv(1)
             if not char:
-                raise RuntimeError("Connection closed while reading from Redis")
+                raise RuntimeError(f"Connection closed while reading from {self._BRAND}")
             if char == b"\r":
                 self._socket.recv(1)  # consume \n
                 break
@@ -204,6 +213,6 @@ class RedisSessionHandler(SessionHandler):
         while len(data) < n:
             chunk = self._socket.recv(n - len(data))
             if not chunk:
-                raise RuntimeError("Connection closed while reading Redis data")
+                raise RuntimeError(f"Connection closed while reading {self._BRAND} data")
             data += chunk
         return data
