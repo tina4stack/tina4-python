@@ -25,10 +25,12 @@ from tina4_python.orm.fields import (
     has_many, has_one, belongs_to,  # relationship descriptors
 )
 from tina4_python.orm.point import Point
+from tina4_python.orm.collection import ModelCollection
 from tina4_python.orm.model import ORM, bind_database, feature_collection
 
 __all__ = [
     "ORM", "bind_database",
+    "ModelCollection",
     "Field",
     # Verbose (preferred)
     "IntegerField", "StringField", "BooleanField", "FloatField",

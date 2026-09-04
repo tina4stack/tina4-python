@@ -4,8 +4,9 @@
 # (find / all / QueryBuilder all could). These tests pin the new behaviour:
 #   * order_by sorts the filtered result (ASC and DESC)
 #   * omitting order_by injects NO ORDER BY (rows come back in natural order)
-#   * with_count=True still returns (rows, total) AND the COUNT query carries
-#     no ORDER BY (a leaked ORDER BY would make the ordinal form raise)
+#   * the ModelCollection total (get_total_records) is right even with order_by,
+#     because the fetch COUNT probe strips the trailing ORDER BY (a leaked ORDER
+#     BY would make the ordinal form raise)
 #
 # Real SQLite, no mocks. Rows are inserted OUT OF alphabetical order so a
 # missing or extra ORDER BY is directly observable in the output.
@@ -52,18 +53,18 @@ def test_without_order_by_is_unchanged(db):
     assert [r.name for r in rows] == ["Charlie", "Alice", "Bob"]
 
 
-def test_with_count_returns_ordered_rows_and_total(db):
-    rows, total = WPerson.where("1=1", with_count=True, order_by="name ASC")
+def test_collection_returns_ordered_rows_and_total(db):
+    rows = WPerson.where("1=1", order_by="name ASC")
     assert [r.name for r in rows] == ["Alice", "Bob", "Charlie"]
-    assert total == 3
+    assert rows.get_total_records() == 3
 
 
-def test_with_count_does_not_order_the_count_query(db):
-    # The COUNT query must NOT receive the ORDER BY. Proven for real via an
-    # ordinal ORDER BY: "SELECT * ... ORDER BY 2" is valid (orders by the 2nd
-    # column, name), but "SELECT COUNT(*) AS n ... ORDER BY 2" is out of range
-    # in SQLite (a single output column) and raises. If order_by ever leaks
-    # into the COUNT query, fetch_one raises here and this test goes red.
-    rows, total = WPerson.where("1=1", with_count=True, order_by="2")
+def test_order_by_does_not_break_the_total(db):
+    # The COUNT probe must NOT carry the ORDER BY. Proven for real via an ordinal
+    # ORDER BY: "SELECT * ... ORDER BY 2" is valid (orders by the 2nd column,
+    # name), but "SELECT COUNT(*) FROM (... ORDER BY 2)" is out of range in SQLite
+    # (a single output column) and raises. The fetch probe strips the trailing
+    # ORDER BY, so the total computes cleanly. If that strip regresses, this reds.
+    rows = WPerson.where("1=1", order_by="2")
     assert [r.name for r in rows] == ["Alice", "Bob", "Charlie"]
-    assert total == 3
+    assert rows.get_total_records() == 3

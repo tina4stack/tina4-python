@@ -254,11 +254,11 @@ MyModel.find_by_id(pk_value, include=None) -> MyModel | None
 MyModel.find_or_fail(pk_value) -> MyModel          # Raises ValueError if not found
 MyModel.exists(pk_value) -> bool                   # True if record with that PK exists
 MyModel.create(data=None, **kwargs) -> MyModel     # Create + save in one call
-MyModel.all(limit=100, offset=0, include=None) -> list[MyModel]
-MyModel.select(sql, params=None, limit=100, offset=0, include=None) -> list[MyModel]
+MyModel.all(limit=100, offset=0, include=None) -> ModelCollection
+MyModel.select(sql, params=None, limit=100, offset=0, include=None) -> ModelCollection
 MyModel.select_one(sql, params=None, include=None) -> MyModel | None
-MyModel.where(filter_sql, params=None, limit=100, offset=0, include=None, order_by=None) -> list[MyModel]
-MyModel.with_trashed(filter_sql="1=1", params=None, limit=100, offset=0) -> list[MyModel]
+MyModel.where(filter_sql, params=None, limit=100, offset=0, include=None, order_by=None) -> ModelCollection
+MyModel.with_trashed(filter_sql="1=1", params=None, limit=100, offset=0) -> ModelCollection
 MyModel.count(conditions=None, params=None) -> int
 MyModel.create_table() -> bool
 MyModel.query() -> QueryBuilder
@@ -267,6 +267,22 @@ MyModel.cached(sql, params=None, ttl=60, limit=100, offset=0) -> list[MyModel]
 
 bind_database(db: Database, name: str = None) -> None
 ```
+
+**`ModelCollection` (ADR-0064)** — `where` / `select` / `find` (filter form) / `all` /
+`with_trashed` return a `ModelCollection`. It IS a `list` (iterate, index, `len`,
+slice, JSON all unchanged), and it also carries the total rows matching the query's
+filter, independent of `limit`/`offset`:
+
+```python
+rows = User.where("active = ?", [1], limit=20)   # a page of <=20 models
+rows.get_total_records()   # e.g. 250 — the whole matching set, ignores limit/offset
+rows.to_paginate()         # {records, total, page, per_page, total_pages, limit, offset}
+```
+
+The total is free (it reuses the `DatabaseResult.count` the query already computes).
+The accessor is a METHOD, not `.count`, because `list.count()` already exists. The old
+Python-only `where(..., with_count=True)` tuple is removed — use `rows.get_total_records()`.
+Uniform across all four frameworks: PHP/Node `getTotalRecords()` / `toPaginate()`.
 
 **Database binding:**
 

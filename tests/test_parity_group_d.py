@@ -4,7 +4,7 @@
 * Container.reset() clears singleton instances but keeps factory registrations
 * Container.reset_all() clears both (the old reset() behaviour)
 * queue.dead_letters() returns list[Job] with .error populated
-* Model.where(..., with_count=True) returns tuple[list[Self], int]
+* Model.where(...) returns a ModelCollection carrying get_total_records()/to_paginate()
 """
 from __future__ import annotations
 
@@ -186,7 +186,7 @@ class TestQueueDeadLettersReturnsJobs:
         q.clear()
 
 
-# ─── Model.where(..., with_count=True) ────────────────────────────────────
+# ─── Model.where(...) returns a ModelCollection carrying the total ─────────
 
 
 def _make_product_model():
@@ -206,8 +206,9 @@ def _make_product_model():
     return Product, db
 
 
-class TestModelWhereWithCount:
-    def test_default_returns_list(self):
+class TestModelWhereCollection:
+    def test_where_is_still_a_list(self):
+        # Non-breaking: a ModelCollection IS a list -- iterate/index/len unchanged.
         Product, db = _make_product_model()
         try:
             Product({"name": "A", "category": "books", "price": 10}).save()
@@ -220,40 +221,50 @@ class TestModelWhereWithCount:
         finally:
             db.close()
 
-    def test_with_count_returns_tuple(self):
+    def test_get_total_records(self):
         Product, db = _make_product_model()
         try:
             for i in range(5):
                 Product({"name": f"P{i}", "category": "books", "price": i * 10}).save()
 
-            records, count = Product.where("category = ?", ["books"], with_count=True)
-            assert isinstance(records, list)
-            assert isinstance(count, int)
-            assert count == 5
-            assert len(records) == 5
+            rows = Product.where("category = ?", ["books"])
+            assert isinstance(rows, list)
+            assert rows.get_total_records() == 5
+            assert len(rows) == 5
         finally:
             db.close()
 
-    def test_with_count_respects_filter_not_pagination(self):
+    def test_total_reflects_filter_not_pagination(self):
         Product, db = _make_product_model()
         try:
             for i in range(10):
                 Product({"name": f"P{i}", "category": "books", "price": i * 10}).save()
 
-            # Paginate to limit=3 — but count should reflect total matching
-            records, count = Product.where(
-                "category = ?", ["books"], limit=3, with_count=True
-            )
-            assert len(records) == 3
-            assert count == 10
+            # Page capped at 3, but the total reflects every matching row.
+            rows = Product.where("category = ?", ["books"], limit=3)
+            assert len(rows) == 3
+            assert rows.get_total_records() == 10
+            page = rows.to_paginate()
+            assert page["total"] == 10
+            assert page["per_page"] == 3
+            assert page["total_pages"] == 4
         finally:
             db.close()
 
-    def test_with_count_zero_results(self):
+    def test_zero_results_still_carries_total(self):
         Product, db = _make_product_model()
         try:
-            records, count = Product.where("category = ?", ["nothing"], with_count=True)
-            assert records == []
-            assert count == 0
+            rows = Product.where("category = ?", ["nothing"])
+            assert rows == []
+            assert rows.get_total_records() == 0
+        finally:
+            db.close()
+
+    def test_with_count_kwarg_is_gone(self):
+        # ADR-0064 supersede: the old tuple flag no longer exists.
+        Product, db = _make_product_model()
+        try:
+            with pytest.raises(TypeError):
+                Product.where("category = ?", ["books"], with_count=True)
         finally:
             db.close()

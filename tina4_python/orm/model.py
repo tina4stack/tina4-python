@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Self
 from tina4_python.orm.fields import Field, RelationshipDescriptor
+from tina4_python.orm.collection import ModelCollection
 from tina4_python.core.cache import Cache
 
 # Module-level query cache — shared across ALL ORM models, so a write on one
@@ -950,11 +951,11 @@ class ORM(metaclass=ORMMeta):
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
-        return instances
+        return ModelCollection(instances, total=result.count, limit=limit, offset=offset)
 
     @classmethod
     def select(cls, sql: str = None, params: list = None, limit: int = 100, offset: int = 0,
-               include: list[str] = None) -> list[Self]:
+               include: list[str] = None) -> ModelCollection:
         """SQL-first query — returns array of ORM objects.
 
         When ``sql`` is omitted, defaults to ``SELECT * FROM <table>`` so
@@ -978,7 +979,7 @@ class ORM(metaclass=ORMMeta):
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
-        return instances
+        return ModelCollection(instances, total=result.count, limit=limit, offset=offset)
 
     @classmethod
     def select_one(cls, sql: str, params: list = None, include: list[str] = None) -> Self | None:
@@ -988,22 +989,22 @@ class ORM(metaclass=ORMMeta):
 
     @classmethod
     def where(cls, filter_sql: str, params: list = None, limit: int = 100, offset: int = 0,
-              include: list[str] = None, with_count: bool = False, order_by: str = None):
-        """Query with WHERE clause — returns array of ORM objects.
+              include: list[str] = None, order_by: str = None) -> ModelCollection:
+        """Query with a WHERE clause -- returns a ModelCollection of ORM objects.
 
-        Two return shapes:
+        The result IS a list (iterate / index / ``len`` / slice all unchanged) and
+        also carries the total rows matching ``filter_sql``, independent of
+        ``limit`` / ``offset``, via ``get_total_records()`` and ``to_paginate()``
+        (ADR-0064). So a caller reading a 20-row page still learns there are 250
+        matching rows.
 
-        * ``Model.where("active = ?", [1])``               → ``list[Self]``
-        * ``Model.where("active = ?", [1], with_count=True)`` → ``tuple[list[Self], int]``
-
-        The tuple form is for pagination UIs where the total count is
-        needed alongside the page slice — saves a second query. Total
-        count respects the same filter clause but ignores limit/offset.
+        The total is free: the ``db.fetch()`` below already ran a ``COUNT(*)``
+        probe for the same filter and returns it on ``result.count`` -- no second
+        query.
 
         Args:
-            order_by: ORDER BY clause (e.g. "name ASC"). Applied to the
-                result rows only; the ``with_count`` COUNT query never
-                carries an ORDER BY.
+            order_by: ORDER BY clause (e.g. "name ASC"). Applied to the page rows
+                only; the total ignores ordering (COUNT is order-independent).
         """
         db = cls._get_db()
         table = cls._get_table()
@@ -1019,29 +1020,22 @@ class ORM(metaclass=ORMMeta):
         instances = [cls(row) for row in result.records]
         if include:
             cls._eager_load(instances, include)
-
-        if with_count:
-            count_sql = f"SELECT COUNT(*) AS n FROM {table_sql} WHERE {filter_sql}"
-            if cls.soft_delete:
-                count_sql = (
-                    f"SELECT COUNT(*) AS n FROM {table_sql} "
-                    f"WHERE ({filter_sql}) AND {cls._soft_delete_filter()}"
-                )
-            count_row = db.fetch_one(count_sql, params)
-            total = int(count_row["n"]) if count_row else len(instances)
-            return instances, total
-
-        return instances
+        return ModelCollection(instances, total=result.count, limit=limit, offset=offset)
 
     @classmethod
-    def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 100, offset: int = 0) -> list[Self]:
-        """Query including soft-deleted records."""
+    def with_trashed(cls, filter_sql: str = "1=1", params: list = None, limit: int = 100, offset: int = 0) -> ModelCollection:
+        """Query including soft-deleted records -- returns a ModelCollection.
+
+        Like ``where()``, the result carries the total matching rows (soft-deleted
+        included) via ``get_total_records()`` / ``to_paginate()`` (ADR-0064).
+        """
         db = cls._get_db()
         table = cls._get_table()
         table_sql = cls._get_table_sql()
         sql = f"SELECT * FROM {table_sql} WHERE {filter_sql}"
         result = db.fetch(sql, params, limit=limit, offset=offset)
-        return [cls(row) for row in result.records]
+        instances = [cls(row) for row in result.records]
+        return ModelCollection(instances, total=result.count, limit=limit, offset=offset)
 
     @classmethod
     def count(cls, conditions: str = None, params: list = None) -> int:

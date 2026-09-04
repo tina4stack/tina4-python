@@ -1795,15 +1795,10 @@ async def list_{route_path}(request, response):
     page = int(request.query.get("page", 1))
     per_page = int(request.query.get("per_page", 20))
     offset = (page - 1) * per_page
-    records, total = {model}.where("1=1", limit=per_page, offset=offset, with_count=True)
+    records = {model}.where("1=1", limit=per_page, offset=offset)
     # tina4:edit  customise the list projection (filters, ordering, fields)
-    return response({{
-        "records": [r.to_dict() for r in records],
-        "count": total,
-        "page": page,
-        "per_page": per_page,
-        "total_pages": max(1, -(-total // per_page)),
-    }})
+    # records.to_paginate() -> records, total, page, per_page, total_pages, limit, offset
+    return response(records.to_paginate())
 
 
 @description("Get a {singular} by ID")
@@ -1862,7 +1857,7 @@ async def delete_{singular}(request, response):
         b_list = _ai_fill(
             f"list_{route_path}",
             f"return the {route_path} collection (add pagination if it grows)",
-            f"{m}.all()  or  {m}.where(sql, params, with_count=True)  (import {m} from src.orm.{m})",
+            f"{m}.all()  or  {m}.where(sql, params).to_paginate()  (import {m} from src.orm.{m})",
             f"list_{route_path}: query and return the records",
             ret='response({"records": [r.to_dict() for r in rows]})',
             ground=f'tina4_context("list ORM records with pagination", "python")',
