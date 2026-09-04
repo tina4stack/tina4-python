@@ -45,35 +45,6 @@ class _Unsupported(Exception):
     so the caller uses the interpreted renderer for the whole template."""
 
 
-def _tostr(value) -> str:
-    """Coerce a rendered value to its output string.
-
-    THE cross-framework output contract, and it MUST stay identical to the
-    interpreter's copy in ``engine.Frond._to_output`` -- the compiled path and the
-    interpreted path have to render the same bytes. Change one, change both.
-
-    A boolean renders lowercase ``true``/``false``: Frond is a template language,
-    not Python, and lowercase is the form usable directly in HTML and JavaScript
-    (``data-active="{{ flag }}"`` -> ``data-active="true"``, testable from JS).
-
-    Breaking in 3.13.87: this used to emit Python's ``True``/``False``. The four
-    frameworks had drifted to four different answers -- Python ``True``/``False``
-    (Jinja2-faithful), PHP ``1``/``''`` (Twig-faithful, with ``false`` rendering as
-    an EMPTY STRING), Ruby inconsistent between a comparison and a bare variable,
-    Node ``true``/``false``. All four now agree; a 72-expression corpus locks it.
-
-    ``is True`` / ``is False`` identity checks are deliberate: ``1 == True`` in
-    Python, and an integer 1 must still render as ``1``.
-    """
-    if value is None:
-        return ""
-    if value is True:
-        return "true"
-    if value is False:
-        return "false"
-    return str(value)
-
-
 def _pad(indent: int) -> str:
     return "    " * indent
 
@@ -99,7 +70,12 @@ def compile_template(ast):
             "_LoopContext": _engine._LoopContext,
             "_eval_expr": _engine._eval_expr,
             "_eval_comparison": _engine._eval_comparison,
-            "_tostr": _tostr,
+            # The compiled path coerces output through the interpreter's OWN
+            # Frond._to_output -- single source of truth for the cross-framework
+            # output contract, so the compiled and interpreted paths cannot drift
+            # (they were byte-identical copies with a "change one, change both"
+            # hazard). Bound here, at compile time, so there is no per-render cost.
+            "_tostr": _engine.Frond._to_output,
             "isinstance": isinstance,
             "list": list,
             "len": len,

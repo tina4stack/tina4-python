@@ -289,23 +289,6 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
         return q(table) if schema is None else f"{q(schema)}.{q(table)}"
 
-    def _returning_pk(self, table: str) -> str | None:
-        """The table's single PRIMARY KEY column, for RETURNING emulation.
-
-        MySQL has no RETURNING, so the provider re-selects the inserted row by
-        its REAL primary key - never a hardcoded ``id`` (MYSQL-RETURNING-ID).
-        Introspected via :meth:`get_columns` and cached per table. Returns
-        ``None`` when the table has no single-column PK (a composite or key-less
-        table degrades to no re-select rather than a wrong one)."""
-        cache = self.__dict__.setdefault("_returning_pk_cache", {})
-        if table not in cache:
-            try:
-                pks = [c["name"] for c in self.get_columns(table) if c.get("primary_key")]
-            except Exception:
-                pks = []
-            cache[table] = pks[0] if len(pks) == 1 else None
-        return cache[table]
-
     def get_database_type(self) -> str:
         return "mysql"
 

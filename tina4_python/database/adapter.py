@@ -1172,6 +1172,30 @@ class SqlCrudMixin:
             sql += f" WHERE {self._marked_filter(filter_sql)}"
         return self.execute(sql, params or [])
 
+    def _returning_pk(self, table: str) -> str | None:
+        """The table's single PRIMARY KEY column, for RETURNING emulation.
+
+        MySQL, MSSQL and Firebird have no usable native RETURNING here (Firebird
+        has it from 2.1+ but this adapter emulates for cross-engine consistency),
+        so after an INSERT they re-select the just-inserted row by its REAL
+        primary key -- never a hardcoded ``id`` (the ``*-RETURNING-ID`` fixes: a
+        table whose PK is not named ``id`` used to fail or re-select the wrong
+        row). Introspected via :meth:`get_columns` and cached per table. Returns
+        ``None`` when the table has no single-column PK, so a composite or
+        key-less table degrades to no re-select rather than a wrong one.
+
+        Shared by every SQL adapter that emulates RETURNING; engines with native
+        RETURNING (PostgreSQL, SQLite) never call it.
+        """
+        cache = self.__dict__.setdefault("_returning_pk_cache", {})
+        if table not in cache:
+            try:
+                pks = [c["name"] for c in self.get_columns(table) if c.get("primary_key")]
+            except Exception:  # noqa: BLE001 - no introspection => no re-select
+                pks = []
+            cache[table] = pks[0] if len(pks) == 1 else None
+        return cache[table]
+
 
 # ── SQL Translation Rules ──────────────────────────────────────
 # Reusable translation functions for common cross-engine quirks.

@@ -102,9 +102,9 @@ def test_booleans_render_lowercase_true_false():
     the way PHP's old empty-string ``false`` did.
 
     Both output paths are asserted: ``render_string`` goes through the COMPILED
-    path (``compiler._tostr``), and a construct the compiler declines falls back
-    to the INTERPRETER (``engine.Frond._to_output``). Editing only one of them
-    changes nothing while the suite still passes -- that happened.
+    path, and a construct the compiler declines falls back to the INTERPRETER.
+    Both now coerce output through the single ``engine.Frond._to_output`` (the
+    compiler binds its ``_tostr`` codegen slot to it), so they cannot drift.
     """
     engine = Frond()
     ctx = {"t": True, "f": False, "n": 5}

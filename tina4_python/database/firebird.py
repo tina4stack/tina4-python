@@ -611,28 +611,6 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
             return token[1:-1].replace('""', '"')
         return token
 
-    def _returning_pk(self, table: str) -> str | None:
-        """The table's single PRIMARY KEY column, for the RETURNING re-select.
-
-        Firebird 2.1+ has native RETURNING but this adapter emulates it for
-        consistency, so an INSERT ... RETURNING re-selects the just-inserted row
-        -- by its REAL primary key, never a hardcoded ``id`` (FB-RETURNING-ID).
-        A table whose PK is not named ``id`` used to raise a Firebird 'Dynamic
-        SQL Error' from ``WHERE id = ?``. Introspected via :meth:`get_columns`
-        and cached per table. Returns ``None`` for a composite or key-less table
-        (which degrades to the generator last-id with no re-select rather than a
-        wrong one). The same defect+fix feature 10 applied to mysql.py and
-        feature 11 to mssql.py.
-        """
-        cache = self.__dict__.setdefault("_returning_pk_cache", {})
-        if table not in cache:
-            try:
-                pks = [c["name"] for c in self.get_columns(table) if c.get("primary_key")]
-            except Exception:  # noqa: BLE001 - no introspection => no re-select
-                pks = []
-            cache[table] = pks[0] if len(pks) == 1 else None
-        return cache[table]
-
     # -- SQL Translation -----------------------------------------------
 
     def _translate_sql(self, sql: str) -> str:

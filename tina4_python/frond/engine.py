@@ -2129,9 +2129,10 @@ class Frond:
     def _to_output(value) -> str:
         """Coerce a rendered value to its output string.
 
-        THE cross-framework output contract. MUST stay identical to the compiled
-        path's copy in ``compiler._tostr`` -- both paths have to render the same
-        bytes. Change one, change both.
+        THE cross-framework output contract, and the SINGLE source of it for both
+        render paths: the interpreter calls this directly, and the compiler binds
+        its ``_tostr`` codegen slot to this same function, so the compiled and
+        interpreted paths render identical bytes and cannot drift.
 
         A boolean renders lowercase ``true``/``false``: Frond is a template
         language, not Python, and lowercase is the form usable directly in HTML and
