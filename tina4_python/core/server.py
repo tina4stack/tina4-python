@@ -3462,6 +3462,64 @@ def resolve_config(cli_host: str | None = None, cli_port: int | None = None) -> 
     return host, port
 
 
+def loopback_bind_hosts(host: str) -> list[str]:
+    """Sibling loopback addresses to ALSO listen on, so ``localhost`` reaches
+    the dev server whether the OS resolves it to IPv4 (127.0.0.1) or IPv6 (::1).
+
+    Windows resolves ``localhost`` to ``::1`` FIRST, so a server bound only to
+    127.0.0.1 — or 0.0.0.0, the IPv4 wildcard, which does NOT cover IPv6 —
+    refused the browser with ERR_CONNECTION_REFUSED even though it was serving.
+    Binding both loopback families closes that gap.
+
+    Returns only the families a direct bind of ``host`` does not already cover.
+    A host that is neither loopback nor a wildcard yields an empty list — an
+    explicit LAN address is left exactly as asked. The host is normalised
+    (whitespace and IPv6 brackets stripped, lower-cased) so ``" [::1] "`` maps
+    the same as ``"::1"``. Addresses are returned WITHOUT brackets: Python's
+    asyncio/socket layer takes a bare ``"::1"``.
+
+    Mirrors PHP ``Server::loopbackBindHosts`` (which returns bracketed forms
+    because PHP's stream_socket_server needs them).
+
+    Args:
+        host: The host the main socket binds.
+
+    Returns:
+        Extra bind addresses (possibly empty).
+    """
+    normalized = host.strip().strip("[]").lower()
+
+    return {
+        "localhost": ["127.0.0.1", "::1"],
+        "127.0.0.1": ["::1"],
+        "0.0.0.0": ["::1"],
+        "::1": ["127.0.0.1"],
+        "::": ["127.0.0.1"],
+    }.get(normalized, [])
+
+
+async def _bind_loopback_siblings(handler, host: str, port: int) -> list:
+    """Best-effort listeners on the sibling loopback family (see
+    :func:`loopback_bind_hosts`), serving the SAME ``handler`` as the primary.
+
+    Each sibling bind is wrapped: a family the primary socket already answers
+    (EADDRINUSE), or one this host cannot provide (EADDRNOTAVAIL / EAFNOSUPPORT),
+    raises ``OSError`` and is skipped. A sibling failure NEVER fails startup —
+    the primary bind owns that. Returns the asyncio servers that bound (possibly
+    empty); the caller closes them alongside the primary.
+    """
+    servers = []
+    for sibling_host in loopback_bind_hosts(host):
+        try:
+            servers.append(await asyncio.start_server(handler, sibling_host, port))
+        except OSError as sibling_error:
+            Log.debug(
+                f"Loopback sibling {sibling_host}:{port} not bound "
+                f"({type(sibling_error).__name__}: {sibling_error}) — skipping"
+            )
+    return servers
+
+
 _PORT_DEPRECATION_WARNED = False
 
 
@@ -4011,6 +4069,15 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
         server = await start_server(_handle_connection, host, port)
 
+        # ALSO listen on the sibling loopback family, best-effort, on the same
+        # main port. `localhost` resolves to ::1 (IPv6) first on Windows, so a
+        # server bound only to 127.0.0.1 (or the IPv4 wildcard 0.0.0.0) refused
+        # the browser with ERR_CONNECTION_REFUSED. Each sibling bind is caught
+        # and skipped on OSError — a family already answered by the primary, or
+        # unavailable here, never fails startup. The primary bind above is
+        # unchanged and owns the fail-closed behaviour.
+        loopback_servers = await _bind_loopback_siblings(_handle_connection, host, port)
+
         # Test port (port + 1000) — stable, no live-reload WebSocket
         ai_server = None
         if _ai_port:
@@ -4041,7 +4108,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
         # 1. Stop accepting FIRST. A connection that arrives after the signal
         #    must get a clean CONNECTION REFUSED — not a 503, not a TCP reset.
-        live_servers = [s for s in (ai_server, server) if s is not None]
+        live_servers = [
+            s for s in (ai_server, server, *loopback_servers) if s is not None
+        ]
         for live_server in live_servers:
             live_server.close()
 
