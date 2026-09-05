@@ -97,6 +97,8 @@ test = [
     # OpenAPI 3.0/3.1 schema (tests/test_swagger_contract.py). NEVER a framework
     # runtime dependency — the swagger generator itself stays zero-dependency.
     "openapi-spec-validator>=0.7",
+    # TEST-ONLY: exercises Feature 140's optional native crypto capability.
+    "cryptography>=42.0",
 ]
 
 [dependency-groups]

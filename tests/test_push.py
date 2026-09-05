@@ -57,3 +57,48 @@ def test_missing_vapid_configuration_fails_loudly(monkeypatch):
     with pytest.raises(PushError, match="TINA4_VAPID"):
         Push().send({"endpoint": "http://127.0.0.1/push", "keys": {"p256dh": "x", "auth": "x"}}, "payload")
 
+
+def test_dead_and_retryable_responses_are_classified():
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import serialization
+    received = {}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            received["status"] = int(self.path.split("status=", 1)[1])
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.send_response(received["status"])
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        keys = generate_vapid_keys()
+        client = ec.generate_private_key(ec.SECP256R1())
+        public = client.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+        subscription = lambda status: {
+            "endpoint": f"http://127.0.0.1:{server.server_port}/push?status={status}",
+            "keys": {"p256dh": _b64(public), "auth": _b64(bytes([7]) * 16)},
+        }
+        sender = Push(subject="mailto:test@tina4.com", public_key=keys["publicKey"], private_key=keys["privateKey"])
+        for status in (404, 410):
+            dead = sender.send(subscription(status), "expired")
+            assert dead.ok is False and dead.status == status and dead.dead is True and dead.retryable is False
+        retry = sender.send(subscription(429), "busy")
+        assert retry.ok is False and retry.status == 429 and retry.dead is False and retry.retryable is True
+        retry = sender.send(subscription(500), "busy")
+        assert retry.ok is False and retry.status == 500 and retry.dead is False and retry.retryable is True
+    finally:
+        server.shutdown()
+
+
+def test_invalid_subscription_key_fails_before_delivery():
+    pytest.importorskip("cryptography")
+    keys = generate_vapid_keys()
+    sender = Push(subject="mailto:test@tina4.com", public_key=keys["publicKey"], private_key=keys["privateKey"])
+    with pytest.raises(PushError, match="subscription.keys.p256dh"):
+        sender.send({"endpoint": "http://127.0.0.1/push", "keys": {"p256dh": "bad", "auth": _b64(bytes([7]) * 16)}}, "payload")
