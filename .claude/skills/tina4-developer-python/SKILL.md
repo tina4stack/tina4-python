@@ -1171,6 +1171,10 @@ against assumptions about another engine's compatibility.
   and subscript access (`{{ items[loop.index0 % 3] }}`) work as documented.
 - If a documented Frond feature misbehaves, that's a **framework bug** — report it (see below).
 
+### Web Push (Feature 140)
+
+Use `references/web-push.md` for the provider-neutral Web Push contract. Treat it as a standalone outbound integration, not WebSocket or Server-Sent Events. Keep it configuration-first, fail loudly on partial VAPID configuration, and install the optional `tina4-python[push]` capability only when the project enables it.
+
 ## Communication Style
 
 When helping developers:
