@@ -178,14 +178,18 @@ class Push:
             raise PushError(f"Web Push is configured but missing: {', '.join(missing)}")
         return self.subject, self.public_key, self.private_key
 
-    def send(self, subscription: dict[str, Any], payload: Any) -> PushResult:
+    @staticmethod
+    def _endpoint(subscription: dict[str, Any]) -> str:
         endpoint = subscription.get("endpoint") if isinstance(subscription, dict) else None
         if not isinstance(endpoint, str) or not endpoint:
             raise PushError("A Web Push subscription with an endpoint is required")
         parsed = urllib.parse.urlparse(endpoint)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:
             raise PushError("Push subscription endpoint must use HTTP or HTTPS")
-        subject, public_key, private_key = self._configuration()
+        return endpoint
+
+    @staticmethod
+    def _keys(public_key: str, private_key: str) -> tuple[bytes, bytes]:
         raw_public = _unb64(public_key, "TINA4_VAPID_PUBLIC")
         raw_private = _unb64(private_key, "TINA4_VAPID_PRIVATE")
         if len(raw_public) != 65 or raw_public[0] != 4:
@@ -195,11 +199,13 @@ class Push:
         _hashes, serialization, ec, *_ = _crypto()
         try:
             derived = ec.derive_private_key(int.from_bytes(raw_private, "big"), ec.SECP256R1())
-            if _public_bytes(derived.public_key(), serialization) != raw_public:
-                raise PushError("TINA4_VAPID_PUBLIC does not match TINA4_VAPID_PRIVATE")
         except ValueError as exc:
             raise PushError("TINA4_VAPID_PRIVATE is not a valid P-256 private key") from exc
-        body = _encrypt(_payload_bytes(payload), subscription)
+        if _public_bytes(derived.public_key(), serialization) != raw_public:
+            raise PushError("TINA4_VAPID_PUBLIC does not match TINA4_VAPID_PRIVATE")
+        return raw_public, raw_private
+
+    def _deliver(self, endpoint: str, subject: str, public_key: str, raw_public: bytes, raw_private: bytes, body: bytes) -> PushResult:
         headers = {
             "Authorization": f"vapid t={_vapid_token(endpoint, subject, raw_private, raw_public)}, k={public_key}",
             "Content-Encoding": "aes128gcm",
@@ -219,6 +225,12 @@ class Push:
         except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
             raise PushError(f"Web Push request failed: {exc}") from exc
         return PushResult(status < 400, status, status in (404, 410), status == 408 or status == 429 or status >= 500, endpoint, text)
+
+    def send(self, subscription: dict[str, Any], payload: Any) -> PushResult:
+        endpoint = self._endpoint(subscription)
+        subject, public_key, private_key = self._configuration()
+        raw_public, raw_private = self._keys(public_key, private_key)
+        return self._deliver(endpoint, subject, public_key, raw_public, raw_private, _encrypt(_payload_bytes(payload), subscription))
 
 
 __all__ = ["Push", "PushError", "PushResult", "generate_vapid_keys"]
