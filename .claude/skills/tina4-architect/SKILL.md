@@ -271,6 +271,10 @@ Once the nine decisions are recorded in `TINA4.md`, activate the matching `tina4
 
 You may still be re-consulted when the project needs a new architectural decision (adding a queue, switching sessions to Redis, adding a second backend for a data-science pipeline). Every such change gets a new ADR and a `TINA4.md` update.
 
+### Web Push selection (Feature 140)
+
+Treat Web Push as an optional, provider-neutral outbound integration. Record it as a configuration choice in `TINA4.md` when the project needs browser notifications. Keep the core install dependency-free; select only the language capability required for cryptography, and make missing capability fail at use time with an actionable error.
+
 ## TINA4.md template
 
 The exact file you write at project root once the flow is done:

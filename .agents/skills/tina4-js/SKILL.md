@@ -1167,6 +1167,10 @@ const theme = persist(signal('light'), { key: 'theme' });
 // See STORAGE.md for the full "must never store" list. localStorage is XSS-readable.
 ```
 
+### Web Push subscriptions (Feature 140)
+
+Use the browser Push API for the subscription side. Register a service worker, call `pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidPublicKey })`, and persist the returned `endpoint`, `keys.p256dh`, and `keys.auth` on the server. The backend sender is a separate outbound integration; do not treat it as a WebSocket or Server-Sent Events connection.
+
 ## Reference Files
 
 - **`references/signals-and-reactivity.md`** — Full signal, computed, effect, batch, isSignal,

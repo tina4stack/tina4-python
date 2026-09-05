@@ -914,6 +914,10 @@ by humans reading the code AND by AI tools reasoning about it. This means:
 This dual-readability is Tina4's competitive edge. Most frameworks optimize for one audience.
 Tina4 optimizes for both, because the future of development is humans and AI working together.
 
+### Feature 140 Web Push
+
+Web Push is a standalone outbound integration. Keep the contract provider-neutral and configuration-first across Python, PHP, Ruby, and Node.js. A configured but unavailable crypto capability must fail loudly; 404/410 responses mark subscriptions dead, while 408, 429, and 5xx responses are retryable. Use the backend developer references for the native API and keep the shared feature count at 140 cataloged entries.
+
 ## Plan Documents
 
 The full v3 plan - specs, the feature-by-feature audit, and the contract-fixture
