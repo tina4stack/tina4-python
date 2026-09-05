@@ -469,27 +469,10 @@ class Swagger:
         Each route dict should have:
             method, path, handler, auth_required (optional)
         """
-        info = {
-            "title": self.title,
-            "version": self.version,
-            "description": self.description,
-        }
-        contact = {}
-        if self.contact_team:
-            contact["name"] = self.contact_team
-        if self.contact_url:
-            contact["url"] = self.contact_url
-        if self.contact_email:
-            contact["email"] = self.contact_email
-        if contact:
-            info["contact"] = contact
-        if self.license_name:
-            info["license"] = {"name": self.license_name}
-
         schemes = self._security_schemes()
         spec = {
             "openapi": self.openapi_version,
-            "info": info,
+            "info": self._build_info(),
             "servers": self._servers(),
             "paths": {},
             "components": {
@@ -507,181 +490,250 @@ class Swagger:
                 continue
             path = self._openapi_path(route["path"])
             method = route["method"].lower()
-            handler = route.get("handler")
-
             if path not in spec["paths"]:
                 spec["paths"][path] = {}
 
-            operation = {
-                "operationId": self._unique_operation_id(method, path, seen_ids),
-                "responses": {
-                    "200": {"description": "Successful response"},
-                },
-            }
+            spec["paths"][path][method] = self._build_operation(
+                route, path, method, schemes, models, ref_schemas, used_tags, seen_ids
+            )
 
-            model = getattr(handler, "_swagger_model", None) if handler else None
-            ref = None
-            if model is not None and hasattr(model, "_fields"):
-                models[model.__name__] = model
-                ref = f"#/components/schemas/{model.__name__}"
-
-            # summary/tags are ALWAYS populated (SWAG-SHAPE-DRIFT, ADR-0004) —
-            # PHP/Ruby/Node never omit them, so an undecorated route used to be
-            # the one shape Python left out. An explicit @summary/@tags wins;
-            # otherwise a "METHOD /path" summary and a first-path-segment tag
-            # match the other three frameworks' fallback.
-            operation["summary"] = (
-                getattr(handler, "_swagger_summary", None) if handler else None
-            ) or f"{method.upper()} {route['path']}"
-            op_tags = (
-                getattr(handler, "_swagger_tags", None) if handler else None
-            ) or [self._infer_tag(route["path"])]
-            operation["tags"] = op_tags
-            for t in op_tags:
-                if t not in used_tags:
-                    used_tags.append(t)
-
-            # Extract metadata from handler decorators
-            if handler:
-                desc = getattr(handler, "_swagger_description", None)
-                detail = getattr(handler, "_swagger_detail", None)
-                if desc is not None or detail:
-                    operation["description"] = "\n\n".join(
-                        p for p in (desc, detail) if p
-                    )
-                if hasattr(handler, "_swagger_deprecated"):
-                    operation["deprecated"] = True
-
-                # Request body — a $ref to the model schema (preferred), else
-                # an inferred schema from @example. application/json unless the
-                # example declares multipart/form-data.
-                if method in ("post", "put", "patch"):
-                    req_schema = getattr(handler, "_swagger_request_schema", None)
-                    ct = getattr(handler, "_swagger_example_content_type", "application/json")
-                    ex = getattr(handler, "_swagger_example", None)
-                    media: dict = {}
-                    if req_schema is not None:
-                        sname, sct = req_schema
-                        ct = sct or ct
-                        ref_schemas.add(sname)
-                        media["schema"] = {"$ref": f"#/components/schemas/{sname}"}
-                    elif ref is not None:
-                        media["schema"] = {"$ref": ref}
-                    elif ex is not None:
-                        media["schema"] = self._infer_schema(ex)
-                    if ex is not None:
-                        media["example"] = ex
-                    if media:
-                        operation["requestBody"] = {"content": {ct: media}}
-
-                # Responses: model $ref (single or list), then any per-status
-                # @example_response entries (explicit wins).
-                if ref is not None:
-                    is_list = getattr(handler, "_swagger_model_list", False)
-                    schema = ({"type": "array", "items": {"$ref": ref}} if is_list
-                              else {"$ref": ref})
-                    operation["responses"]["200"] = {
-                        "description": "Successful response",
-                        "content": {"application/json": {"schema": schema}},
-                    }
-                resp_examples = getattr(handler, "_swagger_example_responses", None)
-                if resp_examples:
-                    for status_code, body in resp_examples.items():
-                        operation["responses"][str(status_code)] = {
-                            "description": "Successful response" if str(status_code).startswith("2") else "Response",
-                            "content": {
-                                "application/json": {
-                                    "schema": self._infer_schema(body),
-                                    "example": body,
-                                }
-                            },
-                        }
-                elif hasattr(handler, "_swagger_example_response") and ref is None:
-                    # Legacy single-example back-compat (no per-status dict).
-                    ex = handler._swagger_example_response
-                    operation["responses"]["200"] = {
-                        "description": "Successful response",
-                        "content": {
-                            "application/json": {
-                                "schema": self._infer_schema(ex),
-                                "example": ex,
-                            }
-                        },
-                    }
-
-                # Registered response schemas ($ref) — explicit and authoritative.
-                resp_schemas = getattr(handler, "_swagger_response_schemas", None)
-                if resp_schemas:
-                    for status_code, (sname, is_list) in resp_schemas.items():
-                        ref_schemas.add(sname)
-                        sref = f"#/components/schemas/{sname}"
-                        schema = ({"type": "array", "items": {"$ref": sref}} if is_list
-                                  else {"$ref": sref})
-                        operation["responses"][str(status_code)] = {
-                            "description": "Successful response" if str(status_code).startswith("2") else "Response",
-                            "content": {"application/json": {"schema": schema}},
-                        }
-
-            # Parameters: path params (+ types) then query params from @description(query=)
-            params = self._extract_path_params(route["path"])
-            if handler:
-                pdocs = getattr(handler, "_swagger_params", None) or {}
-                for p in params:
-                    if p["name"] in pdocs:
-                        p["description"] = str(pdocs[p["name"]])
-                qdocs = getattr(handler, "_swagger_query", None) or {}
-                for qname, qdesc in qdocs.items():
-                    params.append({
-                        "name": qname,
-                        "in": "query",
-                        "required": False,
-                        "description": str(qdesc),
-                        "schema": {"type": "string"},
-                    })
-            if params:
-                operation["parameters"] = params
-
-            # Auth — explicit @security wins (an empty list = explicitly public);
-            # otherwise a secured route gets the default scheme.
-            sec = getattr(handler, "_swagger_security", None) if handler else None
-            if sec is not None:
-                operation["security"] = self._sanitize_security(sec, schemes) if sec else []
-            elif route.get("auth_required", False):
-                requirements = [{self.default_scheme: []}]
-                if self.default_scheme == "bearerAuth" and "ssoSession" in schemes:
-                    requirements.append({"ssoSession": []})
-                operation["security"] = self._sanitize_security(
-                    requirements, schemes
-                )
-
-            # A secured operation documents a 401 (SWAG-401-SHAPE, ADR-0004,
-            # OWNER-DECISIONS.md 2026-08-11: "secured swagger ops document a
-            # 401 (Python adds it)"). PHP/Ruby/Node already did this; Python was
-            # the gap. setdefault so an explicit @example_response(401, ...) is
-            # never clobbered.
-            if operation.get("security"):
-                operation["responses"].setdefault("401", {"description": "Unauthorized"})
-
-            spec["paths"][path][method] = operation
-
-        # components.schemas from any ORM models referenced by handlers
-        if models:
-            schemas = spec["components"].setdefault("schemas", {})
-            for name, model_class in models.items():
-                schemas[name] = self._model_schema(model_class)
-
-        # Registered component schemas referenced via @request_schema/@response_schema.
-        if ref_schemas:
-            schemas = spec["components"].setdefault("schemas", {})
-            for name in ref_schemas:
-                if name in _REGISTERED_SCHEMAS and name not in schemas:
-                    schemas[name] = _REGISTERED_SCHEMAS[name]
+        self._build_component_schemas(spec, models, ref_schemas)
 
         # top-level tags[] (name-only is valid OpenAPI; descriptions optional)
         if used_tags:
             spec["tags"] = [{"name": t} for t in used_tags]
 
         return spec
+
+    # ── generate() building blocks ─────────────────────────────────
+    # generate() is a thin orchestrator; each cohesive slice of the spec
+    # (info block, one path operation, components) is built by one helper so
+    # the top-level function stays readable. The emitted document is unchanged.
+
+    def _build_info(self) -> dict:
+        """Build the OpenAPI info block: title/version/description plus the
+        optional contact and license blocks (each key present only when set)."""
+        info = {
+            "title": self.title,
+            "version": self.version,
+            "description": self.description,
+        }
+        contact = {}
+        if self.contact_team:
+            contact["name"] = self.contact_team
+        if self.contact_url:
+            contact["url"] = self.contact_url
+        if self.contact_email:
+            contact["email"] = self.contact_email
+        if contact:
+            info["contact"] = contact
+        if self.license_name:
+            info["license"] = {"name": self.license_name}
+        return info
+
+    def _build_operation(self, route: dict, path: str, method: str, schemes: dict,
+                         models: dict, ref_schemas: set, used_tags: list,
+                         seen_ids: set) -> dict:
+        """Build the OpenAPI operation object for one route (method + path).
+
+        Accumulators (models/ref_schemas/used_tags/seen_ids) are threaded through
+        and mutated in place, exactly as the inline loop did.
+        """
+        handler = route.get("handler")
+
+        operation = {
+            "operationId": self._unique_operation_id(method, path, seen_ids),
+            "responses": {
+                "200": {"description": "Successful response"},
+            },
+        }
+
+        model = getattr(handler, "_swagger_model", None) if handler else None
+        ref = None
+        if model is not None and hasattr(model, "_fields"):
+            models[model.__name__] = model
+            ref = f"#/components/schemas/{model.__name__}"
+
+        self._operation_summary_tags(operation, route, method, handler, used_tags)
+
+        # Extract metadata from handler decorators
+        if handler:
+            self._operation_metadata(operation, handler)
+            self._operation_request_body(operation, handler, method, ref, ref_schemas)
+            self._operation_responses(operation, handler, ref)
+            self._operation_response_schemas(operation, handler, ref_schemas)
+
+        self._operation_parameters(operation, route, handler)
+        self._operation_security(operation, route, handler, schemes)
+        return operation
+
+    def _operation_summary_tags(self, operation: dict, route: dict, method: str,
+                                handler, used_tags: list) -> None:
+        """Populate summary + tags (SWAG-SHAPE-DRIFT, ADR-0004) — always present.
+
+        An explicit @summary/@tags wins; otherwise a "METHOD /path" summary and a
+        first-path-segment tag match the other three frameworks' fallback. Each
+        used tag is recorded (insertion-ordered) for the top-level tags[] array.
+        """
+        operation["summary"] = (
+            getattr(handler, "_swagger_summary", None) if handler else None
+        ) or f"{method.upper()} {route['path']}"
+        op_tags = (
+            getattr(handler, "_swagger_tags", None) if handler else None
+        ) or [self._infer_tag(route["path"])]
+        operation["tags"] = op_tags
+        for t in op_tags:
+            if t not in used_tags:
+                used_tags.append(t)
+
+    @staticmethod
+    def _operation_metadata(operation: dict, handler) -> None:
+        """Apply @description(+detail) and @deprecated decorator metadata."""
+        desc = getattr(handler, "_swagger_description", None)
+        detail = getattr(handler, "_swagger_detail", None)
+        if desc is not None or detail:
+            operation["description"] = "\n\n".join(
+                p for p in (desc, detail) if p
+            )
+        if hasattr(handler, "_swagger_deprecated"):
+            operation["deprecated"] = True
+
+    def _operation_request_body(self, operation: dict, handler, method: str,
+                                ref, ref_schemas: set) -> None:
+        """Build requestBody for write methods — a $ref to a registered request
+        schema (preferred), else the model schema, else an inferred schema from
+        @example. application/json unless the example declares multipart/form-data."""
+        if method not in ("post", "put", "patch"):
+            return
+        req_schema = getattr(handler, "_swagger_request_schema", None)
+        ct = getattr(handler, "_swagger_example_content_type", "application/json")
+        ex = getattr(handler, "_swagger_example", None)
+        media: dict = {}
+        if req_schema is not None:
+            sname, sct = req_schema
+            ct = sct or ct
+            ref_schemas.add(sname)
+            media["schema"] = {"$ref": f"#/components/schemas/{sname}"}
+        elif ref is not None:
+            media["schema"] = {"$ref": ref}
+        elif ex is not None:
+            media["schema"] = self._infer_schema(ex)
+        if ex is not None:
+            media["example"] = ex
+        if media:
+            operation["requestBody"] = {"content": {ct: media}}
+
+    def _operation_responses(self, operation: dict, handler, ref) -> None:
+        """Populate responses: model $ref (single or list), then any per-status
+        @example_response entries (explicit wins), then the legacy single-example."""
+        if ref is not None:
+            is_list = getattr(handler, "_swagger_model_list", False)
+            schema = ({"type": "array", "items": {"$ref": ref}} if is_list
+                      else {"$ref": ref})
+            operation["responses"]["200"] = {
+                "description": "Successful response",
+                "content": {"application/json": {"schema": schema}},
+            }
+        resp_examples = getattr(handler, "_swagger_example_responses", None)
+        if resp_examples:
+            for status_code, body in resp_examples.items():
+                operation["responses"][str(status_code)] = {
+                    "description": "Successful response" if str(status_code).startswith("2") else "Response",
+                    "content": {
+                        "application/json": {
+                            "schema": self._infer_schema(body),
+                            "example": body,
+                        }
+                    },
+                }
+        elif hasattr(handler, "_swagger_example_response") and ref is None:
+            # Legacy single-example back-compat (no per-status dict).
+            ex = handler._swagger_example_response
+            operation["responses"]["200"] = {
+                "description": "Successful response",
+                "content": {
+                    "application/json": {
+                        "schema": self._infer_schema(ex),
+                        "example": ex,
+                    }
+                },
+            }
+
+    @staticmethod
+    def _operation_response_schemas(operation: dict, handler, ref_schemas: set) -> None:
+        """Apply registered response schemas ($ref) — explicit and authoritative.
+        swagger response_schemas: {status: (name, is_list)}."""
+        resp_schemas = getattr(handler, "_swagger_response_schemas", None)
+        if not resp_schemas:
+            return
+        for status_code, (sname, is_list) in resp_schemas.items():
+            ref_schemas.add(sname)
+            sref = f"#/components/schemas/{sname}"
+            schema = ({"type": "array", "items": {"$ref": sref}} if is_list
+                      else {"$ref": sref})
+            operation["responses"][str(status_code)] = {
+                "description": "Successful response" if str(status_code).startswith("2") else "Response",
+                "content": {"application/json": {"schema": schema}},
+            }
+
+    def _operation_parameters(self, operation: dict, route: dict, handler) -> None:
+        """Build parameters: path params (+ types) then query params from
+        @description(query=). Path-param descriptions come from @description(params=)."""
+        params = self._extract_path_params(route["path"])
+        if handler:
+            pdocs = getattr(handler, "_swagger_params", None) or {}
+            for p in params:
+                if p["name"] in pdocs:
+                    p["description"] = str(pdocs[p["name"]])
+            qdocs = getattr(handler, "_swagger_query", None) or {}
+            for qname, qdesc in qdocs.items():
+                params.append({
+                    "name": qname,
+                    "in": "query",
+                    "required": False,
+                    "description": str(qdesc),
+                    "schema": {"type": "string"},
+                })
+        if params:
+            operation["parameters"] = params
+
+    def _operation_security(self, operation: dict, route: dict, handler,
+                            schemes: dict) -> None:
+        """Merge the per-route security requirement.
+
+        Explicit @security wins (an empty list = explicitly public); otherwise a
+        secured route gets the default scheme. A secured operation documents a 401
+        (SWAG-401-SHAPE, ADR-0004) — setdefault so an explicit
+        @example_response(401, ...) is never clobbered.
+        """
+        sec = getattr(handler, "_swagger_security", None) if handler else None
+        if sec is not None:
+            operation["security"] = self._sanitize_security(sec, schemes) if sec else []
+        elif route.get("auth_required", False):
+            requirements = [{self.default_scheme: []}]
+            if self.default_scheme == "bearerAuth" and "ssoSession" in schemes:
+                requirements.append({"ssoSession": []})
+            operation["security"] = self._sanitize_security(
+                requirements, schemes
+            )
+
+        if operation.get("security"):
+            operation["responses"].setdefault("401", {"description": "Unauthorized"})
+
+    def _build_component_schemas(self, spec: dict, models: dict,
+                                 ref_schemas: set) -> None:
+        """Add components.schemas from referenced ORM models, then any registered
+        component schemas referenced via @request_schema/@response_schema."""
+        if models:
+            schemas = spec["components"].setdefault("schemas", {})
+            for name, model_class in models.items():
+                schemas[name] = self._model_schema(model_class)
+
+        if ref_schemas:
+            schemas = spec["components"].setdefault("schemas", {})
+            for name in ref_schemas:
+                if name in _REGISTERED_SCHEMAS and name not in schemas:
+                    schemas[name] = _REGISTERED_SCHEMAS[name]
 
     def generate_json(self, routes: list[dict]) -> str:
         """Generate OpenAPI spec as JSON string."""
