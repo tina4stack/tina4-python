@@ -59,7 +59,7 @@ __version__ = _resolve_version()
 # ══════════════════════════════════════════════════════════════════════════
 # LAZY FEATURE LOADING (PEP 562 module __getattr__)
 # ══════════════════════════════════════════════════════════════════════════
-# A batteries-included framework should not pay to import all ~98 features on
+# A batteries-included framework should not pay to import all 140 cataloged features on
 # every boot. Only the CORE surface below is imported eagerly; every optional
 # subsystem is registered in _LAZY and imported on FIRST reference via
 # ``__getattr__``. An app that never touches GraphQL/WSDL/MQTT/Messenger never

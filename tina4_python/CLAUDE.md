@@ -1926,7 +1926,7 @@ async def dashboard(request, response):
 
 ## v3 Features Summary
 
-- **98 built-in features**, zero third-party dependencies
+- **140 cataloged features**, zero third-party dependencies
 - **3,887 tests** passing across all modules
 - **Production server auto-detect**: `tina4python serve --production` auto-installs uvicorn
 - **`tina4python generate`**: model, route, migration, middleware scaffolding

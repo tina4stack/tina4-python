@@ -535,7 +535,7 @@ tests/         — pytest tests"""
     if tool_name == "cursor":
         return f"""# tina4-python — Cursor Rules
 
-Tina4 Python v{v}. 54 built-in features, zero dependencies. Python 3.12+.
+Tina4 Python v{v}. 140 cataloged features, zero dependencies. Python 3.12+.
 
 ## Key Patterns
 
@@ -564,7 +564,7 @@ https://tina4.com
     if tool_name == "copilot":
         return f"""# tina4-python Copilot Instructions
 
-Tina4 Python v{v}. 54 features, zero dependencies.
+Tina4 Python v{v}. 140 cataloged features, zero dependencies.
 
 ## Route Pattern
 
@@ -585,7 +585,7 @@ Tina4 Python v{v}. 54 features, zero dependencies.
     if tool_name == "windsurf":
         return f"""# tina4-python — Windsurf Rules
 
-Tina4 Python v{v}. 54 built-in features, zero dependencies. Python 3.12+.
+Tina4 Python v{v}. 140 cataloged features, zero dependencies. Python 3.12+.
 
 ## Key Patterns
 
@@ -620,7 +620,7 @@ https://tina4.com
     if tool_name == "aider":
         return f"""# Tina4 Python — Conventions
 
-v{v} — 54 built-in features, zero dependencies.
+v{v} — 140 cataloged features, zero dependencies.
 
 ## Rules
 
@@ -653,7 +653,7 @@ v{v} — 54 built-in features, zero dependencies.
     if tool_name == "cline":
         return f"""# tina4-python — Cline Rules
 
-Tina4 Python v{v}. 54 built-in features, zero dependencies. Python 3.12+.
+Tina4 Python v{v}. 140 cataloged features, zero dependencies. Python 3.12+.
 
 ## Key Patterns
 
@@ -678,7 +678,7 @@ Tina4 Python v{v}. 54 built-in features, zero dependencies. Python 3.12+.
     if tool_name == "codex":
         return f"""# Tina4 Python — Agent Instructions
 
-v{v}. 54 built-in features, zero dependencies. Python 3.12+.
+v{v}. 140 cataloged features, zero dependencies. Python 3.12+.
 
 ## Framework
 
@@ -731,7 +731,7 @@ tina4python routes      # List routes
     # Fallback: universal context
     return f"""# Tina4 Python — AI Context
 
-Tina4 Python v{v}. 54 built-in features, zero dependencies.
+Tina4 Python v{v}. 140 cataloged features, zero dependencies.
 
 ## Conventions
 

@@ -1,6 +1,6 @@
 """Lock-in: a never-referenced subsystem is never imported.
 
-A batteries-included framework should not pay to import ~98 features on every
+A batteries-included framework should not pay to import all 140 cataloged features on every
 boot. `tina4_python/__init__.py` imports only the CORE surface eagerly and
 registers every optional subsystem in `_LAZY`, resolving it on first reference
 through a PEP 562 module `__getattr__`.

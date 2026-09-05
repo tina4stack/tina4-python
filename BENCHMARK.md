@@ -17,7 +17,7 @@ Real HTTP benchmarks — identical JSON endpoint, development servers.
 | Bottle 0.13 | 3,165 | 1,105 | wsgiref | 0 |
 | Django 6.0 | 2,333 | 2,150 | runserver | 20 |
 
-**Key takeaway:** Tina4 Python delivers 9,761 req/s with 98 features and 0 dependencies — competitive with Starlette (12,914) and FastAPI (10,071), while shipping 98 features vs their 6 and 8 respectively, all with zero dependencies.
+**Key takeaway:** Tina4 Python delivers 9,761 req/s with 140 cataloged features and 0 dependencies — competitive with Starlette (12,914) and FastAPI (10,071), while shipping 140 cataloged features vs their 6 and 8 respectively, all with zero dependencies.
 
 ---
 
@@ -55,9 +55,9 @@ not a win. Closing this gap is tracked as the ahead-of-time compile layer (ADR-0
 Reproduce: `uv run python benchmarks/bench_templates.py`
 
 
-## 2. Feature Comparison (42 of 98 built-in features)
+## 2. Feature Comparison (42 of 140 cataloged features)
 
-Tina4 ships **98 built-in features**. The table below compares the subset that has a
+Tina4 ships **140 cataloged features**. The table below compares the subset that has a
 meaningful equivalent in the competing frameworks, so it is a like-for-like comparison
 rather than the full inventory. Everything listed ships with the core install, with no
 extra packages needed.
@@ -163,7 +163,7 @@ Formula: `Energy(kWh) = (15W × seconds_for_5000_requests) / 3,600,000` | `CO2(g
 
 *CO2 calculated at world average 475g CO2/kWh. Lower req/s = longer to serve 5000 requests = more energy.*
 
-Tina4 uses **7.8x less energy** than Bottle and **2.0x less** than Flask per request, while shipping 98 features with 0 dependencies.
+Tina4 uses **7.8x less energy** than Bottle and **2.0x less** than Flask per request, while shipping 140 cataloged features with 0 dependencies.
 
 ### Tina4 Test Suite Emissions
 

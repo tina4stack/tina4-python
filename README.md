@@ -708,7 +708,7 @@ Benchmarked with `wrk`: 5,000 requests, 50 concurrent, median of 3 runs:
 | Bottle | 4,355 | 0 | ~5 |
 | Django | 4,050 | 20+ | ~22 |
 
-Tina4 Python delivers competitive throughput with **zero dependencies and 98 features**. Frameworks with higher req/s have a fraction of the functionality and require dozens of third-party packages.
+Tina4 Python delivers competitive throughput with **zero dependencies and 140 cataloged features**. Frameworks with higher req/s have a fraction of the functionality and require dozens of third-party packages.
 
 **Across all 4 Tina4 implementations:**
 
@@ -724,7 +724,7 @@ Run benchmarks locally: `python benchmarks/benchmark.py --python`
 
 ## Cross-Framework Parity
 
-Tina4 ships identical features across four languages: same architecture, same conventions, same 98 features:
+Tina4 ships identical features across four languages: same architecture, same conventions, the same 140 cataloged features:
 
 | | Python | PHP | Ruby | Node.js |
 |---|--------|-----|------|---------|
