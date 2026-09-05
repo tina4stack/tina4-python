@@ -9,6 +9,13 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.134
+
+Feature 140 Web Push is now available with provider-neutral subscription delivery,
+native result envelopes, fail-closed configuration, and the documented optional
+Python `push` extra. Developer skills now include the Web Push API and configuration
+reference for all supported language stacks.
+
 ## 3.13.133
 
 Maintainability pass, no behavior changes. Swagger.generate decomposed into cohesive
