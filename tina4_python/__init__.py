@@ -162,6 +162,11 @@ _LAZY: dict[str, tuple[str, str]] = {
     "AutoCrud": ("tina4_python.crud", "AutoCrud"),
     # Email
     "Messenger": ("tina4_python.messenger", "Messenger"),
+    # Provider-neutral Web Push (optional cryptography capability)
+    "Push": ("tina4_python.push", "Push"),
+    "PushError": ("tina4_python.push", "PushError"),
+    "PushResult": ("tina4_python.push", "PushResult"),
+    "generate_vapid_keys": ("tina4_python.push", "generate_vapid_keys"),
     # Realtime / WebRTC
     "realtime": ("tina4_python.realtime", "realtime"),
     "RtcMediaBackend": ("tina4_python.realtime", "RtcMediaBackend"),
