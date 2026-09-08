@@ -9,6 +9,16 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.135
+
+Fix release. The dev-admin version check returns no version and a reason when it cannot
+reach PyPI (set TINA4_VERSION_CHECK_URL to override the registry), so the toolbar reports
+"could not check" instead of a false "up to date". Web Push pads P-256 key material to the
+fixed 32-byte width so a leading-zero coordinate never yields a malformed VAPID key; Python
+was already correct through its cryptography backend and now carries a guard test, and the
+RS256 zero-dependency guard allows cryptography as the opt-in push extra. Full notes:
+https://tina4.com/python/36-releases
+
 ## 3.13.134
 
 Feature 140 Web Push is now available with provider-neutral subscription delivery,
