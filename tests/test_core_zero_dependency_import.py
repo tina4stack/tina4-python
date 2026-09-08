@@ -18,19 +18,19 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# The public surface an app imports. `tina4_python.database` is deliberately
-# excluded: its adapter layer eagerly imports whatever DB drivers are INSTALLED
-# (firebird-driver pulls protobuf/dateutil, etc.). That is the database layer's
-# optional-extra lazy-loading story -- a separate, tracked concern (connecting to
-# one engine should not load the others' drivers) -- not a feature smuggling a
-# dependency into every import, which is what this guard defends.
+# The public surface an app imports -- including `tina4_python.database`, whose
+# adapter layer now registers every optional driver LAZILY (only SQLite, stdlib,
+# is eager), so importing it no longer drags firebird-driver + protobuf + dateutil
+# into a SQLite or Postgres app. Connecting to a given engine loads only that
+# engine's driver (see test_the_database_module_and_a_sqlite_connect_stay_zero_dep).
 SURFACE = [
     "tina4_python",
     "tina4_python.core.server", "tina4_python.core.router", "tina4_python.core.events",
-    "tina4_python.orm", "tina4_python.auth", "tina4_python.frond", "tina4_python.queue",
-    "tina4_python.api", "tina4_python.swagger", "tina4_python.push", "tina4_python.ai",
-    "tina4_python.graphql", "tina4_python.wsdl", "tina4_python.session", "tina4_python.cache",
-    "tina4_python.i18n", "tina4_python.container", "tina4_python.messenger", "tina4_python.crud",
+    "tina4_python.orm", "tina4_python.database", "tina4_python.auth", "tina4_python.frond",
+    "tina4_python.queue", "tina4_python.api", "tina4_python.swagger", "tina4_python.push",
+    "tina4_python.ai", "tina4_python.graphql", "tina4_python.wsdl", "tina4_python.session",
+    "tina4_python.cache", "tina4_python.i18n", "tina4_python.container",
+    "tina4_python.messenger", "tina4_python.crud",
 ]
 
 
@@ -58,4 +58,39 @@ def test_the_core_feature_surface_imports_no_third_party_package():
         f"package(s) {third_party} -- import a heavy dependency lazily (inside the "
         "function that needs it), not at module top level, so apps that never use "
         "the feature never pay for it"
+    )
+
+
+def test_the_database_module_and_a_sqlite_connect_stay_zero_dep():
+    """A real SQLite app -- import the database module AND open a live SQLite
+    connection -- must load NO third-party driver. Every non-SQLite adapter is
+    registered lazily (import on first connect to that scheme), so connecting to
+    SQLite never drags psycopg2 / firebird-driver / protobuf / pymongo in. Real
+    connection, no mock.
+    """
+    code = (
+        "import sys, json\n"
+        "before = set(sys.modules)\n"
+        "from tina4_python.database import Database\n"
+        "db = Database('sqlite:///:memory:')\n"
+        "db.execute('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)')\n"
+        "db.execute('INSERT INTO t (name) VALUES (?)', ['alice'])\n"
+        "assert db.fetch('SELECT name FROM t').records == [{'name': 'alice'}]\n"
+        "added = set(sys.modules) - before\n"
+        "tp = sorted({n.split('.')[0] for n in added\n"
+        "  if getattr(sys.modules.get(n), '__file__', None)\n"
+        "  and ('site-packages' in (sys.modules[n].__file__ or '')\n"
+        "       or 'dist-packages' in (sys.modules[n].__file__ or ''))\n"
+        "  and n.split('.')[0] != 'tina4_python'})\n"
+        "print(json.dumps(tp))\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, cwd=str(REPO_ROOT)
+    )
+    assert result.returncode == 0, f"the SQLite app failed:\n{result.stderr}"
+    third_party = json.loads(result.stdout.strip().splitlines()[-1])
+    assert third_party == [], (
+        f"a SQLite app eagerly loaded third-party package(s) {third_party} -- a "
+        "database adapter must import its driver only when its own scheme is "
+        "connected, never at framework-import time"
     )

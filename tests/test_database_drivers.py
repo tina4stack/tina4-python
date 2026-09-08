@@ -14,7 +14,8 @@ import socket
 import pytest
 from unittest.mock import patch
 from tina4_python.database import Database
-from tina4_python.database.connection import _DRIVERS
+import importlib
+from tina4_python.database.connection import _DRIVERS, _LAZY_DRIVERS, known_drivers
 
 
 # ── Live PostgreSQL connection config (canonical TINA4_TEST_PG_HOST /
@@ -80,37 +81,46 @@ def _mssql_reachable() -> bool:
 
 
 class TestDriverRegistration:
-    """All drivers are registered and discoverable by URL scheme."""
+    """Every driver is discoverable by URL scheme. SQLite is registered eagerly
+    (stdlib, zero-dependency); every other adapter is registered LAZILY -- its
+    module and third-party driver import only on the first connection to that
+    scheme, so importing the framework never drags an unused driver in. That
+    lazy invariant is proven end to end in tests/test_core_zero_dependency_import.py.
+    """
 
-    def test_sqlite_registered(self):
+    def test_sqlite_registered_eagerly(self):
+        # SQLite is stdlib, so it costs no third-party import and stays eager.
         assert "sqlite" in _DRIVERS
 
-    def test_postgresql_registered(self):
-        assert "postgresql" in _DRIVERS
+    def test_all_built_in_schemes_are_known(self):
+        # Discoverable via known_drivers() whether or not their driver has been
+        # loaded yet -- the lazy built-ins are not in _DRIVERS until first use.
+        for scheme in (
+            "postgres", "postgresql", "pgsql", "mysql", "mssql",
+            "sqlserver", "firebird", "odbc", "mongodb", "pymongo",
+        ):
+            assert scheme in known_drivers()
 
-    def test_postgres_alias_registered(self):
-        assert "postgres" in _DRIVERS
+    def test_optional_adapters_are_registered_lazily_not_eagerly(self):
+        # The whole point: the optional adapters are declared, not imported, at
+        # framework-import time. They live in _LAZY_DRIVERS, not _DRIVERS.
+        for scheme in ("postgres", "mysql", "mssql", "firebird", "odbc", "mongodb"):
+            assert scheme in _LAZY_DRIVERS
 
-    def test_pgsql_alias_registered(self):
-        # pgsql:// is the PDO / Laravel / Doctrine scheme name (issue #58)
-        assert "pgsql" in _DRIVERS
-        assert _DRIVERS["pgsql"] is _DRIVERS["postgres"]
+    def test_aliases_target_the_same_adapter(self):
+        # pgsql:// and postgresql:// are the PDO / Laravel / Doctrine spellings
+        # of postgres (issue #58); sqlserver:// is mssql; pymongo:// is mongodb.
+        assert _LAZY_DRIVERS["pgsql"] == _LAZY_DRIVERS["postgres"]
+        assert _LAZY_DRIVERS["postgresql"] == _LAZY_DRIVERS["postgres"]
+        assert _LAZY_DRIVERS["sqlserver"] == _LAZY_DRIVERS["mssql"]
+        assert _LAZY_DRIVERS["pymongo"] == _LAZY_DRIVERS["mongodb"]
 
-    def test_mysql_registered(self):
-        assert "mysql" in _DRIVERS
-
-    def test_mssql_registered(self):
-        assert "mssql" in _DRIVERS
-
-    def test_firebird_registered(self):
-        assert "firebird" in _DRIVERS
-
-    def test_postgresql_and_postgres_same_class(self):
-        assert _DRIVERS["postgresql"] is _DRIVERS["postgres"]
-
-    def test_unknown_driver_raises(self):
-        with pytest.raises(ValueError, match="Unknown database driver"):
+    def test_unknown_driver_raises_and_lists_known_schemes(self):
+        with pytest.raises(ValueError, match="Unknown database driver") as exc:
             Database("fakedb://localhost/test")
+        # The error still lists the resolvable schemes, lazy ones included.
+        message = str(exc.value)
+        assert "postgres" in message and "firebird" in message
 
 
 # ── Graceful Import Errors ───────────────────────────────────────
@@ -510,7 +520,10 @@ class TestAdapterContract:
 
     @pytest.mark.parametrize("scheme", ["postgresql", "mysql", "mssql", "firebird"])
     def test_implements_full_interface(self, scheme):
-        adapter_class = _DRIVERS[scheme]
+        # These adapters are registered lazily, so resolve the class through its
+        # declared module path rather than expecting it eagerly in _DRIVERS.
+        module_path, class_name = _LAZY_DRIVERS[scheme]
+        adapter_class = getattr(importlib.import_module(module_path), class_name)
         missing = [m for m in self.INTERFACE if not callable(getattr(adapter_class, m, None))]
         assert not missing, f"{adapter_class.__name__} missing methods: {missing}"
 

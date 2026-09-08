@@ -10,6 +10,7 @@ Connection pooling:
     db = Database("sqlite:///data/app.db", pool=4)  # 4 connections, round-robin
 """
 import hashlib
+import importlib
 import os
 import threading
 import time
@@ -129,43 +130,56 @@ def register_driver(scheme: str, adapter_class: type):
     _DRIVERS[scheme] = adapter_class
 
 
-# Register built-in SQLite
+# Register built-in SQLite eagerly. It is stdlib, so importing it drags in no
+# third-party package -- the zero-dependency default carries no import cost.
 from tina4_python.database.sqlite import SQLiteAdapter
 register_driver("sqlite", SQLiteAdapter)
 
-# Register ODBC (lazy — only fails if you actually use it without pyodbc)
-try:
-    from tina4_python.database.odbc import ODBCAdapter
-    register_driver("odbc", ODBCAdapter)
-except ImportError:
-    pass  # pyodbc not installed — that's fine
+# Every OTHER adapter is registered LAZILY: its module -- and the third-party
+# driver that module imports -- is loaded only when a URL for that scheme is
+# actually connected. Importing tina4_python.database (which happens on the first
+# Database(url), regardless of engine) therefore never drags psycopg2,
+# firebird-driver (+ protobuf + dateutil), pymssql or pymongo into an app that
+# does not use them. Connecting to Postgres loads only psycopg2; a SQLite app
+# loads no third-party driver at all. This mirrors PHP/Ruby autoload and Node's
+# optionalDependencies + dynamic import. Aliases share the same target so the
+# canonical engine and every alias resolve to one adapter class.
+_LAZY_DRIVERS: dict[str, tuple[str, str]] = {
+    "postgres": ("tina4_python.database.postgres", "PostgreSQLAdapter"),
+    "postgresql": ("tina4_python.database.postgres", "PostgreSQLAdapter"),
+    "pgsql": ("tina4_python.database.postgres", "PostgreSQLAdapter"),  # PDO / Laravel / Doctrine (issue #58)
+    "mysql": ("tina4_python.database.mysql", "MySQLAdapter"),
+    "mssql": ("tina4_python.database.mssql", "MSSQLAdapter"),
+    "sqlserver": ("tina4_python.database.mssql", "MSSQLAdapter"),
+    "firebird": ("tina4_python.database.firebird", "FirebirdAdapter"),
+    "odbc": ("tina4_python.database.odbc", "ODBCAdapter"),
+    "mongodb": ("tina4_python.database.mongodb", "MongoDBAdapter"),
+    "pymongo": ("tina4_python.database.mongodb", "MongoDBAdapter"),
+}
 
-# Register PostgreSQL (psycopg2 — optional)
-from tina4_python.database.postgres import PostgreSQLAdapter
-register_driver("postgresql", PostgreSQLAdapter)
-register_driver("postgres", PostgreSQLAdapter)
-register_driver("pgsql", PostgreSQLAdapter)  # PDO / Laravel / Doctrine scheme name (issue #58)
 
-# Register MySQL (mysql-connector-python — optional)
-from tina4_python.database.mysql import MySQLAdapter
-register_driver("mysql", MySQLAdapter)
+def known_drivers() -> set[str]:
+    """Every URL scheme the framework can resolve: eagerly-registered (sqlite,
+    plus anything an app registered by hand via register_driver) and the
+    lazily-registered built-ins that import their driver on first use."""
+    return set(_DRIVERS) | set(_LAZY_DRIVERS)
 
-# Register MSSQL (pymssql — optional)
-from tina4_python.database.mssql import MSSQLAdapter
-register_driver("mssql", MSSQLAdapter)
-register_driver("sqlserver", MSSQLAdapter)
 
-# Register Firebird (fdb — optional)
-from tina4_python.database.firebird import FirebirdAdapter
-register_driver("firebird", FirebirdAdapter)
+def _resolve_lazy_driver(scheme: str) -> None:
+    """Import a lazily-declared adapter and register it, on first use.
 
-# Register MongoDB (pymongo — optional)
-try:
-    from tina4_python.database.mongodb import MongoDBAdapter
-    register_driver("mongodb", MongoDBAdapter)
-    register_driver("pymongo", MongoDBAdapter)
-except ImportError:
-    pass
+    Raises a clear ValueError if the adapter's driver package is not installed,
+    rather than an opaque ImportError from deep in the driver.
+    """
+    module_path, class_name = _LAZY_DRIVERS[scheme]
+    try:
+        module = importlib.import_module(module_path)
+    except ImportError as exc:
+        raise ValueError(
+            f"Database driver '{scheme}' is unavailable: {exc}. "
+            f"Install the driver package and it will register automatically."
+        ) from exc
+    register_driver(scheme, getattr(module, class_name))
 
 
 class Database:
@@ -339,12 +353,16 @@ class Database:
             scheme = (urlparse(self.url).scheme or "").lower()
 
         if scheme not in _DRIVERS:
-            available = ", ".join(_DRIVERS.keys())
-            raise ValueError(
-                f"Unknown database driver '{scheme}'. "
-                f"Available: {available}. "
-                f"Install the driver package and it will register automatically."
-            )
+            if scheme in _LAZY_DRIVERS:
+                # First connection to this engine: import + register its adapter.
+                _resolve_lazy_driver(scheme)
+            else:
+                available = ", ".join(sorted(known_drivers()))
+                raise ValueError(
+                    f"Unknown database driver '{scheme}'. "
+                    f"Available: {available}. "
+                    f"Install the driver package and it will register automatically."
+                )
 
         return _DRIVERS[scheme]()
 
