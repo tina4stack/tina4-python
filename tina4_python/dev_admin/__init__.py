@@ -1933,20 +1933,41 @@ def _route_count() -> int:
 
 
 async def _api_version_check(request, response):
-    """Proxy version check to PyPI to avoid browser CORS errors."""
+    """Proxy the version check to PyPI so the browser dodges a CORS error.
+
+    A check that did not happen says so. This used to fall back to
+    latest = current on any failure, and the toolbar renders that as a green
+    "You are up to date!" -- so a developer several releases behind, on a
+    machine with no route out, was told the opposite of the truth, and the
+    toolbar's own "Could not check for updates" branch could never fire because
+    the failure arrived as a success. latest is None when the check could not be
+    made, and error says why.
+
+    The registry URL is TINA4_VERSION_CHECK_URL when set (a mirror, or a test's
+    own server), else PyPI.
+    """
     import urllib.request
     current = __version__
-    latest = current
+    url = os.environ.get(
+        "TINA4_VERSION_CHECK_URL", "https://pypi.org/pypi/tina4-python/json"
+    )
+
+    def failed(why):
+        return response({"current": current, "latest": None, "error": why})
+
     try:
         req = urllib.request.Request(
-            "https://pypi.org/pypi/tina4-python/json",
-            headers={"User-Agent": "tina4-python/" + current},
+            url, headers={"User-Agent": "tina4-python/" + current}
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode())
-            latest = data.get("info", {}).get("version", current)
-    except Exception:
-        pass  # Offline or timeout — return current as latest
+    except Exception as exc:  # offline, timeout, DNS, unreadable body
+        return failed(str(exc) or exc.__class__.__name__)
+    # Reaching PyPI is not the same as learning the version: an answer we
+    # cannot read a version out of is the same lie by another route.
+    latest = (data.get("info") or {}).get("version")
+    if not latest:
+        return failed("PyPI did not report a version")
     return response({"current": current, "latest": latest})
 
 
@@ -2139,6 +2160,13 @@ def toolbar_js() -> str:
         el.className = 't4-ok';
         el.innerHTML = 'Latest: <strong class="t4-ok">v' + latest + '</strong> &mdash; You are up to date!';
     }
+    // A check that did not happen is not a clean bill of health. The server
+    // sends latest: null when it could not reach the registry, and saying so is
+    // the whole point -- "up to date" here would be a guess dressed as a fact.
+    function couldNotCheck(el, why) {
+        el.className = 't4-err';
+        el.textContent = 'Could not check for updates' + (why ? ' (' + why + ')' : '');
+    }
     function checkVersion() {
         if (modal.style.display === 'block') { modal.style.display = 'none'; return; }
         modal.style.display = 'block';
@@ -2147,6 +2175,7 @@ def toolbar_js() -> str:
         el.textContent = 'Checking for updates...';
         fetch('/__dev/api/version-check').then(function (r) { return r.json(); }).then(function (d) {
             var latest = d.latest, current = d.current;
+            if (!latest) { couldNotCheck(el, d.error); return; }
             if (latest === current) { upToDate(el, latest); return; }
             var cP = current.split('.').map(Number), lP = latest.split('.').map(Number);
             var isNewer = false, i, c, l;
