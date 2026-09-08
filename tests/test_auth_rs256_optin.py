@@ -361,12 +361,22 @@ def test_the_cross_framework_jwt_contract_fixture_is_honoured():
 def test_rs256_never_becomes_a_declared_dependency():
     """NEGATIVE: the default install stays zero-dependency, forever.
 
-    The whole ruling collapses if someone "fixes" the missing backend by adding
-    it to the manifest - including as an optional extra that a plain sync pulls in.
+    RS256 must never drag cryptography into the CORE manifest. cryptography is
+    permitted ONLY as an opt-in extra -- Feature 140 (Web Push) needs P-256 ECDH
+    and AES-GCM, which the stdlib lacks, so it declares `push = ["cryptography"]`
+    exactly like the optional database drivers. A plain `uv sync` installs no
+    extras, so the default install is still dependency-free. The ruling collapses
+    only if cryptography lands in the CORE `dependencies` list (or a plain sync
+    would pull it), never because an opt-in extra names it.
     """
+    import tomllib
+
     pyproject = Path(REPO_ROOT, "pyproject.toml").read_text(encoding="utf-8")
     assert "dependencies = []" in pyproject, "core dependencies are no longer empty"
-    assert "cryptography" not in pyproject, "cryptography was declared in pyproject.toml"
+    parsed = tomllib.loads(pyproject)
+    core = parsed["project"]["dependencies"]
+    assert core == [], f"core dependencies are no longer empty: {core}"
+    assert not any("cryptography" in dep for dep in core), "cryptography must never be a CORE dependency (opt-in extras only)"
 
 
 # ── 3. RS256 present: it actually works, with a public-key-only verifier ─────
