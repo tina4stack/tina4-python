@@ -12,6 +12,33 @@ def _b64(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
 
+def _unb64(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def test_vapid_keys_are_fixed_width_across_many_generations():
+    """Parity guard for the leading-zero padding PHP/Ruby/Node had to add.
+
+    A P-256 scalar or coordinate whose top byte is zero would encode short
+    without fixed-width padding (a malformed 64-byte key). Python's cryptography
+    lib pads for us (X962 UncompressedPoint + private_value.to_bytes(32)), so
+    this must always hold; generate enough to hit a zero-top-byte scalar for
+    real (no mock) and assert the case was reachable so a green result proves
+    the invariant rather than luck.
+    """
+    pytest.importorskip("cryptography")
+    iterations = 2000
+    zero_top_byte = 0
+    for _ in range(iterations):
+        keys = generate_vapid_keys()
+        assert len(_unb64(keys["publicKey"])) == 65
+        private = _unb64(keys["privateKey"])
+        assert len(private) == 32
+        if private[0] == 0:
+            zero_top_byte += 1
+    assert zero_top_byte > 0, "no zero-top-byte scalar appeared across %d keys; the padding case was not exercised" % iterations
+
+
 def test_vapid_keys_and_real_delivery():
     cryptography = pytest.importorskip("cryptography")
     from cryptography.hazmat.primitives.asymmetric import ec
