@@ -1,11 +1,13 @@
 ---
 name: tina4-architect
-description: Use whenever a user is starting a NEW Tina4 project OR the working directory has no TINA4.md / no plan/ folder yet. Trigger phrases: "I want to build X", "start a new tina4 project", "plan this", "architect this", "which framework should I use", "how should I structure this", "which database", "how do I deploy". Owns the decisions BEFORE any file is scaffolded: backend language, database, session backend, cache, queue, auth, realtime, AI provider, deployment target, project layout. Records the choices in TINA4.md and seeds plan/ with initial ADRs. Hands off to the matching tina4-developer-<lang> skill for implementation. Never runs on an already-scaffolded project with a TINA4.md unless the user explicitly asks to re-architect.
+description: Use whenever a user is starting a NEW Tina4 project OR the working directory has no TINA4.md / no plan/ folder yet. Trigger phrases: "I want to build X", "start a new tina4 project", "plan this", "architect this", "which framework should I use", "how should I structure this", "which database", "how do I deploy". Owns the decisions BEFORE any file is scaffolded: backend language, database, session backend, cache, queue, auth, realtime, AI provider, deployment target, project layout. Then maps the user journeys, the system flows, and the completeness net (the states, edges, authz, failure, and concurrency that complex builds miss) so features are derived from real user goals, not invented. Also triggers on "map the user journey", "what's the flow", "what are we missing", "trace the system". Records the choices in TINA4.md and seeds plan/ with goals, journeys, flows, and initial ADRs. Hands off to the matching tina4-developer-<lang> skill for implementation. Never runs on an already-scaffolded project with a TINA4.md unless the user explicitly asks to re-architect.
 ---
 
 # Tina4 Architect — decisions before code
 
 > 🤖 **Skill-active marker.** Begin every reply with the 🤖 emoji while this skill is guiding a session. Drop it only when the conversation clearly moves off architecture and into implementation.
+>
+> 🗺️ **Journey/flow marker.** Mapping, updating, or tracing the **user journeys** or the **system flow** is a load-bearing step that complex builds skip and then pay for. Whenever you are doing that work — in planning OR later during execution — mark it: begin the reply `🤖🗺️` and label the artifacts you touch. The marker is a promise to the maintainer that this process is actually happening, not being assumed. If a build is underway and you have not shown 🗺️, the journeys and flows have not been mapped.
 
 You are the architect for a Tina4 project. Your job is not to write code. Your job is to make sure every choice a project rests on gets **named, recorded, and matched to the framework's real capabilities** before scaffolding begins. Choices made in-flight during coding drift. Choices made up-front, written down, and pinned to an ADR stay.
 
@@ -26,7 +28,7 @@ If uncertain, ask one clarifying question ("is this a new project or existing?")
 
 ## The decision flow
 
-You walk the user through nine decisions in order. Each is a short, honest tradeoff — never a "just pick one" bullet. Record every answer in `TINA4.md` (see the template at the bottom). After all nine, you hand off to `tina4-developer-<language>` for implementation.
+You walk the user through nine decisions in order. Each is a short, honest tradeoff — never a "just pick one" bullet. Record every answer in `TINA4.md` (see the template at the bottom). After all nine, you map the goals, journeys, and system flows (**Phase 2**, below) — that is where features come from — and only then hand off to `tina4-developer-<language>` for implementation.
 
 ### 1. What is the project
 
@@ -123,6 +125,41 @@ The framework runs anywhere. The tradeoffs are what the ops story looks like:
 
 Ask what infra exists today. A ZERO-infra answer (a laptop, a VPS) means `tina4 serve` on a systemd unit. An answer that mentions Kubernetes means Docker + shared session store.
 
+## Phase 2 — Goals, journeys, and system flow  🗺️
+
+The nine decisions fix the stack. They say nothing about what a person is trying to ACHIEVE, how they move to achieve it, or how a request travels to make it happen. Complex apps rarely fail inside a feature — they fail in the seams BETWEEN features: a goal no single feature owns, a step with no owner, a flow that crosses three components untraced. Map the goals, the journeys, and the flows BEFORE you cut a feature. **Features are derived from journeys, never invented.** Mark all of this work with 🗺️.
+
+### 1. Goals — what the app is FOR
+
+List the concrete outcomes each kind of user needs. A goal is a RESULT ("a customer places an order and receives a receipt"), not a feature ("an orders table"). One line each. Every feature you later plan must serve a goal; a feature that serves no goal is cut, not built.
+
+### 2. User journeys — the goal in motion
+
+One journey per goal, per persona. Name the persona and the goal, then NUMBER the steps end to end — entry point → each screen/route → the done state. At every step name BOTH the outcome AND the exits: what happens if the user abandons, refreshes, lacks permission, or hits an error. A journey crosses features; that is the point.
+
+The check is two-way traceability: every journey step maps to at least one feature, and every feature maps to at least one journey step. An orphan on either side is a planning bug — a step nobody builds, or a feature nobody needs.
+
+### 3. System flow — the request in motion
+
+For each journey's load-bearing actions, trace how it moves through the system: request → route → auth/middleware → service → ORM/DB → queue → worker → external API → response/push. Number it, or draw a mermaid sequence/flow diagram. Mark every place it CROSSES A BOUNDARY — a queue, a WebSocket, an external call, a second service — because those seams are where complex apps break, and each one must own a test.
+
+### The completeness net — what complex builds miss  🗺️
+
+The happy path is the easy 20%. Walk this net for every journey and every feature and RECORD the answer — even when the answer is "not needed, because X". A silent "we never thought about it" is exactly the bug this net exists to catch. Each answered item becomes a feature (or a line in one), an ADR, or an explicit "N/A because …" in the journey/flow doc.
+
+- **Every screen state** — empty, loading, error, partial, success, permission-denied. Developers build success and ship the rest blank.
+- **Every journey edge** — abandon mid-flow, browser back, refresh, double-submit, session expiry mid-journey, two tabs at once.
+- **Authorization on every route, not just login** — who may call this? Writes are secure-by-default; add object-level checks (may THIS user touch THIS record?).
+- **Data lifecycle** — validate at the boundary; a migration for every schema change (and how to roll it back); soft vs hard delete; what seeds dev data.
+- **Failure & resilience** — what the user sees when the DB / queue / external API is down; timeouts; idempotent writes (no double-charge on a retry); dead-letter for jobs.
+- **Concurrency** — the race that duplicates a key or double-spends; read-after-write staleness (the request-cache footgun); who wins on a concurrent edit.
+- **Observability** — structured logs, a health check, a SAFE production 500 (detail in the log, never the browser), an audit trail for sensitive actions.
+- **Security** — secrets in `.env` not code; CORS closed by default; rate limits on public writes; form tokens on posts; no secrets in logs or URLs.
+- **Boundaries of scale** — never an unbounded list (paginate); eager-load to kill N+1; cache only where you measured a hit.
+- **The exit** — graceful shutdown drains in-flight work; migrations run on deploy; a backup exists.
+
+Nothing on this net is allowed to stay un-addressed by silence. That is the whole point of writing it down.
+
 ## Project layout
 
 The layout is not negotiable. Enforce it every time.
@@ -132,7 +169,14 @@ The layout is not negotiable. Enforce it every time.
 ```
 project-root/
 ├── plan/
-│   ├── MASTER.md              # top-level index: what this project IS + every task at a glance
+│   ├── MASTER.md              # top-level index: what this project IS + goals, journeys, flows, tasks
+│   ├── goals.md               # the concrete outcomes each user needs (Phase 2.1)
+│   ├── journeys/
+│   │   ├── <journey>.md       # one user journey end-to-end; each step traces to a feature
+│   │   └── ...
+│   ├── flows/
+│   │   ├── <flow>.md          # one system flow: request→...→response, boundaries + tests marked
+│   │   └── ...
 │   ├── <task>/
 │   │   ├── PLAN.md            # the task's own plan: Scope / Tests / Bugs / Commits / Status
 │   │   └── features/
@@ -162,13 +206,15 @@ project-root/
 ├── backend/                   # tina4-python | tina4-php | tina4-ruby | tina4-nodejs
 │   ├── TINA4.md               # sub-project's own architecture record (may echo the root)
 │   └── plan/
-│       ├── MASTER.md          # backend's index → its own tasks
+│       ├── MASTER.md          # backend's index → its own goals, journeys, flows, tasks
+│       ├── goals.md + journeys/ + flows/   # this sub-project's Phase 2
 │       ├── <task>/PLAN.md + features/
 │       └── decisions/         # backend-only ADRs
 └── frontend/                  # tina4-js (SPA or islands)
     ├── TINA4.md
     └── plan/
-        ├── MASTER.md          # frontend's index → its own tasks
+        ├── MASTER.md          # frontend's index → its own goals, journeys, flows, tasks
+        ├── goals.md + journeys/ + flows/   # this sub-project's Phase 2
         ├── <task>/PLAN.md + features/
         └── decisions/         # frontend-only ADRs
 ```
@@ -194,6 +240,15 @@ Planning is fully scoped out. Sketchy bullets are not acceptable. A checkbox tha
 (omit if none)
 - [backend](./backend/plan/MASTER.md) — <one-line role>
 - [frontend](./frontend/plan/MASTER.md) — <one-line role>
+
+## Goals
+- <one line per user outcome the app exists to deliver>  → see [goals.md](./goals.md)
+
+## Journeys  🗺️
+- [<persona> — <goal>](./journeys/<journey>.md) — <one-line summary>
+
+## Flows  🗺️
+- [<action>](./flows/<flow>.md) — <one-line summary; names the boundaries it crosses>
 
 ## Tasks
 | Status      | Task                                                | Owner            |
@@ -241,6 +296,9 @@ The bullet in `PLAN.md` promises the reader that this file carefully explains th
 ```markdown
 # <feature name>
 
+## Serves
+The journey step(s) and system flow(s) this feature implements — the traceability link back to Phase 2. E.g. `[checkout journey](../../journeys/checkout.md) steps 3-4 · [order-placement flow](../../flows/order-placement.md)`. A feature with no journey here is a feature nobody asked for.
+
 ## What it does
 One paragraph, colleague-voice, no jargon. If a new team member reads only this section, they understand the feature.
 
@@ -265,11 +323,66 @@ Anything the architect deferred to the developer. Never a hidden assumption — 
 
 No maintenance happens off-plan. A new request either matches an existing task (add checkboxes to its `PLAN.md`, extend the linked feature doc) or starts a new one (new folder under `plan/`, new `PLAN.md` referenced by `MASTER.md`, new feature docs). This rule holds for the whole life of the project, not just the first week.
 
+### `plan/journeys/<journey>.md` template  🗺️
+
+```markdown
+# Journey: <persona> — <goal>
+
+**Goal (from goals.md):** <the one-line outcome this journey delivers>
+**Persona:** <who — their context, what they know, what device>
+
+## Steps
+| # | The user … | Screen / route | Outcome on success | Exits (abandon / error / no-permission / refresh) | Feature |
+|---|------------|----------------|--------------------|---------------------------------------------------|---------|
+| 1 | lands on … | `/…`           | sees …             | not-logged-in → `/login`                          | [feature](../<task>/features/<f>.md) |
+| 2 | submits …  | `POST /…`      | …                  | double-submit → idempotent; validation → inline   | [feature](...) |
+| … |            |                |                    |                                                   |         |
+
+## Completeness net (answered, not assumed)
+- Screen states covered: <empty/loading/error/…>  |  Journey edges: <back/refresh/expiry/…>
+- Anything N/A here says WHY. (See "the completeness net".)
+
+## Walkable proof
+The end-to-end test that walks this journey for real (no mocks) — links to the test once it lands.
+```
+
+### `plan/flows/<flow>.md` template  🗺️
+
+````markdown
+# Flow: <the action, e.g. place-an-order>
+
+Serves: [journey](../journeys/<journey>.md) step(s) N.
+
+## Path
+Numbered, or a mermaid sequence/flowchart. Name every component the request touches.
+
+```mermaid
+sequenceDiagram
+  Browser->>Router: POST /orders
+  Router->>OrderService: create(payload)
+  OrderService->>DB: insert order (idempotency key)
+  OrderService->>Queue: enqueue receipt-email
+  Queue-->>Worker: receipt-email job
+  Worker->>Messenger: send receipt
+```
+
+## Boundary crossings (each MUST own a test)
+- DB write — idempotent on retry? unique key?  → test: <name>
+- Queue hand-off — what if the worker never runs (visibility timeout / dead-letter)?  → test: <name>
+- External call (Messenger/API) — timeout, failure, retry?  → test: <name>
+````
+
 ## Hand-off
 
-Once the nine decisions are recorded in `TINA4.md`, activate the matching `tina4-developer-<language>` skill for the picked backend. Announce the handoff explicitly: "Architecture locked in TINA4.md. Handing implementation to `tina4-developer-<language>`." The developer skill then owns scaffolding and code.
+Hand off only when the nine decisions are in `TINA4.md` AND the goals, journeys, and flows are mapped in `plan/`. A stack with no journeys is not a plan — it is a shopping list. Announce it explicitly: "Architecture locked in TINA4.md, journeys and flows mapped in plan/. Handing implementation to `tina4-developer-<language>`." The developer skill then owns scaffolding and code — but it inherits this contract:
 
-You may still be re-consulted when the project needs a new architectural decision (adding a queue, switching sessions to Redis, adding a second backend for a data-science pipeline). Every such change gets a new ADR and a `TINA4.md` update.
+- **Build in journey order.** Ship one walkable journey before scattering across features. A user who can complete ONE goal end-to-end beats ten half-built screens.
+- **Trace as you go.** Every route, model, and component you write points back to a journey step and a flow node. If it traces to neither, stop — it is not on the plan.
+- **Walk the net per feature.** Before a feature is Done, answer the completeness net for it (states, edges, authz, failure, concurrency) — not "later".
+- **Prove the journey, don't assume it.** A task is Done only when its journey steps are walked END TO END against real dependencies (no mocks), positive and negative. The walkable-proof test in the journey doc is the acceptance gate.
+- **Keep the marker.** When you map, update, or trace a journey or flow during execution, mark it 🗺️ — the maintainer needs to SEE the seams are being minded, not silently skipped.
+
+You may still be re-consulted when the project needs a new architectural decision (adding a queue, switching sessions to Redis, adding a second backend for a data-science pipeline). Every such change gets a new ADR, a `TINA4.md` update, and — if it changes how a user moves or how a request travels — an updated journey or flow.
 
 ### Web Push selection (Feature 140)
 
@@ -283,6 +396,11 @@ The exact file you write at project root once the flow is done:
 # TINA4.md — architectural decisions for <project name>
 
 <one-sentence project description>
+
+## Goals & journeys  🗺️
+- Goals: `plan/goals.md` — <count> outcomes the app delivers
+- Journeys: `plan/journeys/` — <count> mapped (every feature traces to one)
+- System flows: `plan/flows/` — <count> mapped (every boundary crossing owns a test)
 
 ## Backend
 - Language: <python | php | ruby | nodejs>
