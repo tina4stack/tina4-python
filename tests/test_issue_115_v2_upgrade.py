@@ -389,3 +389,87 @@ def test_issue_93_fresh_v3_table_still_inserts_only_canonical_columns(db, mig_di
     cols = _column_names(db)
     assert "migration_id" not in cols, "a fresh v3 table must never grow the legacy column"
     assert db.fetch_one("SELECT migration_name FROM tina4_migration")["migration_name"] == "000001_smoke"
+
+
+# ── v2 stored FILENAMES, not stems ──────────────────────────────────
+#
+# Python v2 (tina4_python/Migration.py, 0.2.x) recorded `description` straight
+# from os.listdir, so the value carried the ".sql" extension:
+#
+#     dba.execute("insert into tina4_migration (... description ...)", [next_id, file, ...])
+#
+# Every test above seeds a bare stem ("000001_create_users"), which is not what
+# v2 ever wrote. That gap is why the extension case survived this suite.
+#
+# _resolve_migration_name matched a stem against the description three ways and
+# none of them strip the extension — strategy 3 tests `description in stem`, but
+# here the stem is a substring of the description, not the reverse. So it fell
+# through to the verbatim description, keeping ".sql", while migrate() compares
+# against mig_file.stem without it. Nothing matched and the whole history
+# replayed.
+#
+# This hit Hertex app-portal on 2026-09-09: 90 applied migrations replayed on a
+# 0.2.206 -> 3.13.52 upgrade and the app crashlooped on the first non-idempotent
+# one with a duplicate key.
+
+def test_v2_description_with_sql_extension_resolves_to_the_stem(db, mig_dir):
+    """A v2 row written as "<name>.sql" must resolve to the on-disk stem."""
+    (mig_dir / "0000002_data_migration_for_show_room.sql").write_text(
+        "CREATE TABLE never_created (id INTEGER);"
+    )
+    _create_v2_table(db)
+    _insert_v2_row(db, "0000002_data_migration_for_show_room.sql")
+
+    Migration(db, str(mig_dir))
+
+    name = db.fetch_one("SELECT migration_name FROM tina4_migration")["migration_name"]
+    assert name == "0000002_data_migration_for_show_room", (
+        "the .sql extension must be stripped so migrate() can match mig_file.stem"
+    )
+
+
+def test_v2_filenames_do_not_replay_on_upgrade(db, mig_dir):
+    """The production case: an applied .sql-suffixed history must not re-run.
+
+    Uses a non-idempotent migration, so a replay fails loudly instead of
+    silently succeeding the way a CREATE TABLE IF NOT EXISTS would.
+    """
+    db.execute("CREATE TABLE checklist_item_group (group_name TEXT UNIQUE)")
+    db.execute("INSERT INTO checklist_item_group (group_name) VALUES ('window_&_entrance')")
+    db.commit()
+
+    (mig_dir / "0000002_data_migration_for_show_room.sql").write_text(
+        "INSERT INTO checklist_item_group (group_name) VALUES ('window_&_entrance');"
+    )
+    _create_v2_table(db)
+    _insert_v2_row(db, "0000002_data_migration_for_show_room.sql")
+
+    ran = Migration(db, str(mig_dir)).migrate()
+
+    assert ran == [], f"already-applied v2 migrations must not replay, got {ran}"
+
+
+def test_v2_python_migration_filename_also_resolves(db, mig_dir):
+    """.py migrations were recorded the same way and need the same strip."""
+    (mig_dir / "000003_seed_data.py").write_text("def up(db):\n    pass\n")
+    _create_v2_table(db)
+    _insert_v2_row(db, "000003_seed_data.py")
+
+    Migration(db, str(mig_dir))
+
+    name = db.fetch_one("SELECT migration_name FROM tina4_migration")["migration_name"]
+    assert name == "000003_seed_data"
+
+
+def test_unrelated_description_still_falls_back_verbatim(db, mig_dir):
+    """Control: the strip must not invent a match where no file exists."""
+    (mig_dir / "000001_real.sql").write_text("CREATE TABLE t_real (id INTEGER);")
+    _create_v2_table(db)
+    _insert_v2_row(db, "999_not_on_disk.sql")
+
+    Migration(db, str(mig_dir))
+
+    name = db.fetch_one(
+        "SELECT migration_name FROM tina4_migration WHERE description = '999_not_on_disk.sql'"
+    )["migration_name"]
+    assert name == "999_not_on_disk.sql", "no file match means the description is kept verbatim"
