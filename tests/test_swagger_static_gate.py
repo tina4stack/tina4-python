@@ -22,10 +22,12 @@ No doubles.
 """
 
 import os
+import re
 from pathlib import Path
 
 import tina4_python
 from tina4_python.core.server import _try_static
+from tina4_python.test_client import TestClient
 
 FRAMEWORK_PUBLIC = Path(tina4_python.__file__).resolve().parent / "public"
 
@@ -155,3 +157,56 @@ def test_non_swagger_static_unaffected_by_the_gate():
         )
     finally:
         _restore_env(previous)
+
+
+# ── The asset must also be USABLE, not merely gated ─────────────────────────
+#
+# The gate above answers "may this be served". It cannot answer "is what we
+# serve any use", and that turned out to matter: the bundled index.html asked
+# SwaggerUIBundle for
+#
+#     url: "{SWAGGER_ROUTE}/swagger.json"
+#
+# and SWAGGER_ROUTE was the only occurrence of that token in the package, so
+# nothing ever substituted it -- while swagger.json is not a path this framework
+# routes either. Every gated path therefore answered 200 with a Swagger UI that
+# could never load its document. /swagger and /swagger/ hid it, because
+# server.py handles those two inline and never reaches the static file; the
+# unguarded ways in were /swagger//, which index-resolves, and
+# /swagger/index.html by name.
+#
+# So the property is not about status codes. For every path that hands a browser
+# a Swagger UI page, the document URL THAT PAGE NAMES must be one this server
+# answers. Asserting a 200 on a hardcoded /swagger/openapi.json would have
+# passed throughout.
+
+# Every way to end up on a Swagger UI page. The first two are served inline by
+# the server, the last two by the bundled static asset -- which is the point:
+# the property must hold no matter which of the two answers.
+UI_PATHS = ("/swagger", "/swagger/", "/swagger//", "/swagger/index.html")
+
+_UI_DOCUMENT_URL = re.compile(r'url:\s*"([^"]+)"')
+
+
+def test_every_swagger_ui_page_names_a_document_that_resolves(monkeypatch):
+    """However you reach the UI, the document it asks for must answer 200."""
+    monkeypatch.setenv("TINA4_SWAGGER_ENABLED", "true")
+    client = TestClient()
+
+    for path in UI_PATHS:
+        page = client.get(path)
+        assert page.status == 200, f"{path} returned {page.status}, expected 200"
+
+        html = page.body.decode(errors="replace")
+        match = _UI_DOCUMENT_URL.search(html)
+        assert match, f"{path} served a page with no document url: to check"
+        document_url = match.group(1)
+
+        # Read out of the HTML that was actually served, then fetched. A page
+        # naming an unsubstituted {SWAGGER_ROUTE} placeholder fails right here.
+        served = client.get(document_url)
+        assert served.status == 200, (
+            f"the page at {path} asks for {document_url!r}, which answered "
+            f"{served.status} -- that UI can never load"
+        )
+        assert "application/json" in served.content_type, served.content_type
