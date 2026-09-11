@@ -9,6 +9,17 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.136
+
+The AI skills learn to build to the user journeys. The tina4-architect skill now maps goals,
+user journeys, and system flows with a completeness net before it scaffolds a file (a visible
+map marker flags that work while it happens), the developer skills build to those journeys,
+and a new tina4-design skill runs the visual-identity chain (brand guidelines plus an
+interactive UI guide). Framework fixes: the bundled Swagger UI no longer answers a route miss
+with a document that cannot load (#129); database adapters register lazily, so importing the
+framework never loads a driver you do not use; and a guard test proves the feature surface
+pulls in no third-party runtime dependency. Full notes: https://tina4.com/python/36-releases
+
 ## 3.13.135
 
 Fix release. The dev-admin version check returns no version and a reason when it cannot
