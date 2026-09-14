@@ -156,7 +156,13 @@ def _build_stem_map(migration_folder: str | None) -> list[str]:
 def _resolve_migration_name(description: str, stems: list[str]) -> str:
     """Find the file stem that corresponds to a v2 description, or fall back.
 
-    Match strategy, in order:
+    Python v2 recorded `description` straight from os.listdir, so the value
+    normally carries the file extension (".sql"/".py") while a stem never does.
+    Match on the extension-stripped form as well, or a whole v2 history looks
+    unapplied and replays — see tests/test_issue_115_v2_upgrade.py.
+
+    Match strategy, in order (each tried against the description and against
+    its extension-stripped form):
       1. Exact stem match.
       2. A stem ending in "_" + description (e.g. "000001_create_users"
          resolves a v2 description of "create_users").
@@ -165,14 +171,22 @@ def _resolve_migration_name(description: str, stems: list[str]) -> str:
          getAppliedMigrations() but migrate() may re-run if a real file
          exists with a different name.
     """
-    if description in stems:
-        return description
-    for stem in stems:
-        if stem.endswith("_" + description):
-            return stem
-    for stem in stems:
-        if description in stem:
-            return stem
+    candidates = [description]
+    bare = re.sub(r"\.(sql|py)$", "", description, flags=re.IGNORECASE)
+    if bare != description:
+        candidates.append(bare)
+
+    for candidate in candidates:
+        if candidate in stems:
+            return candidate
+    for candidate in candidates:
+        for stem in stems:
+            if stem.endswith("_" + candidate):
+                return stem
+    for candidate in candidates:
+        for stem in stems:
+            if candidate in stem:
+                return stem
     return description
 
 
