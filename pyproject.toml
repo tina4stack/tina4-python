@@ -41,9 +41,12 @@ s3 = ["boto3>=1.34"]
 kafka = ["confluent-kafka>=2.0"]
 rabbitmq = ["pika>=1.3"]
 
-# Web Push is zero-dependency until selected. The standard library has no
-# P-256 ECDH or ES256 primitives, so the native cryptography capability is
-# installed explicitly when a project enables Web Push.
+# Web Push is zero-dependency on the server: the crypto runs through the OS
+# OpenSSL (libcrypto) by ctypes, so a Linux host needs nothing installed. This
+# extra is the DEV FALLBACK - on a stock Mac or a Windows workstation ctypes
+# cannot reach a safe OpenSSL, so the cryptography package runs instead. Install
+# it there (or pin it with TINA4_PUSH_BACKEND=cryptography); the wire output is
+# identical either way. See tina4_python/push/_libcrypto.py.
 push = ["cryptography>=42.0"]
 
 # All database drivers

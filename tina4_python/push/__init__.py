@@ -1,8 +1,13 @@
 """Provider-neutral Web Push delivery (RFC 8291 / RFC 8292).
 
-The framework remains zero-dependency. Install the optional capability with
-``pip install tina4-python[push]``; ``cryptography`` is imported only when a
-push sender is constructed or used.
+The framework stays zero-dependency on the server. The crypto runs through the OS
+OpenSSL (``libcrypto``) by ctypes - the same "use the platform crypto" model the
+PHP, Ruby and Node frameworks get from their stdlib - so a Linux host sends push
+with nothing installed. Where ctypes cannot reach a safe OpenSSL (a stock Mac, a
+Windows workstation), it falls back to the optional ``cryptography`` package
+(``pip install tina4-python[push]``). Both backends emit identical bytes, so the
+wire output is the same whichever runs. Set ``TINA4_PUSH_BACKEND`` to ``libcrypto``
+or ``cryptography`` to pin one; ``auto`` (default) prefers libcrypto.
 """
 from __future__ import annotations
 
@@ -18,6 +23,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
+
+from ._base import BackendUnavailable
 
 RECORD_SIZE = 4096
 MAX_PAYLOAD = RECORD_SIZE - 17
@@ -50,15 +57,45 @@ def _unb64(value: str, name: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def _crypto() -> tuple[Any, ...]:
-    try:
-        from cryptography.hazmat.primitives import hashes, serialization
-        from cryptography.hazmat.primitives.asymmetric import ec
-        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-        from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-    except ImportError as exc:
-        raise PushError("Web Push requires the optional crypto capability; install tina4-python[push]") from exc
-    return hashes, serialization, ec, Cipher, algorithms, modes, decode_dss_signature
+_BACKEND = None
+
+
+def _select_backend():
+    """Pick the crypto backend: OS libcrypto first, cryptography as fallback.
+
+    ``TINA4_PUSH_BACKEND`` forces ``auto`` (default), ``libcrypto`` or
+    ``cryptography``. The choice is cached for the process; ``_reset_backend``
+    drops the cache so a later call re-selects after the environment changes.
+    """
+    global _BACKEND
+    if _BACKEND is not None:
+        return _BACKEND
+    choice = os.getenv("TINA4_PUSH_BACKEND", "auto").strip().lower() or "auto"
+    order = {"auto": ("libcrypto", "cryptography"),
+             "libcrypto": ("libcrypto",),
+             "cryptography": ("cryptography",)}.get(choice)
+    if order is None:
+        raise PushError("TINA4_PUSH_BACKEND must be auto, libcrypto or cryptography")
+    reasons = []
+    for name in order:
+        if name == "libcrypto":
+            from . import _libcrypto as backend_module
+        else:
+            from . import _cryptography as backend_module
+        try:
+            _BACKEND = backend_module.load()
+            return _BACKEND
+        except BackendUnavailable as exc:
+            reasons.append(f"{name} ({exc})")
+    raise PushError(
+        "Web Push needs the OS OpenSSL (Linux/Unix) or the cryptography package "
+        "(install tina4-python[push]); unavailable here: " + ", ".join(reasons))
+
+
+def _reset_backend() -> None:
+    """Drop the cached backend so the next call re-selects."""
+    global _BACKEND
+    _BACKEND = None
 
 
 def _hmac(key: bytes, value: bytes) -> bytes:
@@ -78,15 +115,8 @@ def _hkdf(prk: bytes, info: bytes, length: int) -> bytes:
     return b"".join(chunks)[:length]
 
 
-def _public_bytes(public_key: Any, serialization: Any) -> bytes:
-    return public_key.public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
-
-
 def generate_vapid_keys() -> dict[str, str]:
-    _hashes, serialization, ec, *_ = _crypto()
-    private = ec.generate_private_key(ec.SECP256R1())
-    public = _public_bytes(private.public_key(), serialization)
-    raw_private = private.private_numbers().private_value.to_bytes(32, "big")
+    raw_private, public = _select_backend().generate_keypair()
     return {"publicKey": _b64(public), "privateKey": _b64(raw_private)}
 
 
@@ -104,7 +134,7 @@ def _payload_bytes(payload: Any) -> bytes:
 def _encrypt(payload: bytes, subscription: dict[str, Any]) -> bytes:
     if len(payload) > MAX_PAYLOAD:
         raise PushError(f"Push payload is too large; maximum is {MAX_PAYLOAD} bytes")
-    _hashes, serialization, ec, Cipher, algorithms, modes, _decode = _crypto()
+    backend = _select_backend()
     try:
         client_public_bytes = _unb64(subscription["keys"]["p256dh"], "subscription.keys.p256dh")
         auth_secret = _unb64(subscription["keys"]["auth"], "subscription.keys.auth")
@@ -115,32 +145,27 @@ def _encrypt(payload: bytes, subscription: dict[str, Any]) -> bytes:
     if len(auth_secret) != 16:
         raise PushError("subscription.keys.auth must be a 16-byte authentication secret")
 
-    client_public = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), client_public_bytes)
-    ephemeral = ec.generate_private_key(ec.SECP256R1())
-    server_public_bytes = _public_bytes(ephemeral.public_key(), serialization)
-    shared = ephemeral.exchange(ec.ECDH(), client_public)
+    try:
+        server_public_bytes, shared = backend.encrypt_ecdh(client_public_bytes)
+    except ValueError as exc:
+        raise PushError("subscription.keys.p256dh is not a valid P-256 public key") from exc
     key_info = b"WebPush: info\0" + client_public_bytes + server_public_bytes
     ikm = _hkdf(_hmac(auth_secret, shared), key_info, 32)
     salt = os.urandom(16)
     prk = _hmac(salt, ikm)
     cek = _hkdf(prk, b"Content-Encoding: aes128gcm\0", 16)
     nonce = _hkdf(prk, b"Content-Encoding: nonce\0", 12)
-    encryptor = Cipher(algorithms.AES(cek), modes.GCM(nonce)).encryptor()
-    ciphertext = encryptor.update(payload + b"\x02") + encryptor.finalize() + encryptor.tag
+    ciphertext = backend.aes128gcm_encrypt(cek, nonce, payload + b"\x02")
     return salt + RECORD_SIZE.to_bytes(4, "big") + bytes([len(server_public_bytes)]) + server_public_bytes + ciphertext
 
 
 def _vapid_token(endpoint: str, subject: str, raw_private: bytes, raw_public: bytes) -> str:
-    _hashes, serialization, ec, _Cipher, _algorithms, _modes, decode_dss_signature = _crypto()
     audience = urllib.parse.urlparse(endpoint)
     aud = f"{audience.scheme}://{audience.netloc}"
     header = _b64(json.dumps({"typ": "JWT", "alg": "ES256"}, separators=(",", ":")).encode())
     claims = _b64(json.dumps({"aud": aud, "exp": int(time.time()) + 12 * 60 * 60, "sub": subject}, separators=(",", ":")).encode())
     signing_input = f"{header}.{claims}".encode("ascii")
-    private = ec.derive_private_key(int.from_bytes(raw_private, "big"), ec.SECP256R1())
-    der = private.sign(signing_input, ec.ECDSA(_hashes.SHA256()))
-    r, s = decode_dss_signature(der)
-    signature = r.to_bytes(32, "big") + s.to_bytes(32, "big")
+    signature = _select_backend().sign_es256(raw_private, signing_input)
     return signing_input.decode("ascii") + "." + _b64(signature)
 
 
@@ -196,12 +221,11 @@ class Push:
             raise PushError("TINA4_VAPID_PUBLIC must be a 65-byte P-256 public key")
         if len(raw_private) != 32:
             raise PushError("TINA4_VAPID_PRIVATE must be a 32-byte P-256 private key")
-        _hashes, serialization, ec, *_ = _crypto()
         try:
-            derived = ec.derive_private_key(int.from_bytes(raw_private, "big"), ec.SECP256R1())
+            derived_public = _select_backend().public_from_private(raw_private)
         except ValueError as exc:
             raise PushError("TINA4_VAPID_PRIVATE is not a valid P-256 private key") from exc
-        if _public_bytes(derived.public_key(), serialization) != raw_public:
+        if derived_public != raw_public:
             raise PushError("TINA4_VAPID_PUBLIC does not match TINA4_VAPID_PRIVATE")
         return raw_public, raw_private
 
