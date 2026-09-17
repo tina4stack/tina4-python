@@ -20,7 +20,7 @@ Everything that branches `if anthropic ... else openai` already covers gemini; e
 ## Parity
 | Feature | Python | PHP | Ruby | Node |
 |---------|--------|-----|------|------|
-| gemini provider (OpenAI-compat) | [x] | [ ] | [ ] | [ ] |
+| gemini provider (OpenAI-compat) | [x] | [x] | [x] | [x] |
 
 ## Tests (real, no mocks - local HTTP server, positive + negative)
 - default endpoint resolves to `.../v1beta/openai/chat/completions` and `.../embeddings`
@@ -34,8 +34,13 @@ Everything that branches `if anthropic ... else openai` already covers gemini; e
 - Ruby: `tina4-ruby/lib/tina4/ai_client.rb`
 - Node: `tina4-nodejs/packages/core/src/aiClient.ts`
 
-## Commits
-- (python) <pending> gemini provider + 5 contract tests
-- (php/ruby/node) <pending>
+## Commits (all on v3, pushed)
+- python  a22ca6a  (44/44 macOS)
+- node    1a91214  (40 passed + typecheck; re-verified 40 passed)
+- ruby    8865a12  (ai_client_contract + ai_spec 59 examples, 0 fail; re-verified)
+- php     0c5ff4e  (AI contract 40 tests/162 assertions; re-verified)
 
-## Status: In Progress - Python done, porting to PHP/Ruby/Node
+## Status: Done - all 4 frameworks, gemini rides the OpenAI wire family, real no-mock
+## contract tests (default endpoint, bearer body, embeddings, missing-key negative,
+## streaming). Independently re-verified at HEAD per framework. Pure-socket tests, no
+## external Gemini call needed.
