@@ -1180,3 +1180,60 @@ def test_ai_agent_loop_provider_neutral_caller_code(ai_server, monkeypatch):
     text = "".join(e.text or "" for e in events2 if e.type == "text_delta")
     assert tool_output in text
     assert events2[-1].type == "done"
+
+
+# ── Gemini: rides the OpenAI wire family at Gemini's OpenAI-compatible base ──
+
+def test_ai_gemini_default_endpoint_is_openai_compatible(monkeypatch):
+    """Gemini's default base resolves to the OpenAI-compatible chat and embeddings
+    endpoints, so reaching Gemini needs no TINA4_AI_URL override."""
+    monkeypatch.delenv("TINA4_AI_MODEL", raising=False)
+    monkeypatch.setenv("TINA4_AI_KEY", "gem-key")
+    chat = Ai._config("chat", model=None, timeout=None, provider="gemini")
+    assert chat.url == "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    assert chat.model == "gemini-2.5-flash"
+    embed = Ai._config("embed", model=None, timeout=None, provider="gemini")
+    assert embed.url == "https://generativelanguage.googleapis.com/v1beta/openai/embeddings"
+
+
+def test_ai_gemini_chat_sends_openai_body_with_bearer(ai_server, monkeypatch):
+    server, base = ai_server
+    monkeypatch.setenv("TINA4_AI_PROVIDER", "gemini")
+    monkeypatch.setenv("TINA4_AI_KEY", "gem-key")
+    monkeypatch.setenv("TINA4_AI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setenv("TINA4_AI_URL", base + "/openai")
+    response = Ai.chat([{"role": "user", "content": "hello"}])
+    assert response.text == "hello world"
+    assert response.model == "gemini-2.5-flash"
+    sent = server.requests[-1]
+    assert sent["authorization"] == "Bearer gem-key"   # Gemini uses the OpenAI Bearer scheme
+    assert sent["x_api_key"] is None                    # not the Anthropic header
+    assert sent["body"]["model"] == "gemini-2.5-flash"
+    assert sent["body"]["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_ai_gemini_embeddings_are_supported(ai_server, monkeypatch):
+    """Unlike Anthropic, Gemini exposes embeddings on its OpenAI-compatible API."""
+    _server, base = ai_server
+    monkeypatch.setenv("TINA4_AI_PROVIDER", "gemini")
+    monkeypatch.setenv("TINA4_AI_KEY", "gem-key")
+    monkeypatch.setenv("TINA4_EMBED_URL", base + "/embeddings")
+    assert Ai.embed("hello") == [0.0, 0.25, 0.5]
+    assert Ai.embed(["one", "two"]) == [[0.0, 0.25, 0.5], [1.0, 0.25, 0.5]]
+
+
+def test_ai_gemini_requires_a_key(monkeypatch):
+    monkeypatch.setenv("TINA4_AI_PROVIDER", "gemini")   # clean_ai_env has removed TINA4_AI_KEY
+    with pytest.raises(AiConfigError, match="TINA4_AI_KEY is required"):
+        Ai.chat([{"role": "user", "content": "hello"}])
+
+
+def test_ai_gemini_streams_openai_style_deltas(ai_server, monkeypatch):
+    _server, base = ai_server
+    monkeypatch.setenv("TINA4_AI_PROVIDER", "gemini")
+    monkeypatch.setenv("TINA4_AI_KEY", "gem-key")
+    monkeypatch.setenv("TINA4_AI_URL", base + "/stream-openai")
+    events = list(Ai.chat([{"role": "user", "content": "hello"}], stream=True))
+    text = "".join(e.text or "" for e in events if e.type == "text_delta")
+    assert text == "hello world"
+    assert events[-1].type == "done"

@@ -98,7 +98,7 @@ class Ai:
     Explicit call options beat environment values, which beat defaults.
     """
 
-    _PROVIDERS = {"local", "openai", "anthropic"}
+    _PROVIDERS = {"local", "openai", "anthropic", "gemini"}
 
     @staticmethod
     def chat(
@@ -369,15 +369,19 @@ class Ai:
     def _config(capability: str, *, model: str | None, timeout: float | None, provider: str | None) -> _Config:
         selected = (provider or os.environ.get("TINA4_AI_PROVIDER") or "local").strip().lower()
         if selected not in Ai._PROVIDERS:
-            raise AiConfigError("TINA4_AI_PROVIDER must be local, openai, or anthropic")
+            raise AiConfigError("TINA4_AI_PROVIDER must be local, openai, anthropic, or gemini")
         key = os.environ.get("TINA4_AI_KEY") or None
-        if selected in {"openai", "anthropic"} and not key:
+        if selected in {"openai", "anthropic", "gemini"} and not key:
             raise AiConfigError(f"TINA4_AI_KEY is required for the {selected} provider")
 
         defaults = {
             "local": ("http://localhost:11437", "llama3.2"),
             "openai": ("https://api.openai.com/v1", "gpt-4o-mini"),
             "anthropic": ("https://api.anthropic.com/v1", "claude-3-5-haiku-latest"),
+            # Gemini speaks the OpenAI wire format at its OpenAI-compatible base, so it
+            # rides the openai body/parse/stream path - only the base URL, the endpoint
+            # suffix append, and the Bearer key differ.
+            "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash"),
         }
         base, default_model = defaults[selected]
         if capability == "embed" and os.environ.get("TINA4_EMBED_URL"):
@@ -408,8 +412,12 @@ class Ai:
             suffix = "/embeddings"
         else:
             suffix = "/chat/completions"
-        if path in {"", "/v1", "/api"}:
-            prefix = path or ("/v1" if provider in {"local", "openai"} else "/v1")
+        # "/v1beta/openai" is Gemini's OpenAI-compatible base; append the suffix onto
+        # it exactly as onto a bare host or "/v1", so the default gemini base resolves
+        # to .../v1beta/openai/chat/completions (or /embeddings). A full endpoint URL
+        # the caller supplies verbatim still passes through untouched.
+        if path in {"", "/v1", "/api", "/v1beta/openai"}:
+            prefix = path or "/v1"
             path = prefix + suffix
             parsed = parsed._replace(path=path)
             return parsed.geturl()
@@ -418,7 +426,7 @@ class Ai:
     @staticmethod
     def _headers(config: _Config) -> dict[str, str]:
         headers = {"content-type": "application/json", "accept": "application/json"}
-        if config.provider == "openai" and config.key:
+        if config.provider in {"openai", "gemini"} and config.key:
             headers["authorization"] = f"Bearer {config.key}"
         elif config.provider == "anthropic" and config.key:
             headers["x-api-key"] = config.key
