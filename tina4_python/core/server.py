@@ -2588,7 +2588,11 @@ def _stage_dev_toolbar_inject(ctx: DispatchContext) -> None:
     Best-effort: a toolbar that fails to render must never break the response
     it was decorating, so the whole thing is guarded.
     """
-    if not ctx.is_dev or not ctx.response.content_type:
+    if (
+        not ctx.is_dev 
+        or not ctx.response.content_type 
+        or ctx.response.status_code == 204
+    ):
         return None
     if "text/html" not in ctx.response.content_type:
         return None
