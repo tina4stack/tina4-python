@@ -9,6 +9,21 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.137
+
+Gemini joins the Ai client as a first-class provider. Set TINA4_AI_PROVIDER=gemini with a
+TINA4_AI_KEY and Ai.chat / Ai.embed reach Google Gemini through its OpenAI-compatible
+endpoint, with the same normalised responses, streaming, tool-use, retries and embeddings
+every other provider gets and no new dependency. Gemini rides the existing OpenAI wire
+family, so the whole provider is a thin alias: the base URL, the endpoint suffix, and the
+Bearer key.
+
+Web Push turns zero-dependency on the server. The RFC 8291 crypto now runs through the
+operating system's OpenSSL (libcrypto) by ctypes, so a Linux host sends push with nothing
+installed; a development Mac or Windows box falls back to the cryptography package. The wire
+output is identical either way, so a push signed on a laptop and one signed on the server
+are the same bytes.
+
 ## 3.13.136
 
 The AI skills learn to build to the user journeys. The tina4-architect skill now maps goals,
