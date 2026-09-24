@@ -18,6 +18,8 @@ TestClient dispatches a real ASGI scope whose socket peer is 127.0.0.1, so
 "is the peer trusted?" is controlled purely by listing (or not) that address.
 No mocks.
 """
+from urllib.parse import urlsplit
+
 import pytest
 
 from tina4_python.core.router import Router
@@ -47,7 +49,7 @@ class TestForwardedHostTrust:
         # No TINA4_TRUSTED_PROXIES: the header is attacker-controlled noise and
         # must not reach request.url.
         url = _probe(url_probe, "evil.com")
-        assert "evil.com" not in url, (
+        assert urlsplit(url).hostname != "evil.com", (
             f"forged X-Forwarded-Host leaked into request.url: {url}"
         )
 
@@ -56,7 +58,7 @@ class TestForwardedHostTrust:
         # the fix would break real deployments.
         monkeypatch.setenv("TINA4_TRUSTED_PROXIES", "127.0.0.1/8")
         url = _probe(url_probe, "app.example.com")
-        assert "app.example.com" in url, (
+        assert urlsplit(url).hostname == "app.example.com", (
             f"forwarded host not honoured behind a trusted proxy: {url}"
         )
 
