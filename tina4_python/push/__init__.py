@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ._base import BackendUnavailable
+from ..ssrf import guard_url, SsrfError, NoFollowRedirectHandler
 
 RECORD_SIZE = 4096
 MAX_PAYLOAD = RECORD_SIZE - 17
@@ -180,7 +181,12 @@ class Push:
 
     def __init__(self, subject: str | None = None, public_key: str | None = None,
                  private_key: str | None = None, ttl: int = 60,
-                 urgency: str | None = None):
+                 urgency: str | None = None,
+                 allow_hosts: list[str] | None = None):
+        # SSRF guard (ADR-0084): the push endpoint is refused when it resolves to
+        # a private/internal address unless TINA4_ALLOW_PRIVATE_REQUESTS is truthy
+        # or the host/CIDR is on this allow-list.
+        self.allow_hosts = list(allow_hosts) if allow_hosts else []
         self.subject = (subject or os.getenv("TINA4_VAPID_SUBJECT", "")).strip()
         self.public_key = (public_key or os.getenv("TINA4_VAPID_PUBLIC", "")).strip()
         self.private_key = (private_key or os.getenv("TINA4_VAPID_PRIVATE", "")).strip()
@@ -244,9 +250,16 @@ class Push:
         }
         if self.urgency:
             headers["Urgency"] = self.urgency
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            guard_url(endpoint, self.allow_hosts)
+        except SsrfError as exc:
+            raise PushError(str(exc)) from None
+        request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
+        # A real push service answers the POST directly; a redirect from a push
+        # endpoint is not followed to a private address (ADR-0084).
+        opener = urllib.request.build_opener(NoFollowRedirectHandler())
+        try:
+            with opener.open(request, timeout=30) as response:
                 status = int(response.status)
                 text = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
