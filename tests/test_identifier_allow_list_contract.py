@@ -210,6 +210,65 @@ def test_orm_save_writes_only_declared_fields(probe_db):
         database.commit()
 
 
+# ── G3. Database write helpers accept only identifier keys ───────────────────
+
+NON_IDENTIFIER_KEYS = ["na me", "na'me", 'na"me', "na]me", "na(me)", "na-me", "1name", ""]
+
+
+def test_db_write_helpers_reject_non_identifier_keys(probe_db):
+    engine, database = probe_db
+    table = f"wkeys_{uuid.uuid4().hex[:8]}"
+    database.execute(
+        f"CREATE TABLE {table} (id INTEGER NOT NULL PRIMARY KEY, name VARCHAR(50), cost$ INTEGER)"
+    )
+    database.commit()
+
+    def snapshot():
+        rows = database.fetch(f"SELECT id, name, cost$ FROM {table} ORDER BY id").records
+        return [tuple(value for _, value in sorted(
+            ((str(key).lower(), value) for key, value in row.items()))) for row in rows]
+
+    try:
+        # POSITIVE: plain identifiers (a '$' included) still write, in every form.
+        database.insert(table, {"id": 1, "name": "one", "cost$": 5})
+        database.insert(table, [
+            {"id": 2, "name": "two", "cost$": 6},
+            {"id": 3, "name": "three", "cost$": 7},
+        ])
+        database.update(table, {"name": "uno"}, {"id": 1})
+        database.update(table, {"id": 2, "name": "dos"})
+        database.delete(table, {"id": 3})
+        database.delete(table, [{"id": 99}])
+        database.commit()
+        before = snapshot()
+        # sorted by column name: cost$, id, name
+        assert before == [(5, 1, "uno"), (6, 2, "dos")], (engine, before)
+
+        # NEGATIVE: every helper, as a data key and as a filter-map key.
+        for key in NON_IDENTIFIER_KEYS:
+            attempts = {
+                "insert": lambda: database.insert(table, {"id": 50, key: 1}),
+                "insert-batch": lambda: database.insert(table, [{"id": 51, key: 1}]),
+                "update-data": lambda: database.update(table, {key: 1}, {"id": 1}),
+                "update-filter": lambda: database.update(table, {"name": "x"}, {key: 1}),
+                "delete": lambda: database.delete(table, {key: 1}),
+                "delete-batch": lambda: database.delete(table, [{key: 1}]),
+            }
+            for helper, attempt in attempts.items():
+                with pytest.raises(ValueError) as raised:
+                    attempt()
+                assert str(raised.value) == f"Invalid column name '{key}'", (
+                    engine, helper, key, str(raised.value),
+                )
+        assert snapshot() == before, engine
+    finally:
+        try:
+            database.execute(f"DROP TABLE {table}")
+            database.commit()
+        except Exception:  # noqa: BLE001 - teardown must never mask a failure
+            pass
+
+
 # ── C. DocStore field paths ──────────────────────────────────────────────────
 
 INVALID_PATH_MESSAGE = (
