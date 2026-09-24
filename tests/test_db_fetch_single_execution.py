@@ -50,13 +50,16 @@ def engine(request, tmp_path_factory):
     except Exception:  # noqa: BLE001 - first run
         db.rollback()
     if name == "mongodb":
+        # Seeded natively: execute_many is one atomic batch, and the lab's
+        # standalone MongoDB has no transactions (ADR-0044 DBA-P02).
         db.adapter._collection(table).delete_many({})
+        db.adapter._collection(table).insert_many([{"id": n, "label": f"row-{n}"} for n in range(1, 8)])
     else:
         db.execute(f"CREATE TABLE {table} (id INTEGER NOT NULL PRIMARY KEY, label VARCHAR(20))")
         db.commit()
-    db.execute_many(f"INSERT INTO {table} (id, label) VALUES (?, ?)",
-                    [[n, f"row-{n}"] for n in range(1, 8)])
-    db.commit()
+        db.execute_many(f"INSERT INTO {table} (id, label) VALUES (?, ?)",
+                        [[n, f"row-{n}"] for n in range(1, 8)])
+        db.commit()
     yield name, db
     try:
         db.execute(f"DROP TABLE {table}")
