@@ -113,11 +113,11 @@
     {
       "ecosystem": "pypi",
       "name": "click",
-      "version": "8.3.1",
+      "version": "8.5.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/click/8.3.1/json"
+      "evidence": "https://pypi.org/pypi/click/8.5.0/json"
     },
     {
       "ecosystem": "pypi",
