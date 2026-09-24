@@ -5,7 +5,9 @@ Zero-dependency ASGI application + built-in dev server.
     from tina4_python.core import run
     run()  # Starts on localhost:7146
 """
+import json
 import os
+import re
 import sys
 import signal
 import asyncio
@@ -22,9 +24,9 @@ from tina4_python.core.request import (
     PayloadTooLarge,
     TINA4_MAX_UPLOAD_SIZE,
 )
-from tina4_python.core.response import Response
+from tina4_python.core.response import Response, unsafe_header_reason
 from tina4_python.core.router import Router
-from tina4_python.core.middleware import CorsMiddleware, RateLimiter
+from tina4_python.core.middleware import CorsMiddleware, RateLimiter, SecurityHeadersMiddleware
 from tina4_python.debug import Log, set_request_id, get_request_id, sanitize_request_id, clear_request_id
 from tina4_python import __version__
 
@@ -793,9 +795,10 @@ _HTTP_REASON_PHRASES: dict[int, str] = {
     304: "Not Modified", 307: "Temporary Redirect", 308: "Permanent Redirect",
     400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
     404: "Not Found", 405: "Method Not Allowed", 406: "Not Acceptable",
+    408: "Request Timeout",
     409: "Conflict", 410: "Gone", 413: "Content Too Large",
     415: "Unsupported Media Type", 422: "Unprocessable Content",
-    429: "Too Many Requests",
+    429: "Too Many Requests", 431: "Request Header Fields Too Large",
     500: "Internal Server Error", 501: "Not Implemented",
     502: "Bad Gateway", 503: "Service Unavailable", 504: "Gateway Timeout",
 }
@@ -2854,32 +2857,241 @@ def asgi(root_dir: str = "src"):
     return app
 
 
+def _transport_rejection(status: int, message: str) -> tuple[list[tuple[bytes, bytes]], bytes]:
+    """Headers and body for a request the server refuses before any route runs.
+
+    One shape for every early refusal (ADR-0068): a compact JSON body, the
+    framing headers, and the same security headers a routed response carries
+    (SECHDR-DEC-01). No HSTS - the request's scheme is not known yet.
+    """
+    body = json.dumps({"error": message}, separators=(",", ":")).encode()
+    carrier = Response()
+    SecurityHeadersMiddleware.before_security(None, carrier)
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode()),
+        (b"connection", b"close"),
+    ]
+    headers += [(name.encode(), value.encode()) for name, value in carrier._headers]
+    return headers, body
+
+
+def _body_too_large_message(size: int, limit: int) -> str:
+    return f"Request body ({size} bytes) exceeds TINA4_MAX_UPLOAD_SIZE ({limit} bytes)"
+
+
 async def _send_payload_too_large(send, received: int, limit: int) -> None:
-    """Answer 413 for a body over TINA4_MAX_UPLOAD_SIZE.
+    """Answer 413 for a body over TINA4_MAX_UPLOAD_SIZE on the ASGI path.
 
     Written straight to the ASGI `send` rather than routed through the normal
     response path: the request never became a Request object, so there is no
-    route, no middleware and no session to run it through.
+    route, no middleware and no session to run it through. Same bytes as the
+    built-in server's refusal.
     """
-    import json
+    headers, body = _transport_rejection(413, _body_too_large_message(received, limit))
+    await send({"type": "http.response.start", "status": 413, "headers": headers})
+    await send({"type": "http.response.body", "body": body, "more_body": False})
 
-    payload = json.dumps(
-        {
-            "error": f"Request body ({received} bytes) exceeds "
-                     f"TINA4_MAX_UPLOAD_SIZE ({limit} bytes)"
-        }
-    ).encode("utf-8")
-    await send(
-        {
-            "type": "http.response.start",
-            "status": 413,
-            "headers": [
-                [b"content-type", b"application/json"],
-                [b"content-length", str(len(payload)).encode()],
-            ],
-        }
-    )
-    await send({"type": "http.response.body", "body": payload, "more_body": False})
+
+# ---------------------------------------------------------------------------
+# Built-in server: read one request without ever holding more than the limits
+# allow (ADR-0068). The server used to readexactly() whatever Content-Length the
+# client declared, before TINA4_MAX_UPLOAD_SIZE was checked anywhere.
+# ---------------------------------------------------------------------------
+
+_READ_SIZE = 65536
+_ASCII_DIGITS = re.compile(r"[0-9]+")
+_HEX_DIGITS = re.compile(rb"[0-9A-Fa-f]+")
+_BARE_CR_LF_NUL = re.compile(rb"[\r\n\x00]")
+
+
+def _resolve_limit(name: str, default: int, zero_allowed: bool = False) -> int:
+    """An integer limit from the environment; a bad value warns and uses the default."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        Log.warning(f"{name}={raw} is not a number - using {default}")
+        return default
+    if value < 0 or (value == 0 and not zero_allowed):
+        Log.warning(f"{name}={raw} is not a usable limit - using {default}")
+        return default
+    return value
+
+
+class _RequestRejected(Exception):
+    """A request the built-in server answers itself, before any route runs."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+class _ConnectionDone(Exception):
+    """The peer went away, or never said anything - there is nothing to answer."""
+
+
+def _declared_body_length(content_lengths: list[str], transfer_encodings: list[str],
+                          body_limit: int) -> int | None:
+    """The declared body length, or None for a chunked body.
+
+    Refuses framing the server cannot read unambiguously, and a declared length
+    over the cap before a single body byte is read.
+    """
+    if transfer_encodings:
+        codings = [c.strip().lower() for value in transfer_encodings
+                   for c in value.split(",") if c.strip()]
+        if content_lengths or codings != ["chunked"]:
+            raise _RequestRejected(400, "Invalid Transfer-Encoding")
+        return None
+    if not content_lengths:
+        return 0
+    if not all(_ASCII_DIGITS.fullmatch(value) for value in content_lengths) \
+            or len({int(value) for value in content_lengths}) != 1:
+        raise _RequestRejected(400, "Invalid Content-Length")
+    declared = int(content_lengths[0])
+    if declared > body_limit:
+        raise _RequestRejected(413, _body_too_large_message(declared, body_limit))
+    return declared
+
+
+class _BoundedRequestReader:
+    """Reads the head and body of one request in reads of at most 64KiB.
+
+    The head may not pass header_limit bytes (431), the body may not pass
+    body_limit bytes (413), and a client silent for idle_timeout seconds
+    partway through a request gets 408.
+    """
+
+    def __init__(self, reader, header_limit: int, body_limit: int, idle_timeout):
+        self.reader = reader
+        self.header_limit = header_limit
+        self.body_limit = body_limit
+        self.idle_timeout = idle_timeout
+        self.buffer = bytearray()
+        self.received_any = False
+
+    async def _fill(self, want: int = _READ_SIZE) -> None:
+        try:
+            data = await asyncio.wait_for(self.reader.read(min(want, _READ_SIZE)),
+                                          self.idle_timeout)
+        except asyncio.TimeoutError:
+            if self.received_any:
+                raise _RequestRejected(408, "Request timed out before it was complete")
+            raise _ConnectionDone()
+        except (ConnectionError, OSError):
+            raise _ConnectionDone()
+        if not data:
+            raise _ConnectionDone()
+        self.received_any = True
+        self.buffer += data
+
+    async def _take(self, count: int) -> bytes:
+        while len(self.buffer) < count:
+            await self._fill(count - len(self.buffer))
+        data = bytes(self.buffer[:count])
+        del self.buffer[:count]
+        return data
+
+    async def _line(self, limit: int, status: int, message: str) -> bytes:
+        while True:
+            end = self.buffer.find(b"\r\n")
+            if end != -1:
+                if end > limit:
+                    raise _RequestRejected(status, message)
+                line = bytes(self.buffer[:end])
+                del self.buffer[:end + 2]
+                return line
+            if len(self.buffer) > limit:
+                raise _RequestRejected(status, message)
+            await self._fill()
+
+    async def read_head(self) -> bytes:
+        """The request line and headers, without the blank line that ends them."""
+        too_large = (431, f"Request header fields exceed TINA4_MAX_REQUEST_HEADER "
+                          f"({self.header_limit} bytes)")
+        while True:
+            end = self.buffer.find(b"\r\n\r\n")
+            if end != -1:
+                if end + 4 > self.header_limit:
+                    raise _RequestRejected(*too_large)
+                head = bytes(self.buffer[:end])
+                del self.buffer[:end + 4]
+                return head
+            if len(self.buffer) > self.header_limit:
+                raise _RequestRejected(*too_large)
+            await self._fill()
+
+    async def read_body(self, declared: int | None) -> bytes:
+        if declared is not None:
+            return await self._take(declared)  # declared <= body_limit, checked already
+        chunks = []
+        received = 0
+        bad_framing = (400, "Invalid Transfer-Encoding")
+        while True:
+            size_text = (await self._line(self.header_limit, *bad_framing)).split(b";", 1)[0].strip()
+            if not _HEX_DIGITS.fullmatch(size_text):
+                raise _RequestRejected(*bad_framing)
+            size = int(size_text, 16)
+            if size == 0:
+                break
+            received += size
+            if received > self.body_limit:
+                raise _RequestRejected(413, _body_too_large_message(received, self.body_limit))
+            chunks.append(await self._take(size))
+            if await self._take(2) != b"\r\n":
+                raise _RequestRejected(*bad_framing)
+        while await self._line(self.header_limit, *bad_framing):
+            pass  # trailer fields are read and discarded
+        return b"".join(chunks)
+
+
+def _response_head(status: int, headers) -> bytes | None:
+    """The status line and header block, or None when a header is unsafe to write.
+
+    Defence in depth behind Response.header() (ADR-0068): anything that appended
+    to the header list directly still cannot put CR, LF or NUL on the wire.
+    """
+    lines = [f"HTTP/1.1 {status} {_http_reason(status)}\r\n".encode()]
+    for name, value in headers:
+        name_bytes = name if isinstance(name, bytes) else str(name).encode()
+        value_bytes = value if isinstance(value, bytes) else str(value).encode()
+        reason = unsafe_header_reason(name_bytes.decode("latin-1"), value_bytes.decode("latin-1"))
+        if reason:
+            Log.error(f"Refused to write a response header: {reason}")
+            return None
+        lines.append(name_bytes + b": " + value_bytes + b"\r\n")
+    lines.append(b"\r\n")
+    return b"".join(lines)
+
+
+def _rejection_bytes(status: int, message: str) -> bytes:
+    headers, body = _transport_rejection(status, message)
+    return _response_head(status, headers) + body
+
+
+async def _answer_and_linger(reader, writer, status: int, message: str) -> None:
+    """Write a transport rejection, then drain what the client is still sending.
+
+    Closing with unread bytes in the kernel buffer sends a reset, and the client
+    may lose the answer before reading it. So half-close, discard input for up
+    to two seconds (memory stays flat - nothing is kept), then close.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        writer.write(_rejection_bytes(status, message))
+        await writer.drain()
+        if writer.can_write_eof():
+            writer.write_eof()
+        deadline = loop.time() + 2
+        while (remaining := deadline - loop.time()) > 0:
+            if not await asyncio.wait_for(reader.read(_READ_SIZE), remaining):
+                break
+    except (asyncio.TimeoutError, ConnectionError, OSError):
+        pass
 
 
 def _strip_weak_etag_prefix(tag: str) -> str:
@@ -3952,58 +4164,75 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     async def _serve():
         from asyncio import start_server
 
+        header_limit = _resolve_limit("TINA4_MAX_REQUEST_HEADER", 65536)
+        idle_timeout = _resolve_limit("TINA4_REQUEST_TIMEOUT", 30, zero_allowed=True) or None
+
         async def _handle_connection(reader, writer):
             """Minimal HTTP/1.1 → ASGI bridge for dev server."""
             try:
-                raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=30)
-            except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
-                writer.close()
-                return
-
-            lines = raw.decode(errors="replace").split("\r\n")
-            if not lines:
-                writer.close()
-                return
-
-            # Parse request line
-            parts = lines[0].split(" ", 2)
-            if len(parts) < 2:
-                writer.close()
-                return
-
-            method = parts[0]
-            raw_path = parts[1]
-            path, _, qs = raw_path.partition("?")
-
-            # Parse headers
-            headers = []
-            content_length = 0
-            for line in lines[1:]:
-                if ":" in line:
-                    name, _, value = line.partition(":")
-                    name = name.strip().lower()
-                    value = value.strip()
-                    headers.append([name.encode(), value.encode()])
-                    if name == "content-length":
-                        content_length = int(value)
-
-            # Check for WebSocket upgrade before reading body
-            _header_dict = {k.decode(): v.decode() for k, v in headers}
-            if _header_dict.get("upgrade", "").lower() == "websocket":
-                if hasattr(writer, "_tina4_ai_port") and path == "/__dev_reload":
-                    writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
-                    await writer.drain()
+                await _serve_one_request(reader, writer)
+            finally:
+                # Every path out closes the socket - including the ones that
+                # used to raise past this handler and leak it.
+                if not writer.is_closing():
                     writer.close()
-                    return
-                await _handle_dev_websocket(reader, writer, _header_dict, path, qs)
-                return
 
-            # Read body
-            body = b""
-            if content_length > 0:
-                body = await asyncio.wait_for(
-                    reader.readexactly(content_length), timeout=30
-                )
+        async def _serve_one_request(reader, writer):
+            request_reader = _BoundedRequestReader(
+                reader, header_limit, TINA4_MAX_UPLOAD_SIZE, idle_timeout)
+            try:
+                raw = await request_reader.read_head()
+                # A bare CR, LF or NUL means the head does not split the way
+                # the client's other hops would split it. Refuse it.
+                if _BARE_CR_LF_NUL.search(raw.replace(b"\r\n", b"")):
+                    raise _RequestRejected(400, "Malformed request head")
+
+                lines = raw.decode(errors="replace").split("\r\n")
+                # Parse request line
+                parts = lines[0].split(" ", 2)
+                if len(parts) < 2:
+                    return
+
+                method = parts[0]
+                raw_path = parts[1]
+                path, _, qs = raw_path.partition("?")
+
+                # Parse headers
+                headers = []
+                content_lengths = []
+                transfer_encodings = []
+                for line in lines[1:]:
+                    if ":" in line:
+                        name, _, value = line.partition(":")
+                        name = name.strip().lower()
+                        value = value.strip()
+                        headers.append([name.encode(), value.encode()])
+                        if name == "content-length":
+                            content_lengths.append(value)
+                        elif name == "transfer-encoding":
+                            transfer_encodings.append(value)
+
+                # Check for WebSocket upgrade before reading body
+                _header_dict = {k.decode(): v.decode() for k, v in headers}
+                if _header_dict.get("upgrade", "").lower() == "websocket":
+                    if hasattr(writer, "_tina4_ai_port") and path == "/__dev_reload":
+                        writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                        await writer.drain()
+                        return
+                    await _handle_dev_websocket(reader, writer, _header_dict, path, qs)
+                    return
+
+                # The cap is enforced BEFORE and WHILE the body is read, never
+                # after: a declared length over it is refused unread, and every
+                # read is bounded.
+                declared = _declared_body_length(
+                    content_lengths, transfer_encodings, TINA4_MAX_UPLOAD_SIZE)
+                body = await request_reader.read_body(declared)
+            except _RequestRejected as rejected:
+                await _answer_and_linger(reader, writer, rejected.status, rejected.message)
+                return
+            except _ConnectionDone:
+                return
 
             # Build ASGI scope
             addr = writer.get_extra_info("peername") or ("127.0.0.1", 0)
@@ -4018,7 +4247,6 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             }
 
             # Capture response
-            resp_started = False
             resp_status = 200
             resp_headers = []
             resp_body = b""
@@ -4027,11 +4255,13 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                 return {"type": "http.request", "body": body, "more_body": False}
 
             _headers_sent = False
+            _refused = False
 
             async def send(msg):
-                nonlocal resp_started, resp_status, resp_headers, resp_body, _headers_sent
+                nonlocal resp_status, resp_headers, resp_body, _headers_sent, _refused
+                if _refused:
+                    return
                 if msg["type"] == "http.response.start":
-                    resp_started = True
                     resp_status = msg["status"]
                     resp_headers = msg.get("headers", [])
                 elif msg["type"] == "http.response.body":
@@ -4042,10 +4272,14 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                         # Streaming mode — flush headers on first chunk, then write each chunk immediately
                         if not _headers_sent:
                             _headers_sent = True
-                            writer.write(f"HTTP/1.1 {resp_status} {_http_reason(resp_status)}\r\n".encode())
-                            for name, value in resp_headers:
-                                writer.write(name + b": " + value + b"\r\n")
-                            writer.write(b"\r\n")
+                            head = _response_head(resp_status, resp_headers)
+                            if head is None:
+                                _refused = True
+                                writer.write(_rejection_bytes(500, "Invalid response header"))
+                                await writer.drain()
+                                writer.close()
+                                return
+                            writer.write(head)
                             await writer.drain()
 
                         if chunk:
@@ -4062,14 +4296,12 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
             # Write HTTP/1.1 response (only if headers weren't already sent by streaming)
             if not _headers_sent:
-                status_line = f"HTTP/1.1 {resp_status} {_http_reason(resp_status)}\r\n"
-                writer.write(status_line.encode())
-                for name, value in resp_headers:
-                    writer.write(name + b": " + value + b"\r\n")
-                writer.write(b"\r\n")
-                writer.write(resp_body)
+                head = _response_head(resp_status, resp_headers)
+                if head is None:
+                    writer.write(_rejection_bytes(500, "Invalid response header"))
+                else:
+                    writer.write(head + resp_body)
                 await writer.drain()
-                writer.close()
 
         server = await start_server(_handle_connection, host, port)
 

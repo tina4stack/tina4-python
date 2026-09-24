@@ -19,7 +19,40 @@ import json
 import gzip
 import hashlib
 import mimetypes
+import re
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Header and cookie safety (ADR-0068)
+# ---------------------------------------------------------------------------
+# A header name is an RFC 9110 token. A value may carry anything except CR, LF
+# and NUL: those end the header line early on the wire, so a value built from
+# user input could start a header the application never set. The value is
+# REFUSED, never stripped: a quietly repaired header hides the bug that made it.
+# The wording matches Node, whose http.setHeader already throws on these.
+_HTTP_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+_UNSAFE_IN_HEADER = re.compile(r"[\r\n\x00]")
+# A cookie value or attribute also ends at ";" - one more attribute otherwise.
+_UNSAFE_IN_COOKIE = re.compile(r"[\r\n\x00;]")
+
+
+def unsafe_header_reason(name, value) -> str | None:
+    """The ADR-0068 message for a header that must not be written, else None."""
+    if not isinstance(name, str) or not _HTTP_TOKEN.fullmatch(name):
+        return f"Header name must be a valid HTTP token [{json.dumps(str(name))}]"
+    if _UNSAFE_IN_HEADER.search(value):
+        return f"Invalid character in header content [{json.dumps(name)}]"
+    return None
+
+
+def _checked_header_value(name, value) -> str:
+    """Return the value as a string, or raise ValueError naming the header."""
+    value = value if isinstance(value, str) else str(value)
+    reason = unsafe_header_reason(name, value)
+    if reason:
+        raise ValueError(reason)
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +166,7 @@ class Response:
         # for each entry, but lets call sites stay on a single expression.
         if headers:
             for k, v in headers.items():
-                self._headers.append((k, v))
+                self.header(k, v)
 
         # Normalise ORM models / collections / query results so handlers can
         # `return response(model)` without serialising by hand.
@@ -141,7 +174,7 @@ class Response:
 
         if content_type:
             # Explicit content type provided
-            self.content_type = content_type
+            self.content_type = _checked_header_value("Content-Type", content_type)
             if isinstance(data, (dict, list)):
                 self.content = json.dumps(data, default=str, separators=(",", ":")).encode()
             elif isinstance(data, str):
@@ -181,8 +214,13 @@ class Response:
         return self
 
     def header(self, name: str, value: str) -> "Response":
-        """Add a response header (chainable)."""
-        self._headers.append((name, value))
+        """Add a response header (chainable).
+
+        Raises ValueError when the name is not an HTTP token or the value
+        contains CR, LF or NUL (ADR-0068) - validate user input before it
+        reaches a header.
+        """
+        self._headers.append((name, _checked_header_value(name, value)))
         return self
 
     def add_header(self, name: str, value: str) -> "Response":
@@ -203,7 +241,12 @@ class Response:
 
         When ``options`` is a dict, its values become the defaults; any
         explicit kwarg passed afterwards overrides individual entries.
+
+        Raises ValueError when the name is not an HTTP token, or when the value
+        or an attribute contains CR, LF, NUL or ";" (ADR-0068).
         """
+        if not isinstance(name, str) or not _HTTP_TOKEN.fullmatch(name):
+            raise ValueError(f"Cookie name must be a valid HTTP token [{json.dumps(str(name))}]")
         # Defaults
         _path = "/"
         _max_age = 3600
@@ -225,6 +268,10 @@ class Response:
         if http_only is not None: _http_only = http_only
         if secure    is not None: _secure = secure
         if same_site is not None: _same_site = same_site
+
+        for part in (value, _path, _max_age, _same_site):
+            if _UNSAFE_IN_COOKIE.search(str(part)):
+                raise ValueError(f"Invalid character in cookie content [{json.dumps(name)}]")
 
         parts = [f"{name}={value}", f"Path={_path}", f"Max-Age={_max_age}",
                  f"SameSite={_same_site}"]
@@ -252,7 +299,7 @@ class Response:
         """
         self._is_streaming = True
         self._stream_source = source
-        self.content_type = content_type
+        self.content_type = _checked_header_value("Content-Type", content_type)
         if content_type == "text/event-stream":
             self._headers.append(("Cache-Control", "no-cache"))
             self._headers.append(("Connection", "keep-alive"))
@@ -301,9 +348,10 @@ class Response:
 
     def redirect(self, url: str, status_code: int = 302) -> "Response":
         """HTTP redirect."""
+        location = _checked_header_value("Location", url)
         self.status_code = status_code
         self.content = b""
-        self._headers.append(("location", url))
+        self._headers.append(("location", location))
         return self
 
     def file(self, file_path: str, download_name: str = None, root: str = None) -> "Response":
@@ -409,9 +457,11 @@ class Response:
         self.content = path.read_bytes()
 
         if download_name:
-            self._headers.append(
-                ("content-disposition", f'attachment; filename="{download_name}"')
-            )
+            self._headers.append((
+                "content-disposition",
+                _checked_header_value("Content-Disposition",
+                                      f'attachment; filename="{download_name}"'),
+            ))
         return self
 
     def render(self, template: str, data: dict = None, status_code: int = None) -> "Response":
@@ -464,7 +514,7 @@ class Response:
                 return self.__call__(data, status_code or 200)
             if isinstance(data, str):
                 if content_type:
-                    self.content_type = content_type
+                    self.content_type = _checked_header_value("Content-Type", content_type)
                 self.content = data.encode()
                 if status_code:
                     self.status_code = status_code
