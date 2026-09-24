@@ -11,6 +11,8 @@ authority for shipped versions.
 
 ## 3.13.138
 
+HTTP clients strip configured-origin Authorization and Cookie credentials from off-origin initial targets across normal, upload, download and streaming paths. Forwarded Host and Proto require a trusted raw transport peer. Every development HTTP method uses the peer, Host and Origin boundary; resolved file paths and database identifiers are confined. Remote non-MCP development routes require the dedicated token while the accepted MCP transport API_KEY fallback remains supported. Development file readers validate and read one descriptor, preserving public in-project symlinks and existing size behavior.
+
 Development credential files are owner-only and refuse symbolic or hard-linked targets.
 MQTT explicitly requires TLS 1.2 or newer. Development and benchmark dependencies
 are updated to patched versions; the framework still has no required runtime dependencies.
