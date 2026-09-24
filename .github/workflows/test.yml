@@ -190,11 +190,12 @@ jobs:
       # localhost:9100). S3 is an always-provisioned service under the ADR-0069
       # gate, so an unreachable MinIO fails the run instead of skipping green.
       # GHA services can't pass `server /data`, so run it as a plain container.
+      # Docker Hub no longer serves minio/minio; quay.io is MinIO's own registry.
       - name: Start MinIO (S3 on 9100)
         run: |
           docker run -d --name tina4-minio -p 9100:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            minio/minio server /data
+            quay.io/minio/minio server /data
           for i in $(seq 1 30); do
             curl -sf http://localhost:9100/minio/health/live && exit 0
             sleep 2
