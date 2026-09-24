@@ -47,7 +47,7 @@ def _pg_reachable() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _pg_reachable(), reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT} (skip)")
+pytestmark = pytest.mark.skipif(not _pg_reachable(), reason=f"[needs:postgres] PostgreSQL not reachable at {PG_HOST}:{PG_PORT} (skip)")
 
 
 class CreateTableWidget(ORM):

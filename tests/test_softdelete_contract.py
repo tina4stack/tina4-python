@@ -68,7 +68,7 @@ def _engine(engine):
         db = Database(f"sqlite:///{path}")
     elif engine == "postgres":
         if not _reachable(_PG["host"], _PG["port"]):
-            pytest.skip(f"postgres unreachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)")
+            pytest.skip(f"[needs:postgres] postgres unreachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)")
         db = Database(f"postgres://{_PG['host']}:{_PG['port']}/{_PG['db']}", _PG["user"], _PG["pwd"])
     else:  # pragma: no cover - guard
         raise AssertionError(engine)

@@ -212,7 +212,7 @@ class TestConnectionURLAdapterSelection:
         db.password = ""
         assert db._create_adapter().__class__ is FirebirdAdapter
 
-    @pytest.mark.skipif(not _pg_reachable(), reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT}")
+    @pytest.mark.skipif(not _pg_reachable(), reason=f"[needs:postgres] PostgreSQL not reachable at {PG_HOST}:{PG_PORT}")
     def test_postgresql_url_connects_live(self):
         """A real PostgreSQL URL connects and the live adapter reports its type."""
         db = Database(_pg_url())
@@ -576,7 +576,7 @@ def _has_firebird_driver():
 
 @pytest.mark.skipif(
     not (_has_psycopg2() and _pg_reachable()),
-    reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT} (or psycopg2 missing)",
+    reason=f"[needs:postgres] PostgreSQL not reachable at {PG_HOST}:{PG_PORT} (or psycopg2 missing)",
 )
 class TestPostgreSQLLive:
     """Live PostgreSQL round-trips against the provisioned container.
@@ -668,7 +668,7 @@ class TestPostgreSQLLive:
 
 @pytest.mark.skipif(
     not (_has_mysql_connector() and _mysql_reachable()),
-    reason=f"MySQL not reachable at {MYSQL_HOST}:{MYSQL_PORT} (or mysql-connector-python not installed)",
+    reason=f"[needs:mysql] MySQL not reachable at {MYSQL_HOST}:{MYSQL_PORT} (or mysql-connector-python not installed)",
 )
 class TestMySQLLive:
     """Live MySQL round-trips against the provisioned container (#262).
@@ -713,7 +713,7 @@ class TestMySQLLive:
 
 @pytest.mark.skipif(
     not (_has_pymssql() and _mssql_reachable()),
-    reason=f"MSSQL not reachable at {MSSQL_HOST}:{MSSQL_PORT} (or pymssql not installed)",
+    reason=f"[needs:mssql] MSSQL not reachable at {MSSQL_HOST}:{MSSQL_PORT} (or pymssql not installed)",
 )
 class TestMSSQLLive:
     """Live MSSQL round-trips against the provisioned container (#262).
@@ -772,7 +772,7 @@ class TestMSSQLLive:
 
 @pytest.mark.skipif(
     not _has_firebird_driver(),
-    reason="neither firebird-driver nor fdb installed",
+    reason="[needs:firebird] neither firebird-driver nor fdb installed",
 )
 class TestFirebirdLive:
     """Live Firebird tests — require a running Firebird instance.
@@ -785,7 +785,7 @@ class TestFirebirdLive:
         import os
         url = os.environ.get("TINA4_TEST_FIREBIRD_URL")
         if not url:
-            pytest.skip("TINA4_TEST_FIREBIRD_URL not set")
+            pytest.skip("[needs:firebird] TINA4_TEST_FIREBIRD_URL not set")
         d = Database(url)
         yield d
         d.close()

@@ -17,7 +17,7 @@ import time
 import weakref
 from urllib.parse import urlparse
 from tina4_python.database.database_url import DatabaseUrl, redact_url
-from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult
+from tina4_python.database.adapter import DatabaseAdapter, DatabaseResult, column_key
 
 
 def _connect_or_explain(adapter: DatabaseAdapter, path: str,
@@ -857,7 +857,7 @@ class Database:
             if not filter_sql:
                 return "", []
             where = " AND ".join(
-                f"{self.quote_identifier(k)} = ?" for k in filter_sql
+                f"{self.quote_identifier(column_key(k))} = ?" for k in filter_sql
             )
             return where, list(filter_sql.values())
         return filter_sql, params or []

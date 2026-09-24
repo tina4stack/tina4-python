@@ -190,19 +190,19 @@ def _reachable(host, port) -> bool:
 
 needs_pg = pytest.mark.skipif(
     not _reachable(_PG["host"], _PG["port"]),
-    reason=f"PostgreSQL not reachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)",
+    reason=f"[needs:postgres] PostgreSQL not reachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)",
 )
 needs_mysql = pytest.mark.skipif(
     not _reachable(_MYSQL["host"], _MYSQL["port"]),
-    reason=f"MySQL not reachable at {_MYSQL['host']}:{_MYSQL['port']} (set TINA4_TEST_MYSQL_*)",
+    reason=f"[needs:mysql] MySQL not reachable at {_MYSQL['host']}:{_MYSQL['port']} (set TINA4_TEST_MYSQL_*)",
 )
 needs_mssql = pytest.mark.skipif(
     not _reachable(_MSSQL["host"], _MSSQL["port"]),
-    reason=f"MSSQL not reachable at {_MSSQL['host']}:{_MSSQL['port']} (set TINA4_TEST_MSSQL_*)",
+    reason=f"[needs:mssql] MSSQL not reachable at {_MSSQL['host']}:{_MSSQL['port']} (set TINA4_TEST_MSSQL_*)",
 )
 needs_firebird = pytest.mark.skipif(
     not _FIREBIRD_URL,
-    reason="TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)",
+    reason="[needs:firebird] TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)",
 )
 
 

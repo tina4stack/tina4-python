@@ -1,44 +1,41 @@
-"""Regression suite for the TINA4_REQUIRE_SERVICES skip gate (tests/conftest.py).
+"""The TINA4_REQUIRE_SERVICES skip gate (tests/conftest.py), tested for real.
 
-THE DEFECT, measured 2026-08-06 on the lab (Ubuntu 24.04.4 LTS x86_64,
-Python 3.13.3, live MinIO container tina4-lab-minio on 9100):
+THE RULE (ADR-0069 addendum F, identical in all four frameworks). Under
+TINA4_REQUIRE_SERVICES=1 a skip passes only when its reason carries a
+``[needs:X]`` tag AND X is excusable in this run: an optional engine only while
+its coordinate env var is unset, an always-provisioned service never, any other
+X (a platform exclusion) always. An untagged skip fails. With the gate off, a
+skip is a skip.
 
-``uv sync --extra X`` PRUNES every package outside the named extras, and boto3
-was declared in NO extra at all. It happened to be installed ad hoc, so the two
-REAL-MinIO tests in tests/test_realtime_files.py were passing -- 9 passed, 0
-skipped. Running ``uv sync --extra test`` removed boto3 (plus s3transfer and
-jmespath) and the same file reported 7 passed, 2 skipped. The run stayed GREEN
-even with TINA4_REQUIRE_SERVICES=1, because the old merged skip reason
+WHY. The gate used to match phrases: a service keyword AND an "unavailable"
+hint. Every skip worded outside those lists skipped green. MEASURED 2026-08-06
+on the lab: the merged live-S3 reason "needs a real MinIO on localhost:9100 and
+boto3 (real S3, never mocked)" matched neither list, so removing boto3 silently
+turned two real-MinIO tests into skips under a green run. Firebird, ODBC, MinIO
+and the graph engines were deliberately left out of the keywords, so their
+skips were green by design. An explicit tag closes all of those at once: a
+skip has to say what it needs, and the gate decides from the run's own env.
 
-    "needs a real MinIO on localhost:9100 and boto3 (real S3, never mocked)"
+boto3 is still declared in the pyproject `test` extra (the other half of the
+2026-08-06 fix), and that declaration is pinned below.
 
-matched NEITHER a service keyword NOR an unavailable hint in the gate. Live S3
-coverage evaporated in silence, which is precisely what this gate exists to
-prevent.
-
-THE FIX has two halves, and each is pinned below:
-  1. boto3 is declared in the pyproject `test` extra, so a sync installs it.
-  2. The gate recognises a missing boto3, so if it ever goes away again the run
-     goes RED instead of quietly dropping the coverage.
-
-WHY MinIO ITSELF IS NOT IN THE GATE. MinIO is not provisioned by
-.github/workflows/test.yml and has no entry in the shared
-tests/fixtures/test_env_contract.json, so -- exactly like Firebird -- an
-unreachable-MinIO skip is honest and must stay green. That asymmetry is the
-whole reason test_realtime_files.py reports the missing CLIENT and the
-unreachable SERVICE as two separate strings: a single merged reason would carry
-the "boto3" keyword even when the real cause was an absent MinIO, turning every
-MinIO-less CI run red for no reason.
-
-These are pure-function tests over the gate's own predicate and over the
-declared pyproject extras. No service, no dependency, no test double.
+The gate cases run a REAL pytest in a child process against a throwaway project
+whose conftest.py is a byte-for-byte copy of tests/conftest.py, so the gate
+under test is the one the suite uses. No doubles.
 """
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
 import tomllib
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 
 import pytest
 
-from conftest import _is_provisioned_service_skip, _truthy
+from conftest import _skip_is_excused, _truthy
 from test_realtime_files import BOTO3_MISSING_REASON, MINIO_UNREACHABLE_REASON
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
@@ -57,89 +54,71 @@ def _declares(extra: str, package: str) -> bool:
     )
 
 
-# ── The gate classifies the two S3 reasons differently ──────────────
+# ── The predicate ──────────────────────────────────────────────────
 
-class TestS3SkipClassification:
-    """The exact strings test_realtime_files.py emits, not copies of them.
-
-    Importing the real constants is the point: a reworded reason that drifts out
-    of the gate's vocabulary fails here instead of silently going undetected for
-    another few releases.
-    """
-
-    def test_missing_boto3_skip_fails_the_gate(self):
-        # POSITIVE: boto3 is a DECLARED client, so its absence is always a
-        # defect and must turn the run red under TINA4_REQUIRE_SERVICES.
-        assert _is_provisioned_service_skip(BOTO3_MISSING_REASON) is True
-
-    def test_unreachable_minio_skip_stays_green(self):
-        # NEGATIVE: MinIO is not provisioned in CI and is absent from the shared
-        # env contract, so this skip is honest. Adding "minio" to the gate's
-        # keywords would fail every CI run and would be caught right here.
-        assert _is_provisioned_service_skip(MINIO_UNREACHABLE_REASON) is False
-
-    def test_the_two_reasons_are_never_merged(self):
-        # A merged reason carries the boto3 keyword even when MinIO is the real
-        # cause. Keeping them distinct is what makes the gate honest, so pin it.
-        assert BOTO3_MISSING_REASON != MINIO_UNREACHABLE_REASON
-        assert "boto3" not in MINIO_UNREACHABLE_REASON.lower()
-        assert "minio" not in BOTO3_MISSING_REASON.lower()
-
-    def test_the_original_merged_reason_was_invisible_to_the_gate(self):
-        # The historical string, kept verbatim as the record of the defect: it
-        # named a service and a client but used none of the gate's vocabulary,
-        # so it was classified as an ordinary skip and the suite reported green.
-        # This is why every real-service skip reason must say "not installed" /
-        # "not reachable" rather than "needs a ...".
-        original = "needs a real MinIO on localhost:9100 and boto3 (real S3, never mocked)"
-        assert _is_provisioned_service_skip(original) is False
+NO_COORDINATES: dict = {}
+ALL_COORDINATES = {
+    "TINA4_TEST_FIREBIRD_URL": "firebird://localhost/db",
+    "TINA4_TEST_PG_URL": "postgres://localhost/db",
+    "TINA4_TEST_POSTGIS_URL": "postgres://localhost:55433/db",
+    "TINA4_TEST_MYSQL_URL": "mysql://localhost/db",
+    "TINA4_TEST_MSSQL_URL": "mssql://localhost/db",
+    "TINA4_TEST_OIDC_ISSUER": "http://localhost/realm",
+    "TINA4_TEST_NEO4J_URL": "bolt://localhost:7687",
+}
 
 
-# ── Genuinely-unprovisioned skips must keep passing ─────────────────
+class TestSkipPredicate:
+    @pytest.mark.parametrize("reason", [
+        "[needs:os=posix] fork is POSIX-only",
+        "four-slash form is POSIX-shaped [needs:os=posix]",
+        "[needs:no-dac-override] root writes through a 0400 file",
+        "[needs:runtime=ipv6-loopback] no ::1 here",
+    ])
+    def test_a_platform_tag_is_always_excused(self, reason):
+        assert _skip_is_excused(reason, NO_COORDINATES) is True
+        assert _skip_is_excused(reason, ALL_COORDINATES) is True
 
-class TestUnprovisionedSkipsStayGreen:
-    """Guards the gate against over-broad keywords.
+    @pytest.mark.parametrize("tag, coordinate", [
+        ("firebird", "TINA4_TEST_FIREBIRD_URL"),
+        ("postgres", "TINA4_TEST_PG_URL"),
+        ("postgis", "TINA4_TEST_POSTGIS_URL"),
+        ("mysql", "TINA4_TEST_MYSQL_URL"),
+        ("mssql", "TINA4_TEST_MSSQL_URL"),
+        ("oidc", "TINA4_TEST_OIDC_ISSUER"),
+        ("neo4j", "TINA4_TEST_NEO4J_URL"),
+    ])
+    def test_an_optional_engine_is_excused_only_while_its_coordinate_is_unset(self, tag, coordinate):
+        reason = f"[needs:{tag}] not reachable"
+        assert _skip_is_excused(reason, NO_COORDINATES) is True
+        assert _skip_is_excused(reason, {coordinate: "set"}) is False
+        # An empty value counts as unset.
+        assert _skip_is_excused(reason, {coordinate: "  "}) is True
 
-    Adding a short token like "s3" would match "pymssql" nowhere but would make
-    future reasons ambiguous; these cases fail the moment the keyword list grows
-    teeth it should not have.
-    """
+    @pytest.mark.parametrize("tag", [
+        "mongo", "redis", "valkey", "memcached", "rabbitmq", "kafka", "mqtt", "smtp", "imap", "s3",
+    ])
+    def test_an_always_provisioned_service_is_never_excused(self, tag):
+        assert _skip_is_excused(f"[needs:{tag}] down", NO_COORDINATES) is False
 
     @pytest.mark.parametrize("reason", [
+        BOTO3_MISSING_REASON,
+        MINIO_UNREACHABLE_REASON,
+        # The historical merged reason that the old phrase matcher missed.
+        "needs a real MinIO on localhost:9100 and boto3 (real S3, never mocked)",
         "Firebird not reachable at localhost:3050",
-        "firebird-driver not installed",
-        "pyodbc not installed",
-        "ODBC driver not available",
+        "no reachable MongoDB at mongodb://localhost:27017",
+        "only runs on Windows",
+        "[needs:] empty tag",
+        "[needs: spaced] tag with a space",
+        "",
+        None,
     ])
-    def test_unprovisioned_service_skip_is_not_a_failure(self, reason):
-        assert _is_provisioned_service_skip(reason) is False
+    def test_an_untagged_reason_is_never_excused(self, reason):
+        assert _skip_is_excused(reason, NO_COORDINATES) is False
 
-
-class TestProvisionedSkipsAreCaught:
-    """The provisioned set must stay caught -- this is the gate's day job."""
-
-    @pytest.mark.parametrize("reason", [
-        "PostgreSQL not reachable at localhost:55432",
-        "pika not installed",
-        "pymemcache not installed",
-        "confluent-kafka not installed",
-        "MongoDB not reachable at localhost:27017",
-        "GreenMail SMTP not reachable at localhost:3025",
-        "boto3 not installed",
-    ])
-    def test_provisioned_service_skip_is_a_failure(self, reason):
-        assert _is_provisioned_service_skip(reason) is True
-
-    def test_a_skip_with_no_service_at_all_is_not_a_failure(self):
-        # NEGATIVE: an ordinary conditional skip must never be upgraded.
-        assert _is_provisioned_service_skip("only runs on Windows") is False
-        assert _is_provisioned_service_skip("") is False
-        assert _is_provisioned_service_skip(None) is False
-
-    def test_a_service_named_without_an_unavailable_hint_is_not_a_failure(self):
-        # Both halves are required: naming a service is not enough, or a test
-        # that merely mentions Postgres in a skip reason would fail the run.
-        assert _is_provisioned_service_skip("postgres tests are slow here") is False
+    def test_every_tag_on_a_reason_must_be_excused(self):
+        assert _skip_is_excused("[needs:os=posix] [needs:mongo]", NO_COORDINATES) is False
 
 
 # ── boto3 is actually declared, so a sync installs it ───────────────
@@ -174,10 +153,171 @@ class TestBoto3IsDeclared:
             assert _declares("test", package), f"{package} dropped from the test extra"
 
 
-def test_the_gate_is_inert_unless_the_env_var_is_set():
+def test_the_env_var_is_read_as_a_boolean():
     # The gate must not fire on a developer laptop that never opted in.
     assert _truthy("1") is True
     assert _truthy("true") is True
     assert _truthy("") is False
     assert _truthy(None) is False
     assert _truthy("0") is False
+
+
+# ── The gate itself, in a real pytest run ───────────────────────────
+
+CONFTEST = Path(__file__).with_name("conftest.py")
+
+SAMPLE_TESTS = '''
+import pytest
+
+
+def test_passes():
+    assert True
+
+
+def test_untagged_skip():
+    pytest.skip("some service is down")
+
+
+@pytest.mark.skipif(True, reason="phrased without any known keyword")
+def test_untagged_skipif():
+    pass
+
+
+def test_platform_skip():
+    pytest.skip("[needs:os=posix] this platform has no fork")
+
+
+@pytest.mark.skipif(True, reason="[needs:os=posix] Windows uses drive letters")
+def test_platform_skipif():
+    pass
+
+
+def test_optional_engine_skip():
+    pytest.skip("[needs:firebird] Firebird not reachable")
+
+
+def test_always_service_skip():
+    pytest.skip("[needs:mongo] MongoDB not reachable")
+
+
+@pytest.mark.xfail(reason="documented known failure", strict=True)
+def test_expected_failure():
+    assert False
+'''
+
+MODULE_LEVEL_UNTAGGED = '''
+import pytest
+pytest.skip("module service is down", allow_module_level=True)
+
+
+def test_never_runs():
+    pass
+'''
+
+MODULE_LEVEL_PLATFORM = '''
+import pytest
+pytest.skip("[needs:os=posix] no lsof here", allow_module_level=True)
+
+
+def test_never_runs():
+    pass
+'''
+
+
+def _run(tmp_path: Path, gate_on: bool, firebird_url: str = "") -> dict[str, str]:
+    """Run the sample project; map each test (or skipped module) to its outcome."""
+    project = tmp_path / "project"
+    project.mkdir()
+    shutil.copyfile(CONFTEST, project / "conftest.py")
+    (project / "test_sample.py").write_text(SAMPLE_TESTS)
+    (project / "test_module_untagged.py").write_text(MODULE_LEVEL_UNTAGGED)
+    (project / "test_module_platform.py").write_text(MODULE_LEVEL_PLATFORM)
+    report = project / "report.xml"
+
+    env = {**os.environ, "TINA4_NO_BROWSER": "true", "TINA4_TEST_FIREBIRD_URL": firebird_url}
+    env.pop("TINA4_REQUIRE_SERVICES", None)
+    if gate_on:
+        env["TINA4_REQUIRE_SERVICES"] = "1"
+    subprocess.run(
+        [
+            sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q",
+            "--rootdir", str(project), f"--junitxml={report}", str(project),
+        ],
+        cwd=project, env=env, capture_output=True, text=True, timeout=120,
+    )
+
+    outcomes = {}
+    for case in ElementTree.parse(report).getroot().iter("testcase"):
+        if case.find("failure") is not None:
+            outcome = "failed"
+        elif case.find("error") is not None:
+            # A skipif fires in setup and a module skip at collection; the
+            # gate's failure is reported as an error there.
+            outcome = "failed"
+        elif case.find("skipped") is not None:
+            skipped = case.find("skipped")
+            outcome = "xfailed" if skipped.get("type") == "pytest.xfail" else "skipped"
+        else:
+            outcome = "passed"
+        # A module skipped at collection is reported under the module's name.
+        outcomes[case.get("name")] = outcome
+    return outcomes
+
+
+@pytest.fixture(scope="module")
+def gate_on(tmp_path_factory):
+    return _run(tmp_path_factory.mktemp("gate_on"), gate_on=True)
+
+
+@pytest.fixture(scope="module")
+def gate_on_with_firebird_promised(tmp_path_factory):
+    return _run(
+        tmp_path_factory.mktemp("gate_fb"), gate_on=True,
+        firebird_url="firebird://SYSDBA:masterkey@localhost:3050//tmp/x.fdb",
+    )
+
+
+@pytest.fixture(scope="module")
+def gate_off(tmp_path_factory):
+    return _run(tmp_path_factory.mktemp("gate_off"), gate_on=False)
+
+
+def test_an_untagged_skip_fails_under_the_gate(gate_on):
+    assert gate_on["test_untagged_skip"] == "failed", gate_on
+    assert gate_on["test_untagged_skipif"] == "failed", gate_on
+    assert gate_on["test_module_untagged"] == "failed", gate_on
+
+
+def test_a_platform_tag_is_excused_under_the_gate(gate_on):
+    assert gate_on["test_platform_skip"] == "skipped", gate_on
+    assert gate_on["test_platform_skipif"] == "skipped", gate_on
+    assert gate_on["test_module_platform"] == "skipped", gate_on
+
+
+def test_an_optional_engine_is_excused_only_while_its_coordinate_is_unset(
+    gate_on, gate_on_with_firebird_promised,
+):
+    assert gate_on["test_optional_engine_skip"] == "skipped", gate_on
+    assert gate_on_with_firebird_promised["test_optional_engine_skip"] == "failed", (
+        gate_on_with_firebird_promised
+    )
+
+
+def test_an_always_provisioned_service_is_never_excused(gate_on):
+    assert gate_on["test_always_service_skip"] == "failed", gate_on
+
+
+def test_the_gate_leaves_passes_and_xfails_alone(gate_on):
+    assert gate_on["test_passes"] == "passed", gate_on
+    assert gate_on["test_expected_failure"] == "xfailed", gate_on
+
+
+def test_gate_off_keeps_the_old_skip_behaviour(gate_off):
+    for name in (
+        "test_untagged_skip", "test_untagged_skipif", "test_platform_skip",
+        "test_platform_skipif", "test_optional_engine_skip", "test_always_service_skip",
+        "test_module_untagged", "test_module_platform",
+    ):
+        assert gate_off[name] == "skipped", (name, gate_off)
+    assert gate_off["test_passes"] == "passed", gate_off
+    assert gate_off["test_expected_failure"] == "xfailed", gate_off

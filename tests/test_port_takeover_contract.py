@@ -35,7 +35,7 @@ from tina4_python.core.port_takeover import (
 )
 
 pytestmark = pytest.mark.skipif(
-    sys.platform == "win32", reason="POSIX lsof/SIGTERM takeover; the lab + dev are POSIX"
+    sys.platform == "win32", reason="[needs:os=posix] POSIX lsof/SIGTERM takeover; the lab + dev are POSIX"
 )
 
 # A child that binds a real port and (for the Tina4 case) writes the real PID

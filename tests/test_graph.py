@@ -54,7 +54,7 @@ def _live_engines():
             live.append(pytest.param(name, id=name))
         else:
             live.append(pytest.param(name, marks=pytest.mark.skip(
-                reason=f"{name} not configured/reachable ({cfg['env']})"), id=name))
+                reason=f"[needs:{name}] {name} not configured/reachable ({cfg['env']})"), id=name))
     return live
 
 
@@ -189,7 +189,7 @@ def test_graph_write_fails_loud(graph):
 
 
 @pytest.mark.skipif(not os.environ.get("TINA4_TEST_ULTIPA_URL"),
-                    reason="needs a graph engine port to point the black hole at")
+                    reason="[needs:ultipa] needs a graph engine port to point the black hole at")
 def test_graph_connect_timeout(monkeypatch):
     """An unreachable host throws GraphConnectTimeout within the bound, naming
     host and port (mirrors the relational connect-timeout contract)."""
