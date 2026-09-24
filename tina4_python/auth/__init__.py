@@ -150,21 +150,20 @@ def ensure_dev_secret(cwd: str = None) -> str | None:
     base = Path(cwd) if cwd else Path.cwd()
     env_local = base / ".env.local"
     try:
-        # Append (create if missing). A trailing newline keeps the file
-        # parseable if it already held entries without a final newline.
-        prefix = ""
-        if env_local.exists():
-            existing = env_local.read_text(encoding="utf-8")
-            if existing and not existing.endswith("\n"):
-                prefix = "\n"
-        # Secrets remain owner-readable only, including an existing config file.
-        fd = os.open(env_local, os.O_WRONLY | os.O_APPEND | os.O_CREAT
-                     | getattr(os, "O_NOFOLLOW", 0), 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as fh:
-            if os.fstat(fh.fileno()).st_nlink != 1:
-                raise OSError("Refusing a configuration file with multiple hard links")
+        import stat
+        # Read and append through the same guarded descriptor: a replaced path
+        # cannot redirect either operation to another file.
+        fd = os.open(env_local, os.O_RDWR | os.O_APPEND | os.O_CREAT
+                     | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600)
+        with os.fdopen(fd, "a+", encoding="utf-8") as fh:
+            info = os.fstat(fh.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError("Refusing a non-regular or multiply-linked configuration file")
             if hasattr(os, "fchmod"):
                 os.fchmod(fh.fileno(), 0o600)
+            fh.seek(0)
+            existing = fh.read()
+            prefix = "\n" if existing and not existing.endswith("\n") else ""
             fh.write(f"{prefix}TINA4_SECRET={new_secret}\n")
         _log_info(
             "Auth: generated a development secret, saved to .env.local (gitignored)"

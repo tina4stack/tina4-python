@@ -55,3 +55,38 @@ async def test_config_writers_refuse_linked_targets(tmp_path, monkeypatch, link_
     monkeypatch.setenv("TINA4_DEBUG", "true")
     assert ensure_dev_secret(cwd=str(tmp_path))
     assert target.read_text() == "original"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo") or not hasattr(os, "O_NOFOLLOW"), reason="POSIX FIFO and no-follow contract")
+@pytest.mark.parametrize("writer", ["bootstrap", "connections"])
+def test_linked_fifo_is_refused_before_reading(tmp_path, writer):
+    # A path-based pre-read would block on this FIFO before reaching open guards.
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    target = tmp_path / "unrelated-pipe"
+    os.mkfifo(target)
+    (tmp_path / (".env.local" if writer == "bootstrap" else ".env")).symlink_to(target)
+    code = """
+import asyncio, os, sys
+from tina4_python.auth import ensure_dev_secret
+from tina4_python.core.request import Request
+from tina4_python.core.response import Response
+from tina4_python.dev_admin import _api_connections_save
+os.environ.pop('TINA4_SECRET', None)
+os.environ.pop('CI', None)
+os.environ.pop('TINA4_ENV', None)
+os.environ['TINA4_DEBUG'] = 'true'
+if sys.argv[1] == 'bootstrap':
+    assert ensure_dev_secret()
+else:
+    request = Request()
+    request.body = {'url': 'sqlite:///private.db', 'password': 'private-test-value'}
+    asyncio.run(_api_connections_save(request, Response()))
+"""
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1]))
+    result = subprocess.run([sys.executable, "-c", code, writer], cwd=tmp_path,
+                            env=env, capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert target.is_fifo()
