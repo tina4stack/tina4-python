@@ -378,8 +378,6 @@ class TestBuiltinServer:
             answer = _exchange(port, _post_head(f"Content-Length: {size}\r\n") + b"b" * size)
             assert answer.status == 200, answer
             assert json.loads(answer.body)["size"] == size
-        twice = _exchange(port, _post_head("Content-Length: 3\r\nContent-Length: 3\r\n") + b"abc")
-        assert twice.status == 200 and json.loads(twice.body)["size"] == 3, twice
 
     @pytest.mark.parametrize("header", [
         "Content-Length: abc\r\n", "Content-Length: -1\r\n", "Content-Length: +5\r\n",
@@ -391,6 +389,16 @@ class TestBuiltinServer:
         answer = _exchange(port, _post_head(header) + b"hello")
         assert answer.status == 400, answer
         assert answer.body == b'{"error":"Invalid Content-Length"}', answer
+        _assert_serving(port)
+
+    def test_two_content_length_headers_answer_400_even_when_they_agree(self, server):
+        """ADR-0068: a second Content-Length is refused outright, agreeing or
+        not - the stricter reading, and what llhttp (Node) already does."""
+        _proc, port = server
+        for pair in ("Content-Length: 3\r\nContent-Length: 3\r\n", "Content-Length: 3\r\ncontent-length: 3\r\n"):
+            answer = _exchange(port, _post_head(pair) + b"abc")
+            assert answer.status == 400, answer
+            assert answer.body == b'{"error":"Invalid Content-Length"}', answer
         _assert_serving(port)
 
     @pytest.mark.parametrize("raw", [

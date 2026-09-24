@@ -2956,8 +2956,10 @@ def _declared_body_length(content_lengths: list[str], transfer_encodings: list[s
         return None
     if not content_lengths:
         return 0
-    if not all(_ASCII_DIGITS.fullmatch(value) for value in content_lengths) \
-            or len({int(value) for value in content_lengths}) != 1:
+    # One Content-Length, ASCII digits only. A second one is refused even when
+    # it agrees (ADR-0068): two framing headers are how request smuggling
+    # starts, and llhttp (Node) refuses the pair the same way.
+    if len(content_lengths) != 1 or not _ASCII_DIGITS.fullmatch(content_lengths[0]):
         raise _RequestRejected(400, "Invalid Content-Length")
     declared = int(content_lengths[0])
     if declared > body_limit:
