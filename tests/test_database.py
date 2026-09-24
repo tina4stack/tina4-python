@@ -338,7 +338,7 @@ class TestSQLiteConnectionPath:
         # paths use the test_absolute_windows_drive_letter form instead.
         import sys
         if sys.platform.startswith("win"):
-            pytest.skip("four-slash absolute form is POSIX-shaped; Windows uses drive-letter form")
+            pytest.skip("[needs:os=posix] four-slash absolute form is POSIX-shaped; Windows uses drive-letter form")
         abs_path = str(tmp_path / "absolute.db")
         # Build the four-slash form
         url = f"sqlite:////{abs_path.lstrip('/')}"

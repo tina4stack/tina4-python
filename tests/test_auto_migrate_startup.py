@@ -214,7 +214,7 @@ def pg_project(tmp_path):
 
 
 @pytest.mark.skipif(
-    not _pg_reachable(), reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT} (skip)"
+    not _pg_reachable(), reason=f"[needs:postgres] PostgreSQL not reachable at {PG_HOST}:{PG_PORT} (skip)"
 )
 def test_applies_pending_on_startup_postgres(pg_project):
     """Flag ON + a real migration → table created + run recorded, on a live PG server."""
@@ -243,7 +243,7 @@ def test_applies_pending_on_startup_postgres(pg_project):
 
 
 @pytest.mark.skipif(
-    not _pg_reachable(), reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT} (skip)"
+    not _pg_reachable(), reason=f"[needs:postgres] PostgreSQL not reachable at {PG_HOST}:{PG_PORT} (skip)"
 )
 def test_disabled_by_env_postgres(pg_project):
     """Flag OFF → NOTHING created on the live PG server (no user table, no tracking table)."""

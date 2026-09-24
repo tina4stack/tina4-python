@@ -110,7 +110,7 @@ def browser_code(login_url, callback):
     return {key: values[0] for key, values in parse_qs(urlparse(stopper.location).query).items()}
 
 
-@pytest.mark.skipif(not os.environ.get("TINA4_REQUIRE_OIDC"), reason="real OIDC gate runs on the lab")
+@pytest.mark.skipif(not os.environ.get("TINA4_REQUIRE_OIDC"), reason="[needs:oidc] real OIDC gate runs on the lab (TINA4_REQUIRE_OIDC)")
 def test_real_oidc_pkce_callback_session_refresh_and_logout():
     value = Sso.from_issuer(**options())
     with tempfile.TemporaryDirectory() as directory:

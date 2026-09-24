@@ -60,7 +60,7 @@ def _reachable(host, port) -> bool:
 
 needs_mysql = pytest.mark.skipif(
     not _reachable(_MYSQL["host"], _MYSQL["port"]),
-    reason=f"no reachable MySQL at {_MYSQL['host']}:{_MYSQL['port']} (set TINA4_TEST_MYSQL_*)",
+    reason=f"[needs:mysql] no reachable MySQL at {_MYSQL['host']}:{_MYSQL['port']} (set TINA4_TEST_MYSQL_*)",
 )
 
 
