@@ -266,3 +266,11 @@ def test_every_dev_method_requires_raw_peer_trust(project_dir, method):
         headers={"x-forwarded-for": "127.0.0.1", "host": "localhost"})
     assert status == 403
     assert b"public-readme" not in body
+
+
+def test_public_in_project_symlink_remains_readable(project_dir):
+    (project_dir / "public-alias.txt").symlink_to(project_dir / "readme.txt")
+    for endpoint in ("/__dev/api/file", "/__dev/api/file/raw"):
+        status, body, _ = _dispatch("GET", endpoint + "?path=public-alias.txt")
+        assert status == 200
+        assert b"public-readme" in body

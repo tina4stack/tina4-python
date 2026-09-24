@@ -22,3 +22,6 @@ Signed release security commit follows.
 
 ## Focused evidence
 38 focused security tests and 205 adjacent tests pass. Initial imported regressions failed against original source. Real local HTTP listeners, ASGI dispatch and filesystem witnesses; no mocks.
+
+## Descriptor-bound development reads
+Text/raw endpoints now validate regular-file type and read through the same descriptor, using available NOFOLLOW/NONBLOCK flags. Existing per-language size behavior is preserved. Final-component replacement by a symlink cannot make the read follow that link; FIFOs are refused without blocking. Previously resolved public symlinks within the project remain supported. Hostile concurrent ancestor-directory renames are not claimed atomic; the local project tree remains trusted. Python retains its existing 2 MiB text and 10 MiB raw limits; Ruby retains its existing uncapped read behavior.

@@ -2527,6 +2527,23 @@ async def _api_files(request, response):
     })
 
 
+def _dev_read_bytes(target: str, limit: int) -> bytes:
+    """Validate and read one descriptor; never reopen a checked pathname."""
+    import os, stat
+    fd = os.open(target, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                 | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("Not a regular file")
+        if info.st_size > limit:
+            raise ValueError("File too large")
+        data = stream.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError("File too large")
+        return data
+
+
 async def _api_file_read(request, response):
     """Read a file's content.
 
@@ -2554,19 +2571,17 @@ async def _api_file_read(request, response):
     if _is_secret_path(resolved_rel):
         return response({"error": "Refused: secret file", "path": rel, "content": "", "language": "text", "size": 0}, 403)
 
-    if not os.path.isfile(target):
-        return response({"error": "File not found", "path": rel, "content": "", "language": "text", "size": 0}, 404)
-
-    # Size guard: don't load huge files into JSON
-    size = os.path.getsize(target)
-    if size > 2 * 1024 * 1024:  # 2MB
-        return response({"error": "File too large", "path": rel, "content": "", "language": "text", "size": size}, 413)
-
     try:
-        with open(target, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
-    except Exception as e:
-        return response({"error": str(e), "path": rel, "content": "", "language": "text", "size": 0}, 500)
+        data = _dev_read_bytes(target, 2 * 1024 * 1024)
+        content = data.decode("utf-8", errors="replace")
+        size = len(data)
+    except FileNotFoundError:
+        return response({"error": "File not found", "path": rel, "content": "", "language": "text", "size": 0}, 404)
+    except ValueError as error:
+        code = 413 if str(error) == "File too large" else 403
+        return response({"error": str(error), "path": rel, "content": "", "language": "text", "size": 0}, code)
+    except OSError:
+        return response({"error": "File could not be read safely", "path": rel, "content": "", "language": "text", "size": 0}, 403)
 
     # Detect language from extension
     ext = os.path.splitext(rel)[1].lower()
@@ -2620,21 +2635,15 @@ async def _api_file_raw(request, response):
     # DEVADMIN-DEC-03: never serve secret material, judged on the RESOLVED path.
     if _is_secret_path(resolved_rel):
         return response({"error": "Refused: secret file"}, 403)
-    if not os.path.isfile(target):
-        return response({"error": "File not found"}, 404)
-
-    # Size guard
-    size = os.path.getsize(target)
-    if size > 10 * 1024 * 1024:
-        return response({"error": "File too large"}, 413)
-
     content_type = mimetypes.guess_type(target)[0] or "application/octet-stream"
-
     try:
-        with open(target, "rb") as f:
-            data = f.read()
-    except Exception as e:
-        return response({"error": str(e)}, 500)
+        data = _dev_read_bytes(target, 10 * 1024 * 1024)
+    except FileNotFoundError:
+        return response({"error": "File not found"}, 404)
+    except ValueError as error:
+        return response({"error": str(error)}, 413 if str(error) == "File too large" else 403)
+    except OSError:
+        return response({"error": "File could not be read safely"}, 403)
 
     # PHP-parity: stream the bytes back with the correct Content-Type,
     # not a JSON wrapper. Matches PHP's `$response->header(...)->html(...)`.
