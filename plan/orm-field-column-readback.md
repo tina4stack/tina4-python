@@ -14,7 +14,7 @@ where / select / load / relationships / GraphQL / seeder, with no stray `full_na
 - [x] GraphQL from_orm resolvers address the row by the key COLUMN
 - [x] Seeder FK pool reads the parent's key COLUMN
 - [x] Found on the way, fixed: PostgreSQL last_id for a key not named "id"; lazy has_one "LIMIT 1" (MSSQL/Firebird syntax error); MySQL fetch_one leaving unread rows
-- [ ] Full suite local + lab, every engine (numbers in the PR)
+- [x] Full suite: lab 6197 passed / 0 failed / 37 skipped (all [needs:graph]); local macOS 6185 passed, 12 env-only failures (MQTT TLS CA, local Mongo) that are green on the lab
 
 ## Parity
 | Path | Python | PHP | Ruby | Node |
@@ -39,6 +39,6 @@ where / select / load / relationships / GraphQL / seeder, with no stray `full_na
 - [x] MySQL fetch_one on a multi-row result left rows unread ("Unread result found" on the next statement, then a metadata lock)
 
 ## Commits
-- (see git log on fix/orm-field-column-readback)
+- af55604  ORM reads a Field(column=) back through one column resolver (rebased onto fix/identifier-allow-list, #148)
 
-## Status: In Progress (lab verification)
+## Status: Complete
