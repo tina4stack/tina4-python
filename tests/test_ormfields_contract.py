@@ -211,19 +211,19 @@ def _engine_db(engine) -> Database:
     'unreachable'); Firebird is gated (skips green when its URL is unset)."""
     if engine == "postgres":
         if not _reachable(_PG["host"], _PG["port"]):
-            pytest.skip(f"postgres unreachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)")
+            pytest.skip(f"[needs:postgres] postgres unreachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)")
         return Database(f"postgres://{_PG['host']}:{_PG['port']}/{_PG['db']}", _PG["user"], _PG["pwd"])
     if engine == "mysql":
         if not _reachable(_MYSQL["host"], _MYSQL["port"]):
-            pytest.skip(f"mysql unreachable at {_MYSQL['host']}:{_MYSQL['port']} (set TINA4_TEST_MYSQL_*)")
+            pytest.skip(f"[needs:mysql] mysql unreachable at {_MYSQL['host']}:{_MYSQL['port']} (set TINA4_TEST_MYSQL_*)")
         return Database(f"mysql://{_MYSQL['host']}:{_MYSQL['port']}/{_MYSQL['db']}", _MYSQL["user"], _MYSQL["pwd"])
     if engine == "mssql":
         if not _reachable(_MSSQL["host"], _MSSQL["port"]):
-            pytest.skip(f"mssql unreachable at {_MSSQL['host']}:{_MSSQL['port']} (set TINA4_TEST_MSSQL_*)")
+            pytest.skip(f"[needs:mssql] mssql unreachable at {_MSSQL['host']}:{_MSSQL['port']} (set TINA4_TEST_MSSQL_*)")
         return Database(f"mssql://{_MSSQL['host']}:{_MSSQL['port']}/{_MSSQL['db']}", _MSSQL["user"], _MSSQL["pwd"])
     if engine == "firebird":
         if not _FIREBIRD_URL:
-            pytest.skip("TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)")
+            pytest.skip("[needs:firebird] TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)")
         return Database(_FIREBIRD_URL)
     raise AssertionError(engine)
 

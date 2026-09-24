@@ -127,7 +127,7 @@ def _postgis_reachable() -> bool:
 postgis_required = pytest.mark.skipif(
     not _postgis_reachable(),
     reason=(
-        f"postgis not reachable at {POSTGIS_HOST}:{POSTGIS_PORT} — start the "
+        f"[needs:postgis] postgis not reachable at {POSTGIS_HOST}:{POSTGIS_PORT} — start the "
         f"postgis/postgis container or set TINA4_TEST_POSTGIS_URL (skip)"
     ),
 )

@@ -55,19 +55,23 @@ MAX_PER_PAGE = 100
 # unrelated existing row); on UPDATE the row is addressed by the URL `{id}`
 # alone, so a body copy of the PK can never redirect the write to a
 # different row than the one the route matched.
+#
+# ADR-0069: a body key is resolved exactly like a find() filter key - a declared
+# field's name OR its column - and written under the field name. Anything else
+# is dropped (writes drop, reads reject).
 def _allow_listed_data(model_class, data, *, is_create: bool) -> dict:
     if not isinstance(data, dict):
         return {}
     pk = model_class._get_pk()
     pk_field = model_class._fields.get(pk)
     strip_pk = pk_field is not None and (not is_create or pk_field.auto_increment)
-    return {
-        key: value
-        for key, value in data.items()
-        if key in model_class._fields
-        and key != "is_deleted"
-        and not (strip_pk and key == pk)
-    }
+    allowed = {}
+    for key, value in data.items():
+        name = model_class._declared_field_for(key)
+        if name is None or name == "is_deleted" or (strip_pk and name == pk):
+            continue
+        allowed[name] = value
+    return allowed
 
 
 class AutoCrud:

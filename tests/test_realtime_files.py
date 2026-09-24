@@ -152,21 +152,14 @@ MINIO_HOST = "localhost"
 MINIO_PORT = 9100
 MINIO_BUCKET = "tina4-rt-test"
 
-# The two reasons are kept SEPARATE and never merged, because the
-# TINA4_REQUIRE_SERVICES gate in tests/conftest.py must treat them differently:
+# The two reasons are kept SEPARATE so the message names the real cause:
 #
-#   boto3 missing  -> a DECLARED client (pyproject `test` extra) is gone, which
-#                     is always a defect. The gate FAILS the run.
-#   MinIO down     -> an unprovisioned service (not in CI, not in the shared
-#                     test_env_contract.json), like Firebird. The skip is honest
-#                     and stays green.
+#   boto3 missing  -> a DECLARED client (pyproject `test` extra) is gone.
+#   MinIO down     -> the S3 service is not running.
 #
-# A single merged reason cannot express that: it would carry the "boto3" keyword
-# even when the real cause was an absent MinIO, and would fail every CI run.
-# Each string is also written in the gate's own vocabulary ("not installed" /
-# "not reachable") so it is machine-legible, and
-# tests/test_require_services_gate.py asserts both classifications against these
-# exact constants.
+# Neither carries a [needs:X] tag. S3 is an always-provisioned service under the
+# ADR-0069 gate rule, so under TINA4_REQUIRE_SERVICES both FAIL the run.
+# tests/test_require_services_gate.py asserts that against these exact constants.
 BOTO3_MISSING_REASON = (
     "boto3 not installed -- it is declared in the pyproject `test` extra, so "
     "run `uv sync --extra test` (real S3, never mocked)")

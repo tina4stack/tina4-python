@@ -23,7 +23,7 @@ def _load_or_skip(module):
     try:
         return module.load()
     except _base.BackendUnavailable as exc:
-        pytest.skip(f"{module.__name__} unavailable here: {exc}")
+        pytest.skip(f"[needs:runtime=libcrypto] {module.__name__} unavailable here: {exc}")
 
 
 @pytest.fixture(autouse=True)
@@ -123,7 +123,10 @@ def test_encrypt_decrypt_roundtrip_for_each_backend(backend_name, monkeypatch):
     try:
         assert push._select_backend().name == backend_name
     except push.PushError as exc:
-        pytest.skip(f"{backend_name} unavailable here: {exc}")
+        # Only the libcrypto backend is a platform exclusion (no reachable safe
+        # OpenSSL on a stock macOS/Windows); cryptography is in the test extra.
+        tag = "[needs:runtime=libcrypto] " if backend_name == "libcrypto" else ""
+        pytest.skip(f"{tag}{backend_name} unavailable here: {exc}")
 
     priv, pub = _receiver_keypair()
     auth_secret = bytes([7]) * 16
@@ -171,7 +174,10 @@ def test_off_curve_p256dh_is_rejected(backend_name, monkeypatch):
     try:
         push._select_backend()
     except push.PushError as exc:
-        pytest.skip(f"{backend_name} unavailable here: {exc}")
+        # Only the libcrypto backend is a platform exclusion (no reachable safe
+        # OpenSSL on a stock macOS/Windows); cryptography is in the test extra.
+        tag = "[needs:runtime=libcrypto] " if backend_name == "libcrypto" else ""
+        pytest.skip(f"{tag}{backend_name} unavailable here: {exc}")
 
     off_curve = bytes([4]) + b"\x01" * 64          # 0x04 prefix, not on P-256
     subscription = {"endpoint": "http://127.0.0.1/push",

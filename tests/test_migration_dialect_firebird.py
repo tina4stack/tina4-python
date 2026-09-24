@@ -95,7 +95,7 @@ class TestGeneratorPortableTypes:
         assert "created_at TEXT" not in sql    # Firebird -607 guard
 
 
-@pytest.mark.skipif(not FB_URL, reason="TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)")
+@pytest.mark.skipif(not FB_URL, reason="[needs:firebird] TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)")
 class TestFirebirdLiveRoundTrip:
     """The REAL proof: the generated migration DDL applies on a live Firebird and
     a row round-trips — where the old TEXT/REAL/IF NOT EXISTS DDL raised -607."""

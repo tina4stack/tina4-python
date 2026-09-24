@@ -343,6 +343,54 @@ This is non-negotiable for anything that commits, merges, or releases — and th
 every status you report: a claim is either proven-and-qualified, or it is not made. A re-run is
 trivial against the cost of shipping a masked regression to four public registries.
 
+## ISO controls (ADR-0073) - standing rules for every change
+
+Tina4 is working towards OpenChain conformance (ISO/IEC 18974 security assurance, ISO/IEC 5230
+licence compliance). ADR-0073 (`tina4-documentation/plan/v3/decisions/ADR-0073.md`) makes these
+controls mandatory. Follow them on every change, without being asked:
+
+- **Pull requests only.** Never push to a release line (`v3`, `main`, `master`, `v2`). Open a PR,
+  wait for the required CI checks, then merge. Never force-push, and never move or delete a tag.
+- **Zero runtime dependencies.** Drivers and optional servers are application dependencies
+  (ADR-0067). A new dev dependency needs a written reason in the PR.
+- **Undisclosed vulnerabilities stay private.** Commits, PR text, issues and plan documents describe
+  a security fix factually, with no exploit payload or proof of concept, until the fix ships with
+  its advisory. Fix it in every affected framework in the same release.
+- **Every security fix gets a permanent regression test** in each affected framework: real
+  dependency, no mocks, proven by mutation.
+- **Releases carry evidence:** checksums, an SBOM, provenance, and release-note entries for
+  security fixes. Pin release-workflow actions by commit SHA.
+- **Licences are checked** on every PR; bundled third-party code ships with its notices.
+- **No ISO claim without evidence.** Never write that Tina4 is ISO certified, conformant or aligned
+  in a README, page or release note until the plan's evidence exists.
+- **Shared machines:** set `TINA4_NO_BROWSER=true` for local runs, kill only the processes you
+  started, and use your own ports and lab directory.
+
+## Estimating time - measure, never guess
+
+An ETA is a claim like any other: base it on measured durations, qualify it, and never give a
+number you cannot explain. Human-pace estimates are wrong for agent work in both directions.
+
+- **Estimate from measured agent durations, not human effort.** Reference points measured on
+  2026-09-24 (Opus workers, four frameworks, lab + CI): a focused one-framework fix with tests
+  15-30 min; a four-framework parity fix with real-engine tests 45-90 min; a large subsystem
+  (a new HTTP server, a multipart parser) 90-120 min; one full framework suite on the lab
+  15-25 min; a CI run 8-20 min; review + merge of a green PR under 2 min. Update these figures
+  from the timestamps of completed work; do not reuse them blindly.
+- **Build the ETA from the critical path, not the sum.** Parallel work finishes with its slowest
+  item; sequential work (a queue run one at a time, a merge order, a rebase chain) adds up. Say
+  which applies. Waits count: CI queues, required checks, lab contention between workers, rate
+  limits and worker-slot limits are often longer than the work itself.
+- **Give a range and name its biggest driver.** "2-3 h, driven by the four queued groups running
+  one at a time" - never a single clock time with false precision.
+- **Prefer milestones over clock times** when the path has many external waits: list the
+  milestones in order and report each as it lands.
+- **Re-estimate after the first milestone** using its real duration, and say what changed.
+- **When the maintainer says an estimate is off, do not guess again.** Ask for the target time,
+  or switch to milestone reporting, then state what fits before that time and what would move.
+- **Record actual durations** in the plan's Commits/log lines (start and finish time), so the
+  next estimate has data.
+
 ## The Guiding Philosophy
 
 > **"The best code you write is the code you don't write."**

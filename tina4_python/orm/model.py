@@ -823,6 +823,32 @@ class ORM(metaclass=ORMMeta):
         return cls.select_one(sql, [pk_value], include=include)
 
     @classmethod
+    def _declared_field_for(cls, key) -> str | None:
+        """The declared field a key names, by field name or by its column.
+
+        tina4: ADR-0069 - the one resolver for request-shaped keys (find()
+        filters and AutoCrud write bodies). Returns None for anything else.
+        """
+        for name in cls._fields:
+            # The model's own property -> column resolution (field_mapping,
+            # then Field(column=), then the name) - never a second copy of it.
+            if key == name or key == cls.get_db_column(name):
+                return name
+        return None
+
+    @classmethod
+    def _resolve_filter_column(cls, key: str) -> str:
+        """DB column for a filter key: a declared field's name or its column.
+
+        tina4: ADR-0069 - a key that reaches SQL must come from the model. Any
+        other key raises before SQL is built.
+        """
+        name = cls._declared_field_for(key)
+        if name is None:
+            raise ValueError(f"Unknown filter field '{key}' for model {cls.__name__}")
+        return cls.get_db_column(name)
+
+    @classmethod
     def find(cls, filter=None, limit: int = 100, offset: int = 0, order_by: str = None, include: list[str] = None):
         """Find record(s) by primary key, filter dict, or all.
 
@@ -843,7 +869,8 @@ class ORM(metaclass=ORMMeta):
 
         Args:
             filter: ``int``/``str`` primary-key value OR dict of
-                {column: value} pairs (AND-ed) OR ``None``.
+                {field: value} pairs (AND-ed) OR ``None``. A key is a declared
+                field name or its column; any other key raises ValueError.
             limit: Max records to return (filter/all variants only).
             offset: Starting offset (filter/all variants only).
             order_by: ORDER BY clause (e.g. "name ASC").
@@ -863,8 +890,8 @@ class ORM(metaclass=ORMMeta):
 
         if filter:
             for key, value in filter.items():
-                col = cls.field_mapping.get(key, key)
-                conditions.append(f"{col} = ?")
+                column = cls._resolve_filter_column(key)
+                conditions.append(f"{db.quote_identifier(column)} = ?")
                 params.append(value)
 
         if cls.soft_delete:

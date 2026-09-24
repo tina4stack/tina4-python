@@ -56,7 +56,7 @@ class TestFirebirdIdentifierFolding:
 
 @pytest.mark.skipif(
     not os.environ.get("TINA4_TEST_FIREBIRD_URL"),
-    reason="TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)",
+    reason="[needs:firebird] TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)",
 )
 class TestFirebirdLivePrimaryKey:
     """Real Firebird. No doubles: get_columns must read the actual catalogue."""
