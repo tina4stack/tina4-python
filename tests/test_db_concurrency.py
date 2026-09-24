@@ -237,15 +237,30 @@ def _boot(root, port, server, name, url, user, password):
     raise AssertionError(f"server never answered:\n{(root / 'server.log').read_text()}")
 
 
-def _matrix():
+#: Engines without multi-statement transactions on the provisioned deployment.
+NO_TRANSACTIONS = {"mongodb"}
+
+
+def _matrix(transactional_only=False):
     cases = []
     for server in ("builtin", "uvicorn"):
         for name, url, user, password in engines():
+            if transactional_only and name in NO_TRANSACTIONS:
+                continue
             cases.append(pytest.param((server, name, url, user, password), id=f"{name}-{server}"))
     return cases
 
 
-@pytest.fixture(scope="module", params=_matrix())
+def pytest_generate_tests(metafunc):
+    """One server per (engine, server), shared by every test in this module.
+    The rollback-isolation test is not generated for an engine that has no
+    transactions (see its docstring) - absent by design, not skipped."""
+    if "served" in metafunc.fixturenames:
+        transactional = metafunc.function.__name__ == "test_rollback_isolation_between_concurrent_requests"
+        metafunc.parametrize("served", _matrix(transactional), indirect=True, scope="module")
+
+
+@pytest.fixture(scope="module")
 def served(request, tmp_path_factory):
     """A real server on a real engine, booted once per (engine, server)."""
     server, name, url, user, password = request.param
@@ -352,6 +367,11 @@ def test_rollback_isolation_between_concurrent_requests(served, api):
 
     With one shared connection, B's commit committed A's insert (A survived its own
     rollback). Only B's row may exist afterwards.
+
+    MongoDB is the one engine where this does not apply: a multi-statement
+    transaction needs a replica set, and a standalone server (the lab's) rejects
+    it outright. Its connections are still lent exclusively - the two concurrent
+    DB cases above prove that for Mongo as for every other engine.
     """
     port = served["port"]
     base = 100 if api == "sync" else 200
