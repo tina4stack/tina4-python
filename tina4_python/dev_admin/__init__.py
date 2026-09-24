@@ -47,24 +47,47 @@ _DEV_SECRET_BASENAMES = frozenset({
 _DEV_SECRET_SUFFIXES = (".pem", ".key", ".pfx", ".p12", ".keystore", ".jks")
 
 
+def _dev_allowed_host_names() -> set:
+    """Host names the dev surface answers to (ADR-0078): loopback names plus the
+    configured TINA4_HOST. Anything else is a DNS-rebinding attempt."""
+    names = {"localhost", "127.0.0.1", "::1"}
+    configured = (os.environ.get("TINA4_HOST") or "").strip().lower()
+    if configured:
+        names.add(configured.strip("[]"))
+    return names
+
+
+def dev_host_allowed(headers) -> bool:
+    """True when the request's Host header names the loopback machine or the
+    configured TINA4_HOST (ADR-0078). A missing Host is not a browser request
+    (every browser sends one), so the peer gate governs it instead."""
+    host = ((headers or {}).get("host") or "").strip().lower()
+    if not host:
+        return True
+    if host.startswith("["):
+        name = host[1:host.find("]")] if "]" in host else host
+    elif host.count(":") == 1:
+        name = host.split(":", 1)[0]
+    else:
+        name = host
+    return name in _dev_allowed_host_names()
+
+
 def _dev_same_origin_ok(request) -> bool:
-    """Fail-closed same-origin check for a dev-admin mutation (DEVADMIN-DEC-01).
+    """Fail-closed same-origin check for a dev-admin request (DEVADMIN-DEC-01,
+    ADR-0078).
 
-    A drive-by CSRF is a BROWSER cross-origin request, and a modern browser
-    always sends ``Sec-Fetch-Site`` (and any browser sends ``Origin`` on a
-    cross-origin POST), so:
-
-    - ``Sec-Fetch-Site`` present -> trust the browser's own classification
-      (``cross-site`` is refused; ``same-origin`` / ``same-site`` / ``none`` ok).
+    - ``Sec-Fetch-Site`` present -> only ``same-origin`` (the dashboard itself)
+      and ``none`` (the developer typed the URL) pass. ``same-site`` is refused:
+      a sibling subdomain is a different origin.
     - else ``Origin`` present -> require it to match the request Host.
-    - else neither header -> not a browser cross-origin request at all (curl, a
-      test client, a server-side caller); it cannot be a drive-by, so it is
-      allowed here and the loopback gate still constrains the peer.
+    - else neither header -> not a browser request at all (curl, a test client,
+      an MCP client); the Host and peer gates still apply.
     """
     headers = getattr(request, "headers", None) or {}
     sec_fetch_site = (headers.get("sec-fetch-site") or "").strip().lower()
     if sec_fetch_site:
-        return sec_fetch_site in ("same-origin", "same-site", "none")
+        return sec_fetch_site in ("same-origin", "none")
     origin = (headers.get("origin") or "").strip()
     if origin:
         netloc = origin.split("://", 1)[1] if "://" in origin else origin
@@ -73,14 +96,22 @@ def _dev_same_origin_ok(request) -> bool:
     return True
 
 
-def _dev_mutation_denial(request):
-    """Return ``(status, error)`` to REFUSE a dev-admin write, or ``None`` to allow.
+def _dev_request_denial(request):
+    """Return ``(status, error)`` to REFUSE a /__dev request, or ``None`` to allow.
 
-    Two independent fail-closed gates on every /__dev mutation:
-      DEVADMIN-DEC-01  same-origin (all writes, incl. mcp/call) - drive-by CSRF.
-      DEVADMIN-DEC-02  loopback peer (all writes EXCEPT the MCP surface, which
-                       carries its own gate) - a network-exposed debug box.
+    One gate for EVERY /__dev request, reads and writes alike (ADR-0078):
+      Host allow-list  loopback names + TINA4_HOST - DNS rebinding.
+      same-origin      DEVADMIN-DEC-01 - drive-by CSRF and cross-site reads.
+      loopback peer    DEVADMIN-DEC-02 - a network-exposed debug box. The MCP
+                       surface skips this one and applies its own gate, so a
+                       remote MCP refusal stays a 404. Only TINA4_MCP_TOKEN lifts it.
     """
+    headers = getattr(request, "headers", None) or {}
+    # A request carrying the valid TINA4_MCP_TOKEN is not a DNS-rebinding page
+    # (a browser cannot know the token), so it may name any Host - that keeps
+    # the opt-in remote MCP path (TINA4_MCP_REMOTE + token) working.
+    if not (dev_host_allowed(headers) or _mcp_token_ok(request)):
+        return (403, "dev-admin: refused (host not allowed)")
     if not _dev_same_origin_ok(request):
         return (403, "dev-admin: refused (cross-origin request)")
     path = getattr(request, "path", "") or ""
@@ -89,6 +120,26 @@ def _dev_mutation_denial(request):
         remote_ip = getattr(request, "remote_ip", "") or ""
         if not (is_loopback(remote_ip) or _mcp_token_ok(request)):
             return (403, "dev-admin: refused (non-loopback peer)")
+    return None
+
+
+#: Kept for callers of the earlier name; every /__dev request now takes one gate.
+_dev_mutation_denial = _dev_request_denial
+
+
+def _dev_resolve_path(rel: str, roots=None):
+    """Resolve ``rel`` against the project root the way the OS will open it
+    (symlinks and ``..`` followed) and return ``(absolute, relative)`` - or
+    ``None`` when the result leaves every allowed root (ADR-0078). The root
+    check carries a trailing separator, so ``/app`` never contains ``/app-x``.
+    The secret denylist runs on the RESOLVED relative path, so ``.env/.`` and a
+    symlink to ``.env`` are caught."""
+    base = os.path.realpath(os.getcwd())
+    allowed = [base] + [os.path.realpath(r) for r in (roots or []) if r]
+    target = os.path.realpath(os.path.join(base, rel or "."))
+    for root in allowed:
+        if target == root or target.startswith(root.rstrip(os.sep) + os.sep):
+            return target, os.path.relpath(target, base)
     return None
 
 
@@ -373,13 +424,10 @@ def register():
     In Python, routes are registered via get_api_handlers() called from the server;
     this function provides an explicit entry point for the same operation.
     """
-    from tina4_python.core.router import Router
-    handlers = get_api_handlers()
-    for path, (method, handler) in handlers.items():
-        if method == "GET":
-            Router.get(path, handler)
-        else:
-            Router.post(path, handler)
+    # ADR-0078: the dev handlers are served ONLY by the gated /__dev dispatch
+    # stage (debug on, Host + same-origin + loopback gate). Mounting them on the
+    # public Router would serve them ungated and in production, so this entry
+    # point no longer mounts anything.
     # Auto-discovery: drop `.tina4/mcp.json` so MCP-aware AI tools
     # (Claude Code, Cursor, etc.) discover the local Live Docs +
     # MCP server without the user authoring config. Idempotent.
@@ -1008,9 +1056,20 @@ async def _api_table_info(request, response):
 
         db_url = os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/app.db")
         db = Database(db_url)
-        columns = db.get_columns(table)
-        sample = db.fetch(f"SELECT * FROM {table} LIMIT 20")
-        db.close()
+        try:
+            # ADR-0078: only a name the database itself reports is accepted, and
+            # it is quoted as an identifier - never spliced raw into SQL.
+            if table not in (db.get_tables() or []):
+                return response({"error": "unknown table"}, 404)
+            columns = db.get_columns(table)
+            scheme = db_url.split(":", 1)[0].lower()
+            if "mysql" in scheme or "maria" in scheme:
+                quoted = "`" + table.replace("`", "``") + "`"
+            else:
+                quoted = '"' + table.replace('"', '""') + '"' 
+            sample = db.fetch(f"SELECT * FROM {quoted}", limit=20)
+        finally:
+            db.close()
         return response({
             "table": table,
             "columns": columns,
@@ -2007,11 +2066,21 @@ async def _api_metrics_file(request, response):
     """Per-file detail metrics."""
     from tina4_python.dev_admin.metrics import file_detail, MetricsEngineError
 
+    from tina4_python.dev_admin import metrics as _metrics
+
     path = request.query.get("path", "")
     if not path:
         return response({"error": "Missing path parameter"}, 400)
+    # ADR-0078: the path must resolve inside the project or the tree the last
+    # scan covered; an absolute path elsewhere is refused before the engine runs.
+    scan_root = _metrics._last_scan_root
+    resolved = _dev_resolve_path(path, [scan_root])
+    if resolved is None and scan_root:
+        resolved = _dev_resolve_path(os.path.join(os.path.realpath(scan_root), path), [scan_root])
+    if resolved is None:
+        return response({"error": "Path outside project"}, 403)
     try:
-        return response(file_detail(path))
+        return response(file_detail(resolved[0]))
     except MetricsEngineError as exc:
         message = str(exc)
         # A bad path is the caller's mistake (404); anything else is the engine
@@ -2311,12 +2380,12 @@ async def _api_files(request, response):
     """
     import os, subprocess
     rel = (request.query.get("path") or "").strip("/")
-    base = os.getcwd()
-    target = os.path.normpath(os.path.join(base, rel))
-
-    # Security: must stay within project root
-    if not target.startswith(base):
+    base = os.path.realpath(os.getcwd())
+    resolved = _dev_resolve_path(rel)
+    # Security: must stay within project root (ADR-0078)
+    if resolved is None:
         return response({"error": "Path outside project", "path": rel, "entries": [], "branch": ""}, 403)
+    target = resolved[0]
 
     if not os.path.isdir(target):
         # Missing / invalid paths: return an empty-but-valid shape
@@ -2466,15 +2535,14 @@ async def _api_file_read(request, response):
     if not rel:
         return response({"error": "path required", "path": "", "content": "", "language": "text", "size": 0}, 400)
 
-    # DEVADMIN-DEC-03: never serve secret material (.env, keys, .git/, secrets/).
-    if _is_secret_path(rel):
-        return response({"error": "Refused: secret file", "path": rel, "content": "", "language": "text", "size": 0}, 403)
-
-    base = os.getcwd()
-    target = os.path.normpath(os.path.join(base, rel))
-
-    if not target.startswith(base):
+    resolved = _dev_resolve_path(rel)
+    if resolved is None:
         return response({"error": "Path outside project", "path": rel, "content": "", "language": "text", "size": 0}, 403)
+    target, resolved_rel = resolved
+    # DEVADMIN-DEC-03: never serve secret material (.env, keys, .git/, secrets/),
+    # judged on the RESOLVED path (ADR-0078).
+    if _is_secret_path(resolved_rel):
+        return response({"error": "Refused: secret file", "path": rel, "content": "", "language": "text", "size": 0}, 403)
 
     if not os.path.isfile(target):
         return response({"error": "File not found", "path": rel, "content": "", "language": "text", "size": 0}, 404)
@@ -2535,15 +2603,13 @@ async def _api_file_raw(request, response):
     if not rel:
         return response({"error": "path required"}, 400)
 
-    # DEVADMIN-DEC-03: never serve secret material (.env, keys, .git/, secrets/).
-    if _is_secret_path(rel):
-        return response({"error": "Refused: secret file"}, 403)
-
-    base = os.getcwd()
-    target = os.path.normpath(os.path.join(base, rel))
-
-    if not target.startswith(base):
+    resolved = _dev_resolve_path(rel)
+    if resolved is None:
         return response({"error": "Path outside project"}, 403)
+    target, resolved_rel = resolved
+    # DEVADMIN-DEC-03: never serve secret material, judged on the RESOLVED path.
+    if _is_secret_path(resolved_rel):
+        return response({"error": "Refused: secret file"}, 403)
     if not os.path.isfile(target):
         return response({"error": "File not found"}, 404)
 
@@ -2580,11 +2646,10 @@ async def _api_file_save(request, response):
     if content is None:
         return response({"error": "content required"}, 400)
 
-    base = os.getcwd()
-    target = os.path.normpath(os.path.join(base, rel))
-
-    if not target.startswith(base):
+    resolved = _dev_resolve_path(rel)
+    if resolved is None:
         return response({"error": "Path outside project"}, 403)
+    target = resolved[0]
 
     # Don't allow overwriting framework internals
     if "tina4_python/" in rel or "vendor/" in rel or "node_modules/" in rel:
@@ -2612,12 +2677,11 @@ async def _api_file_rename(request, response):
     if not from_rel or not to_rel:
         return response({"error": "from and to required"}, 400)
 
-    base = os.getcwd()
-    from_abs = os.path.normpath(os.path.join(base, from_rel))
-    to_abs = os.path.normpath(os.path.join(base, to_rel))
-
-    if not from_abs.startswith(base) or not to_abs.startswith(base):
+    from_resolved = _dev_resolve_path(from_rel)
+    to_resolved = _dev_resolve_path(to_rel)
+    if from_resolved is None or to_resolved is None:
         return response({"error": "Path outside project"}, 403)
+    from_abs, to_abs = from_resolved[0], to_resolved[0]
     if not os.path.exists(from_abs):
         return response({"error": "Source not found"}, 404)
 
@@ -2643,11 +2707,10 @@ async def _api_file_delete(request, response):
     if not rel:
         return response({"error": "path required"}, 400)
 
-    base = os.getcwd()
-    target = os.path.normpath(os.path.join(base, rel))
-
-    if not target.startswith(base):
+    resolved = _dev_resolve_path(rel)
+    if resolved is None:
         return response({"error": "Path outside project"}, 403)
+    target = resolved[0]
     if not os.path.exists(target):
         return response({"error": "Not found"}, 404)
 
@@ -2889,17 +2952,17 @@ async def _api_git_status(request, response):
 
 def _mcp_token_ok(request) -> bool:
     """Timing-safe check of a remote MCP caller's token against
-    TINA4_MCP_TOKEN (falling back to TINA4_API_KEY). Accepts an
-    `Authorization: Bearer <token>` header, `X-MCP-Token`, or `X-Api-Key`."""
+    TINA4_MCP_TOKEN. The application's TINA4_API_KEY never unlocks the dev
+    surface (ADR-0078). Accepts `Authorization: Bearer <token>` or `X-MCP-Token`."""
     import os as _os, hmac as _hmac
-    expected = _os.environ.get("TINA4_MCP_TOKEN") or _os.environ.get("TINA4_API_KEY") or ""
+    expected = _os.environ.get("TINA4_MCP_TOKEN") or ""
     if not expected:
         return False
     headers = getattr(request, "headers", None) or {}
     auth = headers.get("authorization", "") or ""
     provided = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
     if not provided:
-        provided = headers.get("x-mcp-token", "") or headers.get("x-api-key", "")
+        provided = headers.get("x-mcp-token", "")
     if not provided:
         return False
     return _hmac.compare_digest(str(provided), str(expected))
