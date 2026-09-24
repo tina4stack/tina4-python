@@ -1,23 +1,40 @@
 # Tests for the WebSocket + SSE hardening sweep:
-#   - Backplane relay across simulated instances (thread→loop bridge + origin guard)
+#   - Backplane relay across two manager instances (thread->loop bridge + origin guard)
 #   - Broadcast resilience (one dead client never aborts delivery; it is pruned)
 #   - SSE streaming error handling (generator raises / client disconnect)
 #   - origin_allowed() allow-list semantics
 #   - bytes round-trip through the backplane envelope (base64)
 #
-# Everything here is engine-agnostic: no real Redis, NATS, or sockets. A tiny
-# in-memory FakeBackplane proves the relay path end-to-end.
+# The backplane is the REAL RedisBackplane on a REAL Redis (TINA4_TEST_REDIS_URL):
+# two WebSocketManager instances, each with its own backplane connection, as two
+# server processes would have. Messages cross the network, arrive on redis-py's
+# listener thread and hop onto the event loop through the real bridge. Each test
+# uses its own channel, so parallel runs never see each other's traffic. (An
+# in-memory FakeBackplane used to stand in here: it fanned out synchronously on
+# the caller's thread, so the listener thread, the envelope on the wire and the
+# subscription timing were never exercised.)
 import asyncio
 import base64
 import json
+import os
+import socket
+import threading
+import uuid
+from types import SimpleNamespace
 
 import pytest
 
 from tina4_python.websocket import WebSocketManager, origin_allowed
-from tina4_python.websocket.backplane import WebSocketBackplane
+from tina4_python.websocket.backplane import RedisBackplane
+
+REDIS_URL = os.environ.get("TINA4_TEST_REDIS_URL", "")
+
+# The backplane's listener is a background thread. An exception there (a read
+# on a socket closed under it) is a real defect, not noise: fail the test.
+pytestmark = pytest.mark.filterwarnings("error::pytest.PytestUnhandledThreadExceptionWarning")
 
 
-# ── Fakes ─────────────────────────────────────────────────────
+# ── Test connection ───────────────────────────────────────────
 
 
 class FakeConnection:
@@ -43,121 +60,140 @@ class FakeConnection:
         self._closed = True
 
 
-class FakeBackplane(WebSocketBackplane):
-    """In-memory pub/sub backplane. ``publish`` synchronously fans the raw
-    message out to every subscribed callback — exactly what a real backplane
-    does, minus the network and background thread. Because the manager's
-    callback runs ``run_coroutine_threadsafe`` against the captured loop, the
-    relay still goes through the real thread→loop bridge."""
-
-    def __init__(self):
-        self._subs = {}
-
-    def publish(self, channel, message):
-        for cb in self._subs.get(channel, []):
-            cb(message)
-
-    def subscribe(self, channel, callback):
-        self._subs.setdefault(channel, []).append(callback)
-
-    def unsubscribe(self, channel):
-        self._subs.pop(channel, None)
-
-    def close(self):
-        self._subs.clear()
+# ── Real Redis bus ────────────────────────────────────────────
 
 
-def _wire_backplane(manager, backplane):
-    """Attach a fake backplane to a manager the way _ensure_backplane would,
-    capturing the running loop for the thread→loop relay bridge."""
-    manager._backplane = backplane
+def _closed_port() -> int:
+    """A real TCP port on 127.0.0.1 that nothing listens on."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.fixture
+def redis_bus():
+    """A private channel on the real Redis, plus a factory for backplanes that
+    are all closed when the test ends."""
+    if not REDIS_URL:
+        pytest.skip("redis not set: export TINA4_TEST_REDIS_URL (e.g. redis://localhost:6379)")
+    redis = pytest.importorskip("redis", reason="redis client not installed (uv sync --extra test)")
+    probe = redis.Redis.from_url(REDIS_URL)
+    try:
+        probe.ping()
+    except Exception as exc:
+        probe.close()
+        pytest.skip(f"redis not reachable at {REDIS_URL}: {exc}")
+    opened = []
+
+    def make_backplane(url=REDIS_URL):
+        backplane = RedisBackplane(url=url)
+        opened.append(backplane)
+        return backplane
+
+    yield SimpleNamespace(channel=f"tina4:ws:test:{uuid.uuid4().hex}", probe=probe, make=make_backplane)
+    for backplane in opened:
+        try:
+            backplane.close()
+        except Exception:
+            pass
+    probe.close()
+
+
+def _wire_backplane(manager, bus):
+    """Give `manager` its own real backplane on the test channel, the way
+    _ensure_backplane wires one (loop captured for the thread->loop bridge)."""
+    manager._backplane_channel = bus.channel
+    manager._backplane = bus.make()
     manager._backplane_started = True
     manager._backplane_loop = asyncio.get_running_loop()
-    backplane.subscribe(manager._backplane_channel, manager._on_backplane_message)
+    manager._backplane.subscribe(bus.channel, manager._on_backplane_message)
+
+
+async def _until_subscribed(bus, count):
+    """Wait until Redis itself reports `count` subscribers on the channel, so a
+    publish cannot race a subscription that is still in flight."""
+    for _ in range(500):
+        if dict(bus.probe.pubsub_numsub(bus.channel)).get(bus.channel.encode(), 0) >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"Redis never reported {count} subscriber(s) on {bus.channel}")
+
+
+async def _until(predicate, what):
+    for _ in range(500):
+        if predicate():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+async def _two_wired_managers(bus):
+    manager_a, manager_b = WebSocketManager(), WebSocketManager()
+    _wire_backplane(manager_a, bus)
+    _wire_backplane(manager_b, bus)
+    await _until_subscribed(bus, 2)
+    return manager_a, manager_b
 
 
 # ── Backplane relay + origin guard ────────────────────────────
 
 
 class TestBackplaneRelay:
-    async def test_remote_message_relayed_to_local_connections(self):
+    async def test_remote_message_relayed_to_local_connections(self, redis_bus):
         """A broadcast from instance A is relayed to instance B's local conns."""
-        backplane = FakeBackplane()
-
-        # Instance A (the publisher) and instance B (the relayer) share the bus.
-        mgr_a = WebSocketManager()
-        mgr_b = WebSocketManager()
-        _wire_backplane(mgr_a, backplane)
-        _wire_backplane(mgr_b, backplane)
-
-        # B has a local connection that should receive A's broadcast.
+        mgr_a, mgr_b = await _two_wired_managers(redis_bus)
         conn_b = FakeConnection("b1")
         mgr_b.add(conn_b)
 
-        # A broadcasts to all — delivers locally (A has none) then publishes.
+        # A broadcasts to all: delivers locally (A has none) then publishes.
         await mgr_a.broadcast_all("hello-cluster")
 
-        # The relay schedules a coroutine on B's loop; let it run.
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-
+        await _until(lambda: conn_b.sent, "B to receive A's broadcast over Redis")
         assert conn_b.sent == ["hello-cluster"]
 
-    async def test_origin_guard_drops_own_echo(self):
-        """A message tagged with the manager's own instance id is NOT
-        re-delivered (it was already delivered locally on broadcast)."""
-        backplane = FakeBackplane()
+    async def test_origin_guard_drops_own_echo(self, redis_bus):
+        """An envelope tagged with the manager's own instance id arrives over
+        the real channel and is NOT re-delivered."""
         mgr = WebSocketManager()
-        _wire_backplane(mgr, backplane)
-
+        _wire_backplane(mgr, redis_bus)
+        await _until_subscribed(redis_bus, 1)
         conn = FakeConnection("c1")
         mgr.add(conn)
 
-        # Hand-craft an envelope whose src == this manager's instance id.
-        echo = json.dumps({
-            "src": mgr._instance_id,
-            "kind": "all",
-            "exclude": None,
-            "room": None,
-            "path": None,
-            "text": "echo-should-be-dropped",
-        })
-        mgr._on_backplane_message(echo)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        def envelope(source, text):
+            return json.dumps({"src": source, "kind": "all", "exclude": None,
+                               "room": None, "path": None, "text": text})
 
-        # Origin guard: the connection must NOT have received the echo.
-        assert conn.sent == []
+        publisher = redis_bus.make()
+        publisher.publish(redis_bus.channel, envelope(mgr._instance_id, "echo-should-be-dropped"))
+        # A foreign envelope published AFTER it: once it is delivered, the echo
+        # (earlier on the same ordered channel) has certainly been processed.
+        publisher.publish(redis_bus.channel, envelope("another-instance", "sentinel"))
 
-    async def test_real_broadcast_no_double_delivery(self):
-        """End-to-end: a single broadcast on A is delivered once on A (locally)
-        and once on B (via relay) — A does not re-deliver its own echo."""
-        backplane = FakeBackplane()
-        mgr_a = WebSocketManager()
-        mgr_b = WebSocketManager()
-        _wire_backplane(mgr_a, backplane)
-        _wire_backplane(mgr_b, backplane)
+        await _until(lambda: conn.sent, "the sentinel")
+        assert conn.sent == ["sentinel"]
 
+    async def test_real_broadcast_no_double_delivery(self, redis_bus):
+        """A broadcast on A is delivered once on A (locally) and once on B (via
+        the relay) - A does not re-deliver its own echo."""
+        mgr_a, mgr_b = await _two_wired_managers(redis_bus)
         conn_a = FakeConnection("a1")
         conn_b = FakeConnection("b1")
         mgr_a.add(conn_a)
         mgr_b.add(conn_b)
 
         await mgr_a.broadcast_all("ping")
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await _until(lambda: conn_b.sent, "B to receive ping")
+        # B answers; when A has B's reply, A has also processed its own echo of
+        # "ping" (it arrived earlier on A's ordered subscription).
+        await mgr_b.broadcast_all("pong")
+        await _until(lambda: len(conn_a.sent) >= 2, "A to receive pong")
 
-        # Exactly once each — the origin guard prevents A from re-delivering.
-        assert conn_a.sent == ["ping"]
-        assert conn_b.sent == ["ping"]
+        assert conn_a.sent == ["ping", "pong"]
+        assert conn_b.sent == ["ping", "pong"]
 
-    async def test_room_relay_targets_only_room_members(self):
-        backplane = FakeBackplane()
-        mgr_a = WebSocketManager()
-        mgr_b = WebSocketManager()
-        _wire_backplane(mgr_a, backplane)
-        _wire_backplane(mgr_b, backplane)
-
+    async def test_room_relay_targets_only_room_members(self, redis_bus):
+        mgr_a, mgr_b = await _two_wired_managers(redis_bus)
         in_room = FakeConnection("b_in")
         out_room = FakeConnection("b_out")
         mgr_b.add(in_room)
@@ -165,48 +201,74 @@ class TestBackplaneRelay:
         mgr_b._join_room("b_in", "lobby")
 
         await mgr_a.broadcast_to_room("lobby", "room-msg")
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await mgr_a.broadcast_all("everyone")
+        await _until(lambda: out_room.sent, "the broadcast to everyone")
 
-        assert in_room.sent == ["room-msg"]
-        assert out_room.sent == []
+        assert in_room.sent == ["room-msg", "everyone"]
+        assert out_room.sent == ["everyone"]
 
-    async def test_bytes_round_trip_through_envelope(self):
+    async def test_bytes_round_trip_through_envelope(self, redis_bus):
         """Binary payloads survive the JSON envelope via base64."""
-        backplane = FakeBackplane()
-        mgr_a = WebSocketManager()
-        mgr_b = WebSocketManager()
-        _wire_backplane(mgr_a, backplane)
-        _wire_backplane(mgr_b, backplane)
-
+        mgr_a, mgr_b = await _two_wired_managers(redis_bus)
         conn_b = FakeConnection("b1")
         mgr_b.add(conn_b)
 
         payload = b"\x00\x01\x02\xfffoo"
         await mgr_a.broadcast_all(payload)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        await _until(lambda: conn_b.sent, "the binary payload")
 
         assert conn_b.sent == [payload]
         assert isinstance(conn_b.sent[0], bytes)
 
-    def test_publish_encodes_bytes_as_b64(self):
-        """The envelope stores bytes under 'b64' and str under 'text'."""
-        backplane = FakeBackplane()
+    async def test_publish_encodes_bytes_as_b64(self, redis_bus):
+        """The envelope on the wire stores bytes under 'b64' and str under 'text'."""
         captured = []
-        backplane.subscribe("tina4:ws", lambda raw: captured.append(json.loads(raw)))
+        listener = redis_bus.make()
+        listener.subscribe(redis_bus.channel, lambda raw: captured.append(json.loads(raw)))
+        await _until_subscribed(redis_bus, 1)
 
         mgr = WebSocketManager()
-        mgr._backplane = backplane
+        mgr._backplane_channel = redis_bus.channel
+        mgr._backplane = redis_bus.make()
         mgr._backplane_started = True
 
         mgr._publish("all", b"\x10\x20")
         mgr._publish("all", "plain text")
+        await _until(lambda: len(captured) >= 2, "both envelopes")
 
         assert "b64" in captured[0]
         assert base64.b64decode(captured[0]["b64"]) == b"\x10\x20"
         assert captured[1]["text"] == "plain text"
         assert captured[0]["src"] == mgr._instance_id
+
+    async def test_one_backplane_serves_two_channels_and_closes_cleanly(self, redis_bus):
+        """Two subscriptions on ONE backplane both deliver, and close() stops
+        the listener before closing its socket (no thread exception)."""
+        backplane = redis_bus.make()
+        second_channel = redis_bus.channel + ":second"
+        received = []
+        backplane.subscribe(redis_bus.channel, lambda raw: received.append(("first", raw)))
+        backplane.subscribe(second_channel, lambda raw: received.append(("second", raw)))
+        await _until_subscribed(redis_bus, 1)
+        await _until(lambda: dict(redis_bus.probe.pubsub_numsub(second_channel)).get(second_channel.encode(), 0) >= 1,
+                     "the second subscription")
+
+        redis_bus.probe.publish(redis_bus.channel, "one")
+        redis_bus.probe.publish(second_channel, "two")
+        await _until(lambda: len(received) >= 2, "both channels")
+        assert sorted(received) == [("first", "one"), ("second", "two")]
+
+        def live_listeners():
+            # redis-py's worker threads carry the PubSub they read from.
+            return [thread for thread in threading.enumerate()
+                    if getattr(thread, "pubsub", None) is backplane._pubsub and thread.is_alive()]
+
+        # Exactly one reader for the one pub/sub socket, however many channels.
+        assert len(live_listeners()) == 1
+        backplane.close()
+        # close() returns only once that reader is gone - never with a thread
+        # still reading the socket it is about to close.
+        assert live_listeners() == []
 
     def test_publish_is_noop_without_backplane(self):
         """No backplane configured → _publish does nothing and never raises."""
@@ -214,16 +276,14 @@ class TestBackplaneRelay:
         # Should not raise even though no backplane is wired.
         mgr._publish("all", "noop")
 
-    async def test_publish_failure_does_not_crash_broadcast(self):
-        """A flaky message bus must never undo a local broadcast."""
-
-        class ExplodingBackplane(FakeBackplane):
-            def publish(self, channel, message):
-                raise RuntimeError("bus down")
-
+    async def test_publish_failure_does_not_crash_broadcast(self, redis_bus):
+        """A message bus that is down must never undo a local broadcast: a real
+        RedisBackplane pointed at a closed port raises on publish."""
         mgr = WebSocketManager()
-        mgr._backplane = ExplodingBackplane()
+        mgr._backplane = redis_bus.make(url=f"redis://127.0.0.1:{_closed_port()}")
         mgr._backplane_started = True
+        with pytest.raises(Exception):
+            mgr._backplane.publish("probe", "the bus really is down")
 
         conn = FakeConnection("c1")
         mgr.add(conn)
@@ -233,21 +293,17 @@ class TestBackplaneRelay:
         assert conn.sent == ["survive"]
 
     async def test_backplane_init_failure_degrades_to_local_only(self, monkeypatch):
-        """If wiring the backplane blows up (e.g. Redis unreachable at startup),
-        the manager logs and falls back to LOCAL-only delivery — a broadcast
-        still reaches local connections and never raises. (Distinct from a
-        publish-time failure: this is the _ensure_backplane construction path.)"""
-        def _boom(*a, **k):
-            raise RuntimeError("backplane unreachable at startup")
-        # _ensure_backplane does `from ...backplane import create_backplane`,
-        # so patch it where it is looked up.
-        monkeypatch.setattr(
-            "tina4_python.websocket.backplane.create_backplane", _boom
-        )
+        """If wiring the backplane blows up (Redis unreachable at startup: a real
+        closed port), the manager logs and falls back to LOCAL-only delivery - a
+        broadcast still reaches local connections and never raises. (Distinct
+        from a publish-time failure: this is the _ensure_backplane path.)"""
+        pytest.importorskip("redis", reason="redis client not installed (uv sync --extra test)")
+        monkeypatch.setenv("TINA4_WS_BACKPLANE", "redis")
+        monkeypatch.setenv("TINA4_WS_BACKPLANE_URL", f"redis://127.0.0.1:{_closed_port()}")
         mgr = WebSocketManager()
         conn = FakeConnection("c1")
         mgr.add(conn)
-        # Must NOT raise even though backplane construction throws.
+        # Must NOT raise even though the backplane cannot subscribe.
         await mgr.broadcast("hello")
         assert mgr._backplane is None          # degraded to local-only
         assert mgr._backplane_started is True  # attempted exactly once
