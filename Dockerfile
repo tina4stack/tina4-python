@@ -37,7 +37,7 @@
 FROM python:3.13-alpine3.23 AS builder
 RUN apk add --no-cache build-base libffi-dev
 WORKDIR /build
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE NOTICE COMMERCIAL-LICENSE.md ./
 COPY tina4_python/ tina4_python/
 RUN pip install --no-cache-dir --prefix=/install .
 
@@ -89,6 +89,8 @@ RUN set -e; \
 
 # ── Runtime ───────────────────────────────────────────────────
 FROM alpine:3.23
+COPY LICENSE NOTICE COMMERCIAL-LICENSE.md /usr/share/licenses/tina4/
+
 WORKDIR /app
 
 # SQLite only — add database drivers in your Dockerfile (see DEPLOYING.md)
