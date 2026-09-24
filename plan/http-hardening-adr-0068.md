@@ -26,8 +26,8 @@ Governed by `tina4-documentation/plan/v3/decisions/ADR-0068.md`, gated by
 |------|--------|-----|------|------|
 | call-site refusal | ✅ | ✅ tina4-php#217 | ✅ tina4-ruby#50 | ✅ tina4-nodejs#69 |
 | writer refusal | ✅ | ✅ #217 | ✅ #50 | ✅ #69 (native + fixture body) |
-| limits before read | ✅ | ✅ #217 | ✅ #50 | ⚠️ in progress |
-| rejection shape | ✅ | ✅ #217 | ✅ #50 | ⚠️ in progress |
+| limits before read | ✅ | ✅ #217 | ✅ #50 | ✅ #69 |
+| rejection shape | ✅ | ✅ #217 | ✅ #50 | ✅ #69 |
 
 ## Tests (written first, real — no mocks, positive + negative)
 - [x] header/redirect/cookie refusal + normal values + multiple Set-Cookie (real Response, real server)
