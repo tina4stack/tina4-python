@@ -172,3 +172,53 @@ class TestUploadLimitValue:
         for bad in ("ten megabytes", "-5", "0"):
             monkeypatch.setenv("TINA4_MAX_UPLOAD_SIZE", bad)
             assert max_upload_size() == DEFAULT_MAX_UPLOAD_SIZE
+
+
+def _write_uvicorn_app(project, port):
+    """The deployment asgi() documents: uvicorn serving `asgi:app`, no run()."""
+    _write_app(project, port)
+    (project / "asgi.py").write_text(
+        "from tina4_python.core.server import asgi\n"
+        "app = asgi()\n"
+    )
+    (project / "app.py").write_text(
+        "import uvicorn\n"
+        "if __name__ == '__main__':\n"
+        f"    uvicorn.run('asgi:app', host='127.0.0.1', port={port}, log_level='warning')\n"
+    )
+
+
+@pytest.fixture(scope="module")
+def dotenv_uvicorn_server(tmp_path_factory):
+    proc, port = boot_child_server(
+        tmp_path_factory.mktemp("dotenv_settings_uvicorn"), _write_uvicorn_app,
+        extra_env={"TINA4_DEBUG": "false"},
+        unset_env=("TINA4_MAX_UPLOAD_SIZE", "TINA4_HEALTH_PATH", "TINA4_ENV_FILE"),
+        log_dir=tmp_path_factory.mktemp("dotenv_settings_uvicorn_logs"),
+    )
+    try:
+        yield port
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except Exception:
+            proc.kill()
+
+
+class TestAsgiLoadsDotenvLikeRun:
+    """asgi() loads .env the way run() does, so uvicorn behaves like the built-in server."""
+
+    def test_max_upload_size_from_dotenv_is_enforced_under_uvicorn(self, dotenv_uvicorn_server):
+        status, _ = _request(dotenv_uvicorn_server, "POST", "/upload", body=b"x" * (UPLOAD_LIMIT * 5),
+                             headers={"Content-Type": "application/octet-stream"})
+        assert status == 413
+
+    def test_a_body_under_the_dotenv_limit_is_accepted_under_uvicorn(self, dotenv_uvicorn_server):
+        status, _ = _request(dotenv_uvicorn_server, "POST", "/upload", body=b"x" * (UPLOAD_LIMIT // 2),
+                             headers={"Content-Type": "application/octet-stream"})
+        assert status == 200
+
+    def test_health_path_from_dotenv_is_served_under_uvicorn(self, dotenv_uvicorn_server):
+        status, _ = _request(dotenv_uvicorn_server, "GET", DOTENV_HEALTH_PATH)
+        assert status == 200

@@ -2879,11 +2879,27 @@ def asgi(root_dir: str = "src"):
     the bootstrap rather than leaving each user to find ``_auto_discover``,
     which is private and has no business in a deployment file.
 
+    It loads .env the way run() does before discovering routes, so a setting
+    in .env applies under uvicorn exactly as under the built-in server
+    (ADR-0072).
+
     :param root_dir: Directory to discover routes from. Defaults to ``src``.
     :return: The ASGI 3 callable.
     """
+    _load_project_env()
     _auto_discover(root_dir)
     return app
+
+
+def _load_project_env() -> None:
+    """Load .env (real env > .env.local > .env) and apply what was read at import.
+
+    Shared by run() and asgi() so both boots honour the same settings in the
+    same order (ADR-0072).
+    """
+    from tina4_python.dotenv import load_env
+    load_env(override=False)
+    _apply_health_path_from_env()
 
 
 def _transport_rejection(status: int, message: str,
@@ -4073,9 +4089,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # previously-generated dev secret in .env.local is still picked up when no
     # real value is set, and TINA4_ENV_FILE still names the .env while
     # .env.local beside it keeps applying.
-    from tina4_python.dotenv import load_env
-    load_env(override=False)
-    _apply_health_path_from_env()
+    _load_project_env()
 
     # Fail-safe dev secret: if TINA4_SECRET is blank AND we are in dev (not CI,
     # not prod), mint a per-machine random secret, persist it to .env.local
