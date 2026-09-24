@@ -157,7 +157,14 @@ def ensure_dev_secret(cwd: str = None) -> str | None:
             existing = env_local.read_text(encoding="utf-8")
             if existing and not existing.endswith("\n"):
                 prefix = "\n"
-        with env_local.open("a", encoding="utf-8") as fh:
+        # Secrets remain owner-readable only, including an existing config file.
+        fd = os.open(env_local, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                     | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:
+            if os.fstat(fh.fileno()).st_nlink != 1:
+                raise OSError("Refusing a configuration file with multiple hard links")
+            if hasattr(os, "fchmod"):
+                os.fchmod(fh.fileno(), 0o600)
             fh.write(f"{prefix}TINA4_SECRET={new_secret}\n")
         _log_info(
             "Auth: generated a development secret, saved to .env.local (gitignored)"

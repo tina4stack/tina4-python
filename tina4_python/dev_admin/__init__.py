@@ -1789,7 +1789,16 @@ async def _api_connections_save(request, response):
             if not found:
                 val = {"TINA4_DATABASE_URL": url, "TINA4_DATABASE_USERNAME": username, "TINA4_DATABASE_PASSWORD": password}[key]
                 new_lines.append(f"{key}={val}")
-        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        # Do not expose stored database credentials through the process umask.
+        fd = os.open(env_path, os.O_WRONLY | os.O_CREAT
+                     | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            if os.fstat(fh.fileno()).st_nlink != 1:
+                raise OSError("Refusing a configuration file with multiple hard links")
+            if hasattr(os, "fchmod"):
+                os.fchmod(fh.fileno(), 0o600)
+            fh.truncate(0)
+            fh.write("\n".join(new_lines) + "\n")
         return response({"success": True})
     except Exception as e:
         return response({"success": False, "error": str(e)})

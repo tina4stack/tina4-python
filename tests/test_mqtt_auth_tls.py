@@ -75,6 +75,7 @@ def _ca_verifies(url: str, ca_file: str | None) -> bool:
     p = Mqtt.parse_url(url)
     try:
         context = ssl.create_default_context(cafile=ca_file)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         with socket.create_connection((p["host"], p["port"]), timeout=3) as raw:
             with context.wrap_socket(raw, server_hostname=p["host"]):
                 return True

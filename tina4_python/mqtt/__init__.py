@@ -542,6 +542,7 @@ class Mqtt:
         # store a CA loaded for one client would be trusted by every later client
         # in the process -- so we build and verify against this context alone.
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         if self._tls_verify:
             context.verify_mode = ssl.CERT_REQUIRED
             context.check_hostname = True

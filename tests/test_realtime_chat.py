@@ -11,7 +11,6 @@ the HTTP dispatch (via the in-process TestClient) are all REAL. Only the termina
 socket write is observed, so we can assert exactly which peer each event reached.
 """
 import json
-import tempfile
 
 import pytest
 
@@ -25,13 +24,13 @@ from tina4_python.test_client import TestClient
 
 
 @pytest.fixture
-def chat(monkeypatch):
+def chat(monkeypatch, tmp_path):
     """A real SQLite-backed workspace with one public channel and two members.
 
     Members: user "1" (owner) and "2" (member). User "9" is NOT a member.
     """
     monkeypatch.setenv("TINA4_SECRET", "realtime-chat-test-secret")
-    db = Database("sqlite:///" + tempfile.mktemp(suffix=".db"))
+    db = Database("sqlite:///" + str(tmp_path / "database.db"))
     bind_database(db)
     from tina4_python.realtime.models import (
         CHAT_MODELS, Workspace, Channel, ChannelMember,
@@ -44,7 +43,10 @@ def chat(monkeypatch):
     ChannelMember(channel_id=ch.id, user_id="1", role="owner").save()
     ChannelMember(channel_id=ch.id, user_id="2", role="member").save()
     realtime(features=["calls", "chat"])
-    return {"db": db, "workspace": ws, "channel": ch}
+    try:
+        yield {"db": db, "workspace": ws, "channel": ch}
+    finally:
+        db.close()
 
 
 def _find_ws(path):

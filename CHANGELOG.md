@@ -11,6 +11,10 @@ authority for shipped versions.
 
 ## 3.13.138
 
+Development credential files are owner-only and refuse symbolic or hard-linked targets.
+MQTT explicitly requires TLS 1.2 or newer. Development and benchmark dependencies
+are updated to patched versions; the framework still has no required runtime dependencies.
+
 This release adopts MPL-2.0 with Code Infinity copyright and an optional separate
 commercial licence. Previously published releases retain their original licences.
 

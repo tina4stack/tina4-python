@@ -13,8 +13,6 @@ for the bound dialect so that works.
 """
 from __future__ import annotations
 
-import os
-import tempfile
 
 import pytest
 
@@ -32,15 +30,14 @@ class Order(ORM):
 
 
 @pytest.fixture
-def sqlite_db():
-    path = tempfile.mktemp(suffix=".db")
+def sqlite_db(tmp_path):
+    path = str(tmp_path / "database.db")
     db = Database(f"sqlite:///{path}")
     bind_database(db)
-    yield db
     try:
-        os.unlink(path)
-    except OSError:
-        pass
+        yield db
+    finally:
+        db.close()
 
 
 class TestReservedTableName:

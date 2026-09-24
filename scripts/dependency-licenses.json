@@ -23,11 +23,11 @@
     {
       "ecosystem": "pypi",
       "name": "anyio",
-      "version": "4.12.1",
+      "version": "4.14.2",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/anyio/4.12.1/json"
+      "evidence": "https://pypi.org/pypi/anyio/4.14.2/json"
     },
     {
       "ecosystem": "pypi",
@@ -167,11 +167,11 @@
     {
       "ecosystem": "pypi",
       "name": "django",
-      "version": "6.0.3",
+      "version": "6.1.1",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/django/6.0.3/json"
+      "evidence": "https://pypi.org/pypi/django/6.1.1/json"
     },
     {
       "ecosystem": "pypi",
@@ -185,11 +185,11 @@
     {
       "ecosystem": "pypi",
       "name": "fastapi",
-      "version": "0.135.1",
+      "version": "0.141.1",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/fastapi/0.135.1/json"
+      "evidence": "https://pypi.org/pypi/fastapi/0.141.1/json"
     },
     {
       "ecosystem": "pypi",
@@ -239,11 +239,11 @@
     {
       "ecosystem": "pypi",
       "name": "idna",
-      "version": "3.11",
+      "version": "3.20",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/idna/3.11/json"
+      "evidence": "https://pypi.org/pypi/idna/3.20/json"
     },
     {
       "ecosystem": "pypi",
@@ -392,11 +392,11 @@
     {
       "ecosystem": "pypi",
       "name": "pillow",
-      "version": "12.1.1",
+      "version": "12.3.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "MIT-CMU",
-      "evidence": "https://pypi.org/pypi/pillow/12.1.1/json"
+      "evidence": "https://pypi.org/pypi/pillow/12.3.0/json"
     },
     {
       "ecosystem": "pypi",
@@ -464,11 +464,11 @@
     {
       "ecosystem": "pypi",
       "name": "pygments",
-      "version": "2.19.2",
+      "version": "2.21.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "BSD-2-Clause",
-      "evidence": "https://pypi.org/pypi/pygments/2.19.2/json"
+      "evidence": "https://pypi.org/pypi/pygments/2.21.0/json"
     },
     {
       "ecosystem": "pypi",
@@ -518,11 +518,11 @@
     {
       "ecosystem": "pypi",
       "name": "pytest",
-      "version": "9.0.2",
+      "version": "9.1.1",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/pytest/9.0.2/json"
+      "evidence": "https://pypi.org/pypi/pytest/9.1.1/json"
     },
     {
       "ecosystem": "pypi",
@@ -662,11 +662,11 @@
     {
       "ecosystem": "pypi",
       "name": "setuptools",
-      "version": "82.0.1",
+      "version": "84.0.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/setuptools/82.0.1/json"
+      "evidence": "https://pypi.org/pypi/setuptools/84.0.0/json"
     },
     {
       "ecosystem": "pypi",
@@ -680,20 +680,20 @@
     {
       "ecosystem": "pypi",
       "name": "sqlparse",
-      "version": "0.5.5",
+      "version": "0.6.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "License :: OSI Approved :: BSD License",
-      "evidence": "https://pypi.org/pypi/sqlparse/0.5.5/json"
+      "evidence": "https://pypi.org/pypi/sqlparse/0.6.0/json"
     },
     {
       "ecosystem": "pypi",
       "name": "starlette",
-      "version": "0.52.1",
+      "version": "1.7.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/starlette/0.52.1/json"
+      "evidence": "https://pypi.org/pypi/starlette/1.7.0/json"
     },
     {
       "ecosystem": "pypi",

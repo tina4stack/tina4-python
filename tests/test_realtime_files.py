@@ -12,7 +12,6 @@ round-trip runs against a real MinIO container when one is reachable (skipped,
 never mocked, when it is not).
 """
 import socket
-import tempfile
 
 import pytest
 
@@ -31,7 +30,7 @@ def files_env(monkeypatch, tmp_path):
     monkeypatch.setenv("TINA4_SECRET", "realtime-files-test-secret")
     monkeypatch.setenv("TINA4_STORAGE_BACKEND", "local")
     monkeypatch.setenv("TINA4_STORAGE_DIR", str(tmp_path / "store"))
-    db = Database("sqlite:///" + tempfile.mktemp(suffix=".db"))
+    db = Database("sqlite:///" + str(tmp_path / "database.db"))
     bind_database(db)
     from tina4_python.realtime.models import (
         CHAT_MODELS, Workspace, Channel, ChannelMember,
@@ -43,7 +42,10 @@ def files_env(monkeypatch, tmp_path):
                  created_at="2026-07-08T00:00:00"); ch.save()
     ChannelMember(channel_id=ch.id, user_id="1", role="owner").save()
     realtime(features=["files"])
-    return {"channel": ch, "dir": str(tmp_path / "store")}
+    try:
+        yield {"channel": ch, "dir": str(tmp_path / "store")}
+    finally:
+        db.close()
 
 
 def _multipart(fields: dict, files: dict) -> tuple[bytes, str]:
