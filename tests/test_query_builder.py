@@ -464,6 +464,13 @@ class TestExists:
 # ---------------------------------------------------------------------------
 
 class TestNoDatabaseError:
+    @pytest.fixture(autouse=True)
+    def _no_global_database(self, monkeypatch):
+        """No database bound. Another module's fixture may have left one bound
+        (closed): a closed pool reopens on use (ADR-0074), so it must not count."""
+        from tina4_python.orm import model as orm_model
+        monkeypatch.setattr(orm_model, "_database", None)
+
     def test_get_raises(self):
         qb = QueryBuilder.from_table("users")
         with pytest.raises((RuntimeError, AttributeError)):

@@ -59,10 +59,17 @@ so use them for `datetime.now()` and for mutable defaults like `{}` / `[]`.
 ## CRUD Operations
 
 > **Query methods are classmethods.** Call them on the class: `User.where(...)`, `User.all()`,
-> `User.find(...)`, `User.find_by_id(...)`. They return **plain Python lists** of model
-> instances (except `find_by_id` / `find(pk)` / `select_one`, which return a single instance or
-> `None`). A list has **no** `.fetch()`, `.to_array()`, or `.to_json()` — there is no v2 query
+> `User.find(...)`, `User.find_by_id(...)`. They return a **`ModelCollection`** — a `list`
+> subclass of model instances that also knows the total (ADR-0064) — except `find_by_id` /
+> `find(pk)` / `select_one`, which return a single instance or `None`. There is no v2 query
 > chain like `User().select("*").where(...).fetch()`; that raises at request time.
+
+> **In an `async def` route, await the `_async` twin** of every ORM call (ADR-0074):
+> `await User.find_by_id_async(1)`, `await User.where_async(...)`, `await user.save_async()`,
+> `await user.delete_async()`, `await User.query().where(...).get_async()`. Each runs the sync
+> method on one pooled connection, off the event loop, and returns exactly what it returns.
+> A sync ORM call inside `async def` blocks every other request until the query finishes.
+> A plain `def` route may use the sync methods — Tina4 runs it in a worker thread.
 
 ### Create
 
@@ -214,17 +221,13 @@ articles = Article.with_trashed()
 users = User.all(limit=20, offset=40)   # page 3 at 20/page
 ```
 
-For a paginated UI that also needs the total, use `where(..., with_count=True)` — it returns a
-`(list, total)` tuple and runs the count in the same call:
+For a paginated UI that also needs the total, the collection already carries it (ADR-0064 —
+the old `with_count=True` tuple is gone and now raises):
 
 ```python
-page, total = User.where("is_active = ?", [1], limit=20, offset=40, with_count=True)
-return response({
-    "data": [u.to_dict() for u in page],
-    "total": total,
-    "page": 3,
-    "per_page": 20,
-})
+page = User.where("is_active = ?", [1], limit=20, offset=40)
+page.get_total_records()     # every matching row, ignoring limit/offset
+return response(page.to_paginate())   # {records, total, page, per_page, total_pages, limit, offset}
 ```
 
 Models with `auto_crud = True` return this paginated envelope from their generated list route
@@ -351,7 +354,17 @@ from tina4_python.database import Database
 
 db = Database("sqlite:data/app.db")
 results = db.fetch("SELECT * FROM users WHERE id = ?", [1])
+
+# async def route: the awaitable twin, same arguments, same result
+results = await db.fetch_async("SELECT * FROM users WHERE id = ?", [1])
+async with db.transaction_async():
+    await db.execute_async("UPDATE users SET active = ? WHERE id = ?", [0, 1])
 ```
+
+`Database` is a bounded pool (`TINA4_DB_POOL`, default 10). Every call borrows a connection
+for itself and returns it; a transaction keeps its connection until commit/rollback, so two
+requests never share a connection or a transaction. A borrow that waits longer than
+`TINA4_DB_POOL_TIMEOUT` (30s) raises `DatabasePoolExhausted`.
 
 ## Database Connection Strings
 

@@ -438,31 +438,17 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor()
 
-        # Count total rows. The COUNT probe is best-effort — a failure here
-        # defaults `total` to 0 — but it must NEVER mask a real failure in the
-        # MAIN query below. On a probe failure we get a fresh cursor and let
-        # the paginated query run through _safe_cursor_execute, which FAILS
-        # LOUD (parity with execute()) instead of looking like "no rows".
-        # #133: a write that returns rows runs ONCE, exactly as written - no
-        # COUNT probe (a probe that ran would repeat the write) and no
-        # pagination, which no engine accepts after RETURNING/OUTPUT.
+        # #133: a write that returns rows (INSERT ... RETURNING) runs ONCE, as
+        # written - never paginated and never COUNT-probed (a probe would
+        # repeat the write). _total_from_page treats the un-paginated page as
+        # the total below.
         is_write = self._is_write_statement(sql)
-        count_sql = f"SELECT COUNT(*) FROM ({sql})"
-        try:
-            total = None
-            if not is_write:
-                cursor = self._safe_cursor_execute(cursor, count_sql, params)
-                total = cursor.fetchone()[0]
-        except Exception:
-            total = 0
-            # Reconnect may have just happened — get a fresh cursor for the
-            # paginated query below regardless of whether count succeeded.
-            cursor = self._conn.cursor()
 
         # Apply Firebird pagination — ROWS start TO end.
         # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
         # default — give me ALL rows).
-        if is_write or limit is None or limit <= 0:
+        paginated = not (is_write or limit is None or limit <= 0)
+        if not paginated:
             paginated_sql = sql
         else:
             start = offset + 1
@@ -473,9 +459,18 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         desc = cursor.description
         col_names = [FirebirdAdapter._column_name(d[0]) for d in desc] if desc else []
         rows = [self._decode_blobs(dict(zip(col_names, row))) for row in cursor.fetchall()]
-        if total is None:
-            total = len(rows)
         self._commit_fetched_write(sql)  # #133: INSERT ... RETURNING commits like execute()
+
+        # ADR-0074: COUNT only when the page cannot prove the total. Best-effort
+        # (0 on failure) and after the main query, so it never masks a real
+        # failure there.
+        total = self._total_from_page(len(rows), limit, offset, paginated)
+        if total is None:
+            try:
+                probe = self._safe_cursor_execute(self._conn.cursor(), f"SELECT COUNT(*) FROM ({sql})", params)
+                total = probe.fetchone()[0]
+            except Exception:
+                total = 0
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 

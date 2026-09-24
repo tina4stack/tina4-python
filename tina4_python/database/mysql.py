@@ -159,32 +159,14 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(dictionary=True)
 
-        # Count total rows. The COUNT probe is best-effort — a failure here
-        # defaults `total` to 0 — but it must NEVER mask a real failure in the
-        # MAIN query. We use a fresh cursor for the probe so a probe failure
-        # can't leave the main cursor in a half-consumed state, and the main
-        # query below is deliberately NOT wrapped so its error FAILS LOUD
-        # (parity with execute()) instead of looking like "no rows".
-        count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
-        probe = self._conn.cursor(dictionary=True)
-        try:
-            probe.execute(count_sql, params or [])
-            total = probe.fetchone()["cnt"]
-        except Exception:
-            total = 0
-        finally:
-            try:
-                probe.close()
-            except Exception:
-                pass
-
         # Apply pagination — v3.13.12: limit <= 0 means "no pagination"
         # (fetch_all's default — give me ALL rows).
         # _has_trailing_limit: only SQLite deduped before, so SQL that already
         # carried its own LIMIT became `... LIMIT 3 LIMIT %s OFFSET %s` here --
         # a syntax error MEASURED on a live PostgreSQL. It worked on sqlite and
         # crashed on the server, which is the swap ADR-0024 exists to protect.
-        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        paginated = not (limit is None or limit <= 0 or self._has_trailing_limit(sql))
+        if not paginated:
             paginated_sql = sql
             paginated_params = params or []
         else:
@@ -192,6 +174,24 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
             paginated_params = (params or []) + [limit, offset]
         cursor.execute(paginated_sql, paginated_params)  # FAILS LOUD
         rows = [dict(row) for row in cursor.fetchall()]
+
+        # ADR-0074: COUNT only when the page cannot prove the total. The probe
+        # is best-effort (0 on failure) and runs on a fresh cursor AFTER the
+        # main query, so it can never mask a real failure there.
+        total = self._total_from_page(len(rows), limit, offset, paginated)
+        if total is None:
+            count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
+            probe = self._conn.cursor(dictionary=True)
+            try:
+                probe.execute(count_sql, params or [])
+                total = probe.fetchone()["cnt"]
+            except Exception:
+                total = 0
+            finally:
+                try:
+                    probe.close()
+                except Exception:
+                    pass
 
         # mysql-connector connects with autocommit=False (see connect()), so
         # under InnoDB's default REPEATABLE READ a plain SELECT still opens an

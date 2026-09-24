@@ -75,18 +75,21 @@ class TestDatabaseFetchAll:
 
 
 class TestDatabasePoolProperty:
-    def test_returns_none_when_unpooled(self):
+    """ADR-0074: every Database is a bounded pool, so .pool is never None."""
+
+    def test_in_memory_sqlite_is_a_pool_of_one(self):
+        # Every sqlite :memory: connection is a separate database: one only.
         db = _sqlite_db()
-        assert db.pool is None
+        assert db.pool is not None
+        assert db.pool.size == 1
         db.close()
 
-    def test_returns_pool_when_pooled(self):
-        from tina4_python.database import Database, connection as connmod
-        # SQLite memory + pool=2 should expose ConnectionPool through .pool
-        db = Database("sqlite:///:memory:", pool=2)
-        assert db.pool is not None
-        # size is a plain int attribute on ConnectionPool (size() returns int)
-        assert db.pool.size == 2 or db.pool.size() == 2  # tolerate both shapes
+    def test_returns_pool_of_the_requested_size(self, tmp_path):
+        from tina4_python.database import Database
+        from tina4_python.database.pool import ConnectionPool
+        db = Database(f"sqlite:///{tmp_path / 'pooled.db'}", pool=2)
+        assert isinstance(db.pool, ConnectionPool)
+        assert db.pool.size == 2
         db.close()
 
 

@@ -9,6 +9,7 @@
 SQLite adapter using Python's built-in sqlite3 module.
 No external dependencies.
 """
+import contextlib
 import datetime
 import re
 import sqlite3
@@ -106,9 +107,12 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
                 returning_cols = returning_match.group(1).strip()
                 sql = sql[:returning_match.start()]
 
-        # Serialise writes to prevent SQLITE_BUSY / deadlock when multiple
-        # threads or asyncio tasks write concurrently (common in dev server).
-        with self._write_lock:
+        # Serialise standalone writes to prevent SQLITE_BUSY when several
+        # connections write at once. A statement INSIDE a transaction skips the
+        # lock: its BEGIN IMMEDIATE already holds SQLite's own write lock, and
+        # taking ours as well would deadlock against a standalone writer that is
+        # holding ours while it waits for this transaction (ADR-0074).
+        with (contextlib.nullcontext() if self._in_transaction else self._write_lock):
             cursor = self._conn.execute(sql, params or [])
 
             # A statement that returns rows (SELECT, WITH ... SELECT, native
@@ -221,32 +225,17 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
 
         # v3.13.12: strip trailing `;` before wrapping — see DatabaseAdapter.
         sql = self._strip_trailing_semicolons(sql)
-        # Count total rows (without LIMIT/OFFSET). The COUNT probe is
-        # best-effort — a failure here defaults `total` to 0 — but it must
-        # NEVER mask a real failure in the MAIN query below. The main query
-        # is deliberately NOT wrapped in try/except so its error FAILS LOUD
-        # (parity with execute()). A typo'd query then raises, instead of the
-        # old behaviour where a buried probe error made it look like "no rows".
-        # The newline matters: a trailing `-- comment` in the user SQL would
-        # otherwise comment out the closing paren, making the probe fail and
-        # silently report count=0 alongside real records.
-        # #133: a write that returns rows runs ONCE, exactly as written - no
-        # COUNT probe (a probe that ran would repeat the write) and no
-        # pagination, which no engine accepts after RETURNING/OUTPUT.
-        is_write = self._is_write_statement(sql)
-        count_sql = f"SELECT COUNT(*) as cnt FROM ({sql}\n)"
-        try:
-            total = None if is_write else self._conn.execute(count_sql, params or []).fetchone()["cnt"]
-        except Exception:
-            total = 0
-
         # Apply pagination — skip if SQL already has LIMIT, or if
         # limit <= 0 (v3.13.12: fetch_all's "give me all rows" path).
         # _has_trailing_limit scrubs literals/comments first: the old test was
         # `"LIMIT" in sql.upper().split("--")[0]`, so `WHERE label != 'LIMIT'`
         # or a column named rate_limit read as "the caller supplied their own"
         # and the cap was silently dropped -- a full-table read.
-        if is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        # #133: a write that returns rows (INSERT ... RETURNING) runs ONCE -
+        # never paginated and never COUNT-probed (a probe repeats the write).
+        is_write = self._is_write_statement(sql)
+        paginated = not (is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql))
+        if not paginated:
             paginated_sql = sql
             paginated_params = params or []
         else:
@@ -270,8 +259,20 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
         columns = [d[0] for d in cursor.description] if cursor.description else []
         indexes = range(len(columns))
         rows = [{columns[i]: row[i] for i in indexes} for row in cursor.fetchall()]
+
+        # ADR-0074: count only when the page cannot prove the total. The COUNT
+        # probe is best-effort — a failure here defaults `total` to 0 — and it
+        # runs AFTER the main query, which is not wrapped, so a real failure in
+        # the main query FAILS LOUD (parity with execute()). The newline
+        # matters: a trailing `-- comment` in the user SQL would otherwise
+        # comment out the closing paren.
+        total = self._total_from_page(len(rows), limit, offset, paginated)
         if total is None:
-            total = len(rows)
+            count_sql = f"SELECT COUNT(*) as cnt FROM ({sql}\n)"
+            try:
+                total = self._conn.execute(count_sql, params or []).fetchone()["cnt"]
+            except Exception:
+                total = 0
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -282,7 +283,12 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
         return dict(row) if row else None
 
     def start_transaction(self):
-        self._conn.execute("BEGIN")
+        # IMMEDIATE takes SQLite's write lock at BEGIN (ADR-0074). With pooled
+        # connections a deferred BEGIN that reads first and writes later fails
+        # with SQLITE_BUSY_SNAPSHOT if another connection wrote in between;
+        # IMMEDIATE makes a second writer wait (busy_timeout) at its BEGIN
+        # instead - one writer at a time, which is SQLite's model.
+        self._conn.execute("BEGIN IMMEDIATE")
         self._in_transaction = True
 
     def commit(self):

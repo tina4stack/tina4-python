@@ -2140,6 +2140,11 @@ async def _invoke_handler(request: Request, response: Response, route: dict, par
         and inspect.iscoroutinefunction(getattr(_handler, "__call__", None))
     )
 
+    # tina4: ADR-0074 - name the route for the debug warning a sync DB call on
+    # the event loop raises. Set per request in this task's own context.
+    from tina4_python.database.connection import current_route
+    current_route.set(f"{route.get('method', request.method)} {route.get('path', request.path)}")
+
     if _is_async:
         result = await (_handler() if _pcount == 0 else _handler(*_args))
     elif _pcount == 0:

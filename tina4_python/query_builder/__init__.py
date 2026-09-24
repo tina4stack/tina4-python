@@ -569,6 +569,24 @@ class QueryBuilder:
         """
         return self.count() > 0
 
+    # ── Awaitable twins (ADR-0074): same query, off the event loop ──
+
+    async def get_async(self):
+        self._ensure_db()
+        return await self._db.run_async(self.get)
+
+    async def first_async(self) -> dict | None:
+        self._ensure_db()
+        return await self._db.run_async(self.first)
+
+    async def count_async(self) -> int:
+        self._ensure_db()
+        return await self._db.run_async(self.count)
+
+    async def exists_async(self) -> bool:
+        self._ensure_db()
+        return await self._db.run_async(self.exists)
+
     def to_mongo(self) -> dict:
         """Convert the fluent builder state into a MongoDB-compatible query.
 
