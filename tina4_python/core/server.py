@@ -2666,12 +2666,18 @@ def _stage_session_save(ctx: DispatchContext) -> None:
 
     A brand-new session the route never wrote to is NOT saved - that is what
     stops empty orphaned session files accumulating on disk.
+
+    "Empty" is decided on the RAW data (``len(session)``), never on ``all()``:
+    ``all()`` is the user-facing view and hides the reserved SSO keys, so a new
+    session holding only ``Sso.login()``'s pending state looked empty and went
+    out with no cookie - the provider's callback then arrived without it and
+    the first-visit sign-in failed (#135).
     """
     if ctx.request.session is None:
         return None
     session = ctx.request.session
     try:
-        if not (getattr(session, "_is_new", False) and not session.all()):
+        if not (getattr(session, "_is_new", False) and len(session) == 0):
             session.save()
             sid = getattr(session, "session_id", None) or getattr(session, "id", None)
             if sid:
