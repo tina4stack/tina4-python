@@ -132,7 +132,7 @@ def _reachable(host, port):
 
 
 @pytest.mark.skipif(not _reachable(_PG["host"], _PG["port"]),
-                    reason="PostgreSQL not reachable (skip live batch-insert test)")
+                    reason="[needs:postgres] PostgreSQL not reachable (skip live batch-insert test)")
 def test_postgres_batch_insert_list_of_dicts():
     db = Database(f"postgresql://{_PG['host']}:{_PG['port']}/{_PG['db']}", _PG["user"], _PG["pwd"])
     try:
@@ -174,7 +174,7 @@ def _has_mysql_connector():
 
 @pytest.mark.skipif(
     not (_has_mysql_connector() and _reachable(_MYSQL_HOST, _MYSQL_PORT)),
-    reason=f"MySQL not reachable at {_MYSQL_HOST}:{_MYSQL_PORT} (or mysql-connector-python not installed)",
+    reason=f"[needs:mysql] MySQL not reachable at {_MYSQL_HOST}:{_MYSQL_PORT} (or mysql-connector-python not installed)",
 )
 def test_mysql_batch_insert_list_of_dicts():
     db = Database(_mysql_url(), _MYSQL_USER, _MYSQL_PASS)
@@ -208,7 +208,7 @@ def _has_pymssql():
 
 @pytest.mark.skipif(
     not (_has_pymssql() and _reachable(_MSSQL_HOST, _MSSQL_PORT)),
-    reason=f"MSSQL not reachable at {_MSSQL_HOST}:{_MSSQL_PORT} (or pymssql not installed)",
+    reason=f"[needs:mssql] MSSQL not reachable at {_MSSQL_HOST}:{_MSSQL_PORT} (or pymssql not installed)",
 )
 def test_mssql_batch_insert_list_of_dicts():
     db = Database(_mssql_url(), _MSSQL_USER, _MSSQL_PASS)

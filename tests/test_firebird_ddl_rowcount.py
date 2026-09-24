@@ -32,7 +32,7 @@ _FB_URL = os.environ.get("TINA4_TEST_FIREBIRD_URL")
 
 @pytest.mark.skipif(
     not _FB_URL,
-    reason="TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)",
+    reason="[needs:firebird] TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)",
 )
 class TestFirebirdDdlRowcount:
     """Real Firebird. Exercises the exact line the InterfaceError came out of."""

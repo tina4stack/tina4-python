@@ -23,7 +23,8 @@ The inputs are neutral: an undeclared column that really exists in the table,
 and keys that contain a space, a quote or a bracket.
 
 NO MOCKS. Real SQLite, PostgreSQL, MySQL, MSSQL, Firebird and MongoDB. Under
-TINA4_REQUIRE_SERVICES=1 an unreachable engine FAILS; it never skips.
+TINA4_REQUIRE_SERVICES=1 an engine whose URL is set but unreachable FAILS
+(tests/conftest.py gate), and an unreachable MongoDB always fails.
 """
 from __future__ import annotations
 
@@ -37,18 +38,11 @@ from tina4_python.docstore import SqliteDatabase
 from tina4_python.orm import ORM, IntegerField, StringField
 
 
-def _require_services() -> bool:
-    return str(os.environ.get("TINA4_REQUIRE_SERVICES") or "").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
-
-
-def _unavailable(message: str):
-    """Fail under TINA4_REQUIRE_SERVICES, otherwise skip with a reason that
-    names the service, so the conftest gate recognises it too."""
-    if _require_services():
-        pytest.fail(f"TINA4_REQUIRE_SERVICES is set but {message}")
-    pytest.skip(message)
+def _unavailable(need: str, message: str):
+    """Skip tagged [needs:<need>]. Under TINA4_REQUIRE_SERVICES the conftest gate
+    fails it unless the need is excusable: an optional engine whose coordinate
+    env var is unset. Mongo is always provisioned, so it is never excused."""
+    pytest.skip(f"[needs:{need}] {message}")
 
 
 # ── B. ORM find(dict) on every engine ────────────────────────────────────────
@@ -99,7 +93,7 @@ def probe_db(request, tmp_path_factory):
         url_var, username_var, password_var = ENGINE_ENV[engine]
         url = (os.environ.get(url_var) or "").strip()
         if not url:
-            _unavailable(f"{engine} not reachable: {url_var} is not set")
+            _unavailable(engine, f"{engine} not reachable: {url_var} is not set")
         try:
             database = Database(
                 url,
@@ -107,7 +101,7 @@ def probe_db(request, tmp_path_factory):
                 password=os.environ.get(password_var) or "",
             )
         except Exception as error:  # noqa: BLE001 - the message is the finding
-            _unavailable(f"{engine} not reachable at {url_var}: {type(error).__name__}: {error}")
+            _unavailable(engine, f"{engine} not reachable at {url_var}: {type(error).__name__}: {error}")
 
     table = f"idprobe_{uuid.uuid4().hex[:8]}"
     database.execute(
@@ -291,13 +285,13 @@ def real_mongo():
     try:
         import pymongo
     except ImportError:
-        _unavailable("pymongo not installed (mongo client for the real-MongoDB case)")
+        _unavailable("mongo", "pymongo not installed (mongo client for the real-MongoDB case)")
     client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
     try:
         client.admin.command("ping")
     except Exception as error:  # noqa: BLE001 - the message is the finding
         client.close()
-        _unavailable(f"no reachable MongoDB at {MONGO_URI}: {type(error).__name__}")
+        _unavailable("mongo", f"no reachable MongoDB at {MONGO_URI}: {type(error).__name__}")
     database_name = f"tina4_sqli_py_{os.getpid()}_{uuid.uuid4().hex[:6]}"
     collection = client[database_name]["paths"]
     collection.insert_many([dict(document) for document in SAFE_DOCUMENTS])

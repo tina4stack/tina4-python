@@ -26,7 +26,7 @@ from tina4_python.database.firebird import FirebirdAdapter
 FIREBIRD_URL = os.environ.get("TINA4_TEST_FIREBIRD_URL")
 
 pytestmark = pytest.mark.skipif(
-    not FIREBIRD_URL, reason="TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)"
+    not FIREBIRD_URL, reason="[needs:firebird] TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)"
 )
 
 # A binary payload that a naive text decode or an unread blob handle corrupts:

@@ -95,7 +95,7 @@ def _driver(backend):
     """
     if backend._client is None:
         if os.environ.get("TINA4_TEST_NO_REDIS_DRIVER") == "1":
-            pytest.skip("driver variant not applicable: zero-dependency run by design")
+            pytest.skip("[needs:runtime=redis-driver] driver variant not applicable: zero-dependency run by design")
         pytest.skip("redis client library not installed")
     backend._use_raw = False
     return backend

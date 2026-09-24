@@ -103,7 +103,7 @@ async def test_server_bound_to_ipv4_loopback_also_answers_on_ipv6():
     """A server bound to IPv4 loopback also answers on IPv6 loopback — the
     dual-stack behaviour a Windows ``localhost`` browser depends on."""
     if not _ipv6_loopback_available():
-        pytest.skip("IPv6 loopback (::1) is unavailable here")
+        pytest.skip("[needs:runtime=ipv6-loopback] IPv6 loopback (::1) is unavailable here")
 
     port = free_port()
 

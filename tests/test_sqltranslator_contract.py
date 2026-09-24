@@ -66,8 +66,8 @@ def _reachable(host, port) -> bool:
 
 _MYSQL_UP = _reachable(_MYSQL["host"], _MYSQL["port"])
 _PG_UP = _reachable(_PG["host"], _PG["port"])
-needs_mysql = pytest.mark.skipif(not _MYSQL_UP, reason="MySQL not reachable for the SQL-translator contract")
-needs_pg = pytest.mark.skipif(not _PG_UP, reason="PostgreSQL not reachable for the SQL-translator contract")
+needs_mysql = pytest.mark.skipif(not _MYSQL_UP, reason="[needs:mysql] MySQL not reachable for the SQL-translator contract")
+needs_pg = pytest.mark.skipif(not _PG_UP, reason="[needs:postgres] PostgreSQL not reachable for the SQL-translator contract")
 
 
 def _mysql() -> Database:
