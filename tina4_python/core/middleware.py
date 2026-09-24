@@ -276,18 +276,25 @@ class Middleware:
 _CORS_DENY_WARNED: set = set()
 
 
-def _cors_warn_once(key: str, message: str) -> None:
-    """Log an actionable CORS warning at most once per distinct key per process.
+def _cors_warn_once(reason: str, message: str) -> None:
+    """Log an actionable CORS warning at most once per REASON per process.
+
+    Keyed by the reason only (``unconfigured``, ``denied``,
+    ``wildcard_credentials``), never by origin - ADR-0048: CORS denial
+    diagnostics are bounded, "no per-origin ledger and no per-origin warning".
+    A per-origin key let every attacker-chosen Origin header add a ledger entry
+    that was never freed and another log line. The message still names the
+    origin that triggered the first occurrence.
 
     A rejected cross-origin request is otherwise invisible: the browser reports
     a generic CORS failure and the server log says nothing, so the operator has
     to read the framework source to discover which env var to set. Warning on
     EVERY rejected request would flood the log under a scripted probe, so each
-    distinct key warns once.
+    reason warns once.
     """
-    if key in _CORS_DENY_WARNED:
+    if reason in _CORS_DENY_WARNED:
         return
-    _CORS_DENY_WARNED.add(key)
+    _CORS_DENY_WARNED.add(reason)
     try:
         from tina4_python.debug import Log
         Log.warning(message)
@@ -439,7 +446,7 @@ class CorsMiddleware:
         if not origin:
             if warn:
                 _cors_warn_once(
-                    f"denied:{request_origin}",
+                    "denied",
                     f"CORS: origin {request_origin} is not in TINA4_CORS_ORIGINS "
                     f"({self.origins}) - the browser will block this response. If this origin "
                     f"should be allowed, add it to the list: "
@@ -455,7 +462,7 @@ class CorsMiddleware:
         if self.credentials:
             if origin == "*":
                 _cors_warn_once(
-                    "wildcard-credentials",
+                    "wildcard_credentials",
                     "CORS: TINA4_CORS_CREDENTIALS is true but TINA4_CORS_ORIGINS is '*'. "
                     "The Fetch Standard forbids Access-Control-Allow-Origin: * with "
                     "credentials, so credentials are NOT being sent. List the exact "
