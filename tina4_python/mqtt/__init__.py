@@ -44,6 +44,14 @@ from tina4_python.mqtt.message import MqttMessage
 __all__ = ["Mqtt", "MqttMessage", "MqttError", "MqttTimeoutError"]
 
 
+def _redacted(url: str) -> str:
+    """An MQTT url as it may appear in an error: the password in its userinfo
+    replaced by ``***`` (the framework's one redaction primitive). A parse error
+    is logged and shown in tracebacks, so it must never echo the credential."""
+    from tina4_python.database.database_url import redact_url
+    return redact_url(url)
+
+
 class MqttError(Exception):
     """Any MQTT protocol / connection failure."""
 
@@ -185,7 +193,7 @@ class Mqtt:
             scheme = raw.split("://", 1)[0].lower()
             if scheme not in ("mqtt", "tcp", "mqtts"):
                 raise ValueError(
-                    f"unsupported MQTT url scheme {scheme!r} in {raw!r} -- this client "
+                    f"unsupported MQTT url scheme {scheme!r} in {_redacted(raw)!r} -- this client "
                     "speaks mqtt://, tcp:// or mqtts:// (TLS). WebSocket transports are "
                     "not implemented."
                 )
@@ -212,7 +220,7 @@ class Mqtt:
         if path_stripped.startswith("["):
             close = path_stripped.find("]")
             if close == -1:
-                raise ValueError(f"malformed MQTT url {raw!r} -- unclosed IPv6 bracket")
+                raise ValueError(f"malformed MQTT url {_redacted(raw)!r} -- unclosed IPv6 bracket")
             host = path_stripped[1:close]
             after = path_stripped[close + 1:]
             if after.startswith(":"):
@@ -223,9 +231,9 @@ class Mqtt:
                 port_str = maybe_port
 
         if not host:
-            raise ValueError(f"malformed MQTT url {raw!r} -- expected mqtt://host:port")
+            raise ValueError(f"malformed MQTT url {_redacted(raw)!r} -- expected mqtt://host:port")
         if port_str is not None and not port_str.isdigit():
-            raise ValueError(f"malformed MQTT url {raw!r} -- port must be numeric")
+            raise ValueError(f"malformed MQTT url {_redacted(raw)!r} -- port must be numeric")
 
         return {
             "host": host,

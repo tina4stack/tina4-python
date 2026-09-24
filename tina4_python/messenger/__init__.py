@@ -37,7 +37,7 @@ Supported:
     - CC, BCC recipients
     - Reply-To header
     - Template rendering (via Frond engine)
-    - TLS / STARTTLS / SSL
+    - TLS / STARTTLS / SSL, certificates always verified (ADR-0071)
     - IMAP inbox reading, search, mark read/unread, delete
     - Environment variable configuration (TINA4_MAIL_* with SMTP_* fallback)
 """
@@ -97,6 +97,21 @@ def _imap_fail(method: str, exc: Exception) -> "MessengerConnectionError":
     return MessengerConnectionError(f"IMAP {method} failed: {exc}")
 
 
+# ADR-0071: the only encryption values there are. Anything else raises at
+# construction - a typo must never downgrade to cleartext.
+_ENCRYPTION_VALUES = ("ssl", "tls", "starttls", "none")
+
+
+def _mail_encryption(value, label: str) -> str:
+    """Trim + lowercase an encryption setting, or raise naming the bad value."""
+    normalised = str(value).strip().lower()
+    if normalised not in _ENCRYPTION_VALUES:
+        raise ValueError(
+            f"Unknown {label} encryption '{value}'. Valid values: ssl, tls, starttls, none."
+        )
+    return normalised
+
+
 def _parse_mail_redirect_list(raw: str) -> list[str]:
     """Parse TINA4_MAIL_REDIRECT_TO (MAIL-DEC-01): comma-separated addresses,
     each trimmed, blanks dropped. Empty/unset -> [] (redirect off, no
@@ -130,14 +145,18 @@ class Messenger:
             "TINA4_MAIL_FROM", self.username or "noreply@localhost")
         self.from_name = from_name or os.environ.get("TINA4_MAIL_FROM_NAME", "")
 
-        # Encryption: constructor > .env > backward-compat use_tls > default "tls"
-        resolved_encryption = encryption or os.environ.get("TINA4_MAIL_ENCRYPTION", None)
-        if resolved_encryption is not None:
-            self.encryption = resolved_encryption.lower()
+        # Encryption: constructor > .env > backward-compat use_tls > default "tls".
+        # Validated here (ADR-0071 section 2): an unknown value raises now, it
+        # never reaches a socket as "plaintext".
+        if encryption is not None:
+            resolved_encryption = encryption
+        elif "TINA4_MAIL_ENCRYPTION" in os.environ:
+            resolved_encryption = os.environ["TINA4_MAIL_ENCRYPTION"]
         elif use_tls is not None:
-            self.encryption = "tls" if use_tls else "none"
+            resolved_encryption = "tls" if use_tls else "none"
         else:
-            self.encryption = "tls"
+            resolved_encryption = "tls"
+        self.encryption = _mail_encryption(resolved_encryption, "mail")
         # Backward compat: use_tls derived from encryption
         self.use_tls = self.encryption in ("tls", "starttls")
 
@@ -167,10 +186,11 @@ class Messenger:
         # connect to e.g. an SMTP relay over starttls while reading mail over
         # implicit TLS. Constructor arg beats env (ADR-0041, G9); env default
         # "tls". Cross-framework parity v3.12.4.
-        self.imap_encryption = (
-            imap_encryption
-            or os.environ.get("TINA4_MAIL_IMAP_ENCRYPTION", "tls")
-        ).lower().strip()
+        self.imap_encryption = _mail_encryption(
+            imap_encryption if imap_encryption is not None
+            else os.environ.get("TINA4_MAIL_IMAP_ENCRYPTION", "tls"),
+            "IMAP",
+        )
 
     def add_header(self, name: str, value: str):
         """Add a default header to all outgoing emails."""
@@ -351,15 +371,51 @@ class Messenger:
 
         return self.send(to=to, subject=subject, body=body, html=True, **kwargs)
 
+    def _smtp_transport(self) -> str:
+        """How this messenger reaches its SMTP server (ADR-0071 section 1).
+
+        ``implicit_tls`` - port 465 (RFC 8314) whatever the setting, or ``ssl``
+                           on ANY port.
+        ``starttls``     - ``tls`` / ``starttls`` on any other port; REQUIRED.
+        ``plain``        - ``none`` on any other port; never upgraded.
+        """
+        if self.port == 465 or self.encryption == "ssl":
+            return "implicit_tls"
+        if self.encryption in ("tls", "starttls"):
+            return "starttls"
+        return "plain"
+
+    def _smtp_open(self, timeout: int) -> smtplib.SMTP:
+        """Open the SMTP connection the transport table says to.
+
+        Every TLS context is ``ssl.create_default_context()``: the certificate
+        is verified against the runtime trust store and matched to the host
+        name, with no opt-out (ADR-0071 section 3). smtplib's own default is an
+        UNVERIFIED context. A private CA is trusted with SSL_CERT_FILE.
+        """
+        transport = self._smtp_transport()
+        if transport == "implicit_tls":
+            return smtplib.SMTP_SSL(self.host, self.port, timeout=timeout,
+                                    context=ssl.create_default_context())
+        server = smtplib.SMTP(self.host, self.port, timeout=timeout)
+        if transport == "starttls":
+            try:
+                server.ehlo_or_helo_if_needed()
+                if not server.has_extn("starttls"):
+                    # Refused BEFORE AUTH / MAIL FROM: a credential never
+                    # crosses a channel the user asked to be encrypted.
+                    raise MessengerError(
+                        f"STARTTLS was requested but {self.host}:{self.port} does not offer it"
+                    )
+                server.starttls(context=ssl.create_default_context())
+            except BaseException:
+                server.close()
+                raise
+        return server
+
     def _smtp_send(self, msg: MIMEText | MIMEMultipart, recipients: list[str]) -> str:
         """Connect to SMTP and send."""
-        if self.port == 465:
-            # Direct TLS
-            server = smtplib.SMTP_SSL(self.host, self.port, timeout=30)
-        else:
-            server = smtplib.SMTP(self.host, self.port, timeout=30)
-            if self.use_tls:
-                server.starttls()
+        server = self._smtp_open(timeout=30)
 
         try:
             if self.username and self.password:
@@ -408,34 +464,35 @@ class Messenger:
     def _imap_connect(self) -> imaplib.IMAP4_SSL | imaplib.IMAP4:
         """Connect and authenticate to the IMAP server.
 
-        Honours TINA4_MAIL_IMAP_ENCRYPTION:
-            "tls"      → implicit TLS (IMAP4_SSL). Default.
-            "starttls" → plain IMAP4, then STARTTLS upgrade.
-            "none"     → plain IMAP4, no encryption (lab/dev only).
+        Honours TINA4_MAIL_IMAP_ENCRYPTION (validated at construction):
+            "tls" / "ssl" → implicit TLS (IMAP4_SSL). Default "tls".
+            "starttls"    → plain IMAP4, then a REQUIRED STARTTLS upgrade.
+            "none"        → plain IMAP4, no encryption (lab/dev only).
 
-        Falls back to "use port 993 = TLS" for back-compat when the env
-        var is missing — that's how the previous version behaved.
+        Every TLS context verifies the certificate and the host name against
+        the runtime trust store (ADR-0071 section 3); imaplib's own default is
+        UNVERIFIED. A private CA is trusted with SSL_CERT_FILE.
         """
         if not self.imap_host:
             raise MessengerError("IMAP host not configured (set imap_host or IMAP_HOST env)")
 
         enc = self.imap_encryption
-        if enc == "none":
-            conn = imaplib.IMAP4(self.imap_host, self.imap_port)
-        elif enc == "starttls":
-            conn = imaplib.IMAP4(self.imap_host, self.imap_port)
-            conn.starttls()
-        elif enc == "tls":
-            conn = imaplib.IMAP4_SSL(self.imap_host, self.imap_port)
+        if enc in ("tls", "ssl"):
+            conn = imaplib.IMAP4_SSL(self.imap_host, self.imap_port,
+                                     ssl_context=ssl.create_default_context())
         else:
-            # Unknown value — fall back to historical port-based logic so
-            # a typo doesn't break a working deployment.
-            if self.imap_port == 993:
-                conn = imaplib.IMAP4_SSL(self.imap_host, self.imap_port)
-            else:
-                conn = imaplib.IMAP4(self.imap_host, self.imap_port)
-                if self.use_tls:
-                    conn.starttls()
+            conn = imaplib.IMAP4(self.imap_host, self.imap_port)
+            if enc == "starttls":
+                try:
+                    conn.starttls(ssl_context=ssl.create_default_context())
+                except BaseException:
+                    # Close the half-open socket, but never let the close mask
+                    # the real failure (a failed handshake can leave it unusable).
+                    try:
+                        conn.shutdown()
+                    except OSError:
+                        pass
+                    raise
 
         if self.imap_username and self.imap_password:
             conn.login(self.imap_username, self.imap_password)
@@ -829,12 +886,7 @@ class Messenger:
     def test_connection(self) -> dict:
         """Test SMTP connectivity without sending."""
         try:
-            if self.port == 465:
-                server = smtplib.SMTP_SSL(self.host, self.port, timeout=10)
-            else:
-                server = smtplib.SMTP(self.host, self.port, timeout=10)
-                if self.use_tls:
-                    server.starttls()
+            server = self._smtp_open(timeout=10)
             if self.username and self.password:
                 server.login(self.username, self.password)
             server.quit()
