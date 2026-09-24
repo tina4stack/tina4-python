@@ -2394,7 +2394,12 @@ async def _stage_trailing_slash_redirect(ctx: DispatchContext) -> Response | Non
     if len(ctx.request.path) <= 1 or not ctx.request.path.endswith("/"):
         return None
 
-    canonical = ctx.request.path.rstrip("/") or "/"
+    # Collapse any leading run of "/" or "\" so the redirect target stays a
+    # same-origin absolute path. Without this, a request for "//evil.com/"
+    # normalises to "//evil.com", which a browser treats as the
+    # protocol-relative absolute URL of another host — a trailing-slash
+    # convenience must never double as an open redirect (security F3).
+    canonical = "/" + ctx.request.path.rstrip("/").lstrip("/\\")
     return ctx.response.status(301).header("location", canonical)
 
 
