@@ -92,8 +92,7 @@ class KafkaConnector:
         body = json.dumps(message, default=str)
 
         if self._use_confluent:
-            self._producer.produce(topic=topic, key=msg_id, value=body)
-            self._producer.flush(timeout=5)
+            self._produce_confirmed(topic, msg_id, body)
         else:
             self._ensure_topic_metadata(topic)
             self._send_produce(topic, msg_id, body)
@@ -189,6 +188,35 @@ class KafkaConnector:
             self._close_raw()
 
     # ── Confluent-Kafka Implementation ───────────────────────────
+
+    DELIVERY_TIMEOUT_SECONDS = 5
+
+    def _produce_confirmed(self, topic: str, msg_id: str, body: str):
+        """Produce one message and return only once a broker confirmed it.
+
+        ``flush()`` returns how many messages are STILL undelivered and the
+        delivery report carries the broker's error; reading neither turned a
+        push to a dead broker into a returned message id for a job that exists
+        nowhere. An unconfirmed message is purged from the producer's queue so
+        it cannot be delivered later behind the caller's back.
+        """
+        report = {}
+
+        def on_delivery(error, _message):
+            report["error"] = error
+
+        self._producer.produce(topic=topic, key=msg_id, value=body, on_delivery=on_delivery)
+        undelivered = self._producer.flush(timeout=self.DELIVERY_TIMEOUT_SECONDS)
+        if undelivered or "error" not in report:
+            self._producer.purge()
+            self._producer.flush(timeout=0)
+            raise RuntimeError(
+                f"Kafka connection failed: message {msg_id} for topic {topic} was not "
+                f"confirmed by any broker in [{self._brokers}] within "
+                f"{self.DELIVERY_TIMEOUT_SECONDS}s"
+            )
+        if report["error"] is not None:
+            raise RuntimeError(f"Kafka rejected message {msg_id} for topic {topic}: {report['error']}")
 
     def _connect_confluent(self):
         security = self._security_config()
