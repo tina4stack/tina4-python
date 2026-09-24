@@ -159,33 +159,11 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor(as_dict=True)
 
-        # Count total rows. The COUNT probe is best-effort — a failure here
-        # defaults `total` to 0 — but it must NEVER mask a real failure in the
-        # MAIN query. We probe on a fresh cursor so a probe failure can't leave
-        # the main cursor half-consumed, and the main query below is
-        # deliberately NOT wrapped so its error FAILS LOUD (parity with
-        # execute()) instead of looking like "no rows".
-        # Strip a trailing top-level ORDER BY before wrapping: SQL Server rejects
-        # ORDER BY in a derived-table subquery without TOP/OFFSET/FETCH (#262),
-        # which otherwise zeroed the count for any query ending in ORDER BY. The
-        # paginated query below keeps its ORDER BY.
-        count_sql = f"SELECT COUNT(*) AS cnt FROM ({self._strip_trailing_order_by(sql)}) AS _count_subquery"
-        probe = self._conn.cursor(as_dict=True)
-        try:
-            probe.execute(count_sql, tuple(params) if params else ())
-            total = probe.fetchone()["cnt"]
-        except Exception:
-            total = 0
-        finally:
-            try:
-                probe.close()
-            except Exception:
-                pass
-
         # Apply pagination — MSSQL uses OFFSET/FETCH.
         # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
         # default — give me ALL rows).
-        if limit is None or limit <= 0:
+        paginated = not (limit is None or limit <= 0)
+        if not paginated:
             paginated_sql = sql
             paginated_params = tuple(params or [])
         else:
@@ -197,6 +175,26 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             paginated_params = tuple(params or []) + (offset, limit)
         cursor.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
+
+        # ADR-0074: COUNT only when the page cannot prove the total. Best-effort
+        # (0 on failure), on a fresh cursor, after the main query so it never
+        # masks a real failure there. Strip a trailing top-level ORDER BY before
+        # wrapping: SQL Server rejects ORDER BY in a derived-table subquery
+        # without TOP/OFFSET/FETCH (#262).
+        total = self._total_from_page(len(rows), limit, offset, paginated)
+        if total is None:
+            count_sql = f"SELECT COUNT(*) AS cnt FROM ({self._strip_trailing_order_by(sql)}) AS _count_subquery"
+            probe = self._conn.cursor(as_dict=True)
+            try:
+                probe.execute(count_sql, tuple(params) if params else ())
+                total = probe.fetchone()["cnt"]
+            except Exception:
+                total = 0
+            finally:
+                try:
+                    probe.close()
+                except Exception:
+                    pass
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 

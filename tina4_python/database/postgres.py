@@ -389,39 +389,15 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # so psycopg2's type adaptation is unchanged.
         cursor = self._conn.cursor()
 
-        # Count total rows (plain cursor -> read the scalar positionally, not ["cnt"])
-        count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
-        try:
-            self._safe_execute(cursor, count_sql, params)
-            total = cursor.fetchone()[0]
-        except Exception as e:
-            total = 0
-            # v3.13.11 (issue #49 Gap 1): log the probe failure as a
-            # warning so the original cause appears in the log even
-            # though the probe itself swallows. Without this line, a
-            # failure inside an explicit transaction is invisible —
-            # the cascade message from the paginated query below is
-            # all the operator sees.
-            self._log_silent_probe_failure(e, count_sql, params)
-            # If the probe failed because the connection arrived (or
-            # became) aborted, roll back so the real pagination query
-            # below sees a clean txn. Without this we'd cascade.
-            if not self._in_transaction and self._conn is not None:
-                try:
-                    self._conn.rollback()
-                except Exception:
-                    pass
-
         # Apply pagination — the real query, so use the error-handling
-        # wrapper. The count probe above is best-effort and stays on
-        # _safe_execute (a failed probe shouldn't taint last_error).
-        # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
+        # wrapper. v3.13.12: limit <= 0 means "no pagination" (fetch_all's
         # default — give me ALL rows, not a silent first-100 slice).
         # _has_trailing_limit: only SQLite deduped before, so SQL that already
         # carried its own LIMIT became `... LIMIT 3 LIMIT %s OFFSET %s` here --
         # a syntax error MEASURED on a live PostgreSQL. It worked on sqlite and
         # crashed on the server, which is the swap ADR-0024 exists to protect.
-        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        paginated = not (limit is None or limit <= 0 or self._has_trailing_limit(sql))
+        if not paginated:
             paginated_sql = sql
             paginated_params = params or []
         else:
@@ -435,11 +411,48 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             for row in cursor.fetchall()
         ]
 
+        # ADR-0074: the COUNT probe runs only when the page cannot prove the
+        # total (it used to run the statement a second time on every fetch).
+        total = self._total_from_page(len(rows), limit, offset, paginated)
+        if total is None:
+            total = self._count_probe(cursor, sql, params)
+
         # v3.13.15 (#51): rows are materialised above — close the implicit
         # read transaction so the connection doesn't sit idle-in-transaction.
         self._end_read_txn()
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
+
+    def _count_probe(self, cursor, sql: str, params) -> int:
+        """Best-effort COUNT(*) of ``sql``; 0 on failure, never tainting last_error.
+
+        Inside an explicit transaction the probe runs under a SAVEPOINT, so a
+        failed probe cannot leave the caller's transaction aborted after its
+        rows were already returned. Outside one, a failure is rolled back so
+        the connection is clean for the next statement.
+        """
+        count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
+        guarded = self._in_transaction
+        try:
+            if guarded:
+                cursor.execute("SAVEPOINT _t4_count_probe")
+            self._safe_execute(cursor, count_sql, params)
+            total = cursor.fetchone()[0]
+            if guarded:
+                cursor.execute("RELEASE SAVEPOINT _t4_count_probe")
+            return total
+        except Exception as e:
+            # v3.13.11 (issue #49 Gap 1): log the probe failure as a warning so
+            # the original cause appears in the log even though it is swallowed.
+            self._log_silent_probe_failure(e, count_sql, params)
+            try:
+                if guarded:
+                    cursor.execute("ROLLBACK TO SAVEPOINT _t4_count_probe")
+                elif self._conn is not None:
+                    self._conn.rollback()
+            except Exception:
+                pass
+            return 0
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         import psycopg2.extras

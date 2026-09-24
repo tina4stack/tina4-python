@@ -398,25 +398,11 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         sql = self._translate_sql(sql)
         cursor = self._conn.cursor()
 
-        # Count total rows. The COUNT probe is best-effort — a failure here
-        # defaults `total` to 0 — but it must NEVER mask a real failure in the
-        # MAIN query below. On a probe failure we get a fresh cursor and let
-        # the paginated query run through _safe_cursor_execute, which FAILS
-        # LOUD (parity with execute()) instead of looking like "no rows".
-        count_sql = f"SELECT COUNT(*) FROM ({sql})"
-        try:
-            cursor = self._safe_cursor_execute(cursor, count_sql, params)
-            total = cursor.fetchone()[0]
-        except Exception:
-            total = 0
-            # Reconnect may have just happened — get a fresh cursor for the
-            # paginated query below regardless of whether count succeeded.
-            cursor = self._conn.cursor()
-
         # Apply Firebird pagination — ROWS start TO end.
         # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
         # default — give me ALL rows).
-        if limit is None or limit <= 0:
+        paginated = not (limit is None or limit <= 0)
+        if not paginated:
             paginated_sql = sql
         else:
             start = offset + 1
@@ -427,6 +413,17 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         desc = cursor.description
         col_names = [FirebirdAdapter._column_name(d[0]) for d in desc] if desc else []
         rows = [self._decode_blobs(dict(zip(col_names, row))) for row in cursor.fetchall()]
+
+        # ADR-0074: COUNT only when the page cannot prove the total. Best-effort
+        # (0 on failure) and after the main query, so it never masks a real
+        # failure there.
+        total = self._total_from_page(len(rows), limit, offset, paginated)
+        if total is None:
+            try:
+                probe = self._safe_cursor_execute(self._conn.cursor(), f"SELECT COUNT(*) FROM ({sql})", params)
+                total = probe.fetchone()[0]
+            except Exception:
+                total = 0
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 

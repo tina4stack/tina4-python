@@ -12,6 +12,7 @@ SQL-first: you write the queries, ORM maps and manages the data.
 from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Self
+from tina4_python.orm.async_api import ORMAsyncMixin  # ADR-0074
 from tina4_python.orm.fields import Field, RelationshipDescriptor
 from tina4_python.orm.collection import ModelCollection
 from tina4_python.core.cache import Cache
@@ -206,7 +207,7 @@ class ORMMeta(type):
         return cls
 
 
-class ORM(metaclass=ORMMeta):
+class ORM(ORMAsyncMixin, metaclass=ORMMeta):
     """SQL-first Active Record base class.
 
     Features:

@@ -570,12 +570,21 @@ class TestSwaggerEnv:
 
 
 class TestDbPool:
-    def test_default_pool_size_zero(self, monkeypatch):
+    def test_default_pool_size_is_ten(self, monkeypatch, tmp_path):
+        """ADR-0074: the default is a bounded pool of 10, not one shared connection."""
         monkeypatch.delenv("TINA4_DB_POOL", raising=False)
         from tina4_python.database.connection import Database
-        db = Database("sqlite:///:memory:")
-        assert db.pool_size == 0
-        assert db._pool is None
+        db = Database(f"sqlite:///{tmp_path / 'default_pool.db'}")
+        assert db.pool_size == 10
+        assert db.pool.size == 10
+        db.close()
+
+    def test_zero_is_one_exclusively_lent_connection(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TINA4_DB_POOL", "0")
+        from tina4_python.database.connection import Database
+        db = Database(f"sqlite:///{tmp_path / 'single.db'}")
+        assert db.pool.size == 1
+        db.close()
 
     def test_env_sets_pool_size(self, monkeypatch, tmp_path):
         # Use a file-backed sqlite so each pooled adapter can connect

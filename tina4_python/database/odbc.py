@@ -44,6 +44,7 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         super().__init__()
         self._conn = None
         self._cursor = None
+        self._in_transaction: bool = False
         # The connected DBMS name (SQL_DBMS_NAME), cached at connect. Drives the
         # driver-aware last-insert-id: @@IDENTITY is a SQL-Server-ism, not a
         # generic ODBC feature.
@@ -125,7 +126,10 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
         last_id = self._read_last_insert_id(cursor, sql)
 
-        if not self._conn.autocommit and self._autocommit:
+        # Inside start_transaction() the caller owns the commit. This gate used
+        # to ignore the transaction, so every statement in it was committed on
+        # the spot and rollback() had nothing left to undo.
+        if not self._in_transaction and not self._conn.autocommit and self._autocommit:
             self._conn.commit()
 
         return DatabaseResult(
@@ -166,17 +170,7 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # is a syntax error, and so is `SELECT * FROM t; OFFSET ? ROWS ...`.
         sql = self._strip_trailing_semicolons(sql)
 
-        # Count total. The closing paren goes on a NEW LINE: a trailing
-        # `-- comment` in the caller's SQL otherwise comments it out, the probe
-        # fails, the bare `except` below swallows it, and the result reports
-        # count=0 alongside real records. Same fix already shipped in sqlite.py.
-        count_sql = f"SELECT COUNT(*) FROM ({sql}\n) AS _t"
         cursor = self._conn.cursor()
-        try:
-            cursor.execute(count_sql, params or [])
-            total = cursor.fetchone()[0]
-        except Exception:
-            total = 0
 
         # Apply pagination — ODBC gets the SQL Server style OFFSET/FETCH, with a
         # LIMIT/OFFSET fallback for the many non-SQL-Server ODBC sources.
@@ -191,7 +185,8 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # nor fake one. Same helper the sqlite/postgres/mysql adapters use, so
         # all engines answer the question identically.
         # limit <= 0 still means "no pagination" (fetch_all's give-me-everything).
-        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        paginated = not (limit is None or limit <= 0 or self._has_trailing_limit(sql))
+        if not paginated:
             cursor.execute(sql, params or [])
         else:
             # The clause goes on a NEW LINE. Appended inline it lands INSIDE a
@@ -212,6 +207,18 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
+        # ADR-0074: COUNT only when the page cannot prove the total. The closing
+        # paren goes on a NEW LINE: a trailing `-- comment` in the caller's SQL
+        # otherwise comments it out and the probe reports 0 alongside real rows.
+        total = self._total_from_page(len(rows), limit, offset, paginated)
+        if total is None:
+            try:
+                probe = self._conn.cursor()
+                probe.execute(f"SELECT COUNT(*) FROM ({sql}\n) AS _t", params or [])
+                total = probe.fetchone()[0]
+            except Exception:
+                total = 0
+
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
@@ -225,12 +232,26 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
     def start_transaction(self):
         self._conn.autocommit = False
+        self._in_transaction = True
 
     def commit(self):
+        # Only a SUCCESSFUL commit ends the transaction: turning autocommit back
+        # on after a failed one would commit whatever the caller is about to
+        # roll back.
         self._conn.commit()
+        self._end_transaction()
 
     def rollback(self):
-        self._conn.rollback()
+        try:
+            self._conn.rollback()
+        finally:
+            self._end_transaction()
+
+    def _end_transaction(self):
+        """Back to the connection's own commit mode once a transaction ends."""
+        if self._in_transaction:
+            self._in_transaction = False
+            self._conn.autocommit = self._autocommit
 
     def table_exists(self, name: str) -> bool:
         cursor = self._conn.cursor()
