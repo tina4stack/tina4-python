@@ -173,6 +173,92 @@ def test_transactions_on_two_threads_are_isolated(tmp_path):
         db.close()
 
 
+def test_sqlite_standalone_writer_never_deadlocks_an_open_transaction(sqlite_url):
+    """A standalone write waiting on a transaction must not block that transaction.
+
+    The standalone writer holds the process write lock while SQLite makes it wait
+    for the open transaction. If the transaction's own next write needed that
+    lock too, both would stall until busy_timeout (30s).
+    """
+    db = Database(sqlite_url, pool=3)
+    _make_table(db)
+    in_transaction = threading.Event()
+    errors = []
+
+    def transaction():
+        try:
+            db.start_transaction()
+            db.insert("items", {"id": 1, "label": "first"})
+            in_transaction.set()
+            time.sleep(0.3)  # the standalone writer is now waiting on us
+            db.insert("items", {"id": 2, "label": "second"})
+            db.commit()
+        except Exception as error:  # noqa: BLE001 - reported below
+            errors.append(error)
+
+    def standalone():
+        in_transaction.wait(5)
+        try:
+            db.insert("items", {"id": 3, "label": "standalone"})
+        except Exception as error:  # noqa: BLE001
+            errors.append(error)
+
+    try:
+        workers = [threading.Thread(target=transaction), threading.Thread(target=standalone)]
+        started = time.monotonic()
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(10)
+        assert time.monotonic() - started < 5, "the writers deadlocked until busy_timeout"
+        assert errors == []
+        assert db.fetch_one("SELECT COUNT(*) AS c FROM items")["c"] == 3
+    finally:
+        db.close()
+
+
+def test_sqlite_transaction_that_reads_first_can_still_write(sqlite_url):
+    """A transaction reads, another connection writes, the transaction then writes.
+
+    A DEFERRED begin fails the last write with "database is locked" (its read
+    snapshot is stale). BEGIN IMMEDIATE holds the write lock from the start, so
+    the other writer waits for the commit instead.
+    """
+    db = Database(sqlite_url, pool=3)
+    _make_table(db)
+    db.insert("items", {"id": 1, "label": "seed"})
+    read_done = threading.Event()
+    errors = []
+
+    def transaction():
+        try:
+            db.start_transaction()
+            db.fetch_one("SELECT COUNT(*) AS c FROM items")
+            read_done.set()
+            time.sleep(0.3)
+            db.update("items", {"label": "changed"}, "id = ?", [1])
+            db.commit()
+        except Exception as error:  # noqa: BLE001 - reported below
+            errors.append(error)
+            db.rollback()
+
+    def other_writer():
+        read_done.wait(5)
+        db.insert("items", {"id": 2, "label": "other"})
+
+    try:
+        workers = [threading.Thread(target=transaction), threading.Thread(target=other_writer)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(10)
+        assert errors == [], f"the transaction's write failed: {errors}"
+        assert db.fetch_one("SELECT label FROM items WHERE id = 1")["label"] == "changed"
+        assert db.fetch_one("SELECT COUNT(*) AS c FROM items")["c"] == 2
+    finally:
+        db.close()
+
+
 def test_checkin_rolls_back_a_transaction_the_borrower_left_open(sqlite_url):
     """A connection must never go back to the pool mid-transaction."""
     db = Database(sqlite_url, pool=1)
@@ -199,8 +285,9 @@ def test_pool_exhaustion_raises_a_clear_error_naming_tina4_db_pool(monkeypatch, 
             db.fetch_one("SELECT 1 AS one")
         waited = time.monotonic() - started
         message = str(caught.value)
-        assert "TINA4_DB_POOL" in message and "TINA4_DB_POOL_TIMEOUT" in message
-        assert "1" in message  # names the size
+        # Names the variable AND its current value, and the timeout variable.
+        assert "TINA4_DB_POOL=1" in message, message
+        assert "TINA4_DB_POOL_TIMEOUT=0.3s" in message, message
         assert isinstance(caught.value, TimeoutError)
         assert 0.25 <= waited < 3, f"waited {waited:.2f}s for a 0.3s timeout"
     finally:
@@ -213,7 +300,7 @@ def test_pool_exhaustion_raises_the_same_error_on_the_async_api(monkeypatch, sql
     db = Database(sqlite_url, pool=1)
     held = db.checkout()
     try:
-        with pytest.raises(DatabasePoolExhausted, match="TINA4_DB_POOL"):
+        with pytest.raises(DatabasePoolExhausted, match=r"TINA4_DB_POOL=1\b"):
             asyncio.run(db.fetch_one_async("SELECT 1 AS one"))
     finally:
         db.checkin(held)
