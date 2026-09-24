@@ -10,6 +10,7 @@ Environment variables:
     TINA4_SESSION_MONGO_COLLECTION — collection name (default: sessions)
     TINA4_SESSION_TTL              — session TTL in seconds (default: 3600)
 """
+import datetime
 import os
 import socket
 import struct
@@ -388,12 +389,17 @@ class MongoDBSessionHandler(SessionHandler):
             key = data[pos[0]:key_end].decode("utf-8")
             pos[0] = key_end + 1
 
-            doc[key] = self._decode_bson_value(data, pos, bson_type)
+            doc[key] = self._decode_bson_value(data, pos, bson_type, end)
 
         pos[0] += 1  # skip terminator
         return doc
 
-    def _decode_bson_value(self, data: bytes, pos: list, bson_type: int):
+    def _decode_bson_value(self, data: bytes, pos: list, bson_type: int, end: int):
+        # Every type a server reply can carry must CONSUME its bytes. A
+        # replica-set member adds electionId (ObjectId), opTime / operationTime
+        # / $clusterTime (Timestamp) and a BinData signature to every write
+        # reply; returning None for those without advancing the cursor read the
+        # value's bytes as the next key (UnicodeDecodeError on every write).
         if bson_type == 0x01:  # double
             val = struct.unpack("<d", data[pos[0]:pos[0] + 8])[0]
             pos[0] += 8
@@ -431,4 +437,29 @@ class MongoDBSessionHandler(SessionHandler):
             pos[0] += 8
             return val
 
+        if bson_type == 0x05:  # binary: int32 length + subtype byte + bytes
+            length = struct.unpack("<I", data[pos[0]:pos[0] + 4])[0]
+            pos[0] += 5
+            val = data[pos[0]:pos[0] + length]
+            pos[0] += length
+            return val
+
+        if bson_type == 0x07:  # ObjectId, as its 24-char hex string
+            val = data[pos[0]:pos[0] + 12].hex()
+            pos[0] += 12
+            return val
+
+        if bson_type == 0x09:  # UTC datetime, int64 milliseconds
+            millis = struct.unpack("<q", data[pos[0]:pos[0] + 8])[0]
+            pos[0] += 8
+            return datetime.datetime.fromtimestamp(millis / 1000, datetime.timezone.utc)
+
+        if bson_type == 0x11:  # Timestamp, uint64 (seconds << 32 | increment)
+            val = struct.unpack("<Q", data[pos[0]:pos[0] + 8])[0]
+            pos[0] += 8
+            return val
+
+        # An unknown type cannot be sized, so its bytes cannot be skipped. Stop
+        # at the containing document's boundary rather than read them as keys.
+        pos[0] = end
         return None
