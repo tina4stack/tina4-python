@@ -829,8 +829,10 @@ class ORM(metaclass=ORMMeta):
         tina4: ADR-0069 - a key that reaches SQL must come from the model. Any
         other key raises before SQL is built.
         """
-        for name, field in cls._fields.items():
-            column = cls.field_mapping.get(name, field.column or name)
+        for name in cls._fields:
+            # The model's own property -> column resolution (field_mapping,
+            # then Field(column=), then the name) - never a second copy of it.
+            column = cls.get_db_column(name)
             if key == name or key == column:
                 return column
         raise ValueError(f"Unknown filter field '{key}' for model {cls.__name__}")
