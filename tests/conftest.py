@@ -5,6 +5,11 @@ import re as _re
 
 import pytest
 
+# No test may open a browser tab on the machine running the suite. Set before
+# any test or child server reads it; a test that needs the browser path removes
+# it from its own child's environment explicitly.
+os.environ.setdefault("TINA4_NO_BROWSER", "true")
+
 # ── The TINA4_REQUIRE_SERVICES gate (ADR-0069 addendum F) ────────────────
 #
 # With TINA4_REQUIRE_SERVICES set, a SKIP passes only when its reason carries a

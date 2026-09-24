@@ -267,10 +267,21 @@ def _connect_refused(port: int, budget: float):
     """Hammer the port until it refuses or *budget* seconds run out. Returns
     (error_or_None, seconds_waited)."""
     started = time.monotonic()
+    handshake_resets = 0
     while True:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1.0):
                 pass
+        except ConnectionResetError as exc:
+            # The listener closed while THIS handshake was in flight, and the
+            # kernel reset the connection it had half-accepted. That is the
+            # close landing mid-handshake - a race no server can avoid, seen on
+            # base v3 too - not the framework accepting and then resetting.
+            # Probe again at once: the next connection must be refused.
+            handshake_resets += 1
+            if handshake_resets > 3:
+                return exc, time.monotonic() - started
+            continue
         except OSError as exc:
             return exc, time.monotonic() - started
         waited = time.monotonic() - started
