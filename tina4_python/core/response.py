@@ -137,6 +137,7 @@ class Response:
     __slots__ = (
         "status_code", "content", "content_type",
         "_headers", "_cookies", "_is_streaming", "_stream_source",
+        "_content_type_from_header",
     )
 
     def __init__(self):
@@ -147,6 +148,9 @@ class Response:
         self._cookies: list[str] = []
         self._is_streaming: bool = False
         self._stream_source = None
+        # True once the route set Content-Type with header(); response(data)
+        # then keeps it instead of detecting one (ADR-0072, #144).
+        self._content_type_from_header: bool = False
 
     def __call__(self, data=None, status_code: int = 200, content_type: str = None,
                  headers: dict | None = None) -> "Response":
@@ -190,26 +194,31 @@ class Response:
                 self.content = str(data).encode()
         elif isinstance(data, (dict, list)):
             # Auto-detect JSON
-            self.content_type = "application/json"
+            self._detected_content_type("application/json")
             self.content = json.dumps(data, default=str, separators=(",", ":")).encode()
         elif isinstance(data, str):
             stripped = data.strip()
             if stripped.startswith("<") and stripped.endswith(">"):
                 # Looks like HTML
-                self.content_type = "text/html; charset=utf-8"
+                self._detected_content_type("text/html; charset=utf-8")
             else:
-                self.content_type = "text/plain; charset=utf-8"
+                self._detected_content_type("text/plain; charset=utf-8")
             self.content = data.encode()
         elif isinstance(data, bytes):
-            self.content_type = "application/octet-stream"
+            self._detected_content_type("application/octet-stream")
             self.content = data
         elif data is None:
             self.content = b""
         else:
-            self.content_type = "text/plain; charset=utf-8"
+            self._detected_content_type("text/plain; charset=utf-8")
             self.content = str(data).encode()
 
         return self
+
+    def _detected_content_type(self, content_type: str) -> None:
+        """Use a detected content type unless the route chose one with header()."""
+        if not self._content_type_from_header:
+            self.content_type = content_type
 
     def status(self, code: int) -> "Response":
         """Set status code (chainable)."""
@@ -222,8 +231,17 @@ class Response:
         Raises ValueError when the name is not an HTTP token or the value
         contains CR, LF or NUL (ADR-0068) - validate user input before it
         reaches a header.
+
+        ``Content-Type`` (any case) is not added as a second header: it
+        replaces the response's one content type, and ``response(data)`` keeps
+        it instead of detecting one (ADR-0072, #144).
         """
-        self._headers.append((name, _checked_header_value(name, value)))
+        checked_value = _checked_header_value(name, value)
+        if name.lower() == "content-type":
+            self.content_type = checked_value
+            self._content_type_from_header = True
+        else:
+            self._headers.append((name, checked_value))
         return self
 
     def add_header(self, name: str, value: str) -> "Response":

@@ -22,7 +22,8 @@ from pathlib import Path
 from tina4_python.core.request import (
     Request,
     PayloadTooLarge,
-    TINA4_MAX_UPLOAD_SIZE,
+    _resolve_limit,
+    max_upload_size,
 )
 from tina4_python.core.response import Response, unsafe_header_reason
 from tina4_python.core.router import Router
@@ -694,6 +695,34 @@ _HEALTH_PATH = os.environ.get("TINA4_HEALTH_PATH", "/__health")
 Router.add("GET", _HEALTH_PATH, _health_handler)
 if _HEALTH_PATH != "/health":
     Router.add("GET", "/health", _health_handler)
+
+
+def _apply_health_path_from_env() -> None:
+    """Move the health route to TINA4_HEALTH_PATH when .env set it (ADR-0072, #143).
+
+    The route above is registered at import, before run() loads .env, so a path
+    set only in .env was never served. run() calls this after loading .env. The
+    route keeps its slot in the table, so a catch-all registered later still
+    cannot shadow it, and /health stays registered either way (ADR-0016).
+    """
+    global _HEALTH_PATH
+    configured = os.environ.get("TINA4_HEALTH_PATH", "/__health")
+    if configured == _HEALTH_PATH:
+        return
+    from tina4_python.core.router import _compile_pattern
+    routes = Router.get_routes()
+    taken = any(route["method"] == "GET" and route["path"] == configured
+                for route in routes)
+    for index, route in enumerate(routes):
+        if route["handler"] is _health_handler and route["path"] == _HEALTH_PATH:
+            if taken:
+                # /health, or an app route of the same path, already answers.
+                del routes[index]
+            else:
+                route["path"] = configured
+                route["pattern"], route["param_names"], route["param_types"] = _compile_pattern(configured)
+            break
+    _HEALTH_PATH = configured
 
 # Frond live blocks: re-render a registered {% live %} fragment on demand.
 # Always on (production too) - the poll/sse client fetches this; auth re-applies
@@ -2912,22 +2941,6 @@ _HEX_DIGITS = re.compile(rb"[0-9A-Fa-f]+")
 _BARE_CR_LF_NUL = re.compile(rb"[\r\n\x00]")
 
 
-def _resolve_limit(name: str, default: int, zero_allowed: bool = False) -> int:
-    """An integer limit from the environment; a bad value warns and uses the default."""
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        Log.warning(f"{name}={raw} is not a number - using {default}")
-        return default
-    if value < 0 or (value == 0 and not zero_allowed):
-        Log.warning(f"{name}={raw} is not a usable limit - using {default}")
-        return default
-    return value
-
-
 class _RequestRejected(Exception):
     """A request the built-in server answers itself, before any route runs."""
 
@@ -3238,6 +3251,8 @@ async def app(scope: dict, receive, send):
     # uploading 32MB first; and a client that announces a large body and then
     # sends almost nothing would otherwise hold the connection while the server
     # waits for the rest. This is what a reverse proxy does in front of you.
+    # Read per request, not at import: .env is loaded after this module (#143).
+    upload_limit = max_upload_size()
     declared = 0
     for _name, _value in scope.get("headers", []):
         if _name.lower() == b"content-length":
@@ -3246,8 +3261,8 @@ async def app(scope: dict, receive, send):
             except (TypeError, ValueError):
                 declared = 0
             break
-    if declared > TINA4_MAX_UPLOAD_SIZE:
-        await _send_payload_too_large(send, declared, TINA4_MAX_UPLOAD_SIZE)
+    if declared > upload_limit:
+        await _send_payload_too_large(send, declared, upload_limit)
         return
 
     chunks = []
@@ -3258,7 +3273,7 @@ async def app(scope: dict, receive, send):
         chunk = msg.get("body", b"")
         if chunk and not too_large:
             received += len(chunk)
-            if received > TINA4_MAX_UPLOAD_SIZE:
+            if received > upload_limit:
                 # Stop accumulating, but keep draining: an ASGI server expects
                 # the request stream to be consumed, and abandoning it mid-body
                 # can wedge the connection.
@@ -3273,7 +3288,7 @@ async def app(scope: dict, receive, send):
         # 413, not 500. PayloadTooLarge was raised and caught by nobody, so an
         # oversized upload answered "Internal Server Error" - which tells the
         # caller to retry the request that will fail again.
-        await _send_payload_too_large(send, received, TINA4_MAX_UPLOAD_SIZE)
+        await _send_payload_too_large(send, received, upload_limit)
         return
 
     body = b"".join(chunks)
@@ -3285,7 +3300,7 @@ async def app(scope: dict, receive, send):
         # Still reachable: from_scope also refuses on a DECLARED content-length
         # over the limit, which the loop above never sees when the client lies
         # about the length or sends nothing.
-        await _send_payload_too_large(send, received, TINA4_MAX_UPLOAD_SIZE)
+        await _send_payload_too_large(send, received, upload_limit)
         return
     response = await handle(request)
 
@@ -4060,6 +4075,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # .env.local beside it keeps applying.
     from tina4_python.dotenv import load_env
     load_env(override=False)
+    _apply_health_path_from_env()
 
     # Fail-safe dev secret: if TINA4_SECRET is blank AND we are in dev (not CI,
     # not prod), mint a per-machine random secret, persist it to .env.local
@@ -4238,7 +4254,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             already received for the next request.
             """
             request_reader = _BoundedRequestReader(
-                reader, header_limit, TINA4_MAX_UPLOAD_SIZE, idle_timeout)
+                reader, header_limit, max_upload_size(), idle_timeout)
             try:
                 while await _serve_one_request(reader, writer, request_reader):
                     # Silence between requests is an idle keep-alive, not a
@@ -4252,6 +4268,8 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
         async def _serve_one_request(reader, writer, request_reader) -> bool:
             """Serve one request. True when the connection stays open for the next."""
+            upload_limit = max_upload_size()
+            request_reader.body_limit = upload_limit
             try:
                 raw = await request_reader.read_head()
                 # A bare CR, LF or NUL means the head does not split the way
@@ -4304,7 +4322,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                 # after: a declared length over it is refused unread, and every
                 # read is bounded.
                 declared = _declared_body_length(
-                    content_lengths, transfer_encodings, TINA4_MAX_UPLOAD_SIZE)
+                    content_lengths, transfer_encodings, upload_limit)
                 body = await request_reader.read_body(declared)
             except _RequestRejected as rejected:
                 await _answer_and_linger(reader, writer, rejected.status, rejected.message)
