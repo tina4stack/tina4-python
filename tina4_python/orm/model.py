@@ -621,6 +621,23 @@ class ORM(metaclass=ORMMeta):
                     # error from the driver instead of a silent no-op.
                     is_update = False
 
+        # Firebird has no auto-increment column type. An auto_increment PK left
+        # None inserts NULL and the engine rejects it ("validation error for
+        # column ID, value *** null ***") — the field loop above SKIPPED it, so
+        # `data` carries no id column at all. On the INSERT path only, draw the
+        # id from the table's generator (GEN_<TABLE>_ID, the same one Firebird's
+        # get_last_id() emulation reads back) and inject it. Gated on `not
+        # is_update` so a set-PK UPDATE never draws a new id, and generated
+        # OUTSIDE the save() transaction bracket below (get_next_id commits the
+        # generator itself, which a generator is exempt from rolling back).
+        if (not is_update and pk_field.auto_increment
+                and getattr(self, pk, None) is None
+                and db.get_database_type() == "firebird"):
+            new_id = db.get_next_id(table, pk_db_col)
+            setattr(self, pk, new_id)
+            data[pk_db_col] = new_id
+            insert_omit.discard(pk_db_col)
+
         db.start_transaction()
         try:
             if is_update:
@@ -686,6 +703,11 @@ class ORM(metaclass=ORMMeta):
                 # exclude a column-not-found (e.g. Postgres 'column "x" does not exist')
                 # so a genuine missing-column error never gets a spurious table hint
                 and "column" not in low
+            ) or (
+                # MSSQL: "Invalid object name 'foo'." — Firebird: "Table unknown\nFOO"
+                # / "Dynamic SQL Error ... Table unknown". Neither says "does not
+                # exist", so without these the hint was absent on those two engines.
+                "invalid object name" in low or "table unknown" in low
             ):
                 cause += (
                     f" — table '{table}' does not exist; call "
@@ -1560,7 +1582,16 @@ class ORM(metaclass=ORMMeta):
         for rel_name, nested in top_level.items():
             descriptor = cls._relationships.get(rel_name)
             if descriptor is None:
-                continue
+                # A misspelt include= name used to be silently skipped, so a
+                # typo (include=["autor"] for "author") quietly loaded nothing
+                # and the caller saw an empty relationship instead of an error.
+                # Fail loud, naming the bad name and the ones that exist.
+                known = sorted(cls._relationships.keys())
+                raise ValueError(
+                    f"{cls.__name__}.include: unknown relationship "
+                    f"'{rel_name}'. Known relationships: "
+                    f"{', '.join(known) if known else '(none)'}"
+                )
 
             related_cls = descriptor._resolve_model()
             pk = cls._get_pk()
