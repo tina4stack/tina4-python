@@ -894,6 +894,29 @@ class DatabaseAdapter:
         return bool(re.search(pattern, DatabaseAdapter._scrub_sql_text(sql or ""), re.IGNORECASE))
 
     @staticmethod
+    def _is_write_statement(sql: str) -> bool:
+        """True when the statement changes data, even though it returns rows.
+
+        ``fetch()`` / ``fetch_one()`` are the natural way to run a write that
+        RETURNS rows (``INSERT ... RETURNING id``), so they cannot assume every
+        statement is a read (#133). A write is one that STARTS with a DML verb,
+        or a ``WITH`` whose body holds one (a data-modifying CTE ends in SELECT).
+
+        Erring towards "write" is the safe direction: a misread write is closed
+        with a commit, which for a read-only statement only ends the transaction.
+        Literals and comments are scrubbed first, so ``WHERE note = 'DELETE'`` is
+        still a read.
+        """
+        scrubbed = DatabaseAdapter._scrub_sql_text(sql or "").lstrip(" \t\r\n(")
+        first_word = re.match(r"[A-Za-z]+", scrubbed)
+        verb = first_word.group(0).upper() if first_word else ""
+        if verb in ("INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE"):
+            return True
+        if verb == "WITH":
+            return bool(re.search(r"\b(INSERT|UPDATE|DELETE|MERGE)\b", scrubbed, re.IGNORECASE))
+        return False
+
+    @staticmethod
     def _strip_trailing_order_by(sql: str) -> str:
         """Strip a trailing top-level ``ORDER BY`` so the SQL can be safely
         wrapped in ``SELECT COUNT(*) FROM (<sql>)`` for the row-count probe.

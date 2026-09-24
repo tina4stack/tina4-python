@@ -245,6 +245,23 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             # Never let bookkeeping mask the rows we already fetched.
             pass
 
+    def _end_fetch_txn(self, sql: str):
+        """Issue #133: close the implicit transaction fetch()/fetch_one() opened.
+
+        A read ends in the #51 ROLLBACK. A write that returns rows
+        (``INSERT/UPDATE/DELETE ... RETURNING``, a data-modifying CTE) goes
+        through fetch_one() naturally - the caller wants the new id - and that
+        rollback silently discarded the row after handing its id out. A write is
+        committed on exactly execute()'s gate instead: outside an explicit
+        transaction and with autocommit on. With autocommit off it stays open
+        for the caller's commit(), again exactly like execute().
+        """
+        if not self._is_write_statement(sql):
+            self._end_read_txn()
+            return
+        if not self._in_transaction and self.autocommit and self._conn is not None:
+            self._conn.commit()
+
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to PostgreSQL.
 
@@ -389,11 +406,20 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # so psycopg2's type adaptation is unchanged.
         cursor = self._conn.cursor()
 
+        # #133: a write that returns rows can be neither wrapped in the COUNT
+        # probe nor paginated - PostgreSQL rejects both, and a probe that DID
+        # run would perform the write twice. It runs once, as written, and its
+        # returned rows are the whole result.
+        is_write = self._is_write_statement(sql)
+
         # Count total rows (plain cursor -> read the scalar positionally, not ["cnt"])
         count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
         try:
-            self._safe_execute(cursor, count_sql, params)
-            total = cursor.fetchone()[0]
+            if is_write:
+                total = None
+            else:
+                self._safe_execute(cursor, count_sql, params)
+                total = cursor.fetchone()[0]
         except Exception as e:
             total = 0
             # v3.13.11 (issue #49 Gap 1): log the probe failure as a
@@ -421,7 +447,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # carried its own LIMIT became `... LIMIT 3 LIMIT %s OFFSET %s` here --
         # a syntax error MEASURED on a live PostgreSQL. It worked on sqlite and
         # crashed on the server, which is the swap ADR-0024 exists to protect.
-        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        if is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql):
             paginated_sql = sql
             paginated_params = params or []
         else:
@@ -435,9 +461,13 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             for row in cursor.fetchall()
         ]
 
+        if total is None:
+            total = len(rows)
+
         # v3.13.15 (#51): rows are materialised above — close the implicit
-        # read transaction so the connection doesn't sit idle-in-transaction.
-        self._end_read_txn()
+        # transaction so the connection doesn't sit idle-in-transaction; a
+        # write is committed rather than rolled back (#133).
+        self._end_fetch_txn(sql)
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -451,11 +481,11 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         self._exec_with_handling(cursor, sql, params)
         row = cursor.fetchone()
         result = self._decode_blobs(dict(row)) if row else None
-        # v3.13.15 (#51): close the implicit read transaction so the
-        # connection doesn't sit 'idle in transaction' (psycopg2 autocommit
-        # is off). This is the path the migration runner's MAX(batch)
-        # lookup leaked through.
-        self._end_read_txn()
+        # v3.13.15 (#51): close the implicit transaction so the connection
+        # doesn't sit 'idle in transaction' (psycopg2 autocommit is off). This
+        # is the path the migration runner's MAX(batch) lookup leaked through.
+        # A write (INSERT ... RETURNING id) is committed, not rolled back (#133).
+        self._end_fetch_txn(sql)
         return result
 
     @staticmethod

@@ -700,7 +700,13 @@ class Database:
         lookup and no store — and runs the query straight against the DB.
         Works in either cache mode (request-scoped auto-cache or persistent
         DB cache). The default (``False``) preserves today's behaviour.
+
+        A write that returns rows (``INSERT ... RETURNING``) is never served
+        from the cache and flushes it, exactly as :meth:`execute` does (#133).
         """
+        if self._cache_enabled and DatabaseAdapter._is_write_statement(sql):
+            self._cache_invalidate()
+            no_cache = True
         if self._cache_enabled and not no_cache:
             key = self._cache_key(sql + f":L{limit}:S{offset}", params)
             cached = self._cache_get(key)
@@ -781,8 +787,11 @@ class Database:
         ``no_cache=True`` bypasses the query cache for this one call — no
         lookup and no store — and runs the query straight against the DB
         (see :meth:`fetch`). The default (``False``) preserves today's
-        behaviour.
+        behaviour. A write that returns rows bypasses and flushes the cache (#133).
         """
+        if self._cache_enabled and DatabaseAdapter._is_write_statement(sql):
+            self._cache_invalidate()
+            no_cache = True
         if self._cache_enabled and not no_cache:
             key = self._cache_key(sql + ":ONE", params)
             cached = self._cache_get(key)
