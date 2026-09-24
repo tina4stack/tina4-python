@@ -41,6 +41,26 @@ _PYTHON_TO_XSD = {
 }
 
 
+# The encoding named in an XML declaration, if there is one.
+_XML_DECLARED_ENCODING = re.compile(r"""^<\?xml\b[^>]*?\bencoding\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
+
+
+def _is_plain_utf8_text(xml_body: str) -> bool:
+    """True when the text the DOCTYPE guard reads is the text the parser reads.
+
+    A byte order mark, a NUL (UTF-16 without a BOM is ASCII interleaved with
+    NULs, and is still valid UTF-8), or an XML declaration naming any encoding
+    but UTF-8 all let the parser re-decode the body into something the
+    ``<!DOCTYPE`` regex never saw - measured: a BOM-less UTF-16LE envelope had
+    its DTD entity EXPANDED. Invalid UTF-8 never gets here: the request body
+    decode already refused it (the body is then empty -> Malformed XML).
+    """
+    if xml_body.startswith("\ufeff") or "\x00" in xml_body:
+        return False
+    declared = _XML_DECLARED_ENCODING.match(xml_body)
+    return declared is None or declared.group(1).strip().lower() in ("utf-8", "utf8")
+
+
 def wsdl_operation(response_schema: dict = None):
     """Decorator to mark a method as a WSDL operation with its response schema."""
     def decorator(func):
@@ -124,7 +144,15 @@ class WSDL:
         # Parse SOAP request
         body = ""
         if hasattr(self._request, "body"):
-            body = self._request.body if isinstance(self._request.body, str) else str(self._request.body or "")
+            raw = self._request.body
+            if isinstance(raw, (bytes, bytearray)):
+                # Strict UTF-8, never str(bytes): invalid bytes become an
+                # empty body, which the parser refuses as Malformed XML.
+                try:
+                    raw = bytes(raw).decode("utf-8")
+                except UnicodeDecodeError:
+                    raw = ""
+            body = raw if isinstance(raw, str) else str(raw or "")
 
         return self._process_soap(body)
 
@@ -138,6 +166,11 @@ class WSDL:
         # XML backend, regardless of parser defaults.
         if re.search(r"<!DOCTYPE", xml_body, re.IGNORECASE):
             return self._soap_fault("Client", "DOCTYPE declarations are not allowed in SOAP messages")
+
+        # Only plain UTF-8 reaches the parser, so the guard above has read the
+        # same text the parser will (parity with tina4-php).
+        if not _is_plain_utf8_text(xml_body):
+            return self._soap_fault("Client", "Malformed XML")
 
         try:
             # Parse XML
