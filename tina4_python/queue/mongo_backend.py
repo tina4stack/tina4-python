@@ -94,9 +94,26 @@ class MongoBackend:
             attempts=doc.get("attempts", 0),
         )
 
+    _DEAD_STATES = ("dead", "dead_letter", "failed")
+
     def size(self, status: str = "pending") -> int:
-        if status != "pending":
-            return 0
+        # ADR-0022 decision 7: size(status) must never answer a different
+        # question than the one asked. Returning 0 for every non-pending status
+        # was a silent wrong answer -- size("dead") reported 0 while
+        # dead_letters() returned N. Mongo CAN count each status, so it does:
+        # the dead aliases count the .dead_letter topic (== len(dead_letters())),
+        # reserved/completed count by the document status field, pending keeps
+        # the existing count.
+        if status in self._DEAD_STATES:
+            self._backend._ensure_connected()
+            return self._backend._collection.count_documents(
+                {"topic": f"{self._topic}.dead_letter"}
+            )
+        if status in ("reserved", "completed"):
+            self._backend._ensure_connected()
+            return self._backend._collection.count_documents(
+                {"topic": self._topic, "status": status}
+            )
         return self._backend.size(self._topic)
 
     def purge(self, status: str = "completed") -> int:
@@ -172,7 +189,15 @@ class MongoBackend:
         self._backend._ensure_connected()
         dl_topic = f"{self._topic}.dead_letter"
         docs = self._backend._collection.find({"topic": dl_topic})
-        return [{"id": d.get("_id"), "data": d.get("data", d.get("payload")),
+        # Surface the ORIGINAL job id (stored on ``data.id`` by dead_letter()),
+        # NOT the dead-letter doc's synthetic ``_id``. retry_job() looks the doc
+        # up by ``data.id``, so returning ``_id`` here made the no-arg
+        # Queue.retry() -> retry_job(j.id) loop (and any dead_letters()[i].id
+        # caller) search for an id that never matches -- retry() returned False
+        # and the job stayed dead. The original id round-trips: a re-pop after a
+        # successful revival yields the same job.id the producer pushed.
+        return [{"id": (d.get("data") or {}).get("id", d.get("_id")),
+                 "data": d.get("data", d.get("payload")),
                  "attempts": d.get("attempts", 0), "error": d.get("error")}
                 for d in docs]
 
@@ -256,6 +281,17 @@ class MongoBackend:
             self._backend.acknowledge(self._topic, str(job.id))
         else:
             self._backend.reject(self._topic, str(job.id), requeue=True, error=error)
+
+    def reject(self, job: Job, reason: str = ""):
+        """Dead-letter the job immediately — no retry (ADR-0023 reject())."""
+        # Terminal: floor attempts at max_retries so it reads as exhausted,
+        # consistent with fail()'s dead-letter path and size("dead").
+        job.attempts = max(job.attempts + 1, self._max_retries)
+        job.error = reason
+        msg = {"id": job.id, "payload": job.data,
+               "attempts": job.attempts, "error": reason}
+        self._backend.dead_letter(self._topic, msg)
+        self._backend.acknowledge(self._topic, str(job.id))
 
     def retry(self, job: Job, delay_seconds: int = 0):
         job.attempts += 1

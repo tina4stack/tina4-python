@@ -550,6 +550,22 @@ class LiteBackend:
         else:
             self._dead_letter(job, error)
 
+    def reject(self, job: Job, reason: str = ""):
+        """Dead-letter the job immediately — no retry (ADR-0023 reject()).
+
+        Unlike fail(), which requeues until max_retries is spent, reject()
+        moves a known-poison job straight to the dead-letter store on this call.
+        """
+        self._clear_reservation(job.id)
+        # A rejected job is terminal, so record it as exhausted: dead_letters()
+        # (and RabbitMQ/Kafka's) filter the dead-letter store by
+        # attempts >= max_retries, and size("dead") counts the store. Flooring
+        # attempts at max_retries keeps both answers consistent for a job
+        # rejected before its retry budget was spent.
+        job.attempts = max(job.attempts + 1, self._max_retries)
+        job.error = reason
+        self._dead_letter(job, reason)
+
     def retry(self, job: Job, delay_seconds: int = 0):
         """Explicit re-queue requested by the caller (job.retry()).
 
