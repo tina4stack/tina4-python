@@ -35,6 +35,7 @@ import os
 import time
 import logging
 import threading
+from urllib.parse import urlparse
 
 from tina4_python.core.rate_limiter import RateLimiter  # noqa: F401 — re-export for backward compat
 from tina4_python.core.response import Response
@@ -371,18 +372,59 @@ class CorsMiddleware:
             return request_origin
         return ""
 
+    @staticmethod
+    def _normalised_origin(value: str) -> str | None:
+        """``scheme://host[:port]`` lower-cased, with the default port dropped.
+
+        http:80 and https:443 are the default ports, so ``http://a`` and
+        ``http://a:80`` are the same origin. ``None`` for anything that is not
+        an http(s) origin (``null``, an empty value, a malformed port).
+        """
+        try:
+            parsed = urlparse((value or "").strip())
+            port = parsed.port
+        except ValueError:
+            return None
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        if scheme not in ("http", "https") or not host:
+            return None
+        if ":" in host:
+            host = f"[{host}]"
+        if port is None or (scheme, port) in (("http", 80), ("https", 443)):
+            return f"{scheme}://{host}"
+        return f"{scheme}://{host}:{port}"
+
+    def is_same_origin(self, request) -> bool:
+        """True when the request's Origin is the request's OWN origin (#139).
+
+        Browsers send ``Origin`` on every same-origin POST/PUT/PATCH/DELETE, so
+        its presence alone does not make a request cross-origin. The request's
+        own origin is ``request.url``'s scheme and host - the same
+        x-forwarded-proto aware scheme the session cookie trusts. Being
+        same-origin only silences the CORS warning: it never adds a CORS header
+        and never grants anything a cross-origin caller would not get.
+        """
+        origin = self._normalised_origin(request.headers.get("origin", ""))
+        return origin is not None and origin == self._normalised_origin(getattr(request, "url", "") or "")
+
     def apply(self, request, response):
         """Inject CORS headers into the response."""
         request_origin = request.headers.get("origin", "")
         allowed = self.allowed_origins
+        # A same-origin request needs no CORS headers and must never be warned
+        # about - the warning used to fire on an app's own SPA saving a form.
+        warn = bool(request_origin) and not self.is_same_origin(request)
 
         if not allowed:
-            if request_origin:
+            if warn:
+                # Never suggest '*': it would open the API to every website to
+                # silence a warning about one origin. Name that origin instead.
                 _cors_warn_once(
                     "unconfigured",
-                    f"CORS: refused cross-origin request from {request_origin} — no policy is "
-                    f"configured. Set TINA4_CORS_ORIGINS to the origins you want to allow, e.g. "
-                    f"TINA4_CORS_ORIGINS=https://app.example.com (or '*' to allow any origin)."
+                    f"CORS: cross-origin request from {request_origin} got no CORS headers - no "
+                    f"policy is configured, so the browser will block the response. If this origin "
+                    f"should be allowed, add it: TINA4_CORS_ORIGINS={request_origin}"
                 )
             return response
 
@@ -395,11 +437,13 @@ class CorsMiddleware:
 
         origin = self.allowed_origin(request_origin)
         if not origin:
-            if request_origin:
+            if warn:
                 _cors_warn_once(
                     f"denied:{request_origin}",
                     f"CORS: origin {request_origin} is not in TINA4_CORS_ORIGINS "
-                    f"({self.origins}) — the browser will block this response."
+                    f"({self.origins}) - the browser will block this response. If this origin "
+                    f"should be allowed, add it to the list: "
+                    f"TINA4_CORS_ORIGINS={self.origins},{request_origin}"
                 )
             return response
 
