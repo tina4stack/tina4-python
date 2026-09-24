@@ -19,6 +19,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # The marker is the whole of what MySQL's CRUD used to justify overriding.
     PARAM_MARKER = "%s"
+    BACKSLASH_ESCAPES = True
     #: MySQL quotes identifiers with backticks (ANSI_QUOTES is not the default).
     IDENTIFIER_QUOTE = ("`", "`")
 
@@ -77,7 +78,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
             self._conn = None
 
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
 
         # MySQL does not support RETURNING — strip it and emulate
         returning_cols = None
@@ -90,6 +91,13 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         cursor.execute(sql, params or [])
 
         records = []
+        # A statement that returns rows (execute("SELECT ...") is allowed and
+        # returns them) must be read before anything else runs on the
+        # connection: mysql-connector refuses the commit below with "Unread
+        # result found" otherwise. Found by the #138 regression on a live MySQL.
+        returns_rows = bool(cursor.with_rows)
+        if returns_rows:
+            records = [dict(row) for row in cursor.fetchall()]
         # MySQL reports the FIRST generated id of a MULTI-ROW INSERT, not the
         # last (verified live: a 3-row insert into a fresh table reports 1 while
         # MAX(id) is 3). Every other engine reports the last, and callers -
@@ -126,7 +134,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
 
-        return DatabaseResult(
+        result = DatabaseResult(
             records=records,
             count=len(records),
             affected_rows=affected,
@@ -134,13 +142,15 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
             sql=sql,
             adapter=self,
         )
+        # A re-selected RETURNING row counts as a result set too.
+        return result.with_rows() if (returns_rows or records) else result
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
         # v3.13.12: strip trailing `;` before wrapping with COUNT(*)
         # and appending LIMIT/OFFSET — see DatabaseAdapter helper.
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(dictionary=True)
 
         # Count total rows. The COUNT probe is best-effort — a failure here
@@ -194,7 +204,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(dictionary=True)
         cursor.execute(sql, params or [])
         row = cursor.fetchone()
@@ -294,13 +304,15 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # -- SQL Translation -----------------------------------------------
 
-    def _translate_sql(self, sql: str) -> str:
+    def _translate_sql(self, sql: str, rewrite_placeholders: bool = True) -> str:
         """Translate portable SQL to MySQL dialect.
 
         MySQL uses %s placeholders, CONCAT() instead of ||,
         AUTO_INCREMENT, and ILIKE must be lowered.
         """
-        sql = SQLTranslator.placeholder_style(sql, "%s")
+        # No parameters: sent exactly as written (see PostgreSQLAdapter._translate_sql).
+        if rewrite_placeholders:
+            sql = SQLTranslator.placeholder_style(sql, "%s", self.BACKSLASH_ESCAPES)
         sql = SQLTranslator.concat_pipes_to_func(sql)
         sql = SQLTranslator.ilike_to_like(sql)
         sql = SQLTranslator.auto_increment_syntax(sql, "mysql")

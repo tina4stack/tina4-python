@@ -12,164 +12,118 @@ exhausted — then autodiscovery failed mid-boot and every route 404'd while
 
 The fix: after a successful non-transactional read, roll back the implicit
 transaction (a SELECT has nothing to persist). Inside an explicit
-``start_transaction()`` the caller owns it, so we defer. Writes go through
-``execute()``, which commits a standalone write per-statement (autocommit is
-on by default outside an explicit transaction) — this read-side rollback only
-touches the implicit transaction left by a bare SELECT.
+``start_transaction()`` the caller owns it, so we defer. A write that returns
+rows is committed instead (#133, ``test_issue133_fetch_write_commits.py``).
 
-These tests need no live PostgreSQL. The ``_end_read_txn`` checks run with no
-psycopg2 at all; the ``fetch`` wiring checks use a fake connection and stub
-``psycopg2`` only when the optional driver isn't installed (so they still run
-in CI, where the ``postgres`` extra is absent).
+NO MOCKS. This file used to drive a fake connection that counted rollback()
+calls; it proved the method was called, never that PostgreSQL agreed. Every
+check below asks the SERVER: ``pg_stat_activity.state`` for the tested
+connection's own backend, read from a second connection - ``idle`` versus
+``idle in transaction`` is exactly the symptom #51 reported.
 """
-import sys
-import types
+import os
+import socket
+from urllib.parse import urlparse
 
 import pytest
 
 from tina4_python.database.postgres import PostgreSQLAdapter
 
+PG_URL = os.environ.get("TINA4_TEST_PG_URL", "postgres://tina4:tina4@localhost:55432/tina4_py")
+_PARSED = urlparse(PG_URL)
+PG_HOST, PG_PORT = _PARSED.hostname or "localhost", _PARSED.port or 5432
+TABLE = "issue51_py_idle"
 
-@pytest.fixture(autouse=True)
-def _ensure_psycopg2(monkeypatch):
-    """fetch()/fetch_one() do ``import psycopg2.extras``. The driver is an
-    optional extra, so stub it when absent — the fake cursor ignores the
-    cursor_factory anyway. Real psycopg2 is used untouched when present."""
+
+def _pg_reachable() -> bool:
     try:
-        import psycopg2.extras  # noqa: F401
-    except Exception:
-        psycopg2 = types.ModuleType("psycopg2")
-        extras = types.ModuleType("psycopg2.extras")
-        extras.RealDictCursor = object
-        psycopg2.extras = extras
-        monkeypatch.setitem(sys.modules, "psycopg2", psycopg2)
-        monkeypatch.setitem(sys.modules, "psycopg2.extras", extras)
+        with socket.create_connection((PG_HOST, PG_PORT), timeout=1.0):
+            return True
+    except OSError:
+        return False
 
 
-class FakeCursor:
-    """Minimal psycopg2-cursor stand-in that models BOTH real cursor modes.
-
-    fetch() now opens a PLAIN cursor (psycopg2 default -> tuple rows) and
-    hydrates dicts from cursor.description, while fetch_one() still opens a
-    RealDictCursor (dict rows). A faithful fake therefore has to honour
-    cursor_factory: dict_mode=True yields dict rows and a {"cnt": N} probe
-    result (RealDictCursor); dict_mode=False yields tuple rows and a (N,) probe
-    result (plain cursor), exactly as real psycopg2 does. Tests still supply
-    rows as dicts; the fake derives the tuple/description shape from them."""
-
-    def __init__(self, rows, dict_mode):
-        self._rows = rows
-        self._dict_mode = dict_mode
-        self._last_sql = ""
-
-    def execute(self, sql, params=None):
-        self._last_sql = sql
-
-    def fetchone(self):
-        if "_count_subquery" in self._last_sql:
-            # plain cursor -> scalar tuple; RealDictCursor -> {"cnt": N}
-            return {"cnt": len(self._rows)} if self._dict_mode else (len(self._rows),)
-        if not self._rows:
-            return None
-        row = self._rows[0]
-        return row if self._dict_mode else tuple(row.values())
-
-    def fetchall(self):
-        if self._dict_mode:
-            return self._rows
-        return [tuple(row.values()) for row in self._rows]
-
-    @property
-    def description(self):
-        if self._rows:
-            return [(key,) for key in self._rows[0].keys()]
-        return [("col",)]
+pytestmark = pytest.mark.skipif(
+    not _pg_reachable(),
+    reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT} - skip integration test",
+)
 
 
-class FakeInfo:
-    # 0 == TRANSACTION_STATUS_IDLE — never equals INERROR, so the
-    # pre-flight heal step is a no-op and any rollback we observe is
-    # purely from _end_read_txn().
-    transaction_status = 0
+def _connect():
+    from tina4_python.database import Database
+    return Database(PG_URL)
 
 
-class FakeConn:
-    """Records rollback()/commit() so we can assert the implicit read
-    transaction is closed exactly once."""
-
-    def __init__(self, rows):
-        self._rows = rows
-        self.rollbacks = 0
-        self.commits = 0
-        self.info = FakeInfo()
-
-    def cursor(self, cursor_factory=None):
-        # cursor_factory None => plain (tuple) cursor, as fetch() now uses;
-        # a factory => RealDictCursor (dict), as fetch_one() uses.
-        return FakeCursor(self._rows, dict_mode=cursor_factory is not None)
-
-    def rollback(self):
-        self.rollbacks += 1
-
-    def commit(self):
-        self.commits += 1
+@pytest.fixture
+def observer():
+    """A second connection that reads the server's view of the others."""
+    database = _connect()
+    database.execute(f"DROP TABLE IF EXISTS {TABLE}")
+    database.execute(f"CREATE TABLE {TABLE} (id serial PRIMARY KEY, note text)")
+    database.execute(f"INSERT INTO {TABLE} (note) VALUES (?)", ["row"])
+    yield database
+    database.execute(f"DROP TABLE IF EXISTS {TABLE}")
+    database.close()
 
 
-def _adapter(rows, in_transaction=False):
-    adapter = PostgreSQLAdapter()
-    adapter._conn = FakeConn(rows)
-    adapter._in_transaction = in_transaction
-    return adapter
+@pytest.fixture
+def reader():
+    database = _connect()
+    yield database
+    database.close()
 
 
-# ── _end_read_txn() unit (no psycopg2 needed) ───────────────────────
+def _server_state(observer, database) -> str:
+    """pg_stat_activity.state for ``database``'s own backend, as the server sees it."""
+    pid = database._get_adapter()._conn.info.backend_pid
+    row = observer.fetch_one("SELECT state FROM pg_stat_activity WHERE pid = ?", [pid], no_cache=True)
+    return row["state"]
 
-def test_end_read_txn_rolls_back_when_implicit():
-    adapter = _adapter([])
-    adapter._end_read_txn()
-    assert adapter._conn.rollbacks == 1
 
-
-def test_end_read_txn_defers_inside_explicit_transaction():
-    adapter = _adapter([], in_transaction=True)
-    adapter._end_read_txn()
-    assert adapter._conn.rollbacks == 0, (
-        "Inside an explicit transaction the caller owns it — must not rollback."
+def test_fetch_one_leaves_the_connection_idle(observer, reader):
+    assert reader.fetch_one(f"SELECT note FROM {TABLE} WHERE id = 1", no_cache=True) == {"note": "row"}
+    assert _server_state(observer, reader) == "idle", (
+        "fetch_one() left the connection 'idle in transaction' (#51)"
     )
 
 
-def test_end_read_txn_no_connection_is_safe():
+def test_fetch_leaves_the_connection_idle(observer, reader):
+    assert reader.fetch(f"SELECT note FROM {TABLE}", no_cache=True).records == [{"note": "row"}]
+    assert _server_state(observer, reader) == "idle", "fetch() left the connection 'idle in transaction' (#51)"
+
+
+def test_fetch_one_inside_an_explicit_transaction_leaves_it_open(observer, reader):
+    """Negative case: the caller owns an explicit transaction; a read must not end it."""
+    reader.start_transaction()
+    reader.fetch_one(f"SELECT note FROM {TABLE} WHERE id = 1", no_cache=True)
+    assert _server_state(observer, reader) == "idle in transaction"
+    reader.rollback()
+    assert _server_state(observer, reader) == "idle"
+
+
+def test_fetch_inside_an_explicit_transaction_leaves_it_open(observer, reader):
+    reader.start_transaction()
+    reader.fetch(f"SELECT note FROM {TABLE}", no_cache=True)
+    assert _server_state(observer, reader) == "idle in transaction"
+    reader.commit()
+    assert _server_state(observer, reader) == "idle"
+
+
+def test_short_lived_readers_do_not_leak_open_transactions(observer):
+    """The #51 shape: boot-time readers that read once and are never closed."""
+    readers = [_connect() for _ in range(5)]
+    try:
+        for database in readers:
+            database.fetch_one(f"SELECT max(id) AS n FROM {TABLE}", no_cache=True)
+        states = [_server_state(observer, database) for database in readers]
+        assert states == ["idle"] * 5, f"one-shot readers left transactions open: {states}"
+    finally:
+        for database in readers:
+            database.close()
+
+
+def test_ending_the_read_transaction_without_a_connection_is_safe():
+    """Pure: no connection, nothing to close, and no exception."""
     adapter = PostgreSQLAdapter()
     adapter._conn = None
-    adapter._end_read_txn()  # must not raise
-
-
-# ── fetch_one() / fetch() wiring ────────────────────────────────────
-
-def test_fetch_one_closes_idle_transaction():
-    adapter = _adapter([{"one": 1}])
-    row = adapter.fetch_one("SELECT 1 AS one")
-    assert row == {"one": 1}
-    assert adapter._conn.rollbacks == 1, (
-        "fetch_one must close the implicit read transaction (#51) so the "
-        "connection doesn't sit idle-in-transaction."
-    )
-
-
-def test_fetch_one_defers_inside_explicit_transaction():
-    adapter = _adapter([{"one": 1}], in_transaction=True)
-    adapter.fetch_one("SELECT 1 AS one")
-    assert adapter._conn.rollbacks == 0
-
-
-def test_fetch_closes_idle_transaction():
-    adapter = _adapter([{"one": 1}])
-    result = adapter.fetch("SELECT 1 AS one")
-    assert result.records == [{"one": 1}]
-    assert adapter._conn.rollbacks == 1
-
-
-def test_fetch_defers_inside_explicit_transaction():
-    adapter = _adapter([{"one": 1}], in_transaction=True)
-    adapter.fetch("SELECT 1 AS one")
-    assert adapter._conn.rollbacks == 0
+    adapter._end_read_txn()

@@ -86,7 +86,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             self._conn = None
 
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
 
         # MSSQL does not support RETURNING — strip and emulate
         returning_cols = None
@@ -108,6 +108,16 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
         records = []
         last_id = None
+
+        # A statement that returns rows - SELECT, WITH ... SELECT, OUTPUT, EXEC
+        # of a procedure with a result set - hands them back. Read them NOW: the
+        # SCOPE_IDENTITY probe below runs on this cursor and discarded an
+        # INSERT ... OUTPUT's rows unread.
+        returns_rows = cursor.description is not None
+        if returns_rows:
+            records = [dict(row) for row in cursor.fetchall()]
+            if not affected and cursor.rowcount is not None and cursor.rowcount > 0:
+                affected = cursor.rowcount  # OUTPUT: counted once its rows are read
 
         # Get last inserted ID for INSERT statements
         sql_upper = sql.strip().upper()
@@ -143,7 +153,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
 
-        return DatabaseResult(
+        result = DatabaseResult(
             records=records,
             count=len(records),
             affected_rows=affected,
@@ -151,12 +161,13 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             sql=sql,
             adapter=self,
         )
+        return result.with_rows() if (returns_rows or records) else result
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
         # v3.13.12: strip trailing `;` — see DatabaseAdapter helper.
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(as_dict=True)
 
         # Count total rows. The COUNT probe is best-effort — a failure here
@@ -169,11 +180,17 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # ORDER BY in a derived-table subquery without TOP/OFFSET/FETCH (#262),
         # which otherwise zeroed the count for any query ending in ORDER BY. The
         # paginated query below keeps its ORDER BY.
+        # #133: a write that returns rows runs ONCE, exactly as written - no
+        # COUNT probe (a probe that ran would repeat the write) and no
+        # pagination, which no engine accepts after RETURNING/OUTPUT.
+        is_write = self._is_write_statement(sql)
         count_sql = f"SELECT COUNT(*) AS cnt FROM ({self._strip_trailing_order_by(sql)}) AS _count_subquery"
         probe = self._conn.cursor(as_dict=True)
         try:
-            probe.execute(count_sql, tuple(params) if params else ())
-            total = probe.fetchone()["cnt"]
+            total = None
+            if not is_write:
+                probe.execute(count_sql, tuple(params) if params else ())
+                total = probe.fetchone()["cnt"]
         except Exception:
             total = 0
         finally:
@@ -185,7 +202,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # Apply pagination — MSSQL uses OFFSET/FETCH.
         # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
         # default — give me ALL rows).
-        if limit is None or limit <= 0:
+        if is_write or limit is None or limit <= 0:
             paginated_sql = sql
             paginated_params = tuple(params or [])
         else:
@@ -197,15 +214,22 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             paginated_params = tuple(params or []) + (offset, limit)
         cursor.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
+        if total is None:
+            total = len(rows)
+        self._commit_fetched_write(sql)  # #133: INSERT ... OUTPUT commits like execute()
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(as_dict=True)
         cursor.execute(sql, tuple(params) if params else ())
         row = cursor.fetchone()
+        # #133: pymssql runs with autocommit=False, so an INSERT ... OUTPUT here
+        # returned its id and held the row (and its lock) uncommitted until the
+        # connection closed and rolled it back.
+        self._commit_fetched_write(sql)
         return dict(row) if row else None
 
     def start_transaction(self):
@@ -321,14 +345,16 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # -- SQL Translation -----------------------------------------------
 
-    def _translate_sql(self, sql: str) -> str:
+    def _translate_sql(self, sql: str, rewrite_placeholders: bool = True) -> str:
         """Translate portable SQL to MSSQL dialect.
 
         MSSQL uses %s placeholders (pymssql), CONCAT() instead of ||,
         TOP instead of LIMIT, IDENTITY instead of AUTOINCREMENT,
         and no ILIKE.
         """
-        sql = SQLTranslator.placeholder_style(sql, "%s")
+        # No parameters: sent exactly as written (see PostgreSQLAdapter._translate_sql).
+        if rewrite_placeholders:
+            sql = SQLTranslator.placeholder_style(sql, "%s")
         sql = SQLTranslator.concat_pipes_to_func(sql)
         sql = SQLTranslator.ilike_to_like(sql)
         sql = SQLTranslator.auto_increment_syntax(sql, "mssql")

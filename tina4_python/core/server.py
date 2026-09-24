@@ -2346,8 +2346,15 @@ async def _stage_cors_preflight(ctx: DispatchContext) -> Response | None:
 
 
 async def _stage_rate_limit(ctx: DispatchContext) -> Response | None:
-    """Reject the request when it is over the configured rate limit."""
-    return _handle_rate_limit(ctx.request, ctx.response)
+    """Reject the request when it is over the configured rate limit.
+
+    The 429 answers before any middleware runs, so it takes the security
+    headers here: a refusal is still a page that can be framed or sniffed.
+    """
+    refused = _handle_rate_limit(ctx.request, ctx.response)
+    if refused is not None:
+        _apply_security_headers(ctx.request, refused)
+    return refused
 
 
 async def _stage_start_timer(ctx: DispatchContext) -> None:
@@ -2454,6 +2461,8 @@ async def _stage_global_middleware_pre(ctx: DispatchContext) -> Response | None:
         return None
 
     _run_after_middleware(ctx.request, ctx.response, pre_route, include_globals=False)
+    # A pre-match refusal answers before the response stages run.
+    _apply_security_headers(ctx.request, ctx.response)
     return ctx.response
 
 
@@ -2608,6 +2617,47 @@ def _stage_not_found(ctx: DispatchContext) -> bool:
     return True
 
 
+def _apply_security_headers(request: Request, response: Response) -> None:
+    """Add every security header the attached middleware would set and ``response`` lacks.
+
+    Only MISSING headers are added, so a value a route or middleware set on
+    purpose - a looser frame policy for an embeddable widget, say - is kept.
+    A no-op unless ``SecurityHeadersMiddleware`` (or a subclass) is attached.
+    """
+    from tina4_python.core.middleware import Middleware, SecurityHeadersMiddleware
+    for middleware in Middleware.get_global():
+        if not (isinstance(middleware, type) and issubclass(middleware, SecurityHeadersMiddleware)):
+            continue
+        wanted = Response()
+        middleware().before_security(request, wanted)
+        present = {name.lower() for name, _ in response._headers}
+        for name, value in wanted._headers:
+            if name.lower() not in present:
+                response.header(name, value)
+
+
+def _stage_security_headers(ctx: DispatchContext) -> None:
+    """Every routed or fallback response carries the security headers.
+
+    ``SecurityHeadersMiddleware`` sets them in a ``before_*`` hook, and that
+    was the only place they came from, which missed two families of response:
+
+    * anything no route produced (#137) - a static file, the SPA
+      ``index.html`` that ``/`` resolves to, an auto-routed template, a 405 or
+      a 404 - because global middleware only runs inside a matched route;
+    * a REFUSAL by an earlier hook. Global middleware runs in registration
+      order, CSRF is attached before the security headers, and a refusing hook
+      skips every hook after it: the CSRF 403 went out with no CSP, no
+      ``nosniff`` and no frame protection.
+
+    Filling in what is missing here covers both without reordering anyone's
+    middleware. The pre-match refusals (rate limit, pre-match middleware)
+    return before this stage and apply the same helper themselves.
+    """
+    _apply_security_headers(ctx.request, ctx.response)
+    return None
+
+
 def _stage_apply_cors(ctx: DispatchContext) -> None:
     """Apply the CORS policy headers to the finished response."""
     _cors.apply(ctx.request, ctx.response)
@@ -2698,12 +2748,18 @@ def _stage_session_save(ctx: DispatchContext) -> None:
 
     A brand-new session the route never wrote to is NOT saved - that is what
     stops empty orphaned session files accumulating on disk.
+
+    "Empty" is decided on the RAW data (``len(session)``), never on ``all()``:
+    ``all()`` is the user-facing view and hides the reserved SSO keys, so a new
+    session holding only ``Sso.login()``'s pending state looked empty and went
+    out with no cookie - the provider's callback then arrived without it and
+    the first-visit sign-in failed (#135).
     """
     if ctx.request.session is None:
         return None
     session = ctx.request.session
     try:
-        if not (getattr(session, "_is_new", False) and not session.all()):
+        if not (getattr(session, "_is_new", False) and len(session) == 0):
             session.save()
             sid = getattr(session, "session_id", None) or getattr(session, "id", None)
             if sid:
@@ -2786,6 +2842,7 @@ _FALLBACK_STAGES = (
 #: Content-Length report the body AFTER injection, which is exactly what the
 #: equivalent GET would send (RFC 9110 s9.3.2).
 _RESPONSE_STAGES = (
+    _stage_security_headers,
     _stage_apply_cors,
     _stage_dev_toolbar_inject,
     _stage_dev_inspector_capture,
@@ -2879,16 +2936,37 @@ def asgi(root_dir: str = "src"):
     the bootstrap rather than leaving each user to find ``_auto_discover``,
     which is private and has no business in a deployment file.
 
-    It loads .env the way run() does before discovering routes, so a setting
-    in .env applies under uvicorn exactly as under the built-in server
-    (ADR-0072).
+    It runs the SAME ``_bootstrap_application()`` as ``run()`` - env,
+    logging, discovery, configured SSO routes, security middleware and
+    migrations - so the two entry points cannot drift (#134: asgi() once
+    shipped no security headers and never enforced ``TINA4_CSRF=true``).
+
 
     :param root_dir: Directory to discover routes from. Defaults to ``src``.
     :return: The ASGI 3 callable.
     """
-    _load_project_env()
-    _auto_discover(root_dir)
+    _bootstrap_application(root_dir)
     return app
+
+
+def _attach_security_middleware() -> None:
+    """Attach the middleware EVERY serving entry point must carry.
+
+    Shared by ``run()`` and ``asgi()`` so the two bootstraps cannot drift again
+    (#134). Both attaches are idempotent (``Middleware.use`` de-dupes).
+
+    CSRF is attached when TINA4_CSRF is enabled (OFF by default - a default app
+    has no CSRF gate; TINA4_CSRF=true gates every write route).
+
+    Security headers are registered UNCONDITIONALLY (secure-by-default,
+    SECHDR-DEC-01). Unlike CSRF this needs no opt-in - a default app ships
+    X-Frame-Options/X-Content-Type-Options/CSP/etc. with no code change. HSTS
+    stays HTTPS-only.
+    """
+    from tina4_python.core.middleware import attach_csrf_from_env, attach_security_headers
+    if attach_csrf_from_env():
+        Log.info("CSRF protection enabled (TINA4_CSRF) — CsrfMiddleware attached")
+    attach_security_headers()
 
 
 def _load_project_env() -> None:
@@ -2900,6 +2978,7 @@ def _load_project_env() -> None:
     from tina4_python.dotenv import load_env
     load_env(override=False)
     _apply_health_path_from_env()
+
 
 
 def _transport_rejection(status: int, message: str,
@@ -2930,6 +3009,7 @@ def _transport_rejection(status: int, message: str,
 
 def _body_too_large_message(size: int, limit: int) -> str:
     return f"Request body ({size} bytes) exceeds TINA4_MAX_UPLOAD_SIZE ({limit} bytes)"
+
 
 
 async def _send_payload_too_large(send, received: int, limit: int) -> None:
@@ -4025,59 +4105,25 @@ def _auto_migrate_on_startup(migration_folder: str = "migrations") -> None:
             pass
 
 
-def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
-    """Start the Tina4 dev server.
+def _bootstrap_application(root_dir: str = "src") -> None:
+    """Build the application: everything run() does apart from serving it.
 
-    Discovers routes from src/, starts ASGI server, handles shutdown.
+    ONE boot sequence for both entry points. ``run()`` calls it before its
+    own server loop and ``asgi()`` calls it before handing ``app`` to uvicorn
+    / hypercorn / granian. It used to be written out inside ``run()`` alone,
+    and ``asgi()`` drifted: no security headers or CSRF (#134), and no
+    configured SSO routes - ``/auth/login`` was a 404 under uvicorn. Anything
+    that shapes the application belongs HERE, never in one entry point.
 
-    Args:
-        host: Bind address. Falls back to HOST env var, then 0.0.0.0.
-        port: Bind port. Falls back to PORT env var, then 7146.
-        no_browser: If True, do not open browser on startup.
-        no_reload: If True, disable the file watcher / live-reload.
+    Not here, because they are about serving, not the application: the
+    ``tina4 serve`` launch gate, host/port resolution, the pidfile, the banner
+    and the server loop itself.
     """
-    import time
     global _start_time
     _start_time = time.time()
 
     # Refuse to boot with v3.11 / v2 era un-prefixed env vars set.
     _check_legacy_env_vars()
-
-    # ── Require tina4 CLI ─────────────────────────────────────────
-    # The framework must be launched via `tina4 serve`, not `python app.py`.
-    # The tina4 CLI passes --managed when spawning the server process.
-    # Users can bypass this by adding TINA4_OVERRIDE_CLIENT=true to .env
-    is_managed = "--managed" in sys.argv
-    if not is_managed and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
-        # Load .env early so TINA4_OVERRIDE_CLIENT can be read.
-        # ONE call: load_env() with no argument treats the cwd as the ROOT and
-        # applies real-env > .env.local > .env itself. It used to be two calls
-        # here and two more below, and a caller who got the order or the
-        # override flag wrong let a stray gitignored .env.local clobber an
-        # explicitly-set real env var. The rule now lives in one place.
-        from tina4_python.dotenv import load_env
-        load_env(override=False)
-        if os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
-            print()
-            print("=" * 60)
-            print()
-            print("  Tina4 must be started with the tina4 CLI:")
-            print()
-            print("    tina4 serve              (development)")
-            print("    tina4 serve --production (production)")
-            print()
-            print("  Install: cargo install tina4")
-            print("  Docs:    https://tina4.com")
-            print()
-            print("  To run directly, add to .env:")
-            print("    TINA4_OVERRIDE_CLIENT=true")
-            print()
-            print("=" * 60)
-            print()
-            sys.exit(1)
-
-    if no_reload:
-        os.environ["TINA4_NO_RELOAD"] = "true"
 
     # Ensure CWD is on sys.path so auto-discovered modules can be imported
     cwd = os.getcwd()
@@ -4137,7 +4183,11 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             pass
         _prior_excepthook(exc_type, exc_value, exc_tb)
 
-    _sys.excepthook = _tina4_excepthook
+    # asgi() may bootstrap more than once in one process (tests, reloaders):
+    # install the hook once, or every uncaught error is logged once per boot.
+    _tina4_excepthook._tina4 = True
+    if not getattr(_prior_excepthook, "_tina4", False):
+        _sys.excepthook = _tina4_excepthook
 
     # Ensure folders
     _ensure_folders()
@@ -4146,7 +4196,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     _auto_wire_i18n()
 
     # Auto-discover routes
-    _auto_discover("src")
+    _auto_discover(root_dir)
     # Configuration-first OIDC: canonical routes appear only when configured,
     # after app discovery so collisions fail loudly rather than overwrite.
     from tina4_python.sso import Sso as _Sso
@@ -4154,21 +4204,70 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     route_count = len(Router.get_routes())
     Log.info(f"Discovered {route_count} routes")
 
-    # CSRF: attach the middleware when TINA4_CSRF is enabled (OFF by default —
-    # a default app has no CSRF gate; TINA4_CSRF=true gates every write route).
-    from tina4_python.core.middleware import attach_csrf_from_env
-    if attach_csrf_from_env():
-        Log.info("CSRF protection enabled (TINA4_CSRF) — CsrfMiddleware attached")
-
-    # Security headers: register in the default chain UNCONDITIONALLY
-    # (secure-by-default, SECHDR-DEC-01). Unlike CSRF this needs no opt-in — a
-    # default app ships X-Frame-Options/X-Content-Type-Options/CSP/etc. with no
-    # code change. HSTS stays HTTPS-only. Idempotent.
-    from tina4_python.core.middleware import attach_security_headers
-    attach_security_headers()
+    # Security headers + CSRF - the same attach asgi() performs (#134).
+    _attach_security_middleware()
 
     # Apply pending DB migrations on startup (non-breaking — see helper).
     _auto_migrate_on_startup()
+
+    # File watching is handled by the Rust CLI (tina4 serve). In debug mode the
+    # framework receives POST /__dev/api/reload and pushes an instant reload over
+    # the /__dev_reload WebSocket; the mtime counter is the polling fallback.
+    from tina4_python.dotenv import is_truthy as _is_truthy
+    if _is_truthy(os.environ.get("TINA4_DEBUG", "")):
+        _register_dev_reload_ws()
+
+
+def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
+    """Start the Tina4 dev server.
+
+    Discovers routes from src/, starts ASGI server, handles shutdown.
+
+    Args:
+        host: Bind address. Falls back to HOST env var, then 0.0.0.0.
+        port: Bind port. Falls back to PORT env var, then 7146.
+        no_browser: If True, do not open browser on startup.
+        no_reload: If True, disable the file watcher / live-reload.
+    """
+    # ── Require tina4 CLI ─────────────────────────────────────────
+    # The framework must be launched via `tina4 serve`, not `python app.py`.
+    # The tina4 CLI passes --managed when spawning the server process.
+    # Users can bypass this by adding TINA4_OVERRIDE_CLIENT=true to .env
+    is_managed = "--managed" in sys.argv
+    if not is_managed and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
+        # Load .env early so TINA4_OVERRIDE_CLIENT can be read.
+        # ONE call: load_env() with no argument treats the cwd as the ROOT and
+        # applies real-env > .env.local > .env itself. It used to be two calls
+        # here and two more below, and a caller who got the order or the
+        # override flag wrong let a stray gitignored .env.local clobber an
+        # explicitly-set real env var. The rule now lives in one place.
+        from tina4_python.dotenv import load_env
+        load_env(override=False)
+        if os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
+            print()
+            print("=" * 60)
+            print()
+            print("  Tina4 must be started with the tina4 CLI:")
+            print()
+            print("    tina4 serve              (development)")
+            print("    tina4 serve --production (production)")
+            print()
+            print("  Install: cargo install tina4")
+            print("  Docs:    https://tina4.com")
+            print()
+            print("  To run directly, add to .env:")
+            print("    TINA4_OVERRIDE_CLIENT=true")
+            print()
+            print("=" * 60)
+            print()
+            sys.exit(1)
+
+    if no_reload:
+        os.environ["TINA4_NO_RELOAD"] = "true"
+
+    # Everything that builds the application - env, logging, discovery, SSO,
+    # security middleware, migrations - is the bootstrap asgi() runs too.
+    _bootstrap_application("src")
 
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
@@ -4193,8 +4292,6 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # module in-process, and push an instant reload over the /__dev_reload
     # WebSocket. The mtime counter at /__dev/api/mtime is the polling
     # fallback for when that socket is down. No internal watcher.
-    if is_debug:
-        _register_dev_reload_ws()
 
     # TINA4_DEFAULT_WEBSERVER=TRUE pins Tina4's own built-in webserver, so an
     # operator (or CI) can exercise it deterministically without also turning on

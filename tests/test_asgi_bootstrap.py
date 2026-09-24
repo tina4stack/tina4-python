@@ -47,7 +47,12 @@ def project(tmp_path, monkeypatch):
     # project gets its root there because `tina4 serve` starts from it.
     monkeypatch.syspath_prepend(str(tmp_path))
     Router.clear()          # no route state leaking in from another test
+    # asgi() attaches the global security middleware (#134); restore the chain
+    # afterwards so it does not leak into every test that runs after this one.
+    from tina4_python.core.middleware import Middleware
+    saved_middleware = Middleware.get_global()
     yield tmp_path
+    Middleware._global_middleware = saved_middleware
     Router.clear()
 
 

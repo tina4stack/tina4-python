@@ -54,7 +54,9 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         :meth:`_exec_with_handling`.
         """
         if params:
-            cursor.execute(sql, params)
+            # #138: with parameters psycopg reads every % as a placeholder, so a
+            # literal % (LIKE 'a%', a PL/pgSQL message) is doubled first.
+            cursor.execute(SQLTranslator.escape_literal_percent(sql), params)
         else:
             cursor.execute(sql)
 
@@ -245,6 +247,22 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             # Never let bookkeeping mask the rows we already fetched.
             pass
 
+    def _end_fetch_txn(self, sql: str):
+        """Issue #133: close the implicit transaction fetch()/fetch_one() opened.
+
+        A read ends in the #51 ROLLBACK. A write that returns rows
+        (``INSERT/UPDATE/DELETE ... RETURNING``, a data-modifying CTE) goes
+        through fetch_one() naturally - the caller wants the new id - and that
+        rollback silently discarded the row after handing its id out. A write is
+        committed on exactly execute()'s gate instead: outside an explicit
+        transaction and with autocommit on. With autocommit off it stays open
+        for the caller's commit(), again exactly like execute().
+        """
+        if not self._is_write_statement(sql):
+            self._end_read_txn()
+            return
+        self._commit_fetched_write(sql)
+
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to PostgreSQL.
 
@@ -297,7 +315,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
         import psycopg2.extras
 
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
 
         # Handle RETURNING clause natively
         has_returning = bool(
@@ -316,9 +334,14 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         records = []
         last_id = None
 
-        if has_returning and cursor.description:
-            records = [dict(row) for row in cursor.fetchall()]
-            if records and "id" in records[0]:
+        # Any statement that returns rows hands them back - a SELECT and a
+        # WITH ... SELECT too, not only RETURNING (execute() of a SELECT used to
+        # come back EMPTY). Read them before the lastval() probe below reuses
+        # the cursor.
+        returns_rows = cursor.description is not None
+        if returns_rows:
+            records = [self._decode_blobs(dict(row)) for row in cursor.fetchall()]
+            if has_returning and records and "id" in records[0]:
                 last_id = records[0]["id"]
 
         if not has_returning:
@@ -355,7 +378,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
 
-        return DatabaseResult(
+        result = DatabaseResult(
             records=records,
             count=len(records),
             affected_rows=affected,
@@ -363,6 +386,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             sql=sql,
             adapter=self,
         )
+        return result.with_rows() if returns_rows else result
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:
@@ -370,7 +394,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # COUNT(*) and appends LIMIT/OFFSET — otherwise a user-supplied
         # `"SELECT * FROM users;"` produces invalid wrapped SQL.
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
 
         # v3.13.8: heal first so the COUNT probe below doesn't open on a
         # poisoned connection — the probe uses raw _safe_execute (it's
@@ -389,11 +413,20 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # so psycopg2's type adaptation is unchanged.
         cursor = self._conn.cursor()
 
+        # #133: a write that returns rows can be neither wrapped in the COUNT
+        # probe nor paginated - PostgreSQL rejects both, and a probe that DID
+        # run would perform the write twice. It runs once, as written, and its
+        # returned rows are the whole result.
+        is_write = self._is_write_statement(sql)
+
         # Count total rows (plain cursor -> read the scalar positionally, not ["cnt"])
         count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) AS _count_subquery"
         try:
-            self._safe_execute(cursor, count_sql, params)
-            total = cursor.fetchone()[0]
+            if is_write:
+                total = None
+            else:
+                self._safe_execute(cursor, count_sql, params)
+                total = cursor.fetchone()[0]
         except Exception as e:
             total = 0
             # v3.13.11 (issue #49 Gap 1): log the probe failure as a
@@ -421,7 +454,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # carried its own LIMIT became `... LIMIT 3 LIMIT %s OFFSET %s` here --
         # a syntax error MEASURED on a live PostgreSQL. It worked on sqlite and
         # crashed on the server, which is the swap ADR-0024 exists to protect.
-        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        if is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql):
             paginated_sql = sql
             paginated_params = params or []
         else:
@@ -435,9 +468,13 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             for row in cursor.fetchall()
         ]
 
+        if total is None:
+            total = len(rows)
+
         # v3.13.15 (#51): rows are materialised above — close the implicit
-        # read transaction so the connection doesn't sit idle-in-transaction.
-        self._end_read_txn()
+        # transaction so the connection doesn't sit idle-in-transaction; a
+        # write is committed rather than rolled back (#133).
+        self._end_fetch_txn(sql)
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -446,16 +483,16 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
         # v3.13.12: see fetch() — trailing semicolons break the wrappers.
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         self._exec_with_handling(cursor, sql, params)
         row = cursor.fetchone()
         result = self._decode_blobs(dict(row)) if row else None
-        # v3.13.15 (#51): close the implicit read transaction so the
-        # connection doesn't sit 'idle in transaction' (psycopg2 autocommit
-        # is off). This is the path the migration runner's MAX(batch)
-        # lookup leaked through.
-        self._end_read_txn()
+        # v3.13.15 (#51): close the implicit transaction so the connection
+        # doesn't sit 'idle in transaction' (psycopg2 autocommit is off). This
+        # is the path the migration runner's MAX(batch) lookup leaked through.
+        # A write (INSERT ... RETURNING id) is committed, not rolled back (#133).
+        self._end_fetch_txn(sql)
         return result
 
     @staticmethod
@@ -546,13 +583,20 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # -- SQL Translation -----------------------------------------------
 
-    def _translate_sql(self, sql: str) -> str:
+    def _translate_sql(self, sql: str, rewrite_placeholders: bool = True) -> str:
         """Translate portable SQL to PostgreSQL dialect.
 
         PostgreSQL uses %s placeholders, supports ILIKE natively,
-        || for concat, RETURNING, and LIMIT/OFFSET.
+        || for concat, RETURNING, and LIMIT/OFFSET. ``rewrite_placeholders`` is
+        False when the caller passed no parameters.
         """
-        sql = SQLTranslator.placeholder_style(sql, "%s")
+        # tina4: SQL with NO parameters is sent exactly as written - no ? rewrite
+        # (and, on PostgreSQL, no % doubling), so the jsonb operators ?, ?| and ?&
+        # work in a parameterless query. With parameters every ? in code is a
+        # placeholder: use jsonb_exists(), jsonb_exists_any() or
+        # jsonb_exists_all() instead of ?, ?| or ?&.
+        if rewrite_placeholders:
+            sql = SQLTranslator.placeholder_style(sql, "%s")
         sql = SQLTranslator.auto_increment_syntax(sql, "postgresql")
         # v3.13.16: do NOT run boolean_to_int on PostgreSQL — PG has a native
         # BOOLEAN type, so TRUE/FALSE are valid literals and 1/0 are NOT
