@@ -138,6 +138,9 @@ class Response:
         # Normalise ORM models / collections / query results so handlers can
         # `return response(model)` without serialising by hand.
         data = _to_jsonable(data)
+        # Any byte buffer is a binary body, written as it is - never through str().
+        if isinstance(data, (bytearray, memoryview)):
+            data = bytes(data)
 
         if content_type:
             # Explicit content type provided
@@ -462,6 +465,8 @@ class Response:
         if data is not None:
             if isinstance(data, (dict, list)):
                 return self.__call__(data, status_code or 200)
+            if isinstance(data, (bytes, bytearray, memoryview)):
+                return self.__call__(data, status_code or self.status_code, content_type)
             if isinstance(data, str):
                 if content_type:
                     self.content_type = content_type
