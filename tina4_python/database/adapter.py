@@ -894,6 +894,31 @@ class DatabaseAdapter:
         return bool(re.search(pattern, DatabaseAdapter._scrub_sql_text(sql or ""), re.IGNORECASE))
 
     @staticmethod
+    def _total_from_page(row_count: int, limit, offset, paginated: bool) -> int | None:
+        """The true total when the page PROVES it, else ``None`` (run the COUNT probe).
+
+        tina4: ADR-0074 (amends ADR-0043's mechanism, never its contract - total
+        is still the true COUNT for the filter). fetch() used to run COUNT(*)
+        over the statement AND the page, so every read executed twice: a 1s
+        statement took 2s. The page already answers in most cases:
+
+          * not paginated (limit <= 0, or the SQL carries its own LIMIT): the
+            rows returned ARE the whole result set;
+          * a non-empty page shorter than the limit is the LAST page, so the
+            total is offset + rows;
+          * an empty first page means nothing matched.
+
+        Only a FULL page, or an empty page past offset 0, needs the COUNT.
+        """
+        if not paginated:
+            return row_count
+        if 0 < row_count < limit:
+            return (offset or 0) + row_count
+        if row_count == 0 and not offset:
+            return 0
+        return None
+
+    @staticmethod
     def _strip_trailing_order_by(sql: str) -> str:
         """Strip a trailing top-level ``ORDER BY`` so the SQL can be safely
         wrapped in ``SELECT COUNT(*) FROM (<sql>)`` for the row-count probe.

@@ -576,14 +576,6 @@ class MongoDBAdapter(DatabaseAdapter):
         mongo_filter = parsed["mongo_filter"]
         projection = parsed["projection"] or None
 
-        # Total count (before skip/limit)
-        try:
-            total = collection.count_documents(
-                mongo_filter, **self._session_kwargs()
-            )
-        except Exception:
-            total = 0
-
         cursor = collection.find(
             mongo_filter,
             projection,
@@ -593,9 +585,24 @@ class MongoDBAdapter(DatabaseAdapter):
         if parsed["sort"]:
             cursor = cursor.sort(parsed["sort"])
 
-        cursor = cursor.skip(parsed["skip"]).limit(parsed["limit"])
+        skip, limit_applied = parsed["skip"] or 0, parsed["limit"] or 0
+        cursor = cursor.skip(skip).limit(limit_applied)
 
         rows = [_doc_to_dict(doc) for doc in cursor]
+
+        # ADR-0074: count_documents only when the page cannot prove the total
+        # (the total is the filter's full count, before skip/limit).
+        if limit_applied > 0:
+            total = self._total_from_page(len(rows), limit_applied, skip, True)
+        else:
+            total = skip + len(rows) if (rows or not skip) else None
+        if total is None:
+            try:
+                total = collection.count_documents(
+                    mongo_filter, **self._session_kwargs()
+                )
+            except Exception:
+                total = 0
 
         return DatabaseResult(
             records=rows,

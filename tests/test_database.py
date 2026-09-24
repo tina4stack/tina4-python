@@ -428,31 +428,20 @@ class TestPoolTransactionAtomicity:
         assert n == 3, f"commit() persisted only {n} of 3 rows under pool=4"
 
     def test_pin_releases_after_commit(self, pooled_db):
-        """After commit(), _get_adapter() must round-robin again."""
+        """After commit() the connection goes back to the pool (ADR-0074)."""
         pooled_db.start_transaction()
-        pinned_during = pooled_db._get_adapter()
+        assert pooled_db._tx_local.adapter is not None
+        assert pooled_db.pool.in_use_count == 1
         pooled_db.commit()
-
-        # After commit, the next call should NOT be pinned to the same adapter.
-        # Round-robin should resume.
-        seen = set()
-        for _ in range(8):
-            seen.add(id(pooled_db._get_adapter()))
-        assert len(seen) > 1, (
-            "after commit() the pin was not released — _get_adapter() never rotated"
-        )
+        assert pooled_db._tx_local.adapter is None, "after commit() the pin was not released"
+        assert pooled_db.pool.in_use_count == 0, "after commit() the connection was not returned"
 
     def test_pin_releases_after_rollback(self, pooled_db):
-        """After rollback(), _get_adapter() must round-robin again."""
+        """After rollback() the connection goes back to the pool (ADR-0074)."""
         pooled_db.start_transaction()
         pooled_db.rollback()
-
-        seen = set()
-        for _ in range(8):
-            seen.add(id(pooled_db._get_adapter()))
-        assert len(seen) > 1, (
-            "after rollback() the pin was not released — _get_adapter() never rotated"
-        )
+        assert pooled_db._tx_local.adapter is None, "after rollback() the pin was not released"
+        assert pooled_db.pool.in_use_count == 0, "after rollback() the connection was not returned"
 
     def test_no_pool_no_regression(self, tmp_path):
         """Single-connection mode (pool=0) must still work correctly — the
