@@ -1,0 +1,322 @@
+"""ADR-0069: identifiers that reach SQL come from the model, never the caller.
+
+Two surfaces in Python:
+
+B. ``ORM.find(dict)``. Each key must resolve to a DECLARED field, either by the
+   field name or by that field's column (``field_mapping`` or ``Field(column=)``).
+   The resolved column is emitted through the bound adapter's
+   ``quote_identifier``, the same way the ORM's own INSERT/UPDATE emit columns.
+   A key that does not resolve raises ``ValueError`` before any SQL runs:
+       "Unknown filter field 'KEY' for model <ModelName>"
+   ``where()``, ``load()``, ``select()``, QueryBuilder and the raw ``order_by``
+   string stay unchanged - they are documented raw-SQL APIs.
+
+C. DocStore SQLite fallback. Every field path that becomes a JSON path literal
+   (filter keys at any depth, operator fields, sort keys) is split on '.', and
+   every segment must match ``[A-Za-z0-9_-]+``. Otherwise ``ValueError``:
+       "DocStore: invalid field path 'KEY' - each dot-separated segment must
+        match [A-Za-z0-9_-]+"
+   Every key shape the fallback ACCEPTS returns the same documents as a real
+   MongoDB for the same data and query (ADR-0025).
+
+The inputs are neutral: an undeclared column that really exists in the table,
+and keys that contain a space, a quote or a bracket.
+
+NO MOCKS. Real SQLite, PostgreSQL, MySQL, MSSQL, Firebird and MongoDB. Under
+TINA4_REQUIRE_SERVICES=1 an unreachable engine FAILS; it never skips.
+"""
+from __future__ import annotations
+
+import os
+import uuid
+
+import pytest
+
+from tina4_python.database import Database
+from tina4_python.docstore import SqliteDatabase
+from tina4_python.orm import ORM, IntegerField, StringField
+
+
+def _require_services() -> bool:
+    return str(os.environ.get("TINA4_REQUIRE_SERVICES") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _unavailable(message: str):
+    """Fail under TINA4_REQUIRE_SERVICES, otherwise skip with a reason that
+    names the service, so the conftest gate recognises it too."""
+    if _require_services():
+        pytest.fail(f"TINA4_REQUIRE_SERVICES is set but {message}")
+    pytest.skip(message)
+
+
+# ── B. ORM find(dict) on every engine ────────────────────────────────────────
+
+# Every variable name is written out in full so tests/test_env_contract.py can
+# check it against tests/fixtures/test_env_contract.json.
+ENGINE_ENV = {
+    "postgres": ("TINA4_TEST_PG_URL", "TINA4_TEST_PG_USERNAME", "TINA4_TEST_PG_PASSWORD"),
+    "mysql": ("TINA4_TEST_MYSQL_URL", "TINA4_TEST_MYSQL_USERNAME", "TINA4_TEST_MYSQL_PASSWORD"),
+    "mssql": ("TINA4_TEST_MSSQL_URL", "TINA4_TEST_MSSQL_USERNAME", "TINA4_TEST_MSSQL_PASSWORD"),
+    "firebird": (
+        "TINA4_TEST_FIREBIRD_URL",
+        "TINA4_TEST_FIREBIRD_USERNAME",
+        "TINA4_TEST_FIREBIRD_PASSWORD",
+    ),
+}
+ENGINES = ["sqlite", *ENGINE_ENV]
+
+
+class IdentifierProbe(ORM):
+    """Four declared fields. Two reach the table under a different column name:
+    ``display_name`` through ``field_mapping`` and ``remark`` through
+    ``Field(column=)``. The table ALSO has ``hidden_col``, which the model does
+    not declare - the undeclared-but-real column."""
+
+    table_name = "identifier_probe"
+    id = IntegerField(primary_key=True)
+    name = StringField()
+    display_name = StringField()
+    remark = StringField(column="note_col")
+    field_mapping = {"display_name": "label_text"}
+
+
+ROWS = [
+    {"id": 1, "name": "alpha", "label_text": "Alpha", "note_col": "first", "hidden_col": "h1"},
+    {"id": 2, "name": "beta", "label_text": "Beta", "note_col": "second", "hidden_col": "h2"},
+    {"id": 3, "name": "alpha", "label_text": "Gamma", "note_col": "third", "hidden_col": "h3"},
+]
+
+
+@pytest.fixture(scope="module", params=ENGINES)
+def probe_db(request, tmp_path_factory):
+    """The probe table on one real engine, dropped afterwards."""
+    engine = request.param
+    if engine == "sqlite":
+        database = Database(f"sqlite:///{tmp_path_factory.mktemp('allowlist')}/probe.db")
+    else:
+        url_var, username_var, password_var = ENGINE_ENV[engine]
+        url = (os.environ.get(url_var) or "").strip()
+        if not url:
+            _unavailable(f"{engine} not reachable: {url_var} is not set")
+        try:
+            database = Database(
+                url,
+                username=os.environ.get(username_var) or "",
+                password=os.environ.get(password_var) or "",
+            )
+        except Exception as error:  # noqa: BLE001 - the message is the finding
+            _unavailable(f"{engine} not reachable at {url_var}: {type(error).__name__}: {error}")
+
+    table = f"idprobe_{uuid.uuid4().hex[:8]}"
+    database.execute(
+        f"CREATE TABLE {table} ("
+        " id INTEGER NOT NULL PRIMARY KEY,"
+        " name VARCHAR(50),"
+        " label_text VARCHAR(50),"
+        " note_col VARCHAR(50),"
+        " hidden_col VARCHAR(50))"
+    )
+    database.commit()
+    for row in ROWS:
+        database.insert(table, row)
+    database.commit()
+
+    IdentifierProbe.table_name = table
+    IdentifierProbe._db = database
+    yield engine, database
+    IdentifierProbe._db = None
+    try:
+        database.execute(f"DROP TABLE {table}")
+        database.commit()
+    except Exception:  # noqa: BLE001 - teardown must never mask a failure
+        pass
+    database.close()
+
+
+def _ids(result) -> list[int]:
+    return sorted(int(record.id) for record in result)
+
+
+UNKNOWN_KEYS = [
+    "hidden_col",   # a real column the model does not declare
+    "name x",       # contains a space
+    "name'",        # contains a quote
+    "name]",        # contains a bracket
+    "Name",         # a declared field's name in the wrong case is not the field
+]
+
+
+def test_orm_find_rejects_undeclared_filter_key(probe_db):
+    engine, _ = probe_db
+
+    # NEGATIVE: every unknown key raises before any SQL, naming key and model.
+    for key in UNKNOWN_KEYS:
+        with pytest.raises(ValueError) as raised:
+            IdentifierProbe.find({key: "h1"})
+        assert str(raised.value) == f"Unknown filter field '{key}' for model IdentifierProbe", (
+            f"[{engine}] {key!r}: {raised.value}"
+        )
+    # An unknown key next to a valid one still rejects the whole filter.
+    with pytest.raises(ValueError, match="Unknown filter field 'hidden_col'"):
+        IdentifierProbe.find({"name": "alpha", "hidden_col": "h1"})
+
+    # POSITIVE: declared field by name.
+    assert _ids(IdentifierProbe.find({"name": "alpha"})) == [1, 3], engine
+    assert _ids(IdentifierProbe.find({"id": 2})) == [2], engine
+    # field_mapping: by the field name AND by its column.
+    assert _ids(IdentifierProbe.find({"display_name": "Beta"})) == [2], engine
+    assert _ids(IdentifierProbe.find({"label_text": "Beta"})) == [2], engine
+    # Field(column=): by the field name AND by its column.
+    assert _ids(IdentifierProbe.find({"remark": "third"})) == [3], engine
+    assert _ids(IdentifierProbe.find({"note_col": "third"})) == [3], engine
+    # Several keys are AND-ed, and the hydrated field carries the mapped value.
+    matched = IdentifierProbe.find({"name": "alpha", "display_name": "Gamma"})
+    assert _ids(matched) == [3], engine
+    assert matched[0].display_name == "Gamma", engine
+    # The documented raw order_by string is unchanged.
+    ordered = IdentifierProbe.find({"name": "alpha"}, order_by="id DESC")
+    assert [int(record.id) for record in ordered] == [3, 1], engine
+
+
+# ── C. DocStore field paths ──────────────────────────────────────────────────
+
+INVALID_PATH_MESSAGE = (
+    "DocStore: invalid field path '{key}' - each dot-separated segment must match [A-Za-z0-9_-]+"
+)
+
+UNSAFE_PATHS = ["a b", "a'b", "a]b", "a..b", ".a", "a.", ""]
+
+SAFE_DOCUMENTS = [
+    {"_id": "d1", "a_b": 1, "a-b": "x", "A1": True, "nested": {"key": "n1"}},
+    {"_id": "d2", "a_b": 2, "a-b": "y", "A1": False, "nested": {"key": "n2"}},
+    {"_id": "d3", "a_b": 3, "a-b": "x", "A1": True, "nested": {"key": "n3"}},
+]
+
+SAFE_QUERIES = [
+    ({"a_b": 2}, None),
+    ({"a-b": "x"}, None),
+    ({"A1": True}, None),
+    ({"nested.key": "n3"}, None),
+    ({"_id": "d1"}, None),
+    ({"a_b": {"$gte": 2}}, None),
+    ({"$or": [{"a-b": "y"}, {"nested.key": "n1"}]}, None),
+    ({}, [("a_b", -1)]),
+    ({}, [("a-b", 1), ("A1", -1), ("_id", 1)]),
+    ({}, [("nested.key", -1)]),
+]
+
+
+@pytest.fixture
+def fallback(tmp_path):
+    """A real SQLite-backed DocStore with a statement log on its connection."""
+    database = SqliteDatabase(str(tmp_path / "docstore.db"))
+    collection = database.get_collection("paths")
+    collection.insert_many([dict(document) for document in SAFE_DOCUMENTS])
+    statements: list[str] = []
+    database._conn.set_trace_callback(statements.append)
+    yield collection, statements
+    database._conn.set_trace_callback(None)
+    database.close()
+
+
+def _run(collection, query, sort):
+    cursor = collection.find(query)
+    if sort:
+        cursor = cursor.sort(sort)
+    return [document["_id"] for document in cursor]
+
+
+def test_docstore_rejects_unsafe_field_path(fallback):
+    collection, statements = fallback
+    attempts = []
+    for key in UNSAFE_PATHS:
+        attempts += [
+            (key, lambda key=key: collection.find({key: 1}).to_list()),
+            (key, lambda key=key: collection.find({"$or": [{"a_b": 1}, {key: 1}]}).to_list()),
+            (key, lambda key=key: collection.find({"$and": [{"$or": [{key: 1}]}]}).to_list()),
+            (key, lambda key=key: collection.find({key: {"$gt": 1}}).to_list()),
+            (key, lambda key=key: collection.find({key: {"$exists": True}}).to_list()),
+            (key, lambda key=key: collection.find({key: {"$in": [1, 2]}}).to_list()),
+            (key, lambda key=key: collection.find({}).sort(key, -1).to_list()),
+            (key, lambda key=key: collection.find({}).sort([("a_b", 1), (key, 1)]).to_list()),
+            (key, lambda key=key: collection.count_documents({key: 1})),
+            (key, lambda key=key: collection.delete_many({key: 1})),
+            (key, lambda key=key: collection.update_many({key: 1}, {"$set": {"a_b": 9}})),
+        ]
+    for key, attempt in attempts:
+        statements.clear()
+        with pytest.raises(ValueError) as raised:
+            attempt()
+        assert str(raised.value) == INVALID_PATH_MESSAGE.format(key=key), raised.value
+        assert statements == [], f"SQL ran before the path {key!r} was rejected: {statements}"
+
+    # Nothing was changed by any of the rejected calls.
+    assert collection.count_documents({}) == 3
+    assert collection.count_documents({"a_b": 9}) == 0
+
+
+def test_docstore_accepts_safe_field_paths(fallback):
+    collection, _ = fallback
+    expected = [
+        ["d2"],
+        ["d1", "d3"],
+        ["d1", "d3"],
+        ["d3"],
+        ["d1"],
+        ["d2", "d3"],
+        ["d1", "d2"],
+        ["d3", "d2", "d1"],
+        ["d1", "d3", "d2"],
+        ["d3", "d2", "d1"],
+    ]
+    for (query, sort), want in zip(SAFE_QUERIES, expected):
+        got = _run(collection, query, sort)
+        if sort is None:
+            got = sorted(got)
+        assert got == want, f"{query} sort={sort}: {got}"
+    # A path with a dash is still quoted correctly inside the JSON path.
+    assert collection.count_documents({"a-b": {"$in": ["x", "y"]}}) == 3
+
+
+MONGO_HOST = os.environ.get("TINA4_TEST_MONGO_HOST", "localhost")
+MONGO_PORT = os.environ.get("TINA4_TEST_MONGO_PORT", "27017")
+MONGO_URI = os.environ.get("TINA4_TEST_MONGO_URI") or f"mongodb://{MONGO_HOST}:{MONGO_PORT}"
+
+
+@pytest.fixture
+def real_mongo():
+    """A real MongoDB collection in a unique database, dropped afterwards."""
+    try:
+        import pymongo
+    except ImportError:
+        _unavailable("pymongo not installed (mongo client for the real-MongoDB case)")
+    client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
+    try:
+        client.admin.command("ping")
+    except Exception as error:  # noqa: BLE001 - the message is the finding
+        client.close()
+        _unavailable(f"no reachable MongoDB at {MONGO_URI}: {type(error).__name__}")
+    database_name = f"tina4_sqli_py_{os.getpid()}_{uuid.uuid4().hex[:6]}"
+    collection = client[database_name]["paths"]
+    collection.insert_many([dict(document) for document in SAFE_DOCUMENTS])
+    yield collection
+    client.drop_database(database_name)
+    client.close()
+
+
+def test_docstore_safe_paths_match_on_real_mongo(fallback, real_mongo):
+    collection, _ = fallback
+    for query, sort in SAFE_QUERIES:
+        on_fallback = _run(collection, query, sort)
+        on_mongo = _run(real_mongo, query, sort)
+        if sort is None:
+            on_fallback, on_mongo = sorted(on_fallback), sorted(on_mongo)
+        assert on_fallback == on_mongo, f"{query} sort={sort}: fallback {on_fallback} != mongo {on_mongo}"
+        assert on_fallback, f"{query} matched nothing on either provider - not a real comparison"
+
+    # A key the fallback rejects raises there rather than silently matching
+    # nothing (ADR-0025 corollary 4).
+    with pytest.raises(ValueError):
+        collection.find({"a b": 1}).to_list()
