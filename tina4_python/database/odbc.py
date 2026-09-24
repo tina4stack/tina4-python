@@ -185,11 +185,17 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # `-- comment` in the caller's SQL otherwise comments it out, the probe
         # fails, the bare `except` below swallows it, and the result reports
         # count=0 alongside real records. Same fix already shipped in sqlite.py.
+        # #133: a write that returns rows runs ONCE, exactly as written - no
+        # COUNT probe (a probe that ran would repeat the write) and no
+        # pagination, which no engine accepts after RETURNING/OUTPUT.
+        is_write = self._is_write_statement(sql)
         count_sql = f"SELECT COUNT(*) FROM ({sql}\n) AS _t"
         cursor = self._conn.cursor()
         try:
-            cursor.execute(count_sql, params or [])
-            total = cursor.fetchone()[0]
+            total = None
+            if not is_write:
+                cursor.execute(count_sql, params or [])
+                total = cursor.fetchone()[0]
         except Exception:
             total = 0
 
@@ -206,7 +212,7 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # nor fake one. Same helper the sqlite/postgres/mysql adapters use, so
         # all engines answer the question identically.
         # limit <= 0 still means "no pagination" (fetch_all's give-me-everything).
-        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        if is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql):
             cursor.execute(sql, params or [])
         else:
             # The clause goes on a NEW LINE. Appended inline it lands INSIDE a
@@ -226,6 +232,8 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        if total is None:
+            total = len(rows)
         self._commit_fetched_write(sql)  # #133: a write that returns rows commits like execute()
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)

@@ -196,3 +196,13 @@ def test_nothing_is_committed_inside_an_explicit_transaction_until_commit(engine
     writer.commit()
     assert engine.committed_rows() == 2
 
+
+def test_fetch_of_a_write_runs_once_with_no_count_probe_or_pagination(engine):
+    """fetch() must run a write exactly as written: no COUNT probe around it and
+    no LIMIT / ROWS / OFFSET-FETCH after it. Paginating a write is a syntax error
+    on every engine, and a probe that did run would perform the write twice."""
+    writer = engine.connect()
+    result = writer.fetch(engine.write, ["via fetch"], limit=1)
+    assert result.records == [{"id": 1}], f"{engine.name}: fetch() of a write returned {result.records!r}"
+    assert result.count == 1
+    assert engine.committed_rows() == 1, f"{engine.name}: fetch() of a write did not commit exactly one row"

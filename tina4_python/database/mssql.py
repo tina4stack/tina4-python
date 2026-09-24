@@ -169,11 +169,17 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # ORDER BY in a derived-table subquery without TOP/OFFSET/FETCH (#262),
         # which otherwise zeroed the count for any query ending in ORDER BY. The
         # paginated query below keeps its ORDER BY.
+        # #133: a write that returns rows runs ONCE, exactly as written - no
+        # COUNT probe (a probe that ran would repeat the write) and no
+        # pagination, which no engine accepts after RETURNING/OUTPUT.
+        is_write = self._is_write_statement(sql)
         count_sql = f"SELECT COUNT(*) AS cnt FROM ({self._strip_trailing_order_by(sql)}) AS _count_subquery"
         probe = self._conn.cursor(as_dict=True)
         try:
-            probe.execute(count_sql, tuple(params) if params else ())
-            total = probe.fetchone()["cnt"]
+            total = None
+            if not is_write:
+                probe.execute(count_sql, tuple(params) if params else ())
+                total = probe.fetchone()["cnt"]
         except Exception:
             total = 0
         finally:
@@ -185,7 +191,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # Apply pagination — MSSQL uses OFFSET/FETCH.
         # v3.13.12: limit <= 0 means "no pagination" (fetch_all's
         # default — give me ALL rows).
-        if limit is None or limit <= 0:
+        if is_write or limit is None or limit <= 0:
             paginated_sql = sql
             paginated_params = tuple(params or [])
         else:
@@ -197,6 +203,8 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             paginated_params = tuple(params or []) + (offset, limit)
         cursor.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
+        if total is None:
+            total = len(rows)
         self._commit_fetched_write(sql)  # #133: INSERT ... OUTPUT commits like execute()
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
