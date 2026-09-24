@@ -40,6 +40,14 @@ so a PNG served with `image/png` arrived as 512 bytes of UTF-8 text and did not 
 - [x] Ruby: `call(hash, status, type)` sent `Hash#inspect`, not JSON
 
 ## Commits
-- (filled in when landed)
+- tina4-nodejs 4e1c412  fix(response): a Buffer with an explicit content type is written as bytes
+- tina4-python 22f87ef  fix(response): send(bytes) kept; bytearray/memoryview sent as bytes
+- tina4-php    cf198066 test(response): binary body lock-in (no bug in PHP)
+- tina4-ruby   212b82b  fix(response): call(hash, status, type) sends JSON; binary body lock-in
 
-## Status: In Progress
+## Verified (macOS; full suites run at each branch HEAD)
+- New tests green in all four; each proven a gate by mutation.
+- Every full-suite failure was re-run with and without the change: identical results.
+  They are services or packages missing on this Mac (Redis, Postgres, MongoDB, Docker, node_modules), not this change.
+
+## Status: In review (PRs open)
