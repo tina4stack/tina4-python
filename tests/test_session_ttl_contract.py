@@ -108,7 +108,10 @@ def _build(backend: str, tmp_path, db_path):
         return ValkeySessionHandler(host=VALKEY_HOST, port=VALKEY_PORT)
     if backend == "mongodb":
         from tina4_python.session_handlers import MongoDBSessionHandler
-        return MongoDBSessionHandler(host=MONGO_HOST, port=MONGO_PORT)
+        # The handler takes `url`, not host/port: host=/port= were silently
+        # ignored and it wrote to the DEFAULT server while the out-of-band
+        # check read MONGO_HOST:MONGO_PORT - agreeing only when both are 27017.
+        return MongoDBSessionHandler(url=f"mongodb://{MONGO_HOST}:{MONGO_PORT}")
     if backend == "memcached":
         from tina4_python.session_handlers import MemcachedSessionHandler
         return MemcachedSessionHandler(host=MEMCACHED_HOST, port=MEMCACHED_PORT)
