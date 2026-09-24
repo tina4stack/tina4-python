@@ -676,12 +676,15 @@ async def _health_handler(request: Request, response: Response) -> Response:
     """
     import time
 
-    return response.status(200).json({
-        "status": "ok",
-        "version": __version__,
-        "uptime": round(time.time() - _start_time, 2),
-        "framework": "tina4-python",
-    })
+    # ADR-0078 (supersedes the ADR-0016 key set): the exact version is only
+    # disclosed in debug mode; a production probe learns nothing it can match
+    # against a vulnerability list.
+    body = {"status": "ok"}
+    if os.environ.get("TINA4_DEBUG", "false").strip().lower() in ("true", "1", "yes", "on"):
+        body["version"] = __version__
+    body["uptime"] = round(time.time() - _start_time, 2)
+    body["framework"] = "tina4-python"
+    return response.status(200).json(body)
 
 
 # Register health check.
@@ -844,6 +847,10 @@ def _resolve_template(path: str) -> str | None:
         # Skip underscore-prefixed files even within pages/ — they're private
         # by Hugo/Jekyll convention (helpers, fragments) and shouldn't auto-serve.
         if any(seg.startswith("_") for seg in clean_path.split("/")):
+            return None
+        # ADR-0078: a URL segment of "." or ".." (or a backslash) could walk out
+        # of pages/ - the only directory that auto-routes. Refuse it outright.
+        if "\\" in clean_path or any(seg in ("", ".", "..") for seg in clean_path.split("/")):
             return None
         pages_dir = Path("src/templates") / _TEMPLATE_PAGES_DIR
         for ext in (".twig", ".html"):
@@ -1163,6 +1170,13 @@ def _register_dev_reload_ws() -> None:
     _dev_reload_ws_registered[0] = True
 
 
+def _dev_socket_host_ok(headers: dict) -> bool:
+    """Host allow-list for the /__dev_reload socket (ADR-0078): the same rule
+    the /__dev HTTP gate applies, so a rebound DNS name cannot open it."""
+    from tina4_python.dev_admin import dev_host_allowed
+    return dev_host_allowed(headers)
+
+
 async def _handle_asgi_websocket(scope: dict, receive, send):
     """Handle ASGI WebSocket connections, dispatching to registered routes."""
     path = scope.get("path", "/")
@@ -1178,6 +1192,9 @@ async def _handle_asgi_websocket(scope: dict, receive, send):
     # via websocket.origin_allowed().
     from tina4_python.websocket import origin_allowed, ws_authorized
     _ws_headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+    if path.startswith("/__dev") and not _dev_socket_host_ok(_ws_headers):
+        await send({"type": "websocket.close", "code": 1008})
+        return
     if not origin_allowed(_ws_headers):
         # 1008 = policy violation (per ASGI/RFC 6455 close codes)
         await send({"type": "websocket.close", "code": 1008})
@@ -1374,6 +1391,13 @@ async def _handle_dev_websocket(reader, writer, headers, path, query_string: str
     ws_key = headers.get("sec-websocket-key")
     if not ws_key:
         writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+        await writer.drain()
+        writer.close()
+        return
+
+    # ADR-0078: the dev reload socket answers only a loopback / TINA4_HOST Host.
+    if path.startswith("/__dev") and not _dev_socket_host_ok(headers):
+        writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
         await writer.drain()
         writer.close()
         return
@@ -1589,7 +1613,17 @@ def _handle_rate_limit(request: Request, response: Response) -> Response | None:
 
 async def _handle_dev_admin(request: Request, response: Response) -> Response:
     """Serve the /__dev dashboard and API routes."""
-    from tina4_python.dev_admin import get_api_handlers
+    from tina4_python.dev_admin import get_api_handlers, _dev_request_denial
+    # ADR-0078: ONE gate for every /__dev request, reads and writes alike -
+    # Host allow-list (DNS rebinding), same-origin (CSRF and cross-site reads)
+    # and loopback peer. Scoped to /__dev so the deliberately cross-origin
+    # /__feedback widget is unaffected.
+    if request.path.startswith("/__dev"):
+        _denial = _dev_request_denial(request)
+        if _denial is not None:
+            response.status(_denial[0]).json({"ok": False, "error": _denial[1]})
+            _cors.apply(request, response)
+            return response
     if request.path in ("/__dev/", "/__dev", "/__dev/v2", "/__dev/v2/"):
         # Unified SPA dev admin. The bundle derives its WS URL from
         # `location.host` directly, so no environment shim is needed —
@@ -1628,20 +1662,6 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
             and (handler_info[0] == "*" or request.method == handler_info[0])
         )
         if method_ok:
-            # DEVADMIN-DEC-01/02: fail-closed same-origin + loopback gate on
-            # every /__dev write, before the handler runs. Closes drive-by CSRF
-            # (a cross-origin page POSTing to /file/save then /reload) and a
-            # network-exposed debug box. Scoped to /__dev so the deliberately
-            # cross-origin /__feedback widget is unaffected; GET/HEAD/OPTIONS are
-            # safe and skip the gate.
-            if (request.method not in ("GET", "HEAD", "OPTIONS")
-                    and request.path.startswith("/__dev")):
-                from tina4_python.dev_admin import _dev_mutation_denial
-                _denial = _dev_mutation_denial(request)
-                if _denial is not None:
-                    response.status(_denial[0]).json({"ok": False, "error": _denial[1]})
-                    _cors.apply(request, response)
-                    return response
             try:
                 def _resp(data, code=200, content_type=None):
                     # content_type overrides the auto-detected MIME —

@@ -154,7 +154,7 @@ def is_request_allowed(remote_ip: str, has_valid_token: bool = False) -> bool:
       `TINA4_MCP_REMOTE` is truthy AND a valid token was supplied
       (`has_valid_token`). A bare `TINA4_MCP_REMOTE=true` is no longer
       enough — remote access to file_write / database_execute now requires
-      a token (TINA4_MCP_TOKEN, falling back to TINA4_API_KEY).
+      a token (TINA4_MCP_TOKEN only; TINA4_API_KEY never unlocks it, ADR-0078).
 
     `remote_ip` MUST be the raw socket peer (request.remote_ip).
     """
