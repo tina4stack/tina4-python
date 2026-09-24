@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 
 import pytest
 
-MONGO_URI = os.environ.get("TINA4_TEST_MONGO_URI") or os.environ.get("TINA4_TEST_MONGO_URL") or "mongodb://localhost:27017"
+MONGO_URI = os.environ.get("TINA4_TEST_MONGO_URI") or "mongodb://localhost:27017"
 _PARSED = urlparse(MONGO_URI)
 MONGO_HOST, MONGO_PORT = _PARSED.hostname or "localhost", _PARSED.port or 27017
 MONGO_DB = "tina4_issue136_py"
