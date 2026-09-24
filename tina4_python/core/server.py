@@ -2576,6 +2576,27 @@ def _stage_not_found(ctx: DispatchContext) -> bool:
     return True
 
 
+def _stage_fallback_security_headers(ctx: DispatchContext) -> None:
+    """Security headers for a response NO route produced (#137).
+
+    The headers come from ``SecurityHeadersMiddleware``, and global middleware
+    only runs inside a matched route - so a static file, the SPA ``index.html``
+    that ``/`` resolves to, an auto-routed template, a 405 and a 404 all went
+    out with no CSP, no ``nosniff`` and no frame protection, even with the
+    middleware attached. When it is attached, apply it here too.
+
+    Matched routes are skipped: the middleware already ran there, BEFORE the
+    handler, so a route that deliberately overrides a header keeps its value.
+    """
+    if ctx.route is not None:
+        return None
+    from tina4_python.core.middleware import Middleware, SecurityHeadersMiddleware
+    for middleware in Middleware.get_global():
+        if isinstance(middleware, type) and issubclass(middleware, SecurityHeadersMiddleware):
+            ctx.request, ctx.response = middleware().before_security(ctx.request, ctx.response)
+    return None
+
+
 def _stage_apply_cors(ctx: DispatchContext) -> None:
     """Apply the CORS policy headers to the finished response."""
     _cors.apply(ctx.request, ctx.response)
@@ -2760,6 +2781,7 @@ _FALLBACK_STAGES = (
 #: Content-Length report the body AFTER injection, which is exactly what the
 #: equivalent GET would send (RFC 9110 s9.3.2).
 _RESPONSE_STAGES = (
+    _stage_fallback_security_headers,
     _stage_apply_cors,
     _stage_dev_toolbar_inject,
     _stage_dev_inspector_capture,
