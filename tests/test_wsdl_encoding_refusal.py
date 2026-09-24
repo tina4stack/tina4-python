@@ -41,9 +41,9 @@ PLAIN_ECHO = (
 MALFORMED = "<faultcode>Client</faultcode><faultstring>Malformed XML</faultstring>"
 
 
-def _handle(body: bytes) -> str:
+def _handle(body: bytes, content_type: bytes = b"text/xml; charset=utf-8") -> str:
     scope = {"type": "http", "method": "POST", "path": "/soap", "query_string": b"",
-             "headers": [(b"content-type", b"text/xml; charset=utf-8")], "client": ("127.0.0.1", 5555)}
+             "headers": [(b"content-type", content_type)], "client": ("127.0.0.1", 5555)}
     return ParityService(Request.from_scope(scope, body)).handle()
 
 
@@ -55,6 +55,8 @@ def _handle(body: bytes) -> str:
     pytest.param(PLAIN_ECHO.format(encoding="UTF-8").encode().replace(b"hello", b"hel\x00lo"), id="nul-byte"),
     pytest.param(PLAIN_ECHO.format(encoding="ISO-8859-1").encode(), id="declared-latin1"),
     pytest.param(PLAIN_ECHO.format(encoding="UTF-7").encode(), id="declared-utf7"),
+    pytest.param(PLAIN_ECHO.format(encoding="UTF8").encode(), id="declared-utf8-without-hyphen"),
+    pytest.param(PLAIN_ECHO.format(encoding=" UTF-8").encode(), id="declared-utf8-padded"),
     pytest.param(PLAIN_ECHO.format(encoding="UTF-8").encode().replace(b"hello", b"hel\xfflo"), id="invalid-utf8"),
 ])
 def test_a_body_that_is_not_plain_utf8_is_refused(body):
@@ -63,7 +65,7 @@ def test_a_body_that_is_not_plain_utf8_is_refused(body):
     assert "EXPANDED" not in response
 
 
-@pytest.mark.parametrize("declared", ["UTF-8", "utf-8", "utf8"])
+@pytest.mark.parametrize("declared", ["UTF-8", "utf-8", "Utf-8"])
 def test_plain_utf8_still_works(declared):
     """Positive control: the rule refuses what it must and nothing else."""
     response = _handle(PLAIN_ECHO.format(encoding=declared).encode())
@@ -79,3 +81,12 @@ def test_a_utf8_doctype_keeps_its_own_fault():
     response = _handle(ENVELOPE_WITH_DTD.format(encoding="UTF-8").encode())
     assert "DOCTYPE declarations are not allowed in SOAP messages" in response
     assert "EXPANDED" not in response
+
+
+def test_invalid_utf8_is_refused_even_when_the_content_type_decodes_leniently():
+    """request.py decodes an unparseable JSON body with errors="replace", which
+    turns invalid UTF-8 into U+FFFD. The rule reads the RAW bytes, so the
+    content type cannot launder an invalid body into a valid-looking one."""
+    body = PLAIN_ECHO.format(encoding="UTF-8").encode().replace(b"hello", b"hel\xfflo")
+    response = _handle(body, content_type=b"application/json")
+    assert MALFORMED in response, response

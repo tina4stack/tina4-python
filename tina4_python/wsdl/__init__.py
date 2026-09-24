@@ -52,13 +52,15 @@ def _is_plain_utf8_text(xml_body: str) -> bool:
     NULs, and is still valid UTF-8), or an XML declaration naming any encoding
     but UTF-8 all let the parser re-decode the body into something the
     ``<!DOCTYPE`` regex never saw - measured: a BOM-less UTF-16LE envelope had
-    its DTD entity EXPANDED. Invalid UTF-8 never gets here: the request body
-    decode already refused it (the body is then empty -> Malformed XML).
+    its DTD entity EXPANDED. Invalid UTF-8 never gets here: handle() decodes
+    the RAW request bytes strictly, and an undecodable body is empty ->
+    Malformed XML.
     """
     if xml_body.startswith("\ufeff") or "\x00" in xml_body:
         return False
     declared = _XML_DECLARED_ENCODING.match(xml_body)
-    return declared is None or declared.group(1).strip().lower() in ("utf-8", "utf8")
+    # Exactly "UTF-8", any case - the one spelling all four frameworks accept.
+    return declared is None or declared.group(1).lower() == "utf-8"
 
 
 def wsdl_operation(response_schema: dict = None):
@@ -144,7 +146,10 @@ class WSDL:
         # Parse SOAP request
         body = ""
         if hasattr(self._request, "body"):
-            raw = self._request.body
+            # The RAW bytes when the request carries them: the parsed body may
+            # have been decoded with errors="replace" (a JSON content type),
+            # which would hide invalid UTF-8 from the checks below.
+            raw = getattr(self._request, "raw_body", None) or self._request.body
             if isinstance(raw, (bytes, bytearray)):
                 # Strict UTF-8, never str(bytes): invalid bytes become an
                 # empty body, which the parser refuses as Malformed XML.
