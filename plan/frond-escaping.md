@@ -3,16 +3,16 @@
 Outcome: Frond auto-escaping is safe by default in all four frameworks; trusted output is marked ONLY by a real SafeString type; normal templates render byte-identically (frond_expression corpus unchanged). Branch fix/frond-escaping from origin/v3; ADR-0077; shared frond_escaping_contract.json + 4 runners.
 
 ## Scope
-- [ ] F1 PHP: replace in-band RAW_MARKER with SafeString class end-to-end
-- [ ] F2 PHP+Node: filter output after e/escape/raw is plain string -> re-escaped
-- [ ] F3 PHP: data_uri sanitises client MIME type
-- [ ] F4 Py/Ruby/Node: escape list/dict/object string form on output
-- [ ] F5 all4: js_escape also neutralises <, >, &, / and quotes for attr+script safety
-- [ ] F6 sandbox: block dunder/callable-by-name/inherited methods; gate set/for/if against allow-list
-- [ ] F7 all4: e('js'|'url'|'css'|'html_attr') implement Twig strategies
-- [ ] F8 all4: document json_encode safe contexts in ADR (keep Twig semantics)
-- [ ] ADR-0077 + frond_escaping_contract.json + runners (py/php/ruby/node)
-- [ ] positive: frond_expression corpus byte-identical before/after (all 4)
+- [x] F1 PHP: replace in-band RAW_MARKER with SafeString class end-to-end
+- [x] F2 PHP+Node: filter output after e/escape/raw is plain string -> re-escaped
+- [x] F3 PHP: data_uri sanitises client MIME type
+- [x] F4 Py/Ruby/Node: escape list/dict/object string form on output
+- [x] F5 all4: js_escape also neutralises <, >, &, / and quotes for attr+script safety
+- [x] F6 sandbox: block dunder/callable-by-name/inherited methods; gate set/for/if against allow-list
+- [x] F7 all4: e('js'|'url'|'css'|'html_attr') implement Twig strategies
+- [x] F8 all4: document json_encode safe contexts in ADR (keep Twig semantics)
+- [x] ADR-0077 + frond_escaping_contract.json + runners (py/php/ruby/node)
+- [x] positive: frond_expression corpus byte-identical before/after (all 4)
 
 ## Parity
 | Finding | Python | PHP | Ruby | Node |
@@ -41,4 +41,4 @@ Outcome: Frond auto-escaping is safe by default in all four frameworks; trusted 
 ## Commits
 - (hash desc)
 
-## Status: In Progress
+## Status: Frond complete (local, macOS); lab full-suite + PRs pending
