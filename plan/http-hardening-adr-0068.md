@@ -51,6 +51,7 @@ Governed by `tina4-documentation/plan/v3/decisions/ADR-0068.md`, gated by
 - [x] BROWSER-OPENS-IN-TESTS: browser opened with debug off, under CI, ignored "on" — c815f09, 68c7f51, d11270c
 - [x] SHUTDOWN-PROBE-RACE: graceful-shutdown test treated a kernel handshake reset as a failure (base v3 too) — 61efd0e
 - [x] NO-KEEPALIVE / HEAD-LENGTH-ZERO — fbcc85b
+- [x] DUPLICATE-CL-ACCEPTED: an agreeing second Content-Length was accepted (maintainer ruling: refuse) — 38673da
 - [x] ASGI-UNSAFE-HEADER-DROPS: uvicorn dropped the connection on an unsafe header — 6f8293b
 
 ## Commits
@@ -62,5 +63,8 @@ Governed by `tina4-documentation/plan/v3/decisions/ADR-0068.md`, gated by
 - 68c7f51  Browser gate: ADR-0070's eight CI variables, and a runner for its fixture
 - 6f8293b  ASGI path: answer an unsafe response header with the ADR-0068 500, not a dropped connection
 - d11270c  Browser gate: ADR-0070 final CI rule - blank, false, 0, no and off mean not CI
+- 38673da  Built-in server: refuse a second Content-Length even when it agrees (ADR-0068)
+
+Lab (Linux, Python 3.13.13, TINA4_REQUIRE_SERVICES=1, OIDC required, graph engines on, own Firebird db) at 38673da: 6240 passed, 0 failed, 0 skipped.
 
 ## Status: Complete (PR open, not merged)
