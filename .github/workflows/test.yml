@@ -216,6 +216,15 @@ jobs:
           MQTT_REQUIRE_EMQX=false bash tests/mqtt-infra.sh "$RUNNER_TEMP/tina4-mqtt-infra"
           echo "TINA4_TEST_MQTT_CA_FILE=$RUNNER_TEMP/tina4-mqtt-infra/certs/ca.crt" >> "$GITHUB_ENV"
 
+      # TLS + AUTH mail servers for ADR-0071 (tests/test_mail_encryption_adr0071.py):
+      # GreenMail 4025/4465/4143/4993, Mailpit 4587/4825, Dovecot 4144, all with
+      # certificates from a throwaway CA the tests trust through SSL_CERT_FILE.
+      - name: Start TLS mail servers (GreenMail / Mailpit / Dovecot)
+        run: |
+          bash tests/mail-infra.sh "$RUNNER_TEMP/tina4-mail-infra"
+          echo "TINA4_TEST_MAIL_TLS_HOST=127.0.0.1" >> "$GITHUB_ENV"
+          echo "TINA4_TEST_MAIL_TLS_CA_FILE=$RUNNER_TEMP/tina4-mail-infra/certs/ca.crt" >> "$GITHUB_ENV"
+
       # System-level pieces `uv sync --extra test` cannot install (it only
       # installs the PYTHON clients, pyodbc + firebird-driver, both already
       # declared in the `test` extra): unixODBC (the driver manager pyodbc's
