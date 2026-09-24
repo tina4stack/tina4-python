@@ -139,6 +139,11 @@ jobs:
       TINA4_TEST_MSSQL_USERNAME: sa
       TINA4_TEST_MSSQL_PASSWORD: 'TinaSQL123!Secure'
       TINA4_TEST_MSSQL_DB: tina4_test
+      # The ADR-0069 test gate reads these URLs as the promise that MySQL and
+      # MSSQL are provisioned. Without them a [needs:mysql] / [needs:mssql] skip
+      # would be excused here even though both services run in this job.
+      TINA4_TEST_MYSQL_URL: mysql://tina4:tina4@127.0.0.1:3306/tina4_test
+      TINA4_TEST_MSSQL_URL: 'mssql://sa:TinaSQL123!Secure@localhost:1433/tina4_test'
       # ODBC (feature 13): unixODBC + the PostgreSQL Unicode driver (installed
       # below), pointed at the postgres service above via a dedicated
       # `tina4_odbc` database (also created below). AUTH_DSN carries no UID/PWD
@@ -180,6 +185,21 @@ jobs:
       # pass --requirepass, so run it as a plain container on 6381).
       - name: Start auth Redis
         run: docker run -d --name tina4-cache-redis-auth -p 6381:6379 redis:7-alpine redis-server --requirepass s3cret
+
+      # MinIO for the live S3 storage tests (tests/test_realtime_files.py dials
+      # localhost:9100). S3 is an always-provisioned service under the ADR-0069
+      # gate, so an unreachable MinIO fails the run instead of skipping green.
+      # GHA services can't pass `server /data`, so run it as a plain container.
+      - name: Start MinIO (S3 on 9100)
+        run: |
+          docker run -d --name tina4-minio -p 9100:9000 \
+            -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:9100/minio/health/live && exit 0
+            sleep 2
+          done
+          echo "MinIO never became healthy"; docker logs tina4-minio; exit 1
 
       # Kafka in KRaft mode (single node, no ZooKeeper). GitHub service
       # containers can't express the KRaft listener config cleanly, so run it as
