@@ -334,9 +334,14 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         records = []
         last_id = None
 
-        if has_returning and cursor.description:
-            records = [dict(row) for row in cursor.fetchall()]
-            if records and "id" in records[0]:
+        # Any statement that returns rows hands them back - a SELECT and a
+        # WITH ... SELECT too, not only RETURNING (execute() of a SELECT used to
+        # come back EMPTY). Read them before the lastval() probe below reuses
+        # the cursor.
+        returns_rows = cursor.description is not None
+        if returns_rows:
+            records = [self._decode_blobs(dict(row)) for row in cursor.fetchall()]
+            if has_returning and records and "id" in records[0]:
                 last_id = records[0]["id"]
 
         if not has_returning:
@@ -373,7 +378,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
 
-        return DatabaseResult(
+        result = DatabaseResult(
             records=records,
             count=len(records),
             affected_rows=affected,
@@ -381,6 +386,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             sql=sql,
             adapter=self,
         )
+        return result.with_rows() if returns_rows else result
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:

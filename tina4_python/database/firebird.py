@@ -134,8 +134,9 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
     )
 
     # Firebird has no generic last-insert-id, so db.insert() appends RETURNING *
-    # to trigger the generator-based emulation below (execute() strips it and
-    # reads GEN_<TABLE>_ID), giving db.insert().last_id the real new key. Without
+    # so execute() hands back the new row (native RETURNING first; a server that
+    # rejects it falls back to reading GEN_<TABLE>_ID), giving db.insert().last_id
+    # the real new key. Without
     # this the base class's empty INSERT_RETURNING meant a plain db.insert()
     # returned last_id=None on Firebird (FB-LASTID-GAP).
     INSERT_RETURNING = " RETURNING *"
@@ -308,15 +309,36 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
         sql = self._translate_sql(sql)
 
-        # Firebird does not support RETURNING in all versions — strip and emulate
+        # RETURNING runs natively first (Firebird 2.1+; the lab's Firebird 5
+        # returns the rows), so an IDENTITY table - which has no GEN_<TABLE>_ID
+        # generator for the emulation below to read - still gets its id back.
+        # Only a server that rejects the clause falls back to strip-and-emulate.
+        # A failed statement changes nothing in Firebird, so the write still
+        # runs exactly once.
         returning_cols = None
         returning_match = re.search(r"\s+RETURNING\s+(.+)$", sql, re.IGNORECASE)
-        if returning_match:
-            returning_cols = returning_match.group(1).strip()
-            sql = sql[:returning_match.start()]
-
         cursor = self._conn.cursor()
-        cursor = self._safe_cursor_execute(cursor, sql, params)
+        native_rows = None
+        if returning_match:
+            try:
+                cursor = self._safe_cursor_execute(cursor, sql, params)
+                native_rows = cursor.description is not None
+            except Exception:  # noqa: BLE001 - an older server: emulate below
+                cursor = self._conn.cursor()
+        if native_rows is None:
+            if returning_match:
+                returning_cols = returning_match.group(1).strip()
+                sql = sql[:returning_match.start()]
+            cursor = self._safe_cursor_execute(cursor, sql, params)
+
+        # Any statement that returns rows (SELECT, WITH ... SELECT, native
+        # RETURNING, a selectable procedure) hands them back. Read them now,
+        # before the commit below closes the cursor.
+        returns_rows = cursor.description is not None
+        rows_now = []
+        if returns_rows:
+            col_names = [FirebirdAdapter._column_name(d[0]) for d in cursor.description]
+            rows_now = [self._decode_blobs(dict(zip(col_names, row))) for row in cursor.fetchall()]
 
         # Capture the write's affected-row count NOW. firebird-driver's rowcount
         # reflects the LAST statement executed on the cursor, so the generator
@@ -336,8 +358,19 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         except Exception:  # noqa: BLE001 - no rowcount on DDL; it is not a write
             affected = 0
 
-        records = []
+        records = rows_now
+        if native_rows and not affected:
+            # A native RETURNING statement reports no row count once its rows are
+            # read; it returns one row per row it wrote, so that IS the count.
+            affected = len(records)
         last_id = None
+        if native_rows and records and sql.strip().upper().startswith("INSERT"):
+            # Native RETURNING: the new key is in the returned row, under the
+            # table's REAL primary key (FB-RETURNING-ID), not necessarily `id`.
+            last_id = records[0].get("id")
+            if last_id is None:
+                pk = self._returning_pk(self._unquote_ident(self._extract_table(sql)))
+                last_id = (records[0].get(pk) or records[0].get(pk.lower())) if pk else None
 
         if returning_cols:
             # Firebird 2.1+ supports RETURNING but we already stripped it.
@@ -381,7 +414,7 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
 
-        return DatabaseResult(
+        result = DatabaseResult(
             records=records,
             count=len(records),
             affected_rows=affected,
@@ -389,6 +422,7 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
             sql=sql,
             adapter=self,
         )
+        return result.with_rows() if (returns_rows or records) else result
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:

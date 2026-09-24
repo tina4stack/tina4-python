@@ -105,7 +105,13 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
         with self._write_lock:
             cursor = self._conn.execute(sql, params or [])
 
+            # A statement that returns rows (SELECT, WITH ... SELECT, native
+            # RETURNING) hands them back. Read them BEFORE the COMMIT below: a
+            # RETURNING statement is only finished once it is stepped to the end.
             records = []
+            returns_rows = cursor.description is not None
+            if returns_rows:
+                records = [dict(row) for row in cursor.fetchall()]
             if returning_match and not self._supports_returning():
                 # Emulate RETURNING by fetching the last inserted/updated row
                 if cursor.lastrowid:
@@ -120,7 +126,7 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
                 if self._conn.in_transaction:
                     self._conn.execute("COMMIT")
 
-            return DatabaseResult(
+            result = DatabaseResult(
                 records=records,
                 count=len(records),
                 affected_rows=cursor.rowcount,
@@ -128,6 +134,7 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
                 sql=sql,
                 adapter=self,
             )
+            return result.with_rows() if (returns_rows or records) else result
 
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
         """Optimized batch execute using SQLite's executemany — ATOMIC (one txn).

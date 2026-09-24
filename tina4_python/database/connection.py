@@ -668,8 +668,14 @@ class Database:
             # Capture last_id from adapter result
             if hasattr(result, "last_id") and result.last_id is not None:
                 self._last_id = result.last_id
+            # Any statement that produced a result set returns it, in the same
+            # DatabaseResult type fetch() returns - a SELECT, WITH ... SELECT,
+            # RETURNING / OUTPUT, or a procedure with rows. A write that returns
+            # no rows keeps returning True. The keyword test stays for adapters
+            # that cannot report a result set (e.g. MongoDB's translated SQL).
             sql_upper = sql.strip().upper()
-            if ("RETURNING" in sql_upper or sql_upper.startswith("CALL ")
+            if (getattr(result, "_returns_rows", False)
+                    or "RETURNING" in sql_upper or sql_upper.startswith("CALL ")
                     or sql_upper.startswith("EXEC ") or sql_upper.startswith("SELECT ")):
                 return result
             return True

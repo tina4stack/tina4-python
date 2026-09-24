@@ -95,7 +95,8 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # returns them) must be read before anything else runs on the
         # connection: mysql-connector refuses the commit below with "Unread
         # result found" otherwise. Found by the #138 regression on a live MySQL.
-        if cursor.with_rows:
+        returns_rows = bool(cursor.with_rows)
+        if returns_rows:
             records = [dict(row) for row in cursor.fetchall()]
         # MySQL reports the FIRST generated id of a MULTI-ROW INSERT, not the
         # last (verified live: a 3-row insert into a fresh table reports 1 while
@@ -133,7 +134,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
 
-        return DatabaseResult(
+        result = DatabaseResult(
             records=records,
             count=len(records),
             affected_rows=affected,
@@ -141,6 +142,8 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
             sql=sql,
             adapter=self,
         )
+        # A re-selected RETURNING row counts as a result set too.
+        return result.with_rows() if (returns_rows or records) else result
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:

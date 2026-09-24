@@ -109,6 +109,16 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         records = []
         last_id = None
 
+        # A statement that returns rows - SELECT, WITH ... SELECT, OUTPUT, EXEC
+        # of a procedure with a result set - hands them back. Read them NOW: the
+        # SCOPE_IDENTITY probe below runs on this cursor and discarded an
+        # INSERT ... OUTPUT's rows unread.
+        returns_rows = cursor.description is not None
+        if returns_rows:
+            records = [dict(row) for row in cursor.fetchall()]
+            if not affected and cursor.rowcount is not None and cursor.rowcount > 0:
+                affected = cursor.rowcount  # OUTPUT: counted once its rows are read
+
         # Get last inserted ID for INSERT statements
         sql_upper = sql.strip().upper()
         if sql_upper.startswith("INSERT"):
@@ -143,7 +153,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         if not self._in_transaction and self.autocommit:
             self._conn.commit()
 
-        return DatabaseResult(
+        result = DatabaseResult(
             records=records,
             count=len(records),
             affected_rows=affected,
@@ -151,6 +161,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             sql=sql,
             adapter=self,
         )
+        return result.with_rows() if (returns_rows or records) else result
 
     def fetch(self, sql: str, params: list = None,
               limit: int = 100, offset: int = 0) -> DatabaseResult:

@@ -135,7 +135,18 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # was lost (and on a non-SQL-Server target the failed SELECT left it -1).
         affected_rows = cursor.rowcount
 
+        # A statement that returns rows (SELECT, WITH ... SELECT, RETURNING, a
+        # procedure with a result set) hands them back. Read them before the
+        # @@IDENTITY probe below reuses the cursor.
+        records = []
+        returns_rows = cursor.description is not None
+        if returns_rows:
+            columns = [desc[0] for desc in cursor.description]
+            records = [dict(zip(columns, row)) for row in cursor.fetchall()]
+
         last_id = self._read_last_insert_id(cursor, sql)
+        if last_id is None and records and "id" in records[0] and self._is_write_statement(sql):
+            last_id = records[0]["id"]
 
         # Not inside an explicit transaction: there the caller's commit() owns the
         # boundary. Committing here too made every execute() between
@@ -143,14 +154,15 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         if not self._conn.autocommit and self._autocommit and not self._in_transaction:
             self._conn.commit()
 
-        return DatabaseResult(
-            records=[],
-            count=0,
+        result = DatabaseResult(
+            records=records,
+            count=len(records),
             affected_rows=affected_rows,
             last_id=last_id,
             sql=sql,
             adapter=self,
         )
+        return result.with_rows() if returns_rows else result
 
     def _read_last_insert_id(self, cursor, sql: str):
         """Best-effort last-insert-id, driver-aware.

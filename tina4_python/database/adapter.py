@@ -237,6 +237,16 @@ class DatabaseResult:
     sql: str | None = None
     adapter: object | None = field(default=None, repr=False)
     _column_info: list | None = field(default=None, init=False, repr=False)
+    #: True when the statement produced a result set (the cursor had a
+    #: description), even an empty one. Database.execute() returns this result,
+    #: not True, for such a statement - a SELECT, WITH ... SELECT, RETURNING /
+    #: OUTPUT, or a procedure that returns rows.
+    _returns_rows: bool = field(default=False, init=False, repr=False)
+
+    def with_rows(self) -> "DatabaseResult":
+        """Mark this result as carrying a statement's result set (chainable)."""
+        self._returns_rows = True
+        return self
 
     def __iter__(self):
         return iter(self.records)
@@ -1221,8 +1231,8 @@ class SqlCrudMixin:
     def _returning_pk(self, table: str) -> str | None:
         """The table's single PRIMARY KEY column, for RETURNING emulation.
 
-        MySQL, MSSQL and Firebird have no usable native RETURNING here (Firebird
-        has it from 2.1+ but this adapter emulates for cross-engine consistency),
+        MySQL and MSSQL have no usable native RETURNING here, and Firebird falls
+        back to emulation when its server rejects the clause (it tries native first),
         so after an INSERT they re-select the just-inserted row by its REAL
         primary key -- never a hardcoded ``id`` (the ``*-RETURNING-ID`` fixes: a
         table whose PK is not named ``id`` used to fail or re-select the wrong
