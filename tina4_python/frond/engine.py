@@ -17,6 +17,7 @@ re-derived here — see the parser's module docstring for why.
 """
 import os
 import re
+import inspect
 import html
 import hashlib
 import json
@@ -365,6 +366,42 @@ def _split_dotted(expr: str) -> list[str]:
     return parts
 
 
+class _CallableGlobal:
+    """A zero-argument callable registered through ``add_global`` (ADR-0085).
+
+    Node's Frond auto-calls any function reached by a bare reference and uses
+    the return value. Python, PHP and Ruby stored the callable instead, so
+    ``{% if admin_only %}`` with ``add_global("admin_only", lambda: ...)`` was
+    always truthy. Wrapping a zero-parameter closure/lambda/function in this
+    marker at registration lets ``_resolve`` invoke it once for a bare
+    reference, while ``admin_only()`` still calls it through the ordinary
+    function-call path (the wrapper forwards). A global that needs arguments is
+    left unwrapped and behaves exactly as before.
+    """
+
+    __slots__ = ("fn",)
+
+    def __init__(self, fn):
+        self.fn = fn
+
+    def __call__(self, *args, **kwargs):
+        return self.fn(*args, **kwargs)
+
+
+def _wrap_global(value):
+    """Wrap a bare zero-parameter closure/lambda/function so a bare reference
+    to it auto-calls (ADR-0085). Anything else — a value, or a callable that
+    declares parameters, or an arbitrary object with ``__call__`` — is returned
+    unchanged, matching Node, which only auto-calls plain functions."""
+    if inspect.isfunction(value) or inspect.ismethod(value):
+        try:
+            if len(inspect.signature(value).parameters) == 0:
+                return _CallableGlobal(value)
+        except (TypeError, ValueError):
+            pass
+    return value
+
+
 def _resolve(expr: str, context: dict):
     """Resolve a dotted expression against the context.
 
@@ -471,6 +508,11 @@ def _resolve(expr: str, context: dict):
         if value is None:
             return None
 
+    # ADR-0085: a bare reference to a zero-argument callable global uses its
+    # return value. ``g()`` never reaches here as a wrapper — the function-call
+    # path invokes the wrapper directly — so this calls each global at most once.
+    if isinstance(value, _CallableGlobal):
+        return value()
     return value
 
 
@@ -1882,6 +1924,7 @@ class Frond:
         Callable as classmethod or instance method. See ``add_filter`` for the
         dual-call semantics.
         """
+        value = _wrap_global(value)  # ADR-0085
         if instance is None:
             cls._class_globals[name] = value
         else:
