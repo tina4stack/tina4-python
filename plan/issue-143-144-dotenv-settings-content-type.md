@@ -18,7 +18,7 @@ is read when it is used, so a value set only in `.env` applies. Governed by
 - [x] Node: header Content-Type kept by `response(data)` for every body type
 - [x] Node: `TINA4_MAX_UPLOAD_SIZE` read per request
 - [x] ADR-0072
-- [x] Full suites on the lab (Python, Ruby green; Node and PHP: see Lab)
+- [x] Full suites on the lab (see Lab: Python and Ruby zero/zero; Node and PHP each case green, the stragglers were shared-lab races proved in isolation)
 
 ## Reproduced on origin/v3 (2026-09-24)
 | Bug | Python | PHP | Ruby | Node |
@@ -65,6 +65,7 @@ PHP `tests/DotenvSettingsAndContentTypeTest.php`, Ruby
 ## Commits
 - python 3a4aa1d  fix: header Content-Type is the one Content-Type; .env settings read when used (#143, #144)
 - php    cae030ad fix: header Content-Type is the one Content-Type; bad upload limit falls back
+- php    58c1172a test(migration): filter the Firebird relation listing to the table under test
 - ruby   d7b66c0  fix: header Content-Type is the one Content-Type; bad upload limit falls back
 - nodejs 4c518bb  fix: header Content-Type survives response(data); upload cap read when used
 - docs   3113223  ADR-0072 (tina4-documentation#70)
@@ -74,5 +75,9 @@ PHP `tests/DotenvSettingsAndContentTypeTest.php`, Ruby
 |-------|-------------|--------|--------|---------|
 | Python | 3a4aa1d merged with v3 958377c | 6157 | 0 | 0 |
 | Ruby | d7b66c0 (on v3 bc90fc7) | 5848 | 0 | 0 |
+| Node | 4c518bb (on v3 b53face) | 9338 | 1 (shared-Firebird race; 7/7 twice in isolation) | 0 |
+| PHP main | 58c1172a merged with v3 f0c90875 | 5788 run | 1 error + 1 failure (shared-Firebird races; green 2/2 in isolation) | 41 = 4 openswoole (pass OK 4/4) + 37 graph (pass 39/39 with lab-only drivers) |
 
-## Status: In Progress
+PRs: tina4-python#152, tina4-php#227 (depends on #217), tina4-ruby#59, tina4-nodejs#76, tina4-documentation#70 (ADR-0072).
+
+## Status: Complete (PRs open, not merged)
