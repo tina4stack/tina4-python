@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import free_port
+from conftest import child_pythonpath, free_port
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SHIPPED = REPO_ROOT / "tina4_python" / "public" / "css"
@@ -47,7 +47,7 @@ def _boot(root: Path, port: int) -> subprocess.Popen:
     env.update({
         "TINA4_OVERRIDE_CLIENT": "true",
         "TINA4_DEBUG": "false",
-        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONPATH": child_pythonpath(),
         "TINA4_PORT": str(port),
     })
     proc = subprocess.Popen(

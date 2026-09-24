@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import child_pythonpath
+
 
 def _cli_prefix() -> list[str]:
     """The real `tina4python` entry point. Prefer the installed console script
@@ -30,7 +32,7 @@ def _cli_prefix() -> list[str]:
 
 def _run_cli(project: Path, *args: str) -> None:
     """Run `tina4python <args>` in the project dir; require success."""
-    env = {**os.environ, "PYTHONPATH": str(project)}
+    env = {**os.environ, "PYTHONPATH": child_pythonpath(project)}
     result = subprocess.run(
         [*_cli_prefix(), *args],
         cwd=str(project), env=env, capture_output=True, text=True,
@@ -44,7 +46,7 @@ def _run_generated_test(project: Path, test_rel: str) -> None:
     """Run the co-emitted test file with real pytest; require it to pass."""
     test_file = project / test_rel
     assert test_file.exists(), f"generator did not co-emit {test_rel}"
-    env = {**os.environ, "PYTHONPATH": str(project)}
+    env = {**os.environ, "PYTHONPATH": child_pythonpath(project)}
     env.pop("TINA4_API_KEY", None)
     env.setdefault("TINA4_SECRET", "meta-test-secret")
     result = subprocess.run(

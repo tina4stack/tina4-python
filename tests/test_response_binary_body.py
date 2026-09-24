@@ -10,15 +10,11 @@ One REAL server started by the framework's own ``run()`` in a child process,
 real routes, a real socket. Each route sends all 256 byte values (0x00-0xFF)
 and the client compares the raw bytes it received. No mocks.
 """
-import os
-import socket
 import subprocess
-import sys
-import time
 import urllib.request
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from conftest import boot_child_server
+
 ALL_BYTES = bytes(range(256))
 
 _CHILD_APP = '''\
@@ -64,14 +60,8 @@ async def json_explicit(request, response):
 
 
 from tina4_python.core.server import run
-run(host="127.0.0.1", port=int(os.environ["BINARY_PORT"]), no_browser=True, no_reload=True)
+run(host="127.0.0.1", port=int(os.environ["PORT"]), no_browser=True, no_reload=True)
 '''
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
 
 
 def _get(port: int, path: str):
@@ -81,22 +71,14 @@ def _get(port: int, path: str):
 
 
 def test_binary_bodies_arrive_unchanged_through_a_real_server(tmp_path):
-    script = tmp_path / "binary_app.py"
-    script.write_text(_CHILD_APP)
-    port = _free_port()
-    env = {**os.environ, "BINARY_PORT": str(port), "TINA4_SUPPRESS": "true", "TINA4_NO_BROWSER": "true", "TINA4_OVERRIDE_CLIENT": "true"}
-    proc = subprocess.Popen([sys.executable, str(script)], cwd=tmp_path, env=env)
+    # boot_child_server pins the child's PYTHONPATH to this checkout. This test
+    # used to build its own env without it, so from a git worktree the child
+    # imported the venv's editable checkout and tested THAT code instead.
+    proc, port = boot_child_server(
+        tmp_path, lambda project, _port: (project / "app.py").write_text(_CHILD_APP),
+        boot_timeout=30,
+    )
     try:
-        deadline = time.time() + 30
-        while True:
-            try:
-                with socket.create_connection(("127.0.0.1", port), timeout=1):
-                    break
-            except OSError:
-                assert proc.poll() is None, "the server process exited before it listened"
-                assert time.time() < deadline, "the server did not listen within 30s"
-                time.sleep(0.2)
-
         # Positive: every byte body with an explicit type arrives identical.
         for path, content_type in (
             ("/bin/call", "image/png"),

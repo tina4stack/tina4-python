@@ -1,8 +1,46 @@
 # Tina4 v3 test configuration
 
 import os
+import sys
+from pathlib import Path
 
 import pytest
+
+# ── Pin every process to THIS checkout ─────────────────────────────────────
+#
+# The venv's editable install is one .pth line that points at ONE checkout.
+# Run the suite from any other checkout (a git worktree, a lab copy) and any
+# process whose sys.path misses this repo imports tina4_python from THAT
+# checkout instead: the test then passes or fails on code that is not under
+# test. MEASURED 2026-09-24 from a worktree: test_response_binary_body's child
+# served the other checkout's /bin/send as text/html, and the `pytest` console
+# script (not `python -m pytest`) imported the other checkout in-process too.
+#
+# 1. The pytest process: this repo goes first on sys.path.
+# 2. Every Python child: PYTHONPATH starts with this repo plus tests/_child_guard,
+#    whose sitecustomize.py aborts a child that still resolves another copy.
+#    Children inherit it through os.environ; a test that must REPLACE
+#    PYTHONPATH builds it with child_pythonpath() so the pin survives.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CHILD_GUARD_DIR = REPO_ROOT / "tests" / "_child_guard"
+_OUTER_PYTHONPATH = os.environ.get("PYTHONPATH", "")
+
+
+def child_pythonpath(*front) -> str:
+    """PYTHONPATH for a Python child: ``front`` entries, this repo, the guard."""
+    entries = [str(entry) for entry in front] + [str(REPO_ROOT), str(CHILD_GUARD_DIR)]
+    return os.pathsep.join(entries + ([_OUTER_PYTHONPATH] if _OUTER_PYTHONPATH else []))
+
+
+if sys.path[:1] != [str(REPO_ROOT)]:
+    sys.path.insert(0, str(REPO_ROOT))
+os.environ["PYTHONPATH"] = child_pythonpath()
+
+_loaded_tina4 = sys.modules.get("tina4_python")
+if _loaded_tina4 is not None and not os.path.realpath(_loaded_tina4.__file__).startswith(
+        os.path.realpath(REPO_ROOT) + os.sep):
+    pytest.exit(f"pytest already imported tina4_python from {_loaded_tina4.__file__}, "
+                f"not the checkout under test {REPO_ROOT}", returncode=4)
 
 # Provisioned real services (and their client libraries). CI stands all of these
 # up, so an integration test should never skip in CI. Firebird is deliberately
@@ -281,7 +319,6 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
     """
     is_ready = ready or port_open
     from pathlib import Path as _Path
-    repo_root = _Path(__file__).resolve().parent.parent
     failures = []
 
     for attempt in range(1, attempts + 1):
@@ -292,7 +329,7 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
 
         env = {
             **os.environ,
-            "PYTHONPATH": str(repo_root),
+            "PYTHONPATH": child_pythonpath(),
             "TINA4_OVERRIDE_CLIENT": "true",
             "TINA4_NO_BROWSER": "true",
             "TINA4_SUPPRESS": "true",
