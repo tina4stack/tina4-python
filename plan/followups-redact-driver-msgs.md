@@ -49,6 +49,7 @@ Branch: `fix/followups-redact-driver-msgs` (from origin/v3). Lab dir: `/home/and
 - ab825ce  fix(storage,cache): a missing boto3 / pymongo names the package and the install command
 - 173edf4  fix(messenger): ADR-0071 - ssl is TLS on any port, STARTTLS required, certificates verified
 - e11f652  fix(wsdl): refuse a SOAP body that is not plain UTF-8 before any parse
+- 7fa6b3b  fix(wsdl): accept only encoding="UTF-8" (any case) and check the RAW request bytes
 
 Red-first: every new test ran red on the lab against the unfixed tree; 14 mutations
 (break each fix) all turned their tests red (lab log /home/andre/followup-python-mutation.log).
@@ -57,5 +58,6 @@ Red-first: every new test ran red on the lab against the unfixed tree; 14 mutati
 - Not tested live: NATSBackplane (same one-line redaction; no NATS server on the lab or in CI).
 - `redact_url` needs a `scheme://`; a scheme-less MQTT url (`user:pw@host:x`) is not redacted.
 - Tina4 CLI `tina4/src/env_config.rs` still lists TINA4_MAIL_TLS_INSECURE (withdrawn by ADR-0071).
+- Breaking on purpose (WSDL): a UTF-8-BOM body and an ASCII body declaring ISO-8859-1 are now refused (Malformed XML).
 
 ## Status: Complete (full lab suite at the pushed HEAD: see the follow-ups report)
