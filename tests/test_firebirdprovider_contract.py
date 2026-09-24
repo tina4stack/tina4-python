@@ -13,8 +13,9 @@ tina4-documentation/plan/v3/fixtures/firebirdprovider_contract.json.
 Firebird has no generic last_insert_id, so each table is created with a
 GEN_<TABLE>_ID generator + a BEFORE INSERT trigger -- the real Firebird idiom the
 adapter derives the last-id from. TINA4_TEST_FIREBIRD_URL unset -> skip (a
-machine with no Firebird is the skip case, not the design). Firebird is excluded
-from the require-services gate, so a skip here stays green.
+machine with no Firebird is the skip case, not the design). The skip is tagged
+[needs:firebird], so the require-services gate excuses it only while
+TINA4_TEST_FIREBIRD_URL is unset.
 """
 import os
 

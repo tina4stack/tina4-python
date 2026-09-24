@@ -246,9 +246,8 @@ def _reachable(host: str, port: int, timeout: float = 2.0) -> bool:
 
 
 def _require_service(name: str, host: str, port: int) -> None:
-    """TINA4_REQUIRE_SERVICES turns these skips into a hard FAILURE (conftest),
-    which is exactly right on any machine that provisions the services. The
-    messages carry the gate's own keywords on purpose."""
+    """Under TINA4_REQUIRE_SERVICES an unreachable service is a hard FAILURE,
+    which is exactly right on any machine that provisions the services."""
     if _reachable(host, port):
         return
     message = f"{name} not reachable at {host}:{port}"

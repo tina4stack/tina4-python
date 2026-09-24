@@ -82,9 +82,9 @@ def _raw(backend):
 def _driver(backend):
     """Pin a redis/valkey backend to the ``redis`` package transport.
 
-    When the driver is absent this SKIPS, and the skip reason matters. The
-    conftest turns a skip naming a provisioned service into a hard FAILURE,
-    which is exactly right: a driver that silently went missing is how the
+    When the driver is absent this SKIPS, and the skip reason matters. Under
+    TINA4_REQUIRE_SERVICES the conftest fails every untagged skip, which is
+    exactly right: a driver that silently went missing is how the
     zero-dependency blind spot happened in the first place.
 
     The one legitimate exception is a run that removed the driver ON PURPOSE to
