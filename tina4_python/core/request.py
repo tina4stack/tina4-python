@@ -2,13 +2,53 @@
 """
 Clean request object with parsed body, params, headers, and cookies.
 """
+import functools
 import ipaddress
 import json
 import os
 from urllib.parse import parse_qs, unquote
 
-# Maximum upload size in bytes (default 10 MB). Override via TINA4_MAX_UPLOAD_SIZE env var.
-TINA4_MAX_UPLOAD_SIZE = int(os.environ.get("TINA4_MAX_UPLOAD_SIZE", 10_485_760))
+from tina4_python.env import _log_warning
+
+DEFAULT_MAX_UPLOAD_SIZE = 10_485_760  # 10MB
+
+
+@functools.lru_cache(maxsize=64)
+def _parse_limit(name: str, raw: str, default: int, zero_allowed: bool) -> int:
+    """Parse one limit value; cached so a bad value warns once, not per request."""
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        _log_warning(f"{name}={raw} is not a number - using {default}")
+        return default
+    if value < 0 or (value == 0 and not zero_allowed):
+        _log_warning(f"{name}={raw} is not a usable limit - using {default}")
+        return default
+    return value
+
+
+def _resolve_limit(name: str, default: int, zero_allowed: bool = False) -> int:
+    """An integer limit from the environment; a bad value warns and uses the default."""
+    return _parse_limit(name, os.environ.get(name, "").strip(), default, zero_allowed)
+
+
+def max_upload_size() -> int:
+    """TINA4_MAX_UPLOAD_SIZE in bytes, read when it is used (ADR-0072, #143).
+
+    Never read it into a module constant: this module is imported before
+    run() loads .env, so a constant kept the 10MB default whatever .env said.
+    """
+    return _resolve_limit("TINA4_MAX_UPLOAD_SIZE", DEFAULT_MAX_UPLOAD_SIZE)
+
+
+def __getattr__(name: str):
+    # Back-compat for `from tina4_python.core.request import TINA4_MAX_UPLOAD_SIZE`:
+    # the value is resolved at access time instead of frozen at import.
+    if name == "TINA4_MAX_UPLOAD_SIZE":
+        return max_upload_size()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def accept_prefers_json(accept_header: str) -> bool:
@@ -252,10 +292,11 @@ class Request:
 
         # Check upload size limit
         content_length = int(req.headers.get("content-length", 0) or 0)
-        if content_length > TINA4_MAX_UPLOAD_SIZE or len(body) > TINA4_MAX_UPLOAD_SIZE:
+        upload_limit = max_upload_size()
+        if content_length > upload_limit or len(body) > upload_limit:
             raise PayloadTooLarge(
                 f"Request body ({max(content_length, len(body))} bytes) exceeds "
-                f"TINA4_MAX_UPLOAD_SIZE ({TINA4_MAX_UPLOAD_SIZE} bytes)"
+                f"TINA4_MAX_UPLOAD_SIZE ({upload_limit} bytes)"
             )
 
         # Parse query params. `params` is NOT seeded here — it is route-only

@@ -13,9 +13,34 @@ Environment variables:
 import os
 import socket
 import struct
+import threading
 import time
 
 from tina4_python.session import SessionHandler
+
+#: One pymongo client per URI for the whole process (#136). Every request builds
+#: a Session and every Session a handler, so a client per handler meant a new
+#: MongoClient - its own monitor threads and pool, never closed - per request:
+#: MEASURED against a real MongoDB, 20 session requests took a uvicorn worker
+#: from 10 to 67 threads. A MongoClient is thread-safe and pools internally, so
+#: sharing one per URI is the shape pymongo expects (the same cache DocStore
+#: keeps in docstore._mongo_client). The double-checked lock stops two threads
+#: racing the first request from each building one and orphaning the loser.
+_shared_clients: dict = {}
+_shared_clients_lock = threading.Lock()
+
+
+def _shared_client(url: str):
+    """Return the process-wide pymongo client for ``url``, building it once."""
+    client = _shared_clients.get(url)
+    if client is None:
+        with _shared_clients_lock:
+            client = _shared_clients.get(url)
+            if client is None:
+                import pymongo
+                client = pymongo.MongoClient(url)
+                _shared_clients[url] = client
+    return client
 
 
 class MongoDBSessionHandler(SessionHandler):
@@ -67,13 +92,16 @@ class MongoDBSessionHandler(SessionHandler):
 
     @property
     def _collection(self):
-        """The pymongo collection, built on FIRST USE rather than at construction."""
-        if self._collection_cache is None:
-            import pymongo
-            self._pymongo_client = pymongo.MongoClient(self._mongo_url)
-            self._collection_cache = (
-                self._pymongo_client[self._database][self._collection_name]
-            )
+        """The pymongo collection, built on FIRST USE rather than at construction.
+
+        The client behind it is the process-wide one for this URI (#136), looked
+        up on every access so a handler never holds on to a client another
+        handler has since closed.
+        """
+        client = _shared_client(self._mongo_url)
+        if self._collection_cache is None or self._pymongo_client is not client:
+            self._pymongo_client = client
+            self._collection_cache = client[self._database][self._collection_name]
         return self._collection_cache
 
     def _parse_url(self, url: str):
@@ -191,10 +219,20 @@ class MongoDBSessionHandler(SessionHandler):
             self._delete_many(ns, expired)
 
     def close(self):
-        """Close the connection."""
+        """Close the connection.
+
+        The pymongo client is shared by every handler on this URI (#136), so it
+        is closed AND dropped from the shared cache: the next handler to touch
+        the store builds a fresh one instead of inheriting a closed client.
+        """
         if self._use_pymongo:
             if self._pymongo_client:
+                with _shared_clients_lock:
+                    if _shared_clients.get(self._mongo_url) is self._pymongo_client:
+                        del _shared_clients[self._mongo_url]
                 self._pymongo_client.close()
+                self._pymongo_client = None
+                self._collection_cache = None
         else:
             self._close_raw()
 

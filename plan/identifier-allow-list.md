@@ -28,6 +28,11 @@ Branch: `fix/identifier-allow-list` off `origin/v3` (local only, not pushed).
 | C. DocStore fallback validates field paths | ✅ | other worker | other worker | other worker |
 | E. AutoCrud uses the registered connection | ✅ (already correct; lock-in test) | other worker | other worker | other worker |
 | F. REQUIRE_SERVICES gate = [needs:X] rule  | ✅ | other worker | other worker | other worker |
+| G1. AutoCrud body keys via the find() resolver | ✅ (fixed: column keys were dropped) | other worker | other worker | other worker |
+| G2. ORM save writes only declared fields   | ✅ (already correct; lock-in) | other worker | other worker | other worker |
+| G3. write helpers reject non-identifier keys | ✅ (fixed) | other worker | other worker | other worker |
+| AutoCrud id route / GraphQL id argument     | ✅ (already bound; lock-ins) | other worker | other worker | other worker |
+| GraphQL commas insignificant                | ✅ (fixed) | other worker | other worker | other worker |
 
 Open parity question for the maintainer: Python's AutoCrud list route has no
 `filter[...]` / `sort` parameters at all, while PHP, Ruby and Node do. Not built
@@ -63,6 +68,24 @@ Addendum 2 (Python owns E and F; D is AutoCrud filter/sort, absent in Python):
 - [x] Removed one skip instead of tagging it: the live URL-credential test needed an 'a' in the
       password; it now encodes the first character.
 
+Addendum 3 and follow-ups:
+- [x] F: postgis joins the optional-engine map (TINA4_TEST_POSTGIS_URL); the PostGIS skip is tagged.
+- [x] G1 `test_autocrud_write_body_accepts_only_declared_fields` (tests/test_autocrud_write_keys_and_ids.py).
+      RED before: a body key given as a mapped column was dropped. Fix: ORM._declared_field_for is the one
+      resolver for find() filters and AutoCrud bodies. Mutations killed: old name-only resolution, is_deleted
+      guard, PK strip. Surviving by design: letting undeclared body keys through (save() writes declared
+      fields only, G2).
+- [x] G2 `test_orm_save_writes_only_declared_fields` - green before on all 5 engines (lock-in); a mutant that
+      writes undeclared attributes is red on all 5.
+- [x] G3 `test_db_write_helpers_reject_non_identifier_keys` - RED before on all 5 engines (the key reached
+      the SQL unquoted). Fix: `column_key()` in database/adapter.py, used by insert/update/delete (single and
+      batch) and Database._as_where. Five mutations, all red.
+- [x] `test_autocrud_id_route_addresses_only_that_row`, `test_graphql_id_argument_addresses_only_that_row` -
+      green before (lock-ins); interpolating the id, or ignoring it, is red.
+- [x] `test_commas_are_insignificant_between_arguments_and_fields` (tests/test_graphql_commas.py) - RED
+      before: commas between fields, in lists, repeated, and between top-level fields were parse errors.
+      Fix: commas are skipped like whitespace in the tokenizer.
+
 ## Bugs
 - [x] `ORM.find(dict)` interpolated an unrecognised key into the WHERE clause.
 - [x] DocStore fallback built JSON path literals from unvalidated field names.
@@ -93,6 +116,13 @@ Full-suite non-passes (all proven pre-existing or environmental, none from this 
 - d1c19d0  tests: encode any password character in the live credential test
 - bf9ea47  tests: tag optional-engine and platform skips with [needs:X]
 - b519bf3  tests: update comments that described the old phrase-matching gate
+- 89c5150  plan: record addendum 2 (E, F) work and commits
+- 230bb9c  tests: postgis is an optional engine in the REQUIRE_SERVICES gate
+- e0ca851  test: ORM save() writes only declared fields
+- 658b8d1  Database write helpers accept only identifier column keys
+- 867fd20  AutoCrud write bodies resolve keys like find() does
+- 0c2b7ce  test: AutoCrud id routes and GraphQL id arguments address one row
+- 5e33743  GraphQL: commas are insignificant everywhere
 
 Second full run (after E + F, gate on, macOS, Python 3.13.11): 6067 passed, 8 failed, 10 errors,
 38 skipped. All 38 skips are tagged and excused (graph engines and OIDC, coordinates unset
@@ -100,7 +130,15 @@ locally). The 10 MQTT TLS errors are the same missing CA file as before. The 8 f
 same way on clean origin/v3: MongoDB on localhost:27017 went down during the run (connection
 refused), and the memcached container reports TTLs about 79 s short (clock skew).
 
+Full run at 5e33743 (gate on, macOS, Python 3.13.11): 6088 passed, 2 failed, 10 errors, 38 skipped.
+The 2 failures are test_session_zero_dependency_fallback (same on clean origin/v3); the 10 errors are the
+missing MQTT CA file; the 38 skips are tagged and excused (graph engines, OIDC).
+
 Open for the maintainer:
+- Field(column="x") is not hydrated back (see Bugs). A find() -> save() round trip, including an
+  AutoCrud PUT, writes NULL to that column. Data loss; not fixed on this security branch.
+- GraphQL from_orm() builds its id filter from the primary-key FIELD name, not its column, and unquoted.
+  Developer-controlled, not request-controlled, but wrong for a mapped primary key.
 - CI (`.github/workflows/test.yml`) sets TINA4_TEST_PG_URL but not TINA4_TEST_MYSQL_URL or
   TINA4_TEST_MSSQL_URL, so under the new rule a MySQL/MSSQL outage in CI is excused (the old
   keyword gate failed it). Add the two URLs to the CI env to keep them strict.

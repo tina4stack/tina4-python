@@ -5,7 +5,9 @@ Zero-dependency ASGI application + built-in dev server.
     from tina4_python.core import run
     run()  # Starts on localhost:7146
 """
+import json
 import os
+import re
 import sys
 import signal
 import asyncio
@@ -20,11 +22,12 @@ from pathlib import Path
 from tina4_python.core.request import (
     Request,
     PayloadTooLarge,
-    TINA4_MAX_UPLOAD_SIZE,
+    _resolve_limit,
+    max_upload_size,
 )
-from tina4_python.core.response import Response
+from tina4_python.core.response import Response, unsafe_header_reason
 from tina4_python.core.router import Router
-from tina4_python.core.middleware import CorsMiddleware, RateLimiter
+from tina4_python.core.middleware import CorsMiddleware, RateLimiter, SecurityHeadersMiddleware
 from tina4_python.debug import Log, set_request_id, get_request_id, sanitize_request_id, clear_request_id
 from tina4_python import __version__
 
@@ -693,6 +696,34 @@ Router.add("GET", _HEALTH_PATH, _health_handler)
 if _HEALTH_PATH != "/health":
     Router.add("GET", "/health", _health_handler)
 
+
+def _apply_health_path_from_env() -> None:
+    """Move the health route to TINA4_HEALTH_PATH when .env set it (ADR-0072, #143).
+
+    The route above is registered at import, before run() loads .env, so a path
+    set only in .env was never served. run() calls this after loading .env. The
+    route keeps its slot in the table, so a catch-all registered later still
+    cannot shadow it, and /health stays registered either way (ADR-0016).
+    """
+    global _HEALTH_PATH
+    configured = os.environ.get("TINA4_HEALTH_PATH", "/__health")
+    if configured == _HEALTH_PATH:
+        return
+    from tina4_python.core.router import _compile_pattern
+    routes = Router.get_routes()
+    taken = any(route["method"] == "GET" and route["path"] == configured
+                for route in routes)
+    for index, route in enumerate(routes):
+        if route["handler"] is _health_handler and route["path"] == _HEALTH_PATH:
+            if taken:
+                # /health, or an app route of the same path, already answers.
+                del routes[index]
+            else:
+                route["path"] = configured
+                route["pattern"], route["param_names"], route["param_types"] = _compile_pattern(configured)
+            break
+    _HEALTH_PATH = configured
+
 # Frond live blocks: re-render a registered {% live %} fragment on demand.
 # Always on (production too) - the poll/sse client fetches this; auth re-applies
 # through the normal middleware chain on every refresh.
@@ -793,9 +824,10 @@ _HTTP_REASON_PHRASES: dict[int, str] = {
     304: "Not Modified", 307: "Temporary Redirect", 308: "Permanent Redirect",
     400: "Bad Request", 401: "Unauthorized", 403: "Forbidden",
     404: "Not Found", 405: "Method Not Allowed", 406: "Not Acceptable",
+    408: "Request Timeout",
     409: "Conflict", 410: "Gone", 413: "Content Too Large",
     415: "Unsupported Media Type", 422: "Unprocessable Content",
-    429: "Too Many Requests",
+    429: "Too Many Requests", 431: "Request Header Fields Too Large",
     500: "Internal Server Error", 501: "Not Implemented",
     502: "Bad Gateway", 503: "Service Unavailable", 504: "Gateway Timeout",
 }
@@ -2314,8 +2346,15 @@ async def _stage_cors_preflight(ctx: DispatchContext) -> Response | None:
 
 
 async def _stage_rate_limit(ctx: DispatchContext) -> Response | None:
-    """Reject the request when it is over the configured rate limit."""
-    return _handle_rate_limit(ctx.request, ctx.response)
+    """Reject the request when it is over the configured rate limit.
+
+    The 429 answers before any middleware runs, so it takes the security
+    headers here: a refusal is still a page that can be framed or sniffed.
+    """
+    refused = _handle_rate_limit(ctx.request, ctx.response)
+    if refused is not None:
+        _apply_security_headers(ctx.request, refused)
+    return refused
 
 
 async def _stage_start_timer(ctx: DispatchContext) -> None:
@@ -2422,6 +2461,8 @@ async def _stage_global_middleware_pre(ctx: DispatchContext) -> Response | None:
         return None
 
     _run_after_middleware(ctx.request, ctx.response, pre_route, include_globals=False)
+    # A pre-match refusal answers before the response stages run.
+    _apply_security_headers(ctx.request, ctx.response)
     return ctx.response
 
 
@@ -2576,6 +2617,47 @@ def _stage_not_found(ctx: DispatchContext) -> bool:
     return True
 
 
+def _apply_security_headers(request: Request, response: Response) -> None:
+    """Add every security header the attached middleware would set and ``response`` lacks.
+
+    Only MISSING headers are added, so a value a route or middleware set on
+    purpose - a looser frame policy for an embeddable widget, say - is kept.
+    A no-op unless ``SecurityHeadersMiddleware`` (or a subclass) is attached.
+    """
+    from tina4_python.core.middleware import Middleware, SecurityHeadersMiddleware
+    for middleware in Middleware.get_global():
+        if not (isinstance(middleware, type) and issubclass(middleware, SecurityHeadersMiddleware)):
+            continue
+        wanted = Response()
+        middleware().before_security(request, wanted)
+        present = {name.lower() for name, _ in response._headers}
+        for name, value in wanted._headers:
+            if name.lower() not in present:
+                response.header(name, value)
+
+
+def _stage_security_headers(ctx: DispatchContext) -> None:
+    """Every routed or fallback response carries the security headers.
+
+    ``SecurityHeadersMiddleware`` sets them in a ``before_*`` hook, and that
+    was the only place they came from, which missed two families of response:
+
+    * anything no route produced (#137) - a static file, the SPA
+      ``index.html`` that ``/`` resolves to, an auto-routed template, a 405 or
+      a 404 - because global middleware only runs inside a matched route;
+    * a REFUSAL by an earlier hook. Global middleware runs in registration
+      order, CSRF is attached before the security headers, and a refusing hook
+      skips every hook after it: the CSRF 403 went out with no CSP, no
+      ``nosniff`` and no frame protection.
+
+    Filling in what is missing here covers both without reordering anyone's
+    middleware. The pre-match refusals (rate limit, pre-match middleware)
+    return before this stage and apply the same helper themselves.
+    """
+    _apply_security_headers(ctx.request, ctx.response)
+    return None
+
+
 def _stage_apply_cors(ctx: DispatchContext) -> None:
     """Apply the CORS policy headers to the finished response."""
     _cors.apply(ctx.request, ctx.response)
@@ -2666,12 +2748,18 @@ def _stage_session_save(ctx: DispatchContext) -> None:
 
     A brand-new session the route never wrote to is NOT saved - that is what
     stops empty orphaned session files accumulating on disk.
+
+    "Empty" is decided on the RAW data (``len(session)``), never on ``all()``:
+    ``all()`` is the user-facing view and hides the reserved SSO keys, so a new
+    session holding only ``Sso.login()``'s pending state looked empty and went
+    out with no cookie - the provider's callback then arrived without it and
+    the first-visit sign-in failed (#135).
     """
     if ctx.request.session is None:
         return None
     session = ctx.request.session
     try:
-        if not (getattr(session, "_is_new", False) and not session.all()):
+        if not (getattr(session, "_is_new", False) and len(session) == 0):
             session.save()
             sid = getattr(session, "session_id", None) or getattr(session, "id", None)
             if sid:
@@ -2754,6 +2842,7 @@ _FALLBACK_STAGES = (
 #: Content-Length report the body AFTER injection, which is exactly what the
 #: equivalent GET would send (RFC 9110 s9.3.2).
 _RESPONSE_STAGES = (
+    _stage_security_headers,
     _stage_apply_cors,
     _stage_dev_toolbar_inject,
     _stage_dev_inspector_capture,
@@ -2847,39 +2936,308 @@ def asgi(root_dir: str = "src"):
     the bootstrap rather than leaving each user to find ``_auto_discover``,
     which is private and has no business in a deployment file.
 
+    It runs the SAME ``_bootstrap_application()`` as ``run()`` - env,
+    logging, discovery, configured SSO routes, security middleware and
+    migrations - so the two entry points cannot drift (#134: asgi() once
+    shipped no security headers and never enforced ``TINA4_CSRF=true``).
+
+
     :param root_dir: Directory to discover routes from. Defaults to ``src``.
     :return: The ASGI 3 callable.
     """
-    _auto_discover(root_dir)
+    _bootstrap_application(root_dir)
     return app
 
 
+def _attach_security_middleware() -> None:
+    """Attach the middleware EVERY serving entry point must carry.
+
+    Shared by ``run()`` and ``asgi()`` so the two bootstraps cannot drift again
+    (#134). Both attaches are idempotent (``Middleware.use`` de-dupes).
+
+    CSRF is attached when TINA4_CSRF is enabled (OFF by default - a default app
+    has no CSRF gate; TINA4_CSRF=true gates every write route).
+
+    Security headers are registered UNCONDITIONALLY (secure-by-default,
+    SECHDR-DEC-01). Unlike CSRF this needs no opt-in - a default app ships
+    X-Frame-Options/X-Content-Type-Options/CSP/etc. with no code change. HSTS
+    stays HTTPS-only.
+    """
+    from tina4_python.core.middleware import attach_csrf_from_env, attach_security_headers
+    if attach_csrf_from_env():
+        Log.info("CSRF protection enabled (TINA4_CSRF) — CsrfMiddleware attached")
+    attach_security_headers()
+
+
+def _load_project_env() -> None:
+    """Load .env (real env > .env.local > .env) and apply what was read at import.
+
+    Shared by run() and asgi() so both boots honour the same settings in the
+    same order (ADR-0072).
+    """
+    from tina4_python.dotenv import load_env
+    load_env(override=False)
+    _apply_health_path_from_env()
+
+
+
+def _transport_rejection(status: int, message: str,
+                         close: bool = True) -> tuple[list[tuple[bytes, bytes]], bytes]:
+    """Headers and body for a request the server refuses before any route runs.
+
+    One shape for every early refusal (ADR-0068): a compact JSON body, the
+    framing headers, and the same security headers a routed response carries
+    (SECHDR-DEC-01). No HSTS - the request's scheme is not known yet.
+
+    ``close`` adds ``Connection: close`` for the built-in server, which closes
+    after every rejection. Under an ASGI server the connection is that server's
+    business: telling uvicorn to close makes it drop the socket while the
+    client is still sending, and the client never reads the 413.
+    """
+    body = json.dumps({"error": message}, separators=(",", ":")).encode()
+    carrier = Response()
+    SecurityHeadersMiddleware.before_security(None, carrier)
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"content-length", str(len(body)).encode()),
+    ]
+    if close:
+        headers.append((b"connection", b"close"))
+    headers += [(name.encode(), value.encode()) for name, value in carrier._headers]
+    return headers, body
+
+
+def _body_too_large_message(size: int, limit: int) -> str:
+    return f"Request body ({size} bytes) exceeds TINA4_MAX_UPLOAD_SIZE ({limit} bytes)"
+
+
+
 async def _send_payload_too_large(send, received: int, limit: int) -> None:
-    """Answer 413 for a body over TINA4_MAX_UPLOAD_SIZE.
+    """Answer 413 for a body over TINA4_MAX_UPLOAD_SIZE on the ASGI path.
 
     Written straight to the ASGI `send` rather than routed through the normal
     response path: the request never became a Request object, so there is no
-    route, no middleware and no session to run it through.
+    route, no middleware and no session to run it through. Same bytes as the
+    built-in server's refusal.
     """
-    import json
+    headers, body = _transport_rejection(413, _body_too_large_message(received, limit), close=False)
+    await send({"type": "http.response.start", "status": 413, "headers": headers})
+    await send({"type": "http.response.body", "body": body, "more_body": False})
 
-    payload = json.dumps(
-        {
-            "error": f"Request body ({received} bytes) exceeds "
-                     f"TINA4_MAX_UPLOAD_SIZE ({limit} bytes)"
-        }
-    ).encode("utf-8")
-    await send(
-        {
-            "type": "http.response.start",
-            "status": 413,
-            "headers": [
-                [b"content-type", b"application/json"],
-                [b"content-length", str(len(payload)).encode()],
-            ],
-        }
-    )
-    await send({"type": "http.response.body", "body": payload, "more_body": False})
+
+# ---------------------------------------------------------------------------
+# Built-in server: read one request without ever holding more than the limits
+# allow (ADR-0068). The server used to readexactly() whatever Content-Length the
+# client declared, before TINA4_MAX_UPLOAD_SIZE was checked anywhere.
+# ---------------------------------------------------------------------------
+
+_READ_SIZE = 65536
+_ASCII_DIGITS = re.compile(r"[0-9]+")
+_HEX_DIGITS = re.compile(rb"[0-9A-Fa-f]+")
+_BARE_CR_LF_NUL = re.compile(rb"[\r\n\x00]")
+
+
+class _RequestRejected(Exception):
+    """A request the built-in server answers itself, before any route runs."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+class _ConnectionDone(Exception):
+    """The peer went away, or never said anything - there is nothing to answer."""
+
+
+def _declared_body_length(content_lengths: list[str], transfer_encodings: list[str],
+                          body_limit: int) -> int | None:
+    """The declared body length, or None for a chunked body.
+
+    Refuses framing the server cannot read unambiguously, and a declared length
+    over the cap before a single body byte is read.
+    """
+    if transfer_encodings:
+        codings = [c.strip().lower() for value in transfer_encodings
+                   for c in value.split(",") if c.strip()]
+        if content_lengths or codings != ["chunked"]:
+            raise _RequestRejected(400, "Invalid Transfer-Encoding")
+        return None
+    if not content_lengths:
+        return 0
+    # One Content-Length, ASCII digits only. A second one is refused even when
+    # it agrees (ADR-0068): two framing headers are how request smuggling
+    # starts, and llhttp (Node) refuses the pair the same way.
+    if len(content_lengths) != 1 or not _ASCII_DIGITS.fullmatch(content_lengths[0]):
+        raise _RequestRejected(400, "Invalid Content-Length")
+    declared = int(content_lengths[0])
+    if declared > body_limit:
+        raise _RequestRejected(413, _body_too_large_message(declared, body_limit))
+    return declared
+
+
+class _BoundedRequestReader:
+    """Reads the head and body of one request in reads of at most 64KiB.
+
+    The head may not pass header_limit bytes (431), the body may not pass
+    body_limit bytes (413), and a client silent for idle_timeout seconds
+    partway through a request gets 408.
+    """
+
+    def __init__(self, reader, header_limit: int, body_limit: int, idle_timeout):
+        self.reader = reader
+        self.header_limit = header_limit
+        self.body_limit = body_limit
+        self.idle_timeout = idle_timeout
+        self.buffer = bytearray()
+        self.received_any = False
+
+    async def _fill(self, want: int = _READ_SIZE) -> None:
+        try:
+            data = await asyncio.wait_for(self.reader.read(min(want, _READ_SIZE)),
+                                          self.idle_timeout)
+        except asyncio.TimeoutError:
+            if self.received_any:
+                raise _RequestRejected(408, "Request timed out before it was complete")
+            raise _ConnectionDone()
+        except (ConnectionError, OSError):
+            raise _ConnectionDone()
+        if not data:
+            raise _ConnectionDone()
+        self.received_any = True
+        self.buffer += data
+
+    async def _take(self, count: int) -> bytes:
+        while len(self.buffer) < count:
+            await self._fill(count - len(self.buffer))
+        data = bytes(self.buffer[:count])
+        del self.buffer[:count]
+        return data
+
+    async def _line(self, limit: int, status: int, message: str) -> bytes:
+        while True:
+            end = self.buffer.find(b"\r\n")
+            if end != -1:
+                if end > limit:
+                    raise _RequestRejected(status, message)
+                line = bytes(self.buffer[:end])
+                del self.buffer[:end + 2]
+                return line
+            if len(self.buffer) > limit:
+                raise _RequestRejected(status, message)
+            await self._fill()
+
+    async def read_head(self) -> bytes:
+        """The request line and headers, without the blank line that ends them."""
+        too_large = (431, f"Request header fields exceed TINA4_MAX_REQUEST_HEADER "
+                          f"({self.header_limit} bytes)")
+        while True:
+            end = self.buffer.find(b"\r\n\r\n")
+            if end != -1:
+                if end + 4 > self.header_limit:
+                    raise _RequestRejected(*too_large)
+                head = bytes(self.buffer[:end])
+                del self.buffer[:end + 4]
+                return head
+            if len(self.buffer) > self.header_limit:
+                raise _RequestRejected(*too_large)
+            await self._fill()
+
+    async def read_body(self, declared: int | None) -> bytes:
+        if declared is not None:
+            return await self._take(declared)  # declared <= body_limit, checked already
+        chunks = []
+        received = 0
+        bad_framing = (400, "Invalid Transfer-Encoding")
+        while True:
+            size_text = (await self._line(self.header_limit, *bad_framing)).split(b";", 1)[0].strip()
+            if not _HEX_DIGITS.fullmatch(size_text):
+                raise _RequestRejected(*bad_framing)
+            size = int(size_text, 16)
+            if size == 0:
+                break
+            received += size
+            if received > self.body_limit:
+                raise _RequestRejected(413, _body_too_large_message(received, self.body_limit))
+            chunks.append(await self._take(size))
+            if await self._take(2) != b"\r\n":
+                raise _RequestRejected(*bad_framing)
+        while await self._line(self.header_limit, *bad_framing):
+            pass  # trailer fields are read and discarded
+        return b"".join(chunks)
+
+
+def _first_unsafe_header(headers) -> str | None:
+    """The ADR-0068 reason for the first header that must not be written, else None."""
+    for name, value in headers:
+        name_text = name.decode("latin-1") if isinstance(name, bytes) else str(name)
+        value_text = value.decode("latin-1") if isinstance(value, bytes) else str(value)
+        reason = unsafe_header_reason(name_text, value_text)
+        if reason:
+            return reason
+    return None
+
+
+async def _refuse_unsafe_headers(send, headers) -> bool:
+    """ASGI path: answer 500 in the ADR-0068 shape instead of an unsafe header.
+
+    The ASGI server would refuse the header itself (h11 under uvicorn raises and
+    drops the connection), but then the client gets no answer at all. True when
+    the refusal was sent.
+    """
+    reason = _first_unsafe_header(headers)
+    if reason is None:
+        return False
+    Log.error(f"Refused to write a response header: {reason}")
+    rejection_headers, body = _transport_rejection(500, "Invalid response header", close=False)
+    await send({"type": "http.response.start", "status": 500, "headers": rejection_headers})
+    await send({"type": "http.response.body", "body": body, "more_body": False})
+    return True
+
+
+def _response_head(status: int, headers) -> bytes | None:
+    """The status line and header block, or None when a header is unsafe to write.
+
+    Defence in depth behind Response.header() (ADR-0068): anything that appended
+    to the header list directly still cannot put CR, LF or NUL on the wire.
+    """
+    reason = _first_unsafe_header(headers)
+    if reason:
+        Log.error(f"Refused to write a response header: {reason}")
+        return None
+    lines = [f"HTTP/1.1 {status} {_http_reason(status)}\r\n".encode()]
+    for name, value in headers:
+        name_bytes = name if isinstance(name, bytes) else str(name).encode()
+        value_bytes = value if isinstance(value, bytes) else str(value).encode()
+        lines.append(name_bytes + b": " + value_bytes + b"\r\n")
+    lines.append(b"\r\n")
+    return b"".join(lines)
+
+
+def _rejection_bytes(status: int, message: str) -> bytes:
+    headers, body = _transport_rejection(status, message)
+    return _response_head(status, headers) + body
+
+
+async def _answer_and_linger(reader, writer, status: int, message: str) -> None:
+    """Write a transport rejection, then drain what the client is still sending.
+
+    Closing with unread bytes in the kernel buffer sends a reset, and the client
+    may lose the answer before reading it. So half-close, discard input for up
+    to two seconds (memory stays flat - nothing is kept), then close.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        writer.write(_rejection_bytes(status, message))
+        await writer.drain()
+        if writer.can_write_eof():
+            writer.write_eof()
+        deadline = loop.time() + 2
+        while (remaining := deadline - loop.time()) > 0:
+            if not await asyncio.wait_for(reader.read(_READ_SIZE), remaining):
+                break
+    except (asyncio.TimeoutError, ConnectionError, OSError):
+        pass
 
 
 def _strip_weak_etag_prefix(tag: str) -> str:
@@ -2989,6 +3347,8 @@ async def app(scope: dict, receive, send):
     # uploading 32MB first; and a client that announces a large body and then
     # sends almost nothing would otherwise hold the connection while the server
     # waits for the rest. This is what a reverse proxy does in front of you.
+    # Read per request, not at import: .env is loaded after this module (#143).
+    upload_limit = max_upload_size()
     declared = 0
     for _name, _value in scope.get("headers", []):
         if _name.lower() == b"content-length":
@@ -2997,8 +3357,8 @@ async def app(scope: dict, receive, send):
             except (TypeError, ValueError):
                 declared = 0
             break
-    if declared > TINA4_MAX_UPLOAD_SIZE:
-        await _send_payload_too_large(send, declared, TINA4_MAX_UPLOAD_SIZE)
+    if declared > upload_limit:
+        await _send_payload_too_large(send, declared, upload_limit)
         return
 
     chunks = []
@@ -3009,7 +3369,7 @@ async def app(scope: dict, receive, send):
         chunk = msg.get("body", b"")
         if chunk and not too_large:
             received += len(chunk)
-            if received > TINA4_MAX_UPLOAD_SIZE:
+            if received > upload_limit:
                 # Stop accumulating, but keep draining: an ASGI server expects
                 # the request stream to be consumed, and abandoning it mid-body
                 # can wedge the connection.
@@ -3024,7 +3384,7 @@ async def app(scope: dict, receive, send):
         # 413, not 500. PayloadTooLarge was raised and caught by nobody, so an
         # oversized upload answered "Internal Server Error" - which tells the
         # caller to retry the request that will fail again.
-        await _send_payload_too_large(send, received, TINA4_MAX_UPLOAD_SIZE)
+        await _send_payload_too_large(send, received, upload_limit)
         return
 
     body = b"".join(chunks)
@@ -3036,7 +3396,7 @@ async def app(scope: dict, receive, send):
         # Still reachable: from_scope also refuses on a DECLARED content-length
         # over the limit, which the loop above never sees when the client lies
         # about the length or sends nothing.
-        await _send_payload_too_large(send, received, TINA4_MAX_UPLOAD_SIZE)
+        await _send_payload_too_large(send, received, upload_limit)
         return
     response = await handle(request)
 
@@ -3051,6 +3411,8 @@ async def app(scope: dict, receive, send):
             stream_headers.append((name.lower().encode(), value.encode()))
         for cookie_str in response._cookies:
             stream_headers.append((b"set-cookie", cookie_str.encode()))
+        if await _refuse_unsafe_headers(send, stream_headers):
+            return
         await send({"type": "http.response.start", "status": response.status_code, "headers": stream_headers})
 
         source = response._stream_source
@@ -3107,6 +3469,8 @@ async def app(scope: dict, receive, send):
     if_none_match = request.headers.get("if-none-match", "")
     accept_encoding = request.headers.get("accept-encoding", "")
     headers = response.build_headers(accept_encoding)
+    if await _refuse_unsafe_headers(send, headers):
+        return
 
     etag = ""
     last_modified = ""
@@ -3400,6 +3764,27 @@ def _find_available_port(start: int, max_tries: int = 10) -> int:
     except OSError:
         _kill_port(start)
         return start
+
+
+#: ADR-0070: a CI runner sets one of these. It counts as set when its value,
+#: trimmed and lower-cased, is non-empty and not "false", "0", "no" or "off"
+#: (so CI=true and CI=woodpecker are CI; CI=no is not).
+_CI_ENVIRONMENT_VARIABLES = ("CI", "CONTINUOUS_INTEGRATION", "GITHUB_ACTIONS", "GITLAB_CI",
+                             "BUILDKITE", "JENKINS_URL", "TF_BUILD", "TEAMCITY_VERSION")
+_CI_NOT_SET_VALUES = ("false", "0", "no", "off")
+
+
+def _should_open_browser(is_debug: bool, no_browser: bool) -> bool:
+    """ADR-0070: open a browser only in debug, with no veto from the flag,
+    TINA4_NO_BROWSER or a CI variable."""
+    from tina4_python.dotenv import is_truthy
+    if not is_debug or no_browser or is_truthy(os.environ.get("TINA4_NO_BROWSER", "")):
+        return False
+    for name in _CI_ENVIRONMENT_VARIABLES:
+        value = os.environ.get(name, "").strip().lower()
+        if value and value not in _CI_NOT_SET_VALUES:
+            return False
+    return True
 
 
 def _open_browser(url: str):
@@ -3720,59 +4105,25 @@ def _auto_migrate_on_startup(migration_folder: str = "migrations") -> None:
             pass
 
 
-def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
-    """Start the Tina4 dev server.
+def _bootstrap_application(root_dir: str = "src") -> None:
+    """Build the application: everything run() does apart from serving it.
 
-    Discovers routes from src/, starts ASGI server, handles shutdown.
+    ONE boot sequence for both entry points. ``run()`` calls it before its
+    own server loop and ``asgi()`` calls it before handing ``app`` to uvicorn
+    / hypercorn / granian. It used to be written out inside ``run()`` alone,
+    and ``asgi()`` drifted: no security headers or CSRF (#134), and no
+    configured SSO routes - ``/auth/login`` was a 404 under uvicorn. Anything
+    that shapes the application belongs HERE, never in one entry point.
 
-    Args:
-        host: Bind address. Falls back to HOST env var, then 0.0.0.0.
-        port: Bind port. Falls back to PORT env var, then 7146.
-        no_browser: If True, do not open browser on startup.
-        no_reload: If True, disable the file watcher / live-reload.
+    Not here, because they are about serving, not the application: the
+    ``tina4 serve`` launch gate, host/port resolution, the pidfile, the banner
+    and the server loop itself.
     """
-    import time
     global _start_time
     _start_time = time.time()
 
     # Refuse to boot with v3.11 / v2 era un-prefixed env vars set.
     _check_legacy_env_vars()
-
-    # ── Require tina4 CLI ─────────────────────────────────────────
-    # The framework must be launched via `tina4 serve`, not `python app.py`.
-    # The tina4 CLI passes --managed when spawning the server process.
-    # Users can bypass this by adding TINA4_OVERRIDE_CLIENT=true to .env
-    is_managed = "--managed" in sys.argv
-    if not is_managed and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
-        # Load .env early so TINA4_OVERRIDE_CLIENT can be read.
-        # ONE call: load_env() with no argument treats the cwd as the ROOT and
-        # applies real-env > .env.local > .env itself. It used to be two calls
-        # here and two more below, and a caller who got the order or the
-        # override flag wrong let a stray gitignored .env.local clobber an
-        # explicitly-set real env var. The rule now lives in one place.
-        from tina4_python.dotenv import load_env
-        load_env(override=False)
-        if os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
-            print()
-            print("=" * 60)
-            print()
-            print("  Tina4 must be started with the tina4 CLI:")
-            print()
-            print("    tina4 serve              (development)")
-            print("    tina4 serve --production (production)")
-            print()
-            print("  Install: cargo install tina4")
-            print("  Docs:    https://tina4.com")
-            print()
-            print("  To run directly, add to .env:")
-            print("    TINA4_OVERRIDE_CLIENT=true")
-            print()
-            print("=" * 60)
-            print()
-            sys.exit(1)
-
-    if no_reload:
-        os.environ["TINA4_NO_RELOAD"] = "true"
 
     # Ensure CWD is on sys.path so auto-discovered modules can be imported
     cwd = os.getcwd()
@@ -3784,8 +4135,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # previously-generated dev secret in .env.local is still picked up when no
     # real value is set, and TINA4_ENV_FILE still names the .env while
     # .env.local beside it keeps applying.
-    from tina4_python.dotenv import load_env
-    load_env(override=False)
+    _load_project_env()
 
     # Fail-safe dev secret: if TINA4_SECRET is blank AND we are in dev (not CI,
     # not prod), mint a per-machine random secret, persist it to .env.local
@@ -3833,7 +4183,11 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             pass
         _prior_excepthook(exc_type, exc_value, exc_tb)
 
-    _sys.excepthook = _tina4_excepthook
+    # asgi() may bootstrap more than once in one process (tests, reloaders):
+    # install the hook once, or every uncaught error is logged once per boot.
+    _tina4_excepthook._tina4 = True
+    if not getattr(_prior_excepthook, "_tina4", False):
+        _sys.excepthook = _tina4_excepthook
 
     # Ensure folders
     _ensure_folders()
@@ -3842,7 +4196,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     _auto_wire_i18n()
 
     # Auto-discover routes
-    _auto_discover("src")
+    _auto_discover(root_dir)
     # Configuration-first OIDC: canonical routes appear only when configured,
     # after app discovery so collisions fail loudly rather than overwrite.
     from tina4_python.sso import Sso as _Sso
@@ -3850,21 +4204,70 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     route_count = len(Router.get_routes())
     Log.info(f"Discovered {route_count} routes")
 
-    # CSRF: attach the middleware when TINA4_CSRF is enabled (OFF by default —
-    # a default app has no CSRF gate; TINA4_CSRF=true gates every write route).
-    from tina4_python.core.middleware import attach_csrf_from_env
-    if attach_csrf_from_env():
-        Log.info("CSRF protection enabled (TINA4_CSRF) — CsrfMiddleware attached")
-
-    # Security headers: register in the default chain UNCONDITIONALLY
-    # (secure-by-default, SECHDR-DEC-01). Unlike CSRF this needs no opt-in — a
-    # default app ships X-Frame-Options/X-Content-Type-Options/CSP/etc. with no
-    # code change. HSTS stays HTTPS-only. Idempotent.
-    from tina4_python.core.middleware import attach_security_headers
-    attach_security_headers()
+    # Security headers + CSRF - the same attach asgi() performs (#134).
+    _attach_security_middleware()
 
     # Apply pending DB migrations on startup (non-breaking — see helper).
     _auto_migrate_on_startup()
+
+    # File watching is handled by the Rust CLI (tina4 serve). In debug mode the
+    # framework receives POST /__dev/api/reload and pushes an instant reload over
+    # the /__dev_reload WebSocket; the mtime counter is the polling fallback.
+    from tina4_python.dotenv import is_truthy as _is_truthy
+    if _is_truthy(os.environ.get("TINA4_DEBUG", "")):
+        _register_dev_reload_ws()
+
+
+def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
+    """Start the Tina4 dev server.
+
+    Discovers routes from src/, starts ASGI server, handles shutdown.
+
+    Args:
+        host: Bind address. Falls back to HOST env var, then 0.0.0.0.
+        port: Bind port. Falls back to PORT env var, then 7146.
+        no_browser: If True, do not open browser on startup.
+        no_reload: If True, disable the file watcher / live-reload.
+    """
+    # ── Require tina4 CLI ─────────────────────────────────────────
+    # The framework must be launched via `tina4 serve`, not `python app.py`.
+    # The tina4 CLI passes --managed when spawning the server process.
+    # Users can bypass this by adding TINA4_OVERRIDE_CLIENT=true to .env
+    is_managed = "--managed" in sys.argv
+    if not is_managed and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
+        # Load .env early so TINA4_OVERRIDE_CLIENT can be read.
+        # ONE call: load_env() with no argument treats the cwd as the ROOT and
+        # applies real-env > .env.local > .env itself. It used to be two calls
+        # here and two more below, and a caller who got the order or the
+        # override flag wrong let a stray gitignored .env.local clobber an
+        # explicitly-set real env var. The rule now lives in one place.
+        from tina4_python.dotenv import load_env
+        load_env(override=False)
+        if os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
+            print()
+            print("=" * 60)
+            print()
+            print("  Tina4 must be started with the tina4 CLI:")
+            print()
+            print("    tina4 serve              (development)")
+            print("    tina4 serve --production (production)")
+            print()
+            print("  Install: cargo install tina4")
+            print("  Docs:    https://tina4.com")
+            print()
+            print("  To run directly, add to .env:")
+            print("    TINA4_OVERRIDE_CLIENT=true")
+            print()
+            print("=" * 60)
+            print()
+            sys.exit(1)
+
+    if no_reload:
+        os.environ["TINA4_NO_RELOAD"] = "true"
+
+    # Everything that builds the application - env, logging, discovery, SSO,
+    # security middleware, migrations - is the bootstrap asgi() runs too.
+    _bootstrap_application("src")
 
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
@@ -3889,8 +4292,6 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # module in-process, and push an instant reload over the /__dev_reload
     # WebSocket. The mtime counter at /__dev/api/mtime is the polling
     # fallback for when that socket is down. No internal watcher.
-    if is_debug:
-        _register_dev_reload_ws()
 
     # TINA4_DEFAULT_WEBSERVER=TRUE pins Tina4's own built-in webserver, so an
     # operator (or CI) can exercise it deterministically without also turning on
@@ -3920,9 +4321,10 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     if _ai_port:
         Log.info(f"Test port: http://{display}:{_ai_port} (stable — no hot-reload)")
 
-    # Open browser after a short delay (unless --no-browser)
-    _skip_browser = no_browser or os.environ.get("TINA4_NO_BROWSER", "").lower() in ("true", "1", "yes")
-    if not _skip_browser:
+    # Open a browser only for a developer at a keyboard: debug on, no
+    # TINA4_NO_BROWSER, no --no-browser, and not under CI. A test server or a
+    # production boot must never open a tab on the machine it runs on.
+    if _should_open_browser(is_debug, no_browser):
         _open_browser(f"http://{display}:{port}")
 
     # Use production server if available
@@ -3952,58 +4354,92 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     async def _serve():
         from asyncio import start_server
 
+        header_limit = _resolve_limit("TINA4_MAX_REQUEST_HEADER", 65536)
+        idle_timeout = _resolve_limit("TINA4_REQUEST_TIMEOUT", 30, zero_allowed=True) or None
+
         async def _handle_connection(reader, writer):
-            """Minimal HTTP/1.1 → ASGI bridge for dev server."""
+            """Minimal HTTP/1.1 → ASGI bridge for dev server.
+
+            HTTP/1.1 connections stay open for the next request (pipelined or
+            not) until either side says close; one reader carries any bytes
+            already received for the next request.
+            """
+            request_reader = _BoundedRequestReader(
+                reader, header_limit, max_upload_size(), idle_timeout)
             try:
-                raw = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=30)
-            except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
-                writer.close()
-                return
-
-            lines = raw.decode(errors="replace").split("\r\n")
-            if not lines:
-                writer.close()
-                return
-
-            # Parse request line
-            parts = lines[0].split(" ", 2)
-            if len(parts) < 2:
-                writer.close()
-                return
-
-            method = parts[0]
-            raw_path = parts[1]
-            path, _, qs = raw_path.partition("?")
-
-            # Parse headers
-            headers = []
-            content_length = 0
-            for line in lines[1:]:
-                if ":" in line:
-                    name, _, value = line.partition(":")
-                    name = name.strip().lower()
-                    value = value.strip()
-                    headers.append([name.encode(), value.encode()])
-                    if name == "content-length":
-                        content_length = int(value)
-
-            # Check for WebSocket upgrade before reading body
-            _header_dict = {k.decode(): v.decode() for k, v in headers}
-            if _header_dict.get("upgrade", "").lower() == "websocket":
-                if hasattr(writer, "_tina4_ai_port") and path == "/__dev_reload":
-                    writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
-                    await writer.drain()
+                while await _serve_one_request(reader, writer, request_reader):
+                    # Silence between requests is an idle keep-alive, not a
+                    # stalled request: it closes quietly, without a 408.
+                    request_reader.received_any = bool(request_reader.buffer)
+            finally:
+                # Every path out closes the socket - including the ones that
+                # used to raise past this handler and leak it.
+                if not writer.is_closing():
                     writer.close()
-                    return
-                await _handle_dev_websocket(reader, writer, _header_dict, path, qs)
-                return
 
-            # Read body
-            body = b""
-            if content_length > 0:
-                body = await asyncio.wait_for(
-                    reader.readexactly(content_length), timeout=30
-                )
+        async def _serve_one_request(reader, writer, request_reader) -> bool:
+            """Serve one request. True when the connection stays open for the next."""
+            upload_limit = max_upload_size()
+            request_reader.body_limit = upload_limit
+            try:
+                raw = await request_reader.read_head()
+                # A bare CR, LF or NUL means the head does not split the way
+                # the client's other hops would split it. Refuse it.
+                if _BARE_CR_LF_NUL.search(raw.replace(b"\r\n", b"")):
+                    raise _RequestRejected(400, "Malformed request head")
+
+                lines = raw.decode(errors="replace").split("\r\n")
+                # Parse request line
+                parts = lines[0].split(" ", 2)
+                if len(parts) < 2:
+                    return False
+
+                method = parts[0]
+                raw_path = parts[1]
+                path, _, qs = raw_path.partition("?")
+
+                # Parse headers
+                headers = []
+                content_lengths = []
+                transfer_encodings = []
+                for line in lines[1:]:
+                    if ":" in line:
+                        name, _, value = line.partition(":")
+                        name = name.strip().lower()
+                        value = value.strip()
+                        headers.append([name.encode(), value.encode()])
+                        if name == "content-length":
+                            content_lengths.append(value)
+                        elif name == "transfer-encoding":
+                            transfer_encodings.append(value)
+
+                # Check for WebSocket upgrade before reading body
+                _header_dict = {k.decode(): v.decode() for k, v in headers}
+                if _header_dict.get("upgrade", "").lower() == "websocket":
+                    if hasattr(writer, "_tina4_ai_port") and path == "/__dev_reload":
+                        writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+                        await writer.drain()
+                        return False
+                    await _handle_dev_websocket(reader, writer, _header_dict, path, qs)
+                    return False
+
+                # HTTP/1.1 is persistent unless the client says close; an
+                # HTTP/1.0 client gets one answer and a close.
+                version = parts[2].strip() if len(parts) > 2 else "HTTP/1.0"
+                keep_alive = (version == "HTTP/1.1"
+                              and "close" not in _header_dict.get("connection", "").lower())
+
+                # The cap is enforced BEFORE and WHILE the body is read, never
+                # after: a declared length over it is refused unread, and every
+                # read is bounded.
+                declared = _declared_body_length(
+                    content_lengths, transfer_encodings, upload_limit)
+                body = await request_reader.read_body(declared)
+            except _RequestRejected as rejected:
+                await _answer_and_linger(reader, writer, rejected.status, rejected.message)
+                return False
+            except _ConnectionDone:
+                return False
 
             # Build ASGI scope
             addr = writer.get_extra_info("peername") or ("127.0.0.1", 0)
@@ -4018,7 +4454,6 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             }
 
             # Capture response
-            resp_started = False
             resp_status = 200
             resp_headers = []
             resp_body = b""
@@ -4027,11 +4462,13 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                 return {"type": "http.request", "body": body, "more_body": False}
 
             _headers_sent = False
+            _refused = False
 
             async def send(msg):
-                nonlocal resp_started, resp_status, resp_headers, resp_body, _headers_sent
+                nonlocal resp_status, resp_headers, resp_body, _headers_sent, _refused
+                if _refused:
+                    return
                 if msg["type"] == "http.response.start":
-                    resp_started = True
                     resp_status = msg["status"]
                     resp_headers = msg.get("headers", [])
                 elif msg["type"] == "http.response.body":
@@ -4042,10 +4479,14 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                         # Streaming mode — flush headers on first chunk, then write each chunk immediately
                         if not _headers_sent:
                             _headers_sent = True
-                            writer.write(f"HTTP/1.1 {resp_status} {_http_reason(resp_status)}\r\n".encode())
-                            for name, value in resp_headers:
-                                writer.write(name + b": " + value + b"\r\n")
-                            writer.write(b"\r\n")
+                            head = _response_head(resp_status, resp_headers)
+                            if head is None:
+                                _refused = True
+                                writer.write(_rejection_bytes(500, "Invalid response header"))
+                                await writer.drain()
+                                writer.close()
+                                return
+                            writer.write(head)
                             await writer.drain()
 
                         if chunk:
@@ -4060,16 +4501,27 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
             await app(scope, receive, send)
 
-            # Write HTTP/1.1 response (only if headers weren't already sent by streaming)
-            if not _headers_sent:
-                status_line = f"HTTP/1.1 {resp_status} {_http_reason(resp_status)}\r\n"
-                writer.write(status_line.encode())
-                for name, value in resp_headers:
-                    writer.write(name + b": " + value + b"\r\n")
-                writer.write(b"\r\n")
-                writer.write(resp_body)
-                await writer.drain()
-                writer.close()
+            # A streamed response ends by closing the connection.
+            if _headers_sent or _refused:
+                return False
+
+            # The next request can only follow on this socket when the client
+            # asked to keep it, the answer says where its body ends, and the
+            # answer itself did not ask to close.
+            names = {bytes(name).lower(): bytes(value).lower() for name, value in resp_headers}
+            if b"content-length" not in names or names.get(b"connection") == b"close":
+                keep_alive = False
+            if not keep_alive and b"connection" not in names:
+                resp_headers = [*resp_headers, (b"connection", b"close")]
+
+            head = _response_head(resp_status, resp_headers)
+            if head is None:
+                writer.write(_rejection_bytes(500, "Invalid response header"))
+                keep_alive = False
+            else:
+                writer.write(head + resp_body)
+            await writer.drain()
+            return keep_alive
 
         server = await start_server(_handle_connection, host, port)
 

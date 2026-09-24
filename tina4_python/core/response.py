@@ -19,7 +19,40 @@ import json
 import gzip
 import hashlib
 import mimetypes
+import re
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Header and cookie safety (ADR-0068)
+# ---------------------------------------------------------------------------
+# A header name is an RFC 9110 token. A value may carry anything except CR, LF
+# and NUL: those end the header line early on the wire, so a value built from
+# user input could start a header the application never set. The value is
+# REFUSED, never stripped: a quietly repaired header hides the bug that made it.
+# The wording matches Node, whose http.setHeader already throws on these.
+_HTTP_TOKEN = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
+_UNSAFE_IN_HEADER = re.compile(r"[\r\n\x00]")
+# A cookie value or attribute also ends at ";" - one more attribute otherwise.
+_UNSAFE_IN_COOKIE = re.compile(r"[\r\n\x00;]")
+
+
+def unsafe_header_reason(name, value) -> str | None:
+    """The ADR-0068 message for a header that must not be written, else None."""
+    if not isinstance(name, str) or not _HTTP_TOKEN.fullmatch(name):
+        return f"Header name must be a valid HTTP token [{json.dumps(str(name))}]"
+    if _UNSAFE_IN_HEADER.search(value):
+        return f"Invalid character in header content [{json.dumps(name)}]"
+    return None
+
+
+def _checked_header_value(name, value) -> str:
+    """Return the value as a string, or raise ValueError naming the header."""
+    value = value if isinstance(value, str) else str(value)
+    reason = unsafe_header_reason(name, value)
+    if reason:
+        raise ValueError(reason)
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +137,7 @@ class Response:
     __slots__ = (
         "status_code", "content", "content_type",
         "_headers", "_cookies", "_is_streaming", "_stream_source",
+        "_content_type_from_header",
     )
 
     def __init__(self):
@@ -114,6 +148,9 @@ class Response:
         self._cookies: list[str] = []
         self._is_streaming: bool = False
         self._stream_source = None
+        # True once the route set Content-Type with header(); response(data)
+        # then keeps it instead of detecting one (ADR-0072, #144).
+        self._content_type_from_header: bool = False
 
     def __call__(self, data=None, status_code: int = 200, content_type: str = None,
                  headers: dict | None = None) -> "Response":
@@ -133,15 +170,18 @@ class Response:
         # for each entry, but lets call sites stay on a single expression.
         if headers:
             for k, v in headers.items():
-                self._headers.append((k, v))
+                self.header(k, v)
 
         # Normalise ORM models / collections / query results so handlers can
         # `return response(model)` without serialising by hand.
         data = _to_jsonable(data)
+        # Any byte buffer is a binary body, written as it is - never through str().
+        if isinstance(data, (bytearray, memoryview)):
+            data = bytes(data)
 
         if content_type:
             # Explicit content type provided
-            self.content_type = content_type
+            self.content_type = _checked_header_value("Content-Type", content_type)
             if isinstance(data, (dict, list)):
                 self.content = json.dumps(data, default=str, separators=(",", ":")).encode()
             elif isinstance(data, str):
@@ -154,26 +194,31 @@ class Response:
                 self.content = str(data).encode()
         elif isinstance(data, (dict, list)):
             # Auto-detect JSON
-            self.content_type = "application/json"
+            self._detected_content_type("application/json")
             self.content = json.dumps(data, default=str, separators=(",", ":")).encode()
         elif isinstance(data, str):
             stripped = data.strip()
             if stripped.startswith("<") and stripped.endswith(">"):
                 # Looks like HTML
-                self.content_type = "text/html; charset=utf-8"
+                self._detected_content_type("text/html; charset=utf-8")
             else:
-                self.content_type = "text/plain; charset=utf-8"
+                self._detected_content_type("text/plain; charset=utf-8")
             self.content = data.encode()
         elif isinstance(data, bytes):
-            self.content_type = "application/octet-stream"
+            self._detected_content_type("application/octet-stream")
             self.content = data
         elif data is None:
             self.content = b""
         else:
-            self.content_type = "text/plain; charset=utf-8"
+            self._detected_content_type("text/plain; charset=utf-8")
             self.content = str(data).encode()
 
         return self
+
+    def _detected_content_type(self, content_type: str) -> None:
+        """Use a detected content type unless the route chose one with header()."""
+        if not self._content_type_from_header:
+            self.content_type = content_type
 
     def status(self, code: int) -> "Response":
         """Set status code (chainable)."""
@@ -181,8 +226,22 @@ class Response:
         return self
 
     def header(self, name: str, value: str) -> "Response":
-        """Add a response header (chainable)."""
-        self._headers.append((name, value))
+        """Add a response header (chainable).
+
+        Raises ValueError when the name is not an HTTP token or the value
+        contains CR, LF or NUL (ADR-0068) - validate user input before it
+        reaches a header.
+
+        ``Content-Type`` (any case) is not added as a second header: it
+        replaces the response's one content type, and ``response(data)`` keeps
+        it instead of detecting one (ADR-0072, #144).
+        """
+        checked_value = _checked_header_value(name, value)
+        if name.lower() == "content-type":
+            self.content_type = checked_value
+            self._content_type_from_header = True
+        else:
+            self._headers.append((name, checked_value))
         return self
 
     def add_header(self, name: str, value: str) -> "Response":
@@ -203,7 +262,12 @@ class Response:
 
         When ``options`` is a dict, its values become the defaults; any
         explicit kwarg passed afterwards overrides individual entries.
+
+        Raises ValueError when the name is not an HTTP token, or when the value
+        or an attribute contains CR, LF, NUL or ";" (ADR-0068).
         """
+        if not isinstance(name, str) or not _HTTP_TOKEN.fullmatch(name):
+            raise ValueError(f"Cookie name must be a valid HTTP token [{json.dumps(str(name))}]")
         # Defaults
         _path = "/"
         _max_age = 3600
@@ -225,6 +289,10 @@ class Response:
         if http_only is not None: _http_only = http_only
         if secure    is not None: _secure = secure
         if same_site is not None: _same_site = same_site
+
+        for part in (value, _path, _max_age, _same_site):
+            if _UNSAFE_IN_COOKIE.search(str(part)):
+                raise ValueError(f"Invalid character in cookie content [{json.dumps(name)}]")
 
         parts = [f"{name}={value}", f"Path={_path}", f"Max-Age={_max_age}",
                  f"SameSite={_same_site}"]
@@ -252,7 +320,7 @@ class Response:
         """
         self._is_streaming = True
         self._stream_source = source
-        self.content_type = content_type
+        self.content_type = _checked_header_value("Content-Type", content_type)
         if content_type == "text/event-stream":
             self._headers.append(("Cache-Control", "no-cache"))
             self._headers.append(("Connection", "keep-alive"))
@@ -301,9 +369,10 @@ class Response:
 
     def redirect(self, url: str, status_code: int = 302) -> "Response":
         """HTTP redirect."""
+        location = _checked_header_value("Location", url)
         self.status_code = status_code
         self.content = b""
-        self._headers.append(("location", url))
+        self._headers.append(("location", location))
         return self
 
     def file(self, file_path: str, download_name: str = None, root: str = None) -> "Response":
@@ -409,9 +478,11 @@ class Response:
         self.content = path.read_bytes()
 
         if download_name:
-            self._headers.append(
-                ("content-disposition", f'attachment; filename="{download_name}"')
-            )
+            self._headers.append((
+                "content-disposition",
+                _checked_header_value("Content-Disposition",
+                                      f'attachment; filename="{download_name}"'),
+            ))
         return self
 
     def render(self, template: str, data: dict = None, status_code: int = None) -> "Response":
@@ -462,9 +533,11 @@ class Response:
         if data is not None:
             if isinstance(data, (dict, list)):
                 return self.__call__(data, status_code or 200)
+            if isinstance(data, (bytes, bytearray, memoryview)):
+                return self.__call__(data, status_code or self.status_code, content_type)
             if isinstance(data, str):
                 if content_type:
-                    self.content_type = content_type
+                    self.content_type = _checked_header_value("Content-Type", content_type)
                 self.content = data.encode()
                 if status_code:
                     self.status_code = status_code
@@ -495,14 +568,21 @@ class Response:
             etag = hashlib.md5(self.content).hexdigest()[:16]
             self._headers.append(("etag", f'"{etag}"'))
 
-        # Build ASGI header list
+        # Build ASGI header list. One Content-Length only: the body's own, except
+        # for an empty body carrying an explicit one - a HEAD answer reports the
+        # length the GET would have sent (see _stage_head_strip).
+        explicit_length = next((value for name, value in self._headers
+                                if name.lower() == "content-length"), None)
+        length = explicit_length if explicit_length is not None and not self.content \
+            else str(len(self.content))
         headers = [
             (b"content-type", self.content_type.encode()),
-            (b"content-length", str(len(self.content)).encode()),
+            (b"content-length", length.encode()),
         ]
 
         for name, value in self._headers:
-            headers.append((name.encode(), value.encode()))
+            if name.lower() != "content-length":
+                headers.append((name.encode(), value.encode()))
 
         for cookie_str in self._cookies:
             headers.append((b"set-cookie", cookie_str.encode()))

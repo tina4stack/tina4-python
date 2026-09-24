@@ -97,12 +97,14 @@ class TestMultipleFiles:
 
 class TestMaxUploadSize:
     def test_oversized_rejected(self, monkeypatch):
-        import tina4_python.core.request as req_mod
-        monkeypatch.setattr(req_mod, "TINA4_MAX_UPLOAD_SIZE", 10)
+        # The limit is read when a request is built (#143), so the real
+        # setting is the environment variable, not a module attribute.
+        from tina4_python.core.request import PayloadTooLarge
+        monkeypatch.setenv("TINA4_MAX_UPLOAD_SIZE", "10")
         logo = LOGO_PATH.read_bytes()
         boundary = "----SIZE"
         body = _build_multipart(boundary, files={"file": {"filename": "logo.svg", "type": "image/svg+xml", "content": logo}})
-        with pytest.raises(Exception):
+        with pytest.raises(PayloadTooLarge):
             _make_request(body, f"multipart/form-data; boundary={boundary}")
 
     def test_undersized_accepted(self, monkeypatch):

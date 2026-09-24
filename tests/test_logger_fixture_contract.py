@@ -1050,10 +1050,16 @@ def test_bootstrap_does_not_invent_explicit_defaults(monkeypatch, tmp_path):
     try:
         import tina4_python.core.server as server_mod
         import inspect
-        source = inspect.getsource(server_mod.run)
+        # run() and asgi() both boot through _bootstrap_application() (#134),
+        # so that is where the one plain configure() call lives.
+        source = inspect.getsource(server_mod._bootstrap_application)
         assert "Log.configure()" in source, (
             "bootstrap must call configure() with no invented explicit arguments"
         )
+        for entry in (server_mod.run, server_mod.asgi):
+            assert "_bootstrap_application(" in inspect.getsource(entry), (
+                f"{entry.__name__}() no longer boots through _bootstrap_application()"
+            )
         Log.configure()
         assert configure_calls == [((), {})]
         assert Log.configuration()["level"] == "ERROR"

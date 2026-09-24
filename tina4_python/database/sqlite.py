@@ -105,7 +105,13 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
         with self._write_lock:
             cursor = self._conn.execute(sql, params or [])
 
+            # A statement that returns rows (SELECT, WITH ... SELECT, native
+            # RETURNING) hands them back. Read them BEFORE the COMMIT below: a
+            # RETURNING statement is only finished once it is stepped to the end.
             records = []
+            returns_rows = cursor.description is not None
+            if returns_rows:
+                records = [dict(row) for row in cursor.fetchall()]
             if returning_match and not self._supports_returning():
                 # Emulate RETURNING by fetching the last inserted/updated row
                 if cursor.lastrowid:
@@ -120,7 +126,7 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
                 if self._conn.in_transaction:
                     self._conn.execute("COMMIT")
 
-            return DatabaseResult(
+            result = DatabaseResult(
                 records=records,
                 count=len(records),
                 affected_rows=cursor.rowcount,
@@ -128,6 +134,7 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
                 sql=sql,
                 adapter=self,
             )
+            return result.with_rows() if (returns_rows or records) else result
 
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
         """Optimized batch execute using SQLite's executemany — ATOMIC (one txn).
@@ -217,9 +224,13 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
         # The newline matters: a trailing `-- comment` in the user SQL would
         # otherwise comment out the closing paren, making the probe fail and
         # silently report count=0 alongside real records.
+        # #133: a write that returns rows runs ONCE, exactly as written - no
+        # COUNT probe (a probe that ran would repeat the write) and no
+        # pagination, which no engine accepts after RETURNING/OUTPUT.
+        is_write = self._is_write_statement(sql)
         count_sql = f"SELECT COUNT(*) as cnt FROM ({sql}\n)"
         try:
-            total = self._conn.execute(count_sql, params or []).fetchone()["cnt"]
+            total = None if is_write else self._conn.execute(count_sql, params or []).fetchone()["cnt"]
         except Exception:
             total = 0
 
@@ -229,7 +240,7 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
         # `"LIMIT" in sql.upper().split("--")[0]`, so `WHERE label != 'LIMIT'`
         # or a column named rate_limit read as "the caller supplied their own"
         # and the cap was silently dropped -- a full-table read.
-        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        if is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql):
             paginated_sql = sql
             paginated_params = params or []
         else:
@@ -253,6 +264,8 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
         columns = [d[0] for d in cursor.description] if cursor.description else []
         indexes = range(len(columns))
         rows = [{columns[i]: row[i] for i in indexes} for row in cursor.fetchall()]
+        if total is None:
+            total = len(rows)
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 

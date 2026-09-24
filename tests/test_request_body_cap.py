@@ -38,9 +38,8 @@ from pathlib import Path
 
 import pytest
 
-from conftest import free_port
+from conftest import child_pythonpath, free_port
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 
 LIMIT = 1_048_576          # 1MB, so the test does not need a 40MB payload
 OVERSIZE = LIMIT * 8       # 8MB, comfortably over
@@ -71,7 +70,7 @@ def _boot(root: Path, port: int) -> subprocess.Popen:
     env.update({
         "TINA4_OVERRIDE_CLIENT": "true",
         "TINA4_DEBUG": "false",
-        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONPATH": child_pythonpath(),
         "TINA4_PORT": str(port),
         "TINA4_MAX_UPLOAD_SIZE": str(LIMIT),
     })

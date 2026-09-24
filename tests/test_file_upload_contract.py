@@ -26,10 +26,9 @@ from pathlib import Path
 
 import pytest
 
-from conftest import free_port
+from conftest import child_pythonpath, free_port
 from tina4_python.core.request import Request, save_upload
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 BOUNDARY = "----Tina4FileUploadContract"
 
 
@@ -136,7 +135,7 @@ def _boot(root, port):
     env = dict(os.environ)
     env.update({
         "TINA4_OVERRIDE_CLIENT": "true", "TINA4_DEBUG": "false",
-        "PYTHONPATH": str(REPO_ROOT), "TINA4_PORT": str(port),
+        "PYTHONPATH": child_pythonpath(), "TINA4_PORT": str(port),
         "TINA4_MAX_UPLOAD_SIZE": str(LIMIT),
     })
     proc = subprocess.Popen(

@@ -237,6 +237,16 @@ class DatabaseResult:
     sql: str | None = None
     adapter: object | None = field(default=None, repr=False)
     _column_info: list | None = field(default=None, init=False, repr=False)
+    #: True when the statement produced a result set (the cursor had a
+    #: description), even an empty one. Database.execute() returns this result,
+    #: not True, for such a statement - a SELECT, WITH ... SELECT, RETURNING /
+    #: OUTPUT, or a procedure that returns rows.
+    _returns_rows: bool = field(default=False, init=False, repr=False)
+
+    def with_rows(self) -> "DatabaseResult":
+        """Mark this result as carrying a statement's result set (chainable)."""
+        self._returns_rows = True
+        return self
 
     def __iter__(self):
         return iter(self.records)
@@ -894,6 +904,49 @@ class DatabaseAdapter:
         return bool(re.search(pattern, DatabaseAdapter._scrub_sql_text(sql or ""), re.IGNORECASE))
 
     @staticmethod
+    def _is_write_statement(sql: str) -> bool:
+        """True when the statement changes data, even though it returns rows.
+
+        ``fetch()`` / ``fetch_one()`` are the natural way to run a write that
+        RETURNS rows (``INSERT ... RETURNING id``), so they cannot assume every
+        statement is a read (#133). A write is one that STARTS with a DML verb,
+        or a ``WITH`` whose body holds one (a data-modifying CTE ends in SELECT).
+
+        Erring towards "write" is the safe direction: a misread write is closed
+        with a commit, which for a read-only statement only ends the transaction.
+        Literals and comments are scrubbed first, so ``WHERE note = 'DELETE'`` is
+        still a read.
+        """
+        # tina4: a write hidden inside a function (SELECT create_user(...)) is
+        # still classed as a read, and fetch()/fetch_one() close it with the
+        # read-side ROLLBACK. Only the SQL text is inspected; the function body
+        # is not. Call such a function inside start_transaction() / commit().
+        scrubbed = DatabaseAdapter._scrub_sql_text(sql or "").lstrip(" \t\r\n(")
+        first_word = re.match(r"[A-Za-z]+", scrubbed)
+        verb = first_word.group(0).upper() if first_word else ""
+        if verb in ("INSERT", "UPDATE", "DELETE", "MERGE", "UPSERT", "REPLACE"):
+            return True
+        if verb == "WITH":
+            return bool(re.search(r"\b(INSERT|UPDATE|DELETE|MERGE)\b", scrubbed, re.IGNORECASE))
+        return False
+
+    def _commit_fetched_write(self, sql: str) -> None:
+        """Commit a write that ran through fetch()/fetch_one(), exactly as execute() would.
+
+        Issue #133 on every adapter: MSSQL, Firebird and ODBC never committed
+        in fetch()/fetch_one(), so ``INSERT ... OUTPUT/RETURNING`` handed back
+        an id for a row no other connection could see, lost when the connection
+        closed. Same gate as execute(): outside an explicit transaction and with
+        autocommit on; inside one, the caller's commit() owns the boundary.
+        """
+        if not self._is_write_statement(sql):
+            return
+        if getattr(self, "_in_transaction", False) or not self.autocommit:
+            return
+        if getattr(self, "_conn", None) is not None:
+            self._conn.commit()
+
+    @staticmethod
     def _strip_trailing_order_by(sql: str) -> str:
         """Strip a trailing top-level ``ORDER BY`` so the SQL can be safely
         wrapped in ``SELECT COUNT(*) FROM (<sql>)`` for the row-count probe.
@@ -996,6 +1049,9 @@ class DatabaseAdapter:
     #: The engine's parameter marker. Overridden to ``"%s"`` by PostgreSQL,
     #: MySQL and MSSQL; everything else uses the default.
     PARAM_MARKER = "?"
+    #: True where a backslash escapes a quote inside a string literal (MySQL's
+    #: default), so the placeholder scanner does not end the literal early.
+    BACKSLASH_ESCAPES = False
 
     #: Appended to a single-row INSERT. Only PostgreSQL wants ``RETURNING *``;
     #: it is the one genuinely engine-specific part of building an INSERT.
@@ -1011,7 +1067,7 @@ class DatabaseAdapter:
         """
         if self.PARAM_MARKER == "?":
             return filter_sql
-        return SQLTranslator.placeholder_style(filter_sql, self.PARAM_MARKER)
+        return SQLTranslator.placeholder_style(filter_sql, self.PARAM_MARKER, self.BACKSLASH_ESCAPES)
 
     def start_transaction(self):
         """Begin a transaction."""
@@ -1192,8 +1248,8 @@ class SqlCrudMixin:
     def _returning_pk(self, table: str) -> str | None:
         """The table's single PRIMARY KEY column, for RETURNING emulation.
 
-        MySQL, MSSQL and Firebird have no usable native RETURNING here (Firebird
-        has it from 2.1+ but this adapter emulates for cross-engine consistency),
+        MySQL and MSSQL have no usable native RETURNING here, and Firebird falls
+        back to emulation when its server rejects the clause (it tries native first),
         so after an INSERT they re-select the just-inserted row by its REAL
         primary key -- never a hardcoded ``id`` (the ``*-RETURNING-ID`` fixes: a
         table whose PK is not named ``id`` used to fail or re-select the wrong

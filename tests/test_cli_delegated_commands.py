@@ -16,8 +16,8 @@ import os
 import stat
 import subprocess
 import sys
-from pathlib import Path
 
+from conftest import child_pythonpath
 from tina4_python.cli import (
     CLIENT_BINARY,
     COMMANDS,
@@ -27,7 +27,6 @@ from tina4_python.cli import (
     EXIT_UNKNOWN_COMMAND,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # The real entrypoint, driven exactly as a user (or the client) would drive it.
 _ENTRYPOINT = "import sys; from tina4_python.cli import main; main()"
@@ -37,7 +36,7 @@ def _run_cli(argv, *, path, cwd, extra_env=None, timeout=60):
     """Run the REAL tina4python entrypoint as a subprocess with a controlled PATH."""
     env = os.environ.copy()
     env["PATH"] = path
-    env["PYTHONPATH"] = str(REPO_ROOT)
+    env["PYTHONPATH"] = child_pythonpath()
     env.pop(DELEGATION_GUARD_ENV, None)
     if extra_env:
         env.update(extra_env)

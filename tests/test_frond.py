@@ -293,13 +293,18 @@ class TestFilters:
         assert "a" in r
 
     def test_js_escape(self, engine):
+        # ADR-0077: js_escape uses the Twig js strategy (\xHH / \uHHHH), so both
+        # quote characters are hex-escaped rather than backslash-escaped, and
+        # are therefore also safe inside an HTML event attribute.
         r = engine.render_string("{{ v|js_escape|raw }}", {"v": "it's a \"test\""})
-        assert "\\'" in r
-        assert '\\"' in r
+        assert "\\x27" in r  # single quote
+        assert "\\x22" in r  # double quote
+        assert "'" not in r and '"' not in r
 
     def test_js_escape_newlines(self, engine):
         r = engine.render_string("{{ v|js_escape|raw }}", {"v": "a\nb"})
-        assert "\\n" in r
+        assert "\\x0A" in r
+        assert "\n" not in r
 
     # ── Dict Filters ───────────────────────────────────────────
 
@@ -1303,13 +1308,15 @@ class TestJsonAndJsFilters:
         assert r == '{"a":1}'
 
     def test_js_escape_quotes(self, engine):
+        # ADR-0077: hex escapes, safe in both <script> and attribute contexts.
         r = engine.render_string("{{ text|js_escape|raw }}", {"text": "it's a \"test\""})
-        assert "\\'" in r
-        assert '\\"' in r
+        assert "\\x27" in r
+        assert "\\x22" in r
+        assert "'" not in r and '"' not in r
 
     def test_js_escape_newlines(self, engine):
         r = engine.render_string("{{ text|js_escape|raw }}", {"text": "line1\nline2"})
-        assert "\\n" in r
+        assert "\\x0A" in r
         assert "\n" not in r
 
 
@@ -1320,9 +1327,9 @@ class TestSafeStringFilters:
     """Verify js_escape and to_json bypass auto-HTML-escaping via SafeString."""
 
     def test_js_escape_no_html_encoding(self, engine):
-        """js_escape output should NOT be HTML-encoded (no &#x27; for quotes)."""
+        """js_escape uses JS \\xHH escapes, not HTML entities (ADR-0077)."""
         r = engine.render_string("{{ text|js_escape }}", {"text": "it's a test"})
-        assert r == "it\\'s a test"
+        assert r == "it\\x27s\\x20a\\x20test"
         assert "&#" not in r  # No HTML entities
 
     def test_to_json_no_html_encoding(self, engine):
@@ -1336,9 +1343,10 @@ class TestSafeStringFilters:
         assert r == "[1,2]"
 
     def test_js_escape_backslash_not_encoded(self, engine):
-        """Backslashes from js_escape should remain as \\ not &#92;"""
+        """js_escape emits JS escapes, not HTML entities (ADR-0077)."""
         r = engine.render_string("{{ text|js_escape }}", {"text": 'say "hello"'})
-        assert '\\"' in r
+        assert "\\x22" in r  # double quote hex-escaped
+        assert '"' not in r
         assert "&#" not in r
 
     def test_to_json_xss_still_escaped(self, engine):
@@ -1360,8 +1368,12 @@ class TestSafeStringFilters:
             '<button onclick="alert(\'{{ msg|js_escape }}\')">Click</button>',
             {"msg": "it's a \"test\""}
         )
-        assert "\\'" in r
+        # ADR-0077: the double quote is hex-escaped, so it can no longer
+        # terminate the onclick attribute; both quotes are neutralised.
+        assert "\\x27" in r and "\\x22" in r
         assert "&#" not in r
+        # the payload's own quotes never appear literally inside the attribute
+        assert 'alert(\'it\\x27s' in r
 
     def test_to_json_in_script_tag(self, engine):
         """Real-world: to_json in a script tag."""

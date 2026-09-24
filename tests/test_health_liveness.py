@@ -40,9 +40,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import free_port
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from conftest import child_pythonpath, free_port
 
 
 def _write_project(root: Path, port: int) -> None:
@@ -69,7 +67,7 @@ def _boot(root: Path, port: int) -> subprocess.Popen:
     env.update({
         "TINA4_OVERRIDE_CLIENT": "true",
         "TINA4_DEBUG": "false",
-        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONPATH": child_pythonpath(),
         "PORT": str(port),
     })
     env.pop("TINA4_HEALTH_PATH", None)
