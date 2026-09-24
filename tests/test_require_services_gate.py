@@ -60,6 +60,7 @@ NO_COORDINATES: dict = {}
 ALL_COORDINATES = {
     "TINA4_TEST_FIREBIRD_URL": "firebird://localhost/db",
     "TINA4_TEST_PG_URL": "postgres://localhost/db",
+    "TINA4_TEST_POSTGIS_URL": "postgres://localhost:55433/db",
     "TINA4_TEST_MYSQL_URL": "mysql://localhost/db",
     "TINA4_TEST_MSSQL_URL": "mssql://localhost/db",
     "TINA4_TEST_OIDC_ISSUER": "http://localhost/realm",
@@ -81,6 +82,7 @@ class TestSkipPredicate:
     @pytest.mark.parametrize("tag, coordinate", [
         ("firebird", "TINA4_TEST_FIREBIRD_URL"),
         ("postgres", "TINA4_TEST_PG_URL"),
+        ("postgis", "TINA4_TEST_POSTGIS_URL"),
         ("mysql", "TINA4_TEST_MYSQL_URL"),
         ("mssql", "TINA4_TEST_MSSQL_URL"),
         ("oidc", "TINA4_TEST_OIDC_ISSUER"),

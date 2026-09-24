@@ -31,6 +31,7 @@ import pytest
 _OPTIONAL_ENGINE_COORDINATES = {
     "firebird": "TINA4_TEST_FIREBIRD_URL",
     "postgres": "TINA4_TEST_PG_URL",
+    "postgis": "TINA4_TEST_POSTGIS_URL",
     "mysql": "TINA4_TEST_MYSQL_URL",
     "mssql": "TINA4_TEST_MSSQL_URL",
     "swoole": "TINA4_TEST_SWOOLE",
