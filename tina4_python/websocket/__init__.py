@@ -115,7 +115,11 @@ def ws_authorized(route: dict, headers: dict, query_string: str = "", subprotoco
     if not token:
         return None, False
     payload = Auth.valid_token_static(token)
-    return payload, payload is not None
+    # A form token is not an identity (ADR-0079 s1).
+    from tina4_python.auth import is_identity_payload
+    if not is_identity_payload(payload):
+        return None, False
+    return payload, True
 
 
 def _parse_http_headers(data: bytes) -> dict:

@@ -18,8 +18,8 @@ def test_resolve_secret_explicit():
 
 
 def test_resolve_secret_from_env(monkeypatch):
-    monkeypatch.setenv("TINA4_SECRET", "envsecret")
-    assert _resolve_secret() == "envsecret"
+    monkeypatch.setenv("TINA4_SECRET", "envsecret-0123456789abcdef012345")
+    assert _resolve_secret() == "envsecret-0123456789abcdef012345"
 
 
 def test_resolve_secret_blank_when_unset(monkeypatch):
@@ -35,7 +35,7 @@ def test_no_insecure_default_secret(monkeypatch):
 
 
 def test_token_roundtrip_with_secret(monkeypatch):
-    monkeypatch.setenv("TINA4_SECRET", "s3cr3t-shared")
+    monkeypatch.setenv("TINA4_SECRET", "s3cr3t-shared-0123456789abcdef01")
     token = get_token({"user_id": 7})
     assert valid_token(token)["user_id"] == 7
     assert valid_token(token[:-4] + "AAAA") is None  # tampered rejected

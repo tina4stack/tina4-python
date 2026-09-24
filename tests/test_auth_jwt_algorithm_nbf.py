@@ -21,7 +21,7 @@ import pytest
 
 from tina4_python.auth import Auth, _JWT_LEEWAY_SECONDS
 
-SECRET = "jwt-cluster-regression-secret"
+SECRET = "jwt-cluster-regression-secret-01"
 
 
 def _parts(token):
@@ -206,12 +206,12 @@ def test_non_positive_expires_in_stamps_no_exp_claim():
 def test_authenticate_request_honours_the_secret_override():
     """NEGATIVE: passing secret= used to be ignored, so a token signed with a
     different secret was validated against the instance's secret instead."""
-    issued = Auth(secret="the-other-secret").get_token({"user_id": 42})
+    issued = Auth(secret="the-other-secret-0123456789abcde").get_token({"user_id": 42})
     headers = {"authorization": f"Bearer {issued}"}
 
     wrong = Auth(secret=SECRET)
     assert wrong.authenticate_request(headers) is None
-    ok = wrong.authenticate_request(headers, secret="the-other-secret")
+    ok = wrong.authenticate_request(headers, secret="the-other-secret-0123456789abcde")
     assert ok is not None and ok["user_id"] == 42
 
 
@@ -247,4 +247,4 @@ def test_sign_then_validate_round_trip(alg):
 @pytest.mark.parametrize("alg", ["HS256", "HS384", "HS512"])
 def test_a_different_secret_never_validates(alg):
     token = Auth(secret=SECRET, algorithm=alg).get_token({"user_id": 3})
-    assert Auth(secret="not-the-secret", algorithm=alg).valid_token(token) is None
+    assert Auth(secret="not-the-secret-0123456789abcdef0", algorithm=alg).valid_token(token) is None

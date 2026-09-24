@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("TINA4_SECRET", "rid-feature-43-secret")
+os.environ.setdefault("TINA4_SECRET", "rid-feature-43-secret-0123456789")
 
 import re
 import json

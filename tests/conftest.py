@@ -188,6 +188,24 @@ def _tina4_log_state_isolation():
     Log.reset()
 
 
+# ── A usable signing secret for every test (ADR-0079 s2) ──────────────────
+#
+# Auth refuses to sign with a blank or short TINA4_SECRET, and a server refuses
+# to boot outside dev without one. Several suites set the secret once at import
+# time; any earlier test that removes it then left them signing with the blank
+# key, which USED to "work" (and forge-ably so). Each test now starts with a
+# 32+ byte secret unless it already has one, and so does every child server it
+# spawns from os.environ. A test that needs a blank secret removes it itself.
+_TEST_SECRET = "tina4-python-test-suite-secret-0123456789abcdef"
+
+
+@pytest.fixture(autouse=True)
+def _tina4_test_secret(monkeypatch):
+    if len(os.environ.get("TINA4_SECRET", "").encode()) < 32:
+        monkeypatch.setenv("TINA4_SECRET", _TEST_SECRET)
+    yield
+
+
 # ── Real child-server boot (shared by every test that spawns one) ─────────
 #
 # Four test files each carried their own copy of this, and each copy had the
@@ -348,6 +366,15 @@ def boot_child_server(tmp_path, write_app, extra_env=None, attempts: int = 3,
             env.pop(name, None)
         if extra_env:
             env.update(extra_env(port) if callable(extra_env) else extra_env)
+
+        # Every spawned child must sign with a valid secret. The autouse
+        # _tina4_test_secret fixture guarantees one on the parent os.environ,
+        # but a class/module-scoped server fixture boots BEFORE any
+        # function-scoped fixture runs, so its child would inherit no secret and
+        # refuse to boot (ADR-0079 s2). Fill a valid one unless the test
+        # deliberately unset TINA4_SECRET (e.g. to exercise the dev-mint path).
+        if "TINA4_SECRET" not in unset_env and len(env.get("TINA4_SECRET", "").encode()) < 32:
+            env["TINA4_SECRET"] = _TEST_SECRET
 
         log_path = None
         if log_dir is not None:

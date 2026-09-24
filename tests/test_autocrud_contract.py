@@ -32,7 +32,7 @@ import urllib.request
 import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_SECRET = "autocrud-contract-test-secret"
+_SECRET = "autocrud-contract-test-secret-01"
 
 
 def _free_port() -> int:

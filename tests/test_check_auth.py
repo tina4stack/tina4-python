@@ -21,7 +21,7 @@ from tina4_python.core.response import Response
 from tina4_python.core.server import _check_auth
 
 
-SECRET = "test-check-auth-secret"
+SECRET = "test-check-auth-secret-012345678"
 
 
 @pytest.fixture(autouse=True)
@@ -133,15 +133,28 @@ class TestAuthorizationHeader:
 
 class TestBodyFormToken:
 
-    def test_valid_form_token_in_body_passes(self):
-        token = _make_token({"type": "form"})
+    def test_valid_auth_token_in_body_passes(self):
+        # frond.js puts the auth token it received as a FreshToken into the
+        # formToken field; that identity token passes.
+        token = _make_token({"user_id": 1})
         req = _MockRequest(body={"formToken": token})
         res = Response()
         skipped = _check_auth(req, res, _auth_required_route())
         assert skipped is False
 
-    def test_form_token_returns_fresh_token_header(self):
+    def test_a_frond_form_token_in_body_is_refused(self):
+        # A form token ("type": "form") proves where a write came from, not who
+        # sent it: it never authenticates and earns no FreshToken (ADR-0079).
         token = _make_token({"type": "form"})
+        req = _MockRequest(body={"formToken": token})
+        res = Response()
+        skipped = _check_auth(req, res, _auth_required_route())
+        assert skipped is True
+        assert res.status_code == 401
+        assert [v for k, v in res._headers if k == "FreshToken"] == []
+
+    def test_body_token_returns_fresh_token_header(self):
+        token = _make_token({"user_id": 1})
         req = _MockRequest(body={"formToken": token})
         res = Response()
         _check_auth(req, res, _auth_required_route())
@@ -237,8 +250,8 @@ class TestSessionToken:
         assert skipped is False
 
     def test_session_not_checked_when_body_token_valid(self):
-        """If body formToken is valid, session is not needed."""
-        form_token = _make_token({"type": "form"})
+        """If the body token is a valid auth token, session is not needed."""
+        form_token = _make_token({"user_id": 1})
         session = _MockSession({"token": "bad-token"})
         req = _MockRequest(body={"formToken": form_token}, session=session)
         res = Response()
@@ -278,8 +291,8 @@ class TestPriorityChain:
         assert skipped is False
 
     def test_only_body_valid_passes(self):
-        """When header fails, valid body formToken saves the day."""
-        form_token = _make_token({"type": "form"})
+        """When header fails, a valid auth token in the body saves the day."""
+        form_token = _make_token({"user_id": 1})
         req = _MockRequest(
             headers={"authorization": "Bearer bad"},
             body={"formToken": form_token},

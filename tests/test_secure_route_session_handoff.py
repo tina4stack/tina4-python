@@ -44,7 +44,7 @@ from tina4_python.auth import get_token
 from tina4_python.core.request import Request
 from tina4_python.core.router import Router, get as route_get, post as route_post, noauth, secured
 
-SECRET = "secure-handoff-secret"
+SECRET = "secure-handoff-secret-0123456789"
 
 
 @pytest.fixture(autouse=True)

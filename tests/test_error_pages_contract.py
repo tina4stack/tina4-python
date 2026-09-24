@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("TINA4_SECRET", "error-pages-feature-42-secret")
+os.environ.setdefault("TINA4_SECRET", "error-pages-feature-42-secret-01")
 
 import pytest
 

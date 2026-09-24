@@ -78,7 +78,7 @@ def _dispatch(method, path, *, headers=None, client=("127.0.0.1", 12345),
     return status[0], bytes(buf), resp_headers[0]
 
 
-TINA4_SECRET_VALUE = "sup3r-sekret-do-not-leak-127"
+TINA4_SECRET_VALUE = "sup3r-sekret-do-not-leak-127-32bytes"
 
 
 @pytest.fixture

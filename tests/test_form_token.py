@@ -42,7 +42,7 @@ def _extract_token_from_html(html_output: str) -> str:
 
 @pytest.fixture
 def engine(tmp_path):
-    os.environ["TINA4_SECRET"] = "test-secret-key"
+    os.environ["TINA4_SECRET"] = "test-secret-key-0123456789abcdef"
     e = Frond(template_dir=str(tmp_path))
     yield e
     os.environ.pop("TINA4_SECRET", None)
@@ -146,7 +146,7 @@ class TestFormTokenJWTStructure:
         from tina4_python.auth import Auth
         output = engine.render_string("{{ form_token() }}")
         token = _extract_token_from_html(output)
-        auth = Auth(secret="test-secret-key")
+        auth = Auth(secret="test-secret-key-0123456789abcdef")
         assert auth.valid_token(token) is not None
         payload = auth.get_payload(token)
         assert payload["type"] == "form"
@@ -203,8 +203,8 @@ class TestFormTokenDescriptorEdgeCases:
         output = engine.render_string("{{ form_token() }}")
         token = _extract_token_from_html(output)
         # Should validate with the same secret
-        auth = Auth(secret="test-secret-key")
+        auth = Auth(secret="test-secret-key-0123456789abcdef")
         assert auth.valid_token(token) is not None
         # Should NOT validate with a different secret
-        wrong_auth = Auth(secret="wrong-secret")
+        wrong_auth = Auth(secret="wrong-secret-0123456789abcdef012")
         assert wrong_auth.valid_token(token) is None

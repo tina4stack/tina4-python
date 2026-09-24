@@ -29,8 +29,14 @@ def _clean_env(monkeypatch):
 
 class TestIsLoopback:
     def test_loopback_addresses(self):
-        for ip in ["127.0.0.1", "127.0.0.5", "::1", "::ffff:127.0.0.1", "localhost", ""]:
+        for ip in ["127.0.0.1", "127.0.0.5", "::1", "::ffff:127.0.0.1", "localhost"]:
             assert is_loopback(ip) is True, ip
+
+    def test_an_unknown_peer_is_not_loopback(self):
+        # An empty peer means a runtime path lost the socket address; it must
+        # fail closed, never read as local (ADR-0079 s4).
+        for ip in ["", None]:
+            assert is_loopback(ip) is False, ip
 
     def test_non_loopback_addresses(self):
         # 0.0.0.0 is a BIND address, never a client address -> not loopback.
@@ -71,7 +77,7 @@ class TestIsRequestAllowed:
     def test_loopback_allowed_when_enabled(self, monkeypatch):
         monkeypatch.setenv("TINA4_DEBUG", "true")
         assert is_request_allowed("127.0.0.1") is True
-        assert is_request_allowed("") is True  # in-process / built-in dev server
+        assert is_request_allowed("") is False  # unknown peer is not local (ADR-0079 s4)
 
     def test_remote_denied_without_opt_in(self, monkeypatch):
         monkeypatch.setenv("TINA4_DEBUG", "true")
