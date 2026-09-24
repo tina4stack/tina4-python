@@ -13,6 +13,12 @@
 # in-memory FakeBackplane used to stand in here: it fanned out synchronously on
 # the caller's thread, so the listener thread, the envelope on the wire and the
 # subscription timing were never exercised.)
+#
+# The connections are REAL WebSocketConnection objects on REAL loopback TCP
+# sockets: the test reads, from the client end, the frames the framework
+# actually wrote. A dead client is a connection whose socket is really closed.
+# (A FakeConnection that appended to a list and raised on demand used to stand
+# in here, so framing, drain and the real write failure were never exercised.)
 import asyncio
 import base64
 import json
@@ -24,7 +30,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from tina4_python.websocket import WebSocketManager, origin_allowed
+from tina4_python.websocket import (
+    CLOSE_GOING_AWAY, OP_BINARY, OP_CLOSE, OP_TEXT, WebSocketConnection, WebSocketManager,
+    _read_frame, origin_allowed,
+)
 from tina4_python.websocket.backplane import RedisBackplane
 
 REDIS_URL = os.environ.get("TINA4_TEST_REDIS_URL", "")
@@ -34,30 +43,64 @@ REDIS_URL = os.environ.get("TINA4_TEST_REDIS_URL", "")
 pytestmark = pytest.mark.filterwarnings("error::pytest.PytestUnhandledThreadExceptionWarning")
 
 
-# ── Test connection ───────────────────────────────────────────
+# ── Real connections on real sockets ─────────────────────────
 
 
-class FakeConnection:
-    """Minimal stand-in for WebSocketConnection — records what was sent and can
-    be told to raise on send (to exercise broadcast resilience / pruning)."""
+class Peer:
+    """The client end of a real loopback TCP connection: it reads the frames
+    the server-side WebSocketConnection really wrote to the socket."""
 
-    def __init__(self, conn_id, raise_on_send=False):
-        self.id = conn_id
-        self.path = "/"
-        self._closed = False
-        self._rooms = set()
-        self._last_activity = 0.0
-        self._manager = None
-        self.sent = []
-        self.raise_on_send = raise_on_send
+    def __init__(self, reader, writer):
+        self.reader = reader
+        self.writer = writer
 
-    async def send(self, message):
-        if self.raise_on_send:
-            raise ConnectionError(f"simulated broken pipe on {self.id}")
-        self.sent.append(message)
+    async def frame(self, timeout=5.0):
+        return await asyncio.wait_for(_read_frame(self.reader), timeout)
 
-    async def close(self, code=1000, reason=""):
-        self._closed = True
+    async def receive(self, count, timeout=5.0):
+        """The next `count` data messages: str for text frames, bytes for binary."""
+        messages = []
+        for _ in range(count):
+            _fin, opcode, payload = await self.frame(timeout)
+            assert opcode in (OP_TEXT, OP_BINARY), f"expected a data frame, got opcode {opcode:#x}"
+            messages.append(payload.decode("utf-8") if opcode == OP_TEXT else payload)
+        return messages
+
+
+@pytest.fixture
+async def connections():
+    """Opens real WebSocketConnections: `await connections.open("id")`.
+    Every server, socket and writer is closed when the test ends."""
+    servers, writers = [], []
+
+    async def open_connection(conn_id, path="/", dead=False):
+        accepted = asyncio.get_running_loop().create_future()
+
+        async def on_accept(reader, writer):
+            accepted.set_result((reader, writer))
+
+        server = await asyncio.start_server(on_accept, "127.0.0.1", 0)
+        servers.append(server)
+        client_reader, client_writer = await asyncio.open_connection(
+            "127.0.0.1", server.sockets[0].getsockname()[1])
+        server_reader, server_writer = await accepted
+        writers.extend([client_writer, server_writer])
+        connection = WebSocketConnection(server_reader, server_writer, path=path)
+        connection.id = conn_id
+        connection.peer = Peer(client_reader, client_writer)
+        if dead:
+            # The client is gone and its socket torn down: every write now
+            # really fails.
+            server_writer.close()
+            await server_writer.wait_closed()
+        return connection
+
+    yield SimpleNamespace(open=open_connection)
+    for writer in writers:
+        writer.close()
+    for server in servers:
+        server.close()
+        await server.wait_closed()
 
 
 # ── Real Redis bus ────────────────────────────────────────────
@@ -139,25 +182,24 @@ async def _two_wired_managers(bus):
 
 
 class TestBackplaneRelay:
-    async def test_remote_message_relayed_to_local_connections(self, redis_bus):
+    async def test_remote_message_relayed_to_local_connections(self, redis_bus, connections):
         """A broadcast from instance A is relayed to instance B's local conns."""
         mgr_a, mgr_b = await _two_wired_managers(redis_bus)
-        conn_b = FakeConnection("b1")
+        conn_b = await connections.open("b1")
         mgr_b.add(conn_b)
 
         # A broadcasts to all: delivers locally (A has none) then publishes.
         await mgr_a.broadcast_all("hello-cluster")
 
-        await _until(lambda: conn_b.sent, "B to receive A's broadcast over Redis")
-        assert conn_b.sent == ["hello-cluster"]
+        assert await conn_b.peer.receive(1) == ["hello-cluster"]
 
-    async def test_origin_guard_drops_own_echo(self, redis_bus):
+    async def test_origin_guard_drops_own_echo(self, redis_bus, connections):
         """An envelope tagged with the manager's own instance id arrives over
         the real channel and is NOT re-delivered."""
         mgr = WebSocketManager()
         _wire_backplane(mgr, redis_bus)
         await _until_subscribed(redis_bus, 1)
-        conn = FakeConnection("c1")
+        conn = await connections.open("c1")
         mgr.add(conn)
 
         def envelope(source, text):
@@ -170,55 +212,54 @@ class TestBackplaneRelay:
         # (earlier on the same ordered channel) has certainly been processed.
         publisher.publish(redis_bus.channel, envelope("another-instance", "sentinel"))
 
-        await _until(lambda: conn.sent, "the sentinel")
-        assert conn.sent == ["sentinel"]
+        # The FIRST message on the socket is the sentinel: the echo never came.
+        assert await conn.peer.receive(1) == ["sentinel"]
 
-    async def test_real_broadcast_no_double_delivery(self, redis_bus):
+    async def test_real_broadcast_no_double_delivery(self, redis_bus, connections):
         """A broadcast on A is delivered once on A (locally) and once on B (via
         the relay) - A does not re-deliver its own echo."""
         mgr_a, mgr_b = await _two_wired_managers(redis_bus)
-        conn_a = FakeConnection("a1")
-        conn_b = FakeConnection("b1")
+        conn_a = await connections.open("a1")
+        conn_b = await connections.open("b1")
         mgr_a.add(conn_a)
         mgr_b.add(conn_b)
 
         await mgr_a.broadcast_all("ping")
-        await _until(lambda: conn_b.sent, "B to receive ping")
-        # B answers; when A has B's reply, A has also processed its own echo of
-        # "ping" (it arrived earlier on A's ordered subscription).
+        assert await conn_b.peer.receive(1) == ["ping"]
+        # B answers. A's own echo of "ping" arrived on A's ordered subscription
+        # BEFORE B's "pong", so a re-delivered echo would show up here first.
         await mgr_b.broadcast_all("pong")
-        await _until(lambda: len(conn_a.sent) >= 2, "A to receive pong")
 
-        assert conn_a.sent == ["ping", "pong"]
-        assert conn_b.sent == ["ping", "pong"]
+        assert await conn_a.peer.receive(2) == ["ping", "pong"]
+        assert await conn_b.peer.receive(1) == ["pong"]
 
-    async def test_room_relay_targets_only_room_members(self, redis_bus):
+    async def test_room_relay_targets_only_room_members(self, redis_bus, connections):
         mgr_a, mgr_b = await _two_wired_managers(redis_bus)
-        in_room = FakeConnection("b_in")
-        out_room = FakeConnection("b_out")
+        in_room = await connections.open("b_in")
+        out_room = await connections.open("b_out")
         mgr_b.add(in_room)
         mgr_b.add(out_room)
         mgr_b._join_room("b_in", "lobby")
 
         await mgr_a.broadcast_to_room("lobby", "room-msg")
         await mgr_a.broadcast_all("everyone")
-        await _until(lambda: out_room.sent, "the broadcast to everyone")
 
-        assert in_room.sent == ["room-msg", "everyone"]
-        assert out_room.sent == ["everyone"]
+        assert await in_room.peer.receive(2) == ["room-msg", "everyone"]
+        # The first thing the non-member sees is the broadcast to everyone.
+        assert await out_room.peer.receive(1) == ["everyone"]
 
-    async def test_bytes_round_trip_through_envelope(self, redis_bus):
+    async def test_bytes_round_trip_through_envelope(self, redis_bus, connections):
         """Binary payloads survive the JSON envelope via base64."""
         mgr_a, mgr_b = await _two_wired_managers(redis_bus)
-        conn_b = FakeConnection("b1")
+        conn_b = await connections.open("b1")
         mgr_b.add(conn_b)
 
         payload = b"\x00\x01\x02\xfffoo"
         await mgr_a.broadcast_all(payload)
-        await _until(lambda: conn_b.sent, "the binary payload")
 
-        assert conn_b.sent == [payload]
-        assert isinstance(conn_b.sent[0], bytes)
+        received = await conn_b.peer.receive(1)
+        assert received == [payload]
+        assert isinstance(received[0], bytes)   # a BINARY frame on the wire
 
     async def test_publish_encodes_bytes_as_b64(self, redis_bus):
         """The envelope on the wire stores bytes under 'b64' and str under 'text'."""
@@ -276,7 +317,7 @@ class TestBackplaneRelay:
         # Should not raise even though no backplane is wired.
         mgr._publish("all", "noop")
 
-    async def test_publish_failure_does_not_crash_broadcast(self, redis_bus):
+    async def test_publish_failure_does_not_crash_broadcast(self, redis_bus, connections):
         """A message bus that is down must never undo a local broadcast: a real
         RedisBackplane pointed at a closed port raises on publish."""
         mgr = WebSocketManager()
@@ -285,14 +326,14 @@ class TestBackplaneRelay:
         with pytest.raises(Exception):
             mgr._backplane.publish("probe", "the bus really is down")
 
-        conn = FakeConnection("c1")
+        conn = await connections.open("c1")
         mgr.add(conn)
         # broadcast_all delivers locally then publishes; publish raises but is
         # caught — local delivery still happened.
         await mgr.broadcast_all("survive")
-        assert conn.sent == ["survive"]
+        assert await conn.peer.receive(1) == ["survive"]
 
-    async def test_backplane_init_failure_degrades_to_local_only(self, monkeypatch):
+    async def test_backplane_init_failure_degrades_to_local_only(self, monkeypatch, connections):
         """If wiring the backplane blows up (Redis unreachable at startup: a real
         closed port), the manager logs and falls back to LOCAL-only delivery - a
         broadcast still reaches local connections and never raises. (Distinct
@@ -301,24 +342,24 @@ class TestBackplaneRelay:
         monkeypatch.setenv("TINA4_WS_BACKPLANE", "redis")
         monkeypatch.setenv("TINA4_WS_BACKPLANE_URL", f"redis://127.0.0.1:{_closed_port()}")
         mgr = WebSocketManager()
-        conn = FakeConnection("c1")
+        conn = await connections.open("c1")
         mgr.add(conn)
         # Must NOT raise even though the backplane cannot subscribe.
         await mgr.broadcast("hello")
         assert mgr._backplane is None          # degraded to local-only
         assert mgr._backplane_started is True  # attempted exactly once
-        assert conn.sent == ["hello"]          # local delivery still happened
+        assert await conn.peer.receive(1) == ["hello"]   # local delivery still happened
 
 
 # ── Broadcast resilience ──────────────────────────────────────
 
 
 class TestBroadcastResilience:
-    async def test_dead_connection_does_not_abort_delivery_and_is_pruned(self):
+    async def test_dead_connection_does_not_abort_delivery_and_is_pruned(self, connections):
         mgr = WebSocketManager()
-        good1 = FakeConnection("g1")
-        bad = FakeConnection("bad", raise_on_send=True)
-        good2 = FakeConnection("g2")
+        good1 = await connections.open("g1")
+        bad = await connections.open("bad", dead=True)
+        good2 = await connections.open("g2")
         mgr.add(good1)
         mgr.add(bad)
         mgr.add(good2)
@@ -326,24 +367,22 @@ class TestBroadcastResilience:
         await mgr.broadcast_all("payload")
 
         # Both healthy connections received the message despite the bad one.
-        assert good1.sent == ["payload"]
-        assert good2.sent == ["payload"]
+        assert await good1.peer.receive(1) == ["payload"]
+        assert await good2.peer.receive(1) == ["payload"]
         # The dead connection was pruned from the manager.
         assert mgr.get("bad") is None
         assert mgr.count() == 2
 
-    async def test_dead_connection_pruned_on_path_broadcast(self):
+    async def test_dead_connection_pruned_on_path_broadcast(self, connections):
         mgr = WebSocketManager()
-        good = FakeConnection("g")
-        bad = FakeConnection("bad", raise_on_send=True)
-        good.path = "/chat"
-        bad.path = "/chat"
+        good = await connections.open("g", path="/chat")
+        bad = await connections.open("bad", path="/chat", dead=True)
         mgr.add(good)
         mgr.add(bad)
 
         await mgr.broadcast("hi", path="/chat")
 
-        assert good.sent == ["hi"]
+        assert await good.peer.receive(1) == ["hi"]
         assert mgr.get("bad") is None
 
 
@@ -474,19 +513,19 @@ class TestOriginAllowed:
 
 
 class TestIdleReaper:
-    async def test_reap_idle_disabled_is_noop(self):
+    async def test_reap_idle_disabled_is_noop(self, connections):
         mgr = WebSocketManager()
-        conn = FakeConnection("c1")
+        conn = await connections.open("c1")
         mgr.add(conn)
         assert await mgr.reap_idle(0) == 0
         assert mgr.count() == 1
 
-    async def test_reap_idle_closes_stale_connections(self):
+    async def test_reap_idle_closes_stale_connections(self, connections):
         import time
 
         mgr = WebSocketManager()
-        fresh = FakeConnection("fresh")
-        stale = FakeConnection("stale")
+        fresh = await connections.open("fresh")
+        stale = await connections.open("stale")
         fresh._last_activity = time.time()
         stale._last_activity = time.time() - 1000  # long idle
         mgr.add(fresh)
@@ -497,4 +536,10 @@ class TestIdleReaper:
         assert reaped == 1
         assert mgr.get("stale") is None
         assert stale._closed is True
+        # The stale client really got a CLOSE frame with 1001 "going away".
+        _fin, opcode, payload = await stale.peer.frame()
+        assert opcode == OP_CLOSE
+        assert int.from_bytes(payload[:2], "big") == CLOSE_GOING_AWAY
+        assert payload[2:] == b"idle timeout"
         assert mgr.get("fresh") is not None
+        assert fresh._closed is False
