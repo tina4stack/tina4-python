@@ -3056,20 +3056,48 @@ class _BoundedRequestReader:
         return b"".join(chunks)
 
 
+def _first_unsafe_header(headers) -> str | None:
+    """The ADR-0068 reason for the first header that must not be written, else None."""
+    for name, value in headers:
+        name_text = name.decode("latin-1") if isinstance(name, bytes) else str(name)
+        value_text = value.decode("latin-1") if isinstance(value, bytes) else str(value)
+        reason = unsafe_header_reason(name_text, value_text)
+        if reason:
+            return reason
+    return None
+
+
+async def _refuse_unsafe_headers(send, headers) -> bool:
+    """ASGI path: answer 500 in the ADR-0068 shape instead of an unsafe header.
+
+    The ASGI server would refuse the header itself (h11 under uvicorn raises and
+    drops the connection), but then the client gets no answer at all. True when
+    the refusal was sent.
+    """
+    reason = _first_unsafe_header(headers)
+    if reason is None:
+        return False
+    Log.error(f"Refused to write a response header: {reason}")
+    rejection_headers, body = _transport_rejection(500, "Invalid response header", close=False)
+    await send({"type": "http.response.start", "status": 500, "headers": rejection_headers})
+    await send({"type": "http.response.body", "body": body, "more_body": False})
+    return True
+
+
 def _response_head(status: int, headers) -> bytes | None:
     """The status line and header block, or None when a header is unsafe to write.
 
     Defence in depth behind Response.header() (ADR-0068): anything that appended
     to the header list directly still cannot put CR, LF or NUL on the wire.
     """
+    reason = _first_unsafe_header(headers)
+    if reason:
+        Log.error(f"Refused to write a response header: {reason}")
+        return None
     lines = [f"HTTP/1.1 {status} {_http_reason(status)}\r\n".encode()]
     for name, value in headers:
         name_bytes = name if isinstance(name, bytes) else str(name).encode()
         value_bytes = value if isinstance(value, bytes) else str(value).encode()
-        reason = unsafe_header_reason(name_bytes.decode("latin-1"), value_bytes.decode("latin-1"))
-        if reason:
-            Log.error(f"Refused to write a response header: {reason}")
-            return None
         lines.append(name_bytes + b": " + value_bytes + b"\r\n")
     lines.append(b"\r\n")
     return b"".join(lines)
@@ -3270,6 +3298,8 @@ async def app(scope: dict, receive, send):
             stream_headers.append((name.lower().encode(), value.encode()))
         for cookie_str in response._cookies:
             stream_headers.append((b"set-cookie", cookie_str.encode()))
+        if await _refuse_unsafe_headers(send, stream_headers):
+            return
         await send({"type": "http.response.start", "status": response.status_code, "headers": stream_headers})
 
         source = response._stream_source
@@ -3326,6 +3356,8 @@ async def app(scope: dict, receive, send):
     if_none_match = request.headers.get("if-none-match", "")
     accept_encoding = request.headers.get("accept-encoding", "")
     headers = response.build_headers(accept_encoding)
+    if await _refuse_unsafe_headers(send, headers):
+        return
 
     etag = ""
     last_modified = ""

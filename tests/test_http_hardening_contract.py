@@ -495,6 +495,26 @@ def _closed_by_server(sock) -> bool:
         return True
 
 
+class TestAsgiPath:
+    def test_the_asgi_path_refuses_an_unsafe_header_with_the_same_answer(self, tmp_path):
+        """Under uvicorn, h11 refuses the header natively - but the client must
+        still get the ADR-0068 answer, not h11's own plain-text 500."""
+        proc, port = _boot(tmp_path, builtin=False)
+        try:
+            answer = _exchange(port, b"GET /direct-append HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            assert answer.one("server") == "uvicorn", "expected uvicorn: " + repr(answer)
+            assert answer.status == 500, answer
+            assert answer.body == b'{"error":"Invalid response header"}', answer
+            assert answer.one("content-type") == "application/json", answer
+            assert "x-injected" not in answer.headers and "x-direct" not in answer.headers, answer
+            for name, value in SECURITY_HEADERS.items():
+                assert answer.one(name) == value, f"{name}: {answer}"
+            time.sleep(0.2)
+            assert "X-Direct" in read_child_log(proc)
+        finally:
+            _stop(proc)
+
+
 class TestHttp11:
     def test_keep_alive_serves_every_request_on_one_connection(self, server):
         _proc, port = server
