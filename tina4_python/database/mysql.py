@@ -78,7 +78,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
             self._conn = None
 
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
 
         # MySQL does not support RETURNING — strip it and emulate
         returning_cols = None
@@ -147,7 +147,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # v3.13.12: strip trailing `;` before wrapping with COUNT(*)
         # and appending LIMIT/OFFSET — see DatabaseAdapter helper.
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(dictionary=True)
 
         # Count total rows. The COUNT probe is best-effort — a failure here
@@ -201,7 +201,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(dictionary=True)
         cursor.execute(sql, params or [])
         row = cursor.fetchone()
@@ -301,13 +301,15 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # -- SQL Translation -----------------------------------------------
 
-    def _translate_sql(self, sql: str) -> str:
+    def _translate_sql(self, sql: str, rewrite_placeholders: bool = True) -> str:
         """Translate portable SQL to MySQL dialect.
 
         MySQL uses %s placeholders, CONCAT() instead of ||,
         AUTO_INCREMENT, and ILIKE must be lowered.
         """
-        sql = SQLTranslator.placeholder_style(sql, "%s", self.BACKSLASH_ESCAPES)
+        # No parameters: sent exactly as written (see PostgreSQLAdapter._translate_sql).
+        if rewrite_placeholders:
+            sql = SQLTranslator.placeholder_style(sql, "%s", self.BACKSLASH_ESCAPES)
         sql = SQLTranslator.concat_pipes_to_func(sql)
         sql = SQLTranslator.ilike_to_like(sql)
         sql = SQLTranslator.auto_increment_syntax(sql, "mysql")

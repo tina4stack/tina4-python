@@ -86,7 +86,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             self._conn = None
 
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
 
         # MSSQL does not support RETURNING — strip and emulate
         returning_cols = None
@@ -156,7 +156,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
               limit: int = 100, offset: int = 0) -> DatabaseResult:
         # v3.13.12: strip trailing `;` — see DatabaseAdapter helper.
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(as_dict=True)
 
         # Count total rows. The COUNT probe is best-effort — a failure here
@@ -211,7 +211,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(as_dict=True)
         cursor.execute(sql, tuple(params) if params else ())
         row = cursor.fetchone()
@@ -334,14 +334,16 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # -- SQL Translation -----------------------------------------------
 
-    def _translate_sql(self, sql: str) -> str:
+    def _translate_sql(self, sql: str, rewrite_placeholders: bool = True) -> str:
         """Translate portable SQL to MSSQL dialect.
 
         MSSQL uses %s placeholders (pymssql), CONCAT() instead of ||,
         TOP instead of LIMIT, IDENTITY instead of AUTOINCREMENT,
         and no ILIKE.
         """
-        sql = SQLTranslator.placeholder_style(sql, "%s")
+        # No parameters: sent exactly as written (see PostgreSQLAdapter._translate_sql).
+        if rewrite_placeholders:
+            sql = SQLTranslator.placeholder_style(sql, "%s")
         sql = SQLTranslator.concat_pipes_to_func(sql)
         sql = SQLTranslator.ilike_to_like(sql)
         sql = SQLTranslator.auto_increment_syntax(sql, "mssql")

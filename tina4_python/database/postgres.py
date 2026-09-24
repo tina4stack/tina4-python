@@ -315,7 +315,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
     def execute(self, sql: str, params: list = None) -> DatabaseResult:
         import psycopg2.extras
 
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
 
         # Handle RETURNING clause natively
         has_returning = bool(
@@ -388,7 +388,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # COUNT(*) and appends LIMIT/OFFSET — otherwise a user-supplied
         # `"SELECT * FROM users;"` produces invalid wrapped SQL.
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
 
         # v3.13.8: heal first so the COUNT probe below doesn't open on a
         # poisoned connection — the probe uses raw _safe_execute (it's
@@ -477,7 +477,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
         # v3.13.12: see fetch() — trailing semicolons break the wrappers.
         sql = self._strip_trailing_semicolons(sql)
-        sql = self._translate_sql(sql)
+        sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         self._exec_with_handling(cursor, sql, params)
         row = cursor.fetchone()
@@ -577,13 +577,20 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # -- SQL Translation -----------------------------------------------
 
-    def _translate_sql(self, sql: str) -> str:
+    def _translate_sql(self, sql: str, rewrite_placeholders: bool = True) -> str:
         """Translate portable SQL to PostgreSQL dialect.
 
         PostgreSQL uses %s placeholders, supports ILIKE natively,
-        || for concat, RETURNING, and LIMIT/OFFSET.
+        || for concat, RETURNING, and LIMIT/OFFSET. ``rewrite_placeholders`` is
+        False when the caller passed no parameters.
         """
-        sql = SQLTranslator.placeholder_style(sql, "%s")
+        # tina4: SQL with NO parameters is sent exactly as written - no ? rewrite
+        # (and, on PostgreSQL, no % doubling), so the jsonb operators ?, ?| and ?&
+        # work in a parameterless query. With parameters every ? in code is a
+        # placeholder: use jsonb_exists(), jsonb_exists_any() or
+        # jsonb_exists_all() instead of ?, ?| or ?&.
+        if rewrite_placeholders:
+            sql = SQLTranslator.placeholder_style(sql, "%s")
         sql = SQLTranslator.auto_increment_syntax(sql, "postgresql")
         # v3.13.16: do NOT run boolean_to_int on PostgreSQL — PG has a native
         # BOOLEAN type, so TRUE/FALSE are valid literals and 1/0 are NOT
