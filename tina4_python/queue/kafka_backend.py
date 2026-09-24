@@ -230,6 +230,20 @@ class KafkaBackend:
             })
         self._backend.acknowledge(self._topic, str(job.id))
 
+    def reject(self, job: Job, reason: str = ""):
+        """Dead-letter the job immediately — no retry (ADR-0023 reject()).
+
+        Re-produces the poison record to <topic>.dead_letter, then commits past
+        the original so a rebalance never replays it.
+        """
+        # Terminal: floor attempts at max_retries so dead_letters() (which
+        # filters attempts >= max_retries) returns it.
+        job.attempts = max(job.attempts + 1, self._max_retries)
+        msg = {"id": job.id, "payload": job.data,
+               "attempts": job.attempts, "error": reason}
+        self._backend.dead_letter(self._topic, msg)
+        self._backend.acknowledge(self._topic, str(job.id))
+
     def retry(self, job: Job, delay_seconds: int = 0):
         job.attempts += 1
         msg = {"payload": job.data, "priority": job.priority, "attempts": job.attempts}
