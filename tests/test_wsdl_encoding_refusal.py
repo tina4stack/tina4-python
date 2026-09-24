@@ -90,3 +90,14 @@ def test_invalid_utf8_is_refused_even_when_the_content_type_decodes_leniently():
     body = PLAIN_ECHO.format(encoding="UTF-8").encode().replace(b"hello", b"hel\xfflo")
     response = _handle(body, content_type=b"application/json")
     assert MALFORMED in response, response
+
+
+@pytest.mark.parametrize("body", [
+    pytest.param(b"", id="empty-body"),
+    pytest.param(b"<soap:Envelope><soap:Body><Echo>", id="unclosed"),
+    pytest.param(b"not xml at all", id="not-xml"),
+])
+def test_ordinary_malformed_input_is_a_client_fault_not_a_server_error(body):
+    response = _handle(body)
+    assert MALFORMED in response, response
+    assert "Internal server error" not in response and "<faultcode>Server" not in response
