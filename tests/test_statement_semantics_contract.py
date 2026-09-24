@@ -155,9 +155,9 @@ def test_execute_of_a_plain_write_keeps_its_return_value(sqlite_url):
 
 def test_execute_returns_rows_for_output_and_exec_on_sql_server():
     if not MSSQL_URL:
-        pytest.skip("MSSQL not configured for the statement-semantics contract (TINA4_TEST_MSSQL_URL not set)")
+        pytest.skip("[needs:mssql] MSSQL not configured for the statement-semantics contract (TINA4_TEST_MSSQL_URL not set)")
     if not _reachable(MSSQL_URL, 1433):
-        pytest.skip("MSSQL not reachable - skip integration test")
+        pytest.skip("[needs:mssql] MSSQL not reachable - skip integration test")
     database = Database(MSSQL_URL)
     try:
         database.execute("IF OBJECT_ID('contract_py_note', 'U') IS NOT NULL DROP TABLE contract_py_note")
@@ -185,7 +185,7 @@ def test_execute_returns_rows_for_output_and_exec_on_sql_server():
 @pytest.fixture
 def postgres():
     if not _reachable(PG_URL, 5432):
-        pytest.skip("PostgreSQL not reachable - skip integration test")
+        pytest.skip("[needs:postgres] PostgreSQL not reachable - skip integration test")
     database = Database(PG_URL)
     yield database
     database.close()

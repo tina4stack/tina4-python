@@ -855,7 +855,7 @@ def test_reset_is_idempotent_and_reloads_a_clean_snapshot(tmp_path):
     assert "after reset" in (tmp_path / "tina4.log").read_text()
 
 
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="fork is POSIX-only")
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="[needs:os=posix] fork is POSIX-only")
 def test_forked_child_discards_inherited_logger_state(tmp_path):
     Log.configure(output="file", log_dir=str(tmp_path))
     set_request_id("parent")

@@ -93,9 +93,9 @@ def engine(request, tmp_path):
     spec = ENGINES[name]
     url = f"sqlite:///{tmp_path}/exec_rows.db" if name == "sqlite" else spec["url"]
     if not url:
-        pytest.skip(f"{spec['service']} not configured for the execute-rows test (env var not set)")
+        pytest.skip(f"[needs:{name}] {spec['service']} not configured for the execute-rows test (env var not set)")
     if spec.get("port") and not _reachable(url, spec["port"]):
-        pytest.skip(f"{spec['service']} not reachable - skip integration test")
+        pytest.skip(f"[needs:{name}] {spec['service']} not reachable - skip integration test")
     Engine(name, url).drop()
     current = Engine(name, url)
     current.db.execute(f"CREATE TABLE {current.table} (id {spec['id']}, note VARCHAR(20))")

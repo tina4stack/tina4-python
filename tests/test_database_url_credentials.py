@@ -88,25 +88,25 @@ def test_the_url_parser_and_the_adapter_helper_agree():
 
 @pytest.mark.skipif(
     not (os.environ.get("TINA4_TEST_PG_URL") or "").strip(),
-    reason="live PostgreSQL not configured (TINA4_TEST_PG_URL)",
+    reason="[needs:postgres] live PostgreSQL not configured (TINA4_TEST_PG_URL)",
 )
 def test_an_encoded_password_connects_to_a_live_database():
     """
-    The end-to-end proof, against a REAL server. '%61' decodes to 'a', so the
-    encoded form spells the same password as the plain one: it connects only if
-    the credential path decodes.
+    The end-to-end proof, against a REAL server. The first character of the
+    password is percent-encoded (for 'tina4', 't' becomes '%74'), so the encoded
+    form spells the same password as the plain one: it connects only if the
+    credential path decodes.
     """
     from tina4_python.database import Database
 
     raw = (os.environ.get("TINA4_TEST_PG_PASSWORD") or "tina4").strip()
-    if "a" not in raw:
-        pytest.skip("password has no 'a' to encode as %61")
 
     url = (os.environ["TINA4_TEST_PG_URL"] or "").strip()
     user = (os.environ.get("TINA4_TEST_PG_USERNAME") or "tina4").strip()
     # Rebuild the URL with credentials embedded, the password partly encoded.
     tail = url.split("://", 1)[1].split("@")[-1]
-    encoded = raw.replace("a", "%61", 1)
+    # Encode the FIRST character, whatever it is, so no password needs a skip.
+    encoded = "".join(f"%{byte:02X}" for byte in raw[0].encode()) + raw[1:]
     db = Database(f"{url.split('://', 1)[0]}://{user}:{encoded}@{tail}")
 
     assert db.table_exists("tina4_write_contract") in (True, False)

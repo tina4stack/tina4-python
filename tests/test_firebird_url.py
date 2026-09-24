@@ -121,7 +121,7 @@ def _firebird_reachable() -> bool:
 
 pytestmark_live = pytest.mark.skipif(
     not _firebird_reachable(),
-    reason=f"Firebird not reachable at {FIREBIRD_HOST}:{FIREBIRD_PORT}",
+    reason=f"[needs:firebird] Firebird not reachable at {FIREBIRD_HOST}:{FIREBIRD_PORT}",
 )
 
 LIVE_DB_PATH = LIVE_DB_PATH_DEFAULT

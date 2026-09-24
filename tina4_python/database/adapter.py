@@ -1131,6 +1131,23 @@ class DatabaseAdapter:
         return m.group(1) if m else "unknown"
 
 
+_COLUMN_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+
+
+def column_key(key) -> str:
+    """A data or filter-map key, checked to be a plain identifier.
+
+    tina4: ADR-0069 - quote_identifier() passes anything that is not a plain
+    identifier through unquoted (so hand-written expressions keep working), which
+    means a dict key is only safe to emit as a column once it is known to BE an
+    identifier. Raises before any SQL is built. Table names are developer code
+    and are not checked here.
+    """
+    if not isinstance(key, str) or not _COLUMN_KEY.fullmatch(key):
+        raise ValueError(f"Invalid column name '{key}'")
+    return key
+
+
 class SqlCrudMixin:
     """Engine-neutral INSERT/UPDATE/DELETE composition — NOT part of the
     declared DatabaseAdapter interface (ADR-0044, DBA-S03: adapter-required-
@@ -1159,14 +1176,14 @@ class SqlCrudMixin:
             if not data:
                 return DatabaseResult()
             # All dicts must have the same keys
-            keys = list(data[0].keys())
+            keys = [column_key(k) for k in data[0].keys()]
             columns = ", ".join(self.quote_identifier(k) for k in keys)
             placeholders = ", ".join([self.PARAM_MARKER] * len(keys))
             sql = f"INSERT INTO {self.quote_identifier(table)} ({columns}) VALUES ({placeholders})"
             params_list = [list(row[k] for k in keys) for row in data]
             return self.execute_many(sql, params_list)
 
-        columns = ", ".join(self.quote_identifier(c) for c in data.keys())
+        columns = ", ".join(self.quote_identifier(column_key(c)) for c in data.keys())
         placeholders = ", ".join([self.PARAM_MARKER] * len(data))
         sql = (
             f"INSERT INTO {self.quote_identifier(table)} "
@@ -1184,7 +1201,7 @@ class SqlCrudMixin:
         INSERT in this file already does.
         """
         set_clause = ", ".join(
-            f"{self.quote_identifier(k)} = {self.PARAM_MARKER}" for k in data.keys()
+            f"{self.quote_identifier(column_key(k))} = {self.PARAM_MARKER}" for k in data.keys()
         )
         sql = f"UPDATE {self.quote_identifier(table)} SET {set_clause}"
         all_params = list(data.values())
@@ -1219,7 +1236,7 @@ class SqlCrudMixin:
             # Build WHERE from dict. Emits "?" deliberately: the string branch
             # below runs it through _marked_filter, so translating here too
             # would double-translate on a "%s" engine.
-            where_parts = [f"{self.quote_identifier(k)} = ?" for k in filter_sql.keys()]
+            where_parts = [f"{self.quote_identifier(column_key(k))} = ?" for k in filter_sql.keys()]
             where_sql = " AND ".join(where_parts)
             return self.delete(table, where_sql, list(filter_sql.values()))
 
