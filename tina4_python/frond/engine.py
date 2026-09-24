@@ -1776,6 +1776,45 @@ class Frond:
             return True
         return fname in self._allowed_filters
 
+    #: Words that appear in an expression but are not variable references:
+    #: literals, operators and the implicit ``loop`` variable.
+    _SANDBOX_EXPR_KEYWORDS = frozenset({
+        "true", "false", "none", "null", "and", "or", "not", "in", "is",
+        "loop", "if", "else", "empty", "starts", "ends", "with", "matches",
+    })
+    _SANDBOX_IDENT_RE = re.compile(r"(?<![.\w'\"])([A-Za-z_][A-Za-z0-9_]*)")
+    _SANDBOX_STRING_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+    def _sandbox_expr_ok(self, expr: str) -> bool:
+        """Sandbox gate for a WHOLE expression (F6/ADR-0077).
+
+        Returns False when, under sandbox mode, the expression reaches for a
+        dunder attribute (the Python object-graph escape) or names a root
+        variable outside the allow-list. Applied to every place an expression
+        is evaluated — output, ``if`` conditions, ``set`` right-hand sides and
+        ``for`` iterables — so ``{% set x = secret %}`` and
+        ``{% for v in [secret] %}`` can no longer smuggle a blocked variable
+        past the per-output gate.
+        """
+        if not self._sandbox:
+            return True
+        if "__" in expr:
+            return False
+        if self._allowed_vars is None:
+            return True
+        stripped = self._SANDBOX_STRING_RE.sub("", expr)
+        for ident in self._SANDBOX_IDENT_RE.findall(stripped):
+            low = ident.lower()
+            if low in self._SANDBOX_EXPR_KEYWORDS:
+                continue
+            # A filter name is not a variable — the filter permission gate
+            # handles it separately, so skip any known filter here.
+            if ident in self._filters:
+                continue
+            if ident not in self._allowed_vars:
+                return False
+        return True
+
     #: Node kinds that are TAGS a template author writes, mapped to the name
     #: they type. Kinds absent from this map are structure (text, output,
     #: comment, extends/block markers) and are never gated - blocking those
@@ -2397,6 +2436,13 @@ class Frond:
         ``length`` is a real filter but ``!= 1`` is a comparison, so we apply
         the filter first and then evaluate the comparison.
         """
+        # Sandbox: gate the whole condition/RHS expression (F6). A comparison
+        # like ``{% if secret == 'x' %}`` or an iterable/RHS that names a
+        # blocked variable resolves to None here, so it cannot leak the value
+        # or branch on it.
+        if self._sandbox and not self._sandbox_expr_ok(expr):
+            return None
+
         var_name, filters = self._cached_filter_chain(expr)
         value = _eval_expr(var_name, context)
 
@@ -2539,11 +2585,9 @@ class Frond:
         """Core variable evaluation: resolve expression, apply filters, escape."""
         var_name, filters = self._cached_filter_chain(expr)
 
-        # Sandbox: check variable access
-        if self._sandbox and self._allowed_vars is not None:
-            root_var = var_name.split(".")[0].split("[")[0].strip()
-            if root_var and root_var not in self._allowed_vars and root_var != "loop":
-                return ""  # Silently block
+        # Sandbox: check variable access (root allow-list + dunder block, F6)
+        if self._sandbox and not self._sandbox_expr_ok(expr):
+            return ""  # Silently block
 
         # Compound expression (a top-level ~, comparison, arithmetic or ?? sits
         # BELOW the pipe): the naive top-level split above is wrong because the
@@ -2605,7 +2649,12 @@ class Frond:
         """
         var1 = node.key_var
         var2 = node.value_var
-        iterable = _eval_expr(node.iterable, context)
+        # Sandbox: gate the iterable expression (F6) so a blocked variable
+        # cannot be smuggled in through ``{% for v in [secret] %}``.
+        if self._sandbox and not self._sandbox_expr_ok(node.iterable):
+            iterable = None
+        else:
+            iterable = _eval_expr(node.iterable, context)
 
         if not iterable:
             if node.else_body:
