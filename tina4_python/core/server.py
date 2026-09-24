@@ -2314,8 +2314,15 @@ async def _stage_cors_preflight(ctx: DispatchContext) -> Response | None:
 
 
 async def _stage_rate_limit(ctx: DispatchContext) -> Response | None:
-    """Reject the request when it is over the configured rate limit."""
-    return _handle_rate_limit(ctx.request, ctx.response)
+    """Reject the request when it is over the configured rate limit.
+
+    The 429 answers before any middleware runs, so it takes the security
+    headers here: a refusal is still a page that can be framed or sniffed.
+    """
+    refused = _handle_rate_limit(ctx.request, ctx.response)
+    if refused is not None:
+        _apply_security_headers(ctx.request, refused)
+    return refused
 
 
 async def _stage_start_timer(ctx: DispatchContext) -> None:
@@ -2422,6 +2429,8 @@ async def _stage_global_middleware_pre(ctx: DispatchContext) -> Response | None:
         return None
 
     _run_after_middleware(ctx.request, ctx.response, pre_route, include_globals=False)
+    # A pre-match refusal answers before the response stages run.
+    _apply_security_headers(ctx.request, ctx.response)
     return ctx.response
 
 
@@ -2576,24 +2585,44 @@ def _stage_not_found(ctx: DispatchContext) -> bool:
     return True
 
 
-def _stage_fallback_security_headers(ctx: DispatchContext) -> None:
-    """Security headers for a response NO route produced (#137).
+def _apply_security_headers(request: Request, response: Response) -> None:
+    """Add every security header the attached middleware would set and ``response`` lacks.
 
-    The headers come from ``SecurityHeadersMiddleware``, and global middleware
-    only runs inside a matched route - so a static file, the SPA ``index.html``
-    that ``/`` resolves to, an auto-routed template, a 405 and a 404 all went
-    out with no CSP, no ``nosniff`` and no frame protection, even with the
-    middleware attached. When it is attached, apply it here too.
-
-    Matched routes are skipped: the middleware already ran there, BEFORE the
-    handler, so a route that deliberately overrides a header keeps its value.
+    Only MISSING headers are added, so a value a route or middleware set on
+    purpose - a looser frame policy for an embeddable widget, say - is kept.
+    A no-op unless ``SecurityHeadersMiddleware`` (or a subclass) is attached.
     """
-    if ctx.route is not None:
-        return None
     from tina4_python.core.middleware import Middleware, SecurityHeadersMiddleware
     for middleware in Middleware.get_global():
-        if isinstance(middleware, type) and issubclass(middleware, SecurityHeadersMiddleware):
-            ctx.request, ctx.response = middleware().before_security(ctx.request, ctx.response)
+        if not (isinstance(middleware, type) and issubclass(middleware, SecurityHeadersMiddleware)):
+            continue
+        wanted = Response()
+        middleware().before_security(request, wanted)
+        present = {name.lower() for name, _ in response._headers}
+        for name, value in wanted._headers:
+            if name.lower() not in present:
+                response.header(name, value)
+
+
+def _stage_security_headers(ctx: DispatchContext) -> None:
+    """Every routed or fallback response carries the security headers.
+
+    ``SecurityHeadersMiddleware`` sets them in a ``before_*`` hook, and that
+    was the only place they came from, which missed two families of response:
+
+    * anything no route produced (#137) - a static file, the SPA
+      ``index.html`` that ``/`` resolves to, an auto-routed template, a 405 or
+      a 404 - because global middleware only runs inside a matched route;
+    * a REFUSAL by an earlier hook. Global middleware runs in registration
+      order, CSRF is attached before the security headers, and a refusing hook
+      skips every hook after it: the CSRF 403 went out with no CSP, no
+      ``nosniff`` and no frame protection.
+
+    Filling in what is missing here covers both without reordering anyone's
+    middleware. The pre-match refusals (rate limit, pre-match middleware)
+    return before this stage and apply the same helper themselves.
+    """
+    _apply_security_headers(ctx.request, ctx.response)
     return None
 
 
@@ -2781,7 +2810,7 @@ _FALLBACK_STAGES = (
 #: Content-Length report the body AFTER injection, which is exactly what the
 #: equivalent GET would send (RFC 9110 s9.3.2).
 _RESPONSE_STAGES = (
-    _stage_fallback_security_headers,
+    _stage_security_headers,
     _stage_apply_cors,
     _stage_dev_toolbar_inject,
     _stage_dev_inspector_capture,

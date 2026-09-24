@@ -57,7 +57,7 @@ def test_the_pipeline_declares_its_stages_in_order():
         "_stage_not_found",
     ], "405 is answered before falling through to static/template/404"
     assert _names(server._RESPONSE_STAGES) == [
-        "_stage_fallback_security_headers",
+        "_stage_security_headers",
         "_stage_apply_cors",
         "_stage_dev_toolbar_inject",
         "_stage_dev_inspector_capture",
