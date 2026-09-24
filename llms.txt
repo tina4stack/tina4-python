@@ -55,6 +55,14 @@ db.insert("users", {"name": "Alice"})
 db.update("users", {"id": 1, "name": "Bob"})
 db.delete("users", {"id": 1})
 next_id = db.get_next_id("users")  # race-safe atomic ID generation
+
+# async def routes: await the _async twin of every call (ADR-0074) - never the sync call
+row = await db.fetch_one_async("SELECT * FROM users WHERE id = ?", [1])
+user = await User.find_by_id_async(1); await user.save_async()
+async with db.transaction_async():
+    await db.insert_async("users", {"name": "Eve"})
+# plain def routes may use the sync calls (they run in a worker thread)
+# Database is a bounded pool: TINA4_DB_POOL (default 10), TINA4_DB_POOL_TIMEOUT (30s)
 ```
 
 ---
