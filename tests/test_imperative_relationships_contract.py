@@ -67,7 +67,7 @@ def _reachable(host, port):
 def _engine_db(engine, tmp_path):
     if engine == "postgres":
         if not _reachable(_PG["host"], _PG["port"]):
-            pytest.skip(f"postgres unreachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)")
+            pytest.skip(f"[needs:postgres] postgres unreachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)")
         db = Database(f"postgres://{_PG['host']}:{_PG['port']}/{_PG['db']}", _PG["user"], _PG["pwd"])
     else:
         db = Database(f"sqlite:///{tmp_path/'imprel.db'}")

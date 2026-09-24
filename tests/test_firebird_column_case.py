@@ -27,7 +27,7 @@ FIREBIRD_URL = os.environ.get("TINA4_TEST_FIREBIRD_URL", "").strip()
 
 pytestmark = pytest.mark.skipif(
     not FIREBIRD_URL,
-    reason="TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)",
+    reason="[needs:firebird] TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)",
 )
 
 

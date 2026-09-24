@@ -66,7 +66,7 @@ def _pg_url() -> str:
 
 needs_pg = pytest.mark.skipif(
     not _reachable(_PG["host"], _PG["port"]),
-    reason=f"no reachable postgres at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)",
+    reason=f"[needs:postgres] no reachable postgres at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)",
 )
 
 

@@ -1,78 +1,50 @@
 # Tina4 v3 test configuration
 
 import os
+import re as _re
 
 import pytest
 
-# Provisioned real services (and their client libraries). CI stands all of these
-# up, so an integration test should never skip in CI. Firebird is deliberately
-# NOT in this list -- it is not provisioned, so its skips stay green. MySQL and
-# MSSQL joined the provisioned set in 3.13.44 (#262), so their reachability /
-# driver skips now fail the gate too.
-_SERVICE_KEYWORDS = (
-    "postgres", "postgresql", "psycopg2",
-    "postgis",          # spatial engine (own container, port 55433)
-    "mysql",            # also matches "mysql-connector-python"
-    "mssql", "sqlserver", "pymssql",
-    "redis", "valkey", "memcached",
-    "pymemcache",       # the memcached CLIENT: "memcached" does not match it
-    "mongo",            # also matches "pymongo"
-    "rabbit", "amqp",
-    "pika",             # the RabbitMQ CLIENT: "rabbit"/"amqp" do not match it
-    "kafka",            # also matches "rdkafka" / "confluent-kafka"
-    "mqtt", "mosquitto",  # Mosquitto (+ EMQX) for the MQTT tests
-    # GreenMail (real SMTP 3025 / IMAP 3143) for the Messenger round-trip tests.
-    # test_messenger.py has ALWAYS claimed in a comment that its "GreenMail
-    # SMTP/IMAP not reachable" skip was upgraded here -- it was not, because no
-    # mail keyword existed in this tuple, so every one of those live tests could
-    # skip green in CI forever behind a comment saying it could not.
-    "greenmail", "smtp", "imap",
-    # boto3, the S3 CLIENT for the live-MinIO storage tests. It is a DECLARED
-    # client (pyproject `test` extra), so on any host that ran
-    # `uv sync --extra test` its absence is a real defect, exactly like "pika"
-    # and "pymemcache" above. MEASURED 2026-08-06: boto3 was declared in no
-    # extra at all, `uv sync --extra test` pruned it, and the two real-MinIO
-    # tests in test_realtime_files.py silently became skips that this gate did
-    # NOT catch -- the reason matched no keyword here AND no hint below.
-    "boto3",
-)
-# "minio" is deliberately NOT above, for the same reason as Firebird: it is not
-# provisioned by .github/workflows/test.yml and carries no entry in the shared
-# tests/fixtures/test_env_contract.json, so an unreachable-MinIO skip is a
-# genuinely-unprovisioned skip and must stay green. The lab DOES run MinIO
-# (container tina4-lab-minio on 9100), so the tests execute there; if MinIO is
-# ever added to CI and to the env contract, add "minio" here the same day.
-# This is why test_realtime_files.py reports the missing CLIENT and the
-# unreachable SERVICE as two separate reasons instead of one merged string:
-# merged, a MinIO-less CI run would trip the "boto3" keyword and fail honestly-
-# skipped tests.
-# A keyword must match the text the test ACTUALLY skips with, and tests skip on
-# the CLIENT LIBRARY name as often as the service name. Where the two differ and
-# the service name is not a substring of the client's, BOTH belong above:
-# "pika not installed" and "pymemcache not installed" matched nothing and passed
-# green, which is how six live RabbitMQ tests sat silently skipping on a host
-# that had every service running. ("kafka" happens to be a substring of
-# "confluent-kafka" and "psycopg2"/"pymssql" are listed explicitly, so those were
-# already covered -- the gap was only where neither held.)
+# ── The TINA4_REQUIRE_SERVICES gate (ADR-0069 addendum F) ────────────────
 #
-# pyodbc is deliberately NOT here. There is no ODBC service in the lab or in CI,
-# so -- exactly like Firebird -- an ODBC skip is a genuinely-unprovisioned skip
-# and must stay green. Add it the day an ODBC service is provisioned.
-_UNAVAILABLE_HINTS = (
-    "not reachable", "no reachable", "unreachable", "not running", "not set",
-    "not installed", "could not connect", "not available", "refused",
-)
-# "no reachable" (as opposed to "not reachable") is its own phrasing used by
-# several provisioned-service skips -- test_docstore_substitutability.py's
-# MongoDB cases, and the postgres/mysql/mssql cases in test_migration_contract,
-# test_mysqlprovider_contract, test_mssqlprovider_contract, test_nextid_contract,
-# test_pgprovider_contract, and test_seeder_contract. Without this hint, an
-# UNAVAILABLE provisioned service in one of those files would skip green
-# instead of failing loud under TINA4_REQUIRE_SERVICES -- the exact gap that
-# MEASURABLY hid 12 real MongoDB substitutability tests (test_docstore_
-# substitutability.py defaulted TINA4_TEST_MONGO_HOST to a lab-only private IP,
-# unreachable from CI, so its own reachability probe silently failed and none
-# of the "mongo" keyword matches below ever got the chance to fire).
+# With TINA4_REQUIRE_SERVICES set, a SKIP passes only when its reason carries a
+# machine-readable ``[needs:X]`` tag AND X is excusable in this run:
+#
+#   - X is an OPTIONAL engine: excused only while that engine's coordinate env
+#     var is unset. A run that never promised the engine stays green; a run
+#     that set the coordinate (the lab sets all of them) fails if it skips.
+#   - X is an ALWAYS-provisioned service: never excused.
+#   - Any other X is a platform exclusion (os=..., runtime=..., absent-ext=...,
+#     no-dac-override): always excused.
+#   - No tag at all: fails.
+#
+# The same rule and the same tag names are used by all four frameworks. It
+# replaced a phrase matcher (service keywords x "not reachable" / "refused"),
+# under which any skip worded outside those lists - "no reachable", "...
+# unavailable", Firebird, the graph engines - skipped green: a ghost test.
+# Collection-time skips (``allow_module_level=True``) are gated too; they become
+# collection errors. tests/test_require_services_gate.py runs a real pytest
+# against this file.
+
+# TINA4_TEST_POSTGRES_URL (a lab-only alias) is deliberately absent: the
+# env-contract gate (tests/test_env_contract.py) rejects it in Python.
+_OPTIONAL_ENGINE_COORDINATES = {
+    "firebird": "TINA4_TEST_FIREBIRD_URL",
+    "postgres": "TINA4_TEST_PG_URL",
+    "postgis": "TINA4_TEST_POSTGIS_URL",
+    "mysql": "TINA4_TEST_MYSQL_URL",
+    "mssql": "TINA4_TEST_MSSQL_URL",
+    "swoole": "TINA4_TEST_SWOOLE",
+    "oidc": "TINA4_TEST_OIDC_ISSUER",
+    "neo4j": "TINA4_TEST_NEO4J_URL",
+    "memgraph": "TINA4_TEST_MEMGRAPH_URL",
+    "arango": "TINA4_TEST_ARANGO_URL",
+    "ultipa": "TINA4_TEST_ULTIPA_URL",
+}
+_ALWAYS_PROVISIONED = frozenset({
+    "mongo", "redis", "valkey", "memcached", "rabbitmq", "kafka", "mqtt", "smtp", "imap", "s3",
+})
+_NEEDS_TAG = _re.compile(r"\[needs:([^\]\s]+)\]")
 
 
 def _truthy(value):
@@ -83,40 +55,64 @@ def _require_services():
     return _truthy(os.environ.get("TINA4_REQUIRE_SERVICES"))
 
 
-def _is_provisioned_service_skip(reason):
-    low = (reason or "").lower()
-    return any(k in low for k in _SERVICE_KEYWORDS) and any(h in low for h in _UNAVAILABLE_HINTS)
+def _skip_reason(report):
+    longrepr = report.longrepr
+    if isinstance(longrepr, tuple) and len(longrepr) == 3:
+        return str(longrepr[2])
+    return str(longrepr or "")
+
+
+def _tag_is_excused(tag, environ):
+    if tag in _ALWAYS_PROVISIONED:
+        return False
+    coordinate = _OPTIONAL_ENGINE_COORDINATES.get(tag)
+    if coordinate is not None:
+        return not (environ.get(coordinate) or "").strip()
+    return True
+
+
+def _skip_is_excused(reason, environ=None):
+    """True when every [needs:X] tag in the reason is excusable in this run."""
+    environ = os.environ if environ is None else environ
+    tags = _NEEDS_TAG.findall(reason or "")
+    return bool(tags) and all(_tag_is_excused(tag, environ) for tag in tags)
+
+
+def _fail_untagged_skip(report):
+    """Turn a skip that is not excused into a failure when services are required."""
+    if not _require_services() or not report.skipped or hasattr(report, "wasxfail"):
+        return
+    reason = _skip_reason(report)
+    if _skip_is_excused(reason):
+        return
+    report.outcome = "failed"
+    report.longrepr = (
+        "TINA4_REQUIRE_SERVICES is set, and this skip is not excused:\n  "
+        + reason.strip()
+        + "\nAn untagged skip, an always-provisioned service ([needs:mongo], ...) "
+        "and an optional engine whose coordinate env var IS set all fail. "
+        "Provision the service, or tag a genuine platform exclusion [needs:os=...]."
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """When TINA4_REQUIRE_SERVICES is set, turn a skip caused by a PROVISIONED
-    service being unavailable into a hard FAILURE.
-
-    CI provisions PostgreSQL, PostGIS, MySQL, MSSQL, Redis, Valkey, Memcached, MongoDB,
-    RabbitMQ, and Kafka and sets every canonical test-service URL (see
-    tests/fixtures/test_env_contract.json), so these integration
-    tests must run. A skip that names one of those services (or its client
-    library) means the service or driver silently went missing -- the exact gap
-    that let the migration and queue bugs ship green. Firebird is not
-    provisioned, so its skips never match these keywords and stay green.
-    """
     outcome = yield
-    report = outcome.get_result()
-    if not _require_services() or not report.skipped:
-        return
-    try:
-        reason = report.longrepr[2] if isinstance(report.longrepr, tuple) else str(report.longrepr)
-    except Exception:
-        reason = str(getattr(report, "longrepr", ""))
-    if _is_provisioned_service_skip(reason):
-        report.outcome = "failed"
-        report.longrepr = (
-            "TINA4_REQUIRE_SERVICES is set, but this real-service test SKIPPED "
-            "because a provisioned service or client library is missing:\n  "
-            + reason.strip()
-            + "\nProvision the service / install the client, or unset TINA4_REQUIRE_SERVICES."
-        )
+    _fail_untagged_skip(outcome.get_result())
+
+
+def pytest_configure(config):
+    # An untagged module-level skip becomes a collection error. Keep collecting
+    # and running everything else, so one missing service reports as one
+    # error instead of aborting the whole suite.
+    if _require_services():
+        config.option.continue_on_collection_errors = True
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_make_collect_report(collector):
+    outcome = yield
+    _fail_untagged_skip(outcome.get_result())
 
 
 # ── Log state isolation (every test gets a clean, unconfigured logger) ────

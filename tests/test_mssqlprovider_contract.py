@@ -60,7 +60,7 @@ def _reachable(host, port) -> bool:
 
 needs_mssql = pytest.mark.skipif(
     not _reachable(_MSSQL["host"], _MSSQL["port"]),
-    reason=f"no reachable MSSQL at {_MSSQL['host']}:{_MSSQL['port']} (set TINA4_TEST_MSSQL_*)",
+    reason=f"[needs:mssql] no reachable MSSQL at {_MSSQL['host']}:{_MSSQL['port']} (set TINA4_TEST_MSSQL_*)",
 )
 
 

@@ -69,7 +69,7 @@ def _reachable(host, port) -> bool:
 @pytest.fixture
 def pg_db():
     if not _reachable(_PG["host"], _PG["port"]):
-        pytest.skip(f"postgres unreachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)")
+        pytest.skip(f"[needs:postgres] postgres unreachable at {_PG['host']}:{_PG['port']} (set TINA4_TEST_PG_*)")
     db = Database(f"postgres://{_PG['host']}:{_PG['port']}/{_PG['db']}", _PG["user"], _PG["pwd"])
     bind_database(db)
     try:

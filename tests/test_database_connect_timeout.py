@@ -591,11 +591,11 @@ LIVE_DATABASES = [
 def test_healthy_connect_still_succeeds_under_the_default_bound(engine, adapter_class, url):
     """A live, healthy database connects fine at the shipped 10s default."""
     if not url:
-        pytest.skip(f"live {engine} URL not configured")
+        pytest.skip(f"[needs:{engine}] live {engine} URL not configured")
     from urllib.parse import urlparse
     parsed = urlparse(url)
     if not _reachable(parsed.hostname, parsed.port):
-        pytest.skip(f"live {engine} server not reachable")
+        pytest.skip(f"[needs:{engine}] live {engine} server not reachable")
 
     adapter = adapter_class()
     with connect_timeout_env(None):  # the shipped default, not a test value

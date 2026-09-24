@@ -68,7 +68,7 @@ redis_up = pytest.mark.skipif(
     reason="redis service not reachable",
 )
 postgres_up = pytest.mark.skipif(
-    not _reachable(PG_HOST, PG_PORT), reason="postgresql service not reachable"
+    not _reachable(PG_HOST, PG_PORT), reason="[needs:postgres] postgresql service not reachable"
 )
 
 

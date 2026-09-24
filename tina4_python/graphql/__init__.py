@@ -55,12 +55,13 @@ _TOKENS = [
     ("EQUALS", r"="),
     ("AT", r"@"),
     ("DOLLAR", r"\$"),
-    ("COMMA", r","),
     ("STRING", r'"(?:[^"\\]|\\.)*"'),
     ("NUMBER", r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?"),
     ("BOOL", r"\b(?:true|false)\b"),
     ("NULL", r"\bnull\b"),
     ("NAME", r"[_a-zA-Z]\w*"),
+    # Commas are insignificant (GraphQL spec 2.1.7): skipped like whitespace
+    # everywhere - between arguments, fields, list items and variable defs.
     ("SKIP", r"[\s,]+"),
     ("COMMENT", r"#[^\n]*"),
 ]
@@ -237,7 +238,6 @@ class Parser:
             name = self.expect("NAME").value
             self.expect("COLON")
             args[name] = self._parse_value()
-            self.match("COMMA")  # optional comma between arguments
         return args
 
     def _parse_value(self) -> Any:
@@ -304,7 +304,6 @@ class Parser:
             if self.match("EQUALS"):
                 default = self._parse_value()
             defs.append({"name": name, "type": type_name, "default": default})
-            self.match("COMMA")  # optional comma between variable defs
         return defs
 
     def _parse_type_ref(self) -> str:

@@ -97,7 +97,7 @@ class TestSqliteAttachedSchema:
 
 pytestmark_integration = pytest.mark.skipif(
     not _pg_reachable(),
-    reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT}",
+    reason=f"[needs:postgres] PostgreSQL not reachable at {PG_HOST}:{PG_PORT}",
 )
 
 
