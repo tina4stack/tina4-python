@@ -92,7 +92,7 @@ def server(tmp_path_factory):
         "ISSUE134_PORT": str(port),
         "TINA4_CSRF": "true",
         "TINA4_DEBUG": "false",
-        "TINA4_SECRET": "issue134-contract-secret",
+        "TINA4_SECRET": "issue134-contract-secret-0123456789abcdef",
         "TINA4_SESSION_BACKEND": "file",
         "TINA4_SESSION_PATH": str(project / "sessions"),
         "TINA4_NO_BROWSER": "true",

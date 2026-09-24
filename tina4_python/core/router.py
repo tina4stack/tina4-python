@@ -774,10 +774,10 @@ def _register_route(method: str, path: str, fn, **options):
     if inline_mw and hasattr(fn, "_route_ref"):
         existing = ref._route.get("middleware", [])
         ref._route["middleware"] = fn._middleware + existing
-        # Custom middleware means developer handles auth — disable built-in
-        # gate unless @secured() was explicitly set.
-        if not getattr(fn, "_secured", False) and ref._route.get("auth_required"):
-            ref._route["auth_required"] = False
+        # Middleware is purely additive: it never opens the auth gate. The
+        # middleware= kwarg used to set auth_required=False here, the same
+        # silent bypass ADR-0019 removed from Router.add and @middleware. Use
+        # @noauth() to open a write route.
 
     return fn
 

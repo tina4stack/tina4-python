@@ -40,7 +40,7 @@ import pytest
 
 from tina4_python.auth import Auth, RS256UnavailableError
 
-SECRET = "rs256-optin-regression-secret"
+SECRET = "rs256-optin-regression-secret-01"
 REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
 # Stands in for the RSA PUBLIC key an RS256 verifier is configured with. It is
@@ -143,7 +143,7 @@ def test_hmac_family_round_trips_in_an_interpreter_with_no_site_packages():
     out = _run_child(_CONTROL + """
         from tina4_python.auth import Auth
         for alg in ("HS256", "HS384", "HS512"):
-            auth = Auth(secret="zero-dep-secret", algorithm=alg)
+            auth = Auth(secret="zero-dep-secret-0123456789abcdef", algorithm=alg)
             token = auth.get_token({"user_id": 9})
             payload = auth.valid_token(token)
             assert payload is not None and payload["user_id"] == 9, alg
@@ -154,7 +154,7 @@ def test_hmac_family_round_trips_in_an_interpreter_with_no_site_packages():
             assert auth.valid_token(f"{head}.{mid}.{flipped}") is None, alg
 
             # NEGATIVE: another secret never validates.
-            assert Auth(secret="not-the-secret", algorithm=alg).valid_token(token) is None, alg
+            assert Auth(secret="not-the-secret-0123456789abcdef0", algorithm=alg).valid_token(token) is None, alg
         print("HMAC-ZERO-DEP-OK")
     """, isolated=True)
     assert "HMAC-ZERO-DEP-OK" in out
@@ -172,7 +172,7 @@ def test_the_hmac_path_never_imports_the_rs256_backend():
         import tina4_python.auth as auth_module
         assert "cryptography" not in sys.modules, "importing tina4_python.auth pulled in cryptography"
         for alg in ("HS256", "HS384", "HS512"):
-            auth = auth_module.Auth(secret="s", algorithm=alg)
+            auth = auth_module.Auth(secret="s-0123456789abcdef0123456789abcd", algorithm=alg)
             assert auth.valid_token(auth.get_token({"user_id": 1})) is not None
         assert "cryptography" not in sys.modules, "the HMAC path imported cryptography"
         import importlib.util
@@ -243,11 +243,11 @@ def test_rs256_capability_is_checked_only_at_the_point_of_use():
         import tina4_python.auth as auth_module          # must not raise or probe
         assert "cryptography" not in sys.modules
 
-        auth = auth_module.Auth(secret="pem-goes-here", algorithm="RS256")   # must not raise
+        auth = auth_module.Auth(secret="pem-goes-here-0123456789abcdef01", algorithm="RS256")   # must not raise
         assert auth.algorithm == "RS256"
 
         # HMAC in the same process is completely unaffected by the RS256 config.
-        hs = auth_module.Auth(secret="s", algorithm="HS256")
+        hs = auth_module.Auth(secret="s-0123456789abcdef0123456789abcd", algorithm="HS256")
         assert hs.valid_token(hs.get_token({"user_id": 2}))["user_id"] == 2
         print("RS256-LAZY-OK")
     """, isolated=True)
@@ -395,7 +395,7 @@ def test_rs256_signs_and_verifies_when_a_backend_is_installed():
     same test asserts the loud error instead, so it gates in either environment.
     """
     if not CRYPTOGRAPHY_INSTALLED:
-        auth = Auth(secret="pem", algorithm="RS256")
+        auth = Auth(secret="pem-0123456789abcdef0123456789ab", algorithm="RS256")
         with pytest.raises(RS256UnavailableError):
             auth.get_token({"user_id": 1})
         return
@@ -429,7 +429,7 @@ def test_an_hmac_configured_verifier_rejects_a_genuine_rs256_token():
     be the algorithm this app chose."""
     if not CRYPTOGRAPHY_INSTALLED:
         with pytest.raises(RS256UnavailableError):
-            Auth(secret="pem", algorithm="RS256").get_token({"user_id": 1})
+            Auth(secret="pem-0123456789abcdef0123456789ab", algorithm="RS256").get_token({"user_id": 1})
         return
 
     private_pem, _ = _rsa_keypair()
@@ -478,7 +478,7 @@ def test_alg_pinning_holds_even_when_rs256_is_impossible():
 
         def b64(raw): return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
-        auth = Auth(secret="hmac-secret", algorithm="HS256")
+        auth = Auth(secret="hmac-secret-0123456789abcdef0123", algorithm="HS256")
         token = auth.get_token({"user_id": 7})
         head, mid, sig = token.split(".")
 

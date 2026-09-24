@@ -27,6 +27,7 @@ client's implementation into four languages.
 """
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -631,7 +632,9 @@ def _init(args):
             "TINA4_DEBUG=true\n"
             "TINA4_LOG_LEVEL=ALL\n"
             "TINA4_DATABASE_URL=sqlite:///data/app.db\n"
-            'TINA4_SECRET=change-me-in-production\n',
+            # A random per-project secret, never a fixed placeholder that every
+            # scaffolded project would share (ADR-0079 s2).
+            f"TINA4_SECRET={secrets.token_hex(32)}\n",
             encoding="utf-8",
         )
 
@@ -722,11 +725,17 @@ def _init(args):
 # ── Serve ─────────────────────────────────────────────────────────────
 
 def _serve(args):
-    """Start the development server."""
-    os.environ.setdefault("TINA4_DEBUG", "true")
-    os.environ.setdefault("TINA4_LOG_LEVEL", "ALL")
+    """Start the server.
 
+    Debug is decided by the environment and the project's .env, which run()
+    loads, never by a default injected here: a setdefault before .env loads
+    silently beat the file's TINA4_DEBUG=false. --production turns debug off;
+    the explicit flag beats the environment (ADR-0041, ADR-0079 s3).
+    """
     flags, positional = _parse_flags(args)
+
+    if "production" in flags:
+        os.environ["TINA4_DEBUG"] = "false"
 
     cli_host = flags.get("host")
     cli_port = int(flags["port"]) if "port" in flags else None

@@ -29,7 +29,7 @@ def chat(monkeypatch, tmp_path):
 
     Members: user "1" (owner) and "2" (member). User "9" is NOT a member.
     """
-    monkeypatch.setenv("TINA4_SECRET", "realtime-chat-test-secret")
+    monkeypatch.setenv("TINA4_SECRET", "realtime-chat-test-secret-012345")
     db = Database("sqlite:///" + str(tmp_path / "database.db"))
     bind_database(db)
     from tina4_python.realtime.models import (

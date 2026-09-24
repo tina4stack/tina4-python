@@ -234,7 +234,7 @@ class TestSessions:
 
 class TestAuthJWT:
     def test_create_and_validate_token(self):
-        auth = Auth(secret="smoke-secret", expires_in=30)
+        auth = Auth(secret="smoke-secret-0123456789abcdef012", expires_in=30)
         token = auth.get_token({"user_id": 1, "role": "admin"})
         assert auth.valid_token(token) is not None
         payload = auth.get_payload(token)
@@ -243,7 +243,7 @@ class TestAuthJWT:
 
     def test_expired_token_rejected(self):
         from tina4_python.auth import _b64url_encode
-        auth = Auth(secret="smoke-secret", expires_in=0)
+        auth = Auth(secret="smoke-secret-0123456789abcdef012", expires_in=0)
         header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
         payload = _b64url_encode(json.dumps({"user_id": 1, "exp": int(time.time()) - 10}).encode())
         sig = auth._sign(f"{header}.{payload}")
@@ -881,7 +881,7 @@ class TestFrondAdvanced:
 
 class TestAuthAdvanced:
     def test_token_payload_contains_claims(self):
-        auth = Auth(secret="test-key", expires_in=60)
+        auth = Auth(secret="test-key-0123456789abcdef0123456", expires_in=60)
         token = auth.get_token({"role": "admin", "org": "acme"})
         assert auth.valid_token(token) is not None
         payload = auth.get_payload(token)
@@ -889,13 +889,13 @@ class TestAuthAdvanced:
         assert payload["org"] == "acme"
 
     def test_token_invalid_signature_rejected(self):
-        auth1 = Auth(secret="secret-a", expires_in=60)
-        auth2 = Auth(secret="secret-b", expires_in=60)
+        auth1 = Auth(secret="secret-a-0123456789abcdef0123456", expires_in=60)
+        auth2 = Auth(secret="secret-b-0123456789abcdef0123456", expires_in=60)
         token = auth1.get_token({"user_id": 1})
         assert auth2.valid_token(token) is None
 
     def test_token_tampered_payload_rejected(self):
-        auth = Auth(secret="secure-key", expires_in=60)
+        auth = Auth(secret="secure-key-0123456789abcdef01234", expires_in=60)
         token = auth.get_token({"user_id": 1})
         parts = token.split(".")
         # Tamper with payload

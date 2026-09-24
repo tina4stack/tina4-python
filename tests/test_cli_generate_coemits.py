@@ -54,7 +54,7 @@ def _run_generated_test(project: Path, test_rel: str) -> None:
     assert test_file.exists(), f"generator did not co-emit {test_rel}"
     env = {**os.environ, "PYTHONPATH": child_pythonpath(project)}
     env.pop("TINA4_API_KEY", None)
-    env.setdefault("TINA4_SECRET", "meta-test-secret")
+    env.setdefault("TINA4_SECRET", "meta-test-secret-0123456789abcde")
     result = subprocess.run(
         [sys.executable, "-m", "pytest", str(test_file), "-q"],
         cwd=str(project), env=env, capture_output=True, text=True,

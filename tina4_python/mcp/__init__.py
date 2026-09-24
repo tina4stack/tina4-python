@@ -112,16 +112,16 @@ def is_loopback(ip: str) -> bool:
 
     `ip` MUST be the raw socket peer (e.g. request.remote_ip), never a
     value derived from X-Forwarded-For (which the client controls and can
-    spoof to 127.0.0.1). An empty string means there is no TCP peer
-    (in-process call or the built-in dev server) and is treated as local —
-    a genuine remote TCP client always has a non-empty address.
+    spoof to 127.0.0.1). An empty or missing address is an UNKNOWN peer and
+    is NOT loopback: a runtime path that failed to pass its peer must fail
+    closed, never open (ADR-0079 s4).
 
     NOTE: 0.0.0.0 is a *bind* address, never a *client* address, so it is
     deliberately NOT loopback here (the old is_localhost() bug treated the
     0.0.0.0 default bind as "localhost" and so let remote callers through).
     """
     if not ip:
-        return True
+        return False
     ip = ip.strip().lower()
     if ip.startswith("::ffff:"):   # IPv4-mapped IPv6
         ip = ip[7:]

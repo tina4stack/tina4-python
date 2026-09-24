@@ -31,7 +31,7 @@ import os
 
 # A real signing secret so get_token() and valid_token_static() agree. Set before
 # any token is minted; the auth helpers read TINA4_SECRET from the env at call time.
-os.environ["TINA4_SECRET"] = "py2-testclient-auth-secret"
+os.environ["TINA4_SECRET"] = "py2-testclient-auth-secret-01234"
 # Ensure a stray API key from the environment can't mask the JWT path.
 os.environ.pop("TINA4_API_KEY", None)
 

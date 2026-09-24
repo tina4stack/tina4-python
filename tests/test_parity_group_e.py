@@ -181,25 +181,25 @@ class TestJWTTokenExpiresInEnvVar:
         from tina4_python.auth import Auth
         monkeypatch.delenv("TINA4_TOKEN_LIMIT", raising=False)
         monkeypatch.setenv("TINA4_TOKEN_EXPIRES_IN", "45")
-        auth = Auth(secret="parity-e-secret")
+        auth = Auth(secret="parity-e-secret-0123456789abcdef")
         assert auth.expires_in == 45
 
     def test_token_limit_still_works_legacy(self, monkeypatch):
         from tina4_python.auth import Auth
         monkeypatch.delenv("TINA4_TOKEN_EXPIRES_IN", raising=False)
         monkeypatch.setenv("TINA4_TOKEN_LIMIT", "33")
-        auth = Auth(secret="parity-e-secret")
+        auth = Auth(secret="parity-e-secret-0123456789abcdef")
         assert auth.expires_in == 33
 
     def test_token_expires_in_wins_when_both_set(self, monkeypatch):
         from tina4_python.auth import Auth
         monkeypatch.setenv("TINA4_TOKEN_LIMIT", "100")
         monkeypatch.setenv("TINA4_TOKEN_EXPIRES_IN", "30")
-        auth = Auth(secret="parity-e-secret")
+        auth = Auth(secret="parity-e-secret-0123456789abcdef")
         assert auth.expires_in == 30
 
     def test_constructor_arg_wins_over_env(self, monkeypatch):
         from tina4_python.auth import Auth
         monkeypatch.setenv("TINA4_TOKEN_EXPIRES_IN", "60")
-        auth = Auth(secret="parity-e-secret", expires_in=5)
+        auth = Auth(secret="parity-e-secret-0123456789abcdef", expires_in=5)
         assert auth.expires_in == 5

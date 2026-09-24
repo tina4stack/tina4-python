@@ -32,7 +32,7 @@ from tina4_python.session import (
     is_valid_session_id,
 )
 
-SECRET = "auth-session-contract-secret"
+SECRET = "auth-session-contract-secret-012"
 
 
 def _b64(raw: bytes) -> str:
