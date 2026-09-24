@@ -218,6 +218,13 @@ def _boot(root, port, server, name, url, user, password):
         "CONC_SLOW": SLOW[name], "CONC_FAST": FAST.get(name, "SELECT 1 AS one"),
     })
     env.pop("TINA4_DB_POOL", None)  # the DEFAULT is what is under test
+    # ADR-0079 s2: the server refuses to boot outside dev without a >=32-byte
+    # TINA4_SECRET. This module-scoped fixture boots BEFORE the function-scoped
+    # autouse _tina4_test_secret fixture that fills os.environ, so the child
+    # would inherit none and die. Fill a valid one here, exactly as conftest's
+    # shared child-boot helper does.
+    if len(env.get("TINA4_SECRET", "").encode()) < 32:
+        env["TINA4_SECRET"] = "tina4-python-test-suite-secret-0123456789abcdef"
     log = open(root / "server.log", "w")  # noqa: SIM115 - closed with the process
     proc = subprocess.Popen(
         [sys.executable, "app.py"], cwd=str(root), env=env, start_new_session=True,
