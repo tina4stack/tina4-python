@@ -174,6 +174,42 @@ def test_orm_find_rejects_undeclared_filter_key(probe_db):
     assert [int(record.id) for record in ordered] == [3, 1], engine
 
 
+# ── G2. ORM save() writes only declared fields ───────────────────────────────
+
+def _row(database, table, row_id) -> dict:
+    row = database.fetch_one(f"SELECT * FROM {table} WHERE id = ?", [row_id])
+    return {str(key).lower(): value for key, value in (row or {}).items()}
+
+
+def test_orm_save_writes_only_declared_fields(probe_db):
+    engine, database = probe_db
+    table = IdentifierProbe.table_name
+    try:
+        # INSERT: an undeclared key in the constructor data and an undeclared
+        # attribute set afterwards are both left out of the column list.
+        created = IdentifierProbe({"id": 10, "name": "g2", "hidden_col": "from-data"})
+        created.hidden_col = "from-attribute"
+        assert created.save() is not False, (engine, created.get_error())
+        inserted = _row(database, table, 10)
+        assert inserted["name"] == "g2", engine
+        assert inserted["hidden_col"] is None, (engine, inserted)
+
+        # UPDATE: a loaded row with an undeclared attribute changed keeps the
+        # stored value of that column; the declared field is written.
+        database.insert(table, {"id": 11, "name": "before", "hidden_col": "kept"})
+        database.commit()
+        loaded = IdentifierProbe.find_by_id(11)
+        loaded.name = "after"
+        loaded.hidden_col = "overwritten"
+        assert loaded.save() is not False, (engine, loaded.get_error())
+        updated = _row(database, table, 11)
+        assert updated["name"] == "after", engine
+        assert updated["hidden_col"] == "kept", (engine, updated)
+    finally:
+        database.delete(table, [{"id": 10}, {"id": 11}])
+        database.commit()
+
+
 # ── C. DocStore field paths ──────────────────────────────────────────────────
 
 INVALID_PATH_MESSAGE = (
