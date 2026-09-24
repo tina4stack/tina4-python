@@ -66,6 +66,6 @@ Full-suite non-passes (all proven pre-existing or environmental, none from this 
   OIDC gate; same 38 on clean origin/v3.
 
 ## Commits
-- (pending)
+- e8df636  ORM find() accepts only declared fields; DocStore validates field paths (code + tests + plan)
 
 ## Status: Complete (local; not pushed)
