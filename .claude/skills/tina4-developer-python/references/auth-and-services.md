@@ -47,7 +47,7 @@ async def login(request, response):
     email = request.body["email"]
     password = request.body["password"]
 
-    matches = User.where("email = ?", [email])       # SQL WHERE fragment → list
+    matches = await User.where_async("email = ?", [email])   # async route -> *_async (ADR-0074)
     user = matches[0] if matches else None
     if not user or not Auth.check_password(password, user.password_hash):
         return response.json({"error": "Invalid credentials"}, 401)
@@ -205,7 +205,7 @@ from tina4_python import Queue
 @post("/orders")
 async def create_order(request, response):
     order = Order(request.body)
-    order.save()
+    await order.save_async()
 
     # Queue an email notification for background processing
     Queue(topic="order-emails").push({
@@ -329,14 +329,14 @@ async def send_welcome(data):
 
 @on("user.created")
 async def setup_defaults(data):
-    Settings({"user_id": data["id"], "theme": "light"}).save()
+    await Settings({"user_id": data["id"], "theme": "light"}).save_async()
 
 # Fire the event:
 @post("/register")
 @noauth()
 async def register(request, response):
     user = User(request.body)
-    user.save()
+    await user.save_async()
     emit("user.created", {"id": user.id, "email": user.email})
     return response(user, 201)
 ```

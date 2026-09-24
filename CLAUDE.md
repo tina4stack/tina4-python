@@ -185,8 +185,10 @@ from tina4_python.core.router import get, post, put, patch, delete, any_method, 
 ```python
 from tina4_python.database import Database
 
-db = Database(url: str, username="", password="")
-# Connection pooling: Database("sqlite:///app.db", pool=4)  # 4 round-robin connections
+db = Database(url: str, username="", password="", pool=None)
+# pool: None -> TINA4_DB_POOL (default 10); 0 -> one connection. Every operation
+# BORROWS a connection exclusively and returns it (ADR-0074); a transaction keeps
+# its connection until commit()/rollback(). sqlite :memory: is always one connection.
 
 db.fetch(sql, params=None, limit=100, offset=0) -> DatabaseResult  # records, count, limit, offset
 db.fetch_one(sql, params=None) -> dict | None
@@ -210,8 +212,45 @@ db.get_columns(table_name) -> list[dict]
 db.get_next_id(table, pk_column="id", generator_name=None) -> int  # Race-safe sequence
 db.cache_stats() -> dict
 db.cache_clear()
-db.pool -> ConnectionPool | None  # Access connection pool (None if pooling disabled)
+db.pool -> ConnectionPool  # .size, .active_count, .in_use_count, .idle_count
+db.checkout() -> adapter / db.checkin(adapter)  # borrow one connection for raw driver work
+with db.transaction(): ...  # commit on success, roll back on any exception
 ```
+
+**Async API (ADR-0074)** — every operation above has an awaitable twin named
+`<operation>_async`: `fetch_async`, `fetch_one_async`, `fetch_all_async`, `execute_async`,
+`execute_many_async`, `insert_async`, `update_async`, `delete_async`, `truncate_async`,
+`start_transaction_async`, `commit_async`, `rollback_async`, `table_exists_async`,
+`get_tables_async`, `get_columns_async`, `primary_key_async`, `get_next_id_async`, plus
+`run_async(callable, *args)` (runs any sync callable on one borrowed connection) and
+`async with db.transaction_async():`. Each one borrows a connection on the event loop and
+runs the SAME sync method on the pool's worker thread - same results, same errors.
+
+**The rule:** an `async def` route uses the async API; a plain `def` route may use the
+sync API (Tina4 runs `def` routes in a worker thread). A sync DB call inside `async def`
+blocks every other request until the query returns - debug mode logs one warning per
+route naming both fixes.
+
+```python
+@get("/api/users/{id:int}")
+async def get_user(id, request, response):          # async route -> async API
+    return response(await db.fetch_one_async("SELECT * FROM users WHERE id = ?", [id]))
+
+@get("/api/report")
+def report(request, response):                      # def route -> sync API is fine
+    return response(db.fetch("SELECT * FROM big_view", limit=50).to_paginate())
+
+@post("/api/orders")
+async def create_order(request, response):
+    async with db.transaction_async():               # one connection, this task only
+        await db.insert_async("orders", request.body)
+        await db.update_async("stock", {"qty": 4}, "sku = ?", [request.body["sku"]])
+    return response({"ok": True}, 201)
+```
+
+Pool env: `TINA4_DB_POOL` (default 10), `TINA4_DB_POOL_TIMEOUT` (seconds a borrow may
+wait, default 30). An exhausted pool raises `DatabasePoolExhausted` (a `TimeoutError`)
+naming both.
 
 **`tina4_sequences` table** — Auto-created by `get_next_id()` on first use for SQLite, MySQL, and MSSQL. Stores the current sequence value per table. Do not modify this table manually.
 
@@ -264,6 +303,13 @@ MyModel.create_table() -> bool
 MyModel.query() -> QueryBuilder
 MyModel.scope(name, filter_sql, params=None)  # Registers a reusable named method on the class
 MyModel.cached(sql, params=None, ttl=60, limit=100, offset=0) -> list[MyModel]
+
+# Async twins (ADR-0074) - same arguments and results, for async def routes:
+# await model.save_async() / load_async() / delete_async() / force_delete_async() / restore_async()
+# await MyModel.find_by_id_async(pk) / find_async() / find_or_fail_async() / exists_async()
+# await MyModel.all_async() / where_async() / select_async() / select_one_async()
+# await MyModel.with_trashed_async() / count_async() / create_async() / create_table_async()
+# await MyModel.query().where("x = ?", [1]).get_async()  # also first_async/count_async/exists_async
 
 bind_database(db: Database, name: str = None) -> None
 ```
