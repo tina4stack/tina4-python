@@ -135,7 +135,9 @@ def _executions(name, db, run_fetch):
         mongo["system.profile"].drop()
         mongo.command("profile", 2)
         try:
-            run_fetch("SELECT id, label FROM t4single WHERE id <= 3")
+            # The Mongo SQL provider binds values only through parameters, so
+            # the statement carries no literal filter.
+            run_fetch("SELECT id, label FROM t4single")
         finally:
             mongo.command("profile", 0)
         ops = list(mongo["system.profile"].find({"ns": f"{mongo.name}.t4single"}))
