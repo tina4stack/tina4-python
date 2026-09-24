@@ -91,6 +91,12 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         cursor.execute(sql, params or [])
 
         records = []
+        # A statement that returns rows (execute("SELECT ...") is allowed and
+        # returns them) must be read before anything else runs on the
+        # connection: mysql-connector refuses the commit below with "Unread
+        # result found" otherwise. Found by the #138 regression on a live MySQL.
+        if cursor.with_rows:
+            records = [dict(row) for row in cursor.fetchall()]
         # MySQL reports the FIRST generated id of a MULTI-ROW INSERT, not the
         # last (verified live: a 3-row insert into a fresh table reports 1 while
         # MAX(id) is 3). Every other engine reports the last, and callers -
