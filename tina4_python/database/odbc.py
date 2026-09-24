@@ -48,6 +48,10 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # driver-aware last-insert-id: @@IDENTITY is a SQL-Server-ism, not a
         # generic ODBC feature.
         self._dbms_name = ""
+        # Set by start_transaction(), cleared by commit()/rollback(). The driver's
+        # own autocommit flag cannot stand in for it: it is also off whenever
+        # TINA4_AUTOCOMMIT=false, where every statement waits for commit().
+        self._in_transaction: bool = False
 
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect via ODBC.
@@ -109,6 +113,14 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
     def close(self):
         if self._conn:
+            # The driver manager POOLS ODBC connections (pyodbc.pooling is on by
+            # default): close() hands this one to the next connect() as it is.
+            # Measured on psqlODBC: one left in manual-commit mode came back to a
+            # fresh Database that believed autocommit was on, so its reads opened
+            # a transaction nobody closed, and a later DROP TABLE blocked forever.
+            # Undo anything open and restore the connect-time mode first.
+            if self._in_transaction:
+                self.rollback()
             self._conn.close()
             self._conn = None
 
@@ -123,19 +135,34 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # was lost (and on a non-SQL-Server target the failed SELECT left it -1).
         affected_rows = cursor.rowcount
 
-        last_id = self._read_last_insert_id(cursor, sql)
+        # A statement that returns rows (SELECT, WITH ... SELECT, RETURNING, a
+        # procedure with a result set) hands them back. Read them before the
+        # @@IDENTITY probe below reuses the cursor.
+        records = []
+        returns_rows = cursor.description is not None
+        if returns_rows:
+            columns = [desc[0] for desc in cursor.description]
+            records = [dict(zip(columns, row)) for row in cursor.fetchall()]
 
-        if not self._conn.autocommit and self._autocommit:
+        last_id = self._read_last_insert_id(cursor, sql)
+        if last_id is None and records and "id" in records[0] and self._is_write_statement(sql):
+            last_id = records[0]["id"]
+
+        # Not inside an explicit transaction: there the caller's commit() owns the
+        # boundary. Committing here too made every execute() between
+        # start_transaction() and commit() durable on its own (#133 follow-up).
+        if not self._conn.autocommit and self._autocommit and not self._in_transaction:
             self._conn.commit()
 
-        return DatabaseResult(
-            records=[],
-            count=0,
+        result = DatabaseResult(
+            records=records,
+            count=len(records),
             affected_rows=affected_rows,
             last_id=last_id,
             sql=sql,
             adapter=self,
         )
+        return result.with_rows() if returns_rows else result
 
     def _read_last_insert_id(self, cursor, sql: str):
         """Best-effort last-insert-id, driver-aware.
@@ -170,11 +197,17 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # `-- comment` in the caller's SQL otherwise comments it out, the probe
         # fails, the bare `except` below swallows it, and the result reports
         # count=0 alongside real records. Same fix already shipped in sqlite.py.
+        # #133: a write that returns rows runs ONCE, exactly as written - no
+        # COUNT probe (a probe that ran would repeat the write) and no
+        # pagination, which no engine accepts after RETURNING/OUTPUT.
+        is_write = self._is_write_statement(sql)
         count_sql = f"SELECT COUNT(*) FROM ({sql}\n) AS _t"
         cursor = self._conn.cursor()
         try:
-            cursor.execute(count_sql, params or [])
-            total = cursor.fetchone()[0]
+            total = None
+            if not is_write:
+                cursor.execute(count_sql, params or [])
+                total = cursor.fetchone()[0]
         except Exception:
             total = 0
 
@@ -191,7 +224,7 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # nor fake one. Same helper the sqlite/postgres/mysql adapters use, so
         # all engines answer the question identically.
         # limit <= 0 still means "no pagination" (fetch_all's give-me-everything).
-        if limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        if is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql):
             cursor.execute(sql, params or [])
         else:
             # The clause goes on a NEW LINE. Appended inline it lands INSIDE a
@@ -211,6 +244,9 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        if total is None:
+            total = len(rows)
+        self._commit_fetched_write(sql)  # #133: a write that returns rows commits like execute()
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -218,6 +254,7 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         cursor = self._conn.cursor()
         cursor.execute(sql, params or [])
         row = cursor.fetchone()
+        self._commit_fetched_write(sql)  # #133: a write that returns rows commits like execute()
         if row is None:
             return None
         columns = [desc[0] for desc in cursor.description]
@@ -225,12 +262,25 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
     def start_transaction(self):
         self._conn.autocommit = False
+        self._in_transaction = True
 
     def commit(self):
         self._conn.commit()
+        self._end_transaction()
 
     def rollback(self):
         self._conn.rollback()
+        self._end_transaction()
+
+    def _end_transaction(self):
+        """Leave the explicit transaction and restore the connect-time mode.
+
+        start_transaction() switches the driver to manual commit, and nothing
+        switched it back: after one transaction every later write through
+        fetch()/fetch_one() was left uncommitted (#133).
+        """
+        self._in_transaction = False
+        self._conn.autocommit = self._autocommit
 
     def table_exists(self, name: str) -> bool:
         cursor = self._conn.cursor()

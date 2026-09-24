@@ -43,6 +43,12 @@ if _loaded_tina4 is not None and not os.path.realpath(_loaded_tina4.__file__).st
     pytest.exit(f"pytest already imported tina4_python from {_loaded_tina4.__file__}, "
                 f"not the checkout under test {REPO_ROOT}", returncode=4)
 
+# No test may open a browser tab on the machine running the suite. Set before
+# any test or child server reads it; a test that needs the browser path removes
+# it from its own child's environment explicitly.
+os.environ.setdefault("TINA4_NO_BROWSER", "true")
+
+
 # ── The TINA4_REQUIRE_SERVICES gate (ADR-0069 addendum F) ────────────────
 #
 # With TINA4_REQUIRE_SERVICES set, a SKIP passes only when its reason carries a
