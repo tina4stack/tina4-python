@@ -801,6 +801,10 @@ class Api:
         if extra_headers:
             headers.update(extra_headers)
 
+        # Match redirect policy after every configured/per-call header merge.
+        if not _same_origin(url, self.base_url):
+            headers = {key: value for key, value in headers.items()
+                       if key.lower() not in ("authorization", "cookie")}
         return Request(url, data=data, headers=headers, method=method)
 
     def _request(self, method: str, url: str, body=None,

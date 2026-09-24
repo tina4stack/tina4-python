@@ -87,9 +87,8 @@ def _request(https: bool = False):
     headers = []
     scheme = "http"
     if https:
-        # A TLS-terminating proxy forwards plain HTTP to the app with this header;
-        # is_secure_scheme() honours it. This is how HTTPS is expressed on the wire.
-        headers.append((b"x-forwarded-proto", b"https"))
+        # Native TLS is independent of forwarded-header trust.
+        scheme = "https"
     scope = {
         "type": "http", "method": "GET", "path": "/sec-probe", "query_string": b"",
         "scheme": scheme, "headers": headers, "client": ("127.0.0.1", 1),

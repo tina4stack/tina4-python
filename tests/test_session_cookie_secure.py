@@ -112,7 +112,7 @@ def _terminate(proc):
 def test_session_cookie_secure_on_the_wire(tmp_path):
     """The REAL server's Set-Cookie carries Secure iff the client is on https,
     detected proxy-aware from X-Forwarded-Proto. Plain http never gets Secure."""
-    proc, port = _boot_session_server(tmp_path)
+    proc, port = _boot_session_server(tmp_path, {"TINA4_TRUSTED_PROXIES": "127.0.0.1"})
     try:
         # Negative: plain http, no proxy header — MUST NOT be Secure (a Secure
         # cookie over plain http is undeliverable and would break the session).
@@ -222,12 +222,14 @@ def _req(headers=None, scheme="http") -> Request:
     r = Request()
     r.headers = headers or {}
     r.scheme = scheme
+    r.remote_ip = "127.0.0.1"
     return r
 
 
-def test_is_secure_scheme_detection():
+def test_is_secure_scheme_detection(monkeypatch):
     """Request.is_secure_scheme() honours x-forwarded-proto (first hop of a
     comma chain), then the native scheme."""
+    monkeypatch.setenv("TINA4_TRUSTED_PROXIES", "127.0.0.1")
     # No signal at all => not secure.
     assert _req().is_secure_scheme() is False
     # Native TLS (direct https to the app, no proxy header).
@@ -268,3 +270,9 @@ def test_cookie_header_secure_precedence(monkeypatch):
     monkeypatch.setenv("TINA4_SESSION_SAMESITE", "None")
     header = s.cookie_header(request=_req(scheme="http"))
     assert "SameSite=None" in header and "Secure" in header
+
+
+def test_untrusted_forwarded_proto_cannot_change_cookie_scheme(monkeypatch):
+    monkeypatch.delenv("TINA4_TRUSTED_PROXIES", raising=False)
+    assert _req({"x-forwarded-proto": "https"}, scheme="http").is_secure_scheme() is False
+    assert _req({"x-forwarded-proto": "http"}, scheme="https").is_secure_scheme() is True
