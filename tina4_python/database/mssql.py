@@ -197,6 +197,7 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             paginated_params = tuple(params or []) + (offset, limit)
         cursor.execute(paginated_sql, paginated_params)
         rows = [dict(row) for row in cursor.fetchall()]
+        self._commit_fetched_write(sql)  # #133: INSERT ... OUTPUT commits like execute()
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -206,6 +207,10 @@ class MSSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         cursor = self._conn.cursor(as_dict=True)
         cursor.execute(sql, tuple(params) if params else ())
         row = cursor.fetchone()
+        # #133: pymssql runs with autocommit=False, so an INSERT ... OUTPUT here
+        # returned its id and held the row (and its lock) uncommitted until the
+        # connection closed and rolled it back.
+        self._commit_fetched_write(sql)
         return dict(row) if row else None
 
     def start_transaction(self):

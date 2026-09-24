@@ -48,6 +48,10 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # driver-aware last-insert-id: @@IDENTITY is a SQL-Server-ism, not a
         # generic ODBC feature.
         self._dbms_name = ""
+        # Set by start_transaction(), cleared by commit()/rollback(). The driver's
+        # own autocommit flag cannot stand in for it: it is also off whenever
+        # TINA4_AUTOCOMMIT=false, where every statement waits for commit().
+        self._in_transaction: bool = False
 
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect via ODBC.
@@ -109,6 +113,14 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
     def close(self):
         if self._conn:
+            # The driver manager POOLS ODBC connections (pyodbc.pooling is on by
+            # default): close() hands this one to the next connect() as it is.
+            # Measured on psqlODBC: one left in manual-commit mode came back to a
+            # fresh Database that believed autocommit was on, so its reads opened
+            # a transaction nobody closed, and a later DROP TABLE blocked forever.
+            # Undo anything open and restore the connect-time mode first.
+            if self._in_transaction:
+                self.rollback()
             self._conn.close()
             self._conn = None
 
@@ -125,7 +137,10 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
         last_id = self._read_last_insert_id(cursor, sql)
 
-        if not self._conn.autocommit and self._autocommit:
+        # Not inside an explicit transaction: there the caller's commit() owns the
+        # boundary. Committing here too made every execute() between
+        # start_transaction() and commit() durable on its own (#133 follow-up).
+        if not self._conn.autocommit and self._autocommit and not self._in_transaction:
             self._conn.commit()
 
         return DatabaseResult(
@@ -211,6 +226,7 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+        self._commit_fetched_write(sql)  # #133: a write that returns rows commits like execute()
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -218,6 +234,7 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         cursor = self._conn.cursor()
         cursor.execute(sql, params or [])
         row = cursor.fetchone()
+        self._commit_fetched_write(sql)  # #133: a write that returns rows commits like execute()
         if row is None:
             return None
         columns = [desc[0] for desc in cursor.description]
@@ -225,12 +242,25 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
     def start_transaction(self):
         self._conn.autocommit = False
+        self._in_transaction = True
 
     def commit(self):
         self._conn.commit()
+        self._end_transaction()
 
     def rollback(self):
         self._conn.rollback()
+        self._end_transaction()
+
+    def _end_transaction(self):
+        """Leave the explicit transaction and restore the connect-time mode.
+
+        start_transaction() switches the driver to manual commit, and nothing
+        switched it back: after one transaction every later write through
+        fetch()/fetch_one() was left uncommitted (#133).
+        """
+        self._in_transaction = False
+        self._conn.autocommit = self._autocommit
 
     def table_exists(self, name: str) -> bool:
         cursor = self._conn.cursor()

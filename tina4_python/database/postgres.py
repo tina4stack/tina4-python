@@ -259,8 +259,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         if not self._is_write_statement(sql):
             self._end_read_txn()
             return
-        if not self._in_transaction and self.autocommit and self._conn is not None:
-            self._conn.commit()
+        self._commit_fetched_write(sql)
 
     def connect(self, connection_string: str, username: str = "", password: str = "", **kwargs):
         """Connect to PostgreSQL.

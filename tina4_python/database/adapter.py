@@ -916,6 +916,22 @@ class DatabaseAdapter:
             return bool(re.search(r"\b(INSERT|UPDATE|DELETE|MERGE)\b", scrubbed, re.IGNORECASE))
         return False
 
+    def _commit_fetched_write(self, sql: str) -> None:
+        """Commit a write that ran through fetch()/fetch_one(), exactly as execute() would.
+
+        Issue #133 on every adapter: MSSQL, Firebird and ODBC never committed
+        in fetch()/fetch_one(), so ``INSERT ... OUTPUT/RETURNING`` handed back
+        an id for a row no other connection could see, lost when the connection
+        closed. Same gate as execute(): outside an explicit transaction and with
+        autocommit on; inside one, the caller's commit() owns the boundary.
+        """
+        if not self._is_write_statement(sql):
+            return
+        if getattr(self, "_in_transaction", False) or not self.autocommit:
+            return
+        if getattr(self, "_conn", None) is not None:
+            self._conn.commit()
+
     @staticmethod
     def _strip_trailing_order_by(sql: str) -> str:
         """Strip a trailing top-level ``ORDER BY`` so the SQL can be safely

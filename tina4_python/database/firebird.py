@@ -427,6 +427,7 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         desc = cursor.description
         col_names = [FirebirdAdapter._column_name(d[0]) for d in desc] if desc else []
         rows = [self._decode_blobs(dict(zip(col_names, row))) for row in cursor.fetchall()]
+        self._commit_fetched_write(sql)  # #133: INSERT ... RETURNING commits like execute()
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -437,6 +438,10 @@ class FirebirdAdapter(SqlCrudMixin, DatabaseAdapter):
         cursor = self._safe_cursor_execute(cursor, sql, params)
         desc = cursor.description
         row = cursor.fetchone()
+        # #133: an INSERT ... RETURNING here returned its id and was never
+        # committed - no other connection saw the row, and it was lost when the
+        # connection closed.
+        self._commit_fetched_write(sql)
         if row is None:
             return None
         col_names = [FirebirdAdapter._column_name(d[0]) for d in desc] if desc else []
