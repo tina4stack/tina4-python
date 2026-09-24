@@ -25,13 +25,15 @@
   ],
   "ci_not_set_values": [
     "false",
-    "0"
+    "0",
+    "no",
+    "off"
   ],
   "rules": {
     "development": "framework: resolved debug mode on (TINA4_DEBUG truthy, unset is off, or an explicit debug argument). tina4 serve: --production -> production; else --dev -> development; else tina4-js -> development; else TINA4_DEBUG truthy -> development; else production.",
     "no_browser_variable": "TINA4_NO_BROWSER in the truthy set vetoes",
     "no_browser_flag": "--no-browser (or a programmatic no_browser=true) vetoes; no_browser=false never forces a browser open",
-    "ci": "Under CI when ANY variable in ci_env_vars is set to a value that, trimmed and lower-cased, is non-empty and not in ci_not_set_values (false, 0). The rule tina4-php v3 ships in App::shouldOpenBrowser. So CI=no, CI=off and CI=woodpecker are CI; CI=, CI=false and CI=0 are not.",
+    "ci": "Under CI when ANY variable in ci_env_vars is set to a value that, trimmed and lower-cased, is non-empty and not in ci_not_set_values (false, 0, no, off). Maintainer decision 2026-09-24. So CI=true, CI=1, CI=yes and CI=woodpecker are CI; unset, CI=, CI=' ', CI=false, CI=0, CI=no and CI=off are not (any case).",
     "tabs": "at most one tab, the app URL; the CLI sets TINA4_NO_BROWSER=true for any framework server it spawns; only a primary process opens"
   },
   "decision_table": [
@@ -385,6 +387,24 @@
       "opens": true
     },
     {
+      "name": "ci-var-CI-no",
+      "mode": "development",
+      "env": {
+        "CI": "no"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-CI-off",
+      "mode": "development",
+      "env": {
+        "CI": "OFF"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
       "name": "ci-var-CONTINUOUS_INTEGRATION-false",
       "mode": "development",
       "env": {
@@ -407,6 +427,24 @@
       "mode": "development",
       "env": {
         "CONTINUOUS_INTEGRATION": ""
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-CONTINUOUS_INTEGRATION-no",
+      "mode": "development",
+      "env": {
+        "CONTINUOUS_INTEGRATION": "no"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-CONTINUOUS_INTEGRATION-off",
+      "mode": "development",
+      "env": {
+        "CONTINUOUS_INTEGRATION": "OFF"
       },
       "flags": [],
       "opens": true
@@ -439,6 +477,24 @@
       "opens": true
     },
     {
+      "name": "ci-var-GITHUB_ACTIONS-no",
+      "mode": "development",
+      "env": {
+        "GITHUB_ACTIONS": "no"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-GITHUB_ACTIONS-off",
+      "mode": "development",
+      "env": {
+        "GITHUB_ACTIONS": "OFF"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
       "name": "ci-var-GITLAB_CI-false",
       "mode": "development",
       "env": {
@@ -461,6 +517,24 @@
       "mode": "development",
       "env": {
         "GITLAB_CI": ""
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-GITLAB_CI-no",
+      "mode": "development",
+      "env": {
+        "GITLAB_CI": "no"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-GITLAB_CI-off",
+      "mode": "development",
+      "env": {
+        "GITLAB_CI": "OFF"
       },
       "flags": [],
       "opens": true
@@ -493,6 +567,24 @@
       "opens": true
     },
     {
+      "name": "ci-var-BUILDKITE-no",
+      "mode": "development",
+      "env": {
+        "BUILDKITE": "no"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-BUILDKITE-off",
+      "mode": "development",
+      "env": {
+        "BUILDKITE": "OFF"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
       "name": "ci-var-JENKINS_URL-false",
       "mode": "development",
       "env": {
@@ -515,6 +607,24 @@
       "mode": "development",
       "env": {
         "JENKINS_URL": ""
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-JENKINS_URL-no",
+      "mode": "development",
+      "env": {
+        "JENKINS_URL": "no"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-JENKINS_URL-off",
+      "mode": "development",
+      "env": {
+        "JENKINS_URL": "OFF"
       },
       "flags": [],
       "opens": true
@@ -547,6 +657,24 @@
       "opens": true
     },
     {
+      "name": "ci-var-TF_BUILD-no",
+      "mode": "development",
+      "env": {
+        "TF_BUILD": "no"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-TF_BUILD-off",
+      "mode": "development",
+      "env": {
+        "TF_BUILD": "OFF"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
       "name": "ci-var-TEAMCITY_VERSION-false",
       "mode": "development",
       "env": {
@@ -569,6 +697,24 @@
       "mode": "development",
       "env": {
         "TEAMCITY_VERSION": ""
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-TEAMCITY_VERSION-no",
+      "mode": "development",
+      "env": {
+        "TEAMCITY_VERSION": "no"
+      },
+      "flags": [],
+      "opens": true
+    },
+    {
+      "name": "ci-var-TEAMCITY_VERSION-off",
+      "mode": "development",
+      "env": {
+        "TEAMCITY_VERSION": "OFF"
       },
       "flags": [],
       "opens": true
@@ -601,24 +747,24 @@
       "opens": false
     },
     {
-      "name": "ci-no",
+      "name": "ci-not-no",
       "mode": "development",
       "env": {
         "CI": "no"
       },
       "flags": [],
-      "opens": false,
-      "why": "only false and 0 are 'not set'; no is a set value"
+      "opens": true,
+      "why": "'no' is in ci_not_set_values: not CI"
     },
     {
-      "name": "ci-off",
+      "name": "ci-not-off",
       "mode": "development",
       "env": {
         "CI": "off"
       },
       "flags": [],
-      "opens": false,
-      "why": "only false and 0 are 'not set'; off is a set value"
+      "opens": true,
+      "why": "'off' is in ci_not_set_values: not CI"
     },
     {
       "name": "ci-woodpecker",

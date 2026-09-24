@@ -16,8 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from tina4_python.core.server import _CI_ENVIRONMENT_VARIABLES, _should_open_browser
-from tina4_python.dotenv import load_env
+from tina4_python.core.server import _CI_ENVIRONMENT_VARIABLES, _CI_NOT_SET_VALUES, _should_open_browser
+from tina4_python.dotenv import is_truthy, load_env
 
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "browser_open_contract.json").read_text())
 ROWS = FIXTURE["decision_table"]
@@ -53,3 +53,14 @@ def test_every_decision_table_row_matches_the_python_gate(row, tmp_path):
 
 def test_the_gate_reads_exactly_the_adr_0070_ci_variables():
     assert list(_CI_ENVIRONMENT_VARIABLES) == FIXTURE["ci_env_vars"]
+
+
+def test_the_gate_treats_exactly_the_adr_0070_values_as_not_ci():
+    assert list(_CI_NOT_SET_VALUES) == FIXTURE["ci_not_set_values"]
+
+
+def test_the_truthy_set_is_the_adr_0070_truthy_set():
+    for value in FIXTURE["truthy"]:
+        assert is_truthy(value) and is_truthy(value.upper()) and is_truthy(f" {value} "), value
+    for value in (*FIXTURE["ci_not_set_values"], "", "y", "t", "enabled", "maybe"):
+        assert not is_truthy(value), value

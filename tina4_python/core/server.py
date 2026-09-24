@@ -3654,11 +3654,11 @@ def _find_available_port(start: int, max_tries: int = 10) -> int:
 
 
 #: ADR-0070: a CI runner sets one of these. It counts as set when its value,
-#: trimmed and lower-cased, is anything but blank, "false" or "0" (so CI=no and
-#: CI=woodpecker are CI) - the rule tina4-php ships in App::shouldOpenBrowser.
+#: trimmed and lower-cased, is non-empty and not "false", "0", "no" or "off"
+#: (so CI=true and CI=woodpecker are CI; CI=no is not).
 _CI_ENVIRONMENT_VARIABLES = ("CI", "CONTINUOUS_INTEGRATION", "GITHUB_ACTIONS", "GITLAB_CI",
                              "BUILDKITE", "JENKINS_URL", "TF_BUILD", "TEAMCITY_VERSION")
-_CI_NOT_SET = ("", "false", "0")
+_CI_NOT_SET_VALUES = ("false", "0", "no", "off")
 
 
 def _should_open_browser(is_debug: bool, no_browser: bool) -> bool:
@@ -3667,8 +3667,11 @@ def _should_open_browser(is_debug: bool, no_browser: bool) -> bool:
     from tina4_python.dotenv import is_truthy
     if not is_debug or no_browser or is_truthy(os.environ.get("TINA4_NO_BROWSER", "")):
         return False
-    return all(os.environ.get(name, "").strip().lower() in _CI_NOT_SET
-               for name in _CI_ENVIRONMENT_VARIABLES)
+    for name in _CI_ENVIRONMENT_VARIABLES:
+        value = os.environ.get(name, "").strip().lower()
+        if value and value not in _CI_NOT_SET_VALUES:
+            return False
+    return True
 
 
 def _open_browser(url: str):
