@@ -14,6 +14,11 @@ Branch: `fix/followups-redact-driver-msgs` (from origin/v3). Lab dir: `/home/and
 - [x] Item 7: 10 SOAP payloads (+2 from the coordinator: UTF-7 DOCTYPE, UTF-16LE without BOM) through the real Request -> WSDL.handle path
 - [x] Item 7 defect: UTF-16LE without a BOM EXPANDED a DTD entity -> refuse non-plain-UTF-8 bodies (PHP rule)
 - [x] Item 8: ADR-0071 - SMTP transport table, STARTTLS required, verified certs (SMTP + IMAP), unknown value raises
+- [x] Extra (a): DB connect error / redact_url with passwords s3:cret, s3@cret, ODBC PWD= - colon leak found and fixed
+- [x] Extra (b): unknown / empty-after-trim SMTP + IMAP value raises with the value as given
+- [x] Extra (c): FakeBackplane / ExplodingBackplane / monkeypatched factory replaced by the real RedisBackplane
+- [x] Extra (d): Kafka push to an unreachable broker returned an id - now raises
+- [ ] OWED (e): NATSBackplane redaction test - no NATS server on the lab or in CI (code fixed, not run)
 
 ## Parity
 | Item | Python |
@@ -43,6 +48,9 @@ Branch: `fix/followups-redact-driver-msgs` (from origin/v3). Lab dir: `/home/and
 - [x] Messenger: SMTP / IMAP TLS never verifies certificates
 - [x] Messenger: unknown encryption value silently means plaintext; IMAP unknown value falls back to port logic
 - [x] WSDL: a UTF-16LE body without a BOM bypassed the DOCTYPE guard and EXPANDED an internal entity
+- [x] redact_url left the part of a password before a second ':' visible (tina4:s3:***@host)
+- [x] Kafka (confluent) push to a dead broker returned a message id after flush(5) timed out
+- [x] RedisBackplane: a listener thread per subscribe() on one socket; close() closed the socket under a reading thread
 
 ## Commits
 - dfd2560  fix(security): never log a backplane or MQTT URL with its password
@@ -50,12 +58,17 @@ Branch: `fix/followups-redact-driver-msgs` (from origin/v3). Lab dir: `/home/and
 - 173edf4  fix(messenger): ADR-0071 - ssl is TLS on any port, STARTTLS required, certificates verified
 - e11f652  fix(wsdl): refuse a SOAP body that is not plain UTF-8 before any parse
 - 7fa6b3b  fix(wsdl): accept only encoding="UTF-8" (any case) and check the RAW request bytes
+- dc2e416  fix(security): redact_url hides the whole password when it contains ':'
+- 74c2e02  fix(queue): a Kafka push no broker confirmed raises instead of returning an id
+- b5b6223  fix(websocket): RedisBackplane uses one listener and stops it before closing; tests use a real Redis
 
-Red-first: every new test ran red on the lab against the unfixed tree; 14 mutations
-(break each fix) all turned their tests red (lab log /home/andre/followup-python-mutation.log).
+Red-first: every new test ran red on the lab against the unfixed tree; 20 mutations
+(break each fix) all turned their tests red (lab logs /home/andre/followup-python-mutation.log, -mutation2.log).
 
 ## Notes
-- Not tested live: NATSBackplane (same one-line redaction; no NATS server on the lab or in CI).
+- OWED: NATSBackplane redaction test (same one-line redaction; no NATS server on the lab or in CI).
+- Still a stand-in: FakeConnection in tests/test_websocket_hardening.py (a WebSocketConnection double); replacing it needs real sockets.
+- The same ':' redaction pattern should be checked in PHP DatabaseUrl::redact, Ruby DatabaseUrl.redact, Node redactCredentials.
 - `redact_url` needs a `scheme://`; a scheme-less MQTT url (`user:pw@host:x`) is not redacted.
 - Tina4 CLI `tina4/src/env_config.rs` still lists TINA4_MAIL_TLS_INSECURE (withdrawn by ADR-0071).
 - Breaking on purpose (WSDL): a UTF-8-BOM body and an ASCII body declaring ISO-8859-1 are now refused (Malformed XML).
