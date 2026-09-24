@@ -777,11 +777,17 @@ class Api:
         # this is a default, never a clobber.
         headers = {"User-Agent": f"Tina4/{__version__}"}
         headers.update(self._headers)
-        if self.auth_header:
+        # Attach the configured Authorization / Cookie ONLY when the request
+        # target is same-origin as the configured base. A path that is itself an
+        # absolute off-origin URL (e.g. get("http://evil/x")) otherwise leaks the
+        # bearer token / session cookie to an attacker-chosen host -- the same
+        # cross-origin strip already applied to followed redirects.
+        same_origin_as_base = _same_origin(url, self.base_url)
+        if self.auth_header and same_origin_as_base:
             headers["Authorization"] = self.auth_header
 
         # Cookie jar: attach the accumulated Cookie header when enabled.
-        if self._cookies_enabled:
+        if self._cookies_enabled and same_origin_as_base:
             cookie_header = self._cookie_header()
             if cookie_header:
                 headers["Cookie"] = cookie_header
