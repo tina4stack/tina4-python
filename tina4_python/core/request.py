@@ -241,7 +241,7 @@ class Request:
         tina4-php ``Request::isSecureScheme()``, php#175).
         """
         forwarded = self.headers.get("x-forwarded-proto", "")
-        if forwarded:
+        if forwarded and is_trusted_proxy(self.remote_ip):
             return forwarded.split(",")[0].strip().lower() == "https"
         return (self.scheme or "").lower() == "https"
 
@@ -287,7 +287,7 @@ class Request:
         # behind a TLS-terminating proxy still sees https. PHP/Ruby/Node parity.
         scheme = "https" if req.is_secure_scheme() else "http"
         host = (
-            req.headers.get("x-forwarded-host")
+            (req.headers.get("x-forwarded-host") if is_trusted_proxy(req.remote_ip) else None)
             or req.headers.get("host")
             or "localhost"
         )
