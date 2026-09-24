@@ -2847,11 +2847,36 @@ def asgi(root_dir: str = "src"):
     the bootstrap rather than leaving each user to find ``_auto_discover``,
     which is private and has no business in a deployment file.
 
+    The security middleware is attached here too, exactly as ``run()`` does
+    (#134): without it the same app served by uvicorn shipped no security
+    headers, and ``TINA4_CSRF=true`` was set but never enforced.
+
     :param root_dir: Directory to discover routes from. Defaults to ``src``.
     :return: The ASGI 3 callable.
     """
     _auto_discover(root_dir)
+    _attach_security_middleware()
     return app
+
+
+def _attach_security_middleware() -> None:
+    """Attach the middleware EVERY serving entry point must carry.
+
+    Shared by ``run()`` and ``asgi()`` so the two bootstraps cannot drift again
+    (#134). Both attaches are idempotent (``Middleware.use`` de-dupes).
+
+    CSRF is attached when TINA4_CSRF is enabled (OFF by default - a default app
+    has no CSRF gate; TINA4_CSRF=true gates every write route).
+
+    Security headers are registered UNCONDITIONALLY (secure-by-default,
+    SECHDR-DEC-01). Unlike CSRF this needs no opt-in - a default app ships
+    X-Frame-Options/X-Content-Type-Options/CSP/etc. with no code change. HSTS
+    stays HTTPS-only.
+    """
+    from tina4_python.core.middleware import attach_csrf_from_env, attach_security_headers
+    if attach_csrf_from_env():
+        Log.info("CSRF protection enabled (TINA4_CSRF) — CsrfMiddleware attached")
+    attach_security_headers()
 
 
 async def _send_payload_too_large(send, received: int, limit: int) -> None:
@@ -3850,18 +3875,8 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     route_count = len(Router.get_routes())
     Log.info(f"Discovered {route_count} routes")
 
-    # CSRF: attach the middleware when TINA4_CSRF is enabled (OFF by default —
-    # a default app has no CSRF gate; TINA4_CSRF=true gates every write route).
-    from tina4_python.core.middleware import attach_csrf_from_env
-    if attach_csrf_from_env():
-        Log.info("CSRF protection enabled (TINA4_CSRF) — CsrfMiddleware attached")
-
-    # Security headers: register in the default chain UNCONDITIONALLY
-    # (secure-by-default, SECHDR-DEC-01). Unlike CSRF this needs no opt-in — a
-    # default app ships X-Frame-Options/X-Content-Type-Options/CSP/etc. with no
-    # code change. HSTS stays HTTPS-only. Idempotent.
-    from tina4_python.core.middleware import attach_security_headers
-    attach_security_headers()
+    # Security headers + CSRF - the same attach asgi() performs (#134).
+    _attach_security_middleware()
 
     # Apply pending DB migrations on startup (non-breaking — see helper).
     _auto_migrate_on_startup()
