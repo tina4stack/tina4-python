@@ -1183,11 +1183,13 @@ class Database(DatabaseAsyncMixin):
 
     def _begin_on(self, adapter) -> None:
         """Start a transaction on a freshly borrowed ``adapter`` and pin it to
-        this context. Returns the connection to the pool if BEGIN fails."""
+        this context. A connection whose BEGIN fails is proven bad, so it is
+        RETIRED (not returned to the pool) - the next borrower opens a fresh one
+        rather than re-drawing the poisoned connection."""
         try:
             adapter.start_transaction()
         except BaseException:
-            self._pool.checkin(adapter)
+            self._pool.discard(adapter)
             raise
         borrow = _Borrow(adapter, sticky=True, pool=self._pool)
         borrow.depth = 1

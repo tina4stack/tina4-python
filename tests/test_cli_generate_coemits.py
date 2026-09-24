@@ -17,8 +17,10 @@ This proves the co-emitted test is (a) actually written next to the code and
 (b) green on generation — a scaffolded test that fails on creation is bad DX.
 """
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -55,10 +57,17 @@ def _run_generated_test(project: Path, test_rel: str) -> None:
     env = {**os.environ, "PYTHONPATH": child_pythonpath(project)}
     env.pop("TINA4_API_KEY", None)
     env.setdefault("TINA4_SECRET", "meta-test-secret-0123456789abcde")
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", str(test_file), "-q"],
-        cwd=str(project), env=env, capture_output=True, text=True,
-    )
+    # Isolate the child pytest's tmp base so its retention cleanup cannot delete
+    # the parent run's active numbered dir (FileNotFoundError cascade).
+    child_tmp = tempfile.mkdtemp(prefix="tina4-coemit-pytmp-")
+    env["TMPDIR"] = env["TMP"] = env["TEMP"] = child_tmp
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", str(test_file), "-q"],
+            cwd=str(project), env=env, capture_output=True, text=True,
+        )
+    finally:
+        shutil.rmtree(child_tmp, ignore_errors=True)
     assert result.returncode == 0, (
         f"co-emitted {test_rel} did NOT pass on generation:\n"
         f"{result.stdout}\n{result.stderr}"

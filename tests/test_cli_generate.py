@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import pytest
 
 from conftest import child_pythonpath
@@ -590,10 +591,17 @@ class TestCrudGeneratedTestPasses:
         assert test_file.exists()
         env = {**os.environ, "PYTHONPATH": child_pythonpath(tmp_project)}
         env.pop("TINA4_API_KEY", None)
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest", str(test_file), "-q"],
-            cwd=str(tmp_project), env=env, capture_output=True, text=True,
-        )
+        # Isolate the child pytest's tmp base so its retention cleanup cannot
+        # delete the parent run's active numbered dir (FileNotFoundError cascade).
+        child_tmp = tempfile.mkdtemp(prefix="tina4-cligen-pytmp-")
+        env["TMPDIR"] = env["TMP"] = env["TEMP"] = child_tmp
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", str(test_file), "-q"],
+                cwd=str(tmp_project), env=env, capture_output=True, text=True,
+            )
+        finally:
+            shutil.rmtree(child_tmp, ignore_errors=True)
         assert result.returncode == 0, result.stdout + "\n" + result.stderr
 
     def test_crud_default_routes_secure(self, tmp_project):

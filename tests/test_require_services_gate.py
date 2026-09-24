@@ -35,6 +35,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 import xml.etree.ElementTree as ElementTree
 from pathlib import Path
@@ -244,13 +245,22 @@ def _run(tmp_path: Path, gate_on: bool, firebird_url: str = "") -> dict[str, str
     env.pop("TINA4_REQUIRE_SERVICES", None)
     if gate_on:
         env["TINA4_REQUIRE_SERVICES"] = "1"
-    subprocess.run(
-        [
-            sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q",
-            "--rootdir", str(project), f"--junitxml={report}", str(project),
-        ],
-        cwd=project, env=env, capture_output=True, text=True, timeout=120,
-    )
+    # Give the child pytest its OWN tmp base. Without this it shares the parent
+    # run's $TMPDIR/pytest-of-<user>, and the child's startup retention cleanup
+    # can delete the PARENT's active numbered dir - which cascades every later
+    # tmp_path/tmp_path_factory test in the parent into FileNotFoundError.
+    child_tmp = tempfile.mkdtemp(prefix="tina4-gate-pytmp-")
+    env["TMPDIR"] = env["TMP"] = env["TEMP"] = child_tmp
+    try:
+        subprocess.run(
+            [
+                sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q",
+                "--rootdir", str(project), f"--junitxml={report}", str(project),
+            ],
+            cwd=project, env=env, capture_output=True, text=True, timeout=120,
+        )
+    finally:
+        shutil.rmtree(child_tmp, ignore_errors=True)
 
     outcomes = {}
     for case in ElementTree.parse(report).getroot().iter("testcase"):

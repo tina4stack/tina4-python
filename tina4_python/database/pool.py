@@ -284,6 +284,19 @@ class ConnectionPool:
                 return
             self._hand_over_locked(adapter)
 
+    def discard(self, adapter) -> None:
+        """Retire a lent adapter instead of returning it to the pool, and free
+        its capacity. For a connection proven dead (e.g. one whose BEGIN failed)
+        so the next borrower opens a fresh one rather than re-drawing a poisoned
+        connection."""
+        if adapter is None:
+            return
+        with self._lock:
+            if id(adapter) not in self._lent:
+                return
+            self._lent.discard(id(adapter))
+            self._retire_locked(adapter)
+
     def _hand_over_locked(self, adapter) -> None:
         if self._threads_waiting:
             self._idle.append(adapter)
