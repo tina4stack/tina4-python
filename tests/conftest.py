@@ -4,6 +4,11 @@ import os
 
 import pytest
 
+# No test may open a browser tab on the machine running the suite. Set before
+# any test or child server reads it; a test that needs the browser path removes
+# it from its own child's environment explicitly.
+os.environ.setdefault("TINA4_NO_BROWSER", "true")
+
 # Provisioned real services (and their client libraries). CI stands all of these
 # up, so an integration test should never skip in CI. Firebird is deliberately
 # NOT in this list -- it is not provisioned, so its skips stay green. MySQL and

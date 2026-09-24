@@ -3621,6 +3621,17 @@ def _find_available_port(start: int, max_tries: int = 10) -> int:
         return start
 
 
+def _should_open_browser(is_debug: bool, no_browser: bool) -> bool:
+    """True only when debug is on and nothing asked for no browser."""
+    from tina4_python.dotenv import is_truthy
+    return (
+        is_debug
+        and not no_browser
+        and not is_truthy(os.environ.get("TINA4_NO_BROWSER", ""))
+        and not os.environ.get("CI", "").strip()
+    )
+
+
 def _open_browser(url: str):
     """Open *url* in the default browser after a short delay."""
     import webbrowser
@@ -4139,9 +4150,10 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     if _ai_port:
         Log.info(f"Test port: http://{display}:{_ai_port} (stable — no hot-reload)")
 
-    # Open browser after a short delay (unless --no-browser)
-    _skip_browser = no_browser or os.environ.get("TINA4_NO_BROWSER", "").lower() in ("true", "1", "yes")
-    if not _skip_browser:
+    # Open a browser only for a developer at a keyboard: debug on, no
+    # TINA4_NO_BROWSER, no --no-browser, and not under CI. A test server or a
+    # production boot must never open a tab on the machine it runs on.
+    if _should_open_browser(is_debug, no_browser):
         _open_browser(f"http://{display}:{port}")
 
     # Use production server if available
