@@ -1720,7 +1720,7 @@ anywhere (the production on/off switch, wired for real in 3.13.40).
 
 ## CORS
 
-Built-in, and it DENIES by default (ADR-0018). Set `TINA4_CORS_ORIGINS` to the origins you want to allow (comma-separated), or `*` for any. With it unset no `Access-Control-Allow-Origin` is sent and the browser blocks the cross-origin request. `TINA4_CORS_CREDENTIALS=true` is never sent alongside a `*` origin (the Fetch Standard forbids the pair). OPTIONS pre-flight is handled automatically.
+Built-in, and it DENIES by default (ADR-0018). Set `TINA4_CORS_ORIGINS` to the specific origins you want to allow (comma-separated, e.g. `https://app.example.com`). With it unset no `Access-Control-Allow-Origin` is sent and the browser blocks the cross-origin request. A same-origin request (its `Origin` equals the request's own scheme://host[:port], default ports 80/443 ignored) needs no CORS headers and is never warned about; a disallowed cross-origin request logs one warning naming that origin to add. `TINA4_CORS_CREDENTIALS=true` is never sent alongside a `*` origin (the Fetch Standard forbids the pair). OPTIONS pre-flight is handled automatically.
 
 ## SCSS Workflow
 

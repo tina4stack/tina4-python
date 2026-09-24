@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import pytest
+
+from conftest import child_pythonpath
 from pathlib import Path
 from tina4_python.cli import (
     _parse_fields, _parse_flags, _to_snake, _to_table,
@@ -580,7 +582,7 @@ class TestCrudGeneratedTestPasses:
         # R5 — the emitted test file executes green in a real pytest subprocess.
         test_file = tmp_project / "tests" / "test_trinkets.py"
         assert test_file.exists()
-        env = {**os.environ, "PYTHONPATH": str(tmp_project)}
+        env = {**os.environ, "PYTHONPATH": child_pythonpath(tmp_project)}
         env.pop("TINA4_API_KEY", None)
         result = subprocess.run(
             [sys.executable, "-m", "pytest", str(test_file), "-q"],

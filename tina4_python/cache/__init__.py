@@ -73,6 +73,10 @@ from pathlib import Path
 class _CacheBackend:
     """Abstract cache backend."""
 
+    # Set by a backend whose optional driver could not be imported: the
+    # "package is required ... Install it with: ..." text the fallback appends.
+    missing_driver_message: str | None = None
+
     def get(self, key: str):
         raise NotImplementedError
 
@@ -816,6 +820,16 @@ class _MongoBackend(_CacheBackend):
         self._coll = None
         try:
             import pymongo
+        except ImportError:
+            # Recorded so the fallback warning can say the one thing the user
+            # can fix with one command - and ONLY when the driver really is
+            # missing, never when Mongo is merely unreachable.
+            self.missing_driver_message = (
+                "The 'pymongo' package is required for the mongodb cache backend. "
+                "Install it with: uv add pymongo (or: pip install pymongo)"
+            )
+            return
+        try:
             mongo_kwargs = {"serverSelectionTimeoutMS": 5000}
             # Credentials from env when not embedded in the URL (parity with DB layer).
             if "@" not in url:
@@ -1070,9 +1084,11 @@ def _create_backend(
     if not be.is_available():
         try:
             from tina4_python.debug import Log
+            missing_driver = be.missing_driver_message
             Log.warning(
                 f"Cache backend '{backend}' is unavailable "
                 f"(driver missing or service unreachable) — falling back to 'file'."
+                + (f" {missing_driver}" if missing_driver else "")
             )
         except Exception:
             pass

@@ -305,8 +305,8 @@ class ORM(metaclass=ORMMeta):
         LOAD-DEC-01). Business-constraint enforcement stays on the write
         path (``ORM.validate()`` / ``save()``, feature 19) — unaffected.
         """
-        # Build reverse mapping: db_column -> python_attribute
-        reverse = {v: k for k, v in self.field_mapping.items()} if self.field_mapping else {}
+        # db_column -> python_attribute: the exact reverse of get_db_column().
+        reverse = type(self)._column_to_attribute()
 
         for key, value in data.items():
             # Convert DB column name to Python attribute name if mapped
@@ -319,22 +319,32 @@ class ORM(metaclass=ORMMeta):
                 setattr(self, attr, value)
 
     def _get_db_column(self, prop: str) -> str:
-        """Get the DB column name for a Python attribute.
+        """Get the DB column name for a Python attribute (see :meth:`get_db_column`)."""
+        return type(self).get_db_column(prop)
 
-        Uses field_mapping if defined, otherwise returns the property name as-is.
+    @classmethod
+    def _column_to_attribute(cls) -> dict[str, str]:
+        """The reverse of :meth:`get_db_column`: ``{db_column: attribute}``.
+
+        Hydration uses it, so a column is read back onto the SAME attribute
+        the write path wrote it from. ``field_mapping`` entries that name no
+        declared field (e.g. an undeclared ``is_deleted``) are kept.
         """
-        return self.field_mapping.get(prop, prop)
+        reverse = {column: attribute for attribute, column in cls.field_mapping.items()}
+        for attribute in cls._fields:
+            reverse[cls.get_db_column(attribute)] = attribute
+        return reverse
+
+    @classmethod
+    def _attribute_for(cls, name: str) -> str:
+        """The attribute that holds ``name``, whether ``name`` is the attribute
+        itself or the column it maps to (relationship ``foreign_key`` accepts
+        either)."""
+        return name if name in cls._fields else cls._column_to_attribute().get(name, name)
 
     def _get_db_data(self) -> dict:
-        """Convert all field data using field_mapping.
-
-        Returns a dict with DB column names as keys and current attribute values.
-        """
-        data = {}
-        for name, field in self._fields.items():
-            db_col = self.field_mapping.get(name, field.column)
-            data[db_col] = getattr(self, name)
-        return data
+        """Convert all field data to ``{db_column: value}`` via :meth:`get_db_column`."""
+        return {self.get_db_column(name): getattr(self, name) for name in self._fields}
 
     @classmethod
     def query(cls) -> "QueryBuilder":
@@ -463,7 +473,7 @@ class ORM(metaclass=ORMMeta):
         for name in cls._get_pks():
             if name not in cls._fields:
                 continue
-            column = cls.field_mapping.get(name, cls._fields[name].column)
+            column = cls.get_db_column(name)
             clauses.append(f"{column} = ?")
             params.append(getattr(self, name, None))
         return " AND ".join(clauses), params
@@ -476,8 +486,7 @@ class ORM(metaclass=ORMMeta):
         to. QueryBuilder uses this as the stable ORDER BY tie-break.
         """
         pk = cls._get_pk()
-        field = cls._fields.get(pk)
-        return cls.field_mapping.get(pk, (field.column if field else None) or pk)
+        return cls.get_db_column(cls._get_pk())
 
     # ── CRUD ────────────────────────────────────────────────────
 
@@ -532,7 +541,7 @@ class ORM(metaclass=ORMMeta):
         pk_field = self._fields[pk]
         table = self._get_table()
         table_sql = self._get_table_sql()
-        pk_db_col = self.field_mapping.get(pk, self._fields[pk].column)
+        pk_db_col = self.get_db_column(pk)
 
         data = {}
         # #165: db columns to OMIT from an INSERT — those the caller never
@@ -559,8 +568,7 @@ class ORM(metaclass=ORMMeta):
                 if callable(value) and not isinstance(value, type):
                     value = value()
                 if value is not None or not field.auto_increment:
-                    # Use field_mapping for the column name, fall back to field.column
-                    db_col = self.field_mapping.get(name, field.column)
+                    db_col = self.get_db_column(name)
                     # Serialize to the column's storage form: identity for most
                     # fields, JSON string for JSONField (see Field.to_db).
                     data[db_col] = field.to_db(value)
@@ -611,7 +619,7 @@ class ORM(metaclass=ORMMeta):
         try:
             if is_update:
                 pk_columns = {
-                    self.field_mapping.get(n, self._fields[n].column)
+                    self.get_db_column(n)
                     for n in self._get_pks()
                     if n in self._fields
                 }
@@ -701,7 +709,7 @@ class ORM(metaclass=ORMMeta):
         Defaults to ``is_deleted`` when unmapped, so ordinary models are
         unaffected.
         """
-        return cls.field_mapping.get("is_deleted", "is_deleted")
+        return cls.get_db_column("is_deleted")
 
     @classmethod
     def _soft_delete_filter(cls) -> str:
@@ -814,7 +822,7 @@ class ORM(metaclass=ORMMeta):
         pk = cls._get_pk()
         table = cls._get_table()
         table_sql = cls._get_table_sql()
-        pk_col = cls.field_mapping.get(pk, cls._fields[pk].column)
+        pk_col = cls.get_db_column(pk)
 
         sql = f"SELECT * FROM {table_sql} WHERE {pk_col} = ?"
         if cls.soft_delete:
@@ -925,7 +933,7 @@ class ORM(metaclass=ORMMeta):
             pk_value = getattr(self, pk, None)
             if pk_value is None:
                 return False
-            pk_col = self.field_mapping.get(pk, self._fields[pk].column)
+            pk_col = self.get_db_column(pk)
             sql = f"SELECT * FROM {table_sql} WHERE {pk_col} = ?"
             params = [pk_value]
         else:
@@ -1196,7 +1204,7 @@ class ORM(metaclass=ORMMeta):
         for name, field_obj in cls._fields.items():
             if getattr(field_obj, "kind", None) != "PointField":
                 continue
-            col_name = cls.field_mapping.get(name, field_obj.column or name)
+            col_name = cls.get_db_column(name)
             point_sql[col_name] = SQLTranslator.point_column_type(
                 engine, getattr(field_obj, "srid", 4326)
             )
@@ -1207,7 +1215,7 @@ class ORM(metaclass=ORMMeta):
 
         col_defs = []
         for name, field_obj in cls._fields.items():
-            col_name = cls.field_mapping.get(name, field_obj.column or name)
+            col_name = cls.get_db_column(name)
             kind = getattr(field_obj, "kind", None)
 
             # Map field kind to SQL type
@@ -1294,8 +1302,8 @@ class ORM(metaclass=ORMMeta):
         if cls.soft_delete:
             sd_col = cls._soft_delete_column()
             declared_cols = {
-                cls.field_mapping.get(name, fo.column or name)
-                for name, fo in cls._fields.items()
+                cls.get_db_column(name)
+                for name in cls._fields
             }
             if sd_col not in declared_cols:
                 col_defs.append(f"{sd_col} INTEGER DEFAULT 0")
@@ -1305,7 +1313,7 @@ class ORM(metaclass=ORMMeta):
         # column, because two inline primary keys is invalid DDL on every engine.
         pks = cls._get_pks()
         if len(pks) > 1:
-            pk_cols = [cls.field_mapping.get(k, cls._fields[k].column) for k in pks if k in cls._fields]
+            pk_cols = [cls.get_db_column(k) for k in pks if k in cls._fields]
             if pk_cols:
                 col_defs.append(f"PRIMARY KEY ({', '.join(pk_cols)})")
 
@@ -1335,7 +1343,7 @@ class ORM(metaclass=ORMMeta):
                     continue
                 if not getattr(field_obj, "spatial_index", True):
                     continue
-                col_name = cls.field_mapping.get(name, field_obj.column or name)
+                col_name = cls.get_db_column(name)
                 db.execute(SQLTranslator.spatial_index(engine, table, col_name))
             db.commit()
         except Exception as e:
@@ -1469,7 +1477,7 @@ class ORM(metaclass=ORMMeta):
         table = related_class._get_table()
         table_sql = related_class._get_table_sql()
 
-        sql = f"SELECT * FROM {table_sql} WHERE {fk} = ?"
+        sql = f"SELECT * FROM {table_sql} WHERE {related_class.get_db_column(fk)} = ?"
         row = self._get_db().fetch_one(sql, [pk_value])
         return related_class(row) if row else None
 
@@ -1489,10 +1497,8 @@ class ORM(metaclass=ORMMeta):
         table_sql = related_class._get_table_sql()
         # Order by the child PK so OFFSET paging is stable across pages (parity
         # with the lazy descriptor's SQL).
-        order_col = related_class.field_mapping.get(
-            related_class._get_pk(), related_class._fields[related_class._get_pk()].column
-        )
-        sql = f"SELECT * FROM {table_sql} WHERE {fk} = ? ORDER BY {order_col}"
+        order_col = related_class.get_db_column(related_class._get_pk())
+        sql = f"SELECT * FROM {table_sql} WHERE {related_class.get_db_column(fk)} = ? ORDER BY {order_col}"
         db = self._get_db()
 
         if limit is not None:
@@ -1514,7 +1520,7 @@ class ORM(metaclass=ORMMeta):
     def belongs_to(self, related_class, foreign_key: str = None) -> Self | None:
         """Load the parent record (imperative style)."""
         fk = foreign_key or f"{related_class.__name__.lower()}_id"
-        fk_value = getattr(self, fk, None)
+        fk_value = getattr(self, type(self)._attribute_for(fk), None)
         if fk_value is None:
             return None
         return related_class.find_by_id(fk_value)
@@ -1569,16 +1575,14 @@ class ORM(metaclass=ORMMeta):
                     if getattr(related_cls, "soft_delete", False)
                     else ""
                 )
-                order_col = related_cls.field_mapping.get(
-                    related_cls._get_pk(), related_cls._fields[related_cls._get_pk()].column
-                )
+                order_col = related_cls.get_db_column(related_cls._get_pk())
                 # REL-EAGER-UNBOUNDED: chunk the parent PKs so the IN list stays
                 # bounded, and page each chunk so no relation is truncated.
                 related_records = []
                 for chunk in _chunk_list(pk_values, _EAGER_IN_CHUNK):
                     placeholders = ",".join("?" for _ in chunk)
                     sql = (
-                        f"SELECT * FROM {table_sql} WHERE {fk} IN ({placeholders})"
+                        f"SELECT * FROM {table_sql} WHERE {related_cls.get_db_column(fk)} IN ({placeholders})"
                         f"{soft} ORDER BY {order_col}"
                     )
                     offset = 0
@@ -1596,8 +1600,9 @@ class ORM(metaclass=ORMMeta):
 
                 # Group by foreign key and assign
                 grouped = {}
+                fk_attribute = related_cls._attribute_for(fk)
                 for record in related_records:
-                    fk_val = getattr(record, fk, None)
+                    fk_val = getattr(record, fk_attribute, None)
                     if fk_val not in grouped:
                         grouped[fk_val] = []
                     grouped[fk_val].append(record)
@@ -1611,7 +1616,7 @@ class ORM(metaclass=ORMMeta):
                         inst._rel_cache[rel_name] = records
 
             elif isinstance(descriptor, BelongsToDescriptor):
-                fk = descriptor.foreign_key or f"{related_cls.__name__.lower()}_id"
+                fk = cls._attribute_for(descriptor.foreign_key or f"{related_cls.__name__.lower()}_id")
                 fk_values = list({
                     getattr(inst, fk) for inst in instances
                     if getattr(inst, fk, None) is not None
@@ -1621,7 +1626,7 @@ class ORM(metaclass=ORMMeta):
 
                 related_pk = related_cls._get_pk()
                 table_sql = related_cls._get_table_sql()
-                pk_col = related_cls.field_mapping.get(related_pk, related_cls._fields[related_pk].column)
+                pk_col = related_cls.get_db_column(related_pk)
                 # REL-SOFTDELETE-TRAVERSAL: a soft-deleted parent is excluded from
                 # belongs_to traversal too (parity with find_by_id).
                 soft = (

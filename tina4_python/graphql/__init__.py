@@ -416,7 +416,7 @@ class Schema:
 def _make_orm_single_resolver(orm_class, pk_field):
     def resolve(root, args, ctx):
         obj = orm_class()
-        if obj.load(f"{pk_field} = ?", [args["id"]]):
+        if obj.load(f"{orm_class.get_db_column(pk_field)} = ?", [args["id"]]):
             return obj.to_dict()
         return None
     return resolve
@@ -442,7 +442,7 @@ def _make_orm_create_resolver(orm_class):
 def _make_orm_update_resolver(orm_class, pk_field):
     def resolve(root, args, ctx):
         obj = orm_class()
-        if obj.load(f"{pk_field} = ?", [args["id"]]):
+        if obj.load(f"{orm_class.get_db_column(pk_field)} = ?", [args["id"]]):
             for k, v in args.items():
                 if k != "id":
                     setattr(obj, k, v)
@@ -455,7 +455,7 @@ def _make_orm_update_resolver(orm_class, pk_field):
 def _make_orm_delete_resolver(orm_class, pk_field):
     def resolve(root, args, ctx):
         obj = orm_class()
-        if obj.load(f"{pk_field} = ?", [args["id"]]):
+        if obj.load(f"{orm_class.get_db_column(pk_field)} = ?", [args["id"]]):
             obj.delete()
             return True
         return False

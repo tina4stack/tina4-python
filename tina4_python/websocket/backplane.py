@@ -23,6 +23,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _redacted(url: str) -> str:
+    """The backplane URL as it may appear in a log: the password (redis://:pw@host,
+    nats://user:pw@host) replaced by ``***`` via the framework's one redaction
+    primitive. Imported lazily so the backplane does not pull in the database
+    package at import time."""
+    from tina4_python.database.database_url import redact_url
+    return redact_url(url)
+
+
 class WebSocketBackplane:
     """Base backplane interface for scaling WebSocket broadcast across instances.
 
@@ -70,31 +79,36 @@ class RedisBackplane(WebSocketBackplane):
         )
         self._redis = redis.Redis.from_url(self._url)
         self._pubsub = self._redis.pubsub()
-        self._threads: dict[str, threading.Thread] = {}
+        # ONE listener thread for the one pub/sub connection. A thread per
+        # subscribe() had several threads reading the same socket, and close()
+        # closed that socket under a thread still reading it (an unhandled
+        # "Bad file descriptor" in the listener, seen once the tests ran on a
+        # real Redis instead of an in-memory stand-in).
+        self._listener = None
         self._running = True
-        logger.info("RedisBackplane connected to %s", self._url)
+        logger.info("RedisBackplane connected to %s", _redacted(self._url))
 
     def publish(self, channel: str, message: str) -> None:
         self._redis.publish(channel, message)
 
     def subscribe(self, channel: str, callback) -> None:
         self._pubsub.subscribe(**{channel: lambda raw: callback(raw["data"].decode() if isinstance(raw["data"], bytes) else raw["data"])})
-        thread = self._pubsub.run_in_thread(sleep_time=0.01, daemon=True)
-        self._threads[channel] = thread
+        if self._listener is None:
+            self._listener = self._pubsub.run_in_thread(sleep_time=0.01, daemon=True)
         logger.info("RedisBackplane subscribed to channel '%s'", channel)
 
     def unsubscribe(self, channel: str) -> None:
         self._pubsub.unsubscribe(channel)
-        thread = self._threads.pop(channel, None)
-        if thread:
-            thread.stop()
         logger.info("RedisBackplane unsubscribed from channel '%s'", channel)
 
     def close(self) -> None:
         self._running = False
-        for thread in self._threads.values():
-            thread.stop()
-        self._threads.clear()
+        if self._listener is not None:
+            # Stop AND wait: the listener must be off the socket before the
+            # socket is closed.
+            self._listener.stop()
+            self._listener.join(timeout=5)
+            self._listener = None
         self._pubsub.close()
         self._redis.close()
         logger.info("RedisBackplane closed")
@@ -128,7 +142,7 @@ class NATSBackplane(WebSocketBackplane):
         self._thread = None
         self._running = True
         self._connect()
-        logger.info("NATSBackplane connected to %s", self._url)
+        logger.info("NATSBackplane connected to %s", _redacted(self._url))
 
     def _connect(self):
         """Connect to NATS in a background event loop."""

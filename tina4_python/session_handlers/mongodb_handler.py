@@ -10,12 +10,38 @@ Environment variables:
     TINA4_SESSION_MONGO_COLLECTION — collection name (default: sessions)
     TINA4_SESSION_TTL              — session TTL in seconds (default: 3600)
 """
+import datetime
 import os
 import socket
 import struct
+import threading
 import time
 
 from tina4_python.session import SessionHandler
+
+#: One pymongo client per URI for the whole process (#136). Every request builds
+#: a Session and every Session a handler, so a client per handler meant a new
+#: MongoClient - its own monitor threads and pool, never closed - per request:
+#: MEASURED against a real MongoDB, 20 session requests took a uvicorn worker
+#: from 10 to 67 threads. A MongoClient is thread-safe and pools internally, so
+#: sharing one per URI is the shape pymongo expects (the same cache DocStore
+#: keeps in docstore._mongo_client). The double-checked lock stops two threads
+#: racing the first request from each building one and orphaning the loser.
+_shared_clients: dict = {}
+_shared_clients_lock = threading.Lock()
+
+
+def _shared_client(url: str):
+    """Return the process-wide pymongo client for ``url``, building it once."""
+    client = _shared_clients.get(url)
+    if client is None:
+        with _shared_clients_lock:
+            client = _shared_clients.get(url)
+            if client is None:
+                import pymongo
+                client = pymongo.MongoClient(url)
+                _shared_clients[url] = client
+    return client
 
 
 class MongoDBSessionHandler(SessionHandler):
@@ -67,13 +93,16 @@ class MongoDBSessionHandler(SessionHandler):
 
     @property
     def _collection(self):
-        """The pymongo collection, built on FIRST USE rather than at construction."""
-        if self._collection_cache is None:
-            import pymongo
-            self._pymongo_client = pymongo.MongoClient(self._mongo_url)
-            self._collection_cache = (
-                self._pymongo_client[self._database][self._collection_name]
-            )
+        """The pymongo collection, built on FIRST USE rather than at construction.
+
+        The client behind it is the process-wide one for this URI (#136), looked
+        up on every access so a handler never holds on to a client another
+        handler has since closed.
+        """
+        client = _shared_client(self._mongo_url)
+        if self._collection_cache is None or self._pymongo_client is not client:
+            self._pymongo_client = client
+            self._collection_cache = client[self._database][self._collection_name]
         return self._collection_cache
 
     def _parse_url(self, url: str):
@@ -191,10 +220,20 @@ class MongoDBSessionHandler(SessionHandler):
             self._delete_many(ns, expired)
 
     def close(self):
-        """Close the connection."""
+        """Close the connection.
+
+        The pymongo client is shared by every handler on this URI (#136), so it
+        is closed AND dropped from the shared cache: the next handler to touch
+        the store builds a fresh one instead of inheriting a closed client.
+        """
         if self._use_pymongo:
             if self._pymongo_client:
+                with _shared_clients_lock:
+                    if _shared_clients.get(self._mongo_url) is self._pymongo_client:
+                        del _shared_clients[self._mongo_url]
                 self._pymongo_client.close()
+                self._pymongo_client = None
+                self._collection_cache = None
         else:
             self._close_raw()
 
@@ -350,12 +389,17 @@ class MongoDBSessionHandler(SessionHandler):
             key = data[pos[0]:key_end].decode("utf-8")
             pos[0] = key_end + 1
 
-            doc[key] = self._decode_bson_value(data, pos, bson_type)
+            doc[key] = self._decode_bson_value(data, pos, bson_type, end)
 
         pos[0] += 1  # skip terminator
         return doc
 
-    def _decode_bson_value(self, data: bytes, pos: list, bson_type: int):
+    def _decode_bson_value(self, data: bytes, pos: list, bson_type: int, end: int):
+        # Every type a server reply can carry must CONSUME its bytes. A
+        # replica-set member adds electionId (ObjectId), opTime / operationTime
+        # / $clusterTime (Timestamp) and a BinData signature to every write
+        # reply; returning None for those without advancing the cursor read the
+        # value's bytes as the next key (UnicodeDecodeError on every write).
         if bson_type == 0x01:  # double
             val = struct.unpack("<d", data[pos[0]:pos[0] + 8])[0]
             pos[0] += 8
@@ -393,4 +437,29 @@ class MongoDBSessionHandler(SessionHandler):
             pos[0] += 8
             return val
 
+        if bson_type == 0x05:  # binary: int32 length + subtype byte + bytes
+            length = struct.unpack("<I", data[pos[0]:pos[0] + 4])[0]
+            pos[0] += 5
+            val = data[pos[0]:pos[0] + length]
+            pos[0] += length
+            return val
+
+        if bson_type == 0x07:  # ObjectId, as its 24-char hex string
+            val = data[pos[0]:pos[0] + 12].hex()
+            pos[0] += 12
+            return val
+
+        if bson_type == 0x09:  # UTC datetime, int64 milliseconds
+            millis = struct.unpack("<q", data[pos[0]:pos[0] + 8])[0]
+            pos[0] += 8
+            return datetime.datetime.fromtimestamp(millis / 1000, datetime.timezone.utc)
+
+        if bson_type == 0x11:  # Timestamp, uint64 (seconds << 32 | increment)
+            val = struct.unpack("<Q", data[pos[0]:pos[0] + 8])[0]
+            pos[0] += 8
+            return val
+
+        # An unknown type cannot be sized, so its bytes cannot be skipped. Stop
+        # at the containing document's boundary rather than read them as keys.
+        pos[0] = end
         return None

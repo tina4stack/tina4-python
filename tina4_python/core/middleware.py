@@ -35,6 +35,7 @@ import os
 import time
 import logging
 import threading
+from urllib.parse import urlparse
 
 from tina4_python.core.rate_limiter import RateLimiter  # noqa: F401 — re-export for backward compat
 from tina4_python.core.response import Response
@@ -275,18 +276,25 @@ class Middleware:
 _CORS_DENY_WARNED: set = set()
 
 
-def _cors_warn_once(key: str, message: str) -> None:
-    """Log an actionable CORS warning at most once per distinct key per process.
+def _cors_warn_once(reason: str, message: str) -> None:
+    """Log an actionable CORS warning at most once per REASON per process.
+
+    Keyed by the reason only (``unconfigured``, ``denied``,
+    ``wildcard_credentials``), never by origin - ADR-0048: CORS denial
+    diagnostics are bounded, "no per-origin ledger and no per-origin warning".
+    A per-origin key let every attacker-chosen Origin header add a ledger entry
+    that was never freed and another log line. The message still names the
+    origin that triggered the first occurrence.
 
     A rejected cross-origin request is otherwise invisible: the browser reports
     a generic CORS failure and the server log says nothing, so the operator has
     to read the framework source to discover which env var to set. Warning on
     EVERY rejected request would flood the log under a scripted probe, so each
-    distinct key warns once.
+    reason warns once.
     """
-    if key in _CORS_DENY_WARNED:
+    if reason in _CORS_DENY_WARNED:
         return
-    _CORS_DENY_WARNED.add(key)
+    _CORS_DENY_WARNED.add(reason)
     try:
         from tina4_python.debug import Log
         Log.warning(message)
@@ -371,18 +379,59 @@ class CorsMiddleware:
             return request_origin
         return ""
 
+    @staticmethod
+    def _normalised_origin(value: str) -> str | None:
+        """``scheme://host[:port]`` lower-cased, with the default port dropped.
+
+        http:80 and https:443 are the default ports, so ``http://a`` and
+        ``http://a:80`` are the same origin. ``None`` for anything that is not
+        an http(s) origin (``null``, an empty value, a malformed port).
+        """
+        try:
+            parsed = urlparse((value or "").strip())
+            port = parsed.port
+        except ValueError:
+            return None
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        if scheme not in ("http", "https") or not host:
+            return None
+        if ":" in host:
+            host = f"[{host}]"
+        if port is None or (scheme, port) in (("http", 80), ("https", 443)):
+            return f"{scheme}://{host}"
+        return f"{scheme}://{host}:{port}"
+
+    def is_same_origin(self, request) -> bool:
+        """True when the request's Origin is the request's OWN origin (#139).
+
+        Browsers send ``Origin`` on every same-origin POST/PUT/PATCH/DELETE, so
+        its presence alone does not make a request cross-origin. The request's
+        own origin is ``request.url``'s scheme and host - the same
+        x-forwarded-proto aware scheme the session cookie trusts. Being
+        same-origin only silences the CORS warning: it never adds a CORS header
+        and never grants anything a cross-origin caller would not get.
+        """
+        origin = self._normalised_origin(request.headers.get("origin", ""))
+        return origin is not None and origin == self._normalised_origin(getattr(request, "url", "") or "")
+
     def apply(self, request, response):
         """Inject CORS headers into the response."""
         request_origin = request.headers.get("origin", "")
         allowed = self.allowed_origins
+        # A same-origin request needs no CORS headers and must never be warned
+        # about - the warning used to fire on an app's own SPA saving a form.
+        warn = bool(request_origin) and not self.is_same_origin(request)
 
         if not allowed:
-            if request_origin:
+            if warn:
+                # Never suggest '*': it would open the API to every website to
+                # silence a warning about one origin. Name that origin instead.
                 _cors_warn_once(
                     "unconfigured",
-                    f"CORS: refused cross-origin request from {request_origin} — no policy is "
-                    f"configured. Set TINA4_CORS_ORIGINS to the origins you want to allow, e.g. "
-                    f"TINA4_CORS_ORIGINS=https://app.example.com (or '*' to allow any origin)."
+                    f"CORS: cross-origin request from {request_origin} got no CORS headers - no "
+                    f"policy is configured, so the browser will block the response. If this origin "
+                    f"should be allowed, add it: TINA4_CORS_ORIGINS={request_origin}"
                 )
             return response
 
@@ -395,11 +444,13 @@ class CorsMiddleware:
 
         origin = self.allowed_origin(request_origin)
         if not origin:
-            if request_origin:
+            if warn:
                 _cors_warn_once(
-                    f"denied:{request_origin}",
+                    "denied",
                     f"CORS: origin {request_origin} is not in TINA4_CORS_ORIGINS "
-                    f"({self.origins}) — the browser will block this response."
+                    f"({self.origins}) - the browser will block this response. If this origin "
+                    f"should be allowed, add it to the list: "
+                    f"TINA4_CORS_ORIGINS={self.origins},{request_origin}"
                 )
             return response
 
@@ -411,7 +462,7 @@ class CorsMiddleware:
         if self.credentials:
             if origin == "*":
                 _cors_warn_once(
-                    "wildcard-credentials",
+                    "wildcard_credentials",
                     "CORS: TINA4_CORS_CREDENTIALS is true but TINA4_CORS_ORIGINS is '*'. "
                     "The Fetch Standard forbids Access-Control-Allow-Origin: * with "
                     "credentials, so credentials are NOT being sent. List the exact "

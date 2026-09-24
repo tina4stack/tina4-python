@@ -4,98 +4,103 @@ A migration containing PL/pgSQL with `RAISE EXCEPTION 'thing %', x`
 used to fail with `list index out of range` because psycopg2
 interpreted % as a placeholder even when params=None/[]. The fix
 routes empty/None params through cursor.execute(sql) (no params arg)
-so substitution is skipped.
+so substitution is skipped. With real parameters, a literal % is doubled
+first so it survives substitution (#138).
 
-These tests don't require a live Postgres — we exercise the
-_safe_execute helper directly with a fake cursor that records what
-psycopg2 would have received.
+NO MOCKS. This file used to hand ``_safe_execute`` a fake cursor that recorded
+which branch it took; it proved the branch, never that PostgreSQL got the right
+SQL. Every case below runs ``_safe_execute`` on a REAL psycopg2 cursor and reads
+the value PostgreSQL sends back.
 """
+import os
+import socket
+from urllib.parse import urlparse
+
 import pytest
 
 from tina4_python.database.postgres import PostgreSQLAdapter
 
-
-class FakeCursor:
-    """Records every (sql, params_supplied?) call. Lets us verify
-    the helper picks the no-params-arg branch correctly."""
-
-    def __init__(self):
-        self.calls: list[tuple[str, bool, object]] = []
-
-    def execute(self, sql, params=...):  # sentinel for "not passed"
-        if params is ...:
-            self.calls.append((sql, False, None))
-        else:
-            self.calls.append((sql, True, params))
+PG_URL = os.environ.get("TINA4_TEST_PG_URL", "postgres://tina4:tina4@localhost:55432/tina4_py")
+_PARSED = urlparse(PG_URL)
+PG_HOST, PG_PORT = _PARSED.hostname or "localhost", _PARSED.port or 5432
+FUNCTION = "issue40_py_enforce"
 
 
-def test_safe_execute_no_params_skips_substitution_pass():
-    """Issue #40: when params is None, must call cursor.execute(sql)
-    with NO second arg so psycopg2 doesn't try to treat % as a
-    placeholder."""
-    cur = FakeCursor()
-    sql = "CREATE FUNCTION foo() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'thing % conflicts with %', a, b; END $$ LANGUAGE plpgsql"
-    PostgreSQLAdapter._safe_execute(cur, sql, None)
-    assert len(cur.calls) == 1
-    received_sql, had_params_arg, _ = cur.calls[0]
-    assert received_sql == sql
-    assert had_params_arg is False, (
-        "params=None must route to cursor.execute(sql) with no second arg "
-        "— otherwise psycopg2 tries to substitute % and a PL/pgSQL body "
-        "with literal %% chars blows up (#40)."
-    )
+def _pg_reachable() -> bool:
+    try:
+        with socket.create_connection((PG_HOST, PG_PORT), timeout=1.0):
+            return True
+    except OSError:
+        return False
 
 
-def test_safe_execute_empty_list_also_skips_substitution():
-    """params=[] is the same case as params=None — psycopg2 still
-    triggers substitution if the arg is supplied at all."""
-    cur = FakeCursor()
-    PostgreSQLAdapter._safe_execute(cur, "RAISE EXCEPTION 'literal %s'", [])
-    assert cur.calls[0][1] is False, (
-        "Empty list must still route through the no-arg branch."
-    )
+pytestmark = pytest.mark.skipif(
+    not _pg_reachable(),
+    reason=f"PostgreSQL not reachable at {PG_HOST}:{PG_PORT} - skip integration test",
+)
 
 
-def test_safe_execute_with_real_params_passes_them_through():
-    """When params is non-empty, normal execution path applies
-    — psycopg2 substitutes %s correctly."""
-    cur = FakeCursor()
-    PostgreSQLAdapter._safe_execute(
-        cur,
-        "INSERT INTO t(a, b) VALUES (%s, %s)",
-        [1, 2],
-    )
-    sql, had_params_arg, params = cur.calls[0]
-    assert had_params_arg is True
-    assert params == [1, 2]
+@pytest.fixture
+def db():
+    from tina4_python.database import Database
+    database = Database(PG_URL)
+    yield database
+    database.close()
 
 
-def test_safe_execute_falsy_zero_param_routed_correctly():
-    """[0] is truthy as a list (length 1), so passes through with
-    params. Guards against an over-eager `if not params` check."""
-    cur = FakeCursor()
-    PostgreSQLAdapter._safe_execute(cur, "SELECT %s", [0])
-    assert cur.calls[0][1] is True
-    assert cur.calls[0][2] == [0]
+@pytest.fixture
+def cursor(db):
+    """A real psycopg2 cursor; rolled back afterwards so nothing lingers."""
+    connection = db._get_adapter()._conn
+    real_cursor = connection.cursor()
+    yield real_cursor
+    connection.rollback()
 
 
-def test_plpgsql_body_with_percent_does_not_raise():
-    """The exact case from issue #40 — a CREATE FUNCTION with literal
-    % chars in the body. With the fix, psycopg2 never sees the %
-    chars during substitution."""
-    cur = FakeCursor()
-    body = """
-    CREATE OR REPLACE FUNCTION enforce_unique() RETURNS trigger
+def _value(cursor, sql, params):
+    PostgreSQLAdapter._safe_execute(cursor, sql, params)
+    return cursor.fetchone()
+
+
+def test_safe_execute_no_params_skips_substitution_pass(cursor):
+    """params=None: the SQL goes to PostgreSQL untouched, literal % included."""
+    assert _value(cursor, "SELECT 'thing % conflicts with %' AS v", None) == ("thing % conflicts with %",)
+
+
+def test_safe_execute_empty_list_also_skips_substitution(cursor):
+    """params=[] is the same case - psycopg2 substitutes whenever the argument is supplied at all."""
+    assert _value(cursor, "SELECT 'literal %s and %' AS v", []) == ("literal %s and %",)
+
+
+def test_safe_execute_with_real_params_passes_them_through(cursor):
+    assert _value(cursor, "SELECT %s::int + %s::int AS v", [1, 2]) == (3,)
+
+
+def test_safe_execute_falsy_zero_param_routed_correctly(cursor):
+    """[0] is a real parameter list (length 1), not 'no params'."""
+    assert _value(cursor, "SELECT %s::int AS v", [0]) == (0,)
+
+
+def test_safe_execute_literal_percent_with_real_params(cursor):
+    """#138: with parameters a literal % is doubled first, so it survives substitution."""
+    assert _value(cursor, "SELECT '100%' AS v, %s::int AS n", [7]) == ("100%", 7)
+
+
+def test_plpgsql_body_with_percent_does_not_raise(db):
+    """The exact case from issue #40: CREATE FUNCTION with literal % in its body,
+    created through execute() and then called for real."""
+    db.execute(f"""
+    CREATE OR REPLACE FUNCTION {FUNCTION}(a int, b int) RETURNS void
     LANGUAGE plpgsql AS $$
     BEGIN
-        IF FOUND THEN
-            RAISE EXCEPTION 'thing % conflicts with %', NEW.a, NEW.b
-                USING HINT = 'use 100%% real values';
-        END IF;
-        RETURN NEW;
+        RAISE EXCEPTION 'thing % conflicts with %', a, b
+            USING HINT = 'use 100%% real values';
     END $$;
-    """
-    # Should not raise — the helper's branch routes us away from
-    # psycopg2's substitution engine entirely.
-    PostgreSQLAdapter._safe_execute(cur, body, None)
-    assert cur.calls[0][1] is False
+    """)
+    try:
+        with pytest.raises(Exception) as raised:
+            db.fetch_one(f"SELECT {FUNCTION}(1, 2)", no_cache=True)
+        assert "thing 1 conflicts with 2" in str(raised.value)
+    finally:
+        db.rollback()
+        db.execute(f"DROP FUNCTION IF EXISTS {FUNCTION}(int, int)")

@@ -390,26 +390,129 @@ class SQLTranslator:
             sql = re.sub(r"\bTIMESTAMP\b", "DATETIME", sql, flags=re.IGNORECASE)
         return sql
 
+    _DOLLAR_TAG = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)?\$")
+
     @staticmethod
-    def placeholder_style(sql: str, style: str = "?") -> str:
+    def sql_segments(sql: str, backslash_escapes: bool = False) -> list[tuple[bool, str]]:
+        """Split SQL into ``(is_code, text)`` runs.
+
+        Non-code runs are string literals (``'...'``, PostgreSQL ``E'...'`` and
+        ``$$...$$`` / ``$tag$...$tag$``), quoted identifiers (``"..."`` and
+        MySQL backticks) and comments (``--`` to end of line, ``/* */``,
+        nested as PostgreSQL allows). A ``?`` or ``%`` inside one of those is
+        text, never a placeholder (#138). An unterminated run extends to the
+        end, which is where the engine would fail on it anyway.
+
+        ``backslash_escapes`` is MySQL's default string syntax, where ``\'``
+        does not end a literal; PostgreSQL only does that inside ``E'...'``.
+        """
+        segments: list[tuple[bool, str]] = []
+        code_start = 0
+        i = 0
+        length = len(sql)
+
+        def close_code(at):
+            if at > code_start:
+                segments.append((True, sql[code_start:at]))
+
+        while i < length:
+            ch = sql[i]
+            nxt = sql[i + 1] if i + 1 < length else ""
+            end = None
+            if ch == "-" and nxt == "-":
+                newline = sql.find("\n", i)
+                end = length if newline == -1 else newline
+            elif ch == "/" and nxt == "*":
+                depth, j = 1, i + 2
+                while j < length and depth:
+                    if sql.startswith("/*", j):
+                        depth, j = depth + 1, j + 2
+                    elif sql.startswith("*/", j):
+                        depth, j = depth - 1, j + 2
+                    else:
+                        j += 1
+                end = j
+            elif ch in ("'", '"', "`"):
+                backslash = (backslash_escapes and ch != "`") or (
+                    ch == "'" and i > 0 and sql[i - 1] in "Ee"
+                    and (i < 2 or not (sql[i - 2].isalnum() or sql[i - 2] == "_")))
+                j = i + 1
+                while j < length:
+                    if backslash and sql[j] == "\\":
+                        j += 2
+                        continue
+                    if sql[j] == ch:
+                        if j + 1 < length and sql[j + 1] == ch:  # doubled quote escape
+                            j += 2
+                            continue
+                        break
+                    j += 1
+                end = min(j + 1, length)
+            elif ch == "$" and (i == 0 or not (sql[i - 1].isalnum() or sql[i - 1] == "_")):
+                tag = SQLTranslator._DOLLAR_TAG.match(sql, i)
+                if tag:
+                    close = sql.find(tag.group(0), tag.end())
+                    end = length if close == -1 else close + len(tag.group(0))
+            if end is None:
+                i += 1
+                continue
+            close_code(i)
+            segments.append((False, sql[i:end]))
+            i = code_start = end
+        close_code(length)
+        return segments
+
+    @staticmethod
+    def placeholder_style(sql: str, style: str = "?", backslash_escapes: bool = False) -> str:
         """Convert ? placeholders to engine-specific style.
 
-        ?  → %s  (MySQL, PostgreSQL)
+        ?  → %s  (MySQL, PostgreSQL, MSSQL)
         ?  → :1, :2, :3  (Oracle, Firebird)
+
+        Only a ``?`` in SQL CODE is a placeholder (#138): one inside a string
+        literal, a quoted identifier or a comment is left alone. This used to
+        be a plain text replace, so ``SELECT 'why?', ?`` gained a second
+        placeholder and failed with "list index out of range".
         """
-        if style == "%s":
-            return sql.replace("?", "%s")
-        if style.startswith(":"):
-            count = 0
-            result = []
-            for ch in sql:
-                if ch == "?":
-                    count += 1
-                    result.append(f":{count}")
-                else:
-                    result.append(ch)
-            return "".join(result)
-        return sql
+        if style != "%s" and not style.startswith(":"):
+            return sql
+        count = 0
+        result = []
+        for is_code, text in SQLTranslator.sql_segments(sql, backslash_escapes):
+            if not is_code or "?" not in text:
+                result.append(text)
+            elif style == "%s":
+                result.append(text.replace("?", "%s"))
+            else:
+                for ch in text:
+                    if ch == "?":
+                        count += 1
+                        result.append(f":{count}")
+                    else:
+                        result.append(ch)
+        return "".join(result)
+
+    @staticmethod
+    def escape_literal_percent(sql: str) -> str:
+        """Double every ``%`` that is not a ``%s`` placeholder, for psycopg's pyformat.
+
+        psycopg treats EVERY ``%`` as a placeholder whenever parameters are
+        passed, and fetch() always passes LIMIT/OFFSET - so ``LIKE 'a%'`` or
+        ``to_char(x, '990%')`` crashed with "list index out of range" (#138;
+        #40 fixed only the no-parameters path). In a literal, identifier or
+        comment every ``%`` is text; in code, only ``%s`` is a placeholder.
+        Apply it ONLY when parameters are passed: without them psycopg sends
+        the SQL untouched and ``%%`` would reach the server as two characters.
+        """
+        result = []
+        for is_code, text in SQLTranslator.sql_segments(sql):
+            if "%" not in text:
+                result.append(text)
+            elif is_code:
+                result.append(re.sub(r"%(?!s)", "%%", text))
+            else:
+                result.append(text.replace("%", "%%"))
+        return "".join(result)
 
     # Hard per-statement bind-parameter ceiling per engine. 0 means "never
     # collapse a batch on this engine". See tests/fixtures/batch_write_contract.json,

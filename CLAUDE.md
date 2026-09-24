@@ -190,7 +190,7 @@ db = Database(url: str, username="", password="")
 
 db.fetch(sql, params=None, limit=100, offset=0) -> DatabaseResult  # records, count, limit, offset
 db.fetch_one(sql, params=None) -> dict | None
-db.execute(sql, params=None) -> True | DatabaseResult  # True for writes, DatabaseResult for RETURNING/CALL/EXEC; RAISES on SQL error (never returns False — cause on get_error()). Wrap in try/except, don't test the return.
+db.execute(sql, params=None) -> True | DatabaseResult  # True for a write that returns no rows; a DatabaseResult (same type as fetch()) for any statement that returns rows - SELECT, WITH ... SELECT, RETURNING/OUTPUT, CALL/EXEC with a result set; RAISES on SQL error (never returns False — cause on get_error()). Wrap in try/except, don't test the return.
 db.execute_many(sql, params=None) -> DatabaseResult
 db.insert(table_name, data: dict | list) -> DatabaseResult
 db.update(table_name, data: dict, filter=None, params=None) -> DatabaseResult

@@ -119,7 +119,13 @@ class S3Storage(StorageBackend):
 
     def __init__(self, *, endpoint=None, key=None, secret=None, bucket=None,
                  region=None):
-        import boto3  # optional dependency, imported lazily
+        try:
+            import boto3  # optional dependency, imported lazily
+        except ImportError:
+            raise ImportError(
+                "The 'boto3' package is required for S3Storage. "
+                "Install it with: uv add boto3 (or: pip install boto3)"
+            ) from None
 
         self.bucket = bucket or os.getenv("TINA4_STORAGE_BUCKET")
         if not self.bucket:

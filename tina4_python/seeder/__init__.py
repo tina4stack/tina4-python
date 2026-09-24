@@ -782,9 +782,9 @@ def _foreign_key_pools(orm_class, fields: dict) -> dict:
             if target is None:
                 continue
             db = target._get_db()
-            pk = target._get_pk()
-            rows = db.fetch(f"SELECT {pk} FROM {target._get_table()}", limit=100000)
-            values = [r[pk] for r in rows.records if r.get(pk) is not None]
+            pk_column = target.get_db_column(target._get_pk())
+            rows = db.fetch(f"SELECT {pk_column} FROM {target._get_table()}", limit=100000)
+            values = [r[pk_column] for r in rows.records if r.get(pk_column) is not None]
             if values:
                 pools[name] = values
         except Exception as exc:

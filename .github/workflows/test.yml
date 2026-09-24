@@ -113,6 +113,8 @@ jobs:
       TINA4_TEST_MONGO_HOST: localhost
       TINA4_TEST_MONGO_PORT: '27017'
       TINA4_TEST_REDIS_URL: redis://localhost:6379
+      # The password Redis started by the "Start auth Redis" step (6381).
+      TINA4_TEST_REDIS_AUTH_URL: redis://:s3cret@localhost:6381/3
       TINA4_TEST_VALKEY_URL: redis://localhost:6380
       TINA4_TEST_RABBITMQ_URL: amqp://guest:guest@localhost:5672
       TINA4_TEST_KAFKA_URL: localhost:9092
@@ -235,6 +237,15 @@ jobs:
           MQTT_REQUIRE_EMQX=false bash tests/mqtt-infra.sh "$RUNNER_TEMP/tina4-mqtt-infra"
           echo "TINA4_TEST_MQTT_CA_FILE=$RUNNER_TEMP/tina4-mqtt-infra/certs/ca.crt" >> "$GITHUB_ENV"
 
+      # TLS + AUTH mail servers for ADR-0071 (tests/test_mail_encryption_adr0071.py):
+      # GreenMail 4025/4465/4143/4993, Mailpit 4587/4825, Dovecot 4144, all with
+      # certificates from a throwaway CA the tests trust through SSL_CERT_FILE.
+      - name: Start TLS mail servers (GreenMail / Mailpit / Dovecot)
+        run: |
+          bash tests/mail-infra.sh "$RUNNER_TEMP/tina4-mail-infra"
+          echo "TINA4_TEST_MAIL_TLS_HOST=127.0.0.1" >> "$GITHUB_ENV"
+          echo "TINA4_TEST_MAIL_TLS_CA_FILE=$RUNNER_TEMP/tina4-mail-infra/certs/ca.crt" >> "$GITHUB_ENV"
+
       # System-level pieces `uv sync --extra test` cannot install (it only
       # installs the PYTHON clients, pyodbc + firebird-driver, both already
       # declared in the `test` extra): unixODBC (the driver manager pyodbc's
@@ -265,6 +276,29 @@ jobs:
           Driver = $DRIVER_PATH
           EOF
           cat /etc/odbcinst.ini
+
+      # MongoDB 8 as a single-node REPLICA SET, beside the mongo:7 STANDALONE
+      # service above. A replica-set member (7 and 8 alike) adds electionId
+      # (ObjectId), opTime / operationTime / $clusterTime (Timestamp) and a
+      # BinData signature to every write reply; a standalone never does. The
+      # zero-dependency wire clients mis-sized those types and failed every
+      # write against a replica set (Atlas, most production) while CI stayed
+      # green on the standalone. This leg keeps that from regressing.
+      - name: Start MongoDB 8 replica set (27018)
+        run: |
+          docker run -d --name tina4-mongo8-rs -p 27018:27018 mongo:8 \
+            mongod --replSet rs0 --bind_ip_all --port 27018
+          for i in $(seq 1 30); do
+            docker exec tina4-mongo8-rs mongosh --port 27018 --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break
+            sleep 2
+          done
+          docker exec tina4-mongo8-rs mongosh --port 27018 --quiet \
+            --eval "rs.initiate({_id:'rs0',members:[{_id:0,host:'127.0.0.1:27018'}]})"
+          for i in $(seq 1 30); do
+            [ "$(docker exec tina4-mongo8-rs mongosh --port 27018 --quiet --eval 'db.hello().isWritablePrimary')" = "true" ] && exit 0
+            sleep 2
+          done
+          echo "::error::mongo:8 replica set never became primary"; exit 1
 
       - name: Install native Tina4 CLI 3.8.77
         run: |
@@ -339,6 +373,17 @@ jobs:
       # native engine above and proves that boundary instead of excluding it.
       - name: Run tests
         run: uv run pytest tests/ -v
+
+      - name: Run the Mongo suites against the MongoDB 8 replica set
+        env:
+          TINA4_TEST_MONGO_URI: mongodb://127.0.0.1:27018
+          TINA4_TEST_MONGO_HOST: 127.0.0.1
+          TINA4_TEST_MONGO_PORT: '27018'
+          TINA4_MONGO_URI: mongodb://127.0.0.1:27018
+          TINA4_SESSION_MONGO_URI: mongodb://127.0.0.1:27018
+        run: |
+          uv run pytest -v tests/test_mongo_wire_bson_types.py tests/test_session_zero_dependency_fallback.py tests/test_session_ttl_contract.py tests/test_session_expiry_contract.py tests/test_cache_null_round_trip.py tests/test_docstore_substitutability.py tests/test_queue_mongo_retry_and_purge.py tests/test_mongo_sql_fail_closed.py
+          uv run pytest -v tests/test_session_handlers.py tests/test_cache_backends.py -k mongo
 
       # ADR-0024 rule 4: the ZERO-DEPENDENCY default counts double, because it
       # is the provider every developer starts on. `uv sync --extra test`

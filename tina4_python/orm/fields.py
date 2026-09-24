@@ -682,15 +682,13 @@ class HasManyDescriptor(RelationshipDescriptor):
         fk = self.foreign_key or f"{obj.__class__.__name__.lower()}_id"
         table = related_cls._get_table()
         db = obj._get_db()
-        where = f"{fk} = ?"
+        where = f"{related_cls.get_db_column(fk)} = ?"
         # REL-SOFTDELETE-TRAVERSAL: a soft-deleted child must not surface through
         # parent.children, consistent with the finders' default exclusion.
         if getattr(related_cls, "soft_delete", False):
             where += f" AND {related_cls._soft_delete_filter()}"
         # Order by the child PK so OFFSET paging is stable across pages.
-        order_col = related_cls.field_mapping.get(
-            related_cls._get_pk(), related_cls._fields[related_cls._get_pk()].column
-        )
+        order_col = related_cls.get_db_column(related_cls._get_pk())
         sql = f"SELECT * FROM {table} WHERE {where} ORDER BY {order_col}"
         # REL-EAGER-UNBOUNDED: page through ALL children rather than silently
         # truncating at a fixed cap.
@@ -718,11 +716,12 @@ class HasOneDescriptor(RelationshipDescriptor):
         fk = self.foreign_key or f"{obj.__class__.__name__.lower()}_id"
         table = related_cls._get_table()
         db = obj._get_db()
-        sql = f"SELECT * FROM {table} WHERE {fk} = ?"
+        sql = f"SELECT * FROM {table} WHERE {related_cls.get_db_column(fk)} = ?"
         # REL-SOFTDELETE-TRAVERSAL: exclude a soft-deleted related row.
         if getattr(related_cls, "soft_delete", False):
             sql += f" AND {related_cls._soft_delete_filter()}"
-        sql += " LIMIT 1"
+        # fetch_one reads a single row; a literal "LIMIT 1" is a syntax error on
+        # MSSQL (and Firebird), where the lazy has_one then failed outright.
         row = db.fetch_one(sql, [pk_value])
         return related_cls(row) if row else None
 
@@ -733,7 +732,7 @@ class BelongsToDescriptor(RelationshipDescriptor):
     def _load(self, obj):
         related_cls = self._resolve_model()
         fk = self.foreign_key or f"{related_cls.__name__.lower()}_id"
-        fk_value = getattr(obj, fk, None)
+        fk_value = getattr(obj, type(obj)._attribute_for(fk), None)
         if fk_value is None:
             return None
         return related_cls.find_by_id(fk_value)
