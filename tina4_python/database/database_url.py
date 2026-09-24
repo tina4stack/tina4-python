@@ -54,7 +54,12 @@ _ODBC_PASSWORD = re.compile(
 # whitespace" defect as tina4-php's `\bpassword=\S*` (C4). Newlines stay
 # excluded because a connection string never spans lines, and allowing them
 # would let one line's `@` swallow another's.
-_URL_PASSWORD = re.compile(r"(://[^/@\s]*:)[^/\r\n]*@")
+#
+# The USER run excludes ':' too. RFC 3986 userinfo is `user ":" password`, so
+# the password starts at the FIRST ':'. Letting the user run reach the LAST ':'
+# (measured 2026-09-24) turned `tina4:s3:cret@host` into `tina4:s3:***@host` -
+# half the password left in every log line.
+_URL_PASSWORD = re.compile(r"(://[^/@\s:]*:)[^/\r\n]*@")
 
 
 def redact_url(value: str) -> str:
