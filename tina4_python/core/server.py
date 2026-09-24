@@ -2875,15 +2875,15 @@ def asgi(root_dir: str = "src"):
     the bootstrap rather than leaving each user to find ``_auto_discover``,
     which is private and has no business in a deployment file.
 
-    The security middleware is attached here too, exactly as ``run()`` does
-    (#134): without it the same app served by uvicorn shipped no security
-    headers, and ``TINA4_CSRF=true`` was set but never enforced.
+    It runs the SAME ``_bootstrap_application()`` as ``run()`` - env,
+    logging, discovery, configured SSO routes, security middleware and
+    migrations - so the two entry points cannot drift (#134: asgi() once
+    shipped no security headers and never enforced ``TINA4_CSRF=true``).
 
     :param root_dir: Directory to discover routes from. Defaults to ``src``.
     :return: The ASGI 3 callable.
     """
-    _auto_discover(root_dir)
-    _attach_security_middleware()
+    _bootstrap_application(root_dir)
     return app
 
 
@@ -3773,59 +3773,25 @@ def _auto_migrate_on_startup(migration_folder: str = "migrations") -> None:
             pass
 
 
-def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
-    """Start the Tina4 dev server.
+def _bootstrap_application(root_dir: str = "src") -> None:
+    """Build the application: everything run() does apart from serving it.
 
-    Discovers routes from src/, starts ASGI server, handles shutdown.
+    ONE boot sequence for both entry points. ``run()`` calls it before its
+    own server loop and ``asgi()`` calls it before handing ``app`` to uvicorn
+    / hypercorn / granian. It used to be written out inside ``run()`` alone,
+    and ``asgi()`` drifted: no security headers or CSRF (#134), and no
+    configured SSO routes - ``/auth/login`` was a 404 under uvicorn. Anything
+    that shapes the application belongs HERE, never in one entry point.
 
-    Args:
-        host: Bind address. Falls back to HOST env var, then 0.0.0.0.
-        port: Bind port. Falls back to PORT env var, then 7146.
-        no_browser: If True, do not open browser on startup.
-        no_reload: If True, disable the file watcher / live-reload.
+    Not here, because they are about serving, not the application: the
+    ``tina4 serve`` launch gate, host/port resolution, the pidfile, the banner
+    and the server loop itself.
     """
-    import time
     global _start_time
     _start_time = time.time()
 
     # Refuse to boot with v3.11 / v2 era un-prefixed env vars set.
     _check_legacy_env_vars()
-
-    # ── Require tina4 CLI ─────────────────────────────────────────
-    # The framework must be launched via `tina4 serve`, not `python app.py`.
-    # The tina4 CLI passes --managed when spawning the server process.
-    # Users can bypass this by adding TINA4_OVERRIDE_CLIENT=true to .env
-    is_managed = "--managed" in sys.argv
-    if not is_managed and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
-        # Load .env early so TINA4_OVERRIDE_CLIENT can be read.
-        # ONE call: load_env() with no argument treats the cwd as the ROOT and
-        # applies real-env > .env.local > .env itself. It used to be two calls
-        # here and two more below, and a caller who got the order or the
-        # override flag wrong let a stray gitignored .env.local clobber an
-        # explicitly-set real env var. The rule now lives in one place.
-        from tina4_python.dotenv import load_env
-        load_env(override=False)
-        if os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
-            print()
-            print("=" * 60)
-            print()
-            print("  Tina4 must be started with the tina4 CLI:")
-            print()
-            print("    tina4 serve              (development)")
-            print("    tina4 serve --production (production)")
-            print()
-            print("  Install: cargo install tina4")
-            print("  Docs:    https://tina4.com")
-            print()
-            print("  To run directly, add to .env:")
-            print("    TINA4_OVERRIDE_CLIENT=true")
-            print()
-            print("=" * 60)
-            print()
-            sys.exit(1)
-
-    if no_reload:
-        os.environ["TINA4_NO_RELOAD"] = "true"
 
     # Ensure CWD is on sys.path so auto-discovered modules can be imported
     cwd = os.getcwd()
@@ -3886,7 +3852,11 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             pass
         _prior_excepthook(exc_type, exc_value, exc_tb)
 
-    _sys.excepthook = _tina4_excepthook
+    # asgi() may bootstrap more than once in one process (tests, reloaders):
+    # install the hook once, or every uncaught error is logged once per boot.
+    _tina4_excepthook._tina4 = True
+    if not getattr(_prior_excepthook, "_tina4", False):
+        _sys.excepthook = _tina4_excepthook
 
     # Ensure folders
     _ensure_folders()
@@ -3895,7 +3865,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     _auto_wire_i18n()
 
     # Auto-discover routes
-    _auto_discover("src")
+    _auto_discover(root_dir)
     # Configuration-first OIDC: canonical routes appear only when configured,
     # after app discovery so collisions fail loudly rather than overwrite.
     from tina4_python.sso import Sso as _Sso
@@ -3908,6 +3878,65 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
     # Apply pending DB migrations on startup (non-breaking — see helper).
     _auto_migrate_on_startup()
+
+    # File watching is handled by the Rust CLI (tina4 serve). In debug mode the
+    # framework receives POST /__dev/api/reload and pushes an instant reload over
+    # the /__dev_reload WebSocket; the mtime counter is the polling fallback.
+    from tina4_python.dotenv import is_truthy as _is_truthy
+    if _is_truthy(os.environ.get("TINA4_DEBUG", "")):
+        _register_dev_reload_ws()
+
+
+def run(host: str | None = None, port: int | None = None, no_browser: bool = False, no_reload: bool = False):
+    """Start the Tina4 dev server.
+
+    Discovers routes from src/, starts ASGI server, handles shutdown.
+
+    Args:
+        host: Bind address. Falls back to HOST env var, then 0.0.0.0.
+        port: Bind port. Falls back to PORT env var, then 7146.
+        no_browser: If True, do not open browser on startup.
+        no_reload: If True, disable the file watcher / live-reload.
+    """
+    # ── Require tina4 CLI ─────────────────────────────────────────
+    # The framework must be launched via `tina4 serve`, not `python app.py`.
+    # The tina4 CLI passes --managed when spawning the server process.
+    # Users can bypass this by adding TINA4_OVERRIDE_CLIENT=true to .env
+    is_managed = "--managed" in sys.argv
+    if not is_managed and os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
+        # Load .env early so TINA4_OVERRIDE_CLIENT can be read.
+        # ONE call: load_env() with no argument treats the cwd as the ROOT and
+        # applies real-env > .env.local > .env itself. It used to be two calls
+        # here and two more below, and a caller who got the order or the
+        # override flag wrong let a stray gitignored .env.local clobber an
+        # explicitly-set real env var. The rule now lives in one place.
+        from tina4_python.dotenv import load_env
+        load_env(override=False)
+        if os.environ.get("TINA4_OVERRIDE_CLIENT") != "true":
+            print()
+            print("=" * 60)
+            print()
+            print("  Tina4 must be started with the tina4 CLI:")
+            print()
+            print("    tina4 serve              (development)")
+            print("    tina4 serve --production (production)")
+            print()
+            print("  Install: cargo install tina4")
+            print("  Docs:    https://tina4.com")
+            print()
+            print("  To run directly, add to .env:")
+            print("    TINA4_OVERRIDE_CLIENT=true")
+            print()
+            print("=" * 60)
+            print()
+            sys.exit(1)
+
+    if no_reload:
+        os.environ["TINA4_NO_RELOAD"] = "true"
+
+    # Everything that builds the application - env, logging, discovery, SSO,
+    # security middleware, migrations - is the bootstrap asgi() runs too.
+    _bootstrap_application("src")
 
     # Resolve host/port (CLI arg > ENV > default)
     host, port = resolve_config(cli_host=host, cli_port=port)
@@ -3932,8 +3961,6 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # module in-process, and push an instant reload over the /__dev_reload
     # WebSocket. The mtime counter at /__dev/api/mtime is the polling
     # fallback for when that socket is down. No internal watcher.
-    if is_debug:
-        _register_dev_reload_ws()
 
     # TINA4_DEFAULT_WEBSERVER=TRUE pins Tina4's own built-in webserver, so an
     # operator (or CI) can exercise it deterministically without also turning on
