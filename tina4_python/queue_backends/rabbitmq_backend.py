@@ -204,6 +204,18 @@ class RabbitMQConnector:
         )
         self._connection = self._pika.BlockingConnection(params)
         self._channel = self._connection.channel()
+        # Publisher confirms: basic_publish then blocks until the broker acks
+        # the message (or raises on nack). Without this a publish returns before
+        # the broker has enqueued it, so a size()/dead_letters() read right after
+        # fail()/reject() could miss the just-published dead letter — a
+        # timing-dependent wrong answer. Confirms make every publish (push AND
+        # dead-letter) durable-before-return, so the dead-letter store is
+        # observable immediately. Durability over raw throughput is the right
+        # trade for a job queue (ADR-0022 at-least-once).
+        try:
+            self._channel.confirm_delivery()
+        except Exception:
+            pass  # older pika without confirm support — degrade, do not crash
 
     def _ensure_queue_pika(self, topic: str):
         if topic not in self._declared_queues:

@@ -43,8 +43,17 @@ class Job:
         self.queue._backend.fail(self, error)
 
     def reject(self, reason: str = ""):
-        """Reject a job with a reason. Alias for fail()."""
-        self.fail(reason)
+        """Reject a job permanently — dead-letter it NOW, no retry (ADR-0023).
+
+        Distinct from ``fail()``: ``fail()`` records a failed attempt and only
+        dead-letters once ``max_retries`` is exhausted, so the job is retried
+        first. ``reject()`` is for a message the consumer KNOWS is poison (a
+        payload that will never parse) — it goes straight to the dead-letter
+        store on this call, without burning the retry budget. This is AMQP's
+        ``basic.reject(requeue=false)`` semantics, and matches SQS / Celery /
+        Spring AMQP. Was a literal alias for ``fail()`` before 3.13.139.
+        """
+        self.queue._backend.reject(self, reason)
 
     def retry(self, delay_seconds: int = 0):
         """Re-queue this job with optional delay."""
