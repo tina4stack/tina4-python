@@ -42,7 +42,9 @@ class TestHealthEndpoint:
         assert result.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_response_has_version(self, broken_dir):
+    async def test_response_has_version(self, broken_dir, monkeypatch):
+        # ADR-0078: the version is disclosed in debug mode only.
+        monkeypatch.setenv("TINA4_DEBUG", "true")
         req = Request()
         resp = Response()
         result = await _health_handler(req, resp)
@@ -111,7 +113,7 @@ class TestHealthEndpoint:
         assert result.status_code == 200
         body = json.loads(result.content)
         assert body["status"] == "ok"
-        assert set(body) == {"status", "version", "uptime", "framework"}
+        assert set(body) - {"version"} == {"status", "uptime", "framework"}
 
     @pytest.mark.asyncio
     async def test_no_broken_dir_returns_ok(self, tmp_path, monkeypatch):

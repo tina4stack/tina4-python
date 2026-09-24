@@ -208,12 +208,13 @@ class TestHealthWireContract:
         payload = json.loads(_get(port, "/health")[1])
         assert payload["framework"] == "tina4-python"
 
-    def test_the_body_is_exactly_the_four_contract_keys(self, live_server):
+    def test_the_body_is_exactly_the_contract_keys(self, live_server):
         """The whole point of the contract: one key set, four frameworks.
 
-        php, ruby and node emit exactly {status, version, uptime, framework}.
-        Any key added here is a key three other frameworks do not send.
+        Outside debug all four emit exactly {status, uptime, framework}; debug
+        adds `version` (ADR-0078, superseding the ADR-0016 key set). Any other
+        key is a key three other frameworks do not send.
         """
         _, port = live_server
         payload = json.loads(_get(port, "/health")[1])
-        assert set(payload) == {"status", "version", "uptime", "framework"}
+        assert set(payload) == {"status", "uptime", "framework"}
