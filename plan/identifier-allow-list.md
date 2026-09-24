@@ -26,6 +26,8 @@ Branch: `fix/identifier-allow-list` off `origin/v3` (local only, not pushed).
 | A. AutoCrud filter/sort allow-list         | n/a (no filter/sort in Python AutoCrud) | other worker | other worker | other worker |
 | B. ORM `find(map)` rejects unknown keys    | ✅ | other worker | other worker | other worker |
 | C. DocStore fallback validates field paths | ✅ | other worker | other worker | other worker |
+| E. AutoCrud uses the registered connection | ✅ (already correct; lock-in test) | other worker | other worker | other worker |
+| F. REQUIRE_SERVICES gate = [needs:X] rule  | ✅ | other worker | other worker | other worker |
 
 Open parity question for the maintainer: Python's AutoCrud list route has no
 `filter[...]` / `sort` parameters at all, while PHP, Ruby and Node do. Not built
@@ -43,6 +45,23 @@ File: `tests/test_identifier_allow_list_contract.py`
 - [x] `docstore_accepts_safe_field_paths` - `a_b`, `a-b`, `A1`, `nested.key`, `_id` on the fallback.
 - [x] `docstore_safe_paths_match_on_real_mongo` - same data and queries give identical results on
       the fallback and on a real MongoDB (`TINA4_TEST_MONGO_URI`), unique db dropped afterwards.
+
+Addendum 2 (Python owns E and F; D is AutoCrud filter/sort, absent in Python):
+- [x] E `test_autocrud_list_uses_the_registered_connection` (tests/test_autocrud_registered_connection.py):
+      two real SQLite files, model bound directly and by name; list/get/create/update/delete.
+      GREEN on unmodified code (ORM._get_db already honours `_db`); proved a gate by mutating
+      `_get_db` to prefer the global default (both cases red).
+- [x] F gate in tests/conftest.py: a skip passes under TINA4_REQUIRE_SERVICES only with a
+      `[needs:X]` tag that is excusable (optional engine only while its coordinate env var is
+      unset; always-provisioned service never; any other tag always). Module-level skips gated at
+      collection; `continue_on_collection_errors` so one missing service does not abort the run.
+      tests/test_require_services_gate.py: predicate cases + a real child pytest per branch
+      (gate on / on with the Firebird coordinate set / off). Red on the origin/v3 conftest for
+      "untagged fails" and "optional engine only while unset"; 6 mutations all red.
+- [x] Tagged skip sites: 69 edits in 44 files (postgres, mysql, mssql, firebird, graph engines,
+      oidc; platform os=posix / runtime=ipv6-loopback / runtime=libcrypto / runtime=redis-driver).
+- [x] Removed one skip instead of tagging it: the live URL-credential test needed an 'a' in the
+      password; it now encodes the first character.
 
 ## Bugs
 - [x] `ORM.find(dict)` interpolated an unrecognised key into the WHERE clause.
@@ -67,5 +86,27 @@ Full-suite non-passes (all proven pre-existing or environmental, none from this 
 
 ## Commits
 - e8df636  ORM find() accepts only declared fields; DocStore validates field paths (code + tests + plan)
+- 0b75b1b  plan: record identifier-allow-list commit
+- e0e87d9  ORM find() resolves filter keys through get_db_column (lead)
+- acb6cba  test: AutoCrud routes use the model's registered connection
+- 61178cb  tests: TINA4_REQUIRE_SERVICES excuses only [needs:X]-tagged skips
+- d1c19d0  tests: encode any password character in the live credential test
+- bf9ea47  tests: tag optional-engine and platform skips with [needs:X]
+- b519bf3  tests: update comments that described the old phrase-matching gate
+
+Second full run (after E + F, gate on, macOS, Python 3.13.11): 6067 passed, 8 failed, 10 errors,
+38 skipped. All 38 skips are tagged and excused (graph engines and OIDC, coordinates unset
+locally). The 10 MQTT TLS errors are the same missing CA file as before. The 8 failures fail the
+same way on clean origin/v3: MongoDB on localhost:27017 went down during the run (connection
+refused), and the memcached container reports TTLs about 79 s short (clock skew).
+
+Open for the maintainer:
+- CI (`.github/workflows/test.yml`) sets TINA4_TEST_PG_URL but not TINA4_TEST_MYSQL_URL or
+  TINA4_TEST_MSSQL_URL, so under the new rule a MySQL/MSSQL outage in CI is excused (the old
+  keyword gate failed it). Add the two URLs to the CI env to keep them strict.
+- S3 is always-provisioned under the rule, but CI does not run MinIO, so the two real-MinIO tests
+  in tests/test_realtime_files.py will now FAIL in CI until MinIO is provisioned there.
+- TINA4_TEST_POSTGRES_URL (in the rule as a postgres alias) is rejected by Python's env-contract
+  gate, so the Python gate reads only TINA4_TEST_PG_URL.
 
 ## Status: Complete (local; not pushed)
