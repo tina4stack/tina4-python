@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Attachment — a file linked to a channel (and optionally a message).
 
 ``storage_key`` is the key the StorageBackend put/get the bytes under; the row

@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """MCP `migration_create` tool emits the ADR-0063 generate_v1_1 envelope.
 
 Locks the unification of the third migration-create surface (the MCP dev tool)

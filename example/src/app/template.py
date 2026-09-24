@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Shared Frond template engine instance with session-aware rendering."""
 from tina4_python.frond import Frond
 from tina4_python.i18n import I18n

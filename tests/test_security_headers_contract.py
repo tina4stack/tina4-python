@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Security headers conformance — secure-by-default register + HTTPS-guarded HSTS.
 """
 Feature 36 (security headers) conformance suite. See SECHDR-DEC-01/02 and

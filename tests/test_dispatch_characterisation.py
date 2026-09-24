@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Feature 6, step 1: FREEZE the dispatch behaviour before refactoring it.
 """
 These are characterisation tests, not new-behaviour tests. Every one asserts

@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Chat control-plane regression suite for tina4_python.realtime (feature "chat").
 
 No mocks: the WebSocketManager + rooms, the ORM models, the SQLite database, and

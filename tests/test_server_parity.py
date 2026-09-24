@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Behavioural tests for Server cross-framework parity: handle(), start(), stop().
 
 Mirrors tina4-ruby spec/server_parity_spec.rb and tina4-nodejs

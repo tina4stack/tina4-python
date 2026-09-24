@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """`tina4 lint` — the framework ships NO linter; the command runs the project's
 own ruff and installs it as a DEV dependency on demand, with a zero-dependency
 `compile()` syntax baseline as the fallback.

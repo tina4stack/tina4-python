@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """SESSION CONTRACT: a backend failure is LOUD, then degrades - on the REAL request path.
 
 ADR-0021: a backend that becomes unreachable is LOGGED and then degraded - the

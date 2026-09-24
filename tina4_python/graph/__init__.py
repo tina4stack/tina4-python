@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Tina4 graph data layer — a URL-selected graph database, shaped like Database.
 """One factory (`GraphDatabase.create` / `.from_env`), one portable
 node/edge/traverse surface plus a raw `query`/`execute` pass-through, and neutral

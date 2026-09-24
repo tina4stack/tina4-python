@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Default-CSP warn-once — the visible half of the secure-by-default CSP.
 """
 Issue tina4-nodejs#61. `default-src 'self'` stays the secure default, but when

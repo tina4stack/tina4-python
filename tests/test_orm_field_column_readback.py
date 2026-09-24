@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """ORM field column read-back: a Field(column=...) round-trips on every read path.
 
 Bug (tina4-python origin/v3): ``name = StringField(column="full_name")`` was

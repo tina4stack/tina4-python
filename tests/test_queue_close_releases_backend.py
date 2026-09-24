@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Queue.close() — the connection an app opens must be one it can hand back.
 
 MEASURED 2026-08-04: ``close()`` was ABSENT on the top-level ``Queue`` class in

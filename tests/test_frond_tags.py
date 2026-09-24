@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Feature 53 - Frond {% include %} / {% extends %} path confinement (TAG-DEC-01).
 
 Real templates on disk, a real secret file OUTSIDE the templates dir, and a real

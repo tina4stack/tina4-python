@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Messenger parity locks for 3.13.96 — decisions G2-G10. REAL SMTP/IMAP, no mocks.
 """
 Pins the Messenger IMAP-read/SMTP-send parity decisions

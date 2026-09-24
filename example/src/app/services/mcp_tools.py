@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Custom MCP tools for the Tina4 Store — queryable by AI assistants.
 
 Demonstrates: McpServer, @mcp_tool, @mcp_resource for AI integration.

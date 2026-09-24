@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """PostgreSQL provider as the write-path ORACLE - feature 9 (pgprovider_contract.json).
 
 PG-DEC-01 (OWNER-DECISIONS.md Batch 5, feature 009-postgresql-provider.md): make the

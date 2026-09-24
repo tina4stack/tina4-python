@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """fetch()'s ``count`` is the total for the FILTER, never the length of the page.
 
 Found in tina4-nodejs: on SQL Server and MySQL its COUNT probe lacked the

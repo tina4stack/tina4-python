@@ -11,6 +11,9 @@ authority for shipped versions.
 
 ## 3.13.138
 
+This release adopts MPL-2.0 with Code Infinity copyright and an optional separate
+commercial licence. Previously published releases retain their original licences.
+
 Security and correctness release covering Frond output escaping and sandbox boundaries,
 HTTP header and request-body validation, model-field allow-lists, and secret redaction.
 Explicit Content-Type headers survive response conversion, binary responses preserve

@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 name: Publish to PyPI
 
 on:
@@ -34,8 +40,10 @@ jobs:
       - name: Generate SPDX inventory and checksums
         run: |
           python3 scripts/release_evidence.py --output dist --name tina4-python \
-            --version "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" --license MIT --repository tina4stack/tina4-python
+            --version "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" --license MPL-2.0 --repository tina4stack/tina4-python
           (cd dist && sha256sum --check SHA256SUMS)
+      - name: Check inbound dependency licence policy
+        run: python3 scripts/check_dependency_licenses.py
       - name: Test release evidence generator
         run: python3 -m unittest discover -s scripts -p 'test_release_evidence.py'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

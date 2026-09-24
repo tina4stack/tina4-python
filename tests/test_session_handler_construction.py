@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """SESSION CONTRACT: a handler constructor performs NO network I/O.
 
 ADR-0021: connection happens on FIRST USE, inside the log-loud-and-degrade

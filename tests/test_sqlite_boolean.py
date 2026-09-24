@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Regression: a boolean field must round-trip through the real SQLite driver as
 # 0/1. Python's sqlite3 binds bool natively (bool subclasses int), so this is a
 # lock-in test for the cross-framework boolean-coercion contract (Node and Ruby
