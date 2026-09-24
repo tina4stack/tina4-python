@@ -462,7 +462,9 @@ class TestMcpEndpointMounted:
     def _req(self, body=None, path="/__dev/mcp", method="POST", params=None, headers=None):
         return type("Req", (), {
             "body": body or {}, "path": path, "params": params or {},
-            "method": method, "headers": headers or {}, "remote_ip": "",
+            # A local caller states its loopback peer; an empty one is unknown
+            # and refused (ADR-0079 s4).
+            "method": method, "headers": headers or {}, "remote_ip": "127.0.0.1",
         })()
 
     async def test_initialize_issues_session_header(self, monkeypatch):

@@ -51,7 +51,7 @@ import subprocess
 
 # A real signing secret so get_token()/valid_token_static() agree, set before
 # any token is minted (the auth helpers read TINA4_SECRET at call time).
-os.environ["TINA4_SECRET"] = "tc131-contract-secret"
+os.environ["TINA4_SECRET"] = "tc131-contract-secret-0123456789"
 os.environ.pop("TINA4_API_KEY", None)
 
 from conftest import boot_child_server

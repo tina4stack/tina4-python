@@ -14,7 +14,7 @@ from tina4_python.auth import Auth
 
 @pytest.fixture
 def auth():
-    return Auth(secret="test-secret-key", expires_in=30)
+    return Auth(secret="test-secret-key-0123456789abcdef", expires_in=30)
 
 
 # ── JWT Tests ──────────────────────────────────────────────────
@@ -86,11 +86,11 @@ class TestJWTNegative:
 
     def test_wrong_secret(self, auth):
         token = auth.get_token({"user_id": 1})
-        other = Auth(secret="wrong-secret")
+        other = Auth(secret="wrong-secret-0123456789abcdef012")
         assert other.valid_token(token) is None
 
     def test_expired_token(self):
-        auth = Auth(secret="test", expires_in=0)
+        auth = Auth(secret="test-0123456789abcdef0123456789a", expires_in=0)
         # Manually create an expired token
         import json
         from tina4_python.auth import _b64url_encode
@@ -196,10 +196,10 @@ class TestRequestAuth:
 
 class TestAuthConfig:
     def test_secret_from_env(self):
-        os.environ["TINA4_SECRET"] = "env-secret"
+        os.environ["TINA4_SECRET"] = "env-secret-0123456789abcdef01234"
         try:
             auth = Auth()
-            assert auth.secret == "env-secret"
+            assert auth.secret == "env-secret-0123456789abcdef01234"
         finally:
             del os.environ["TINA4_SECRET"]
 
@@ -240,7 +240,7 @@ class TestJWTClaims:
         assert payload["org"] == "acme"
 
     def test_get_payload_ignores_expiration(self):
-        auth = Auth(secret="test")
+        auth = Auth(secret="test-0123456789abcdef0123456789a")
         import json
         from tina4_python.auth import _b64url_encode
         header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
@@ -360,11 +360,11 @@ class TestAPIKeyEdgeCases:
 
 class TestSecretOverride:
     def test_get_token_with_explicit_secret(self):
-        token = Auth.get_token({"user": 1}, secret="custom-secret")
+        token = Auth.get_token({"user": 1}, secret="custom-secret-0123456789abcdef01")
         assert isinstance(token, str)
         # Token signed with custom-secret — default env secret should not validate it
         import os
-        os.environ["TINA4_SECRET"] = "env-secret"
+        os.environ["TINA4_SECRET"] = "env-secret-0123456789abcdef01234"
         try:
             assert not Auth.valid_token_static(token)
         finally:
@@ -372,21 +372,21 @@ class TestSecretOverride:
 
     def test_get_token_module_level_with_secret(self):
         from tina4_python.auth import get_token, valid_token
-        token = get_token({"user": 2}, secret="my-secret")
+        token = get_token({"user": 2}, secret="my-secret-0123456789abcdef012345")
         assert isinstance(token, str)
 
     def test_authenticate_request_with_secret_param(self):
-        auth = Auth(secret="test-secret")
+        auth = Auth(secret="test-secret-0123456789abcdef0123")
         token = auth.get_token({"user": 3})
         result = auth.authenticate_request(
             {"authorization": f"Bearer {token}"},
-            secret="test-secret"
+            secret="test-secret-0123456789abcdef0123"
         )
         assert result is not None
         assert result["user"] == 3
 
     def test_authenticate_request_with_algorithm_param(self):
-        auth = Auth(secret="algo-test")
+        auth = Auth(secret="algo-test-0123456789abcdef012345")
         token = auth.get_token({"user": 4})
         result = auth.authenticate_request(
             {"authorization": f"Bearer {token}"},

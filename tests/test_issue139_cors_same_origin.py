@@ -109,7 +109,7 @@ def server(request, tmp_path_factory):
         "TINA4_SUPPRESS": "true",
         "TINA4_NO_BROWSER": "true",
         "TINA4_AUTO_MIGRATE": "false",
-        "TINA4_SECRET": "cors-contract-secret",
+        "TINA4_SECRET": "cors-contract-secret-0123456789abcdef",
         "TINA4_SESSION_BACKEND": "file",
         "TINA4_SESSION_PATH": str(project / "sessions"),
         "TINA4_CSP": "default-src 'self'",  # an explicit CSP keeps the default-CSP notice out of the log

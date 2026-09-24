@@ -493,7 +493,7 @@ class TestRouteSecureByDefaultBehaviour:
         from tina4_python.core.router import Router
         from tina4_python.test_client import TestClient
         from tina4_python.auth import get_token
-        os.environ["TINA4_SECRET"] = "scaffold-test-secret"
+        os.environ["TINA4_SECRET"] = "scaffold-test-secret-0123456789a"
         os.environ.pop("TINA4_API_KEY", None)
 
         _boot_model_route(tmp_project, "Sprocket", "sprockets")
@@ -528,7 +528,7 @@ class TestRouteSecureByDefaultBehaviour:
 class TestRoutePublicOptOut:
     def test_public_route_boot_gate(self, tmp_project, clean_registry):
         from tina4_python.test_client import TestClient
-        os.environ["TINA4_SECRET"] = "scaffold-test-secret"
+        os.environ["TINA4_SECRET"] = "scaffold-test-secret-0123456789a"
         os.environ.pop("TINA4_API_KEY", None)
 
         _boot_model_route(tmp_project, "Widget", "widgets", public=True)
@@ -557,7 +557,7 @@ class TestRouteNoModelStub:
     def test_no_model_route_is_a_live_stub(self, tmp_project, clean_registry):
         from tina4_python.core.router import Router
         from tina4_python.test_client import TestClient
-        os.environ["TINA4_SECRET"] = "scaffold-test-secret"
+        os.environ["TINA4_SECRET"] = "scaffold-test-secret-0123456789a"
         os.environ.pop("TINA4_API_KEY", None)
 
         _gen_route("notes", {})

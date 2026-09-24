@@ -93,7 +93,7 @@ def dev_tools_env(tmp_path, monkeypatch):
     # reaches its code path but can NEVER contact a real LLM (graceful error).
     monkeypatch.setenv("TINA4_DEBUG", "true")
     monkeypatch.setenv("TINA4_MCP", "true")
-    monkeypatch.setenv("TINA4_SECRET", "conformance-secret-key")
+    monkeypatch.setenv("TINA4_SECRET", "conformance-secret-key-012345678")
     monkeypatch.setenv("TINA4_AI_URL", "http://127.0.0.1:9/closed-on-purpose")
     monkeypatch.delenv("TINA4_DATABASE_URL", raising=False)
 

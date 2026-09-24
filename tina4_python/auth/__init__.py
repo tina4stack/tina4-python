@@ -200,6 +200,66 @@ def _warn_blank_secret() -> None:
     _log_warning(_BLANK_SECRET_WARNING)
 
 
+# ── Auth-token rules (ADR-0079) ─────────────────────────────────────────
+#
+# A token's PURPOSE is part of its validity. Frond's form_token() signs a JWT
+# with the same TINA4_SECRET as an auth token, marked "type": "form". A form
+# token proves where a write came from, never who the caller is, so every
+# identity gate (route gate, WebSocket upgrade, authenticate_request, the
+# Bearer middleware, refresh) refuses these reserved purposes. valid_token
+# itself stays purpose-neutral because the CSRF middleware needs it.
+NON_IDENTITY_TOKEN_TYPES = frozenset({"form"})
+
+# The HMAC key must be at least the HS256 output size (RFC 7518 s3.2). A blank
+# key is the shortest case: anyone can reproduce an HMAC made with it.
+MIN_SECRET_BYTES = 32
+
+
+class InsecureSecretError(ValueError):
+    """The HMAC signing key is blank or shorter than MIN_SECRET_BYTES."""
+
+
+def is_identity_payload(payload) -> bool:
+    """True when a VERIFIED payload may stand for a caller's identity.
+
+    A payload whose ``type`` claim is a reserved non-identity purpose (a Frond
+    form token) is refused. Application payloads are otherwise untouched: an
+    app that puts ``"type": "admin"`` in its own auth token is unaffected.
+    """
+    return isinstance(payload, dict) and payload.get("type") not in NON_IDENTITY_TOKEN_TYPES
+
+
+def insecure_secret_message(secret) -> "str | None":
+    """The actionable error for a weak HMAC key, or None when the key is usable."""
+    length = len((secret or "").encode("utf-8"))
+    if length >= MIN_SECRET_BYTES:
+        return None
+    what = "is not set" if length == 0 else f"is {length} bytes"
+    return (
+        f"Auth: TINA4_SECRET {what}; an HMAC JWT secret must be at least "
+        f"{MIN_SECRET_BYTES} bytes. Generate one with `openssl rand -hex 32` and set "
+        f"TINA4_SECRET in your environment or .env."
+    )
+
+
+def require_boot_secret() -> None:
+    """Refuse to boot with a secret that makes tokens forgeable (ADR-0079 s2).
+
+    Outside dev a blank TINA4_SECRET is refused; in any mode a set-but-short
+    one is refused. Dev with a blank secret has already had one minted into
+    .env.local by ensure_dev_secret(). RS256 keys are PEMs and are not measured
+    here. Raises InsecureSecretError with the actionable message.
+    """
+    if _resolve_algorithm_name() in _RSA_ALGORITHMS:
+        return
+    secret = os.environ.get("TINA4_SECRET", "")
+    if not secret and _is_dev():
+        return
+    message = insecure_secret_message(secret)
+    if message:
+        raise InsecureSecretError(message)
+
+
 def _resolve_secret(secret: str = None) -> str:
     """Resolve the JWT signing secret.
 
@@ -374,6 +434,10 @@ def _numeric_date(value) -> "int | None":
     return int(value)
 
 
+def _resolve_algorithm_name() -> str:
+    return (os.environ.get("TINA4_JWT_ALGORITHM") or "HS256").strip()
+
+
 def _resolve_algorithm(algorithm: str = None) -> str:
     """Pick the JWT algorithm: explicit arg, else TINA4_JWT_ALGORITHM, else HS256.
 
@@ -492,6 +556,15 @@ class Auth:
             if header.get("alg") != self.algorithm:
                 return None
 
+            # A blank or short HMAC key verifies tokens anyone can mint, so the
+            # token is REJECTED (fail closed with a 401, never a 500) and the
+            # operator is told why. ADR-0079 s2.
+            if self.algorithm in _HMAC_ALGORITHMS:
+                weak = insecure_secret_message(self.secret)
+                if weak:
+                    _log_warning(weak)
+                    return None
+
             if not self._verify(f"{h}.{p}", sig):
                 return None
 
@@ -550,6 +623,9 @@ class Auth:
         payload = self.valid_token(token)
         if payload is None:
             return None
+        # Refresh preserves PURPOSE: a form token comes back as a form token
+        # (CSRF rotation) and so can still never pass an identity gate. The
+        # route gate issues a FreshToken only for an identity token. ADR-0079 s1.
         payload.pop("iat", None)
         payload.pop("exp", None)
         return self.get_token(payload, expires_in=expires_in)
@@ -560,6 +636,9 @@ class Auth:
         # backend is installed. self.secret carries the PEM private key.
         if self.algorithm in _RSA_ALGORITHMS:
             return _b64url_encode(_rs256_sign(message.encode(), self.secret))
+        weak = insecure_secret_message(self.secret)
+        if weak:
+            raise InsecureSecretError(weak)
         # Digest comes from the configured algorithm, so the "alg" we advertise in
         # the header is the one that actually produced this signature.
         sig = hmac.new(
@@ -717,8 +796,10 @@ class Auth:
 
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
-            if self.valid_token(token):
-                return self.get_payload(token)
+            payload = self.valid_token(token)
+            if payload is not None:
+                # A form token is not an identity (ADR-0079 s1).
+                return payload if is_identity_payload(payload) else None
             # "_auth" is the cross-framework key for a non-JWT auth result; PHP
             # and Node already used it, Python used "auth_type" and Ruby
             # "api_key", so the same successful auth read three different ways.
@@ -793,7 +874,7 @@ class AuthMiddleware:
         if not auth_header.startswith("Bearer "):
             return request, response({"error": "Unauthorized"}, 401)
         token = auth_header[7:]
-        if not Auth.valid_token_static(token):
+        if not is_identity_payload(Auth.valid_token_static(token)):
             return request, response({"error": "Invalid token"}, 401)
         # Stash the payload on request.user (REQ-PY-NO-USER, 3.13.99 — the
         # field every other framework already exposes). This used to assign
@@ -806,5 +887,7 @@ class AuthMiddleware:
 __all__ = [
     "Auth", "AuthMiddleware", "RS256UnavailableError", "get_token", "valid_token",
     "get_payload", "refresh_token", "authenticate_request", "validate_api_key",
-    "ensure_dev_secret",
+    "ensure_dev_secret", "InsecureSecretError", "NON_IDENTITY_TOKEN_TYPES",
+    "MIN_SECRET_BYTES", "is_identity_payload", "insecure_secret_message",
+    "require_boot_secret",
 ]

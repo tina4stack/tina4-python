@@ -1569,7 +1569,11 @@ def _generate_form_jwt(descriptor: str = "", session_id: str = "") -> str:
         payload["session_id"] = sid
 
     secret = _resolve_secret()
-    ttl = int(os.environ.get("TINA4_TOKEN_EXPIRES_IN", "60"))
+    # Minutes, from the SAME variables Auth reads (TINA4_TOKEN_EXPIRES_IN, then
+    # TINA4_TOKEN_LIMIT), so a form token lives exactly as long as configured in
+    # every framework (ADR-0079 s5).
+    ttl = int(os.environ.get("TINA4_TOKEN_EXPIRES_IN")
+              or os.environ.get("TINA4_TOKEN_LIMIT", "60"))
     auth = _FrondAuth(secret=secret, expires_in=ttl)
     return auth.get_token(payload)
 

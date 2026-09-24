@@ -30,6 +30,22 @@ import itertools
 import pytest
 
 from tina4_python.auth import Auth, _b64url_encode
+
+
+def _forge_hs256(claims: dict, key: str) -> str:
+    """Sign an HS256 JWT with a raw HMAC, as a forger would.
+
+    Auth refuses to SIGN with a blank or short key (ADR-0079 s2), so a token
+    made with the retired public 'tina4-default-secret' or the blank key is
+    built by hand here: the point is that the middleware REJECTS it.
+    """
+    import hashlib
+    import hmac as _hmac
+    claims = dict(claims, iat=int(time.time()), exp=int(time.time()) + 3600)
+    head = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    body = _b64url_encode(json.dumps(claims).encode())
+    sig = _hmac.new(key.encode(), f"{head}.{body}".encode(), hashlib.sha256).digest()
+    return f"{head}.{body}.{_b64url_encode(sig)}"
 from tina4_python.core.middleware import CsrfMiddleware
 from tina4_python.core.request import Request
 from tina4_python.core.response import Response
@@ -42,7 +58,7 @@ from tina4_python.session import Session
 def csrf_env():
     """Ensure CSRF is enabled and SECRET is set for every test."""
     os.environ["TINA4_CSRF"] = "true"
-    os.environ["TINA4_SECRET"] = "test-csrf-secret"
+    os.environ["TINA4_SECRET"] = "test-csrf-secret-0123456789abcde"
     yield
     os.environ.pop("TINA4_CSRF", None)
     os.environ.pop("TINA4_SECRET", None)
@@ -138,7 +154,7 @@ def _dispatch(method="POST", *, body=None, headers=None, params=None,
 def _make_form_token(auth=None, extra_claims=None):
     """Generate a valid form token JWT."""
     if auth is None:
-        auth = Auth(secret="test-csrf-secret")
+        auth = Auth(secret="test-csrf-secret-0123456789abcde")
     claims = {"type": "form"}
     if extra_claims:
         claims.update(extra_claims)
@@ -257,7 +273,7 @@ class TestCsrfInvalidToken:
         assert res.envelope()["code"] == "CSRF_INVALID"
 
     def test_expired_token_is_rejected_403(self):
-        auth = Auth(secret="test-csrf-secret")
+        auth = Auth(secret="test-csrf-secret-0123456789abcde")
         header = _b64url_encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
         payload = _b64url_encode(json.dumps({
             "type": "form",
@@ -272,7 +288,7 @@ class TestCsrfInvalidToken:
         assert res.status_code == 403
 
     def test_token_signed_with_wrong_secret_is_rejected_403(self):
-        forged = Auth(secret="wrong-secret").get_token({"type": "form"})
+        forged = Auth(secret="wrong-secret-0123456789abcdef012").get_token({"type": "form"})
         res = _dispatch(body={"formToken": forged})
         assert res.passed is False
         assert res.status_code == 403
@@ -282,7 +298,7 @@ class TestCsrfInvalidToken:
         # keep the original signature — the HMAC check must fail.
         good = _make_form_token()
         header, _payload, sig = good.split(".")
-        tampered_claims = Auth(secret="test-csrf-secret").get_payload(good)
+        tampered_claims = Auth(secret="test-csrf-secret-0123456789abcde").get_payload(good)
         tampered_claims["admin"] = True
         new_payload = _b64url_encode(json.dumps(tampered_claims).encode())
         tampered = f"{header}.{new_payload}.{sig}"
@@ -324,7 +340,7 @@ class TestCsrfNoauthSkip:
 class TestCsrfBearerSkip:
 
     def test_valid_bearer_skips_csrf(self):
-        bearer = Auth(secret="test-csrf-secret").get_token({"user_id": 1})
+        bearer = Auth(secret="test-csrf-secret-0123456789abcde").get_token({"user_id": 1})
         res = _dispatch(headers={"authorization": f"Bearer {bearer}"})
         assert res.passed is True
         assert res.status_code == 200
@@ -337,7 +353,7 @@ class TestCsrfBearerSkip:
         assert res.status_code == 403
 
     def test_bearer_signed_with_wrong_secret_does_not_skip_csrf(self):
-        forged_bearer = Auth(secret="wrong-secret").get_token({"user_id": 1})
+        forged_bearer = Auth(secret="wrong-secret-0123456789abcdef012").get_token({"user_id": 1})
         res = _dispatch(headers={"authorization": f"Bearer {forged_bearer}"})
         assert res.passed is False
         assert res.status_code == 403
@@ -402,7 +418,7 @@ class TestCsrfTokenRotation:
     resurrect an invalid one."""
 
     def test_refreshed_token_still_passes_csrf(self):
-        auth = Auth(secret="test-csrf-secret")
+        auth = Auth(secret="test-csrf-secret-0123456789abcde")
         original = _make_form_token(auth=auth)
         rotated = auth.refresh_token(original)
 
@@ -416,7 +432,7 @@ class TestCsrfTokenRotation:
         assert res.status_code == 200
 
     def test_refreshed_token_preserves_session_binding(self):
-        auth = Auth(secret="test-csrf-secret")
+        auth = Auth(secret="test-csrf-secret-0123456789abcde")
         original = _make_form_token(auth=auth, extra_claims={"session_id": "sess-1"})
         rotated = auth.refresh_token(original)
 
@@ -433,16 +449,16 @@ class TestCsrfTokenRotation:
         assert bad.status_code == 403
 
     def test_refreshing_an_invalid_token_returns_none_and_cannot_pass(self):
-        auth = Auth(secret="test-csrf-secret")
+        auth = Auth(secret="test-csrf-secret-0123456789abcde")
         # A token forged with the wrong secret cannot be refreshed.
-        forged = Auth(secret="wrong-secret").get_token({"type": "form"})
+        forged = Auth(secret="wrong-secret-0123456789abcdef012").get_token({"type": "form"})
         assert auth.refresh_token(forged) is None
 
     def test_token_refreshed_under_wrong_secret_is_rejected(self):
         # Rotate a valid token but sign the fresh one with a different secret —
         # the middleware (using TINA4_SECRET) must reject the rotated token.
         original = _make_form_token()
-        rotated_wrong = Auth(secret="another-wrong-secret").refresh_token(original)
+        rotated_wrong = Auth(secret="another-wrong-secret-0123456789a").refresh_token(original)
         # refresh validates against its OWN secret, so a genuinely-signed
         # original cannot be refreshed by an Auth holding the wrong secret.
         assert rotated_wrong is None
@@ -502,7 +518,7 @@ class TestCsrfNoDefaultSecret:
 
     def test_forged_default_secret_token_rejected_when_secret_unset(self):
         os.environ.pop("TINA4_SECRET", None)
-        forged = Auth(secret="tina4-default-secret").get_token({"type": "form"})
+        forged = _forge_hs256({"type": "form"}, "tina4-default-secret")
         res = _dispatch("POST", body={"formToken": forged})
         assert res.status_code == 403, (
             "a formToken signed with the public default secret must be rejected "
@@ -514,7 +530,7 @@ class TestCsrfNoDefaultSecret:
         # is publicly reproducible — a token an attacker signs with '' must NOT
         # validate. The middleware fails closed: no secret means no trusted token.
         os.environ.pop("TINA4_SECRET", None)
-        forged = Auth(secret="").get_token({"type": "form"})
+        forged = _forge_hs256({"type": "form"}, "")
         res = _dispatch("POST", body={"formToken": forged})
         assert res.status_code == 403, (
             "a formToken signed with the blank secret must be rejected when "
@@ -537,13 +553,13 @@ class TestCsrfConformance:
     # csrf-no-default-secret (SEC-01)
     def test_forged_default_secret_token_is_rejected(self):
         os.environ.pop("TINA4_SECRET", None)
-        forged = Auth(secret="tina4-default-secret").get_token({"type": "form"})
+        forged = _forge_hs256({"type": "form"}, "tina4-default-secret")
         res = _dispatch("POST", body={"formToken": forged})
         assert res.status_code == 403
 
     def test_forged_blank_secret_token_is_rejected(self):
         os.environ.pop("TINA4_SECRET", None)
-        forged = Auth(secret="").get_token({"type": "form"})
+        forged = _forge_hs256({"type": "form"}, "")
         res = _dispatch("POST", body={"formToken": forged})
         assert res.status_code == 403
 
@@ -561,7 +577,7 @@ class TestCsrfConformance:
     def test_a_non_form_jwt_in_the_form_token_slot_is_rejected(self):
         # A validly-signed but non-form JWT (e.g. an auth token) must not be
         # accepted in the formToken slot.
-        auth_jwt = Auth(secret="test-csrf-secret").get_token({"user_id": 1})
+        auth_jwt = Auth(secret="test-csrf-secret-0123456789abcde").get_token({"user_id": 1})
         res = _dispatch("POST", body={"formToken": auth_jwt})
         assert res.status_code == 403
 
@@ -594,7 +610,7 @@ class TestCsrfConformance:
 
     # csrf-bearer-exempt
     def test_a_valid_bearer_token_skips_csrf(self):
-        bearer = Auth(secret="test-csrf-secret").get_token({"user_id": 1})
+        bearer = Auth(secret="test-csrf-secret-0123456789abcde").get_token({"user_id": 1})
         res = _dispatch(method="POST", headers={"authorization": f"Bearer {bearer}"})
         assert res.passed is True
 
