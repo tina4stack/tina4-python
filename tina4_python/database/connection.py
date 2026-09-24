@@ -236,6 +236,12 @@ class Database(DatabaseAsyncMixin):
 
     def __init__(self, url: str = None, username: str = "", password: str = "",
                  pool: int | None = None, **kwargs):
+        # get_last_id() / get_error() answer for THIS context (thread or task),
+        # never for whichever concurrent request wrote last (ADR-0074).
+        self._last_id_var: contextvars.ContextVar = contextvars.ContextVar(
+            f"tina4_db_last_id_{id(self)}", default=None)
+        self._last_error_var: contextvars.ContextVar = contextvars.ContextVar(
+            f"tina4_db_last_error_{id(self)}", default=None)
         self.url = url or os.environ.get("TINA4_DATABASE_URL", "sqlite:///data/tina4.db")
         # Priority: constructor params > env vars > empty
         self.username = username or os.environ.get("TINA4_DATABASE_USERNAME", "")
@@ -323,6 +329,28 @@ class Database(DatabaseAsyncMixin):
             except Exception:
                 self._cache_backend = None  # fall back to the in-process dict
         Database._instances.add(self)
+
+    @property
+    def last_error(self) -> str | None:
+        """The last error in THIS context (thread or asyncio task)."""
+        return self._last_error_var.get()
+
+    @last_error.setter
+    def last_error(self, value: str | None) -> None:
+        self._last_error_var.set(value)
+
+    @property
+    def _last_id(self):
+        return self._last_id_var.get()
+
+    @_last_id.setter
+    def _last_id(self, value) -> None:
+        self._last_id_var.set(value)
+
+    def _adopt_state(self, context: contextvars.Context) -> None:
+        """Carry last_id / last_error back from a worker's context copy."""
+        self._last_id_var.set(context.get(self._last_id_var))
+        self._last_error_var.set(context.get(self._last_error_var))
 
     @staticmethod
     def _serialize_result(result) -> dict:

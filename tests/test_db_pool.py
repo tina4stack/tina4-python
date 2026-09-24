@@ -273,6 +273,61 @@ def test_checkin_rolls_back_a_transaction_the_borrower_left_open(sqlite_url):
         db.close()
 
 
+# ── Per-request state: get_last_id() / get_error() ─────────────────────────────
+
+def test_get_last_id_is_per_thread_not_shared_between_requests(tmp_path):
+    """Thread A inserts, thread B inserts, THEN A reads get_last_id(): A's own id.
+
+    The last id lived on the shared Database object, so a concurrent request's
+    insert overwrote it and A read B's row id.
+    """
+    db = Database(f"sqlite:///{tmp_path / 'lastid.db'}", pool=3)
+    db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT)")
+    a_inserted, b_inserted = threading.Event(), threading.Event()
+    seen = {}
+
+    def request_a():
+        db.execute("INSERT INTO items (label) VALUES ('a')")
+        a_inserted.set()
+        b_inserted.wait(5)
+        seen["a"] = db.get_last_id()
+
+    def request_b():
+        a_inserted.wait(5)
+        db.execute("INSERT INTO items (label) VALUES ('b')")
+        seen["b"] = db.get_last_id()
+        b_inserted.set()
+
+    try:
+        workers = [threading.Thread(target=request_a), threading.Thread(target=request_b)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(10)
+        assert seen == {"a": 1, "b": 2}, seen
+    finally:
+        db.close()
+
+
+def test_get_last_id_and_get_error_follow_the_async_api(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'lastid_async.db'}", pool=2)
+    db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT)")
+
+    async def main():
+        await db.execute_async("INSERT INTO items (label) VALUES ('x')")
+        first = db.get_last_id()
+        with pytest.raises(Exception):
+            await db.execute_async("INSERT INTO no_such_table (label) VALUES ('y')")
+        return first, db.get_error()
+
+    try:
+        last_id, error = asyncio.run(main())
+        assert last_id == 1
+        assert error and "no_such_table" in error
+    finally:
+        db.close()
+
+
 # ── Exhaustion ─────────────────────────────────────────────────────────────────
 
 def test_pool_exhaustion_raises_a_clear_error_naming_tina4_db_pool(monkeypatch, sqlite_url):
