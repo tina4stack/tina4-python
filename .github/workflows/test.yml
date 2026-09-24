@@ -134,13 +134,11 @@ jobs:
       TINA4_TEST_MYSQL_USERNAME: tina4
       TINA4_TEST_MYSQL_PASSWORD: tina4
       TINA4_TEST_MYSQL_DB: tina4_test
-      TINA4_TEST_MYSQL_URL: mysql://tina4:tina4@127.0.0.1:3306/tina4_test
       TINA4_TEST_MSSQL_HOST: localhost
       TINA4_TEST_MSSQL_PORT: '1433'
       TINA4_TEST_MSSQL_USERNAME: sa
       TINA4_TEST_MSSQL_PASSWORD: 'TinaSQL123!Secure'
       TINA4_TEST_MSSQL_DB: tina4_test
-      TINA4_TEST_MSSQL_URL: 'mssql://sa:TinaSQL123%21Secure@localhost:1433/tina4_test'
       # The ADR-0069 test gate reads these URLs as the promise that MySQL and
       # MSSQL are provisioned. Without them a [needs:mysql] / [needs:mssql] skip
       # would be excused here even though both services run in this job.
