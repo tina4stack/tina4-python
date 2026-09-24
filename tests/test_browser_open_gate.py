@@ -8,7 +8,7 @@ The rule: open a browser only when ALL of these hold -
   * TINA4_DEBUG is truthy,
   * TINA4_NO_BROWSER is not truthy (the shared is_truthy list, "on" included),
   * --no-browser (run(no_browser=True)) was not passed,
-  * no CI variable is set.
+  * no CI variable is set (ADR-0070's list: CI, GITHUB_ACTIONS, ...).
 
 No mocks: each case boots the real server in a child process. The "browser" is
 Python's own webbrowser module driven by the standard BROWSER variable, pointed
@@ -26,6 +26,10 @@ from conftest import boot_child_server
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="[needs:posix] the marker opener is a POSIX shell script")
 
+# ADR-0070's CI list: a CI runner running this suite sets one of them, and the
+# positive case must not inherit it.
+CI_VARIABLES = ("CI", "CONTINUOUS_INTEGRATION", "GITHUB_ACTIONS", "GITLAB_CI",
+                "BUILDKITE", "JENKINS_URL", "TF_BUILD", "TEAMCITY_VERSION")
 OPEN_DELAY = 2.0      # _open_browser waits this long before opening
 WAIT_FOR_OPEN = 8.0   # generous: a slow lab still opens well inside this
 
@@ -48,7 +52,7 @@ def _boot(tmp_path, *, debug: bool, no_browser_flag: bool = False, extra=None, u
         tmp_path, write_app, extra_env=env,
         # boot_child_server pins TINA4_NO_BROWSER=true for safety; each case
         # removes exactly the guards it is about.
-        unset_env=("TINA4_NO_BROWSER", "CI", "TINA4_DEFAULT_WEBSERVER", *unset),
+        unset_env=("TINA4_NO_BROWSER", "TINA4_DEFAULT_WEBSERVER", *CI_VARIABLES, *unset),
     )
     return proc, port, marker
 
@@ -80,13 +84,14 @@ def test_debug_on_with_no_guard_opens_the_browser(tmp_path):
         _stop(proc)
 
 
-@pytest.mark.parametrize("case", ["debug_off", "no_browser_on", "no_browser_flag", "ci_set"])
+@pytest.mark.parametrize("case", ["debug_off", "no_browser_on", "no_browser_flag", "ci_set", "github_actions_set"])
 def test_the_browser_stays_closed_when_any_guard_holds(tmp_path, case):
     kwargs = {
         "debug_off": dict(debug=False),
         "no_browser_on": dict(debug=True, extra={"TINA4_NO_BROWSER": "on"}),
         "no_browser_flag": dict(debug=True, no_browser_flag=True),
         "ci_set": dict(debug=True, extra={"CI": "true"}),
+        "github_actions_set": dict(debug=True, extra={"GITHUB_ACTIONS": "true"}),
     }[case]
     # boot_child_server applies extra_env AFTER unset_env, so a guard passed in
     # extra survives the removal of the outer one.
