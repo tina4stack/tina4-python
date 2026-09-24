@@ -211,10 +211,21 @@ def _id_key(value) -> str:
 _COMPARATORS = {"$gt": ">", "$gte": ">=", "$lt": "<", "$lte": "<="}
 
 
+_PATH_SEGMENT = re.compile(r"[A-Za-z0-9_-]+")
+
+
 def _path(field: str) -> str:
-    """Field name -> a JSON path. Dotted names address nested keys."""
-    # json_extract path; quote each segment to allow keys with odd characters
+    """Field name -> a JSON path. Dotted names address nested keys.
+
+    tina4: ADR-0069 - every SQL path literal is built here, so every segment is
+    checked here. A non-identifier segment such as ``a-b`` is quoted.
+    """
     segments = field.split(".")
+    if not all(_PATH_SEGMENT.fullmatch(s) for s in segments):
+        raise ValueError(
+            f"DocStore: invalid field path '{field}' - each dot-separated segment "
+            "must match [A-Za-z0-9_-]+"
+        )
     return "$." + ".".join(f'"{s}"' if not s.isidentifier() else s for s in segments)
 
 
