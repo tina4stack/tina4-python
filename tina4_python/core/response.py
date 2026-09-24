@@ -545,14 +545,21 @@ class Response:
             etag = hashlib.md5(self.content).hexdigest()[:16]
             self._headers.append(("etag", f'"{etag}"'))
 
-        # Build ASGI header list
+        # Build ASGI header list. One Content-Length only: the body's own, except
+        # for an empty body carrying an explicit one - a HEAD answer reports the
+        # length the GET would have sent (see _stage_head_strip).
+        explicit_length = next((value for name, value in self._headers
+                                if name.lower() == "content-length"), None)
+        length = explicit_length if explicit_length is not None and not self.content \
+            else str(len(self.content))
         headers = [
             (b"content-type", self.content_type.encode()),
-            (b"content-length", str(len(self.content)).encode()),
+            (b"content-length", length.encode()),
         ]
 
         for name, value in self._headers:
-            headers.append((name.encode(), value.encode()))
+            if name.lower() != "content-length":
+                headers.append((name.encode(), value.encode()))
 
         for cookie_str in self._cookies:
             headers.append((b"set-cookie", cookie_str.encode()))

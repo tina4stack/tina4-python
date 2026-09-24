@@ -166,6 +166,17 @@ def _read_all(sock) -> bytes:
 
 
 def _exchange(port, raw: bytes, timeout: float = 8.0) -> Answer:
+    """Send one request and read until the server closes.
+
+    HTTP/1.1 keeps the connection open, so a request that does not say
+    otherwise gets Connection: close added after its request line; the
+    keep-alive cases in TestHttp11 use their own sockets.
+    """
+    head_end = raw.find(b"\r\n\r\n")
+    head = raw if head_end == -1 else raw[:head_end]
+    first_line_end = raw.find(b"\r\n")
+    if first_line_end != -1 and b"\r\nconnection:" not in head.lower():
+        raw = raw[:first_line_end + 2] + b"Connection: close\r\n" + raw[first_line_end + 2:]
     with socket.create_connection(("127.0.0.1", port), timeout=timeout) as sock:
         try:
             sock.sendall(raw)
@@ -452,6 +463,85 @@ class TestBuiltinServer:
         log = read_child_log(proc)
         for leak in ("Task exception was never retrieved", "Traceback", "LimitOverrunError"):
             assert leak not in log, f"server logged {leak!r}:\n{log[-2000:]}"
+
+
+def _read_one_response(sock, head_only=False) -> Answer:
+    """One response off a connection that stays open: head, then Content-Length bytes."""
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(65536)
+        if not chunk:
+            return Answer(data)
+        data += chunk
+    head, _, rest = data.partition(b"\r\n\r\n")
+    answer = Answer(head + b"\r\n\r\n")
+    length = 0 if head_only else int(answer.one("content-length") or 0)
+    while len(rest) < length:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        rest += chunk
+    answer.body = rest[:length]
+    answer.extra = rest[length:]
+    return answer
+
+
+def _closed_by_server(sock) -> bool:
+    try:
+        return sock.recv(1) == b""
+    except (socket.timeout, TimeoutError):
+        return False
+    except ConnectionResetError:
+        return True
+
+
+class TestHttp11:
+    def test_keep_alive_serves_every_request_on_one_connection(self, server):
+        _proc, port = server
+        request = b"GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            for _ in range(3):  # one at a time on the same socket
+                sock.sendall(request)
+                answer = _read_one_response(sock)
+                assert answer.status == 200 and json.loads(answer.body) == {"ok": True}, answer
+            sock.sendall(request * 2)  # pipelined
+            first = _read_one_response(sock)
+            second = _read_one_response(sock) if not first.extra else Answer(first.extra)
+            assert first.status == 200 and second.status == 200, (first, second)
+
+    def test_connection_close_is_honoured(self, server):
+        _proc, port = server
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            sock.sendall(b"GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            answer = _read_one_response(sock)
+            assert answer.status == 200, answer
+            assert answer.one("connection") == "close", answer
+            assert _closed_by_server(sock), "the server kept a Connection: close socket open"
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+            sock.sendall(b"GET /hello HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+            assert _read_one_response(sock).status == 200
+            assert _closed_by_server(sock), "an HTTP/1.0 request without keep-alive must close"
+
+    def test_head_answers_the_get_content_length_without_a_body(self, server, tmp_path):
+        def check(port):
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as sock:
+                sock.sendall(b"GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                get = _read_one_response(sock)
+                sock.sendall(b"HEAD /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                head = _read_one_response(sock, head_only=True)
+                assert head.status == 200, head
+                assert head.headers.get("content-length") == [str(len(get.body))], head
+                # No body follows: the next thing on the socket is the next answer.
+                sock.sendall(b"GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                after = _read_one_response(sock)
+                assert after.status == 200 and after.body == get.body, after
+
+        check(server[1])
+        proc, asgi_port = _boot(tmp_path, builtin=False)
+        try:
+            check(asgi_port)
+        finally:
+            _stop(proc)
 
 
 class TestRejectionShape:

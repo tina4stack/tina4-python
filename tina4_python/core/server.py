@@ -3621,15 +3621,22 @@ def _find_available_port(start: int, max_tries: int = 10) -> int:
         return start
 
 
+#: ADR-0070: a CI runner sets one of these. It counts as set when its value,
+#: trimmed and lower-cased, is anything but blank, "false" or "0" (so CI=no and
+#: CI=woodpecker are CI) - the rule tina4-php ships in App::shouldOpenBrowser.
+_CI_ENVIRONMENT_VARIABLES = ("CI", "CONTINUOUS_INTEGRATION", "GITHUB_ACTIONS", "GITLAB_CI",
+                             "BUILDKITE", "JENKINS_URL", "TF_BUILD", "TEAMCITY_VERSION")
+_CI_NOT_SET = ("", "false", "0")
+
+
 def _should_open_browser(is_debug: bool, no_browser: bool) -> bool:
-    """True only when debug is on and nothing asked for no browser."""
+    """ADR-0070: open a browser only in debug, with no veto from the flag,
+    TINA4_NO_BROWSER or a CI variable."""
     from tina4_python.dotenv import is_truthy
-    return (
-        is_debug
-        and not no_browser
-        and not is_truthy(os.environ.get("TINA4_NO_BROWSER", ""))
-        and not os.environ.get("CI", "").strip()
-    )
+    if not is_debug or no_browser or is_truthy(os.environ.get("TINA4_NO_BROWSER", "")):
+        return False
+    return all(os.environ.get(name, "").strip().lower() in _CI_NOT_SET
+               for name in _CI_ENVIRONMENT_VARIABLES)
 
 
 def _open_browser(url: str):
@@ -4187,18 +4194,27 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         idle_timeout = _resolve_limit("TINA4_REQUEST_TIMEOUT", 30, zero_allowed=True) or None
 
         async def _handle_connection(reader, writer):
-            """Minimal HTTP/1.1 → ASGI bridge for dev server."""
+            """Minimal HTTP/1.1 → ASGI bridge for dev server.
+
+            HTTP/1.1 connections stay open for the next request (pipelined or
+            not) until either side says close; one reader carries any bytes
+            already received for the next request.
+            """
+            request_reader = _BoundedRequestReader(
+                reader, header_limit, TINA4_MAX_UPLOAD_SIZE, idle_timeout)
             try:
-                await _serve_one_request(reader, writer)
+                while await _serve_one_request(reader, writer, request_reader):
+                    # Silence between requests is an idle keep-alive, not a
+                    # stalled request: it closes quietly, without a 408.
+                    request_reader.received_any = bool(request_reader.buffer)
             finally:
                 # Every path out closes the socket - including the ones that
                 # used to raise past this handler and leak it.
                 if not writer.is_closing():
                     writer.close()
 
-        async def _serve_one_request(reader, writer):
-            request_reader = _BoundedRequestReader(
-                reader, header_limit, TINA4_MAX_UPLOAD_SIZE, idle_timeout)
+        async def _serve_one_request(reader, writer, request_reader) -> bool:
+            """Serve one request. True when the connection stays open for the next."""
             try:
                 raw = await request_reader.read_head()
                 # A bare CR, LF or NUL means the head does not split the way
@@ -4210,7 +4226,7 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                 # Parse request line
                 parts = lines[0].split(" ", 2)
                 if len(parts) < 2:
-                    return
+                    return False
 
                 method = parts[0]
                 raw_path = parts[1]
@@ -4237,9 +4253,15 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                     if hasattr(writer, "_tina4_ai_port") and path == "/__dev_reload":
                         writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
                         await writer.drain()
-                        return
+                        return False
                     await _handle_dev_websocket(reader, writer, _header_dict, path, qs)
-                    return
+                    return False
+
+                # HTTP/1.1 is persistent unless the client says close; an
+                # HTTP/1.0 client gets one answer and a close.
+                version = parts[2].strip() if len(parts) > 2 else "HTTP/1.0"
+                keep_alive = (version == "HTTP/1.1"
+                              and "close" not in _header_dict.get("connection", "").lower())
 
                 # The cap is enforced BEFORE and WHILE the body is read, never
                 # after: a declared length over it is refused unread, and every
@@ -4249,9 +4271,9 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                 body = await request_reader.read_body(declared)
             except _RequestRejected as rejected:
                 await _answer_and_linger(reader, writer, rejected.status, rejected.message)
-                return
+                return False
             except _ConnectionDone:
-                return
+                return False
 
             # Build ASGI scope
             addr = writer.get_extra_info("peername") or ("127.0.0.1", 0)
@@ -4313,14 +4335,27 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
             await app(scope, receive, send)
 
-            # Write HTTP/1.1 response (only if headers weren't already sent by streaming)
-            if not _headers_sent:
-                head = _response_head(resp_status, resp_headers)
-                if head is None:
-                    writer.write(_rejection_bytes(500, "Invalid response header"))
-                else:
-                    writer.write(head + resp_body)
-                await writer.drain()
+            # A streamed response ends by closing the connection.
+            if _headers_sent or _refused:
+                return False
+
+            # The next request can only follow on this socket when the client
+            # asked to keep it, the answer says where its body ends, and the
+            # answer itself did not ask to close.
+            names = {bytes(name).lower(): bytes(value).lower() for name, value in resp_headers}
+            if b"content-length" not in names or names.get(b"connection") == b"close":
+                keep_alive = False
+            if not keep_alive and b"connection" not in names:
+                resp_headers = [*resp_headers, (b"connection", b"close")]
+
+            head = _response_head(resp_status, resp_headers)
+            if head is None:
+                writer.write(_rejection_bytes(500, "Invalid response header"))
+                keep_alive = False
+            else:
+                writer.write(head + resp_body)
+            await writer.drain()
+            return keep_alive
 
         server = await start_server(_handle_connection, host, port)
 
