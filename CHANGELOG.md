@@ -9,6 +9,36 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.138
+
+Development credential files are owner-only and refuse symbolic or hard-linked targets.
+MQTT explicitly requires TLS 1.2 or newer. Development and benchmark dependencies
+are updated to patched versions; the framework still has no required runtime dependencies.
+
+This release adopts MPL-2.0 with Code Infinity copyright and an optional separate
+commercial licence. Previously published releases retain their original licences.
+
+Security and correctness release covering Frond output escaping and sandbox boundaries,
+HTTP header and request-body validation, model-field allow-lists, and secret redaction.
+Explicit Content-Type headers survive response conversion, binary responses preserve
+bytes, and settings loaded from .env are read when used across server entry points.
+
+Database statement semantics, filtered totals, SQL placeholder handling and mapped-field
+read-back now follow the shared contracts. MongoDB session connections are reused and
+replica-set reply decoding is covered against MongoDB 8. Mail transports verify TLS
+certificates and require STARTTLS when configured; broker failures and missing optional
+drivers produce actionable errors. GraphQL accepts insignificant commas and limits
+writes to declared fields.
+
+Connection pools exclusively lease connections for each operation and transaction,
+preventing concurrent dirty reads and writes lost to another transaction’s rollback.
+Exhausted pools fail immediately instead of sharing an active connection.
+
+The maintainer skill estimates time from measured agent durations. Release workflows
+produce checksum and SPDX inventory evidence and attest the built packages before
+publishing. Release Actions are pinned to immutable commits. ISO programme work remains
+in progress; this release does not claim certification or conformance.
+
 ## 3.13.137
 
 Gemini joins the Ai client as a first-class provider. Set TINA4_AI_PROVIDER=gemini with a

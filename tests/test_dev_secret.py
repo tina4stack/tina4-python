@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Fail-safe dev secret bootstrap — tina4_python.auth.ensure_dev_secret().
 
 In DEV (TINA4_DEBUG truthy, CI unset, not production) with a blank
@@ -36,6 +42,8 @@ class TestDevGenerates:
         # Persisted to .env.local (and ONLY .env.local).
         env_local = tmp_path / ".env.local"
         assert env_local.is_file()
+        if os.name == "posix":
+            assert env_local.stat().st_mode & 0o777 == 0o600
         assert f"TINA4_SECRET={secret}" in env_local.read_text(encoding="utf-8")
         assert not (tmp_path / ".env").exists()  # never writes .env
 
@@ -47,6 +55,8 @@ class TestDevGenerates:
 
         secret = ensure_dev_secret(cwd=str(tmp_path))
 
+        if os.name == "posix":
+            assert env_local.stat().st_mode & 0o777 == 0o600
         content = env_local.read_text(encoding="utf-8")
         assert "EXISTING=1" in content                  # preserved
         assert f"TINA4_SECRET={secret}" in content       # appended

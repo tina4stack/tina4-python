@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Feature 130: dynamic framework version (single resolver + version User-Agent).
 
 See plan/v3/features/130-dynamic-version.md and plan/v3/OWNER-DECISIONS.md

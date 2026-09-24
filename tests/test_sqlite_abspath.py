@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """SQLite absolute-path parity — a naive `sqlite:<abs>` (one leading slash) must open
 the ABSOLUTE file, not a path relative to cwd. Real driver, real files, no mocks."""
 import os

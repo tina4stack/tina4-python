@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Tina4 Python v3.0 — The Intelligent Native Application 4ramework.
 # Copyright 2007 - present Tina4
 # License: MIT https://opensource.org/licenses/MIT
@@ -51,7 +57,7 @@ def _resolve_version() -> str:
     #
     # test_version_constant.py now asserts this literal equals the pyproject
     # version, so the release bump cannot leave it behind again.
-    return "3.13.137"
+    return "3.13.138"
 
 
 __version__ = _resolve_version()

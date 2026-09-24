@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """The TINA4_REQUIRE_SERVICES skip gate (tests/conftest.py), tested for real.
 
 THE RULE (ADR-0069 addendum F, identical in all four frameworks). Under

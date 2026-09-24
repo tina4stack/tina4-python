@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """A table/column named with a SQL reserved word must work.
 
 `CREATE TABLE order (...)` / `SELECT * FROM order` are syntax errors on every
@@ -7,8 +13,6 @@ for the bound dialect so that works.
 """
 from __future__ import annotations
 
-import os
-import tempfile
 
 import pytest
 
@@ -26,15 +30,14 @@ class Order(ORM):
 
 
 @pytest.fixture
-def sqlite_db():
-    path = tempfile.mktemp(suffix=".db")
+def sqlite_db(tmp_path):
+    path = str(tmp_path / "database.db")
     db = Database(f"sqlite:///{path}")
     bind_database(db)
-    yield db
     try:
-        os.unlink(path)
-    except OSError:
-        pass
+        yield db
+    finally:
+        db.close()
 
 
 class TestReservedTableName:

@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Graph connection URL parser — the DatabaseUrl sibling for graph engines.
 """Parse a graph connection URL into its parts, the same way DatabaseUrl does
 for SQL. Engine is the CANONICAL name the factory selects an adapter by; a

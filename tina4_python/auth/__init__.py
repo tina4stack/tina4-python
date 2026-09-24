@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Tina4 Auth — Zero-dependency JWT, password hashing, and token validation.
 """
 JWT implementation using Python stdlib only (hmac + hashlib). No PyJWT.
@@ -144,14 +150,20 @@ def ensure_dev_secret(cwd: str = None) -> str | None:
     base = Path(cwd) if cwd else Path.cwd()
     env_local = base / ".env.local"
     try:
-        # Append (create if missing). A trailing newline keeps the file
-        # parseable if it already held entries without a final newline.
-        prefix = ""
-        if env_local.exists():
-            existing = env_local.read_text(encoding="utf-8")
-            if existing and not existing.endswith("\n"):
-                prefix = "\n"
-        with env_local.open("a", encoding="utf-8") as fh:
+        import stat
+        # Read and append through the same guarded descriptor: a replaced path
+        # cannot redirect either operation to another file.
+        fd = os.open(env_local, os.O_RDWR | os.O_APPEND | os.O_CREAT
+                     | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600)
+        with os.fdopen(fd, "a+", encoding="utf-8") as fh:
+            info = os.fstat(fh.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError("Refusing a non-regular or multiply-linked configuration file")
+            if hasattr(os, "fchmod"):
+                os.fchmod(fh.fileno(), 0o600)
+            fh.seek(0)
+            existing = fh.read()
+            prefix = "\n" if existing and not existing.endswith("\n") else ""
             fh.write(f"{prefix}TINA4_SECRET={new_secret}\n")
         _log_info(
             "Auth: generated a development secret, saved to .env.local (gitignored)"

@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Messenger SEND-SIGNATURE contract, mirroring tina4-nodejs#41 and #42.
 
 This is the send()/capture() signature-and-branch contract (one name = one

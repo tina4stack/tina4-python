@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Zero-dependency MQTT 3.1.1 client -- the protocol every broker and every IoT
 device already speaks.
 
@@ -536,6 +542,7 @@ class Mqtt:
         # store a CA loaded for one client would be trusted by every later client
         # in the process -- so we build and verify against this context alone.
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         if self._tls_verify:
             context.verify_mode = ssl.CERT_REQUIRED
             context.check_hostname = True

@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # RFC 9110 s9.3.2: a HEAD response MUST NOT carry content. On EVERY path.
 """
 Python already behaves correctly; this LOCKS IT IN, because Ruby did not.

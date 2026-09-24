@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Real, no-mock tests for the native ``Context`` code/doc grounding subsystem.
 
 Every test uses a REAL temp SQLite file (``tmp_path``) and REAL temp source

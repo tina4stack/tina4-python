@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """MySQL provider contract - feature 10 (mysqlprovider_contract.json).
 
 MYSQL-DEC-01 + MYSQL-DEC-02 (OWNER-DECISIONS.md Batch 5, feature doc

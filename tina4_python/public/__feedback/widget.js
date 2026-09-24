@@ -1,3 +1,11 @@
+/*
+Copyright (c) 2026 Code Infinity
+SPDX-License-Identifier: MPL-2.0
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at https://mozilla.org/MPL/2.0/.
+*/
+
 (function(){"use strict";(()=>{try{const t=window.location.pathname||"";return t.startsWith("/__dev")||t.startsWith("/__feedback")}catch{return!1}})()?console.info("tina4-feedback-widget: skipping on developer path"):window.__tina4FeedbackLoaded?console.warn("tina4-feedback-widget already loaded; skipping"):(window.__tina4FeedbackLoaded=!0,b());function b(){const c=(getComputedStyle(document.documentElement).getPropertyValue("--primary")||"").trim()||"#3b82f6";h(c);const l=m();document.body.appendChild(l);let e=null,u;const r=[];l.addEventListener("click",()=>{if(e){e.remove(),e=null,l.style.display="";return}e=g(),document.body.appendChild(e),l.style.display="none",setTimeout(()=>e?.querySelector("textarea")?.focus(),0)});function g(){const o=document.createElement("div");o.className="tina4-fb-modal",o.innerHTML=`
       <div class="tina4-fb-head">
         <span class="tina4-fb-title">Tell us what's not working</span>

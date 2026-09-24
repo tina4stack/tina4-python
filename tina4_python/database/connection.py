@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Tina4 Database Connection — Parse DATABASE_URL, auto-detect driver.
 """
 The Database class parses a connection URL and creates the right adapter.
@@ -7,8 +13,10 @@ The Database class parses a connection URL and creates the right adapter.
     db = Database()  # Reads DATABASE_URL from environment
 
 Connection pooling:
-    db = Database("sqlite:///data/app.db", pool=4)  # 4 connections, round-robin
+    db = Database("sqlite:///data/app.db", pool=4)  # 4 exclusive connection leases
 """
+from contextlib import contextmanager
+from functools import wraps
 import hashlib
 import importlib
 import os
@@ -43,12 +51,22 @@ def _connect_or_explain(adapter: DatabaseAdapter, path: str,
         ) from cause
 
 
+def _connection_operation(method):
+    """Reserve one physical connection for the complete facade operation."""
+    @wraps(method)
+    def operation(self, *args, **kwargs):
+        with self._adapter_operation():
+            return method(self, *args, **kwargs)
+    return operation
+
+
 class ConnectionPool:
-    """Thread-safe connection pool using round-robin rotation.
+    """Thread-safe exclusive leases with round-robin selection and fail-fast saturation.
 
     When pool_size > 0, maintains multiple adapter instances and rotates
-    through them for each operation. Connections are created lazily on
-    first use.
+    through available connections for each operation. Transactions retain
+    their exclusive lease until completion. Saturation fails immediately;
+    connections are created lazily on first use.
 
     Usage:
         pool = ConnectionPool(pool_size=4, factory=create_adapter,
@@ -70,6 +88,7 @@ class ConnectionPool:
         self._password = password
         self._connect_kwargs = kwargs
         self._adapters: list[DatabaseAdapter | None] = [None] * pool_size
+        self._owners = [None] * pool_size
         self._index = 0
         self._lock = threading.Lock()
 
@@ -83,16 +102,43 @@ class ConnectionPool:
             self._adapters[idx] = adapter
         return self._adapters[idx]
 
-    def checkout(self) -> DatabaseAdapter:
-        """Get the next adapter via round-robin. Thread-safe."""
-        with self._lock:
-            idx = self._index
-            self._index = (self._index + 1) % self._pool_size
-            return self._ensure_adapter(idx)
+    def _available(self) -> int:
+        for offset in range(self._pool_size):
+            idx = (self._index + offset) % self._pool_size
+            if self._owners[idx] is None:
+                self._index = (idx + 1) % self._pool_size
+                return idx
+        raise RuntimeError("Database connection pool exhausted")
 
-    def checkin(self, adapter: DatabaseAdapter) -> None:
-        """Return an adapter to the pool. Currently a no-op for round-robin."""
-        pass
+    def peek(self) -> DatabaseAdapter:
+        """Non-owning advanced access; never expose a leased connection.
+
+        Concurrent raw-driver callers must use checkout/checkin instead.
+        """
+        with self._lock:
+            return self._ensure_adapter(self._available())
+
+    def checkout(self) -> DatabaseAdapter:
+        """Exclusively lease an available connection; fail fast if saturated."""
+        with self._lock:
+            idx = self._available()
+            adapter = self._ensure_adapter(idx)
+            self._owners[idx] = threading.current_thread()
+            return adapter
+
+    def checkin(self, adapter: DatabaseAdapter, *, discard=False) -> None:
+        """Only the owning thread can return (or discard) a lease."""
+        with self._lock:
+            idx = next((i for i, item in enumerate(self._adapters) if item is adapter), None)
+            if idx is None or self._owners[idx] is not threading.current_thread():
+                raise RuntimeError("Database connection lease owner mismatch")
+            try:
+                if discard:
+                    adapter.close()
+            finally:
+                if discard:
+                    self._adapters[idx] = None
+                self._owners[idx] = None
 
     def close_all(self) -> None:
         """Close all active connections in the pool."""
@@ -101,6 +147,7 @@ class ConnectionPool:
                 if adapter is not None:
                     adapter.close()
                     self._adapters[i] = None
+                    self._owners[i] = None
 
     @property
     def size(self) -> int:
@@ -260,6 +307,7 @@ class Database:
         # on this thread routes to the same adapter — so the round-robin
         # pool can't rotate mid-transaction and silently break atomicity.
         self._tx_local = threading.local()
+        self._operation_local = threading.local()
 
         # Query cache. One store, two layers — BOTH opt-in:
         #   • request-scoped (DEFAULT OFF — opt-in via TINA4_AUTO_CACHING=true) —
@@ -603,28 +651,41 @@ class Database:
 
     # ── Pool-aware adapter access ─────────────────────────────
 
+    @contextmanager
+    def _adapter_operation(self):
+        if (self._pool is None or getattr(self._tx_local, "adapter", None) is not None
+                or getattr(self._operation_local, "adapter", None) is not None):
+            yield
+            return
+        adapter = self._pool.checkout()
+        self._operation_local.adapter = adapter
+        self._operation_local.discard = False
+        try:
+            yield
+        finally:
+            self._operation_local.adapter = None
+            if getattr(self._tx_local, "adapter", None) is not adapter:
+                self._pool.checkin(adapter, discard=self._operation_local.discard)
+
+    def _release_transaction(self, adapter, *, discard=False):
+        self._tx_local.adapter = None
+        self._tx_local.depth = 0
+        if self._pool is not None:
+            if getattr(self._operation_local, "adapter", None) is adapter:
+                self._operation_local.discard = discard
+            else:
+                self._pool.checkin(adapter, discard=discard)
+
     def _get_adapter(self) -> DatabaseAdapter:
-        """Get an adapter for the next operation.
-
-        With pooling enabled, ordinary calls round-robin through the pool.
-        Inside a transaction, however, all calls must land on the SAME
-        adapter — otherwise start_transaction(), execute() and commit()
-        each rotate to a different connection and the transaction is
-        meaningless (executes autocommit on whatever adapter they hit;
-        the final commit lands on yet another adapter that has nothing
-        to commit; rollback() is silently no-op'd).
-
-        We pin the adapter to the calling thread for the duration of the
-        transaction. start_transaction() sets the pin, commit()/rollback()
-        clear it. While pinned, _get_adapter() returns that same adapter
-        for every call so the whole transaction is atomic on one
-        connection.
-        """
+        """Use the current operation/transaction lease, or a non-owning peek."""
         pinned = getattr(self._tx_local, "adapter", None)
         if pinned is not None:
             return pinned
+        operation = getattr(self._operation_local, "adapter", None)
+        if operation is not None:
+            return operation
         if self._pool is not None:
-            return self._pool.checkout()
+            return self._pool.peek()
         return self._adapter
 
     # ── Delegate to adapter — with cache integration ─────────
@@ -644,6 +705,7 @@ class Database:
         """Return the last insert ID from execute() or insert()."""
         return self._last_id
 
+    @_connection_operation
     def execute(self, sql: str, params: list = None):
         """Execute a write statement. Returns True for simple writes.
 
@@ -686,6 +748,7 @@ class Database:
             self.last_error = str(e)
             raise
 
+    @_connection_operation
     def execute_many(self, sql: str, params_list: list[list] = None) -> DatabaseResult:
         if self._cache_enabled:
             self._cache_invalidate()
@@ -727,6 +790,7 @@ class Database:
             return result
         return self._fetch_direct(sql, params, limit, offset)
 
+    @_connection_operation
     def _fetch_direct(self, sql: str, params: list, limit: int, offset: int) -> DatabaseResult:
         """Run a fetch straight against the adapter — no cache lookup or store.
 
@@ -747,6 +811,7 @@ class Database:
             self.last_error = getattr(adapter, "last_error", None) or str(e) or self.last_error
             raise
 
+    @_connection_operation
     def _fetch_one_direct(self, sql: str, params: list) -> dict | None:
         """Run a fetch_one straight against the adapter — no cache lookup/store.
 
@@ -815,6 +880,7 @@ class Database:
             return result
         return self._fetch_one_direct(sql, params)
 
+    @_connection_operation
     def quote_identifier(self, name: str) -> str:
         """Quote a table/column name for THIS connection's dialect.
 
@@ -823,6 +889,7 @@ class Database:
         """
         return self._get_adapter().quote_identifier(name)
 
+    @_connection_operation
     def insert(self, table: str, data: dict | list) -> DatabaseResult:
         if self._cache_enabled:
             self._cache_invalidate()
@@ -832,6 +899,7 @@ class Database:
             self._last_id = result.last_id
         return result
 
+    @_connection_operation
     def primary_key(self, table: str) -> list[str]:
         """The table's primary-key columns, introspected once and cached.
 
@@ -922,6 +990,7 @@ class Database:
                 missing.append(column)
         return resolved, missing
 
+    @_connection_operation
     def update(self, table: str, data: dict,
                filter_sql: str | dict = "", params: list = None) -> DatabaseResult:
         """Update rows. A write with no filter is an error, not a full-table write.
@@ -966,6 +1035,7 @@ class Database:
         result = self._get_adapter().update(table, data, filter_sql, params)
         return self._without_last_id(result)
 
+    @_connection_operation
     def delete(self, table: str,
                filter_sql: str | dict | list = "", params: list = None) -> DatabaseResult:
         """Delete rows. A filterless delete raises; use ``truncate()`` to empty."""
@@ -987,6 +1057,7 @@ class Database:
         result = self._get_adapter().delete(table, filter_sql, params)
         return self._without_last_id(result)
 
+    @_connection_operation
     def truncate(self, table: str) -> DatabaseResult:
         """Remove every row. The explicit spelling of a whole-table delete."""
         if self._cache_enabled:
@@ -1005,6 +1076,7 @@ class Database:
             result.last_id = None
         return result
 
+    @_connection_operation
     def start_transaction(self):
         """Begin a transaction. Pins the adapter to this thread for the
         whole transaction so executes and the final commit/rollback all
@@ -1038,8 +1110,13 @@ class Database:
         adapter = self._get_adapter()
         self._tx_local.adapter = adapter
         self._tx_local.depth = 1
-        adapter.start_transaction()
+        try:
+            adapter.start_transaction()
+        except Exception:
+            self._release_transaction(adapter, discard=True)
+            raise
 
+    @_connection_operation
     def commit(self):
         """Commit the current transaction and release the adapter pin.
 
@@ -1063,10 +1140,10 @@ class Database:
             # Keep the pin so rollback() reaches this same connection.
             self.last_error = str(e)
             raise
-        # Success — release the pin.
-        self._tx_local.adapter = None
-        self._tx_local.depth = 0
+        # Success — release the exclusive transaction lease.
+        self._release_transaction(adapter)
 
+    @_connection_operation
     def rollback(self):
         """Roll back the current transaction and release the adapter pin.
 
@@ -1078,34 +1155,39 @@ class Database:
         doesn't stay pinned to this thread forever.
         """
         adapter = self._get_adapter()
+        failed = False
         try:
             adapter.rollback()
             self.last_error = None
         except Exception as e:
             self.last_error = str(e)
+            failed = True
             raise
         finally:
-            # Terminal cleanup — always release the pin.
-            self._tx_local.adapter = None
-            self._tx_local.depth = 0
+            self._release_transaction(adapter, discard=failed)
 
+    @_connection_operation
     def table_exists(self, name: str) -> bool:
         adapter = self._get_adapter()
         return adapter.table_exists(name)
 
+    @_connection_operation
     def get_tables(self) -> list[str]:
         adapter = self._get_adapter()
         return adapter.get_tables()
 
+    @_connection_operation
     def get_columns(self, table: str) -> list[dict]:
         adapter = self._get_adapter()
         return adapter.get_columns(table)
 
+    @_connection_operation
     def get_database_type(self) -> str:
         adapter = self._get_adapter()
         return adapter.get_database_type()
 
     @property
+    @_connection_operation
     def autocommit(self) -> bool:
         """Whether writes auto-commit. Off by default, set TINA4_AUTOCOMMIT=true to enable."""
         adapter = self._get_adapter()
@@ -1154,6 +1236,7 @@ class Database:
             pass  # Table doesn't exist — start at 0
         return 0
 
+    @_connection_operation
     def _sequence_next(self, seq_name: str, table: str = None, pk_column: str = "id") -> int:
         """Atomically increment and return the next value from tina4_sequences.
 
@@ -1354,6 +1437,7 @@ class Database:
             return int(records[0]["current_value"])
         raise RuntimeError(f"get_next_id: sequence row '{seq_name}' missing")
 
+    @_connection_operation
     def get_next_id(self, table: str, pk_column: str = "id", generator_name: str = None) -> int:
         """Get the next available ID for a table.
 
@@ -1440,6 +1524,7 @@ class Database:
         seq_key = generator_name or f"{table}.{pk_column}"
         return self._sequence_next(seq_key, table=table, pk_column=pk_column)
 
+    @_connection_operation
     def register_function(self, name: str, num_params: int, func: callable, deterministic: bool = True):
         """Register a custom SQL function (SQLite only).
 
@@ -1516,7 +1601,8 @@ class Database:
         """Return the underlying driver/adapter object.
 
         With pooling enabled, returns the next adapter from the pool
-        via round-robin (same as the internal _get_adapter()).
+        via a non-owning peek that excludes leased connections. Concurrent raw
+        driver work must use checkout()/checkin() for an exclusive lease.
         Without pooling, returns the single connection adapter.
         """
         return self._get_adapter()
@@ -1541,7 +1627,7 @@ class Database:
         return 1 if self._adapter is not None else 0
 
     def checkout(self) -> DatabaseAdapter:
-        """Check out an adapter from the pool (round-robin).
+        """Exclusively check out an available adapter; fail fast if saturated.
 
         In single-connection mode, returns the single adapter directly.
         """
@@ -1553,8 +1639,7 @@ class Database:
         """Return an adapter to the pool.
 
         In single-connection mode this is a no-op.
-        In pool mode, delegates to ConnectionPool.checkin() (currently a no-op
-        for round-robin pools, but provided for API consistency).
+        In pool mode, only the owning thread may release its lease.
         """
         if self._pool is not None:
             self._pool.checkin(adapter)

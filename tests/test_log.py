@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Tests for tina4_python.debug.Log (3.14 contract, black-box against the
 # public surface only). Rewritten 2026-08-13 alongside the shared
 # logger_contract.json conformance runner (tests/test_logger_fixture_contract.py):

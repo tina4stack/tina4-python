@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """The MSSQL adapter (and Firebird) wire ``boolean_to_int`` into apply-time
 translation, so a bare ``TRUE``/``FALSE`` reaches a BIT-backed engine as ``1``/``0``.
 A ``TRUE``/``FALSE`` inside a string literal is data and must survive untouched.

@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Real-subprocess tests for the scaffolding envelope v1.1 (ADR-0063 Wave 1).
 
 3.13.120 bumps the generate resolution envelope from `generate_v1` to

@@ -1,68 +1,108 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 name: Publish to PyPI
 
 on:
   push:
-    tags:
-      - '[0-9]*.*.*'
+    tags: ['[0-9]*.*.*']
+  pull_request:
+    branches: [v3]
+
+permissions:
+  contents: read
 
 jobs:
-  publish:
+  release-package:
+    name: Build release package and evidence
     runs-on: ubuntu-latest
-    # softprops/action-gh-release calls the GitHub REST API with the
-    # default GITHUB_TOKEN. That token only writes to the repository if
-    # the job declares contents:write. Make it explicit so we don't
-    # depend on the repo-level Workflow permissions setting.
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # need full history for git log on the tagged commit
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
-
-      - name: Install dependencies
-        run: pip install uv
-
-      - name: Verify tag matches source version
+      - name: Validate release version
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          VERSION="${GITHUB_REF_NAME}"
-          SOURCE_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          RUNTIME_VERSION="$(PYTHONPATH=. python -c 'import tina4_python; print(tina4_python.__version__)')"
-          test "$SOURCE_VERSION" = "$VERSION" || {
-            echo "::error::Tag $VERSION does not match pyproject.toml $SOURCE_VERSION"
-            exit 1
-          }
-          test "$RUNTIME_VERSION" = "$VERSION" || {
-            echo "::error::Tag $VERSION does not match runtime $RUNTIME_VERSION"
-            exit 1
-          }
-          echo "Building verified version $VERSION"
+          VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [[ "$RELEASE_REF" == refs/tags/* ]]; then
+            test "${RELEASE_TAG}" = "$VERSION"
+          fi
+      - name: Build immutable package
+        run: |
+          pip install uv==0.12.18
+          uv build
+      - name: Generate SPDX inventory and checksums
+        run: |
+          python3 scripts/release_evidence.py --output dist --name tina4-python \
+            --version "$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')" --license MPL-2.0 --repository tina4stack/tina4-python
+          (cd dist && sha256sum --check SHA256SUMS)
+      - name: Check inbound dependency licence policy
+        run: |
+          python3 scripts/check_dependency_licenses.py
+          python3 -m unittest discover -s scripts -p test_dependency_licenses.py
+      - name: Test release evidence generator
+        run: python3 -m unittest discover -s scripts -p 'test_release_evidence.py'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-release-package
+          path: dist/*
+          if-no-files-found: error
 
-      - name: Build package
-        run: uv build
-
-      - name: Publish to PyPI
-        run: uv publish
+  publish:
+    needs: release-package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verified-release-package
+          path: dist
+      - name: Verify the exact built assets before attestation or publication
+        run: cd dist && sha256sum --check SHA256SUMS
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/*
+      - name: Attest SPDX inventory
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3
+        with:
+          subject-path: dist/*.whl
+          sbom-path: dist/sbom.spdx.json
+      - name: Attest source distribution inventory
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3
+        with:
+          subject-path: dist/*.tar.gz
+          sbom-path: dist/sbom.spdx.json
+      - name: Publish the verified wheel and source distribution
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
-
-      - name: Extract release notes from commit body
         run: |
-          # Pull the tagged commit body (sans Co-Authored-By trailers and
-          # trailing blank lines). The body is the narrative the maintainer
-          # already writes for each release — piping it straight into the
-          # GitHub release beats a bare "Full Changelog" link.
-          git log -1 "${GITHUB_REF_NAME}" --pretty=%B \
-            | awk '/^Co-Authored-By:/ { skip=1 } !skip { print }' \
-            | sed -e :a -e '/^[[:space:]]*$/{$d;N;ba' -e '}' \
-            > /tmp/release-notes.md
-          echo "── /tmp/release-notes.md ──"
-          cat /tmp/release-notes.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+          pip install uv==0.12.18
+          uv publish dist/*.whl dist/*.tar.gz
+      - name: Extract this release's changelog
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('CHANGELOG.md').read_text()
+          section = text.split('\n## ', 1)[1].split('\n## ', 1)[0]
+          Path('release-notes.md').write_text('## ' + section + '\n')
+          PY
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          body_path: /tmp/release-notes.md
+          body_path: release-notes.md
+          files: dist/*
+          fail_on_unmatched_files: true

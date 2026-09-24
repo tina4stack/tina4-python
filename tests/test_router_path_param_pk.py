@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Regression: a route path param like {id} must match an INTEGER primary key.
 
 An untyped path param is captured as a str; SQLite gives a TEXT operand numeric
@@ -6,8 +12,6 @@ master contract the other frameworks mirror (tina4-ruby had a bug where its
 path captures arrived as ASCII-8BIT and bound as a BLOB, which skips affinity,
 so GET /api/users/{id} 404'd a real row). No mocks: real Router + real SQLite.
 """
-import os
-import tempfile
 
 import pytest
 
@@ -23,14 +27,15 @@ def clear_routes():
 
 
 @pytest.fixture
-def db():
-    path = tempfile.mktemp(suffix=".db")
+def db(tmp_path):
+    path = str(tmp_path / "database.db")
     d = Database(f"sqlite:///{path}")
     d.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
     d.execute("INSERT INTO users (id, name) VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Carol')")
-    yield d
-    if os.path.exists(path):
-        os.remove(path)
+    try:
+        yield d
+    finally:
+        d.close()
 
 
 class TestPathParamIntegerPkLookup:

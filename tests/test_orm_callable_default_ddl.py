@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Regression for issue #61: create_table() must OMIT callable field defaults from DDL.
 
 A callable default (e.g. ``DateTimeField(default=lambda: datetime.now())``, a documented

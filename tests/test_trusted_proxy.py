@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Feature 11 (rate limiter) — the client key must not be attacker-controlled.
 #
 # ADR-0019. X-Forwarded-For is written by whoever sends it, so reading it

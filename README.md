@@ -764,8 +764,9 @@ Full guides, API reference, and examples at **[tina4.com](https://tina4.com)**.
 
 ## License
 
-MIT (c) 2007-2026 Tina4 Stack
-https://opensource.org/licenses/MIT
+Copyright (c) 2026 Code Infinity. Licensed under the [Mozilla Public License 2.0](LICENSE).
+A separate commercial licence is available from Code Infinity; see [commercial licensing](COMMERCIAL-LICENSE.md).
+Previously published releases retain their original licences.
 
 ---
 

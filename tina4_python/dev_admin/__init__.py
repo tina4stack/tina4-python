@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 # Tina4 Dev Admin — Built-in development dashboard, zero dependencies.
 """
 Auto-registered admin panel for development mode (TINA4_DEBUG=true).
@@ -1752,38 +1758,47 @@ async def _api_connections_save(request, response):
     if not url:
         return response({"success": False, "error": "No connection URL provided"})
     try:
+        import stat
         env_path = Path(".env")
-        lines = []
-        if env_path.exists():
-            lines = env_path.read_text(encoding="utf-8").splitlines()
-        keys_found = {"TINA4_DATABASE_URL": False, "TINA4_DATABASE_USERNAME": False, "TINA4_DATABASE_PASSWORD": False}
-        new_lines = []
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("#") or "=" not in stripped:
-                new_lines.append(line)
-                continue
-            key = stripped.split("=", 1)[0].strip()
-            # Preserve the TINA4_ prefix when rewriting — the boot guard
-            # rejects bare DATABASE_URL / DATABASE_USERNAME / DATABASE_PASSWORD
-            # since v3.12, so stripping the prefix here would break the next
-            # restart. Bug filed as tina4-python#45.
-            if key == "TINA4_DATABASE_URL":
-                new_lines.append(f"TINA4_DATABASE_URL={url}")
-                keys_found["TINA4_DATABASE_URL"] = True
-            elif key == "TINA4_DATABASE_USERNAME":
-                new_lines.append(f"TINA4_DATABASE_USERNAME={username}")
-                keys_found["TINA4_DATABASE_USERNAME"] = True
-            elif key == "TINA4_DATABASE_PASSWORD":
-                new_lines.append(f"TINA4_DATABASE_PASSWORD={password}")
-                keys_found["TINA4_DATABASE_PASSWORD"] = True
-            else:
-                new_lines.append(line)
-        for key, found in keys_found.items():
-            if not found:
-                val = {"TINA4_DATABASE_URL": url, "TINA4_DATABASE_USERNAME": username, "TINA4_DATABASE_PASSWORD": password}[key]
-                new_lines.append(f"{key}={val}")
-        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        fd = os.open(env_path, os.O_RDWR | os.O_CREAT
+                     | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600)
+        with os.fdopen(fd, "r+", encoding="utf-8") as fh:
+            info = os.fstat(fh.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise OSError("Refusing a non-regular or multiply-linked configuration file")
+            if hasattr(os, "fchmod"):
+                os.fchmod(fh.fileno(), 0o600)
+            lines = fh.read().splitlines()
+            keys_found = {"TINA4_DATABASE_URL": False, "TINA4_DATABASE_USERNAME": False, "TINA4_DATABASE_PASSWORD": False}
+            new_lines = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("#") or "=" not in stripped:
+                    new_lines.append(line)
+                    continue
+                key = stripped.split("=", 1)[0].strip()
+                # Preserve the TINA4_ prefix when rewriting — the boot guard
+                # rejects bare DATABASE_URL / DATABASE_USERNAME / DATABASE_PASSWORD
+                # since v3.12, so stripping the prefix here would break the next
+                # restart. Bug filed as tina4-python#45.
+                if key == "TINA4_DATABASE_URL":
+                    new_lines.append(f"TINA4_DATABASE_URL={url}")
+                    keys_found["TINA4_DATABASE_URL"] = True
+                elif key == "TINA4_DATABASE_USERNAME":
+                    new_lines.append(f"TINA4_DATABASE_USERNAME={username}")
+                    keys_found["TINA4_DATABASE_USERNAME"] = True
+                elif key == "TINA4_DATABASE_PASSWORD":
+                    new_lines.append(f"TINA4_DATABASE_PASSWORD={password}")
+                    keys_found["TINA4_DATABASE_PASSWORD"] = True
+                else:
+                    new_lines.append(line)
+            for key, found in keys_found.items():
+                if not found:
+                    val = {"TINA4_DATABASE_URL": url, "TINA4_DATABASE_USERNAME": username, "TINA4_DATABASE_PASSWORD": password}[key]
+                    new_lines.append(f"{key}={val}")
+            fh.seek(0)
+            fh.truncate(0)
+            fh.write("\n".join(new_lines) + "\n")
         return response({"success": True})
     except Exception as e:
         return response({"success": False, "error": str(e)})

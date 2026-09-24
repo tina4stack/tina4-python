@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """Database statement semantics - the runner for statement_semantics_contract.json (ADR-0065).
 
 tests/fixtures/statement_semantics_contract.json is a byte-for-byte copy of

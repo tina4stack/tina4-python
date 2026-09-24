@@ -1,3 +1,9 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 """ORM constructor accepts a dict, kwargs, or a JSON object string (one record),
 and rejects a list/array with a clear TypeError (not a cryptic AttributeError)."""
 import pytest
