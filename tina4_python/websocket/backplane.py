@@ -23,6 +23,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _redacted(url: str) -> str:
+    """The backplane URL as it may appear in a log: the password (redis://:pw@host,
+    nats://user:pw@host) replaced by ``***`` via the framework's one redaction
+    primitive. Imported lazily so the backplane does not pull in the database
+    package at import time."""
+    from tina4_python.database.database_url import redact_url
+    return redact_url(url)
+
+
 class WebSocketBackplane:
     """Base backplane interface for scaling WebSocket broadcast across instances.
 
@@ -72,7 +81,7 @@ class RedisBackplane(WebSocketBackplane):
         self._pubsub = self._redis.pubsub()
         self._threads: dict[str, threading.Thread] = {}
         self._running = True
-        logger.info("RedisBackplane connected to %s", self._url)
+        logger.info("RedisBackplane connected to %s", _redacted(self._url))
 
     def publish(self, channel: str, message: str) -> None:
         self._redis.publish(channel, message)
@@ -128,7 +137,7 @@ class NATSBackplane(WebSocketBackplane):
         self._thread = None
         self._running = True
         self._connect()
-        logger.info("NATSBackplane connected to %s", self._url)
+        logger.info("NATSBackplane connected to %s", _redacted(self._url))
 
     def _connect(self):
         """Connect to NATS in a background event loop."""
