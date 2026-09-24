@@ -48,16 +48,25 @@ class DatabaseAsyncMixin:
             # This task holds a connection (a transaction): run on it, one
             # statement at a time, and never let it go back to anyone while a
             # statement is still running on it - hence the wait-through below.
+            context = contextvars.copy_context()
             async with borrow.async_lock():
-                return await self._finish(self._pool.executor().submit(
-                    contextvars.copy_context().run, functools.partial(operation, *args, **kwargs)))
+                try:
+                    return await self._finish(self._pool.executor().submit(
+                        context.run, functools.partial(operation, *args, **kwargs)))
+                finally:
+                    self._adopt_state(context)
         adapter = await self._pool.checkout_async()
+        context = contextvars.copy_context()
         job = functools.partial(self._run_on_borrowed, adapter, operation, args, kwargs)
-        future = self._pool.executor().submit(contextvars.copy_context().run, job)
+        future = self._pool.executor().submit(context.run, job)
         # Cancelled before a worker picked it up: the job never runs, so the
         # connection is returned here. Once running, the job returns it itself.
         future.add_done_callback(lambda done: done.cancelled() and self._pool.checkin(adapter))
-        return await asyncio.wrap_future(future, loop=loop)
+        try:
+            return await asyncio.wrap_future(future, loop=loop)
+        finally:
+            if future.done() and not future.cancelled():
+                self._adopt_state(context)  # get_last_id()/get_error() for this task
 
     def _run_on_borrowed(self, adapter, operation, args, kwargs):
         """Worker side of run_async: hold ``adapter`` for exactly this call."""
@@ -134,6 +143,7 @@ class DatabaseAsyncMixin:
                 result = await self._finish(future)
             finally:
                 self._borrowed.set(context.get(self._borrowed))
+                self._adopt_state(context)
         return result
 
     @contextlib.asynccontextmanager
