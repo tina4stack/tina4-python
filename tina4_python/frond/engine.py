@@ -1220,6 +1220,104 @@ def _dict_replace(s: str, mapping: dict) -> str:
     return s
 
 
+# -- Escape strategies (ADR-0077) --------------------------------------------
+# One implementation per strategy, shared by ``js_escape`` and ``e(strategy)``
+# and mirrored byte-for-byte by PHP/Ruby/Node. Twig-compatible.
+
+_JS_SAFE = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789,._"
+)
+
+
+def _js_escape(value) -> str:
+    """Twig ``escape('js')``: everything outside ``[A-Za-z0-9,._]`` becomes a
+    ``\\xHH`` (single byte) or ``\\uHHHH`` (UTF-16 code unit) escape.
+
+    This neutralises ``<`` ``>`` ``&`` ``/`` and both quote characters, so the
+    result is safe both inside a ``<script>`` block and inside an HTML event
+    attribute. Astral characters emit a surrogate pair (two ``\\uHHHH``).
+    """
+    out = []
+    for ch in str(value):
+        if ch in _JS_SAFE:
+            out.append(ch)
+            continue
+        code = ord(ch)
+        if code < 0x80:
+            out.append("\\x%02X" % code)
+        elif code <= 0xFFFF:
+            out.append("\\u%04X" % code)
+        else:
+            code -= 0x10000
+            out.append("\\u%04X" % (0xD800 + (code >> 10)))
+            out.append("\\u%04X" % (0xDC00 + (code & 0x3FF)))
+    return "".join(out)
+
+
+_CSS_SAFE = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+)
+
+
+def _css_escape(value) -> str:
+    """Twig ``escape('css')``: everything outside ``[A-Za-z0-9]`` becomes a
+    ``\\HHHHHH `` (six-digit, space-terminated) CSS escape."""
+    out = []
+    for ch in str(value):
+        if ch in _CSS_SAFE:
+            out.append(ch)
+        else:
+            out.append("\\%06X " % ord(ch))
+    return "".join(out)
+
+
+_HTML_ATTR_SAFE = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789,.-_"
+)
+
+
+def _html_attr_escape(value) -> str:
+    """Twig ``escape('html_attr')``: everything outside ``[A-Za-z0-9,.\\-_]``
+    becomes a ``&#xHH;`` numeric entity, so a value is safe in an unquoted or
+    any-quoted HTML attribute."""
+    out = []
+    for ch in str(value):
+        if ch in _HTML_ATTR_SAFE:
+            out.append(ch)
+        else:
+            out.append("&#x%02X;" % ord(ch))
+    return "".join(out)
+
+
+def _url_escape(value) -> str:
+    """Twig ``escape('url')``: RFC-3986 unreserved set is left as-is, everything
+    else is percent-encoded (``rawurlencode`` semantics)."""
+    from urllib.parse import quote
+
+    return quote(str(value), safe="")
+
+
+def _e_strategy(value, strategy: str = "html"):
+    """Dispatch ``e(strategy)`` / ``escape(strategy)`` to the right escaper.
+
+    ``html`` (the default) HTML-escapes; ``js`` / ``url`` / ``css`` /
+    ``html_attr`` use the strategy escapers above. An unknown strategy raises,
+    so a typo can never silently fall back to no-escaping.
+    """
+    s = (strategy or "html").strip().strip("'\"")
+    if s == "html":
+        return SafeString(html.escape(str(value)))
+    if s == "js":
+        return SafeString(_js_escape(value))
+    if s == "url":
+        return SafeString(_url_escape(value))
+    if s == "css":
+        return SafeString(_css_escape(value))
+    if s in ("html_attr", "attr"):
+        return SafeString(_html_attr_escape(value))
+    raise ValueError(f"Unknown escape strategy: {strategy!r}")
+
+
 # Built-in filters
 def _json_safe(value) -> "SafeString":
     """Serialize to JSON that is valid JSON, valid JavaScript, and safe in HTML.
@@ -1322,8 +1420,8 @@ _BUILTIN_FILTERS = {
     "default": lambda v, *a: v if v is not None and v != "" else (a[0] if a else ""),
     "raw": lambda v, *a: v,  # Mark as safe (no escaping)
     "safe": lambda v, *a: v,
-    "escape": lambda v, *a: SafeString(html.escape(str(v))),
-    "e": lambda v, *a: SafeString(html.escape(str(v))),
+    "escape": lambda v, *a: _e_strategy(v, a[0] if a else "html"),
+    "e": lambda v, *a: _e_strategy(v, a[0] if a else "html"),
     "striptags": lambda v, *a: _STRIPTAGS_RE.sub("", str(v)),
     "nl2br": lambda v, *a: SafeString(html.escape(str(v)).replace("\n", "<br />\n")),
     "abs": lambda v, *a: abs(v) if isinstance(v, (int, float)) else v,
@@ -1334,7 +1432,7 @@ _BUILTIN_FILTERS = {
     "json_encode": lambda v, *a: _json_safe(v),
     "to_json": lambda v, *a: _json_safe(v),
     "tojson": lambda v, *a: _json_safe(v),
-    "js_escape": lambda v, *a: SafeString(str(v).replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")),
+    "js_escape": lambda v, *a: SafeString(_js_escape(v)),
     "json_decode": lambda v, *a: json.loads(v) if isinstance(v, str) else v,
     "keys": lambda v, *a: list(v.keys()) if isinstance(v, dict) else [],
     "values": lambda v, *a: list(v.values()) if isinstance(v, dict) else [],
@@ -2472,9 +2570,18 @@ class Frond:
         )
         value = self._apply_filters(value, filters, context)
 
-        # Auto-escape HTML unless marked safe or SafeString
-        if not is_safe and isinstance(value, str) and not isinstance(value, SafeString):
-            value = html.escape(value)
+        # Auto-escape HTML unless marked safe or SafeString. A plain string is
+        # escaped directly; a list/dict/object is escaped on its rendered string
+        # form (F4/ADR-0077) — before this, only ``str`` values were escaped, so
+        # ``{{ items }}`` where ``items`` held markup emitted it raw. None, bool
+        # and numbers render through ``_to_output`` and carry no HTML-special
+        # characters, so they are left untouched to preserve the render contract.
+        if not is_safe and not isinstance(value, SafeString):
+            if isinstance(value, str):
+                value = html.escape(value)
+            elif value is not None and value is not True and value is not False \
+                    and not isinstance(value, (int, float)):
+                value = SafeString(html.escape(self._to_output(value)))
 
         return value
 
