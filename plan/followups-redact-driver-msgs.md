@@ -18,6 +18,8 @@ Branch: `fix/followups-redact-driver-msgs` (from origin/v3). Lab dir: `/home/and
 - [x] Extra (b): unknown / empty-after-trim SMTP + IMAP value raises with the value as given
 - [x] Extra (c): FakeBackplane / ExplodingBackplane / monkeypatched factory replaced by the real RedisBackplane
 - [x] Extra (d): Kafka push to an unreachable broker returned an id - now raises
+- [x] Extra (f): FakeConnection in the hardening tests replaced by real WebSocketConnections on real sockets
+- [x] Extra (g): empty body / ordinary malformed XML pinned as the Client 'Malformed XML' fault
 - [ ] OWED (e): NATSBackplane redaction test - no NATS server on the lab or in CI (code fixed, not run)
 
 ## Parity
@@ -61,13 +63,16 @@ Branch: `fix/followups-redact-driver-msgs` (from origin/v3). Lab dir: `/home/and
 - dc2e416  fix(security): redact_url hides the whole password when it contains ':'
 - 74c2e02  fix(queue): a Kafka push no broker confirmed raises instead of returning an id
 - b5b6223  fix(websocket): RedisBackplane uses one listener and stops it before closing; tests use a real Redis
+- 8866086  test(websocket): hardening tests use real WebSocketConnections on real sockets
+- 633b351  test(wsdl): an empty body and ordinary malformed XML are the Client 'Malformed XML' fault
+(hashes before the DCO sign-off rebase onto origin/v3)
 
-Red-first: every new test ran red on the lab against the unfixed tree; 20 mutations
-(break each fix) all turned their tests red (lab logs /home/andre/followup-python-mutation.log, -mutation2.log).
+Red-first: every new test ran red on the lab against the unfixed tree; 23 mutations
+(break each fix) all turned their tests red (lab logs /home/andre/followup-python-mutation.log, -mutation2.log, -mutation3.log).
 
 ## Notes
 - OWED: NATSBackplane redaction test (same one-line redaction; no NATS server on the lab or in CI).
-- Still a stand-in: FakeConnection in tests/test_websocket_hardening.py (a WebSocketConnection double); replacing it needs real sockets.
+- Still stand-ins elsewhere (not in scope of this pass): _MockWriter in tests/test_parity_group_a.py, _CaptureWriter in tests/test_frond_live_push.py, _MockTransport in tests/test_websocket.py, and the patched server.handle in the SSE part of tests/test_websocket_hardening.py.
 - The same ':' redaction pattern should be checked in PHP DatabaseUrl::redact, Ruby DatabaseUrl.redact, Node redactCredentials.
 - `redact_url` needs a `scheme://`; a scheme-less MQTT url (`user:pw@host:x`) is not redacted.
 - Tina4 CLI `tina4/src/env_config.rs` still lists TINA4_MAIL_TLS_INSECURE (withdrawn by ADR-0071).
