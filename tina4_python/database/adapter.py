@@ -907,6 +907,10 @@ class DatabaseAdapter:
         Literals and comments are scrubbed first, so ``WHERE note = 'DELETE'`` is
         still a read.
         """
+        # tina4: a write hidden inside a function (SELECT create_user(...)) is
+        # still classed as a read, and fetch()/fetch_one() close it with the
+        # read-side ROLLBACK. Only the SQL text is inspected; the function body
+        # is not. Call such a function inside start_transaction() / commit().
         scrubbed = DatabaseAdapter._scrub_sql_text(sql or "").lstrip(" \t\r\n(")
         first_word = re.match(r"[A-Za-z]+", scrubbed)
         verb = first_word.group(0).upper() if first_word else ""
