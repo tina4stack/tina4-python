@@ -321,7 +321,9 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             if records and "id" in records[0]:
                 last_id = records[0]["id"]
 
-        if not has_returning:
+        # A key column not named "id" (``person_id SERIAL``) is invisible to the
+        # RETURNING read above, so fall through to the lastval() probe for it.
+        if not has_returning or (records and "id" not in records[0]):
             # Try to get last inserted ID for INSERT statements.
             #
             # Issue #38: ``SELECT lastval()`` raises on tables with no sequence
@@ -346,6 +348,11 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
                     cursor.execute("RELEASE SAVEPOINT _t4_lastval_probe")
                 except Exception:
                     cursor.execute("ROLLBACK TO SAVEPOINT _t4_lastval_probe")
+                # lastval() is session-wide: on a table with no sequence it is a
+                # value from some EARLIER insert. Only trust it when the row this
+                # INSERT returned actually holds it.
+                if records and last_id not in records[0].values():
+                    last_id = None
 
         # NOTE: affected_rows was captured right after the main statement above,
         # before the lastval()/SAVEPOINT probes ran their own cursor.execute()

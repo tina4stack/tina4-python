@@ -195,7 +195,9 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
     def fetch_one(self, sql: str, params: list = None) -> dict | None:
         sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql)
-        cursor = self._conn.cursor(dictionary=True)
+        # buffered: a query matching several rows must not leave the rest unread,
+        # or the NEXT statement on this connection fails "Unread result found".
+        cursor = self._conn.cursor(dictionary=True, buffered=True)
         cursor.execute(sql, params or [])
         row = cursor.fetchone()
         # See the matching comment in fetch() above: close out the implicit
