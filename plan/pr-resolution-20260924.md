@@ -18,6 +18,7 @@ Shared contracts preserved: ADR-0068 body/header limits, ADR-0070 browser gate, 
 - [ ] Combined multi-framework lab run after all repositories merge.
 
 ## Bugs
+- [x] Tag optional Firebird dependencies in three new suites so the existing strict gate excuses only unconfigured optional engines: 23 previously failing setup cases now correctly skip; required-service semantics unchanged.
 - [x] Resolve overlapping bootstrap/settings changes while retaining complete startup and dynamic settings.
 - [x] Retain buffered MySQL fetch_one with parameter-aware SQL translation.
 - [x] Retain both browser suppression and child checkout pinning in conftest.

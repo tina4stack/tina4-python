@@ -44,9 +44,9 @@ def table(request, tmp_path):
     spec = ENGINES[name]
     url = f"sqlite:///{tmp_path}/fetch_total.db" if name == "sqlite" else spec["url"]
     if not url:
-        pytest.skip(f"{spec['service']} not configured for the fetch-total test (env var not set)")
+        pytest.skip(f"[needs:{name}] {spec['service']} not configured for the fetch-total test (env var not set)")
     if spec.get("port") and not _reachable(url, spec["port"]):
-        pytest.skip(f"{spec['service']} not reachable - skip integration test")
+        pytest.skip(f"[needs:{name}] {spec['service']} not reachable - skip integration test")
     table_name = TABLE.format(engine=name)
     database = Database(url)
     if database.table_exists(table_name):

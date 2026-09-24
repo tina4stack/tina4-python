@@ -147,9 +147,9 @@ def engine(request, tmp_path):
     spec = ENGINES[name]
     url = f"sqlite:///{tmp_path}/issue133.db" if name == "sqlite" else spec["url"]
     if not url:
-        pytest.skip(f"{spec['service']} not configured for the #133 adapter test (env var not set)")
+        pytest.skip(f"[needs:{name}] {spec['service']} not configured for the #133 adapter test (env var not set)")
     if spec.get("port") and not _reachable(url, spec["port"]):
-        pytest.skip(f"{spec['service']} not reachable - skip integration test")
+        pytest.skip(f"[needs:{name}] {spec['service']} not reachable - skip integration test")
     current = Engine(name, spec, url)
     current.drop()
     setup = current.connect()

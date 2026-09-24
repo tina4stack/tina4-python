@@ -75,7 +75,7 @@ def _open(engine, tmp_path) -> Database:
         return Database(f"sqlite:///{tmp_path / 'colrb.db'}")
     if engine == "firebird":
         if not _FIREBIRD_URL:
-            pytest.skip("firebird not set: TINA4_TEST_FIREBIRD_URL (needs a live Firebird)")
+            pytest.skip("[needs:firebird] firebird not set: TINA4_TEST_FIREBIRD_URL (needs a live Firebird)")
         return Database(_FIREBIRD_URL)
     coordinates, scheme = {
         "postgres": (_PG, "postgresql"),
@@ -83,7 +83,7 @@ def _open(engine, tmp_path) -> Database:
         "mssql": (_MSSQL, "mssql"),
     }[engine]
     if not _reachable(coordinates["host"], coordinates["port"]):
-        pytest.skip(f"{engine} unreachable at {coordinates['host']}:{coordinates['port']}")
+        pytest.skip(f"[needs:{engine}] {engine} unreachable at {coordinates['host']}:{coordinates['port']}")
     return Database(
         f"{scheme}://{coordinates['host']}:{coordinates['port']}/{coordinates['db']}",
         coordinates["user"], coordinates["pwd"],
