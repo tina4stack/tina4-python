@@ -39,6 +39,7 @@ from urllib.error import HTTPError, URLError
 # tina4_python/__init__.py, well before Api (a LAZY-loaded name) is ever
 # touched -- no circular import.
 from tina4_python import __version__
+from tina4_python.ssrf import guard_url, SsrfError
 
 
 # Statuses that warrant an automatic retry when ``max_retries`` > 0: rate-limit
@@ -124,9 +125,20 @@ class _AuthStripRedirectHandler(HTTPRedirectHandler):
     requests/httpx and closes that leak, while same-origin redirects keep auth.
     The cookie jar's ``Cookie`` header is stripped on the same rule for the
     identical reason.
+
+    It also re-validates the redirect target against the SSRF guard (ADR-0084):
+    a hop to a private/internal address is refused even when the initial URL was
+    public, closing the redirect-to-metadata SSRF vector.
     """
 
+    def __init__(self, allow_hosts=None):
+        super().__init__()
+        self._allow_hosts = allow_hosts or []
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Guard BEFORE following: the dangerous hop is the one the caller never
+        # wrote. Raises SsrfError, which the request path turns into an error dict.
+        guard_url(newurl, self._allow_hosts)
         new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new_req is not None and not _same_origin(req.full_url, newurl):
             new_req.headers = {
@@ -159,7 +171,8 @@ class Api:
                  max_retries: int = 0,
                  retry_backoff: float = 0.5,
                  transport=None,
-                 cookies: bool = False):
+                 cookies: bool = False,
+                 allow_hosts: list[str] | None = None):
         """HTTP client.
 
         Constructor accepts ergonomic kwargs the documentation has long
@@ -213,6 +226,9 @@ class Api:
         self._transport = transport
         self._cookies_enabled = bool(cookies)
         self._cookies: dict[str, str] = {}
+        # SSRF guard (ADR-0084): an explicit allow-list of hosts / host:port /
+        # CIDRs that bypass the private-address refusal even with the opt-out off.
+        self._allow_hosts: list[str] = list(allow_hosts) if allow_hosts else []
 
         # ── kwarg sugar ────────────────────────────────────────────────
         # Bearer token wins over basic auth if both are passed.
@@ -383,6 +399,7 @@ class Api:
                     "path": None}
 
         try:
+            guard_url(req.full_url, self._allow_hosts)
             resp = _open(req, self.timeout, self._opener())
             self._store_cookies(resp.headers)
             with open(dest_path, "wb") as out_file:
@@ -517,6 +534,13 @@ class Api:
                 if payload:
                     yield bytes(payload)
             return one_shot()
+
+        # SSRF guard (ADR-0084): refuse a private/internal target before the
+        # real socket connect (the transport seam above never reaches here).
+        try:
+            guard_url(req.full_url, self._allow_hosts)
+        except SsrfError as exc:
+            raise ApiStreamError(str(exc)) from None
 
         deadline = time.monotonic() + total_bound
         port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -735,7 +759,7 @@ class Api:
         Authorization/Cookie header on a cross-origin hop, honouring the SSL
         context."""
         if self._opener_cache is None:
-            handlers = [_AuthStripRedirectHandler()]
+            handlers = [_AuthStripRedirectHandler(self._allow_hosts)]
             if self._ssl_context is not None:
                 handlers.append(HTTPSHandler(context=self._ssl_context))
             self._opener_cache = build_opener(*handlers)
@@ -858,6 +882,7 @@ class Api:
             self._store_cookies(result["headers"])
             return result
         try:
+            guard_url(req.full_url, self._allow_hosts)
             resp = _open(req, self.timeout, self._opener())
             self._store_cookies(resp.headers)
             raw = resp.read().decode("utf-8", errors="replace")

@@ -414,3 +414,23 @@ def mongo_uri_with_option(uri: str, option: str) -> str:
         return uri + "&" + option
     _, _, after_scheme = uri.partition("://")
     return uri + ("?" if "/" in after_scheme else "/?") + option
+
+
+# ── SSRF guard opt-out for local-listener tests (ADR-0084) ──────────────────
+#
+# The Api client and Web Push refuse private/internal addresses by default, so
+# every existing suite that points them at a 127.0.0.1 test server would now be
+# refused. The suite legitimately talks to loopback (exactly the internal-service
+# case TINA4_ALLOW_PRIVATE_REQUESTS exists for), so it opts in by default. The
+# dedicated guard suite (tests/test_ssrf_guard_contract.py) clears this in its
+# own autouse fixture, which runs after this one, so it still proves the
+# default-blocked behaviour.
+@pytest.fixture(autouse=True)
+def _tina4_allow_private_requests_for_local_listeners():
+    saved = os.environ.get("TINA4_ALLOW_PRIVATE_REQUESTS")
+    os.environ["TINA4_ALLOW_PRIVATE_REQUESTS"] = "true"
+    yield
+    if saved is None:
+        os.environ.pop("TINA4_ALLOW_PRIVATE_REQUESTS", None)
+    else:
+        os.environ["TINA4_ALLOW_PRIVATE_REQUESTS"] = saved
