@@ -19,6 +19,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
 
     # The marker is the whole of what MySQL's CRUD used to justify overriding.
     PARAM_MARKER = "%s"
+    BACKSLASH_ESCAPES = True
     #: MySQL quotes identifiers with backticks (ANSI_QUOTES is not the default).
     IDENTIFIER_QUOTE = ("`", "`")
 
@@ -300,7 +301,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         MySQL uses %s placeholders, CONCAT() instead of ||,
         AUTO_INCREMENT, and ILIKE must be lowered.
         """
-        sql = SQLTranslator.placeholder_style(sql, "%s")
+        sql = SQLTranslator.placeholder_style(sql, "%s", self.BACKSLASH_ESCAPES)
         sql = SQLTranslator.concat_pipes_to_func(sql)
         sql = SQLTranslator.ilike_to_like(sql)
         sql = SQLTranslator.auto_increment_syntax(sql, "mysql")

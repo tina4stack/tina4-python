@@ -1039,6 +1039,9 @@ class DatabaseAdapter:
     #: The engine's parameter marker. Overridden to ``"%s"`` by PostgreSQL,
     #: MySQL and MSSQL; everything else uses the default.
     PARAM_MARKER = "?"
+    #: True where a backslash escapes a quote inside a string literal (MySQL's
+    #: default), so the placeholder scanner does not end the literal early.
+    BACKSLASH_ESCAPES = False
 
     #: Appended to a single-row INSERT. Only PostgreSQL wants ``RETURNING *``;
     #: it is the one genuinely engine-specific part of building an INSERT.
@@ -1054,7 +1057,7 @@ class DatabaseAdapter:
         """
         if self.PARAM_MARKER == "?":
             return filter_sql
-        return SQLTranslator.placeholder_style(filter_sql, self.PARAM_MARKER)
+        return SQLTranslator.placeholder_style(filter_sql, self.PARAM_MARKER, self.BACKSLASH_ESCAPES)
 
     def start_transaction(self):
         """Begin a transaction."""

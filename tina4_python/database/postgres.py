@@ -54,7 +54,9 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         :meth:`_exec_with_handling`.
         """
         if params:
-            cursor.execute(sql, params)
+            # #138: with parameters psycopg reads every % as a placeholder, so a
+            # literal % (LIKE 'a%', a PL/pgSQL message) is doubled first.
+            cursor.execute(SQLTranslator.escape_literal_percent(sql), params)
         else:
             cursor.execute(sql)
 
