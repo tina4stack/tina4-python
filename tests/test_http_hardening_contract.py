@@ -455,12 +455,14 @@ class TestBuiltinServer:
 
 
 class TestRejectionShape:
-    def _assert_shape(self, answer, status, body):
+    def _assert_shape(self, answer, status, body, builtin=True):
         assert answer.status == status, answer
         assert answer.body == body, answer
         assert answer.one("content-type") == "application/json", answer
         assert answer.one("content-length") == str(len(body)), answer
-        assert answer.one("connection") == "close", answer
+        if builtin:
+            # Under uvicorn the connection is uvicorn's to manage.
+            assert answer.one("connection") == "close", answer
         for name, value in SECURITY_HEADERS.items():
             assert answer.one(name) == value, f"{name}: {answer}"
         assert "strict-transport-security" not in answer.headers, answer
@@ -480,6 +482,6 @@ class TestRejectionShape:
         try:
             answer = _exchange(asgi_port, _post_head(f"Content-Length: {LIMIT + 1}\r\n"))
             assert answer.one("server") == "uvicorn", "expected uvicorn: " + repr(answer)
-            self._assert_shape(answer, 413, _body_413(LIMIT + 1))
+            self._assert_shape(answer, 413, _body_413(LIMIT + 1), builtin=False)
         finally:
             _stop(proc)

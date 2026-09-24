@@ -2857,12 +2857,18 @@ def asgi(root_dir: str = "src"):
     return app
 
 
-def _transport_rejection(status: int, message: str) -> tuple[list[tuple[bytes, bytes]], bytes]:
+def _transport_rejection(status: int, message: str,
+                         close: bool = True) -> tuple[list[tuple[bytes, bytes]], bytes]:
     """Headers and body for a request the server refuses before any route runs.
 
     One shape for every early refusal (ADR-0068): a compact JSON body, the
     framing headers, and the same security headers a routed response carries
     (SECHDR-DEC-01). No HSTS - the request's scheme is not known yet.
+
+    ``close`` adds ``Connection: close`` for the built-in server, which closes
+    after every rejection. Under an ASGI server the connection is that server's
+    business: telling uvicorn to close makes it drop the socket while the
+    client is still sending, and the client never reads the 413.
     """
     body = json.dumps({"error": message}, separators=(",", ":")).encode()
     carrier = Response()
@@ -2870,8 +2876,9 @@ def _transport_rejection(status: int, message: str) -> tuple[list[tuple[bytes, b
     headers = [
         (b"content-type", b"application/json"),
         (b"content-length", str(len(body)).encode()),
-        (b"connection", b"close"),
     ]
+    if close:
+        headers.append((b"connection", b"close"))
     headers += [(name.encode(), value.encode()) for name, value in carrier._headers]
     return headers, body
 
@@ -2888,7 +2895,7 @@ async def _send_payload_too_large(send, received: int, limit: int) -> None:
     route, no middleware and no session to run it through. Same bytes as the
     built-in server's refusal.
     """
-    headers, body = _transport_rejection(413, _body_too_large_message(received, limit))
+    headers, body = _transport_rejection(413, _body_too_large_message(received, limit), close=False)
     await send({"type": "http.response.start", "status": 413, "headers": headers})
     await send({"type": "http.response.body", "body": body, "more_body": False})
 
