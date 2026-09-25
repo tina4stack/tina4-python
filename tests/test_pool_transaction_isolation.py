@@ -142,7 +142,7 @@ def test_ordinary_query_is_exclusively_leased(database):
     db, observer = make(1), make(0)
     marker = 'pool145_sleep_' + uuid4().hex
     with ThreadPoolExecutor(1) as executor:
-        query = executor.submit(db.fetch_one, f'SELECT pg_sleep(0.5) /* {marker} */')
+        query = executor.submit(db.fetch_one, f'SELECT pg_sleep(2) /* {marker} */')
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             running = observer.fetch_one(

@@ -685,12 +685,17 @@ async def _health_handler(request: Request, response: Response) -> Response:
     """
     import time
 
-    return response.status(200).json({
+    # ADR-0078: the liveness wire contract is {status, uptime, framework} in
+    # every framework; `version` is a debug-only diagnostic and must not be
+    # disclosed in production (health version disclosure hardening).
+    body = {
         "status": "ok",
-        "version": __version__,
         "uptime": round(time.time() - _start_time, 2),
         "framework": "tina4-python",
-    })
+    }
+    if _is_dev_mode():
+        body["version"] = __version__
+    return response.status(200).json(body)
 
 
 # Register health check.
