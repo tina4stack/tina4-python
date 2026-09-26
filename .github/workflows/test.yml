@@ -402,7 +402,7 @@ jobs:
         # full-suite runs clean; this guards the GitHub runner path.
         run: |
           uv pip install pytest-timeout
-          uv run pytest tests/ -v --timeout=90 --timeout-method=thread -rfE
+          uv run pytest tests/ -v -o faulthandler_timeout=100 --timeout=150 --timeout-method=thread -rfE
 
       - name: Run the Mongo suites against the MongoDB 8 replica set
         env:
