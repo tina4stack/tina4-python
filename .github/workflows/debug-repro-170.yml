@@ -1,9 +1,8 @@
-# TEMPORARY debug workflow for tina4stack/tina4-python#170.
+# TEMPORARY debug workflow for tina4stack/tina4-python#170. Not for merge.
 # Runs the --ignore'd tests/test_http_hardening_contract.py on the real 2-vCPU
-# GitHub runner, wraps it in a py-spy watchdog that dumps the native + Python
-# stack of every tina4 process the moment a run stops making progress, so the
-# built-in-server deadlock (which resists SIGALRM / faulthandler) leaves a trace.
-# Delete this file once the issue is understood; it never touches v3.
+# GitHub runner, many times across many shards, and dumps the native + Python
+# stack of every tina4 process the moment a run stops making progress — so the
+# built-in-server deadlock (which resists SIGALRM/faulthandler) leaves a trace.
 name: Debug Repro 170
 
 on:
@@ -20,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -33,53 +32,53 @@ jobs:
         run: |
           uv sync
           uv pip install pytest-timeout py-spy
-      - name: Show runner CPU
+      - name: Runner facts
+        run: nproc; free -m || true
+      - name: Loop the hardening test with a py-spy watchdog
+        shell: bash
         run: |
-          nproc; echo "---"; grep -c ^processor /proc/cpuinfo; free -m || true
-      - name: Run hardening test under py-spy watchdog (loop)
-        run: |
-          set -u
+          # No `set -e`: we manage every exit code by hand so the watchdog's
+          # own signal cannot abort the loop.
+          set +e
           PY=$(uv run python -c 'import sys; print(sys.executable)')
           echo "python: $PY"
-          watchdog() {
-            # $1 = pid of the pytest process to watch
-            local target=$1 waited=0 limit=${WEDGE_SECONDS:-120}
-            while kill -0 "$target" 2>/dev/null; do
-              sleep 5; waited=$((waited+5))
-              if [ "$waited" -ge "$limit" ]; then
-                echo "::warning::WEDGE suspected after ${waited}s — dumping py-spy for all python procs"
-                for pid in $(pgrep -f 'python'); do
-                  cmd=$(tr '\0' ' ' </proc/$pid/cmdline 2>/dev/null)
-                  case "$cmd" in
-                    *pytest*|*app.py*|*test_http_hardening*)
-                      echo "===== py-spy dump pid=$pid :: $cmd"
-                      "$PY" -m py_spy dump --pid "$pid" --nonblocking 2>&1 | sed 's/^/    /' || \
-                        py-spy dump --pid "$pid" --nonblocking 2>&1 | sed 's/^/    /' || echo "    (py-spy failed for $pid)"
-                      echo "----- /proc/$pid/stack (kernel):"
-                      sudo cat /proc/$pid/stack 2>/dev/null | sed 's/^/    /' || cat /proc/$pid/stack 2>/dev/null | sed 's/^/    /' || true
-                      echo "----- /proc/$pid/wchan:"; cat /proc/$pid/wchan 2>/dev/null | sed 's/^/    /'; echo ;;
-                  esac
-                done
-                echo "::warning::killing wedged run"
-                kill -TERM "$target" 2>/dev/null; sleep 3
-                kill -KILL "$target" 2>/dev/null
-                pkill -KILL -f 'app.py' 2>/dev/null || true
-                return 42
-              fi
-            done
-            return 0
-          }
-          overall=0
-          for n in $(seq 1 12); do
-            echo "::group::hardening run $n (shard ${{ matrix.shard }})"
+          RUNS=${RUNS:-20}
+          WEDGE=${WEDGE_SECONDS:-90}   # a healthy run is ~13s; 90s = wedged
+          wedged_total=0
+          for n in $(seq 1 "$RUNS"); do
+            echo "::group::shard ${{ matrix.shard }} run $n"
             uv run pytest tests/test_http_hardening_contract.py \
               -p no:cacheprovider -q --timeout=180 --timeout-method=signal -rfE &
             pid=$!
-            watchdog $pid & wd=$!
-            wait $pid; rc=$?
-            kill $wd 2>/dev/null; wait $wd 2>/dev/null; wdrc=$?
-            echo "run $n: pytest rc=$rc watchdog rc=$wdrc"
-            if [ "$wdrc" = "42" ]; then echo "::error::run $n WEDGED — see py-spy dump above"; overall=1; fi
+            waited=0; wedged=0
+            while kill -0 "$pid" 2>/dev/null; do
+              sleep 5; waited=$((waited+5))
+              if [ "$waited" -ge "$WEDGE" ]; then
+                wedged=1
+                echo "::warning::shard ${{ matrix.shard }} run $n WEDGED after ${waited}s — dumping stacks"
+                for p in $(pgrep -f python); do
+                  cmd=$(tr '\0' ' ' </proc/$p/cmdline 2>/dev/null)
+                  case "$cmd" in
+                    *pytest*|*app.py*)
+                      echo "===== py-spy dump pid=$p :: $cmd"
+                      py-spy dump --pid "$p" --nonblocking 2>&1 | sed 's/^/    /' || echo "    (py-spy failed)"
+                      echo "----- /proc/$p/wchan: $(cat /proc/$p/wchan 2>/dev/null)"
+                      echo "----- /proc/$p/status Threads/State:"; grep -E '^(State|Threads)' /proc/$p/status 2>/dev/null | sed 's/^/    /' ;;
+                  esac
+                done
+                echo "----- full process tree:"; ps -eLf | grep -E 'pytest|app.py|python' | grep -v grep | sed 's/^/    /'
+                kill -TERM "$pid" 2>/dev/null; sleep 3; kill -KILL "$pid" 2>/dev/null
+                pkill -KILL -f 'app.py' 2>/dev/null
+                wedged_total=$((wedged_total+1))
+                break
+              fi
+            done
+            if [ "$wedged" -eq 0 ]; then
+              wait "$pid"; rc=$?
+              echo "shard ${{ matrix.shard }} run $n: rc=$rc (${waited}s)"
+            fi
             echo "::endgroup::"
           done
-          exit $overall
+          echo "=== shard ${{ matrix.shard }}: wedges=$wedged_total / $RUNS ==="
+          [ "$wedged_total" -eq 0 ] || { echo "::error::shard ${{ matrix.shard }} saw $wedged_total wedge(s)"; exit 1; }
+          exit 0
