@@ -396,7 +396,13 @@ jobs:
       # ADR-0054: the framework owns only the handoff. CI installs the released
       # native engine above and proves that boundary instead of excluding it.
       - name: Run tests
-        run: uv run pytest tests/ -v
+        # A per-test timeout turns a CI-only hang into a LOUD failure with a
+        # full thread stack dump (method=thread) instead of a silent multi-minute
+        # wedge, and -rfE surfaces any collection error in the summary. The lab
+        # full-suite runs clean; this guards the GitHub runner path.
+        run: |
+          uv pip install pytest-timeout
+          uv run pytest tests/ -v --timeout=90 --timeout-method=thread -rfE
 
       - name: Run the Mongo suites against the MongoDB 8 replica set
         env:
