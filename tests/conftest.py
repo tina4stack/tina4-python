@@ -461,3 +461,37 @@ def _tina4_allow_private_requests_for_local_listeners():
         os.environ.pop("TINA4_ALLOW_PRIVATE_REQUESTS", None)
     else:
         os.environ["TINA4_ALLOW_PRIVATE_REQUESTS"] = saved
+
+
+# --- TEMP DIAGNOSTIC: global wall-clock hang watchdog (TINA4_HANG_WATCHDOG=1) ---
+# The full suite wedges silently at ~46% ONLY on the GitHub runner; the same
+# files pass in isolation, and pytest's per-test timers (thread method +
+# faulthandler_timeout) never fire because the hang straddles the item boundary.
+# This daemon thread is armed once for the whole process: if no test has STARTED
+# for >75s it prints the last-started nodeid and dumps every thread's stack
+# (socket hangs release the GIL, so the watchdog thread runs). Remove once the
+# leak/wedge is fixed.
+import os as _t4_os
+if _t4_os.environ.get("TINA4_HANG_WATCHDOG") == "1":
+    import threading as _t4_thr, faulthandler as _t4_fh, sys as _t4_sys, time as _t4_time
+    _t4_state = {"nodeid": "<none-yet>", "t": _t4_time.monotonic(), "dumps": 0}
+
+    def _t4_watchdog():
+        while True:
+            _t4_time.sleep(5)
+            stalled = _t4_time.monotonic() - _t4_state["t"]
+            if stalled > 75 and _t4_state["dumps"] < 6:
+                _t4_state["dumps"] += 1
+                _t4_sys.stderr.write(
+                    f"\n===== HANG WATCHDOG (#{_t4_state['dumps']}): no test start for "
+                    f"{stalled:.0f}s; last test to START = {_t4_state['nodeid']} =====\n")
+                _t4_sys.stderr.flush()
+                _t4_fh.dump_traceback(all_threads=True)
+                _t4_sys.stderr.flush()
+                _t4_state["t"] = _t4_time.monotonic()  # re-arm for a follow-up dump
+
+    def pytest_runtest_logstart(nodeid, location):
+        _t4_state["nodeid"] = nodeid
+        _t4_state["t"] = _t4_time.monotonic()
+
+    _t4_thr.Thread(target=_t4_watchdog, name="tina4-hang-watchdog", daemon=True).start()
