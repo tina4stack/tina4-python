@@ -1,0 +1,59 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# Doc-drift gate: the packaged CLAUDE.md and the AI skills must not document an
+# API the code does not have. Fast, no live services -- it imports the package
+# and reads the tina4-js source, then checks every documented symbol resolves.
+name: Doc Drift
+
+on:
+  push:
+    branches: [v3]
+  pull_request:
+    branches: [v3]
+
+permissions:
+  contents: read
+
+jobs:
+  doc-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tina4-python
+        uses: actions/checkout@v4
+        with:
+          path: tina4-python
+
+      # The tina4-js skill's imports are checked against tina4-js's real exports,
+      # so the sibling repo must sit beside this one (../tina4-js).
+      - name: Checkout tina4-js (sibling, for its real exports)
+        uses: actions/checkout@v4
+        with:
+          repository: tina4stack/tina4-js
+          ref: master
+          path: tina4-js
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package (for live introspection)
+        working-directory: tina4-python
+        run: uv sync
+
+      - name: Doc-drift audit (strict)
+        working-directory: tina4-python
+        run: uv run python scripts/audit_doc_drift.py --strict --tina4-js ../tina4-js
+
+      - name: Doc-drift gate mutation tests
+        working-directory: tina4-python
+        run: uv run python -m unittest discover -s scripts -p 'test_audit_doc_drift.py'

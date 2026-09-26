@@ -1752,25 +1752,39 @@ uv run tina4python start 8080         # Start on custom port
 
 ### CRUD Generator
 
-Generate a complete CRUD interface (list, create, update, delete) for any database table with one call:
+Generate a complete REST CRUD interface (list, get, create, update, delete) for any ORM model.
+Flag the model with `auto_crud = True` and the routes register themselves at import time:
+
+```python
+from tina4_python.orm import ORM, IntegerField, StringField
+
+class User(ORM):
+    auto_crud = True                       # auto-registers CRUD routes for this model
+    id    = IntegerField(primary_key=True, auto_increment=True)
+    name  = StringField()
+    email = StringField()
+```
+
+Or register models explicitly (or discover a whole directory):
 
 ```python
 from tina4_python.crud import AutoCrud
+from src.orm.user import User
 
-@get("/admin/users")
-async def admin_users(request, response):
-    return response(CRUD.to_crud(request, {
-        "sql": "SELECT id, name, email FROM users",
-        "title": "User Management",
-        "primary_key": "id",
-    }))
+AutoCrud.register(User)                    # routes under /api/user
+AutoCrud.register(User, prefix="/api/v2")  # or a custom prefix
+AutoCrud.discover("src/orm", prefix="/api")  # every ORM model in a directory
 ```
 
-This auto-generates:
-- Searchable, paginated HTML table with Tina4 CSS
-- Create / Edit / Delete modals with form tokens
-- 4 RESTful API routes (GET list, POST create, POST update, DELETE)
-- Per-table Twig template in `src/templates/crud/` (customisable after generation)
+This auto-generates per model:
+- `GET /api/{table}` — paginated list (returns the `to_paginate()` envelope)
+- `GET /api/{table}/{id}` — one record by primary key
+- `POST /api/{table}` — create
+- `PUT /api/{table}/{id}` — update
+- `DELETE /api/{table}/{id}` — delete
+
+Write routes are secure by default (they require a valid token); pass `public=True`
+to `register` / `discover` to open them.
 
 ### ORM Table Creation
 
@@ -1799,7 +1813,7 @@ uv run tina4python migrate
 
 | Need | Use |
 |------|-----|
-| Quick admin UI for a table | `CRUD.to_crud()` |
+| Auto REST CRUD for a model | `auto_crud = True` / `AutoCrud.register()` |
 | Schema-first database design | Migration files |
 | Code-first database design | `ORM.create_table()` |
 | New project from scratch | `tina4python init` |
