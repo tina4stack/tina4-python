@@ -402,7 +402,14 @@ jobs:
         # full-suite runs clean; this guards the GitHub runner path.
         run: |
           uv pip install pytest-timeout
-          uv run pytest tests/ -v -o faulthandler_timeout=100 --timeout=150 --timeout-method=thread -rfE
+          # DIAGNOSTIC (temporary): the full suite wedges silently at ~46% only
+          # on the GitHub runner. Per-test timers (thread method + faulthandler)
+          # never fired, so the wedge escapes their per-item window. Run just the
+          # suspect files with the SIGNAL method: SIGALRM interrupts a blocked
+          # syscall in the MAIN thread in place and raises with the test's own
+          # traceback, naming the exact test and line. Restore to the full suite
+          # once the culprit is fixed.
+          uv run pytest tests/test_http_hardening_contract.py tests/test_http_protocol_gaps.py -v -o faulthandler_timeout=45 --timeout=60 --timeout-method=signal -rfE
 
       - name: Run the Mongo suites against the MongoDB 8 replica set
         env:
