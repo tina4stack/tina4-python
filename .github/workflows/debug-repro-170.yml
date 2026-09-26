@@ -1,0 +1,85 @@
+# TEMPORARY debug workflow for tina4stack/tina4-python#170.
+# Runs the --ignore'd tests/test_http_hardening_contract.py on the real 2-vCPU
+# GitHub runner, wraps it in a py-spy watchdog that dumps the native + Python
+# stack of every tina4 process the moment a run stops making progress, so the
+# built-in-server deadlock (which resists SIGALRM / faulthandler) leaves a trace.
+# Delete this file once the issue is understood; it never touches v3.
+name: Debug Repro 170
+
+on:
+  push:
+    branches: [debug/repro-170]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package + tools
+        run: |
+          uv sync
+          uv pip install pytest-timeout py-spy
+      - name: Show runner CPU
+        run: |
+          nproc; echo "---"; grep -c ^processor /proc/cpuinfo; free -m || true
+      - name: Run hardening test under py-spy watchdog (loop)
+        run: |
+          set -u
+          PY=$(uv run python -c 'import sys; print(sys.executable)')
+          echo "python: $PY"
+          watchdog() {
+            # $1 = pid of the pytest process to watch
+            local target=$1 waited=0 limit=${WEDGE_SECONDS:-120}
+            while kill -0 "$target" 2>/dev/null; do
+              sleep 5; waited=$((waited+5))
+              if [ "$waited" -ge "$limit" ]; then
+                echo "::warning::WEDGE suspected after ${waited}s — dumping py-spy for all python procs"
+                for pid in $(pgrep -f 'python'); do
+                  cmd=$(tr '\0' ' ' </proc/$pid/cmdline 2>/dev/null)
+                  case "$cmd" in
+                    *pytest*|*app.py*|*test_http_hardening*)
+                      echo "===== py-spy dump pid=$pid :: $cmd"
+                      "$PY" -m py_spy dump --pid "$pid" --nonblocking 2>&1 | sed 's/^/    /' || \
+                        py-spy dump --pid "$pid" --nonblocking 2>&1 | sed 's/^/    /' || echo "    (py-spy failed for $pid)"
+                      echo "----- /proc/$pid/stack (kernel):"
+                      sudo cat /proc/$pid/stack 2>/dev/null | sed 's/^/    /' || cat /proc/$pid/stack 2>/dev/null | sed 's/^/    /' || true
+                      echo "----- /proc/$pid/wchan:"; cat /proc/$pid/wchan 2>/dev/null | sed 's/^/    /'; echo ;;
+                  esac
+                done
+                echo "::warning::killing wedged run"
+                kill -TERM "$target" 2>/dev/null; sleep 3
+                kill -KILL "$target" 2>/dev/null
+                pkill -KILL -f 'app.py' 2>/dev/null || true
+                return 42
+              fi
+            done
+            return 0
+          }
+          overall=0
+          for n in $(seq 1 12); do
+            echo "::group::hardening run $n (shard ${{ matrix.shard }})"
+            uv run pytest tests/test_http_hardening_contract.py \
+              -p no:cacheprovider -q --timeout=180 --timeout-method=signal -rfE &
+            pid=$!
+            watchdog $pid & wd=$!
+            wait $pid; rc=$?
+            kill $wd 2>/dev/null; wait $wd 2>/dev/null; wdrc=$?
+            echo "run $n: pytest rc=$rc watchdog rc=$wdrc"
+            if [ "$wdrc" = "42" ]; then echo "::error::run $n WEDGED — see py-spy dump above"; overall=1; fi
+            echo "::endgroup::"
+          done
+          exit $overall
