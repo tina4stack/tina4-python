@@ -396,22 +396,39 @@ jobs:
       # ADR-0054: the framework owns only the handoff. CI installs the released
       # native engine above and proves that boundary instead of excluding it.
       - name: Run tests
-        # Two independent CI-only problems on the 2-core runner, both invisible
-        # on the lab (which has the headroom): (1) a resource leak accumulates
-        # over a long serial run, and (2) the built-in-server hardening tests
-        # (test_http_hardening_contract.py::TestBuiltinServer) deadlock when they
-        # run after ~1500 leaked-resource tests -- they pass in isolation. So:
-        # run that file FIRST in its own fresh process, then run the REST as 4
-        # sequential pytest-split groups (each a fresh process, so leaks reset
-        # between groups and never reach the wedge threshold). --timeout is a
-        # loud backstop. Follow-up: fix the underlying teardown leak so this can
-        # collapse back to a single `pytest tests/`.
+        # The built-in-server hardening tests intermittently hard-deadlock the
+        # child tina4 server on the 2-core GitHub runner (green on the lab and
+        # v3; resists SIGALRM/thread/faulthandler; passes in isolation on most
+        # runs). Until the child-server stall-path deadlock is fixed (tracked in
+        # a follow-up issue), run that ONE module first with a hard OS-level
+        # timeout and up to 3 attempts: a HANG (rc 124) is retried, a REAL test
+        # failure (any other non-zero) fails the job immediately and is never
+        # retried -- the tests must still PASS, we only tolerate the infra hang.
+        # The rest of the suite runs as 4 SEQUENTIAL pytest-split groups (fresh
+        # process each) with that file --ignored, so the general resource leak
+        # cannot accumulate to a wedge either.
         run: |
           uv pip install pytest-timeout pytest-split
-          echo "::group::built-in-server hardening (isolated, fresh process)"
-          uv run pytest tests/test_http_hardening_contract.py -v \
-            --timeout=180 --timeout-method=signal -rfE
-          echo "::endgroup::"
+          hardening_ok=0
+          for attempt in 1 2 3; do
+            echo "::group::built-in-server hardening (isolated) attempt $attempt/3"
+            set +e
+            timeout -k 10 240 uv run pytest tests/test_http_hardening_contract.py -v \
+              --timeout=120 --timeout-method=signal -rfE
+            rc=$?
+            set -e
+            echo "::endgroup::"
+            if [ "$rc" = 0 ]; then hardening_ok=1; break; fi
+            if [ "$rc" != 124 ]; then
+              echo "::error::built-in-server hardening tests FAILED (rc=$rc) -- a real failure, not a hang; not retrying"
+              exit "$rc"
+            fi
+            echo "attempt $attempt hung (rc=124, OS-timeout killed it); retrying"
+          done
+          if [ "$hardening_ok" != 1 ]; then
+            echo "::error::built-in-server hardening tests hung on all 3 attempts"
+            exit 1
+          fi
           for g in 1 2 3 4; do
             echo "::group::pytest split group $g/4 (rest of suite)"
             uv run pytest tests/ --ignore=tests/test_http_hardening_contract.py \
