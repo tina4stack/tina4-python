@@ -396,20 +396,26 @@ jobs:
       # ADR-0054: the framework owns only the handoff. CI installs the released
       # native engine above and proves that boundary instead of excluding it.
       - name: Run tests
-        # The suite is a long serial run against shared services. On the 2-core
-        # GitHub runner a resource leak accumulates and hard-wedges the process
-        # at ~46% (no per-test timeout, faulthandler, or watchdog can interrupt
-        # it; the lab and v3 have the headroom to finish). Splitting the run into
-        # 4 SEQUENTIAL pytest-split groups keeps it serial (no shared-DB
-        # collisions) but starts each group in a FRESH process, so leaked
-        # threads/sockets/child servers die between groups and never reach the
-        # wedge threshold. --timeout is a loud backstop. See release3.13.139.
+        # Two independent CI-only problems on the 2-core runner, both invisible
+        # on the lab (which has the headroom): (1) a resource leak accumulates
+        # over a long serial run, and (2) the built-in-server hardening tests
+        # (test_http_hardening_contract.py::TestBuiltinServer) deadlock when they
+        # run after ~1500 leaked-resource tests -- they pass in isolation. So:
+        # run that file FIRST in its own fresh process, then run the REST as 4
+        # sequential pytest-split groups (each a fresh process, so leaks reset
+        # between groups and never reach the wedge threshold). --timeout is a
+        # loud backstop. Follow-up: fix the underlying teardown leak so this can
+        # collapse back to a single `pytest tests/`.
         run: |
           uv pip install pytest-timeout pytest-split
+          echo "::group::built-in-server hardening (isolated, fresh process)"
+          uv run pytest tests/test_http_hardening_contract.py -v \
+            --timeout=180 --timeout-method=signal -rfE
+          echo "::endgroup::"
           for g in 1 2 3 4; do
-            echo "::group::pytest split group $g/4"
-            uv run pytest tests/ --splits 4 --group "$g" -v \
-              --timeout=180 --timeout-method=signal -rfE
+            echo "::group::pytest split group $g/4 (rest of suite)"
+            uv run pytest tests/ --ignore=tests/test_http_hardening_contract.py \
+              --splits 4 --group "$g" -v --timeout=180 --timeout-method=signal -rfE
             echo "::endgroup::"
           done
 
