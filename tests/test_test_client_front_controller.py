@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import os
 
-os.environ["TINA4_SECRET"] = "d6-front-controller-secret"
+os.environ["TINA4_SECRET"] = "d6-front-controller-secret-01234"
 
 from tina4_python.core.router import get
 from tina4_python.test_client import TestClient, TestResponse

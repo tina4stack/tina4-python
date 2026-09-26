@@ -24,7 +24,7 @@ from tina4_python.test_client import TestClient
 @pytest.fixture(autouse=True)
 def _secret(monkeypatch):
     # Generator and validator resolve the same secret so a minted token verifies.
-    monkeypatch.setenv("TINA4_SECRET", "rbac-contract-secret")
+    monkeypatch.setenv("TINA4_SECRET", "rbac-contract-secret-0123456789a")
     yield
 
 

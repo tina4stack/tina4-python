@@ -84,7 +84,7 @@ def serve(tmp_path, origins=None):
     env = {
         "TINA4_DEBUG": "false",
         "TINA4_AUTO_MIGRATE": "false",
-        "TINA4_SECRET": "cors-contract-secret",
+        "TINA4_SECRET": "cors-contract-secret-0123456789abcdef",
         "TINA4_SESSION_BACKEND": "file",
         "TINA4_CSP": "default-src 'self'",  # an explicit CSP keeps the default-CSP notice out of the log
     }

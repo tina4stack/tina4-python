@@ -27,7 +27,7 @@ from tina4_python.realtime.storage import (
 
 @pytest.fixture
 def files_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("TINA4_SECRET", "realtime-files-test-secret")
+    monkeypatch.setenv("TINA4_SECRET", "realtime-files-test-secret-01234")
     monkeypatch.setenv("TINA4_STORAGE_BACKEND", "local")
     monkeypatch.setenv("TINA4_STORAGE_DIR", str(tmp_path / "store"))
     db = Database("sqlite:///" + str(tmp_path / "database.db"))

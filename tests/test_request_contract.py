@@ -34,7 +34,7 @@ from tina4_python.test_client import TestClient
 
 @pytest.fixture(autouse=True)
 def _secret(monkeypatch):
-    monkeypatch.setenv("TINA4_SECRET", "request-contract-secret")
+    monkeypatch.setenv("TINA4_SECRET", "request-contract-secret-01234567")
     yield
 
 

@@ -727,7 +727,10 @@ class CsrfMiddleware:
 
         if auth_header.startswith("Bearer "):
             bearer_token = auth_header[7:].strip()
-            if bearer_token and auth.valid_token(bearer_token):
+            # Only an IDENTITY token marks an API client; a form token in the
+            # Bearer slot is not one and does not skip the check (ADR-0079 s1).
+            from tina4_python.auth import is_identity_payload
+            if bearer_token and is_identity_payload(auth.valid_token(bearer_token)):
                 return request, response
 
         # Reject if token is in query string (security risk — log warning).

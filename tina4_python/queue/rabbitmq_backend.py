@@ -75,7 +75,17 @@ class RabbitMQBackend:
             attempts=attempts,
         )
 
+    _DEAD_STATES = ("dead", "dead_letter", "failed")
+
     def size(self, status: str = "pending") -> int:
+        # ADR-0022 decision 7: never answer a different question than the one
+        # asked. The dead aliases count the <topic>.dead_letter queue depth via
+        # a non-destructive durable declare (== len(dead_letters())); returning 0
+        # while dead_letters() returned N was a silent wrong answer. RabbitMQ has
+        # no queryable notion of "completed" (an ack removes the message) or a
+        # simple "reserved" count, so those non-pending statuses are unchanged.
+        if status in self._DEAD_STATES:
+            return self._backend.size(f"{self._topic}.dead_letter")
         if status != "pending":
             return 0
         return self._backend.size(self._topic)
@@ -233,6 +243,21 @@ class RabbitMQBackend:
         # Ack LAST: the re-publish (or dead-letter) is durable before the
         # original leaves the queue, so a crash in between redelivers rather
         # than loses. That is at-least-once, which is the contract.
+        self._backend.acknowledge(self._topic, str(job.id))
+
+    def reject(self, job: Job, reason: str = ""):
+        """Dead-letter the job immediately — no retry (ADR-0023 reject()).
+
+        Publishes to <topic>.dead_letter, then acks the original delivery LAST
+        so the dead-letter is durable before the original leaves the queue.
+        """
+        # Terminal: floor attempts at max_retries so dead_letters() (which
+        # filters attempts >= max_retries) returns it and size("dead") agrees.
+        job.attempts = max(job.attempts + 1, self._max_retries)
+        msg = self._jobs.pop(str(job.id), None) or {"payload": job.data, "id": job.id}
+        msg["attempts"] = job.attempts
+        msg["error"] = reason
+        self._backend.dead_letter(self._topic, msg)
         self._backend.acknowledge(self._topic, str(job.id))
 
     def retry(self, job: Job, delay_seconds: int = 0):

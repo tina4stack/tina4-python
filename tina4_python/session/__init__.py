@@ -196,17 +196,60 @@ class DatabaseSessionHandler(SessionHandler):
         "firebird": "CREATE TABLE tina4_session (session_id VARCHAR(255) NOT NULL PRIMARY KEY, data VARCHAR(8191) NOT NULL, expires_at DOUBLE PRECISION NOT NULL)",
     }
 
+    #: How many times _ensure_table() tries the CREATE before a failure is real,
+    #: and the base pause between tries (50, 100, 150, 200 ms). Same numbers in
+    #: all four frameworks.
+    _CREATE_ATTEMPTS = 5
+    _CREATE_RETRY_DELAY = 0.05
+
     def _ensure_table(self):
+        """Create tina4_session on first use - safely when processes race to do it.
+
+        Every app that starts more than one process races here: all of them see
+        no table and all of them CREATE. The losers fail, and each engine spells
+        that differently - "already exists" on SQLite and MySQL, a pg_type unique
+        violation on PostgreSQL, Msg 2714 on SQL Server, an RDB$RELATIONS unique
+        violation on Firebird. So a failure is judged by RE-CHECKING whether the
+        table now exists, never by parsing the message.
+
+        The re-check is RETRIED because the loser can fail before the winner has
+        committed: MySQL answers 1213 "Deadlock found" (two sessions upgrading
+        the metadata lock inside CREATE TABLE) while the table is still
+        invisible. Bounded, so a genuine failure (no CREATE grant) still raises.
+
+        MEASURED before this: with six real processes, five of six died on EVERY
+        engine - this used to CREATE with no guard at all.
+        """
         if self._table_ready:
             return
         self._table_ready = True
-        if not self._db.table_exists("tina4_session"):
+        attempt = 1
+        while not self._db.table_exists("tina4_session"):
             try:
-                engine = (self._db.get_database_type() or "").lower()
+                self._db.execute(self._create_table_sql())
+                self._db.commit()
+                return
             except Exception:
-                engine = ""
-            self._db.execute(self._CREATE_TABLE_SQL.get(engine, self._CREATE_TABLE_DEFAULT))
-            self._db.commit()
+                # A failed statement leaves a PostgreSQL transaction aborted, and
+                # a Firebird transaction can still be reading the old catalog;
+                # roll back so the re-check sees the engine as it is now.
+                try:
+                    self._db.rollback()
+                except Exception:
+                    pass
+                if attempt >= self._CREATE_ATTEMPTS:
+                    if self._db.table_exists("tina4_session"):
+                        return
+                    raise
+                time.sleep(self._CREATE_RETRY_DELAY * attempt)
+                attempt += 1
+
+    def _create_table_sql(self) -> str:
+        try:
+            engine = (self._db.get_database_type() or "").lower()
+        except Exception:
+            engine = ""
+        return self._CREATE_TABLE_SQL.get(engine, self._CREATE_TABLE_DEFAULT)
 
     def read(self, session_id: str) -> dict:
         self._ensure_table()

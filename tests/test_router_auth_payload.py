@@ -31,7 +31,7 @@ from tina4_python.auth import Auth, AuthMiddleware
 from tina4_python.core.request import Request
 from tina4_python.core.response import Response
 
-SECRET = "test-router-auth-secret"
+SECRET = "test-router-auth-secret-01234567"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

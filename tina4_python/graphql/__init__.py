@@ -86,6 +86,10 @@ def tokenize(source: str) -> list[Token]:
 
 # ── Parser ────────────────────────────────────────────────────
 
+class ComplexityError(Exception):
+    """Raised when a query's expanded selection count exceeds the node budget (F2)."""
+
+
 class ParseError(Exception):
     pass
 
@@ -96,6 +100,15 @@ class Parser:
     def __init__(self, tokens: list[Token]):
         self.tokens = tokens
         self.pos = 0
+        # F2: bound the parser's own recursion. A deeply nested query
+        # ("{a{a{a...}}}") otherwise recurses here until the interpreter stack
+        # overflows — BEFORE the execution-time depth guard can run. Reusing
+        # TINA4_GRAPHQL_MAX_DEPTH keeps parse and execution on one bound.
+        self._depth = 0
+        try:
+            self._max_depth = int(os.environ.get("TINA4_GRAPHQL_MAX_DEPTH", "50"))
+        except (TypeError, ValueError):
+            self._max_depth = 50
 
     def peek(self) -> Token | None:
         return self.tokens[self.pos] if self.pos < len(self.tokens) else None
@@ -174,6 +187,15 @@ class Parser:
         }
 
     def _parse_selection_set(self) -> list:
+        self._depth += 1
+        if self._max_depth > 0 and self._depth > self._max_depth:
+            raise ParseError(f"Query exceeds maximum depth of {self._max_depth}")
+        try:
+            return self._parse_selection_set_inner()
+        finally:
+            self._depth -= 1
+
+    def _parse_selection_set_inner(self) -> list:
         self.expect("LBRACE")
         selections = []
         while not self.match("RBRACE"):
@@ -515,6 +537,19 @@ class GraphQL:
             self.max_depth: int = int(os.environ.get("TINA4_GRAPHQL_MAX_DEPTH", "50"))
         except (TypeError, ValueError):
             self.max_depth = 50
+        # F2: maximum number of expanded selection nodes a single query may
+        # request. The depth guard bounds NESTING but not WIDTH: a fragment that
+        # spreads another fragment many times (a "fragment bomb") stays shallow
+        # while expanding to millions of fields, and a query with thousands of
+        # aliases of one field is not deep at all. This budget bounds the
+        # expanded selection tree (fragments expanded, aliases counted) so both
+        # are rejected before any resolver runs. Query-structure only, so a
+        # legitimate query over a large result list is unaffected. Set <= 0 to
+        # disable. TINA4_GRAPHQL_MAX_NODES, default 1000.
+        try:
+            self.max_nodes: int = int(os.environ.get("TINA4_GRAPHQL_MAX_NODES", "1000"))
+        except (TypeError, ValueError):
+            self.max_nodes = 1000
         # Drain any resolvers registered via the class-level @resolve
         # decorator BEFORE this instance was constructed. The decorator
         # writes to _class_resolvers; here we attach them to the live schema.
@@ -636,6 +671,15 @@ class GraphQL:
             return {"data": None, "errors": [{"message": "No operation found"}]}
 
         op = operations[0]
+
+        # F2: reject an over-complex query (fragment bomb / alias explosion)
+        # before any resolver runs.
+        if self.max_nodes > 0:
+            try:
+                self._assert_complexity(op["selections"], fragments)
+            except ComplexityError as e:
+                return {"data": None, "errors": [{"message": str(e)}]}
+
         resolvers = self.schema.queries if op["operation"] == "query" else self.schema.mutations
 
         for vdef in op.get("variables", []):
@@ -654,6 +698,41 @@ class GraphQL:
     def execute_json(self, query: str, variables: dict = None, context: dict = None) -> str:
         """Execute and return JSON string."""
         return json.dumps(self.execute(query, variables, context))
+
+    def _assert_complexity(self, selections: list, fragments: dict) -> None:
+        """Count the expanded selection nodes, aborting past ``max_nodes`` (F2).
+
+        Fragment spreads are expanded (so a fragment bomb is counted, not the
+        small unexpanded document) and every field — including each alias —
+        counts once. The count is capped by ``max_nodes`` and the walk by
+        ``max_depth``, so a circular fragment simply trips the budget instead of
+        looping forever, and the check itself can never cost more than the
+        budget. Raises {@link ComplexityError} when the budget is exceeded.
+        """
+        depth_cap = self.max_depth if self.max_depth > 0 else 1000
+        count = 0
+
+        def walk(sels: list, depth: int) -> None:
+            nonlocal count
+            if depth > depth_cap:
+                return
+            for sel in sels:
+                count += 1
+                if count > self.max_nodes:
+                    raise ComplexityError(
+                        f"Query exceeds maximum complexity of {self.max_nodes} nodes"
+                    )
+                kind = sel.get("kind")
+                if kind == "fragment_spread":
+                    frag = fragments.get(sel["name"])
+                    if frag:
+                        walk(frag["selections"], depth + 1)
+                elif kind == "inline_fragment":
+                    walk(sel.get("selections") or [], depth + 1)
+                elif sel.get("selections"):
+                    walk(sel["selections"], depth + 1)
+
+        walk(selections, 1)
 
     def _resolve_selections_into(self, selections: list, resolvers: dict, parent: Any,
                                  variables: dict, context: dict, fragments: dict,

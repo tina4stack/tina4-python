@@ -286,11 +286,17 @@ class Request:
         # (first hop of a comma chain wins) then the native scheme, so an app
         # behind a TLS-terminating proxy still sees https. PHP/Ruby/Node parity.
         scheme = "https" if req.is_secure_scheme() else "http"
-        host = (
-            (req.headers.get("x-forwarded-host") if is_trusted_proxy(req.remote_ip) else None)
-            or req.headers.get("host")
-            or "localhost"
+        # X-Forwarded-Host is honoured ONLY when the raw socket peer is a trusted
+        # proxy (TINA4_TRUSTED_PROXIES) -- the same gate already applied to
+        # X-Forwarded-For. An untrusted client can otherwise forge the host and
+        # control the absolute request.url (password-reset links, cache keys,
+        # open-redirect base). Parity with PHP/Ruby/Node.
+        forwarded_host = (
+            req.headers.get("x-forwarded-host")
+            if is_trusted_proxy(req.remote_ip)
+            else None
         )
+        host = forwarded_host or req.headers.get("host") or "localhost"
         url = f"{scheme}://{host}{req.path}"
         if req.query_string:
             url = f"{url}?{req.query_string}"

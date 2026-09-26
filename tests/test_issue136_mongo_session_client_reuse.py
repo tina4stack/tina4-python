@@ -151,7 +151,7 @@ def server(tmp_path_factory):
         **os.environ,
         "ISSUE136_PORT": str(port),
         "TINA4_DEBUG": "false",
-        "TINA4_SECRET": "issue136-contract-secret",
+        "TINA4_SECRET": "issue136-contract-secret-0123456789abcdef",
         "TINA4_SESSION_BACKEND": "mongodb",
         "TINA4_SESSION_MONGO_URI": MONGO_URI,
         "TINA4_SESSION_MONGO_DB": MONGO_DB,

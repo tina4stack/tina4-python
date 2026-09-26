@@ -74,7 +74,7 @@ def server(tmp_path_factory):
         **os.environ,
         "ISSUE137_PORT": str(port),
         "TINA4_DEBUG": "false",
-        "TINA4_SECRET": "issue137-contract-secret",
+        "TINA4_SECRET": "issue137-contract-secret-0123456789abcdef",
         "TINA4_FRAME_OPTIONS": FRAME_OPTIONS,
         "TINA4_SESSION_BACKEND": "file",
         "TINA4_SESSION_PATH": str(project / "sessions"),

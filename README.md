@@ -226,13 +226,13 @@ from tina4_python.core.router import get, post, noauth
 @get("/api/users")
 async def list_users(request, response):
     from src.orm.User import User
-    return response(User.select(limit=100))
+    return response(await User.select_async(limit=100))
 
 @get("/api/users/{id:int}")
 async def get_user(id, request, response):
     from src.orm.User import User
     user = User()
-    if user.load("id = ?", [id]):
+    if await user.load_async("id = ?", [id]):
         return response(user.to_dict())
     return response({"error": "Not found"}, 404)
 
@@ -241,9 +241,13 @@ async def get_user(id, request, response):
 async def create_user(request, response):
     from src.orm.User import User
     user = User(request.body)
-    user.save()
+    await user.save_async()
     return response(user.to_dict(), 201)
 ```
+
+An `async def` route awaits the `*_async` form of every database and ORM call, so a
+slow query never holds up another request. A plain `def` route can use the sync calls:
+Tina4 runs it in a worker thread.
 
 ### 6. Add a template
 
@@ -384,7 +388,16 @@ result = db.fetch("SELECT * FROM users WHERE age > ?", [18], limit=20, offset=0)
 row = db.fetch_one("SELECT * FROM users WHERE id = ?", [1])
 db.insert("users", {"name": "Alice", "email": "alice@test.com"})
 db.commit()
+
+# In an async def route, await the twin of each call
+row = await db.fetch_one_async("SELECT * FROM users WHERE id = ?", [1])
+async with db.transaction_async():
+    await db.insert_async("users", {"name": "Bob", "email": "bob@test.com"})
 ```
+
+Each `Database` is a pool of connections (`TINA4_DB_POOL`, default 10). Every call borrows
+one for itself and hands it back, and a transaction keeps its connection until it commits or
+rolls back, so two requests never share one.
 
 ### Middleware
 
@@ -466,7 +479,7 @@ Auto-generated at `/swagger`:
 @tags(["users"])
 @get("/api/users")
 async def users(request, response):
-    return response(User.select())
+    return response(await User.select_async())
 ```
 
 ### Event System

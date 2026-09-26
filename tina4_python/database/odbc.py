@@ -50,6 +50,7 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         super().__init__()
         self._conn = None
         self._cursor = None
+        self._in_transaction: bool = False
         # The connected DBMS name (SQL_DBMS_NAME), cached at connect. Drives the
         # driver-aware last-insert-id: @@IDENTITY is a SQL-Server-ism, not a
         # generic ODBC feature.
@@ -157,7 +158,7 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # Not inside an explicit transaction: there the caller's commit() owns the
         # boundary. Committing here too made every execute() between
         # start_transaction() and commit() durable on its own (#133 follow-up).
-        if not self._conn.autocommit and self._autocommit and not self._in_transaction:
+        if not self._in_transaction and not self._conn.autocommit and self._autocommit:
             self._conn.commit()
 
         result = DatabaseResult(
@@ -199,23 +200,12 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # is a syntax error, and so is `SELECT * FROM t; OFFSET ? ROWS ...`.
         sql = self._strip_trailing_semicolons(sql)
 
-        # Count total. The closing paren goes on a NEW LINE: a trailing
-        # `-- comment` in the caller's SQL otherwise comments it out, the probe
-        # fails, the bare `except` below swallows it, and the result reports
-        # count=0 alongside real records. Same fix already shipped in sqlite.py.
-        # #133: a write that returns rows runs ONCE, exactly as written - no
-        # COUNT probe (a probe that ran would repeat the write) and no
-        # pagination, which no engine accepts after RETURNING/OUTPUT.
+        # #133: a write that returns rows (INSERT ... RETURNING) runs ONCE, as
+        # written - never paginated and never COUNT-probed (a probe would
+        # repeat the write). _total_from_page treats the un-paginated page as
+        # the total below.
         is_write = self._is_write_statement(sql)
-        count_sql = f"SELECT COUNT(*) FROM ({sql}\n) AS _t"
         cursor = self._conn.cursor()
-        try:
-            total = None
-            if not is_write:
-                cursor.execute(count_sql, params or [])
-                total = cursor.fetchone()[0]
-        except Exception:
-            total = 0
 
         # Apply pagination — ODBC gets the SQL Server style OFFSET/FETCH, with a
         # LIMIT/OFFSET fallback for the many non-SQL-Server ODBC sources.
@@ -230,7 +220,8 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         # nor fake one. Same helper the sqlite/postgres/mysql adapters use, so
         # all engines answer the question identically.
         # limit <= 0 still means "no pagination" (fetch_all's give-me-everything).
-        if is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql):
+        paginated = not (is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql))
+        if not paginated:
             cursor.execute(sql, params or [])
         else:
             # The clause goes on a NEW LINE. Appended inline it lands INSIDE a
@@ -250,9 +241,19 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
 
         columns = [desc[0] for desc in cursor.description] if cursor.description else []
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
-        if total is None:
-            total = len(rows)
         self._commit_fetched_write(sql)  # #133: a write that returns rows commits like execute()
+
+        # ADR-0074: COUNT only when the page cannot prove the total. The closing
+        # paren goes on a NEW LINE: a trailing `-- comment` in the caller's SQL
+        # otherwise comments it out and the probe reports 0 alongside real rows.
+        total = self._total_from_page(len(rows), limit, offset, paginated)
+        if total is None:
+            try:
+                probe = self._conn.cursor()
+                probe.execute(f"SELECT COUNT(*) FROM ({sql}\n) AS _t", params or [])
+                total = probe.fetchone()[0]
+            except Exception:
+                total = 0
 
         return DatabaseResult(records=rows, count=total, limit=limit, offset=offset, sql=sql, adapter=self)
 
@@ -271,22 +272,28 @@ class ODBCAdapter(SqlCrudMixin, DatabaseAdapter):
         self._in_transaction = True
 
     def commit(self):
+        # Only a SUCCESSFUL commit ends the transaction: turning autocommit back
+        # on after a failed one would commit whatever the caller is about to
+        # roll back.
         self._conn.commit()
         self._end_transaction()
 
     def rollback(self):
-        self._conn.rollback()
-        self._end_transaction()
+        try:
+            self._conn.rollback()
+        finally:
+            self._end_transaction()
 
     def _end_transaction(self):
-        """Leave the explicit transaction and restore the connect-time mode.
+        """Leave the explicit transaction and restore the connect-time mode (#133).
 
-        start_transaction() switches the driver to manual commit, and nothing
-        switched it back: after one transaction every later write through
-        fetch()/fetch_one() was left uncommitted (#133).
+        start_transaction() switches the driver to manual commit; nothing
+        switched it back, so after one transaction every later write through
+        fetch()/fetch_one() was left uncommitted.
         """
-        self._in_transaction = False
-        self._conn.autocommit = self._autocommit
+        if self._in_transaction:
+            self._in_transaction = False
+            self._conn.autocommit = self._autocommit
 
     def table_exists(self, name: str) -> bool:
         cursor = self._conn.cursor()

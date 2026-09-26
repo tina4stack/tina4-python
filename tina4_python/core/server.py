@@ -685,12 +685,17 @@ async def _health_handler(request: Request, response: Response) -> Response:
     """
     import time
 
-    return response.status(200).json({
+    # ADR-0078: the liveness wire contract is {status, uptime, framework} in
+    # every framework; `version` is a debug-only diagnostic and must not be
+    # disclosed in production (health version disclosure hardening).
+    body = {
         "status": "ok",
-        "version": __version__,
         "uptime": round(time.time() - _start_time, 2),
         "framework": "tina4-python",
-    })
+    }
+    if _is_dev_mode():
+        body["version"] = __version__
+    return response.status(200).json(body)
 
 
 # Register health check.
@@ -1786,15 +1791,21 @@ def _handle_swagger(request: Request, response: Response) -> Response | None:
 
 
 def _check_auth(request: Request, response: Response, route: dict) -> bool:
-    """Validate auth on a route. Returns True if handler should be skipped."""
+    """Validate auth on a route. Returns True if handler should be skipped.
+
+    Token slots in order: Bearer header, body formToken, session token. Each
+    slot is accepted only when it carries an IDENTITY token: a Frond form token
+    ("type": "form") proves where a write came from, not who sent it, so it is
+    skipped and the search moves on to the next slot (ADR-0079 s1).
+    """
     if not route.get("auth_required"):
         return False
+    from tina4_python.auth import Auth, is_identity_payload
     _auth_header = request.headers.get("authorization", "")
     _auth_ok = False
     if _auth_header and _auth_header.startswith("Bearer "):
         _token = _auth_header[7:]
         try:
-            from tina4_python.auth import Auth
             # The API-key bypass goes through validate_api_key, which compares
             # with hmac.compare_digest. A plain `==` on a secret returns as soon
             # as two bytes differ, so response timing leaks the key prefix and
@@ -1803,7 +1814,7 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
                 _auth_ok = True
             else:
                 _payload = Auth.valid_token_static(_token)
-                if _payload:
+                if is_identity_payload(_payload):
                     _auth_ok = True
                     # Stash the authenticated payload on the request
                     # (REQ-PY-NO-USER, 3.13.99) — a handler/downstream
@@ -1811,15 +1822,15 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
                     request.user = _payload
         except Exception:
             pass
-    # Fall back to formToken in request body (frond.js sends token here)
+    # Fall back to formToken in request body (frond.js puts the auth token
+    # it received as a FreshToken here; a Frond form token is not accepted)
     if not _auth_ok:
         _body = getattr(request, "body", None) or {}
         _form_token = _body.get("formToken", "") if isinstance(_body, dict) else ""
         if _form_token:
             try:
-                from tina4_python.auth import Auth
                 _payload = Auth.valid_token_static(_form_token)
-                if _payload:
+                if is_identity_payload(_payload):
                     _auth_ok = True
                     request.user = _payload
                     # Return a FreshToken header so frond.js can use
@@ -1835,19 +1846,19 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
         _session = getattr(request, "session", None)
         if _session:
             # A provider-verified OIDC identity is handed into the SAME auth
-            # gate as JWT. Provider credentials stay in the reserved Session
-            # value and never enter request.user.
-            _sso = _session.get("_tina4_sso")
-            _sso_identity = _sso.get("identity") if isinstance(_sso, dict) else None
-            if isinstance(_sso_identity, dict) and _sso_identity.get("issuer") and _sso_identity.get("subject"):
+            # gate as JWT, while it is still live (ADR-0079 s5). Provider
+            # credentials stay in the reserved Session value and never enter
+            # request.user.
+            from tina4_python.sso import live_session_identity
+            _sso_identity = live_session_identity(_session.get("_tina4_sso"))
+            if _sso_identity is not None:
                 _auth_ok = True
                 request.user = _sso_identity
             _session_token = _session.get("token") if _session else ""
             if not _auth_ok and _session_token:
                 try:
-                    from tina4_python.auth import Auth
                     _payload = Auth.valid_token_static(_session_token)
-                    if _payload:
+                    if is_identity_payload(_payload):
                         _auth_ok = True
                         request.user = _payload
                 except Exception:
@@ -2140,6 +2151,11 @@ async def _invoke_handler(request: Request, response: Response, route: dict, par
         and inspect.iscoroutinefunction(getattr(_handler, "__call__", None))
     )
 
+    # tina4: ADR-0074 - name the route for the debug warning a sync DB call on
+    # the event loop raises. Set per request in this task's own context.
+    from tina4_python.database.connection import current_route
+    current_route.set(f"{route.get('method', request.method)} {route.get('path', request.path)}")
+
     if _is_async:
         result = await (_handler() if _pcount == 0 else _handler(*_args))
     elif _pcount == 0:
@@ -2411,7 +2427,12 @@ async def _stage_trailing_slash_redirect(ctx: DispatchContext) -> Response | Non
     if len(ctx.request.path) <= 1 or not ctx.request.path.endswith("/"):
         return None
 
-    canonical = ctx.request.path.rstrip("/") or "/"
+    # Collapse any leading run of "/" or "\" so the redirect target stays a
+    # same-origin absolute path. Without this, a request for "//evil.com/"
+    # normalises to "//evil.com", which a browser treats as the
+    # protocol-relative absolute URL of another host — a trailing-slash
+    # convenience must never double as an open redirect (security F3).
+    canonical = "/" + ctx.request.path.rstrip("/").lstrip("/\\")
     return ctx.response.status(301).header("location", canonical)
 
 
@@ -4165,8 +4186,18 @@ def _bootstrap_application(root_dir: str = "src") -> None:
     # (gitignored), and set it in the process env for this run. In CI/prod this
     # emits an actionable warning instead. Runs after env load, before auth is
     # used. Never crashes boot — file-write failures fall back to in-memory.
-    from tina4_python.auth import ensure_dev_secret
+    from tina4_python.auth import ensure_dev_secret, require_boot_secret, InsecureSecretError
     ensure_dev_secret()
+
+    # Refuse to serve with a secret anyone can reproduce: blank outside dev, or
+    # set but shorter than 32 bytes in any mode (ADR-0079 s2). Printed, not
+    # logged, because the logger is not configured yet and this is the one
+    # message the operator must see.
+    try:
+        require_boot_secret()
+    except InsecureSecretError as exc:
+        print(f"\n  {exc}\n", file=sys.stderr)
+        sys.exit(1)
 
     # Init logger. Bootstrap invents NO explicit defaults (LOG-I01 / Decision
     # 17): call configure() with no arguments so level/format/output all

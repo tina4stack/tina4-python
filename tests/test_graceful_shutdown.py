@@ -610,7 +610,7 @@ def test_close_bound_databases_really_closes_them(tmp_path):
             db.execute("INSERT INTO probe (id) VALUES (1)")
             db.commit()
             assert db.fetch_one("SELECT count(*) AS n FROM probe")["n"] == 1
-            real_connections.append(db._adapter._conn)
+            real_connections.extend(a._conn for a in db.pool._adapters)
             real_connections[-1].execute("SELECT 1")  # positive: it works now
 
         assert _close_bound_databases() == 2

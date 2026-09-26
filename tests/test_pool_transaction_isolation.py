@@ -4,7 +4,16 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-"""Real PostgreSQL regressions for exclusive pool leases (issue #145)."""
+"""Real PostgreSQL regressions for exclusive pool leases (issue #145, ADR-0074).
+
+ADR-0074 replaced the interim fail-fast pool with a bounded pool that BLOCKS on a
+saturated checkout and then raises ``DatabasePoolExhausted`` (a ``TimeoutError``)
+after ``TINA4_DB_POOL_TIMEOUT``. The invariant these tests pin is unchanged: a
+transaction (or an explicit lease) holds its connection exclusively, so no other
+context can borrow it, read its uncommitted rows, or have its own write rolled
+back with it. ``get_adapter()``/peek is introspection-only and may alias an in-use
+connection; only the STATEMENT/checkout path lends exclusively.
+"""
 import os
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
@@ -12,13 +21,17 @@ from uuid import uuid4
 import pytest
 
 from tina4_python.database import Database
+from tina4_python.database.pool import DatabasePoolExhausted
 
 
 @pytest.fixture
-def database():
+def database(monkeypatch):
     url = os.environ.get('TINA4_TEST_PG_URL')
     if not url:
         pytest.skip('[needs:postgres] TINA4_TEST_PG_URL is not configured')
+    # A short borrow timeout so an exclusivity check surfaces DatabasePoolExhausted
+    # in a second instead of the 30s default (ADR-0074).
+    monkeypatch.setenv('TINA4_DB_POOL_TIMEOUT', '1')
     instances = []
     tables = []
 
@@ -63,31 +76,33 @@ def test_pool_transaction_lease_prevents_cross_context_dirty_reads_and_lost_writ
     assert [row['id'] for row in db.fetch(f'SELECT id FROM {name} ORDER BY id')] == list(range(100, 104))
 
 
-def test_pool_exhaustion_fails_without_sharing_a_live_transaction(database):
+def test_pool_exhaustion_blocks_then_raises_without_sharing_a_live_transaction(database):
     make, _ = database
     db = make(1)
     db.start_transaction()
     with ThreadPoolExecutor(1) as executor:
-        with pytest.raises(RuntimeError, match='pool exhausted'):
-            executor.submit(db.fetch_one, 'SELECT 1 AS n').result(timeout=5)
-        with pytest.raises(RuntimeError, match='pool exhausted'):
-            executor.submit(db.get_adapter).result(timeout=5)
+        # ADR-0074: the one connection is pinned to this transaction, so a
+        # concurrent borrow cannot get it - it waits TINA4_DB_POOL_TIMEOUT and
+        # raises DatabasePoolExhausted rather than sharing the live transaction.
+        with pytest.raises(DatabasePoolExhausted):
+            executor.submit(db.fetch_one, 'SELECT 1 AS n').result(timeout=10)
     db.rollback()
     assert db.fetch_one('SELECT 1 AS n')['n'] == 1
 
 
-def test_explicit_lease_cannot_be_released_by_another_thread(database):
+def test_a_checked_out_lease_is_exclusive_until_returned(database):
     make, _ = database
     db = make(1)
     adapter = db.checkout()
     try:
-        with ThreadPoolExecutor(1) as executor:
-            with pytest.raises(RuntimeError, match='owner'):
-                executor.submit(db.checkin, adapter).result(timeout=5)
-        with pytest.raises(RuntimeError, match='pool exhausted'):
+        # ADR-0074: the single connection is leased exclusively; a second
+        # checkout finds none free and raises DatabasePoolExhausted rather than
+        # handing the same live connection to a second borrower.
+        with pytest.raises(DatabasePoolExhausted):
             db.checkout()
     finally:
         db.checkin(adapter)
+    # Once returned, the connection is lease-able again.
     assert db.fetch_one('SELECT 1 AS n')['n'] == 1
 
 
@@ -109,8 +124,10 @@ def test_pool_failed_commit_retains_lease_until_rollback(database):
     with pytest.raises(Exception):
         db.commit()
     with ThreadPoolExecutor(1) as executor:
-        with pytest.raises(RuntimeError, match='pool exhausted'):
-            executor.submit(db.fetch_one, 'SELECT 1 AS n').result(timeout=5)
+        # A failed commit keeps the connection pinned until rollback, so a
+        # concurrent borrow is still exhausted (ADR-0074).
+        with pytest.raises(DatabasePoolExhausted):
+            executor.submit(db.fetch_one, 'SELECT 1 AS n').result(timeout=10)
     db.rollback()
     assert db.fetch_one(f'SELECT COUNT(*) AS n FROM {name}')['n'] == 0
     db.start_transaction()
@@ -125,7 +142,7 @@ def test_ordinary_query_is_exclusively_leased(database):
     db, observer = make(1), make(0)
     marker = 'pool145_sleep_' + uuid4().hex
     with ThreadPoolExecutor(1) as executor:
-        query = executor.submit(db.fetch_one, f'SELECT pg_sleep(0.5) /* {marker} */')
+        query = executor.submit(db.fetch_one, f'SELECT pg_sleep(2) /* {marker} */')
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             running = observer.fetch_one(
@@ -136,7 +153,9 @@ def test_ordinary_query_is_exclusively_leased(database):
             time.sleep(0.01)
         else:
             pytest.fail('PostgreSQL did not observe the concurrent query')
-        with pytest.raises(RuntimeError, match='pool exhausted'):
+        # While the one connection runs the sleeping query, a borrow on this
+        # thread is exhausted - the connection is leased exclusively (ADR-0074).
+        with pytest.raises(DatabasePoolExhausted):
             db.fetch_one('SELECT 1 AS n')
         query.result(timeout=5)
     assert db.fetch_one('SELECT 1 AS n')['n'] == 1
@@ -152,14 +171,22 @@ def test_failed_begin_discards_connection_and_returns_capacity(tmp_path):
     assert db.fetch_one('SELECT 1 AS n')['n'] == 1
 
 
-def test_raw_peek_never_exposes_another_threads_transaction(database):
+def test_peek_is_introspection_only_and_never_lends_the_pinned_connection(database):
     make, _ = database
-    db = make(2)
+    db = make(1)
     db.start_transaction()
     pinned = db.get_adapter()
     try:
         with ThreadPoolExecutor(1) as executor:
-            assert executor.submit(db.get_adapter).result(timeout=5) is not pinned
+            # ADR-0074: get_adapter()/peek is introspection-only and MAY alias the
+            # connection a transaction holds - aliasing is not a leak because peek
+            # never LENDS it...
+            assert executor.submit(db.get_adapter).result(timeout=5) is pinned
+            # ...only the statement path lends, and it is exclusive: a concurrent
+            # statement cannot borrow the pinned connection, so nothing ever runs
+            # inside this transaction (issue #145).
+            with pytest.raises(DatabasePoolExhausted):
+                executor.submit(db.fetch_one, 'SELECT 1 AS n').result(timeout=10)
     finally:
         db.rollback()
 

@@ -26,7 +26,7 @@ class TestAuthValidTokenReturnsPayload:
     def test_valid_token_returns_payload_dict(self):
         from tina4_python.auth import Auth
 
-        auth = Auth(secret="parity-d-secret", expires_in=60)
+        auth = Auth(secret="parity-d-secret-0123456789abcdef", expires_in=60)
         token = auth.get_token({"user_id": 42, "role": "admin"})
 
         result = auth.valid_token(token)
@@ -37,7 +37,7 @@ class TestAuthValidTokenReturnsPayload:
     def test_valid_token_returns_none_for_invalid(self):
         from tina4_python.auth import Auth
 
-        auth = Auth(secret="parity-d-secret")
+        auth = Auth(secret="parity-d-secret-0123456789abcdef")
         assert auth.valid_token("not.a.jwt") is None
         assert auth.valid_token("aaa.bbb.ccc") is None
         assert auth.valid_token("") is None
@@ -46,7 +46,7 @@ class TestAuthValidTokenReturnsPayload:
         from tina4_python.auth import Auth
 
         # Use expires_in=1 minute, then leap time forward via monkey-patching
-        auth = Auth(secret="parity-d-secret", expires_in=1)
+        auth = Auth(secret="parity-d-secret-0123456789abcdef", expires_in=1)
         token = auth.get_token({"user_id": 1})
 
         # Move clock forward 2 minutes
@@ -60,8 +60,8 @@ class TestAuthValidTokenReturnsPayload:
     def test_valid_token_returns_none_for_wrong_secret(self):
         from tina4_python.auth import Auth
 
-        a1 = Auth(secret="secret-one")
-        a2 = Auth(secret="secret-two")
+        a1 = Auth(secret="secret-one-0123456789abcdef01234")
+        a2 = Auth(secret="secret-two-0123456789abcdef01234")
         token = a1.get_token({"x": 1})
         assert a2.valid_token(token) is None
 
@@ -69,7 +69,7 @@ class TestAuthValidTokenReturnsPayload:
         """The truthy/falsy contract is preserved — `if valid_token(t):` still works."""
         from tina4_python.auth import Auth
 
-        auth = Auth(secret="parity-d-secret")
+        auth = Auth(secret="parity-d-secret-0123456789abcdef")
         valid_tok = auth.get_token({"user_id": 1})
         invalid_tok = "bogus"
 

@@ -23,6 +23,37 @@ class SsoError(RuntimeError):
     """An OIDC configuration, protocol, or verification failure."""
 
 
+def _expires_at(tokens: dict) -> int:
+    """When the provider's access token lapses; 0 when it gave no lifetime.
+
+    0 means "no provider expiry" and the identity then lives as long as the
+    session. It must never be "now", which is already in the past by the next
+    request (ADR-0079 s5).
+    """
+    lifetime = int(tokens.get("expires_in") or 0)
+    return int(time.time()) + lifetime if lifetime > 0 else 0
+
+
+def live_session_identity(stored) -> "dict | None":
+    """The stored SSO identity, only while it is live (ADR-0079 s5).
+
+    ``stored`` is the reserved ``_tina4_sso`` session value. The identity needs
+    an issuer and a subject, and a numeric ``expires_at`` that is 0 (no
+    provider lifetime) or still in the future.
+    """
+    if not isinstance(stored, dict):
+        return None
+    identity = stored.get("identity")
+    if not (isinstance(identity, dict) and identity.get("issuer") and identity.get("subject")):
+        return None
+    expires_at = stored.get("expires_at", 0)
+    if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
+        return None
+    if expires_at and int(time.time()) >= expires_at:
+        return None
+    return identity
+
+
 class Sso:
     PENDING_KEY = "_tina4_sso_pending"
     SESSION_KEY = "_tina4_sso"
@@ -230,14 +261,14 @@ class Sso:
         session.set(self.SESSION_KEY, {
             "version": 1, "identity": identity, "access_token": access_token,
             "refresh_token": tokens.get("refresh_token"), "id_token": id_token,
-            "expires_at": int(time.time()) + int(tokens.get("expires_in", 0)),
+            "expires_at": _expires_at(tokens),
         })
         return {"identity": identity, "return_to": self._safe_return(pending.get("return_to"))}
 
     def identity(self, request_or_session):
         session = getattr(request_or_session, "session", request_or_session)
         stored = session.get(self.SESSION_KEY) if session else None
-        identity = stored.get("identity") if isinstance(stored, dict) else None
+        identity = live_session_identity(stored)
         if identity is not None and hasattr(request_or_session, "user"):
             request_or_session.user = identity
         return identity
@@ -264,7 +295,7 @@ class Sso:
                 "identity": identity, "access_token": access_token,
                 "refresh_token": tokens.get("refresh_token") or refresh_token,
                 "id_token": tokens.get("id_token") or stored.get("id_token"),
-                "expires_at": int(time.time()) + int(tokens.get("expires_in", 0)),
+                "expires_at": _expires_at(tokens),
             })
             session.set(self.SESSION_KEY, stored)
             return identity

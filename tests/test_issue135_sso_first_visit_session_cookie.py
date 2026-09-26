@@ -128,7 +128,7 @@ def server(tmp_path_factory, issuer):
         "ISSUE135_PORT": str(port),
         "ISSUE135_ISSUER": issuer,
         "TINA4_DEBUG": "false",
-        "TINA4_SECRET": "issue135-contract-secret",
+        "TINA4_SECRET": "issue135-contract-secret-0123456789abcdef",
         "TINA4_SESSION_BACKEND": "file",
         "TINA4_SESSION_PATH": str(sessions),
         "TINA4_NO_BROWSER": "true",
