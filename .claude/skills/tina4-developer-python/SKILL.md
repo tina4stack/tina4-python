@@ -680,7 +680,7 @@ from tina4_python.auth import get_token, Auth
 @noauth()                                    # login MUST be public — the user has no token yet
 @post("/api/login")
 async def login(request, response):
-    matches = User.where("email = ?", [request.body["email"]])   # SQL WHERE fragment → list
+    matches = User.where("email = ?", [request.body["email"]])   # SQL WHERE fragment → ModelCollection
     user = matches[0] if matches else None
     if not user or not Auth.check_password(request.body["password"], user.password):
         return response({"error": "Invalid credentials"}, 401)

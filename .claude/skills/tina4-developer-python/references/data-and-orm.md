@@ -139,9 +139,10 @@ user.to_dict()    # {"id": 1, "name": "Alice", ...}
 user.to_json()    # '{"id": 1, "name": "Alice", ...}'
 ```
 
-> **Query results are plain lists — serialize with a comprehension.** `where()`, `all()`,
-> `find(dict)`, and `select()` return a `list`, and a list has no `.to_dict()` / `.to_array()`.
-> Build the payload per-instance:
+> **Query results are a `ModelCollection` — serialize with a comprehension.** `where()`, `all()`,
+> `find(dict)`, and `select()` return a **`ModelCollection`** (a `list` subclass, ADR-0064). You
+> iterate and index it like a list, and it adds `.to_paginate()` / `.get_total_records()` — but
+> like a list it has no `.to_dict()` / `.to_array()`. Build the payload per-instance:
 > ```python
 > return response([u.to_dict() for u in User.all()])
 > ```
@@ -253,10 +254,11 @@ results.to_csv()     # 'id,name\n1,Alice\n...'
 ```
 
 > **`to_array()` / `to_json()` / `to_csv()` are on the `DatabaseResult` from `db.fetch()` only.**
-> The ORM methods `Model.all()` / `Model.where()` / `Model.select()` return a plain list of
-> model instances — a list has no `.to_array()`. To serialize ORM results, use a comprehension:
-> `[m.to_dict() for m in Note.all()]`. (Chaining `Note.all().to_array()` raises
-> `'list' object has no attribute 'to_array'` — a common, boot-time failure.)
+> The ORM methods `Model.all()` / `Model.where()` / `Model.select()` return a `ModelCollection`
+> (a `list` subclass) of model instances — like a list it has no `.to_array()`. To serialize ORM
+> results, use a comprehension: `[m.to_dict() for m in Note.all()]`. (Chaining
+> `Note.all().to_array()` raises `'ModelCollection' object has no attribute 'to_array'` — a
+> common, boot-time failure.) For the paginated envelope use `Note.all().to_paginate()`.
 
 ## QueryBuilder — Fluent Queries with JOINs
 

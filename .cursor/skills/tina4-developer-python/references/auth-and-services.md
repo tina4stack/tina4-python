@@ -41,13 +41,13 @@ TINA4_SECRET=a-long-random-string-here
 from tina4_python import post
 from tina4_python.auth import Auth, get_token
 
-@post("/login")
 @noauth()                                  # login is public — the caller has no token yet
+@post("/login")
 async def login(request, response):
     email = request.body["email"]
     password = request.body["password"]
 
-    matches = User.where("email = ?", [email])       # SQL WHERE fragment → list
+    matches = await User.where_async("email = ?", [email])   # async route -> *_async (ADR-0074)
     user = matches[0] if matches else None
     if not user or not Auth.check_password(password, user.password_hash):
         return response.json({"error": "Invalid credentials"}, 401)
@@ -172,8 +172,8 @@ TINA4_SESSION_BACKEND=file    # file, redis, valkey, mongodb, database
 
 ### Usage
 ```python
-@post("/login")
 @noauth()
+@post("/login")
 async def login(request, response):
     # After validating credentials...
     request.session.set("user_id", user.id)
@@ -205,7 +205,7 @@ from tina4_python import Queue
 @post("/orders")
 async def create_order(request, response):
     order = Order(request.body)
-    order.save()
+    await order.save_async()
 
     # Queue an email notification for background processing
     Queue(topic="order-emails").push({
@@ -248,8 +248,8 @@ queue.produce("order-emails", data, delay_seconds=300)
 ```python
 from tina4_python import Messenger
 
-@post("/contact")
 @noauth()
+@post("/contact")
 async def contact(request, response):
     Messenger().send(
         to=request.body["email"],
@@ -267,12 +267,18 @@ async def contact(request, response):
 from tina4_python import websocket
 
 @websocket("/ws/chat")
-async def chat(connection):
-    async for message in connection:
-        # Broadcast to all connected clients
-        await connection.broadcast(message.data)
+async def chat(connection, event, data):
+    # event is "open", "message", or "close"; data is the payload (str on
+    # "message", None on "open"/"close").
+    if event == "message":
+        await connection.broadcast(data)   # send to every connected client
+    elif event == "open":
+        await connection.send("Welcome")
 ```
 
+> The handler signature is `(connection, event, data)` — the router calls it once per
+> lifecycle event, it is NOT an `async for` loop over the connection.
+>
 > `from tina4_python import websocket` is the documented form (the subpackage is
 > callable and forwards to `core.router.websocket`). `from tina4_python.core.router
 > import websocket` still works and is the spelling mypy/pyright accept.
@@ -329,14 +335,14 @@ async def send_welcome(data):
 
 @on("user.created")
 async def setup_defaults(data):
-    Settings({"user_id": data["id"], "theme": "light"}).save()
+    await Settings({"user_id": data["id"], "theme": "light"}).save_async()
 
 # Fire the event:
-@post("/register")
 @noauth()
+@post("/register")
 async def register(request, response):
     user = User(request.body)
-    user.save()
+    await user.save_async()
     emit("user.created", {"id": user.id, "email": user.email})
     return response(user, 201)
 ```
