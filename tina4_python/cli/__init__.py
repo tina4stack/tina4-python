@@ -1970,7 +1970,12 @@ def _gen_crud(name: str, flags: dict):
     """
     fields = _fields_or_default(flags.get("fields", ""))
     table = _resolve_table(name, flags)
-    route_name = table + "s"  # routes are plural
+    # Routes are the SINGLE plural of the singular base — pluralise(snake(name)) —
+    # never `table + "s"`. When the table was pluralised to escape a SQL reserved
+    # word (Order -> table `orders`), `table + "s"` double-pluralised the route,
+    # file and template to `orderss`. Deriving from the singular base keeps one
+    # consistent rule: Order -> orders, Product -> products.
+    route_name = _pluralize_table(_to_snake(name))
 
     print(f"\n  Generating CRUD for {name}...\n")
 
@@ -3244,7 +3249,7 @@ def _gen_form(name: str, flags: dict = None):
     flags = flags or {}
     fields = _fields_or_default(flags.get("fields", ""))
     table = _resolve_table(name, flags)
-    route_name = table + "s"
+    route_name = _pluralize_table(_to_snake(name))  # single plural of the singular base (never table + "s")
 
     # Input type mapping
     input_types = {
@@ -3328,7 +3333,7 @@ def _gen_view(name: str, flags: dict = None):
     flags = flags or {}
     fields = _fields_or_default(flags.get("fields", ""))
     table = _resolve_table(name, flags)
-    route_name = table + "s"
+    route_name = _pluralize_table(_to_snake(name))  # single plural of the singular base (never table + "s")
 
     target = Path("src/templates/pages")
     target.mkdir(parents=True, exist_ok=True)

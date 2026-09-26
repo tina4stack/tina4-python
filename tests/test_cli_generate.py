@@ -429,6 +429,55 @@ class TestGenerateCrud:
         assert "from src.orm.Product import Product" in content
 
 
+class TestCrudPluralisationContract:
+    """The ONE pluralisation rule, applied consistently (regression for the
+    double-pluralisation bug). The route path, route file and list/page template
+    are the SINGLE plural of the singular base — pluralise(snake(ClassName)) —
+    never the plural of an already-pluralised table. The table/migration stay
+    the singular base, except a SQL reserved word which is pluralised for the
+    table. So `Order` (reserved) has table `orders` and route `orders` (NOT
+    `orderss`), and `Product` has table `product` and route `products`.
+    """
+
+    def test_reserved_word_class_is_not_double_pluralised(self, tmp_project):
+        # `order` is a SQL reserved word -> table pluralised to `orders`. The
+        # route must be `orders` (plural of the singular base), not `orderss`.
+        _gen_crud("Order", {"fields": "total:float"})
+
+        # route file + path: single plural, never double.
+        assert (tmp_project / "src" / "routes" / "orders.py").exists()
+        assert not (tmp_project / "src" / "routes" / "orderss.py").exists()
+        route = (tmp_project / "src" / "routes" / "orders.py").read_text()
+        assert "/api/orders" in route
+        assert "/api/orderss" not in route
+
+        # list/page template: single plural, never double.
+        assert (tmp_project / "src" / "templates" / "pages" / "orders.twig").exists()
+        assert not (tmp_project / "src" / "templates" / "pages" / "orderss.twig").exists()
+
+        # model + migration: singular base, reserved word pluralised for the table.
+        assert (tmp_project / "src" / "orm" / "Order.py").exists()
+        assert list((tmp_project / "migrations").glob("*create_orders.sql"))
+        assert not list((tmp_project / "migrations").glob("*create_orderss.sql"))
+        # the co-emitted test follows the same single-plural name.
+        assert (tmp_project / "tests" / "test_orders.py").exists()
+        assert not (tmp_project / "tests" / "test_orderss.py").exists()
+
+    def test_plain_word_class_is_pluralised_once(self, tmp_project):
+        _gen_crud("Product", {"fields": "name:string"})
+
+        assert (tmp_project / "src" / "routes" / "products.py").exists()
+        assert not (tmp_project / "src" / "routes" / "productss.py").exists()
+        route = (tmp_project / "src" / "routes" / "products.py").read_text()
+        assert "/api/products" in route
+        assert "/api/productss" not in route
+
+        assert (tmp_project / "src" / "templates" / "pages" / "products.twig").exists()
+        assert (tmp_project / "src" / "orm" / "Product.py").exists()
+        # non-reserved -> table stays SINGULAR, so the migration is create_product.
+        assert list((tmp_project / "migrations").glob("*create_product.sql"))
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Scaffolding-first acceptance matrix — real temp project, real test
 # client, NO mocks. Compile + import + boot behaviour, not string-grep.
