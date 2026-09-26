@@ -406,12 +406,15 @@ jobs:
         # tina4stack/tina4-python#170. The rest of the suite runs as 4 SEQUENTIAL
         # pytest-split groups (fresh process each) so a separate CI-only resource
         # leak cannot accumulate to a wedge. --timeout is a loud backstop.
+        # TRIAL (tina4-python#170): the http-hardening file is NO LONGER --ignored --
+        # runners moved 2->4 vCPU so the original deadlock trigger is gone; if this
+        # stays green across several runs the mitigation is retired.
         run: |
           uv pip install pytest-timeout pytest-split
           overall=0
           for g in 1 2 3 4; do
             echo "::group::pytest split group $g/4"
-            uv run pytest tests/ --ignore=tests/test_http_hardening_contract.py \
+            uv run pytest tests/ \
               --splits 4 --group "$g" -v --timeout=180 --timeout-method=signal -rfE || overall=1
             echo "::endgroup::"
           done
