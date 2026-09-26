@@ -33,10 +33,17 @@ def _reachable(host: str, port: int) -> bool:
         return False
 
 
-if not _URL:
-    if os.environ.get("TINA4_REQUIRE_SERVICES"):
-        raise RuntimeError("TINA4_REQUIRE_SERVICES set but TINA4_TEST_FIREBIRD_URL is unset")
-    pytest.skip("[needs:firebird] TINA4_TEST_FIREBIRD_URL not set", allow_module_level=True)
+# Firebird is an OPTIONAL engine; the main `test` job intentionally does not
+# provision it (Firebird runs in the dedicated `firebird` job). Gate with a
+# per-test skipif carrying the excusable [needs:firebird] tag -- the
+# require-services gate passes that here, and the dedicated job (where
+# TINA4_TEST_FIREBIRD_URL is set) runs it for real. A module-level
+# pytest.skip/raise would instead become a COLLECTION ERROR under the gate
+# (see tests/conftest.py), which failed this job for the whole release branch.
+pytestmark = pytest.mark.skipif(
+    not _URL,
+    reason="[needs:firebird] TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)",
+)
 
 
 _SUFFIX = uuid.uuid4().hex[:8]
