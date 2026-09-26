@@ -408,12 +408,14 @@ jobs:
         # leak cannot accumulate to a wedge. --timeout is a loud backstop.
         run: |
           uv pip install pytest-timeout pytest-split
+          overall=0
           for g in 1 2 3 4; do
             echo "::group::pytest split group $g/4"
             uv run pytest tests/ --ignore=tests/test_http_hardening_contract.py \
-              --splits 4 --group "$g" -v --timeout=180 --timeout-method=signal -rfE
+              --splits 4 --group "$g" -v --timeout=180 --timeout-method=signal -rfE || overall=1
             echo "::endgroup::"
           done
+          exit $overall
 
       - name: Run the Mongo suites against the MongoDB 8 replica set
         env:

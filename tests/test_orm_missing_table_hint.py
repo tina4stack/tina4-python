@@ -71,9 +71,11 @@ class TestFirebirdMissingTableHint:
     def test_hint_present(self):
         url = os.environ.get("TINA4_TEST_FIREBIRD_URL")
         if not url:
-            if os.environ.get("TINA4_REQUIRE_SERVICES"):
-                raise RuntimeError("TINA4_REQUIRE_SERVICES set but TINA4_TEST_FIREBIRD_URL unset")
-            pytest.skip("[needs:firebird] TINA4_TEST_FIREBIRD_URL not set")
+            # Firebird is an OPTIONAL engine the main test job does not provision
+            # (it runs in the dedicated firebird job); skip with the excusable
+            # [needs:firebird] tag rather than raising, exactly like the sibling
+            # firebird specs. Raising here failed the whole job (tina4-python#170).
+            pytest.skip("[needs:firebird] TINA4_TEST_FIREBIRD_URL not set (needs a live Firebird)")
         db = Database(url)
         try:
             _assert_hint(db)
