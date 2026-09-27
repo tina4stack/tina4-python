@@ -42,3 +42,40 @@ def test_three_slash_relative_form_unchanged(tmp_path, monkeypatch):
 def test_memory_forms_unchanged():
     assert Database("sqlite::memory:", pool=1)._connection_path() == ":memory:"
     assert Database("sqlite:///:memory:", pool=1)._connection_path() == ":memory:"
+
+
+def _resolver_for(url):
+    """A live Database whose _connection_path() resolves `url` without connecting.
+
+    _connection_path() reads self.url and is a pure resolver (no driver call), so
+    we build a cheap :memory: Database and point its url at the case under test.
+    """
+    db = Database("sqlite::memory:", pool=1)
+    db.url = url
+    return db
+
+
+def test_windows_absolute_form_passes_through():
+    # Drive-letter path is treated as absolute and returned untouched (parity with
+    # tina4-php / tina4-ruby / tina4-nodejs), never re-rooted under cwd.
+    assert _resolver_for("sqlite:///C:/Users/app.db")._connection_path() == "C:/Users/app.db"
+
+
+def test_relative_form_creates_parent_dir_under_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    resolved = Database("sqlite:///sub/dir/app.db", pool=1)._connection_path()
+    assert resolved == os.path.join(os.getcwd(), "sub", "dir", "app.db")
+    assert os.path.isdir(os.path.join(os.getcwd(), "sub", "dir")), "parent dir auto-created under cwd"
+
+
+def test_relative_escaping_cwd_is_not_created(tmp_path, monkeypatch):
+    # Python-specific guard: a relative path whose parent resolves OUTSIDE cwd is
+    # resolved but its directory is NOT auto-created (os.path.commonpath check).
+    # This is the divergence from tina4-php, which mkdirs the parent unconditionally.
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    outside = tmp_path / "escaped"
+    resolved = _resolver_for("sqlite:///../escaped/app.db")._connection_path()
+    assert resolved == os.path.join(os.getcwd(), "..", "escaped", "app.db")
+    assert not outside.exists(), "a relative path escaping cwd must NOT auto-create its dir"
