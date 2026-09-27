@@ -68,14 +68,16 @@ def test_relative_form_creates_parent_dir_under_cwd(tmp_path, monkeypatch):
     assert os.path.isdir(os.path.join(os.getcwd(), "sub", "dir")), "parent dir auto-created under cwd"
 
 
-def test_relative_escaping_cwd_is_not_created(tmp_path, monkeypatch):
-    # Python-specific guard: a relative path whose parent resolves OUTSIDE cwd is
-    # resolved but its directory is NOT auto-created (os.path.commonpath check).
-    # This is the divergence from tina4-php, which mkdirs the parent unconditionally.
+def test_relative_escaping_cwd_is_refused(tmp_path, monkeypatch):
+    # ADR-0086: a relative path whose parent resolves OUTSIDE cwd is REFUSED
+    # loudly (ValueError) and no directory is created — the four frameworks now
+    # agree on this. (Before ADR-0086 Python resolved it and silently skipped
+    # the mkdir; PHP/Ruby mkdir'd the escaping parent unconditionally.)
+    import pytest
     work = tmp_path / "work"
     work.mkdir()
     monkeypatch.chdir(work)
     outside = tmp_path / "escaped"
-    resolved = _resolver_for("sqlite:///../escaped/app.db")._connection_path()
-    assert resolved == os.path.join(os.getcwd(), "..", "escaped", "app.db")
-    assert not outside.exists(), "a relative path escaping cwd must NOT auto-create its dir"
+    with pytest.raises(ValueError):
+        _resolver_for("sqlite:///../escaped/app.db")._connection_path()
+    assert not outside.exists(), "an escaping relative path must NOT auto-create its dir"

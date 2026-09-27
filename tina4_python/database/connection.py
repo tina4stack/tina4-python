@@ -430,11 +430,13 @@ class Database(DatabaseAsyncMixin):
             sqlite:////absolute/path.db    → /absolute/path.db  (absolute)
             sqlite:///C:/Users/app.db      → C:/Users/app.db  (Windows absolute)
 
-        Directories are auto-created ONLY when the resolved path is
-        inside the current working directory (the project root). We
-        never try to ``os.makedirs`` at root (``/data``, ``C:\\data``)
-        — that's both hostile on read-only filesystems and not what
-        any project actually wants.
+        Directories are auto-created (mode ``0775``, masked by the umask)
+        ONLY when the resolved parent stays inside the current working
+        directory (the project root). An absolute path is trusted and
+        never auto-created. A RELATIVE path whose parent resolves OUTSIDE
+        cwd (``../../etc/foo.db``) is REFUSED with a ``ValueError`` — Tina4
+        never ``os.makedirs`` outside the project, which is both hostile on
+        read-only filesystems and a latent footgun (ADR-0086).
         """
         parsed = urlparse(self.url)
 
@@ -500,10 +502,25 @@ class Database(DatabaseAsyncMixin):
             # Relative — resolve under the project root (cwd).
             cwd = os.getcwd()
             path = os.path.join(cwd, stripped)
-            # Only auto-create subdirectories *inside* cwd.
+            # Create the parent, but ONLY when it stays inside cwd (ADR-0086).
+            # A relative path whose parent resolves OUTSIDE cwd (e.g.
+            # "../../etc/foo.db") is REFUSED loudly here — never a silent mkdir
+            # outside the project (the PHP/Ruby footgun) and never a path that
+            # only fails cryptically when the driver opens it (the old Python
+            # silent-skip). Absolute paths are trusted and never reach this
+            # branch. The created directory is mode 0775 (masked by the umask),
+            # matching every framework.
             directory = os.path.dirname(path)
-            if directory and os.path.commonpath([os.path.abspath(directory), cwd]) == cwd:
-                os.makedirs(directory, exist_ok=True)
+            if directory:
+                if os.path.commonpath([os.path.abspath(directory), cwd]) != cwd:
+                    raise ValueError(
+                        f"SQLite path {self.url!r} resolves outside the project "
+                        f"directory: {os.path.abspath(directory)!r} is not within "
+                        f"{cwd!r}. Tina4 refuses to create directories outside the "
+                        f"project (ADR-0086). Use an absolute path for a database "
+                        f"that lives outside the project."
+                    )
+                os.makedirs(directory, mode=0o775, exist_ok=True)
 
         return path
 
