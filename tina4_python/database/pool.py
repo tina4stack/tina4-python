@@ -43,6 +43,14 @@ def resolve_pool_size(pool: int | None) -> int:
 
     ``0`` keeps its documented meaning, "a single connection" - it is now LENT
     exclusively like any other pool, so it serialises instead of being shared.
+
+    Backward-compatibility note (ADR-0074): an UNSET ``pool=`` used to mean one
+    shared connection; it now means TINA4_DB_POOL, else DEFAULT_POOL_SIZE (10).
+    This is a deliberate behavioural fix - the old shared connection let two
+    concurrent requests read and commit inside each other's transaction. Sync
+    callers keep working unchanged; the only visible difference is that an app
+    that never set ``pool=`` now opens up to ten connections instead of one. Pin
+    the old single-connection behaviour with ``pool=0`` or ``TINA4_DB_POOL=0``.
     """
     if pool is None:
         raw = os.environ.get("TINA4_DB_POOL", "").strip()

@@ -66,16 +66,35 @@ current_route: contextvars.ContextVar = contextvars.ContextVar("tina4_current_ro
 _warned_routes: set = set()
 
 
+def _running_event_loop():
+    """The event loop running on this thread, or ``None`` when there is none.
+
+    A supported replacement for the private ``asyncio._get_running_loop()``:
+    ``asyncio.get_running_loop()`` answers on a running loop and raises
+    ``RuntimeError`` off one (ADR-0074). It runs only after the TINA4_DEBUG
+    gate below, so its off-loop ``RuntimeError`` never fires on the hot sync
+    path in production.
+    """
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
 def _warn_if_blocking_the_event_loop(operation: str) -> None:
     """Debug-mode warning: a sync DB call on a thread that is running an event
     loop freezes every other request on that loop until the statement returns.
 
-    Called only once a running loop is detected, so the check costs one C call
-    on every other thread (sync routes run in worker threads, and the async API
-    runs its statements on the pool's own workers - neither has a loop).
+    Gated on TINA4_DEBUG first, so production pays nothing; only then does it
+    look for a running loop. Callers invoke it unconditionally - the loop check
+    lives here, not at every call site, so the supported (raising)
+    ``asyncio.get_running_loop()`` never touches the hot sync path outside
+    debug mode (ADR-0074).
     """
     from tina4_python.dotenv import is_truthy
     if not is_truthy(os.environ.get("TINA4_DEBUG", "")):
+        return
+    if _running_event_loop() is None:
         return
     route = current_route.get() or "(no route - a coroutine outside a request)"
     if route in _warned_routes:
@@ -680,8 +699,7 @@ class Database(DatabaseAsyncMixin):
         in this context, so nested facade calls land on the same connection;
         ``_release`` returns it.
         """
-        if asyncio._get_running_loop() is not None:
-            _warn_if_blocking_the_event_loop(operation)
+        _warn_if_blocking_the_event_loop(operation)
         borrow = self._borrowed.get()
         if borrow is not None:
             return borrow.adapter, None
@@ -692,8 +710,7 @@ class Database(DatabaseAsyncMixin):
         """``_acquire`` for a single adapter call that never calls back into this
         facade (fetch, fetch_one, execute, insert, delete): nothing nested can
         need the pin, so skip recording it. ``token`` is the adapter to return."""
-        if asyncio._get_running_loop() is not None:
-            _warn_if_blocking_the_event_loop(operation)
+        _warn_if_blocking_the_event_loop(operation)
         borrow = self._borrowed.get()
         if borrow is not None:
             return borrow.adapter, None
@@ -722,8 +739,7 @@ class Database(DatabaseAsyncMixin):
         commit()/rollback() - the write is uncommitted, so the connection that
         holds it must be the one the commit lands on."""
         if self._manual_commit and self._borrowed.get() is None:
-            if asyncio._get_running_loop() is not None:
-                _warn_if_blocking_the_event_loop(operation)
+            _warn_if_blocking_the_event_loop(operation)
             adapter = self._pool.checkout()
             self._borrowed.set(_Borrow(adapter, sticky=True, pool=self._pool))
             return adapter, None
@@ -1189,8 +1205,7 @@ class Database(DatabaseAsyncMixin):
             borrow.depth += 1
             return
         if borrow is None:
-            if asyncio._get_running_loop() is not None:
-                _warn_if_blocking_the_event_loop("start_transaction")
+            _warn_if_blocking_the_event_loop("start_transaction")
             self._begin_on(self._pool.checkout())
             return
         # Inside an operation's (or a manual-commit write's) borrow: open the
@@ -1240,8 +1255,7 @@ class Database(DatabaseAsyncMixin):
             # Inner commit of an ignored nested begin — just unwind the depth.
             borrow.depth -= 1
             return
-        if asyncio._get_running_loop() is not None:
-            _warn_if_blocking_the_event_loop("commit")
+        _warn_if_blocking_the_event_loop("commit")
         try:
             borrow.adapter.commit()
             self.last_error = None
@@ -1267,8 +1281,7 @@ class Database(DatabaseAsyncMixin):
                 adapter.rollback()
             self.last_error = None
             return
-        if asyncio._get_running_loop() is not None:
-            _warn_if_blocking_the_event_loop("rollback")
+        _warn_if_blocking_the_event_loop("rollback")
         try:
             borrow.adapter.rollback()
             self.last_error = None
