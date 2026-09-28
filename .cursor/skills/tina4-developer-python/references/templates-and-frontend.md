@@ -23,6 +23,49 @@ from tina4_python.frond import Frond
 html = Frond(template_dir="src/templates").render("index.twig", {"title": "My App"})
 ```
 
+### Globals (values available in every template)
+
+Register a value every template can read with `add_global`:
+
+```python
+from tina4_python.frond import Frond
+engine = Frond(template_dir="src/templates")
+engine.add_global("app_name", "My App")
+```
+
+```twig
+<title>{{ app_name }}</title>
+```
+
+**`add_global` takes a VALUE, not a lazy callable.** Whatever you pass is stored
+as-is and merged into the render context unchanged — Frond never calls it for you
+when you name it bare. A function or lambda is therefore stored uncalled, and in
+a condition it is a plain object, which is truthy. So this section shows to
+everyone:
+
+```python
+frond.add_global("admin_only", lambda: access.admin_only())   # WRONG for {% if %}
+```
+
+```twig
+{% if admin_only %} ...admin link... {% endif %}   {# always true — admin_only is a function #}
+```
+
+Verified on tina4-python 3.13.x with `add_global("g", lambda: False)`:
+`{% if g %}` is **true** and only `{% if g() %}` calls it (false). Fixes:
+
+- **Resolve it before you pass it:** `frond.add_global("admin_only", access.admin_only())` — a real bool.
+- **Or call it in the template:** `{% if admin_only() %}`.
+- **Accept either a function global or a plain bool from the render context:**
+  `{% if (admin_only is boolean and admin_only) or admin_only() %}`. A name that
+  is not registered, called as `nope()`, renders as false (it does not throw on
+  3.13.x), so this form is safe when the global is missing.
+
+**Tests must register the global the way the app does.** A plain bool passed in
+the render context (`render(tpl, {"admin_only": False})`) makes `{% if admin_only %}`
+behave correctly, so a test that passes a bool hides the closure bug that
+production hits through `add_global`.
+
 ### Basic Syntax
 
 ```twig
