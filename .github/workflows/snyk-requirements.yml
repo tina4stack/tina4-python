@@ -1,0 +1,44 @@
+# Copyright (c) 2026 Code Infinity
+# SPDX-License-Identifier: MPL-2.0
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+# Snyk-requirements gate: requirements-snyk.txt is a pinned export of uv.lock's
+# full third-party graph, scanned by Snyk because it cannot resolve this
+# project's zero-dependency uv/PEP-735 pyproject.toml. This gate fails the build
+# if the committed export drifts from uv.lock, so the scan can never go stale.
+# Fast, no live services -- it re-runs `uv export` and byte-compares.
+name: Snyk Requirements
+
+on:
+  push:
+    branches: [v3]
+  pull_request:
+    branches: [v3]
+
+permissions:
+  contents: read
+
+jobs:
+  snyk-requirements:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check requirements-snyk.txt is in sync with uv.lock
+        run: python scripts/check_snyk_requirements.py
+
+      - name: Snyk-requirements gate mutation tests
+        run: python -m unittest discover -s scripts -p 'test_check_snyk_requirements.py'

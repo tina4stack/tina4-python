@@ -46,6 +46,11 @@ _FLOOR_LITERAL_RE = re.compile(r'return\s+"(\d+\.\d+\.\d+)"')
 _CLAUDE_HEADER_RE = re.compile(r"^Version (\d+\.\d+\.\d+)\b", re.MULTILINE)
 # CLAUDE.md footer line(s): "- Version: 3.13.121"
 _CLAUDE_FOOTER_RE = re.compile(r"^- Version:\s*(\d+\.\d+\.\d+)", re.MULTILINE)
+# AGENTS.md header line: "v3.13.140. 140 cataloged features, zero dependencies."
+# Parsed the same way as the CLAUDE.md header: the leading version token on its
+# own line. AGENTS.md silently drifted (stale at 3.13.87) because it was not
+# gated here -- adding it closes that gap.
+_AGENTS_HEADER_RE = re.compile(r"^v(\d+\.\d+\.\d+)\b", re.MULTILINE)
 
 
 def _pyproject_versions(text: str) -> list[str]:
@@ -68,6 +73,10 @@ def _claude_footer_versions(text: str) -> list[str]:
     return _CLAUDE_FOOTER_RE.findall(text)
 
 
+def _agents_header_versions(text: str) -> list[str]:
+    return _AGENTS_HEADER_RE.findall(text)
+
+
 # Every location the release version lives, as (relative path, human label,
 # extractor). The extractor returns EVERY version it finds at that location; the
 # location passes when the list is non-empty and every entry equals the expected
@@ -78,6 +87,7 @@ CHECKS = [
     ("tina4_python/__init__.py", "_resolve_version() floor literal", _init_floor_versions),
     ("CLAUDE.md", "header 'Version X'", _claude_header_versions),
     ("CLAUDE.md", "footer '- Version: X'", _claude_footer_versions),
+    ("AGENTS.md", "header 'vX'", _agents_header_versions),
 ]
 
 
