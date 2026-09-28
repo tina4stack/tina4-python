@@ -38,3 +38,17 @@ def test_claude_md_version_matches_pyproject():
     assert footers, "CLAUDE.md is missing its '- Version:' footer line"
     stale = sorted({v for v in footers if v != version})
     assert not stale, f"stale CLAUDE.md footer version(s) {stale}, expected {version}"
+
+
+def test_agents_md_version_matches_pyproject():
+    """AGENTS.md (the Codex/Cursor-facing doc) carries the same "vX.Y.Z" header
+    and must not drift from the package version -- it silently stayed at 3.13.87
+    until this release because nothing gated it."""
+    version = _package_version()
+    agents = (ROOT / "AGENTS.md").read_text()
+
+    # Header line: "v3.13.140. 140 cataloged features, ..."
+    headers = re.findall(r"^v(\d+\.\d+\.\d+)\b", agents, re.M)
+    assert headers, "AGENTS.md is missing its 'vX.Y.Z' header line"
+    stale = sorted({v for v in headers if v != version})
+    assert not stale, f"stale AGENTS.md header version(s) {stale}, expected {version}"

@@ -112,6 +112,22 @@ def test_drift_in_init_floor_literal_fails_and_names_that_file(tmp_path):
     assert "9.9.9" in output, f"wrong value not shown; output:\n{output}"
 
 
+def test_drift_in_agents_md_fails_and_names_that_file(tmp_path):
+    """Corrupting AGENTS.md's "vX.Y.Z" header names THAT file -- proving the
+    precheck now gates AGENTS.md, the doc that silently drifted (stale at
+    3.13.87) because nothing checked it before this release."""
+    version = _current_version()
+    _materialise_repo_version_files(tmp_path)
+    _rewrite_once(tmp_path / "AGENTS.md", f"v{version}", "v9.9.9")
+
+    result = _run(version, "--root", str(tmp_path))
+    output = result.stdout + result.stderr
+
+    assert result.returncode != 0, f"expected non-zero exit on drift; output:\n{output}"
+    assert "AGENTS.md" in output, f"drifted filename not named; output:\n{output}"
+    assert "9.9.9" in output, f"wrong value not shown; output:\n{output}"
+
+
 def test_wrong_expected_version_fails_at_head():
     """Pointed at the real checkout but asked for a version nothing carries, the
     precheck must fail and name every real file -- the mutation guard: a script
@@ -123,3 +139,4 @@ def test_wrong_expected_version_fails_at_head():
     assert "pyproject.toml" in output
     assert "tina4_python/__init__.py" in output
     assert "CLAUDE.md" in output
+    assert "AGENTS.md" in output
