@@ -27,6 +27,16 @@ jobs:
         with:
           path: tina4-python
 
+      # No-committed-symlinks gate. A file recorded in git with mode 120000 is a
+      # symbolic link; Windows extraction (7-Zip, and therefore Composer on
+      # Windows) refuses "dangerous link paths", so a leaked symlink fails every
+      # Windows install -- the tina4-php repo shipped 134 of them by accident.
+      # This runs against the checked-out tree's git index; the in-suite
+      # tests/test_no_symlinks_gate.py proves it positive AND negative (mutation).
+      - name: No committed symlinks
+        working-directory: tina4-python
+        run: sh scripts/check-no-symlinks.sh
+
       # The tina4-js skill's imports are checked against tina4-js's real exports,
       # so the sibling repo must sit beside this one (../tina4-js).
       - name: Checkout tina4-js (sibling, for its real exports)

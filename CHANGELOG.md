@@ -9,6 +9,10 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.141 — 2026-09-29
+
+A committed symbolic link now fails the build. Git records a symlink with mode 120000, and Windows extraction -- 7-Zip, and so Composer on Windows -- refuses those "dangerous link paths", so a single leaked link breaks every Windows install. A new guard walks the git index, rejects any such file and names it, and a continuous-integration step runs it on every push and pull request. Its test is mutation-proof: it stages a real symlink in a real temporary repository and proves the guard bites. This is a small hardening release, parity with the tina4-php fix for the same Windows-Composer breakage, where a leaked container conf.d snapshot shipped 134 absolute symlinks. tina4-python carries none today; the guard keeps it that way. The framework still has no required runtime dependencies.
+
 ## 3.13.140 — 2026-09-28
 
 The crud generator stops double-pluralising: a `Category` resource now writes `categories` for its route and template names, not `categoriess`. SQLite path resolution is hardened -- a relative database path that would escape the project root is refused, and any missing parent directories are created 0775 (ADR-0086). The async database layer asks for the running event loop through a supported check instead of a private call, and the connection-pool default is now written down (ADR-0074). Two continuous-integration gates land: a doc-drift audit that fails the build when the packaged CLAUDE.md or the AI skills describe an API the code does not have, and generator-parity coverage that keeps the crud output honest. Alongside them the CLAUDE.md CRUD example is corrected, the web-push skill mirrors are synced to their canonical source, and the http-hardening module is un-ignored so its tests actually run (tina4-python#170). The AI-skill stale-check resolves correctly and warns on addGlobal closures (skill 90/91). The framework still has no required runtime dependencies.
