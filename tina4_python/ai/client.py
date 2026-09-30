@@ -19,6 +19,11 @@ from typing import Any, Iterator
 from urllib.parse import urlparse
 
 
+# Sentinel: a per-shape message translator did not recognise the message, so
+# the next translator (finally the default content translator) should handle it.
+_UNTRANSLATED = object()
+
+
 class AiError(RuntimeError):
     """Base error for the app-facing AI client."""
 
@@ -577,118 +582,152 @@ class Ai:
           with ``tool_use`` parts (Anthropic form) translated per
           provider (ADR-0061).
         """
-        role = message.get("role")
+        # ADR-0061: each message shape has its own translator; the first that
+        # recognises this message returns its result, else the default
+        # content/multimodal translator handles it. Keeping one shape per helper
+        # holds every branch's complexity low.
+        for translator in (
+            Ai._translate_tool_result_message,
+            Ai._translate_openai_tool_calls,
+            Ai._translate_anthropic_tool_results,
+            Ai._translate_anthropic_tool_use,
+        ):
+            result = translator(provider, message)
+            if result is not _UNTRANSLATED:
+                return result
+        return Ai._translate_content(provider, message)
 
-        # ADR-0061: OpenAI-style tool-result message.
-        if role == "tool":
-            if provider == "anthropic":
-                return {
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": message["tool_call_id"],
-                        "content": message["content"],
-                    }],
-                }
-            # openai / local: passthrough, but keep only the wire fields.
+    @staticmethod
+    def _translate_tool_result_message(provider: str, message: dict[str, Any]):
+        """ADR-0061: OpenAI-style ``role='tool'`` result message."""
+        if message.get("role") != "tool":
+            return _UNTRANSLATED
+        if provider == "anthropic":
             return {
-                "role": "tool",
-                "tool_call_id": message["tool_call_id"],
-                "content": message["content"],
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": message["tool_call_id"],
+                    "content": message["content"],
+                }],
             }
+        # openai / local: passthrough, but keep only the wire fields.
+        return {
+            "role": "tool",
+            "tool_call_id": message["tool_call_id"],
+            "content": message["content"],
+        }
 
-        # ADR-0061: assistant tool_calls (OpenAI form).
-        if role == "assistant" and isinstance(message.get("tool_calls"), list):
-            if provider != "anthropic":
-                # openai / local: passthrough.
-                out: dict[str, Any] = {
-                    "role": "assistant",
-                    "tool_calls": message["tool_calls"],
-                }
-                content = message.get("content")
-                if content is None:
-                    out["content"] = None
-                elif isinstance(content, str):
-                    out["content"] = content
-                return out
-            # Anthropic: fold tool_calls into a content list with tool_use parts.
-            parts: list[dict[str, Any]] = []
+    @staticmethod
+    def _translate_openai_tool_calls(provider: str, message: dict[str, Any]):
+        """ADR-0061: assistant ``tool_calls`` (OpenAI form)."""
+        if message.get("role") != "assistant" or not isinstance(message.get("tool_calls"), list):
+            return _UNTRANSLATED
+        if provider != "anthropic":
+            # openai / local: passthrough.
+            out: dict[str, Any] = {
+                "role": "assistant",
+                "tool_calls": message["tool_calls"],
+            }
             content = message.get("content")
-            if isinstance(content, str) and content:
-                parts.append({"type": "text", "text": content})
-            for tc in message["tool_calls"]:
-                fn = tc.get("function", {})
-                args_val = fn.get("arguments")
-                if isinstance(args_val, str):
-                    try:
-                        parsed = json.loads(args_val) if args_val else {}
-                    except (json.JSONDecodeError, ValueError):
-                        parsed = {}
-                else:
-                    parsed = args_val or {}
-                parts.append({
-                    "type": "tool_use",
-                    "id": tc.get("id"),
-                    "name": fn.get("name"),
-                    "input": parsed,
+            if content is None:
+                out["content"] = None
+            elif isinstance(content, str):
+                out["content"] = content
+            return out
+        # Anthropic: fold tool_calls into a content list with tool_use parts.
+        parts: list[dict[str, Any]] = []
+        content = message.get("content")
+        if isinstance(content, str) and content:
+            parts.append({"type": "text", "text": content})
+        for tc in message["tool_calls"]:
+            fn = tc.get("function", {})
+            parts.append({
+                "type": "tool_use",
+                "id": tc.get("id"),
+                "name": fn.get("name"),
+                "input": Ai._decode_tool_arguments(fn.get("arguments")),
+            })
+        return {"role": "assistant", "content": parts}
+
+    @staticmethod
+    def _decode_tool_arguments(args_val: Any) -> Any:
+        """OpenAI tool-call arguments: a JSON string decodes to a dict (bad JSON
+        becomes ``{}``); a non-string is used as-is (``None`` becomes ``{}``)."""
+        if not isinstance(args_val, str):
+            return args_val or {}
+        try:
+            return json.loads(args_val) if args_val else {}
+        except (json.JSONDecodeError, ValueError):
+            return {}
+
+    @staticmethod
+    def _translate_anthropic_tool_results(provider: str, message: dict[str, Any]):
+        """ADR-0061: Anthropic-form ``tool_result`` parts on a user turn."""
+        if message.get("role") != "user" or not isinstance(message.get("content"), list):
+            return _UNTRANSLATED
+        content = message["content"]
+        has_tool_result = any(
+            isinstance(p, dict) and p.get("type") == "tool_result" for p in content
+        )
+        if not has_tool_result:
+            return _UNTRANSLATED
+        if provider == "anthropic":
+            # Passthrough — the content shape is native.
+            return {"role": "user", "content": list(content)}
+        # openai / local: split into one role='tool' message per part. Non-
+        # tool_result parts (e.g. text) are dropped: OpenAI wants tool_result
+        # content on a role='tool' message alone.
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": part["tool_use_id"],
+                "content": part.get("content", ""),
+            }
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "tool_result"
+        ]
+
+    @staticmethod
+    def _translate_anthropic_tool_use(provider: str, message: dict[str, Any]):
+        """ADR-0061: Anthropic-form assistant with ``tool_use`` content parts."""
+        if message.get("role") != "assistant" or not isinstance(message.get("content"), list):
+            return _UNTRANSLATED
+        content = message["content"]
+        has_tool_use = any(
+            isinstance(p, dict) and p.get("type") == "tool_use" for p in content
+        )
+        if not has_tool_use:
+            return _UNTRANSLATED
+        if provider == "anthropic":
+            return {"role": "assistant", "content": list(content)}
+        # openai / local: fold tool_use parts into tool_calls.
+        tool_calls: list[dict[str, Any]] = []
+        text_parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "tool_use":
+                tool_calls.append({
+                    "id": part.get("id"),
+                    "type": "function",
+                    "function": {
+                        "name": part.get("name"),
+                        "arguments": json.dumps(part.get("input") or {}),
+                    },
                 })
-            return {"role": "assistant", "content": parts}
+            elif part.get("type") == "text":
+                text_parts.append(part.get("text", ""))
+        return {
+            "role": "assistant",
+            "tool_calls": tool_calls,
+            "content": "".join(text_parts) if text_parts else None,
+        }
 
-        # ADR-0061: Anthropic-form tool_result parts on a user turn.
-        if role == "user" and isinstance(message.get("content"), list):
-            has_tool_result = any(
-                isinstance(p, dict) and p.get("type") == "tool_result"
-                for p in message["content"]
-            )
-            if has_tool_result:
-                if provider == "anthropic":
-                    # Passthrough — the content shape is native.
-                    return {"role": "user", "content": list(message["content"])}
-                # openai / local: split into one role='tool' message per part.
-                # Non-tool_result parts (e.g. text) are dropped: OpenAI wants
-                # tool_result content on a role='tool' message alone.
-                results: list[dict[str, Any]] = []
-                for part in message["content"]:
-                    if isinstance(part, dict) and part.get("type") == "tool_result":
-                        results.append({
-                            "role": "tool",
-                            "tool_call_id": part["tool_use_id"],
-                            "content": part.get("content", ""),
-                        })
-                return results
-
-        # ADR-0061: Anthropic-form assistant with tool_use content parts.
-        if role == "assistant" and isinstance(message.get("content"), list):
-            has_tool_use = any(
-                isinstance(p, dict) and p.get("type") == "tool_use"
-                for p in message["content"]
-            )
-            if has_tool_use:
-                if provider == "anthropic":
-                    return {"role": "assistant", "content": list(message["content"])}
-                # openai / local: fold tool_use parts into tool_calls.
-                tool_calls: list[dict[str, Any]] = []
-                text_parts: list[str] = []
-                for part in message["content"]:
-                    if not isinstance(part, dict):
-                        continue
-                    if part.get("type") == "tool_use":
-                        tool_calls.append({
-                            "id": part.get("id"),
-                            "type": "function",
-                            "function": {
-                                "name": part.get("name"),
-                                "arguments": json.dumps(part.get("input") or {}),
-                            },
-                        })
-                    elif part.get("type") == "text":
-                        text_parts.append(part.get("text", ""))
-                out = {"role": "assistant", "tool_calls": tool_calls}
-                out["content"] = "".join(text_parts) if text_parts else None
-                return out
-
-        # Default: string content passthrough, absent content preserved,
-        # or multimodal parts translated per provider.
+    @staticmethod
+    def _translate_content(provider: str, message: dict[str, Any]):
+        """Default: string content passthrough, absent content preserved, or
+        multimodal parts translated per provider."""
         content = message.get("content")
         if isinstance(content, str) or content is None:
             return dict(message)
@@ -698,24 +737,22 @@ class Ai:
             kind = part.get("type") if isinstance(part, dict) else None
             if kind == "text":
                 translated.append({"type": "text", "text": part.get("text", "")})
-                continue
-            if kind == "image":
-                source = part["source"]
-                if provider == "anthropic":
-                    translated.append(Ai._anthropic_image_part(source))
-                else:
-                    # openai + local (llama.cpp, ollama openai-shim, etc.) share
-                    # OpenAI's image_url shape.
-                    translated.append({
-                        "type": "image_url",
-                        "image_url": {"url": source},
-                    })
-                continue
-            # Unknown part type after validation - pass through as-is.
-            translated.append(dict(part) if isinstance(part, dict) else part)
+            elif kind == "image":
+                translated.append(Ai._translate_image_part(provider, part["source"]))
+            else:
+                # Unknown part type after validation - pass through as-is.
+                translated.append(dict(part) if isinstance(part, dict) else part)
         new_message = dict(message)
         new_message["content"] = translated
         return new_message
+
+    @staticmethod
+    def _translate_image_part(provider: str, source: str) -> dict[str, Any]:
+        """An image part per provider: Anthropic's native shape, else OpenAI's
+        ``image_url`` (shared by openai + local llama.cpp/ollama shims)."""
+        if provider == "anthropic":
+            return Ai._anthropic_image_part(source)
+        return {"type": "image_url", "image_url": {"url": source}}
 
     @staticmethod
     def _anthropic_image_part(source: str) -> dict[str, Any]:

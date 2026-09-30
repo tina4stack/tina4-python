@@ -550,87 +550,26 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
         table_sql = self._get_table_sql()
         pk_db_col = self.get_db_column(pk)
 
-        data = {}
-        # #165: db columns to OMIT from an INSERT — those the caller never
-        # assigned AND whose value is None. Omitting them lets the DB DEFAULT
-        # apply (e.g. NOT NULL DEFAULT '') instead of emitting an explicit NULL
-        # that violates the constraint. Unused on the UPDATE path.
-        insert_omit = set()
-        # A field's to_db() serialization can fail loud — the commonest case is a
-        # JSONField handed a value that is not JSON-serializable (a set, a custom
-        # object). The write-path contract, identical in all four frameworks, is:
-        # save() returns False + logs the cause (never raises out of save(), never
-        # silently persists a bad row). So a serialization error while BUILDING the
-        # row is caught here, recorded on last_error, logged, and turned into a
-        # False return before any transaction is opened.
+        # Build the row. A field's to_db() serialization can fail loud (the
+        # commonest case is a JSONField handed a non-serializable value): the
+        # write-path contract, identical in all four frameworks, is save()
+        # returns False + logs the cause, never raises, never persists a bad
+        # row. So a serialization error is caught here and turned into False
+        # before any transaction is opened.
         try:
-            for name, field in self._fields.items():
-                if field.auto_increment and pk_value is None:
-                    continue  # Skip auto-increment on insert
-                value = getattr(self, name)
-                # v3.13.11 (issue #50): resolve callable values at write time
-                # too, in case the user set ``self.created_at = lambda: ...``
-                # directly. Defensive — Field.validate() already handles this
-                # for the normal __init__ + _populate paths.
-                if callable(value) and not isinstance(value, type):
-                    value = value()
-                if value is not None or not field.auto_increment:
-                    db_col = self.get_db_column(name)
-                    # Serialize to the column's storage form: identity for most
-                    # fields, JSON string for JSONField (see Field.to_db).
-                    data[db_col] = field.to_db(value)
-                    # #165: a None value the caller never assigned is an UNSET
-                    # column — omit it from the INSERT so the DB DEFAULT applies.
-                    # A resolved ORM default (non-None) is still written; a value
-                    # the caller explicitly set to None is still written as NULL
-                    # (its field name is in _assigned_fields).
-                    if value is None and name not in self._assigned_fields:
-                        insert_omit.add(db_col)
+            data, insert_omit = self._collect_write_values(pk_value)
         except (ValueError, TypeError) as exc:
             self.last_error = str(exc)
             Log.error(f"{type(self).__name__}.save() refused: {exc}")
             return False
 
-        # v3.13.11 (issue #50): pick INSERT vs UPDATE on row existence
-        # for non-auto-increment PKs. Auto-increment keeps the legacy
-        # behaviour (PK is None → INSERT, PK is set → UPDATE).
-        is_update = False
-        if pk_value is not None:
-            if pk_field.auto_increment:
-                is_update = True
-            else:
-                # Natural-key model — check if THIS row already exists.
-                #
-                # This asked exists(pk_value), which tests only the FIRST key
-                # column. On a composite key that is true for any row sharing
-                # that column, so inserting a genuinely new row was decided to
-                # be an UPDATE and silently OVERWROTE a different row: saving
-                # (acme, a2) rewrote (acme, a1). The check has to name the whole
-                # key, exactly like the write that follows it.
-                try:
-                    where, where_params = self._pk_where()
-                    if where:
-                        found = db.fetch_one(
-                            f"SELECT 1 AS present FROM {table_sql} WHERE {where}", where_params
-                        )
-                        is_update = found is not None
-                    else:
-                        is_update = type(self).exists(pk_value)
-                except Exception:
-                    # If we can't tell (e.g. table doesn't exist yet),
-                    # fall back to INSERT — the user will see the real
-                    # error from the driver instead of a silent no-op.
-                    is_update = False
+        is_update = self._decide_is_update(db, pk_value, pk_field, table_sql)
 
         # Firebird has no auto-increment column type. An auto_increment PK left
-        # None inserts NULL and the engine rejects it ("validation error for
-        # column ID, value *** null ***") — the field loop above SKIPPED it, so
-        # `data` carries no id column at all. On the INSERT path only, draw the
-        # id from the table's generator (GEN_<TABLE>_ID, the same one Firebird's
-        # get_last_id() emulation reads back) and inject it. Gated on `not
-        # is_update` so a set-PK UPDATE never draws a new id, and generated
-        # OUTSIDE the save() transaction bracket below (get_next_id commits the
-        # generator itself, which a generator is exempt from rolling back).
+        # None inserts NULL and the engine rejects it — the field loop SKIPPED
+        # it, so `data` carries no id column. On the INSERT path only, draw the
+        # id from the table's generator and inject it. Generated OUTSIDE the
+        # transaction bracket below (get_next_id commits the generator itself).
         if (not is_update and pk_field.auto_increment
                 and getattr(self, pk, None) is None
                 and db.get_database_type() == "firebird"):
@@ -641,79 +580,14 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
 
         db.start_transaction()
         try:
-            if is_update:
-                pk_columns = {
-                    self.get_db_column(n)
-                    for n in self._get_pks()
-                    if n in self._fields
-                }
-                update_data = {k: v for k, v in data.items() if k not in pk_columns}
-                where, where_params = self._pk_where()
-                if update_data and where:
-                    db.update(table, update_data, where, where_params)
-            else:
-                # #165: drop unset-None columns so the DB DEFAULT applies.
-                insert_data = {c: v for c, v in data.items() if c not in insert_omit}
-                if insert_data:
-                    db.insert(table, insert_data)
-                else:
-                    # Every insertable column was left unset — let the DB
-                    # apply ALL its column defaults rather than emitting
-                    # explicit NULLs. DEFAULT VALUES is valid on SQLite /
-                    # PostgreSQL / MSSQL / Firebird; MySQL spells it () VALUES ().
-                    if db.get_database_type() == "mysql":
-                        db.execute(f"INSERT INTO {table_sql} () VALUES ()")
-                    else:
-                        db.execute(f"INSERT INTO {table_sql} DEFAULT VALUES")
-                # Only adopt the engine-assigned ID for auto-increment PKs.
-                # Natural-key PKs were already set by the caller; don't
-                # overwrite them with the driver's last_id (which on PG
-                # may be a sequence value that doesn't apply here).
-                if pk_field.auto_increment:
-                    last_id = db.get_last_id()
-                    if last_id and pk in self._fields:
-                        setattr(self, pk, last_id)
+            self._write_row(db, is_update, data, insert_omit, table, table_sql, pk, pk_field)
             db.commit()
         except Exception as e:
             db.rollback()
-            # ── Change 1: fail loud, never silent. Keep the False return
-            # contract, but capture the REAL cause (prefer db.get_error(),
-            # which db.execute()/insert()/update() populate, falling back to
-            # the exception text) on self.last_error so it survives, and log
-            # it with model/table context. ──
-            cause = db.get_error() or str(e)
-            # ── DX hint (v3.13.60): turn a bare driver error into an
-            # actionable fix for the two commonest ORM write footguns. Match
-            # the message case-insensitively (SQLite says "no such table" /
-            # "no such column: is_deleted" / "has no column named is_deleted";
-            # Postgres/MySQL say "does not exist" / "doesn't exist"). Any
-            # OTHER error keeps its raw cause untouched so we never mask an
-            # unrelated failure (e.g. a NOT NULL / duplicate-PK violation). ──
-            low = cause.lower()
-            if self.soft_delete and "is_deleted" in low and (
-                "no such column" in low or "has no column" in low
-                or "does not exist" in low or "doesn't exist" in low
-                or "unknown column" in low
-            ):
-                cause += (
-                    " — soft_delete=True requires an is_deleted column; declare "
-                    "it (is_deleted = IntegerField(default=0)) or add a migration"
-                )
-            elif "no such table" in low or (
-                ("does not exist" in low or "doesn't exist" in low)
-                # exclude a column-not-found (e.g. Postgres 'column "x" does not exist')
-                # so a genuine missing-column error never gets a spurious table hint
-                and "column" not in low
-            ) or (
-                # MSSQL: "Invalid object name 'foo'." — Firebird: "Table unknown\nFOO"
-                # / "Dynamic SQL Error ... Table unknown". Neither says "does not
-                # exist", so without these the hint was absent on those two engines.
-                "invalid object name" in low or "table unknown" in low
-            ):
-                cause += (
-                    f" — table '{table}' does not exist; call "
-                    f"{type(self).__name__}.create_table() or run a migration"
-                )
+            # Fail loud, never silent. Keep the False return contract, but
+            # capture the REAL cause (prefer db.get_error()) on last_error and
+            # log it with model/table context.
+            cause = self._augment_save_error(db.get_error() or str(e), table)
             self.last_error = cause
             Log.error(
                 f"{type(self).__name__}.save() failed for table "
@@ -726,6 +600,123 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
         self._rel_cache = {}
         self._persisted = True
         return self
+
+    def _collect_write_values(self, pk_value) -> tuple[dict, set]:
+        """Serialize every field to its DB column form for an INSERT/UPDATE.
+
+        Returns ``(data, insert_omit)``. ``insert_omit`` (#165) are db columns
+        to OMIT from an INSERT — those the caller never assigned AND whose value
+        is None — so the DB DEFAULT applies instead of an explicit NULL that
+        would violate a NOT NULL constraint. Unused on the UPDATE path. May
+        raise ValueError/TypeError if a field's to_db() serialization fails; the
+        caller turns that into a False return.
+        """
+        data: dict = {}
+        insert_omit: set = set()
+        for name, field in self._fields.items():
+            if field.auto_increment and pk_value is None:
+                continue  # Skip auto-increment on insert
+            value = getattr(self, name)
+            # v3.13.11 (issue #50): resolve callable values at write time too,
+            # in case the user set ``self.created_at = lambda: ...`` directly.
+            if callable(value) and not isinstance(value, type):
+                value = value()
+            if value is not None or not field.auto_increment:
+                db_col = self.get_db_column(name)
+                # Serialize to the column's storage form (JSON string for JSONField).
+                data[db_col] = field.to_db(value)
+                # #165: a None the caller never assigned is UNSET — omit it so
+                # the DB DEFAULT applies. An explicit None (in _assigned_fields)
+                # is still written as NULL.
+                if value is None and name not in self._assigned_fields:
+                    insert_omit.add(db_col)
+        return data, insert_omit
+
+    def _decide_is_update(self, db, pk_value, pk_field, table_sql: str) -> bool:
+        """INSERT vs UPDATE (issue #50). Auto-increment keeps the legacy
+        behaviour (PK None -> INSERT, PK set -> UPDATE). A natural key checks
+        whether the WHOLE-key row already exists — testing only the first key
+        column once let saving (acme, a2) silently overwrite (acme, a1)."""
+        if pk_value is None:
+            return False
+        if pk_field.auto_increment:
+            return True
+        try:
+            where, where_params = self._pk_where()
+            if where:
+                found = db.fetch_one(
+                    f"SELECT 1 AS present FROM {table_sql} WHERE {where}", where_params
+                )
+                return found is not None
+            return type(self).exists(pk_value)
+        except Exception:
+            # Can't tell (e.g. table doesn't exist yet) — fall back to INSERT so
+            # the user sees the real driver error instead of a silent no-op.
+            return False
+
+    def _write_row(self, db, is_update: bool, data: dict, insert_omit: set,
+                   table: str, table_sql: str, pk: str, pk_field) -> None:
+        """Execute the UPDATE or INSERT inside the caller's transaction bracket."""
+        if is_update:
+            pk_columns = {
+                self.get_db_column(n) for n in self._get_pks() if n in self._fields
+            }
+            update_data = {k: v for k, v in data.items() if k not in pk_columns}
+            where, where_params = self._pk_where()
+            if update_data and where:
+                db.update(table, update_data, where, where_params)
+            return
+        # #165: drop unset-None columns so the DB DEFAULT applies.
+        insert_data = {c: v for c, v in data.items() if c not in insert_omit}
+        if insert_data:
+            db.insert(table, insert_data)
+        elif db.get_database_type() == "mysql":
+            # Every insertable column was left unset — let the DB apply all its
+            # defaults. DEFAULT VALUES is valid on SQLite/PG/MSSQL/Firebird;
+            # MySQL spells it () VALUES ().
+            db.execute(f"INSERT INTO {table_sql} () VALUES ()")
+        else:
+            db.execute(f"INSERT INTO {table_sql} DEFAULT VALUES")
+        # Only adopt the engine-assigned ID for auto-increment PKs. Natural-key
+        # PKs were set by the caller; don't overwrite them with the driver's
+        # last_id (which on PG may be an unrelated sequence value).
+        if pk_field.auto_increment:
+            last_id = db.get_last_id()
+            if last_id and pk in self._fields:
+                setattr(self, pk, last_id)
+
+    def _augment_save_error(self, cause: str, table: str) -> str:
+        """Turn a bare driver error into an actionable fix for the two commonest
+        ORM write footguns (v3.13.60). Matched case-insensitively across engines
+        (SQLite "no such table"/"no such column", PG/MySQL "does not exist"/
+        "doesn't exist", MSSQL "invalid object name", Firebird "table unknown").
+        Any OTHER error keeps its raw cause so a NOT NULL / duplicate-PK failure
+        is never masked."""
+        low = cause.lower()
+        if self.soft_delete and "is_deleted" in low and (
+            "no such column" in low or "has no column" in low
+            or "does not exist" in low or "doesn't exist" in low
+            or "unknown column" in low
+        ):
+            return cause + (
+                " — soft_delete=True requires an is_deleted column; declare "
+                "it (is_deleted = IntegerField(default=0)) or add a migration"
+            )
+        if "no such table" in low or (
+            ("does not exist" in low or "doesn't exist" in low)
+            # exclude a column-not-found (e.g. PG 'column "x" does not exist')
+            # so a genuine missing-column error never gets a spurious table hint
+            and "column" not in low
+        ) or (
+            # MSSQL "Invalid object name 'foo'." / Firebird "Table unknown" —
+            # neither says "does not exist", so the hint needs these too.
+            "invalid object name" in low or "table unknown" in low
+        ):
+            return cause + (
+                f" — table '{table}' does not exist; call "
+                f"{type(self).__name__}.create_table() or run a migration"
+            )
+        return cause
 
     @classmethod
     def _soft_delete_column(cls) -> str:
@@ -1171,155 +1162,28 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
                 same signal as "the DDL failed", and the caller would create
                 the table by hand and carry on.
         """
-        from tina4_python.database.adapter import SQLTranslator
-
         db = cls._get_db()
         table = cls._get_table()
         table_sql = cls._get_table_sql()
         engine = (db.get_database_type() or "").lower()
+        column_types = cls._engine_column_types(engine)
 
-        # v3.13.11: BooleanField now uses each engine's native type
-        # where it's reliable. SQLite and Firebird stay on INTEGER —
-        # SQLite has no native bool, and Firebird's driver round-trip
-        # for native BOOLEAN is uneven across versions.
-        # v3.13.16: db.get_database_type() returns "postgresql" (with the -ql),
-        # so the old `== "postgres"` check never matched and BooleanField got
-        # INTEGER on PG — which then can't accept a Python bool on insert.
-        if engine in ("postgres", "postgresql"):
-            bool_sql = "BOOLEAN"
-        elif engine == "mysql":
-            bool_sql = "BOOLEAN"  # MySQL alias for TINYINT(1)
-        elif engine == "mssql":
-            bool_sql = "BIT"
-        else:
-            # sqlite, firebird, odbc, anything else
-            bool_sql = "INTEGER"
-
-        # v3.13.16: DateTimeField was emitted as "DATETIME" unconditionally,
-        # but PostgreSQL and Firebird have no DATETIME type — CREATE TABLE blew
-        # up with `type "datetime" does not exist`. Emit each engine's real
-        # timestamp type. (MySQL/MSSQL/SQLite keep DATETIME: it's valid there,
-        # and on MySQL it avoids TIMESTAMP's auto-update + 2038 surprises.)
-        if engine in ("postgres", "postgresql", "firebird"):
-            datetime_sql = "TIMESTAMP"
-        else:
-            datetime_sql = "DATETIME"
-
-        # JSONField -> the engine's native JSON type where it has one, else a
-        # text column. PostgreSQL JSONB (binary, indexable, canonical form);
-        # MySQL JSON; MSSQL has no JSON type so NVARCHAR(MAX) (its documented
-        # JSON storage); SQLite/ODBC TEXT; Firebird has no TEXT/JSON type so
-        # BLOB SUB_TYPE TEXT. The ORM stores a JSON string in every case, so a
-        # text-backed column round-trips identically to a native one.
-        if engine in ("postgres", "postgresql"):
-            json_sql = "JSONB"
-        elif engine == "mysql":
-            json_sql = "JSON"
-        elif engine == "mssql":
-            json_sql = "NVARCHAR(MAX)"
-        elif engine == "firebird":
-            json_sql = "BLOB SUB_TYPE TEXT"
-        else:
-            json_sql = "TEXT"
-
-        # PointField -> the engine's spatial type via the SQLTranslator dialect
-        # seam (``geography(Point,<srid>)`` on PostGIS). Resolved BEFORE the
-        # table_exists short-circuit so a spatial model on a non-spatial engine
-        # ALWAYS raises SpatialNotSupportedError naming that engine — a wrong
-        # column type is never created, and the error does not depend on whether
-        # the table happens to exist yet. This is the loud-not-silent contract:
-        # unlike the other type mappings there is no safe fallback for geometry.
-        point_sql: dict[str, str] = {}
-        for name, field_obj in cls._fields.items():
-            if getattr(field_obj, "kind", None) != "PointField":
-                continue
-            col_name = cls.get_db_column(name)
-            point_sql[col_name] = SQLTranslator.point_column_type(
-                engine, getattr(field_obj, "srid", 4326)
-            )
+        # PointField spatial types, resolved BEFORE the table_exists
+        # short-circuit so a spatial model on a non-spatial engine ALWAYS raises
+        # SpatialNotSupportedError naming that engine — a wrong column type is
+        # never created, and the error does not depend on whether the table
+        # happens to exist yet. This is the loud-not-silent contract: unlike the
+        # other type mappings there is no safe fallback for geometry.
+        point_sql = cls._point_column_types(engine)
 
         # Don't recreate if table already exists
         if db.table_exists(table):
             return True
 
-        col_defs = []
-        for name, field_obj in cls._fields.items():
-            col_name = cls.get_db_column(name)
-            kind = getattr(field_obj, "kind", None)
-
-            # Map field kind to SQL type
-            sql_type = "TEXT"
-            if kind == "IntegerField":
-                sql_type = "INTEGER"
-            elif kind == "StringField":
-                max_len = getattr(field_obj, "max_length", None) or 255
-                sql_type = f"VARCHAR({max_len})"
-            elif kind == "TextField":
-                sql_type = "TEXT"
-            elif kind in ("NumericField", "FloatField"):
-                sql_type = "REAL"
-            elif kind == "DecimalField":
-                # A fixed-precision column: emit a real DECIMAL(p, s) so the
-                # engine keeps the declared scale instead of a floating
-                # approximation. Valid syntax on PG/MySQL/MSSQL/Firebird/SQLite.
-                precision = getattr(field_obj, "precision", 10)
-                scale = getattr(field_obj, "scale", 2)
-                sql_type = f"DECIMAL({precision},{scale})"
-            elif kind == "BooleanField":
-                sql_type = bool_sql
-            elif kind == "DateTimeField":
-                sql_type = datetime_sql
-            elif kind == "BlobField":
-                sql_type = "BLOB"
-            elif kind == "JSONField":
-                sql_type = json_sql
-            elif kind == "PointField":
-                sql_type = point_sql[col_name]
-            else:
-                # Fallback based on field_type
-                ft = field_obj.field_type
-                if ft == int:
-                    sql_type = "INTEGER"
-                elif ft == float:
-                    sql_type = "REAL"
-                elif ft == bool:
-                    sql_type = bool_sql
-                elif ft == bytes:
-                    sql_type = "BLOB"
-
-            parts = [col_name, sql_type]
-
-            # A COMPOSITE key is declared once, at table level (below). Emitting
-            # an inline PRIMARY KEY per column is invalid DDL - SQLite,
-            # PostgreSQL and MySQL all reject two of them in one table.
-            if field_obj.primary_key and len(cls._get_pks()) == 1:
-                parts.append("PRIMARY KEY")
-            if field_obj.auto_increment:
-                parts.append("AUTOINCREMENT")
-            if field_obj.required and not field_obj.primary_key:
-                parts.append("NOT NULL")
-            # Callable defaults (e.g. DateTimeField(default=lambda: datetime.now())) are
-            # resolved per-row at insert time (_resolve_default, issue #50); they must NOT
-            # be emitted into the CREATE TABLE DDL, where they stringify to an invalid
-            # `DEFAULT <function ...>` and silently fail table creation.
-            if field_obj.default is not None and not field_obj.auto_increment \
-                    and kind != "JSONField" and not callable(field_obj.default):
-                default_val = field_obj.default
-                if isinstance(default_val, str):
-                    parts.append(f"DEFAULT '{default_val}'")
-                elif isinstance(default_val, bool):
-                    # v3.13.16: a native BOOLEAN column (PG/MySQL) needs
-                    # TRUE/FALSE; INTEGER- and BIT-backed bools (SQLite,
-                    # Firebird, MSSQL) need 1/0. `DEFAULT 0` on a PG BOOLEAN
-                    # raises "default expression is of type integer".
-                    if bool_sql == "BOOLEAN":
-                        parts.append(f"DEFAULT {'TRUE' if default_val else 'FALSE'}")
-                    else:
-                        parts.append(f"DEFAULT {1 if default_val else 0}")
-                else:
-                    parts.append(f"DEFAULT {default_val}")
-
-            col_defs.append(" ".join(parts))
+        col_defs = [
+            cls._column_definition(name, field_obj, column_types, point_sql)
+            for name, field_obj in cls._fields.items()
+        ]
 
         # SOFTDEL-DEC-02: a soft_delete model needs an is_deleted flag column,
         # but create_table only knew about DECLARED fields — so a
@@ -1330,16 +1194,13 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
         # generated schema always matches the soft-delete behaviour.
         if cls.soft_delete:
             sd_col = cls._soft_delete_column()
-            declared_cols = {
-                cls.get_db_column(name)
-                for name in cls._fields
-            }
+            declared_cols = {cls.get_db_column(name) for name in cls._fields}
             if sd_col not in declared_cols:
                 col_defs.append(f"{sd_col} INTEGER DEFAULT 0")
 
         # A COMPOSITE key is declared ONCE, at table level. Per-column inline
-        # PRIMARY KEY (above) is suppressed when the key spans more than one
-        # column, because two inline primary keys is invalid DDL on every engine.
+        # PRIMARY KEY is suppressed when the key spans more than one column,
+        # because two inline primary keys is invalid DDL on every engine.
         pks = cls._get_pks()
         if len(pks) > 1:
             pk_cols = [cls.get_db_column(k) for k in pks if k in cls._fields]
@@ -1353,27 +1214,153 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
         if_not_exists = "" if engine in ("mssql", "sqlserver", "firebird") else "IF NOT EXISTS "
         sql = f"CREATE TABLE {if_not_exists}{table_sql} ({', '.join(col_defs)})"
 
-        # Translate auto-increment syntax for the current engine
-        engine = db.get_database_type()
-        sql = SQLTranslator.auto_increment_syntax(sql, engine)
+        # Translate auto-increment syntax for the current engine (original case).
+        from tina4_python.database.adapter import SQLTranslator
+        engine_name = db.get_database_type()
+        sql = SQLTranslator.auto_increment_syntax(sql, engine_name)
+        return cls._execute_create_table(db, sql, engine_name, table)
 
-        # Don't claim success when the DDL failed. execute() now RAISES on a
-        # bad type / any DDL error (it used to swallow it into get_error() and
-        # return False). Keep create_table()'s bool contract by catching the
-        # error and returning False with the cause logged, rather than letting
-        # it propagate out of create_table().
+    @classmethod
+    def _engine_column_types(cls, engine: str) -> dict[str, str]:
+        """Engine-aware SQL types for BooleanField, DateTimeField and JSONField.
+
+        - BooleanField: native BOOLEAN on PG/MySQL, BIT on MSSQL, INTEGER on
+          SQLite/Firebird/ODBC (SQLite has no native bool; Firebird's native
+          BOOLEAN round-trip is uneven). v3.13.16: get_database_type() returns
+          "postgresql", so the match must include it, not just "postgres".
+        - DateTimeField: TIMESTAMP on PG/Firebird (no DATETIME type there),
+          DATETIME on MySQL/MSSQL/SQLite (valid, and avoids MySQL TIMESTAMP's
+          auto-update + 2038 surprises).
+        - JSONField: JSONB on PG, JSON on MySQL, NVARCHAR(MAX) on MSSQL,
+          BLOB SUB_TYPE TEXT on Firebird, TEXT elsewhere. The ORM always stores
+          a JSON string, so a text-backed column round-trips like a native one.
+        """
+        engine = (engine or "").lower()
+        bool_sql = {
+            "postgres": "BOOLEAN", "postgresql": "BOOLEAN",
+            "mysql": "BOOLEAN", "mssql": "BIT",
+        }.get(engine, "INTEGER")
+        datetime_sql = "TIMESTAMP" if engine in ("postgres", "postgresql", "firebird") else "DATETIME"
+        json_sql = {
+            "postgres": "JSONB", "postgresql": "JSONB", "mysql": "JSON",
+            "mssql": "NVARCHAR(MAX)", "firebird": "BLOB SUB_TYPE TEXT",
+        }.get(engine, "TEXT")
+        return {"bool": bool_sql, "datetime": datetime_sql, "json": json_sql}
+
+    @classmethod
+    def _point_column_types(cls, engine: str) -> dict[str, str]:
+        """PointField -> the engine's spatial type via the SQLTranslator dialect
+        seam (``geography(Point,<srid>)`` on PostGIS). Raises
+        SpatialNotSupportedError on a non-spatial engine (loud, not silent)."""
+        from tina4_python.database.adapter import SQLTranslator
+        point_sql: dict[str, str] = {}
+        for name, field_obj in cls._fields.items():
+            if getattr(field_obj, "kind", None) != "PointField":
+                continue
+            col_name = cls.get_db_column(name)
+            point_sql[col_name] = SQLTranslator.point_column_type(
+                engine, getattr(field_obj, "srid", 4326)
+            )
+        return point_sql
+
+    @classmethod
+    def _column_sql_type(cls, field_obj, kind, col_name: str,
+                         column_types: dict[str, str], point_sql: dict[str, str]) -> str:
+        """The SQL column type for one field, given the engine's type map."""
+        simple = {
+            "IntegerField": "INTEGER",
+            "TextField": "TEXT",
+            "NumericField": "REAL",
+            "FloatField": "REAL",
+            "BlobField": "BLOB",
+            "BooleanField": column_types["bool"],
+            "DateTimeField": column_types["datetime"],
+            "JSONField": column_types["json"],
+        }
+        if kind in simple:
+            return simple[kind]
+        if kind == "StringField":
+            return f"VARCHAR({getattr(field_obj, 'max_length', None) or 255})"
+        if kind == "DecimalField":
+            # A fixed-precision column: emit a real DECIMAL(p, s) so the engine
+            # keeps the declared scale. Valid on PG/MySQL/MSSQL/Firebird/SQLite.
+            return f"DECIMAL({getattr(field_obj, 'precision', 10)},{getattr(field_obj, 'scale', 2)})"
+        if kind == "PointField":
+            return point_sql[col_name]
+        return cls._fallback_sql_type(field_obj, column_types["bool"])
+
+    @staticmethod
+    def _fallback_sql_type(field_obj, bool_sql: str) -> str:
+        """Type for a field with no recognised ``kind`` — inferred from field_type."""
+        by_type = {int: "INTEGER", float: "REAL", bool: bool_sql, bytes: "BLOB"}
+        return by_type.get(field_obj.field_type, "TEXT")
+
+    @staticmethod
+    def _default_clause(field_obj, kind, bool_sql: str) -> str | None:
+        """A ``DEFAULT …`` clause for the column, or None when none applies.
+
+        Callable defaults (e.g. ``DateTimeField(default=lambda: datetime.now())``)
+        are resolved per-row at insert time (issue #50) and must NOT be emitted
+        into the DDL, where they stringify to an invalid ``DEFAULT <function …>``.
+        """
+        if (field_obj.default is None or field_obj.auto_increment
+                or kind == "JSONField" or callable(field_obj.default)):
+            return None
+        default_val = field_obj.default
+        if isinstance(default_val, str):
+            return f"DEFAULT '{default_val}'"
+        if isinstance(default_val, bool):
+            # v3.13.16: a native BOOLEAN column (PG/MySQL) needs TRUE/FALSE;
+            # INTEGER-/BIT-backed bools (SQLite, Firebird, MSSQL) need 1/0.
+            # `DEFAULT 0` on a PG BOOLEAN raises "default expression is of type integer".
+            if bool_sql == "BOOLEAN":
+                return f"DEFAULT {'TRUE' if default_val else 'FALSE'}"
+            return f"DEFAULT {1 if default_val else 0}"
+        return f"DEFAULT {default_val}"
+
+    @classmethod
+    def _column_definition(cls, name: str, field_obj,
+                           column_types: dict[str, str], point_sql: dict[str, str]) -> str:
+        """One column's DDL fragment: ``<col> <type> [PRIMARY KEY] [AUTOINCREMENT]
+        [NOT NULL] [DEFAULT …]``."""
+        col_name = cls.get_db_column(name)
+        kind = getattr(field_obj, "kind", None)
+        parts = [col_name, cls._column_sql_type(field_obj, kind, col_name, column_types, point_sql)]
+
+        # A COMPOSITE key is declared once, at table level. Emitting an inline
+        # PRIMARY KEY per column is invalid DDL — SQLite/PostgreSQL/MySQL all
+        # reject two of them in one table.
+        if field_obj.primary_key and len(cls._get_pks()) == 1:
+            parts.append("PRIMARY KEY")
+        if field_obj.auto_increment:
+            parts.append("AUTOINCREMENT")
+        if field_obj.required and not field_obj.primary_key:
+            parts.append("NOT NULL")
+        default_clause = cls._default_clause(field_obj, kind, column_types["bool"])
+        if default_clause:
+            parts.append(default_clause)
+        return " ".join(parts)
+
+    @classmethod
+    def _execute_create_table(cls, db, sql: str, engine_name: str, table: str) -> bool:
+        """Run the CREATE TABLE DDL plus any spatial indexes, in one transaction.
+
+        Keeps create_table()'s bool contract: execute() RAISES on a bad type /
+        any DDL error, so the cause is caught, logged, and turned into False
+        rather than propagating out of create_table()."""
+        from tina4_python.database.adapter import SQLTranslator
         try:
             db.execute(sql)
             # A spatial predicate without a spatial index is a full table scan,
             # so the index ships WITH the column rather than as a thing the
-            # developer must remember. IF NOT EXISTS keeps it idempotent.
+            # developer must remember.
             for name, field_obj in cls._fields.items():
                 if getattr(field_obj, "kind", None) != "PointField":
                     continue
                 if not getattr(field_obj, "spatial_index", True):
                     continue
                 col_name = cls.get_db_column(name)
-                db.execute(SQLTranslator.spatial_index(engine, table, col_name))
+                db.execute(SQLTranslator.spatial_index(engine_name, table, col_name))
             db.commit()
         except Exception as e:
             from tina4_python.debug import Log

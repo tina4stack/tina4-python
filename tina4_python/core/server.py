@@ -3312,58 +3312,8 @@ def _etag_matches(if_none_match: str, etag: str) -> bool:
 async def app(scope: dict, receive, send):
     """ASGI entry point — compatible with uvicorn, hypercorn, granian."""
     if scope["type"] == "lifespan":
-        # ASGI lifespan is ONE call carrying BOTH events, so this has to loop.
-        # It used to return after the first message, which made the shutdown
-        # branch below unreachable: the app coroutine had already finished by
-        # the time the server sent lifespan.shutdown.
-        #
-        # These live across the whole server lifetime (the coroutine spans both
-        # events), so the tasks started at startup are the ones stopped at
-        # shutdown.
-        lifespan_shutdown = None
-        lifespan_executor = None
-        lifespan_runners = []
-        while True:
-            msg = await receive()
-            if msg["type"] == "lifespan.startup":
-                import time
-                global _start_time
-                _start_time = time.time()
-                # Start registered background tasks on the PRODUCTION server's
-                # event loop. Without this, background() was a SILENT NO-OP under
-                # uvicorn/hypercorn/granian (BG-PY-PROD-NOOP): tasks were
-                # registered but only the built-in dev server's _serve() ever
-                # started them. The lifespan runs on the same loop the ASGI
-                # server serves requests on, so the tasks tick alongside real
-                # traffic — and stop on lifespan.shutdown below.
-                lifespan_shutdown = asyncio.Event()
-                lifespan_executor, lifespan_runners = _spin_up_background_tasks(
-                    lifespan_shutdown
-                )
-                await send({"type": "lifespan.startup.complete"})
-            elif msg["type"] == "lifespan.shutdown":
-                # The only shutdown hook that fires on the production path.
-                # uvicorn restores the default signal handlers and RE-RAISES the
-                # signal as its run() returns, so the process dies inside the
-                # starter and nothing after it ever executes — a `finally` there
-                # is unreachable. uvicorn drains requests and closes sockets
-                # itself; the background tasks and ORM-bound connections are the
-                # part only Tina4 knows about, so this is where they are stopped.
-                if lifespan_shutdown is not None:
-                    lifespan_shutdown.set()
-                for runner in lifespan_runners:
-                    runner.cancel()
-                if lifespan_executor is not None:
-                    lifespan_executor.shutdown(wait=False, cancel_futures=True)
-                _close_bound_databases()
-                Log.info("Server stopped.")
-                # Graceful shutdown owns the final reset() call (Decision 24 /
-                # LOG-I02) on the ASGI lifespan path too.
-                Log.reset()
-                await send({"type": "lifespan.shutdown.complete"})
-                return
-            else:
-                return
+        await _handle_lifespan(receive, send)
+        return
 
     if scope["type"] == "websocket":
         await _handle_asgi_websocket(scope, receive, send)
@@ -3372,26 +3322,77 @@ async def app(scope: dict, receive, send):
     if scope["type"] != "http":
         return
 
-    # Read the body, bounded, in one allocation.
-    #
-    # Two defects lived in the three lines this replaces.
-    #
-    # `body += chunk` on immutable bytes reallocates and copies the WHOLE
-    # buffer per chunk, so an N-byte body costs O(N^2). Measured with uvicorn
-    # feeding ~16KB chunks: a 40MB upload took the server from 51MB RSS to
-    # 1213MB. A list plus one join is linear.
-    #
-    # And the size limit was enforced by Request.from_scope AFTER this loop
-    # finished, so a body 4x over the limit was accumulated in full and only
-    # then refused - the limit measured the damage instead of preventing it.
-    # Checking per chunk stops at the limit. (Same defect, same fix, as the
-    # Node request reader.)
-    # Refuse on the DECLARED length before reading a byte. A client that
-    # announces 32MB against a 1MB limit gets its answer immediately instead of
-    # uploading 32MB first; and a client that announces a large body and then
-    # sends almost nothing would otherwise hold the connection while the server
-    # waits for the rest. This is what a reverse proxy does in front of you.
-    # Read per request, not at import: .env is loaded after this module (#143).
+    body = await _read_bounded_body(scope, receive, send)
+    if body is None:
+        return  # over the limit — a 413 was already sent
+
+    # Build request and dispatch. from_scope ALSO refuses on a declared
+    # content-length over the limit, which the reader never sees when the
+    # client lies about the length or sends nothing.
+    try:
+        request = Request.from_scope(scope, body)
+    except PayloadTooLarge:
+        await _send_payload_too_large(send, len(body), max_upload_size())
+        return
+    response = await handle(request)
+
+    # Streaming responses bypass ETag/compression — send immediately.
+    if getattr(response, "_is_streaming", False):
+        await _send_stream_response(send, response)
+        return
+
+    await _send_buffered_response(request, response, send)
+
+
+async def _handle_lifespan(receive, send):
+    """ASGI lifespan: ONE call carries BOTH events, so this loops (returning
+    after the first would make shutdown unreachable). Startup spins up the
+    registered background tasks on the PRODUCTION server's event loop — without
+    this, background() was a SILENT NO-OP under uvicorn/hypercorn/granian
+    (BG-PY-PROD-NOOP). Shutdown stops those tasks and closes ORM-bound
+    connections: uvicorn re-raises the signal as run() returns, so a `finally`
+    in the starter is unreachable and this is the only production shutdown hook."""
+    lifespan_shutdown = None
+    lifespan_executor = None
+    lifespan_runners = []
+    while True:
+        msg = await receive()
+        if msg["type"] == "lifespan.startup":
+            import time
+            global _start_time
+            _start_time = time.time()
+            lifespan_shutdown = asyncio.Event()
+            lifespan_executor, lifespan_runners = _spin_up_background_tasks(
+                lifespan_shutdown
+            )
+            await send({"type": "lifespan.startup.complete"})
+        elif msg["type"] == "lifespan.shutdown":
+            if lifespan_shutdown is not None:
+                lifespan_shutdown.set()
+            for runner in lifespan_runners:
+                runner.cancel()
+            if lifespan_executor is not None:
+                lifespan_executor.shutdown(wait=False, cancel_futures=True)
+            _close_bound_databases()
+            Log.info("Server stopped.")
+            # Graceful shutdown owns the final reset() (Decision 24 / LOG-I02).
+            Log.reset()
+            await send({"type": "lifespan.shutdown.complete"})
+            return
+        else:
+            return
+
+
+async def _read_bounded_body(scope, receive, send):
+    """Read the request body, bounded by the upload limit. Returns the body
+    bytes, or None when a 413 was already sent (the caller then returns).
+
+    Refuses on the DECLARED content-length before reading a byte (a client
+    announcing 32MB against a 1MB limit gets its answer immediately, like a
+    reverse proxy), then caps the ACTUAL bytes per chunk. A list + one join is
+    linear; `body += chunk` on immutable bytes is O(N^2) — a 40MB upload once
+    took the server from 51MB RSS to 1213MB. Read per request, not at import:
+    .env is loaded after this module (#143)."""
     upload_limit = max_upload_size()
     declared = 0
     for _name, _value in scope.get("headers", []):
@@ -3403,7 +3404,7 @@ async def app(scope: dict, receive, send):
             break
     if declared > upload_limit:
         await _send_payload_too_large(send, declared, upload_limit)
-        return
+        return None
 
     chunks = []
     received = 0
@@ -3414,9 +3415,9 @@ async def app(scope: dict, receive, send):
         if chunk and not too_large:
             received += len(chunk)
             if received > upload_limit:
-                # Stop accumulating, but keep draining: an ASGI server expects
-                # the request stream to be consumed, and abandoning it mid-body
-                # can wedge the connection.
+                # Stop accumulating but keep draining: an ASGI server expects
+                # the request stream consumed, and abandoning it mid-body can
+                # wedge the connection.
                 too_large = True
                 chunks = []
             else:
@@ -3425,79 +3426,63 @@ async def app(scope: dict, receive, send):
             break
 
     if too_large:
-        # 413, not 500. PayloadTooLarge was raised and caught by nobody, so an
-        # oversized upload answered "Internal Server Error" - which tells the
-        # caller to retry the request that will fail again.
+        # 413, not 500: an oversized upload once answered "Internal Server
+        # Error", telling the caller to retry the request that will fail again.
         await _send_payload_too_large(send, received, upload_limit)
+        return None
+    return b"".join(chunks)
+
+
+async def _send_stream_response(send, response):
+    """A streaming response: send the headers, stream the source chunks, then a
+    final empty body. Bypasses ETag/compression."""
+    stream_headers = [(b"content-type", response.content_type.encode())]
+    for name, value in response._headers:
+        stream_headers.append((name.lower().encode(), value.encode()))
+    for cookie_str in response._cookies:
+        stream_headers.append((b"set-cookie", cookie_str.encode()))
+    if await _refuse_unsafe_headers(send, stream_headers):
         return
+    await send({"type": "http.response.start", "status": response.status_code, "headers": stream_headers})
 
-    body = b"".join(chunks)
-
-    # Build request and dispatch
+    source = response._stream_source
     try:
-        request = Request.from_scope(scope, body)
-    except PayloadTooLarge:
-        # Still reachable: from_scope also refuses on a DECLARED content-length
-        # over the limit, which the loop above never sees when the client lies
-        # about the length or sends nothing.
-        await _send_payload_too_large(send, received, upload_limit)
-        return
-    response = await handle(request)
+        if hasattr(source, "__aiter__"):
+            async for chunk in source:
+                if isinstance(chunk, str):
+                    chunk = chunk.encode()
+                await send({"type": "http.response.body", "body": chunk, "more_body": True})
+        elif hasattr(source, "__iter__"):
+            for chunk in source:
+                if isinstance(chunk, str):
+                    chunk = chunk.encode()
+                await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                await asyncio.sleep(0)  # yield control
+    except asyncio.CancelledError:
+        # Client disconnected mid-stream. Close the source if it supports it
+        # (best-effort) then re-raise — cancellation must never be swallowed.
+        aclose = getattr(source, "aclose", None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception:
+                pass
+        raise
+    except Exception as exc:
+        # The generator itself raised mid-stream. Log and stop cleanly — fall
+        # through to the final empty-body send rather than crashing the worker.
+        Log.error(f"SSE/stream source error: {exc}")
 
-    # Streaming responses bypass ETag/compression — send immediately
-    _streaming = getattr(response, "_is_streaming", False)
-    if _streaming:
-        # Streaming response — send headers then stream chunks
-        stream_headers = [
-            (b"content-type", response.content_type.encode()),
-        ]
-        for name, value in response._headers:
-            stream_headers.append((name.lower().encode(), value.encode()))
-        for cookie_str in response._cookies:
-            stream_headers.append((b"set-cookie", cookie_str.encode()))
-        if await _refuse_unsafe_headers(send, stream_headers):
-            return
-        await send({"type": "http.response.start", "status": response.status_code, "headers": stream_headers})
+    await send({"type": "http.response.body", "body": b"", "more_body": False})
 
-        source = response._stream_source
-        try:
-            if hasattr(source, "__aiter__"):
-                # Async generator
-                async for chunk in source:
-                    if isinstance(chunk, str):
-                        chunk = chunk.encode()
-                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
-            elif hasattr(source, "__iter__"):
-                # Sync iterable
-                for chunk in source:
-                    if isinstance(chunk, str):
-                        chunk = chunk.encode()
-                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
-                    await asyncio.sleep(0)  # yield control
-        except asyncio.CancelledError:
-            # Client disconnected mid-stream. Close the source if it supports it
-            # (best-effort) then re-raise — cancellation must never be swallowed.
-            aclose = getattr(source, "aclose", None)
-            if aclose is not None:
-                try:
-                    await aclose()
-                except Exception:
-                    pass
-            raise
-        except Exception as exc:
-            # The generator itself raised mid-stream. Log and stop cleanly —
-            # fall through to the final empty-body send rather than crashing
-            # the worker.
-            Log.error(f"SSE/stream source error: {exc}")
 
-        await send({"type": "http.response.body", "body": b"", "more_body": False})
-        return
-
-    # Customer feedback widget injection — adds <script src="/__feedback/widget.js">
-    # to HTML responses for whitelisted users. No-op if the feature is
-    # off (TINA4_FEEDBACK_WHITELIST empty) or the user isn't whitelisted
-    # or the body isn't HTML. Done BEFORE ETag/header build so the
-    # injected bytes are included in the ETag hash + Content-Length.
+async def _send_buffered_response(request, response, send):
+    """A non-streaming response: feedback-widget injection, then the ETag /
+    Last-Modified conditional-GET check (304), then the headers and body."""
+    # Customer feedback widget injection — adds the widget <script> to HTML
+    # responses for whitelisted users. No-op when the feature is off, the user
+    # isn't whitelisted, or the body isn't HTML. Done BEFORE the header build so
+    # the injected bytes are in the ETag hash + Content-Length.
     try:
         if (
             response.content
@@ -3509,7 +3494,6 @@ async def app(scope: dict, receive, send):
     except Exception:
         pass  # Injection is best-effort — never break the response.
 
-    # ETag / Last-Modified check — 304 Not Modified
     if_none_match = request.headers.get("if-none-match", "")
     accept_encoding = request.headers.get("accept-encoding", "")
     headers = response.build_headers(accept_encoding)
@@ -3525,10 +3509,8 @@ async def app(scope: dict, receive, send):
             last_modified = value.decode()
 
     # A 304 MUST echo the validators it would have carried on 200 (RFC 9110
-    # S15.4.5), so an intermediary cache can refresh freshness from the empty
-    # body alone. CE-PY-304-DROPS-VALIDATORS: this used to send an EMPTY
-    # header list on every 304, silently dropping ETag/Last-Modified while
-    # PHP/Ruby/Node preserved them.
+    # 15.4.5) so an intermediary cache can refresh freshness from the empty
+    # body. CE-PY-304-DROPS-VALIDATORS: this used to send an EMPTY header list.
     validator_headers = []
     if etag:
         validator_headers.append((b"etag", etag.encode()))
@@ -3541,8 +3523,8 @@ async def app(scope: dict, receive, send):
         await send({"type": "http.response.body", "body": b""})
         return
 
-    # If-Modified-Since -> 304, for responses carrying a Last-Modified (static
-    # assets). Only runs when the client sent no ETag validator.
+    # If-Modified-Since -> 304 for responses carrying a Last-Modified (static
+    # assets). Only when the client sent no ETag validator.
     if not if_none_match:
         if_modified_since = request.headers.get("if-modified-since", "")
         if if_modified_since and last_modified:

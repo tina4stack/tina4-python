@@ -436,118 +436,175 @@ def _split_statements(sql: str, delimiter: str = ";") -> list[str]:
 
     Smart/curly quotes are normalized to straight ASCII first. Mirrors the
     tina4-php ``Migration::splitStatements`` scanner for cross-framework parity.
+
+    Shape (mirror in php/ruby): a small scanner state — the source, a cursor,
+    the current-statement buffer, the collected statements, the active
+    delimiter and two block flags — advanced one token at a time by a step
+    function that tries ORDERED token handlers (dollar-block, slash-block,
+    inside-block passthrough, block-comment, line-comment, single-quote,
+    double-quote, delimiter). The first handler that matches consumes its
+    token; if none match, one literal character is copied. See
+    :class:`_StatementScanner`.
     """
     # Normalize smart/curly quotes to straight ASCII first, so SQL pasted from
     # an editor/doc (which converts " → “ ” and ' → ‘ ’) actually runs.
-    sql = _normalize_quotes(sql)
+    return _StatementScanner(_normalize_quotes(sql), delimiter).scan()
 
-    statements: list[str] = []
-    current: list[str] = []
-    n = len(sql)
-    i = 0
-    in_dollar_block = False
-    in_slash_block = False
 
-    while i < n:
-        ch = sql[i]
+class _StatementScanner:
+    """Single-pass, quote/comment/block-aware SQL statement scanner (issue #54).
 
-        # $$ … $$ stored-proc block (toggle in/out).
-        if not in_slash_block and ch == "$" and i + 1 < n and sql[i + 1] == "$":
-            current.append("$$")
-            i += 2
-            in_dollar_block = not in_dollar_block
-            continue
+    A step function (:meth:`_step`) over the characters of ``sql``: it tries an
+    ordered list of token handlers and copies one literal character only when
+    none of them fire. Each handler owns exactly one token shape and its guard,
+    so the whole scanner stays a flat set of tiny methods — the same shape the
+    php/ruby mirrors carry. State is deliberately explicit so the port is a
+    field-for-field translation.
+    """
 
-        # // … // stored-proc block (toggle). The `//` must NOT be preceded by a
-        # colon, so a URL scheme (`https://…`) or any `://` literal is never
-        # treated as a block delimiter (it would otherwise swallow everything
-        # between two `//` occurrences and skip statement splitting).
-        if (not in_dollar_block and ch == "/" and i + 1 < n and sql[i + 1] == "/"
-                and not (i > 0 and sql[i - 1] == ":")):
-            current.append("//")
-            i += 2
-            in_slash_block = not in_slash_block
-            continue
+    # The token handlers, in priority order. A handler returns True when it
+    # consumed its token (advancing the cursor), False when it does not apply.
+    _HANDLERS = (
+        "_scan_dollar_block",
+        "_scan_slash_block",
+        "_scan_inside_block",
+        "_scan_block_comment",
+        "_scan_line_comment",
+        "_scan_single_quote",
+        "_scan_double_quote",
+        "_scan_delimiter",
+    )
 
-        # Inside a stored-proc block: consume verbatim (inner ; never splits).
-        if in_dollar_block or in_slash_block:
-            current.append(ch)
-            i += 1
-            continue
+    def __init__(self, sql: str, delimiter: str):
+        self.sql = sql
+        self.length = len(sql)
+        self.cursor = 0
+        self.delimiter = delimiter
+        self.current: list[str] = []
+        self.statements: list[str] = []
+        self.in_dollar_block = False
+        self.in_slash_block = False
 
-        # Block comment /* … */ — stripped.
-        if ch == "/" and i + 1 < n and sql[i + 1] == "*":
-            end = sql.find("*/", i + 2)
-            i = (end + 2) if end != -1 else n
-            continue
+    def scan(self) -> list[str]:
+        while self.cursor < self.length:
+            self._step()
+        self._flush_trailing()
+        return self.statements
 
-        # Line comment -- … — stripped to end of line; the newline is left for
-        # the next iteration so line structure (and statement boundaries on the
-        # NEXT line) survive. A ';' inside the comment is NOT a delimiter.
-        if ch == "-" and i + 1 < n and sql[i + 1] == "-":
-            end = sql.find("\n", i + 2)
-            i = end if end != -1 else n
-            continue
+    def _step(self) -> None:
+        """Advance past exactly one token: the first matching handler, else one char."""
+        for handler_name in self._HANDLERS:
+            if getattr(self, handler_name)():
+                return
+        self.current.append(self.sql[self.cursor])
+        self.cursor += 1
 
-        # Single-quoted string literal — '' escapes a quote. Copied verbatim so a
-        # ';' / '--' / '/*' inside the value is data, not a delimiter/comment.
-        if ch == "'":
-            current.append("'")
-            i += 1
-            while i < n:
-                if sql[i] == "'" and i + 1 < n and sql[i + 1] == "'":
-                    current.append("''")
-                    i += 2
-                elif sql[i] == "'":
-                    current.append("'")
-                    i += 1
-                    break
-                else:
-                    current.append(sql[i])
-                    i += 1
-            continue
+    def _two_char(self, first: str, second: str) -> bool:
+        """Whether the cursor sits on the pair ``first``+``second``."""
+        return (self.sql[self.cursor] == first
+                and self.cursor + 1 < self.length
+                and self.sql[self.cursor + 1] == second)
 
-        # Double-quoted identifier — "" escapes a quote. Same verbatim handling.
-        if ch == '"':
-            current.append('"')
-            i += 1
-            while i < n:
-                if sql[i] == '"' and i + 1 < n and sql[i + 1] == '"':
-                    current.append('""')
-                    i += 2
-                elif sql[i] == '"':
-                    current.append('"')
-                    i += 1
-                    break
-                else:
-                    current.append(sql[i])
-                    i += 1
-            continue
+    def _scan_dollar_block(self) -> bool:
+        """``$$`` toggles a stored-proc block (its inner ``;`` never splits)."""
+        if self.in_slash_block or not self._two_char("$", "$"):
+            return False
+        self.current.append("$$")
+        self.cursor += 2
+        self.in_dollar_block = not self.in_dollar_block
+        return True
 
-        # Statement delimiter — only reached outside blocks/comments/strings. A
-        # SET TERM directive switches the active terminator and is consumed
-        # (never emitted); any other completed statement is collected.
-        if delimiter and sql.startswith(delimiter, i):
-            i += len(delimiter)
-            stmt = "".join(current).strip()
-            current = []
-            if stmt:
-                new_term = _parse_set_term(stmt)
-                if new_term is not None:
-                    delimiter = new_term
-                else:
-                    statements.append(stmt)
-            continue
+    def _scan_slash_block(self) -> bool:
+        """``//`` toggles a stored-proc block, unless preceded by ``:`` (a URL scheme)."""
+        if self.in_dollar_block or not self._two_char("/", "/"):
+            return False
+        if self.cursor > 0 and self.sql[self.cursor - 1] == ":":
+            return False  # https://… — not a block marker
+        self.current.append("//")
+        self.cursor += 2
+        self.in_slash_block = not self.in_slash_block
+        return True
 
-        current.append(ch)
-        i += 1
+    def _scan_inside_block(self) -> bool:
+        """Inside a stored-proc block: copy the character verbatim."""
+        if not (self.in_dollar_block or self.in_slash_block):
+            return False
+        self.current.append(self.sql[self.cursor])
+        self.cursor += 1
+        return True
 
-    # Trailing statement (may not end with a delimiter). A trailing SET TERM
-    # directive is a no-op — consume it, don't emit it.
-    stmt = "".join(current).strip()
-    if stmt and _parse_set_term(stmt) is None:
-        statements.append(stmt)
-    return statements
+    def _scan_block_comment(self) -> bool:
+        """``/* … */`` is stripped."""
+        if not self._two_char("/", "*"):
+            return False
+        end = self.sql.find("*/", self.cursor + 2)
+        self.cursor = (end + 2) if end != -1 else self.length
+        return True
+
+    def _scan_line_comment(self) -> bool:
+        """``-- …`` is stripped to end of line; the newline is left in place."""
+        if not self._two_char("-", "-"):
+            return False
+        end = self.sql.find("\n", self.cursor + 2)
+        self.cursor = end if end != -1 else self.length
+        return True
+
+    def _scan_single_quote(self) -> bool:
+        """Single-quoted literal, honouring the ``''`` doubled-quote escape."""
+        if self.sql[self.cursor] != "'":
+            return False
+        self._consume_quoted("'")
+        return True
+
+    def _scan_double_quote(self) -> bool:
+        """Double-quoted identifier, honouring the ``""`` doubled-quote escape."""
+        if self.sql[self.cursor] != '"':
+            return False
+        self._consume_quoted('"')
+        return True
+
+    def _consume_quoted(self, quote: str) -> None:
+        """Copy a quoted run verbatim: a ``;``/``--``/``/*`` inside it is data."""
+        self.current.append(quote)
+        self.cursor += 1
+        while self.cursor < self.length:
+            ch = self.sql[self.cursor]
+            if ch == quote and self._two_char(quote, quote):
+                self.current.append(quote + quote)
+                self.cursor += 2
+            elif ch == quote:
+                self.current.append(quote)
+                self.cursor += 1
+                return
+            else:
+                self.current.append(ch)
+                self.cursor += 1
+
+    def _scan_delimiter(self) -> bool:
+        """The active delimiter ends a statement; a SET TERM directive is consumed."""
+        if not (self.delimiter and self.sql.startswith(self.delimiter, self.cursor)):
+            return False
+        self.cursor += len(self.delimiter)
+        self._collect_statement()
+        return True
+
+    def _collect_statement(self) -> None:
+        """Flush ``current``: a SET TERM switches the delimiter, else emit if non-empty."""
+        stmt = "".join(self.current).strip()
+        self.current = []
+        if not stmt:
+            return
+        new_term = _parse_set_term(stmt)
+        if new_term is not None:
+            self.delimiter = new_term
+        else:
+            self.statements.append(stmt)
+
+    def _flush_trailing(self) -> None:
+        """A trailing statement (no closing delimiter); a trailing SET TERM is a no-op."""
+        stmt = "".join(self.current).strip()
+        if stmt and _parse_set_term(stmt) is None:
+            self.statements.append(stmt)
 
 
 def _is_firebird(db) -> bool:
