@@ -245,15 +245,7 @@ class LiteBackend:
                 except FileNotFoundError:
                     continue  # Already consumed by another worker
 
-                return Job(
-                    queue=queue_ref,
-                    job_id=job_data["id"],
-                    topic=job_data.get("topic", self._topic),
-                    data=job_data["data"],
-                    priority=job_data.get("priority", 0),
-                    attempts=job_data.get("attempts", 0),
-                    error=job_data.get("error"),
-                )
+                return Job.from_data(queue_ref, job_data, self._topic)
 
         return None
 
@@ -278,15 +270,7 @@ class LiteBackend:
                 except FileNotFoundError:
                     continue
 
-                results.append(Job(
-                    queue=queue_ref,
-                    job_id=job_data["id"],
-                    topic=job_data.get("topic", self._topic),
-                    data=job_data["data"],
-                    priority=job_data.get("priority", 0),
-                    attempts=job_data.get("attempts", 0),
-                    error=job_data.get("error"),
-                ))
+                results.append(Job.from_data(queue_ref, job_data, self._topic))
 
         return results
 

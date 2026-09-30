@@ -20,6 +20,26 @@ class Job:
         # without trawling logs.
         self.error: str | None = error
 
+    @classmethod
+    def from_data(cls, queue, job_data: dict, default_topic: str) -> "Job":
+        """Build a Job from a persisted job_data dict.
+
+        The file backends (LiteBackend and the FileQueue) store each job as a
+        JSON file and rebuild the Job from that dict on pop. The field mapping
+        is identical everywhere a stored job is revived — id, topic (falling
+        back to the queue's own topic), data, priority, attempts and error —
+        so it lives here once rather than being spelt out at each pop site.
+        """
+        return cls(
+            queue=queue,
+            job_id=job_data["id"],
+            topic=job_data.get("topic", default_topic),
+            data=job_data["data"],
+            priority=job_data.get("priority", 0),
+            attempts=job_data.get("attempts", 0),
+            error=job_data.get("error"),
+        )
+
     @property
     def data(self):
         """Alias for payload — deprecated, use .payload instead."""

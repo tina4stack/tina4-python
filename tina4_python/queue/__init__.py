@@ -431,14 +431,7 @@ class Queue:
                         # claim the pending file — mirrors LiteBackend.pop().
                         self._backend._write_reserved(job_data)
                         os.unlink(filepath)
-                        return Job(
-                            queue=self, job_id=job_data["id"],
-                            topic=job_data.get("topic", self.topic),
-                            data=job_data["data"],
-                            priority=job_data.get("priority", 0),
-                            attempts=job_data.get("attempts", 0),
-                            error=job_data.get("error"),
-                        )
+                        return Job.from_data(self, job_data, self.topic)
                 except (json.JSONDecodeError, FileNotFoundError):
                     continue
         except FileNotFoundError:
