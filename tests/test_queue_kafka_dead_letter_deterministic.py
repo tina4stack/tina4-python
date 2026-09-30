@@ -86,3 +86,43 @@ class TestKafkaDeadLetterDeterministic:
             assert job_id in ids, f"rejected job {job_id} not observable (got {ids})"
         finally:
             q.close()
+
+    def test_retry_job_clears_the_dead_letter_and_reports_true(self):
+        """retry(job_id) revives a dead-lettered job: it returns True and the
+        job leaves the dead-letter topic.
+
+        This exercises the shared TopicDeadLetterMixin.retry_job() on live
+        Kafka — the same method the RabbitMQ backend inherits. (Whether the
+        re-produced record is then re-consumed is a Kafka offset concern, not
+        part of this method's contract, so it is not asserted here.)
+        """
+        q = _make_queue()
+        try:
+            job_id = q.push({"task": "revive-me"})
+            job = q.pop()
+            assert job is not None
+            job.reject("dead for now")
+            assert job_id in [d.id for d in q.dead_letters()], "prime: not dead-lettered"
+
+            assert q.retry(job_id) is True, "retry() must report it revived the job"
+            assert job_id not in [d.id for d in q.dead_letters()], (
+                "revived job must no longer be in the dead-letter topic"
+            )
+        finally:
+            q.close()
+
+    def test_retry_job_unknown_id_returns_false(self):
+        """retry() on an id that is not dead-lettered reports False, without
+        disturbing the real dead letter."""
+        q = _make_queue()
+        try:
+            job_id = q.push({"task": "stays-dead"})
+            job = q.pop()
+            assert job is not None
+            job.reject("poison")
+            assert q.retry("no-such-id") is False
+            assert job_id in [d.id for d in q.dead_letters()], (
+                "a failed retry lookup must leave the real dead letter in place"
+            )
+        finally:
+            q.close()
