@@ -13,11 +13,10 @@ import os
 
 from tina4_python.queue.amqp_url import parse_amqp_url as _parse_amqp_url
 from tina4_python.queue.job import Job
+from tina4_python.queue.topic_dead_letter import TopicDeadLetterMixin
 
 
-
-
-class RabbitMQBackend:
+class RabbitMQBackend(TopicDeadLetterMixin):
     """Backend adapter wrapping RabbitMQBackend for the unified Queue API."""
 
     def __init__(self, topic: str, max_retries: int):
@@ -151,52 +150,8 @@ class RabbitMQBackend:
             "file or mongodb backend to enumerate retryable failures."
         )
 
-    def dead_letters(self, max_retries: int = None) -> list[dict]:
-        """Drain the dead_letter queue, re-enqueue, and return jobs at/over max_retries.
-
-        Accepts max_retries to match the LiteBackend contract — Queue.dead_letters()
-        passes it as a kwarg, so without this signature the call raised TypeError.
-        """
-        mr = max_retries if max_retries is not None else self._max_retries
-        dl_topic = f"{self._topic}.dead_letter"
-        results = []
-        requeue = []
-        while True:
-            msg = self._backend.dequeue(dl_topic)
-            if msg is None:
-                break
-            payload = msg.get("payload", msg)
-            attempts = msg.get("attempts", 0)
-            if attempts >= mr:
-                results.append({"id": msg.get("id"), "data": payload,
-                                 "attempts": attempts, "error": msg.get("error")})
-            requeue.append(msg)
-        for msg in requeue:
-            self._backend.enqueue(dl_topic, msg)
-        return results
-
-    def retry_job(self, job_id: str, delay_seconds: int = 0) -> bool:
-        """Move a job from the dead_letter queue back to the main topic."""
-        dl_topic = f"{self._topic}.dead_letter"
-        found = None
-        requeue = []
-        while True:
-            msg = self._backend.dequeue(dl_topic)
-            if msg is None:
-                break
-            if msg.get("id") == job_id and found is None:
-                found = msg
-            else:
-                requeue.append(msg)
-        for msg in requeue:
-            self._backend.enqueue(dl_topic, msg)
-        if found is None:
-            return False
-        found["attempts"] = found.get("attempts", 0) + 1
-        found["status"] = "pending"
-        found.pop("error", None)
-        self._backend.enqueue(self._topic, found)
-        return True
+    # dead_letters() and retry_job() come from TopicDeadLetterMixin — both are
+    # pure over the .dead_letter topic and identical to the kafka backend.
 
     def clear(self) -> int:
         """Not performable on RabbitMQ — raises naming the backend and the operation.
