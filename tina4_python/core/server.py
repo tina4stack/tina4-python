@@ -1181,7 +1181,7 @@ function deployGallery(name, tryUrl) {{
 
 
 # ── WebSocket support ──────────────────────────────────────────
-from tina4_python.websocket import CLOSE_GOING_AWAY, WebSocketConnection, WebSocketManager
+from tina4_python.websocket import CLOSE_GOING_AWAY, RoomMemberMixin, WebSocketConnection, WebSocketManager
 
 _ws_manager = WebSocketManager()
 
@@ -1309,7 +1309,7 @@ async def _handle_asgi_websocket(scope: dict, receive, send):
         _ws_manager.remove(conn)
 
 
-class _AsgiWebSocketConnection:
+class _AsgiWebSocketConnection(RoomMemberMixin):
     """WebSocket connection wrapper for ASGI servers (uvicorn, etc.).
 
     Supports both Router's (conn, event, data) style and WebSocketServer's
@@ -1344,10 +1344,8 @@ class _AsgiWebSocketConnection:
     def closed(self) -> bool:
         return self._closed
 
-    @property
-    def rooms(self) -> set:
-        """Return the set of room names this connection has joined."""
-        return self._rooms
+    # rooms / join_room / leave_room / broadcast_to_room come from
+    # RoomMemberMixin — transport-agnostic, shared with WebSocketConnection.
 
     def on_message(self, handler):
         """Register a message handler (decorator style)."""
@@ -1360,25 +1358,6 @@ class _AsgiWebSocketConnection:
     def on_error(self, handler):
         """Register an error handler (decorator style)."""
         self._on_error = handler
-
-    def join_room(self, room_name: str) -> None:
-        """Join a named room."""
-        self._rooms.add(room_name)
-        if self._manager:
-            self._manager._join_room(self.id, room_name)
-
-    def leave_room(self, room_name: str) -> None:
-        """Leave a named room."""
-        self._rooms.discard(room_name)
-        if self._manager:
-            self._manager._leave_room(self.id, room_name)
-
-    async def broadcast_to_room(self, room_name: str, message: str | bytes,
-                                 exclude_self: bool = False) -> None:
-        """Broadcast a message to all connections in a room."""
-        if self._manager:
-            exclude = self.id if exclude_self else None
-            await self._manager.broadcast_to_room(room_name, message, exclude=exclude)
 
     async def send(self, message: str | bytes):
         """Send a text or binary message."""
