@@ -1506,7 +1506,7 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
         row count whether accessed imperatively or lazily. An explicit ``limit``
         still pages (explicit, never silent).
         """
-        from tina4_python.orm.fields import _LAZY_PAGE_SIZE
+        from tina4_python.orm.fields import fetch_all_pages
         pk = self._get_pk()
         pk_value = getattr(self, pk)
         fk = foreign_key or f"{self.__class__.__name__.lower()}_id"
@@ -1522,15 +1522,7 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
             return [related_class(row) for row in result.records]
 
         # No explicit limit -> page through ALL rows (uncapped, parity with lazy).
-        records = []
-        page_offset = offset
-        while True:
-            result = db.fetch(sql, [pk_value], limit=_LAZY_PAGE_SIZE, offset=page_offset)
-            batch = result.records
-            records.extend(batch)
-            if len(batch) < _LAZY_PAGE_SIZE:
-                break
-            page_offset += _LAZY_PAGE_SIZE
+        records = fetch_all_pages(db, sql, [pk_value], offset)
         return [related_class(row) for row in records]
 
     def belongs_to(self, related_class, foreign_key: str = None) -> Self | None:

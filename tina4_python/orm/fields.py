@@ -622,6 +622,27 @@ BoolField = BooleanField
 _LAZY_PAGE_SIZE = 1000
 
 
+def fetch_all_pages(db, sql: str, params: list, start_offset: int = 0) -> list:
+    """Return every row of ``sql``, paging in blocks of ``_LAZY_PAGE_SIZE``.
+
+    Uncapped by design (REL-EAGER-UNBOUNDED): a relationship load that passed a
+    silent ``limit=1000`` truncated the tail with no signal, so this pages until
+    a short block instead. Shared by the descriptor lazy-load and the imperative
+    ``has_many`` so both revive the full set the same way. Returns raw rows; the
+    caller wraps them in the related model.
+    """
+    records = []
+    offset = start_offset
+    while True:
+        result = db.fetch(sql, params, limit=_LAZY_PAGE_SIZE, offset=offset)
+        batch = result.records
+        records.extend(batch)
+        if len(batch) < _LAZY_PAGE_SIZE:
+            break
+        offset += _LAZY_PAGE_SIZE
+    return records
+
+
 class RelationshipDescriptor:
     """Base descriptor for ORM relationships. Lazy-loads on first access."""
 
@@ -698,15 +719,7 @@ class HasManyDescriptor(RelationshipDescriptor):
         sql = f"SELECT * FROM {table} WHERE {where} ORDER BY {order_col}"
         # REL-EAGER-UNBOUNDED: page through ALL children rather than silently
         # truncating at a fixed cap.
-        records = []
-        offset = 0
-        while True:
-            result = db.fetch(sql, [pk_value], limit=_LAZY_PAGE_SIZE, offset=offset)
-            batch = result.records
-            records.extend(batch)
-            if len(batch) < _LAZY_PAGE_SIZE:
-                break
-            offset += _LAZY_PAGE_SIZE
+        records = fetch_all_pages(db, sql, [pk_value])
         return [related_cls(row) for row in records]
 
 
