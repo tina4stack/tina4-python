@@ -37,18 +37,7 @@ class RateLimiter:
     @staticmethod
     def before_rate_limit(request, response):
         """Class-based middleware entry point — enforces the shared rate limit."""
-        limiter = RateLimiter._shared()
-        ip = getattr(request, "ip", None) or "unknown"
-        allowed, info = limiter.check(ip)
-        limiter.apply_headers(response, info)
-        if not allowed:
-            retry_after = max(1, int(info.get("reset", limiter.window)))
-            response.header("retry-after", str(retry_after))
-            if hasattr(response, "error"):
-                response.error("Too Many Requests", f"Rate limit exceeded. Retry in {retry_after}s.", 429)
-            else:
-                setattr(response, "status_code", 429)
-        return request, response
+        return RateLimiter._shared().apply(request, response)
 
     def __init__(self):
         self._env_snapshot: tuple = ()
