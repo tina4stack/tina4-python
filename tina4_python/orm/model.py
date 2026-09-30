@@ -1171,155 +1171,28 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
                 same signal as "the DDL failed", and the caller would create
                 the table by hand and carry on.
         """
-        from tina4_python.database.adapter import SQLTranslator
-
         db = cls._get_db()
         table = cls._get_table()
         table_sql = cls._get_table_sql()
         engine = (db.get_database_type() or "").lower()
+        column_types = cls._engine_column_types(engine)
 
-        # v3.13.11: BooleanField now uses each engine's native type
-        # where it's reliable. SQLite and Firebird stay on INTEGER —
-        # SQLite has no native bool, and Firebird's driver round-trip
-        # for native BOOLEAN is uneven across versions.
-        # v3.13.16: db.get_database_type() returns "postgresql" (with the -ql),
-        # so the old `== "postgres"` check never matched and BooleanField got
-        # INTEGER on PG — which then can't accept a Python bool on insert.
-        if engine in ("postgres", "postgresql"):
-            bool_sql = "BOOLEAN"
-        elif engine == "mysql":
-            bool_sql = "BOOLEAN"  # MySQL alias for TINYINT(1)
-        elif engine == "mssql":
-            bool_sql = "BIT"
-        else:
-            # sqlite, firebird, odbc, anything else
-            bool_sql = "INTEGER"
-
-        # v3.13.16: DateTimeField was emitted as "DATETIME" unconditionally,
-        # but PostgreSQL and Firebird have no DATETIME type — CREATE TABLE blew
-        # up with `type "datetime" does not exist`. Emit each engine's real
-        # timestamp type. (MySQL/MSSQL/SQLite keep DATETIME: it's valid there,
-        # and on MySQL it avoids TIMESTAMP's auto-update + 2038 surprises.)
-        if engine in ("postgres", "postgresql", "firebird"):
-            datetime_sql = "TIMESTAMP"
-        else:
-            datetime_sql = "DATETIME"
-
-        # JSONField -> the engine's native JSON type where it has one, else a
-        # text column. PostgreSQL JSONB (binary, indexable, canonical form);
-        # MySQL JSON; MSSQL has no JSON type so NVARCHAR(MAX) (its documented
-        # JSON storage); SQLite/ODBC TEXT; Firebird has no TEXT/JSON type so
-        # BLOB SUB_TYPE TEXT. The ORM stores a JSON string in every case, so a
-        # text-backed column round-trips identically to a native one.
-        if engine in ("postgres", "postgresql"):
-            json_sql = "JSONB"
-        elif engine == "mysql":
-            json_sql = "JSON"
-        elif engine == "mssql":
-            json_sql = "NVARCHAR(MAX)"
-        elif engine == "firebird":
-            json_sql = "BLOB SUB_TYPE TEXT"
-        else:
-            json_sql = "TEXT"
-
-        # PointField -> the engine's spatial type via the SQLTranslator dialect
-        # seam (``geography(Point,<srid>)`` on PostGIS). Resolved BEFORE the
-        # table_exists short-circuit so a spatial model on a non-spatial engine
-        # ALWAYS raises SpatialNotSupportedError naming that engine — a wrong
-        # column type is never created, and the error does not depend on whether
-        # the table happens to exist yet. This is the loud-not-silent contract:
-        # unlike the other type mappings there is no safe fallback for geometry.
-        point_sql: dict[str, str] = {}
-        for name, field_obj in cls._fields.items():
-            if getattr(field_obj, "kind", None) != "PointField":
-                continue
-            col_name = cls.get_db_column(name)
-            point_sql[col_name] = SQLTranslator.point_column_type(
-                engine, getattr(field_obj, "srid", 4326)
-            )
+        # PointField spatial types, resolved BEFORE the table_exists
+        # short-circuit so a spatial model on a non-spatial engine ALWAYS raises
+        # SpatialNotSupportedError naming that engine — a wrong column type is
+        # never created, and the error does not depend on whether the table
+        # happens to exist yet. This is the loud-not-silent contract: unlike the
+        # other type mappings there is no safe fallback for geometry.
+        point_sql = cls._point_column_types(engine)
 
         # Don't recreate if table already exists
         if db.table_exists(table):
             return True
 
-        col_defs = []
-        for name, field_obj in cls._fields.items():
-            col_name = cls.get_db_column(name)
-            kind = getattr(field_obj, "kind", None)
-
-            # Map field kind to SQL type
-            sql_type = "TEXT"
-            if kind == "IntegerField":
-                sql_type = "INTEGER"
-            elif kind == "StringField":
-                max_len = getattr(field_obj, "max_length", None) or 255
-                sql_type = f"VARCHAR({max_len})"
-            elif kind == "TextField":
-                sql_type = "TEXT"
-            elif kind in ("NumericField", "FloatField"):
-                sql_type = "REAL"
-            elif kind == "DecimalField":
-                # A fixed-precision column: emit a real DECIMAL(p, s) so the
-                # engine keeps the declared scale instead of a floating
-                # approximation. Valid syntax on PG/MySQL/MSSQL/Firebird/SQLite.
-                precision = getattr(field_obj, "precision", 10)
-                scale = getattr(field_obj, "scale", 2)
-                sql_type = f"DECIMAL({precision},{scale})"
-            elif kind == "BooleanField":
-                sql_type = bool_sql
-            elif kind == "DateTimeField":
-                sql_type = datetime_sql
-            elif kind == "BlobField":
-                sql_type = "BLOB"
-            elif kind == "JSONField":
-                sql_type = json_sql
-            elif kind == "PointField":
-                sql_type = point_sql[col_name]
-            else:
-                # Fallback based on field_type
-                ft = field_obj.field_type
-                if ft == int:
-                    sql_type = "INTEGER"
-                elif ft == float:
-                    sql_type = "REAL"
-                elif ft == bool:
-                    sql_type = bool_sql
-                elif ft == bytes:
-                    sql_type = "BLOB"
-
-            parts = [col_name, sql_type]
-
-            # A COMPOSITE key is declared once, at table level (below). Emitting
-            # an inline PRIMARY KEY per column is invalid DDL - SQLite,
-            # PostgreSQL and MySQL all reject two of them in one table.
-            if field_obj.primary_key and len(cls._get_pks()) == 1:
-                parts.append("PRIMARY KEY")
-            if field_obj.auto_increment:
-                parts.append("AUTOINCREMENT")
-            if field_obj.required and not field_obj.primary_key:
-                parts.append("NOT NULL")
-            # Callable defaults (e.g. DateTimeField(default=lambda: datetime.now())) are
-            # resolved per-row at insert time (_resolve_default, issue #50); they must NOT
-            # be emitted into the CREATE TABLE DDL, where they stringify to an invalid
-            # `DEFAULT <function ...>` and silently fail table creation.
-            if field_obj.default is not None and not field_obj.auto_increment \
-                    and kind != "JSONField" and not callable(field_obj.default):
-                default_val = field_obj.default
-                if isinstance(default_val, str):
-                    parts.append(f"DEFAULT '{default_val}'")
-                elif isinstance(default_val, bool):
-                    # v3.13.16: a native BOOLEAN column (PG/MySQL) needs
-                    # TRUE/FALSE; INTEGER- and BIT-backed bools (SQLite,
-                    # Firebird, MSSQL) need 1/0. `DEFAULT 0` on a PG BOOLEAN
-                    # raises "default expression is of type integer".
-                    if bool_sql == "BOOLEAN":
-                        parts.append(f"DEFAULT {'TRUE' if default_val else 'FALSE'}")
-                    else:
-                        parts.append(f"DEFAULT {1 if default_val else 0}")
-                else:
-                    parts.append(f"DEFAULT {default_val}")
-
-            col_defs.append(" ".join(parts))
+        col_defs = [
+            cls._column_definition(name, field_obj, column_types, point_sql)
+            for name, field_obj in cls._fields.items()
+        ]
 
         # SOFTDEL-DEC-02: a soft_delete model needs an is_deleted flag column,
         # but create_table only knew about DECLARED fields — so a
@@ -1330,16 +1203,13 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
         # generated schema always matches the soft-delete behaviour.
         if cls.soft_delete:
             sd_col = cls._soft_delete_column()
-            declared_cols = {
-                cls.get_db_column(name)
-                for name in cls._fields
-            }
+            declared_cols = {cls.get_db_column(name) for name in cls._fields}
             if sd_col not in declared_cols:
                 col_defs.append(f"{sd_col} INTEGER DEFAULT 0")
 
         # A COMPOSITE key is declared ONCE, at table level. Per-column inline
-        # PRIMARY KEY (above) is suppressed when the key spans more than one
-        # column, because two inline primary keys is invalid DDL on every engine.
+        # PRIMARY KEY is suppressed when the key spans more than one column,
+        # because two inline primary keys is invalid DDL on every engine.
         pks = cls._get_pks()
         if len(pks) > 1:
             pk_cols = [cls.get_db_column(k) for k in pks if k in cls._fields]
@@ -1353,27 +1223,153 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
         if_not_exists = "" if engine in ("mssql", "sqlserver", "firebird") else "IF NOT EXISTS "
         sql = f"CREATE TABLE {if_not_exists}{table_sql} ({', '.join(col_defs)})"
 
-        # Translate auto-increment syntax for the current engine
-        engine = db.get_database_type()
-        sql = SQLTranslator.auto_increment_syntax(sql, engine)
+        # Translate auto-increment syntax for the current engine (original case).
+        from tina4_python.database.adapter import SQLTranslator
+        engine_name = db.get_database_type()
+        sql = SQLTranslator.auto_increment_syntax(sql, engine_name)
+        return cls._execute_create_table(db, sql, engine_name, table)
 
-        # Don't claim success when the DDL failed. execute() now RAISES on a
-        # bad type / any DDL error (it used to swallow it into get_error() and
-        # return False). Keep create_table()'s bool contract by catching the
-        # error and returning False with the cause logged, rather than letting
-        # it propagate out of create_table().
+    @classmethod
+    def _engine_column_types(cls, engine: str) -> dict[str, str]:
+        """Engine-aware SQL types for BooleanField, DateTimeField and JSONField.
+
+        - BooleanField: native BOOLEAN on PG/MySQL, BIT on MSSQL, INTEGER on
+          SQLite/Firebird/ODBC (SQLite has no native bool; Firebird's native
+          BOOLEAN round-trip is uneven). v3.13.16: get_database_type() returns
+          "postgresql", so the match must include it, not just "postgres".
+        - DateTimeField: TIMESTAMP on PG/Firebird (no DATETIME type there),
+          DATETIME on MySQL/MSSQL/SQLite (valid, and avoids MySQL TIMESTAMP's
+          auto-update + 2038 surprises).
+        - JSONField: JSONB on PG, JSON on MySQL, NVARCHAR(MAX) on MSSQL,
+          BLOB SUB_TYPE TEXT on Firebird, TEXT elsewhere. The ORM always stores
+          a JSON string, so a text-backed column round-trips like a native one.
+        """
+        engine = (engine or "").lower()
+        bool_sql = {
+            "postgres": "BOOLEAN", "postgresql": "BOOLEAN",
+            "mysql": "BOOLEAN", "mssql": "BIT",
+        }.get(engine, "INTEGER")
+        datetime_sql = "TIMESTAMP" if engine in ("postgres", "postgresql", "firebird") else "DATETIME"
+        json_sql = {
+            "postgres": "JSONB", "postgresql": "JSONB", "mysql": "JSON",
+            "mssql": "NVARCHAR(MAX)", "firebird": "BLOB SUB_TYPE TEXT",
+        }.get(engine, "TEXT")
+        return {"bool": bool_sql, "datetime": datetime_sql, "json": json_sql}
+
+    @classmethod
+    def _point_column_types(cls, engine: str) -> dict[str, str]:
+        """PointField -> the engine's spatial type via the SQLTranslator dialect
+        seam (``geography(Point,<srid>)`` on PostGIS). Raises
+        SpatialNotSupportedError on a non-spatial engine (loud, not silent)."""
+        from tina4_python.database.adapter import SQLTranslator
+        point_sql: dict[str, str] = {}
+        for name, field_obj in cls._fields.items():
+            if getattr(field_obj, "kind", None) != "PointField":
+                continue
+            col_name = cls.get_db_column(name)
+            point_sql[col_name] = SQLTranslator.point_column_type(
+                engine, getattr(field_obj, "srid", 4326)
+            )
+        return point_sql
+
+    @classmethod
+    def _column_sql_type(cls, field_obj, kind, col_name: str,
+                         column_types: dict[str, str], point_sql: dict[str, str]) -> str:
+        """The SQL column type for one field, given the engine's type map."""
+        simple = {
+            "IntegerField": "INTEGER",
+            "TextField": "TEXT",
+            "NumericField": "REAL",
+            "FloatField": "REAL",
+            "BlobField": "BLOB",
+            "BooleanField": column_types["bool"],
+            "DateTimeField": column_types["datetime"],
+            "JSONField": column_types["json"],
+        }
+        if kind in simple:
+            return simple[kind]
+        if kind == "StringField":
+            return f"VARCHAR({getattr(field_obj, 'max_length', None) or 255})"
+        if kind == "DecimalField":
+            # A fixed-precision column: emit a real DECIMAL(p, s) so the engine
+            # keeps the declared scale. Valid on PG/MySQL/MSSQL/Firebird/SQLite.
+            return f"DECIMAL({getattr(field_obj, 'precision', 10)},{getattr(field_obj, 'scale', 2)})"
+        if kind == "PointField":
+            return point_sql[col_name]
+        return cls._fallback_sql_type(field_obj, column_types["bool"])
+
+    @staticmethod
+    def _fallback_sql_type(field_obj, bool_sql: str) -> str:
+        """Type for a field with no recognised ``kind`` — inferred from field_type."""
+        by_type = {int: "INTEGER", float: "REAL", bool: bool_sql, bytes: "BLOB"}
+        return by_type.get(field_obj.field_type, "TEXT")
+
+    @staticmethod
+    def _default_clause(field_obj, kind, bool_sql: str) -> str | None:
+        """A ``DEFAULT …`` clause for the column, or None when none applies.
+
+        Callable defaults (e.g. ``DateTimeField(default=lambda: datetime.now())``)
+        are resolved per-row at insert time (issue #50) and must NOT be emitted
+        into the DDL, where they stringify to an invalid ``DEFAULT <function …>``.
+        """
+        if (field_obj.default is None or field_obj.auto_increment
+                or kind == "JSONField" or callable(field_obj.default)):
+            return None
+        default_val = field_obj.default
+        if isinstance(default_val, str):
+            return f"DEFAULT '{default_val}'"
+        if isinstance(default_val, bool):
+            # v3.13.16: a native BOOLEAN column (PG/MySQL) needs TRUE/FALSE;
+            # INTEGER-/BIT-backed bools (SQLite, Firebird, MSSQL) need 1/0.
+            # `DEFAULT 0` on a PG BOOLEAN raises "default expression is of type integer".
+            if bool_sql == "BOOLEAN":
+                return f"DEFAULT {'TRUE' if default_val else 'FALSE'}"
+            return f"DEFAULT {1 if default_val else 0}"
+        return f"DEFAULT {default_val}"
+
+    @classmethod
+    def _column_definition(cls, name: str, field_obj,
+                           column_types: dict[str, str], point_sql: dict[str, str]) -> str:
+        """One column's DDL fragment: ``<col> <type> [PRIMARY KEY] [AUTOINCREMENT]
+        [NOT NULL] [DEFAULT …]``."""
+        col_name = cls.get_db_column(name)
+        kind = getattr(field_obj, "kind", None)
+        parts = [col_name, cls._column_sql_type(field_obj, kind, col_name, column_types, point_sql)]
+
+        # A COMPOSITE key is declared once, at table level. Emitting an inline
+        # PRIMARY KEY per column is invalid DDL — SQLite/PostgreSQL/MySQL all
+        # reject two of them in one table.
+        if field_obj.primary_key and len(cls._get_pks()) == 1:
+            parts.append("PRIMARY KEY")
+        if field_obj.auto_increment:
+            parts.append("AUTOINCREMENT")
+        if field_obj.required and not field_obj.primary_key:
+            parts.append("NOT NULL")
+        default_clause = cls._default_clause(field_obj, kind, column_types["bool"])
+        if default_clause:
+            parts.append(default_clause)
+        return " ".join(parts)
+
+    @classmethod
+    def _execute_create_table(cls, db, sql: str, engine_name: str, table: str) -> bool:
+        """Run the CREATE TABLE DDL plus any spatial indexes, in one transaction.
+
+        Keeps create_table()'s bool contract: execute() RAISES on a bad type /
+        any DDL error, so the cause is caught, logged, and turned into False
+        rather than propagating out of create_table()."""
+        from tina4_python.database.adapter import SQLTranslator
         try:
             db.execute(sql)
             # A spatial predicate without a spatial index is a full table scan,
             # so the index ships WITH the column rather than as a thing the
-            # developer must remember. IF NOT EXISTS keeps it idempotent.
+            # developer must remember.
             for name, field_obj in cls._fields.items():
                 if getattr(field_obj, "kind", None) != "PointField":
                     continue
                 if not getattr(field_obj, "spatial_index", True):
                     continue
                 col_name = cls.get_db_column(name)
-                db.execute(SQLTranslator.spatial_index(engine, table, col_name))
+                db.execute(SQLTranslator.spatial_index(engine_name, table, col_name))
             db.commit()
         except Exception as e:
             from tina4_python.debug import Log
