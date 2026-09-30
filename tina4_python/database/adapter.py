@@ -977,6 +977,22 @@ class DatabaseAdapter:
             return 0
         return None
 
+    def _paginate_sql(self, sql: str, params, limit, offset, paginated: bool):
+        """Append this engine's LIMIT/OFFSET clause when ``paginated``.
+
+        Returns ``(sql, params)``. Each adapter decides ``paginated`` for
+        itself (SQLite/PostgreSQL also exclude writes), but the append is the
+        same everywhere: this engine's placeholder (``?`` or ``%s``) for the
+        two bound values. The clause goes on a NEW LINE — appended inline it
+        can land inside a trailing ``-- comment`` and be swallowed, the same
+        bug at the append site rather than the detector.
+        """
+        if not paginated:
+            return sql, params or []
+        marker = self.PARAM_MARKER
+        return (f"{sql}\nLIMIT {marker} OFFSET {marker}",
+                (params or []) + [limit, offset])
+
     @staticmethod
     def _strip_trailing_order_by(sql: str) -> str:
         """Strip a trailing top-level ``ORDER BY`` so the SQL can be safely
