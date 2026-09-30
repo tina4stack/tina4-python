@@ -29,22 +29,34 @@ executor, a PK lookup) or behaviour-locked cold-path writes. Fixing any would re
 behaviour (esp. #4 PostgreSQL failure isolation) for no real hot-path win — refused.
 
 ## Scope
-- [ ] Characterization tests (real SQLite, no mocks): result + query-count
-- [ ] Annotate all 10 with `# carbonah:ignore <CODE>` + reason
-- [ ] carbonah lint: E002 9→0, E003 1→0, other rules unchanged
-- [ ] carbonah measure: no regression
-- [ ] tina4 metrics: unaffected
-- [ ] affected subsystem suites green (SQLite local)
+- [x] Characterization tests (real SQLite, no mocks): result + query-count — mutation-proven
+- [x] Annotate all 10 with `# carbonah:ignore <CODE>` + reason
+- [x] carbonah lint: E002 9→0, E003 1→0 (E004 12→11 same-loop side effect, see below)
+- [x] carbonah measure: no regression (APlus both; SCI within ~2% noise)
+- [x] tina4 metrics: unaffected (no new offender; comments add no CC)
+- [x] affected subsystem suites green (SQLite local + Postgres/MySQL/MSSQL on lab)
 
 ## Tests (written first, real — no mocks, positive + negative)
-- [ ] execute_many collapsible: build_batch_inserts returns 1 stmt for 200 rows (query-count), all 200 land, affected_rows/data correct (result)
-- [ ] execute_many fallback: RETURNING not collapsed (returns []), rows still land via the fallback loop
-- [ ] migration apply + rollback on real SQLite: end state correct
+- [x] execute_many collapsible: build_batch_inserts returns 1 stmt for 200 rows (query-count) + all 200 land, affected_rows/data correct (result)
+- [x] execute_many fallback: RETURNING not collapsed (returns []), rows still land via the fallback loop
+- [x] migration apply + rollback on real SQLite: end state correct
+
+## Results
+- carbonah lint (carbonah 0.3.3): **E002 9→0, E003 1→0**. E004 12→11 — the session
+  `_ensure_table` E002 annotation also clears carbonah's coupled "polling loop" E004
+  for that same bounded 5-attempt backoff (also a false positive). All other rules
+  unchanged (C001 2, D003 2, E001 3, E004 11, E005 29, H001 4).
+- carbonah measure (batch workload, 3 runs each): branch median SCI 0.00022239 vs
+  baseline 0.00021779 — within noise; grade APlus both.
+- Local SQLite: characterization (4, mutation-proven) + 117 batch/migration/orm tests green.
+- Lab (real Postgres + MySQL + MSSQL): 81 passed, 4 skipped (`[needs:firebird]`, no live Firebird).
+- Production diff is 100% comments (verified) → zero runtime behaviour change.
 
 ## Bugs
 - (none — comment-only change; no runtime behaviour touched)
 
 ## Commits
-- (log here)
+- 4f92d3e  test: characterization net for efficiency round 2b (E002/E003)
+- 77d2e2b  perf: annotate carbonah E002/E003 false positives in tina4_python
 
-## Status: In Progress
+## Status: Complete
