@@ -550,87 +550,26 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
         table_sql = self._get_table_sql()
         pk_db_col = self.get_db_column(pk)
 
-        data = {}
-        # #165: db columns to OMIT from an INSERT — those the caller never
-        # assigned AND whose value is None. Omitting them lets the DB DEFAULT
-        # apply (e.g. NOT NULL DEFAULT '') instead of emitting an explicit NULL
-        # that violates the constraint. Unused on the UPDATE path.
-        insert_omit = set()
-        # A field's to_db() serialization can fail loud — the commonest case is a
-        # JSONField handed a value that is not JSON-serializable (a set, a custom
-        # object). The write-path contract, identical in all four frameworks, is:
-        # save() returns False + logs the cause (never raises out of save(), never
-        # silently persists a bad row). So a serialization error while BUILDING the
-        # row is caught here, recorded on last_error, logged, and turned into a
-        # False return before any transaction is opened.
+        # Build the row. A field's to_db() serialization can fail loud (the
+        # commonest case is a JSONField handed a non-serializable value): the
+        # write-path contract, identical in all four frameworks, is save()
+        # returns False + logs the cause, never raises, never persists a bad
+        # row. So a serialization error is caught here and turned into False
+        # before any transaction is opened.
         try:
-            for name, field in self._fields.items():
-                if field.auto_increment and pk_value is None:
-                    continue  # Skip auto-increment on insert
-                value = getattr(self, name)
-                # v3.13.11 (issue #50): resolve callable values at write time
-                # too, in case the user set ``self.created_at = lambda: ...``
-                # directly. Defensive — Field.validate() already handles this
-                # for the normal __init__ + _populate paths.
-                if callable(value) and not isinstance(value, type):
-                    value = value()
-                if value is not None or not field.auto_increment:
-                    db_col = self.get_db_column(name)
-                    # Serialize to the column's storage form: identity for most
-                    # fields, JSON string for JSONField (see Field.to_db).
-                    data[db_col] = field.to_db(value)
-                    # #165: a None value the caller never assigned is an UNSET
-                    # column — omit it from the INSERT so the DB DEFAULT applies.
-                    # A resolved ORM default (non-None) is still written; a value
-                    # the caller explicitly set to None is still written as NULL
-                    # (its field name is in _assigned_fields).
-                    if value is None and name not in self._assigned_fields:
-                        insert_omit.add(db_col)
+            data, insert_omit = self._collect_write_values(pk_value)
         except (ValueError, TypeError) as exc:
             self.last_error = str(exc)
             Log.error(f"{type(self).__name__}.save() refused: {exc}")
             return False
 
-        # v3.13.11 (issue #50): pick INSERT vs UPDATE on row existence
-        # for non-auto-increment PKs. Auto-increment keeps the legacy
-        # behaviour (PK is None → INSERT, PK is set → UPDATE).
-        is_update = False
-        if pk_value is not None:
-            if pk_field.auto_increment:
-                is_update = True
-            else:
-                # Natural-key model — check if THIS row already exists.
-                #
-                # This asked exists(pk_value), which tests only the FIRST key
-                # column. On a composite key that is true for any row sharing
-                # that column, so inserting a genuinely new row was decided to
-                # be an UPDATE and silently OVERWROTE a different row: saving
-                # (acme, a2) rewrote (acme, a1). The check has to name the whole
-                # key, exactly like the write that follows it.
-                try:
-                    where, where_params = self._pk_where()
-                    if where:
-                        found = db.fetch_one(
-                            f"SELECT 1 AS present FROM {table_sql} WHERE {where}", where_params
-                        )
-                        is_update = found is not None
-                    else:
-                        is_update = type(self).exists(pk_value)
-                except Exception:
-                    # If we can't tell (e.g. table doesn't exist yet),
-                    # fall back to INSERT — the user will see the real
-                    # error from the driver instead of a silent no-op.
-                    is_update = False
+        is_update = self._decide_is_update(db, pk_value, pk_field, table_sql)
 
         # Firebird has no auto-increment column type. An auto_increment PK left
-        # None inserts NULL and the engine rejects it ("validation error for
-        # column ID, value *** null ***") — the field loop above SKIPPED it, so
-        # `data` carries no id column at all. On the INSERT path only, draw the
-        # id from the table's generator (GEN_<TABLE>_ID, the same one Firebird's
-        # get_last_id() emulation reads back) and inject it. Gated on `not
-        # is_update` so a set-PK UPDATE never draws a new id, and generated
-        # OUTSIDE the save() transaction bracket below (get_next_id commits the
-        # generator itself, which a generator is exempt from rolling back).
+        # None inserts NULL and the engine rejects it — the field loop SKIPPED
+        # it, so `data` carries no id column. On the INSERT path only, draw the
+        # id from the table's generator and inject it. Generated OUTSIDE the
+        # transaction bracket below (get_next_id commits the generator itself).
         if (not is_update and pk_field.auto_increment
                 and getattr(self, pk, None) is None
                 and db.get_database_type() == "firebird"):
@@ -641,79 +580,14 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
 
         db.start_transaction()
         try:
-            if is_update:
-                pk_columns = {
-                    self.get_db_column(n)
-                    for n in self._get_pks()
-                    if n in self._fields
-                }
-                update_data = {k: v for k, v in data.items() if k not in pk_columns}
-                where, where_params = self._pk_where()
-                if update_data and where:
-                    db.update(table, update_data, where, where_params)
-            else:
-                # #165: drop unset-None columns so the DB DEFAULT applies.
-                insert_data = {c: v for c, v in data.items() if c not in insert_omit}
-                if insert_data:
-                    db.insert(table, insert_data)
-                else:
-                    # Every insertable column was left unset — let the DB
-                    # apply ALL its column defaults rather than emitting
-                    # explicit NULLs. DEFAULT VALUES is valid on SQLite /
-                    # PostgreSQL / MSSQL / Firebird; MySQL spells it () VALUES ().
-                    if db.get_database_type() == "mysql":
-                        db.execute(f"INSERT INTO {table_sql} () VALUES ()")
-                    else:
-                        db.execute(f"INSERT INTO {table_sql} DEFAULT VALUES")
-                # Only adopt the engine-assigned ID for auto-increment PKs.
-                # Natural-key PKs were already set by the caller; don't
-                # overwrite them with the driver's last_id (which on PG
-                # may be a sequence value that doesn't apply here).
-                if pk_field.auto_increment:
-                    last_id = db.get_last_id()
-                    if last_id and pk in self._fields:
-                        setattr(self, pk, last_id)
+            self._write_row(db, is_update, data, insert_omit, table, table_sql, pk, pk_field)
             db.commit()
         except Exception as e:
             db.rollback()
-            # ── Change 1: fail loud, never silent. Keep the False return
-            # contract, but capture the REAL cause (prefer db.get_error(),
-            # which db.execute()/insert()/update() populate, falling back to
-            # the exception text) on self.last_error so it survives, and log
-            # it with model/table context. ──
-            cause = db.get_error() or str(e)
-            # ── DX hint (v3.13.60): turn a bare driver error into an
-            # actionable fix for the two commonest ORM write footguns. Match
-            # the message case-insensitively (SQLite says "no such table" /
-            # "no such column: is_deleted" / "has no column named is_deleted";
-            # Postgres/MySQL say "does not exist" / "doesn't exist"). Any
-            # OTHER error keeps its raw cause untouched so we never mask an
-            # unrelated failure (e.g. a NOT NULL / duplicate-PK violation). ──
-            low = cause.lower()
-            if self.soft_delete and "is_deleted" in low and (
-                "no such column" in low or "has no column" in low
-                or "does not exist" in low or "doesn't exist" in low
-                or "unknown column" in low
-            ):
-                cause += (
-                    " — soft_delete=True requires an is_deleted column; declare "
-                    "it (is_deleted = IntegerField(default=0)) or add a migration"
-                )
-            elif "no such table" in low or (
-                ("does not exist" in low or "doesn't exist" in low)
-                # exclude a column-not-found (e.g. Postgres 'column "x" does not exist')
-                # so a genuine missing-column error never gets a spurious table hint
-                and "column" not in low
-            ) or (
-                # MSSQL: "Invalid object name 'foo'." — Firebird: "Table unknown\nFOO"
-                # / "Dynamic SQL Error ... Table unknown". Neither says "does not
-                # exist", so without these the hint was absent on those two engines.
-                "invalid object name" in low or "table unknown" in low
-            ):
-                cause += (
-                    f" — table '{table}' does not exist; call "
-                    f"{type(self).__name__}.create_table() or run a migration"
-                )
+            # Fail loud, never silent. Keep the False return contract, but
+            # capture the REAL cause (prefer db.get_error()) on last_error and
+            # log it with model/table context.
+            cause = self._augment_save_error(db.get_error() or str(e), table)
             self.last_error = cause
             Log.error(
                 f"{type(self).__name__}.save() failed for table "
@@ -726,6 +600,123 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
         self._rel_cache = {}
         self._persisted = True
         return self
+
+    def _collect_write_values(self, pk_value) -> tuple[dict, set]:
+        """Serialize every field to its DB column form for an INSERT/UPDATE.
+
+        Returns ``(data, insert_omit)``. ``insert_omit`` (#165) are db columns
+        to OMIT from an INSERT — those the caller never assigned AND whose value
+        is None — so the DB DEFAULT applies instead of an explicit NULL that
+        would violate a NOT NULL constraint. Unused on the UPDATE path. May
+        raise ValueError/TypeError if a field's to_db() serialization fails; the
+        caller turns that into a False return.
+        """
+        data: dict = {}
+        insert_omit: set = set()
+        for name, field in self._fields.items():
+            if field.auto_increment and pk_value is None:
+                continue  # Skip auto-increment on insert
+            value = getattr(self, name)
+            # v3.13.11 (issue #50): resolve callable values at write time too,
+            # in case the user set ``self.created_at = lambda: ...`` directly.
+            if callable(value) and not isinstance(value, type):
+                value = value()
+            if value is not None or not field.auto_increment:
+                db_col = self.get_db_column(name)
+                # Serialize to the column's storage form (JSON string for JSONField).
+                data[db_col] = field.to_db(value)
+                # #165: a None the caller never assigned is UNSET — omit it so
+                # the DB DEFAULT applies. An explicit None (in _assigned_fields)
+                # is still written as NULL.
+                if value is None and name not in self._assigned_fields:
+                    insert_omit.add(db_col)
+        return data, insert_omit
+
+    def _decide_is_update(self, db, pk_value, pk_field, table_sql: str) -> bool:
+        """INSERT vs UPDATE (issue #50). Auto-increment keeps the legacy
+        behaviour (PK None -> INSERT, PK set -> UPDATE). A natural key checks
+        whether the WHOLE-key row already exists — testing only the first key
+        column once let saving (acme, a2) silently overwrite (acme, a1)."""
+        if pk_value is None:
+            return False
+        if pk_field.auto_increment:
+            return True
+        try:
+            where, where_params = self._pk_where()
+            if where:
+                found = db.fetch_one(
+                    f"SELECT 1 AS present FROM {table_sql} WHERE {where}", where_params
+                )
+                return found is not None
+            return type(self).exists(pk_value)
+        except Exception:
+            # Can't tell (e.g. table doesn't exist yet) — fall back to INSERT so
+            # the user sees the real driver error instead of a silent no-op.
+            return False
+
+    def _write_row(self, db, is_update: bool, data: dict, insert_omit: set,
+                   table: str, table_sql: str, pk: str, pk_field) -> None:
+        """Execute the UPDATE or INSERT inside the caller's transaction bracket."""
+        if is_update:
+            pk_columns = {
+                self.get_db_column(n) for n in self._get_pks() if n in self._fields
+            }
+            update_data = {k: v for k, v in data.items() if k not in pk_columns}
+            where, where_params = self._pk_where()
+            if update_data and where:
+                db.update(table, update_data, where, where_params)
+            return
+        # #165: drop unset-None columns so the DB DEFAULT applies.
+        insert_data = {c: v for c, v in data.items() if c not in insert_omit}
+        if insert_data:
+            db.insert(table, insert_data)
+        elif db.get_database_type() == "mysql":
+            # Every insertable column was left unset — let the DB apply all its
+            # defaults. DEFAULT VALUES is valid on SQLite/PG/MSSQL/Firebird;
+            # MySQL spells it () VALUES ().
+            db.execute(f"INSERT INTO {table_sql} () VALUES ()")
+        else:
+            db.execute(f"INSERT INTO {table_sql} DEFAULT VALUES")
+        # Only adopt the engine-assigned ID for auto-increment PKs. Natural-key
+        # PKs were set by the caller; don't overwrite them with the driver's
+        # last_id (which on PG may be an unrelated sequence value).
+        if pk_field.auto_increment:
+            last_id = db.get_last_id()
+            if last_id and pk in self._fields:
+                setattr(self, pk, last_id)
+
+    def _augment_save_error(self, cause: str, table: str) -> str:
+        """Turn a bare driver error into an actionable fix for the two commonest
+        ORM write footguns (v3.13.60). Matched case-insensitively across engines
+        (SQLite "no such table"/"no such column", PG/MySQL "does not exist"/
+        "doesn't exist", MSSQL "invalid object name", Firebird "table unknown").
+        Any OTHER error keeps its raw cause so a NOT NULL / duplicate-PK failure
+        is never masked."""
+        low = cause.lower()
+        if self.soft_delete and "is_deleted" in low and (
+            "no such column" in low or "has no column" in low
+            or "does not exist" in low or "doesn't exist" in low
+            or "unknown column" in low
+        ):
+            return cause + (
+                " — soft_delete=True requires an is_deleted column; declare "
+                "it (is_deleted = IntegerField(default=0)) or add a migration"
+            )
+        if "no such table" in low or (
+            ("does not exist" in low or "doesn't exist" in low)
+            # exclude a column-not-found (e.g. PG 'column "x" does not exist')
+            # so a genuine missing-column error never gets a spurious table hint
+            and "column" not in low
+        ) or (
+            # MSSQL "Invalid object name 'foo'." / Firebird "Table unknown" —
+            # neither says "does not exist", so the hint needs these too.
+            "invalid object name" in low or "table unknown" in low
+        ):
+            return cause + (
+                f" — table '{table}' does not exist; call "
+                f"{type(self).__name__}.create_table() or run a migration"
+            )
+        return cause
 
     @classmethod
     def _soft_delete_column(cls) -> str:
