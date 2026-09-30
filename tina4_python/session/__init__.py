@@ -226,6 +226,10 @@ class DatabaseSessionHandler(SessionHandler):
         attempt = 1
         while not self._db.table_exists("tina4_session"):
             try:
+                # Race-safe CREATE TABLE; this while is a bounded retry on a
+                # concurrent-create collision, executes once on success
+                # (returns), not a per-row query.
+                # carbonah:ignore E002 — bounded create-table retry, runs once on success
                 self._db.execute(self._create_table_sql())
                 self._db.commit()
                 return

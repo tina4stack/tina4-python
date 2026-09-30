@@ -1026,6 +1026,10 @@ async def _api_query(request, response):
         db.start_transaction()
         try:
             for stmt in statements:
+                # Admin SQL console runs the developer's own multi-statement
+                # batch (split on ';'); each is distinct arbitrary SQL typed by
+                # the user, not a data-driven N+1.
+                # carbonah:ignore E002 — arbitrary user statements, not a data N+1
                 result = db.execute(stmt)  # raises on failure → caught + rolled back below
                 if hasattr(result, "affected_rows"):
                     total_affected += result.affected_rows
@@ -1104,7 +1108,9 @@ async def _api_queue_replay(request, response):
         if not job_id:
             return response({"error": "job_id required"}, 400)
 
-        # Fetch original job data
+        # Fetch original job data — single-row lookup by primary key via
+        # fetch_one (WHERE id = ? returns at most one row); a LIMIT is redundant.
+        # carbonah:ignore E003 — bounded PK lookup, at most one row
         row = db.fetch_one("SELECT * FROM tina4_queue WHERE id = ?", [job_id])
         if not row:
             db.close()

@@ -1360,6 +1360,9 @@ class ORM(ORMAsyncMixin, metaclass=ORMMeta):
                 if not getattr(field_obj, "spatial_index", True):
                     continue
                 col_name = cls.get_db_column(name)
+                # One spatial-index DDL per PointField at CREATE TABLE; DDL over
+                # the model's own columns, not a data N+1.
+                # carbonah:ignore E002 — per-column index DDL at create, not a data N+1
                 db.execute(SQLTranslator.spatial_index(engine_name, table, col_name))
             db.commit()
         except Exception as e:

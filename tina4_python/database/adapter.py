@@ -767,6 +767,10 @@ class DatabaseAdapter:
         try:
             if batched:
                 for chunk_sql, chunk_params in batched:
+                    # The ANTI-N+1: build_batch_inserts turns N single-row
+                    # INSERTs into ~1 multi-row statement, so this is one
+                    # round-trip per chunk, not one per row.
+                    # carbonah:ignore E002 — batched chunk, not a per-row query
                     result = self.execute(chunk_sql, chunk_params)
                     # The collapse must be invisible: affected_rows is the total
                     # ROW count, never the number of statements run.
@@ -780,6 +784,10 @@ class DatabaseAdapter:
                         last_id = result.last_id
             else:
                 for params in rows:
+                    # Intentional row-at-a-time fallback for statements
+                    # build_batch_inserts cannot collapse safely (RETURNING /
+                    # upsert / Firebird / ragged rows).
+                    # carbonah:ignore E002 — deliberate fallback, no safe collapse
                     result = self.execute(sql, params)
                     total_affected += result.affected_rows
                     if result.last_id is not None:

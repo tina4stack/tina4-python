@@ -272,6 +272,11 @@ def _upgrade_v2_to_v3(db, migration_folder: str | None) -> None:
         migration_name = _resolve_migration_name(desc, stems)
 
         try:
+            # One-time v2→v3 backfill. The per-row UPDATE+commit is deliberate:
+            # it isolates failures (a failed row would abort the whole PostgreSQL
+            # transaction) and keeps the log-and-continue contract. Cold path,
+            # runs once per upgrade.
+            # carbonah:ignore E002 — one-time cold-path backfill, per-row commit is deliberate
             db.execute(
                 "UPDATE tina4_migration SET migration_name = ?, batch = 1 "
                 "WHERE description = ? AND migration_name IS NULL",
@@ -826,6 +831,10 @@ def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
                     if skip_reason:
                         logger.info(f"Migration {mig_file.name}: {skip_reason}")
                         continue
+                    # Sequential DDL statements from one migration file; each is
+                    # distinct and must run in order, not a data N+1 a JOIN could
+                    # collapse.
+                    # carbonah:ignore E002 — ordered DDL statements, not a data N+1
                     if db.execute(stmt) is False:
                         raise RuntimeError(f"Migration failed: {db.get_error() or stmt[:80]}")
 
@@ -895,6 +904,9 @@ def _rollback(db, migration_folder: str = "migrations", delimiter: str = ";") ->
                 sql = down_file.read_text(encoding="utf-8")
                 statements = _split_statements(sql, delimiter)
                 for stmt in statements:
+                    # Sequential rollback DDL from one .down.sql file; ordered,
+                    # distinct, not a data N+1.
+                    # carbonah:ignore E002 — ordered rollback DDL, not a data N+1
                     if db.execute(stmt) is False:
                         raise RuntimeError(f"Rollback failed: {db.get_error() or stmt[:80]}")
                 rolled_back_name = f"{mid}.down.sql"
@@ -903,6 +915,10 @@ def _rollback(db, migration_folder: str = "migrations", delimiter: str = ";") ->
                     f"Cannot rollback {mid}: no .py or .down.sql file found"
                 )
 
+            # One DELETE per rolled-back migration, each inside its own
+            # per-migration transaction (down + delete atomic together);
+            # collapsing to one statement would break that atomicity.
+            # carbonah:ignore E002 — per-migration DELETE inside its own txn
             db.execute(
                 "DELETE FROM tina4_migration WHERE migration_name = ?",
                 [mid],
