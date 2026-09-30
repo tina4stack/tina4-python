@@ -365,6 +365,104 @@ def _split_dotted(expr: str) -> list[str]:
     return parts
 
 
+# Sentinel: ``expr`` was not a literal, so it must be resolved as a path.
+_NOT_A_LITERAL = object()
+
+
+def _resolve_literal(expr: str):
+    """Return the literal value of ``expr`` (string/number/bool/null), or
+    :data:`_NOT_A_LITERAL` when it is a path to resolve, not a literal."""
+    if (expr.startswith('"') and expr.endswith('"')) or \
+       (expr.startswith("'") and expr.endswith("'")):
+        return expr[1:-1]
+    try:
+        return float(expr) if "." in expr else int(expr)
+    except ValueError:
+        pass
+    if expr == "true":
+        return True
+    if expr == "false":
+        return False
+    if expr in ("null", "none", "None"):
+        return None
+    return _NOT_A_LITERAL
+
+
+def _slice_bound(text: str, context: dict):
+    """One end of a slice: an evaluated int, or None for an empty/absent bound."""
+    text = text.strip()
+    if not text:
+        return None
+    bound = _eval_expr(text, context)
+    return int(bound) if bound is not None else None
+
+
+def _resolve_index(value, raw_idx: str, context: dict):
+    """Resolve a bracket access ``value[raw_idx]`` — slice, string/int/expr key.
+    Returns None (which stops resolution) on any miss."""
+    raw_idx = raw_idx.strip()
+    is_quoted = (raw_idx.startswith('"') and raw_idx.endswith('"')) or \
+                (raw_idx.startswith("'") and raw_idx.endswith("'"))
+    # Slice syntax: value[1:5], value[:10], value[3:]
+    if ":" in raw_idx and not is_quoted:
+        left, _, right = raw_idx.strip("'\"").partition(":")
+        try:
+            return value[_slice_bound(left, context):_slice_bound(right, context)]
+        except (TypeError, IndexError):
+            return None
+    # Key: string literal, integer literal, or an expression.
+    if is_quoted:
+        idx = raw_idx[1:-1]
+    else:
+        try:
+            idx = int(raw_idx)
+        except ValueError:
+            idx = _eval_expr(raw_idx, context)
+            if idx is None:
+                return None
+    try:
+        return value[idx]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _resolve_call(value, call_match, context: dict):
+    """Resolve a method call ``name(args)`` against ``value``. None on any miss."""
+    method_name = call_match.group(1)
+    raw_args = call_match.group(2) or ""
+    if isinstance(value, dict):
+        fn = value.get(method_name)
+    elif hasattr(value, method_name):
+        fn = getattr(value, method_name)
+    else:
+        return None
+    if not callable(fn):
+        return None
+    args = ([_eval_expr(a.strip(), context) for a in _split_args(raw_args)]
+            if raw_args.strip() else [])
+    return fn(*args)
+
+
+def _resolve_member(value, part: str, context: dict):
+    """Resolve a dotted member: method call, dict key, list index, or attribute.
+    Returns None (which stops resolution) on any miss."""
+    call_match = _METHOD_CALL_RE.match(part)
+    if call_match:
+        return _resolve_call(value, call_match, context)
+    if isinstance(value, dict):
+        return value.get(part)
+    if isinstance(value, (list, tuple)) and part.isdigit():
+        # Numeric dot-index into a list/tuple: items.0.name
+        try:
+            return value[int(part)]
+        except IndexError:
+            return None
+    if hasattr(value, part):
+        attr = getattr(value, part)
+        return attr() if callable(attr) else attr
+    return None
+
+
 def _resolve(expr: str, context: dict):
     """Resolve a dotted expression against the context.
 
@@ -372,102 +470,17 @@ def _resolve(expr: str, context: dict):
     """
     expr = expr.strip()
 
-    # String literal
-    if (expr.startswith('"') and expr.endswith('"')) or \
-       (expr.startswith("'") and expr.endswith("'")):
-        return expr[1:-1]
+    literal = _resolve_literal(expr)
+    if literal is not _NOT_A_LITERAL:
+        return literal
 
-    # Numeric literal
-    try:
-        if "." in expr:
-            return float(expr)
-        return int(expr)
-    except ValueError:
-        pass
-
-    # Boolean/null literals
-    if expr == "true":
-        return True
-    if expr == "false":
-        return False
-    if expr in ("null", "none", "None"):
-        return None
-
-    # Dotted path with bracket access — split respecting quotes and parens
-    parts = _split_dotted(expr)
-
+    # Dotted path with bracket access — split respecting quotes and parens.
     value = context
-    for part in parts:
+    for part in _split_dotted(expr):
         if part.startswith("[") and part.endswith("]"):
-            raw_idx = part[1:-1].strip()
-            # Slice syntax: value[1:5], value[:10], value[3:]
-            if ":" in raw_idx and not ((raw_idx.startswith('"') and raw_idx.endswith('"')) or (raw_idx.startswith("'") and raw_idx.endswith("'"))):
-                idx_clean = raw_idx.strip("'\"")
-                slice_parts = idx_clean.split(":", 1)
-                s_start = _eval_expr(slice_parts[0].strip(), context) if slice_parts[0].strip() else None
-                s_end = _eval_expr(slice_parts[1].strip(), context) if slice_parts[1].strip() else None
-                # Convert to int for slicing
-                if s_start is not None: s_start = int(s_start)
-                if s_end is not None: s_end = int(s_end)
-                try:
-                    value = value[s_start:s_end]
-                except (TypeError, IndexError):
-                    return None
-            else:
-                # Resolve the key: string literal, int literal, or variable
-                if (raw_idx.startswith('"') and raw_idx.endswith('"')) or \
-                   (raw_idx.startswith("'") and raw_idx.endswith("'")):
-                    # String literal: balances["9600.000"]
-                    idx = raw_idx[1:-1]
-                else:
-                    try:
-                        # Integer literal: items[0]
-                        idx = int(raw_idx)
-                    except ValueError:
-                        # Expression key: loop.index0 % 2, variable, etc.
-                        idx = _eval_expr(raw_idx, context)
-                        if idx is None:
-                            return None
-                try:
-                    value = value[idx]
-                except (KeyError, IndexError, TypeError):
-                    return None
+            value = _resolve_index(value, part[1:-1], context)
         else:
-            # Check if this part is a method call: name(args)
-            call_match = _METHOD_CALL_RE.match(part)
-            if call_match:
-                method_name = call_match.group(1)
-                raw_args = call_match.group(2) or ""
-                # Resolve the callable from the current value
-                if isinstance(value, dict):
-                    fn = value.get(method_name)
-                elif hasattr(value, method_name):
-                    fn = getattr(value, method_name)
-                else:
-                    return None
-                if callable(fn):
-                    if raw_args.strip():
-                        args = [_eval_expr(a.strip(), context) for a in _split_args(raw_args)]
-                    else:
-                        args = []
-                    value = fn(*args)
-                else:
-                    return None
-            elif isinstance(value, dict):
-                value = value.get(part)
-            elif isinstance(value, (list, tuple)) and part.isdigit():
-                # Numeric dot-index into a list/tuple: items.0.name
-                idx = int(part)
-                try:
-                    value = value[idx]
-                except IndexError:
-                    return None
-            elif hasattr(value, part):
-                attr = getattr(value, part)
-                value = attr() if callable(attr) else attr
-            else:
-                return None
-
+            value = _resolve_member(value, part, context)
         if value is None:
             return None
 
