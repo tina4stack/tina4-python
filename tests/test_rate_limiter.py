@@ -147,3 +147,69 @@ class TestRateLimiterCleanup:
         now = time.monotonic()
         rl._cleanup(now)
         assert "10.0.0.1" in rl._requests
+
+
+class TestRateLimiterEnforcement:
+    """Lock the enforcement entry points, not just check()/apply_headers().
+
+    RateLimiter.apply() holds the enforcement path, and the two before_rate_limit
+    staticmethods (the class-based middleware entry points) delegate to it. These
+    entry points had no coverage before, so a refactor could quietly stop
+    returning the 429 with nothing going red. Real Response object, plain request
+    holder — no doubles.
+    """
+
+    def _request(self, ip="10.0.0.1"):
+        import types
+        return types.SimpleNamespace(ip=ip)
+
+    def test_apply_allows_under_limit(self, monkeypatch):
+        monkeypatch.setenv("TINA4_RATE_LIMIT", "3")
+        monkeypatch.setenv("TINA4_RATE_WINDOW", "60")
+        rl = RateLimiter()
+        resp = Response()
+        _, out = rl.apply(self._request(), resp)
+        assert out.status_code == 200
+        assert dict(resp._headers).get("x-ratelimit-limit") == "3"
+
+    def test_apply_refuses_over_limit_with_429_and_retry_after(self, monkeypatch):
+        monkeypatch.setenv("TINA4_RATE_LIMIT", "3")
+        monkeypatch.setenv("TINA4_RATE_WINDOW", "60")
+        rl = RateLimiter()
+        req = self._request()
+        statuses = []
+        for _ in range(4):
+            resp = Response()
+            _, out = rl.apply(req, resp)
+            statuses.append(out.status_code)
+        assert statuses == [200, 200, 200, 429]
+        # the refused response carries retry-after and the rate-limit headers
+        assert dict(resp._headers).get("retry-after") is not None
+        assert dict(resp._headers).get("x-ratelimit-remaining") == "0"
+
+    def test_shared_before_rate_limit_refuses_over_limit(self, monkeypatch):
+        monkeypatch.setenv("TINA4_RATE_LIMIT", "2")
+        monkeypatch.setenv("TINA4_RATE_WINDOW", "60")
+        RateLimiter._shared_instance = None
+        req = self._request("10.0.0.2")
+        statuses = []
+        for _ in range(3):
+            resp = Response()
+            _, out = RateLimiter.before_rate_limit(req, resp)
+            statuses.append(out.status_code)
+        RateLimiter._shared_instance = None
+        assert statuses == [200, 200, 429]
+
+    def test_middleware_before_rate_limit_refuses_over_limit(self, monkeypatch):
+        from tina4_python.core.middleware import RateLimiterMiddleware
+        monkeypatch.setenv("TINA4_RATE_LIMIT", "2")
+        monkeypatch.setenv("TINA4_RATE_WINDOW", "60")
+        RateLimiterMiddleware._limiter = None
+        req = self._request("10.0.0.3")
+        statuses = []
+        for _ in range(3):
+            resp = Response()
+            _, out = RateLimiterMiddleware.before_rate_limit(req, resp)
+            statuses.append(out.status_code)
+        RateLimiterMiddleware._limiter = None
+        assert statuses == [200, 200, 429]

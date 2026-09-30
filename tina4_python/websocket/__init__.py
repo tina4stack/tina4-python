@@ -186,7 +186,42 @@ async def _read_frame(reader: asyncio.StreamReader, max_size: int = 1048576) -> 
     return bool(fin), opcode, payload
 
 
-class WebSocketConnection:
+class RoomMemberMixin:
+    """Room membership for a WebSocket connection — shared across transports.
+
+    Joining, leaving and room broadcasts only ever touch this connection's own
+    ``_rooms`` set and delegate to ``_manager``; none of it depends on how the
+    bytes reach the socket. The raw-socket connection and the ASGI connection
+    therefore share this one copy. A host must expose ``self.id``,
+    ``self._rooms`` (a set) and ``self._manager``.
+    """
+
+    @property
+    def rooms(self) -> set[str]:
+        """Return the set of room names this connection has joined."""
+        return self._rooms
+
+    def join_room(self, room_name: str) -> None:
+        """Join a named room."""
+        self._rooms.add(room_name)
+        if self._manager:
+            self._manager._join_room(self.id, room_name)
+
+    def leave_room(self, room_name: str) -> None:
+        """Leave a named room."""
+        self._rooms.discard(room_name)
+        if self._manager:
+            self._manager._leave_room(self.id, room_name)
+
+    async def broadcast_to_room(self, room_name: str, message: str | bytes,
+                                 exclude_self: bool = False) -> None:
+        """Broadcast a message to all connections in a room."""
+        if self._manager:
+            exclude = self.id if exclude_self else None
+            await self._manager.broadcast_to_room(room_name, message, exclude=exclude)
+
+
+class WebSocketConnection(RoomMemberMixin):
     """Represents a single WebSocket connection."""
 
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
@@ -266,31 +301,8 @@ class WebSocketConnection:
         if self._manager:
             await self._manager.broadcast(message, path=path)
 
-    # ── Rooms ──────────────────────────────────────────────────
-
-    @property
-    def rooms(self) -> set[str]:
-        """Return the set of room names this connection has joined."""
-        return self._rooms
-
-    def join_room(self, room_name: str) -> None:
-        """Join a named room."""
-        self._rooms.add(room_name)
-        if self._manager:
-            self._manager._join_room(self.id, room_name)
-
-    def leave_room(self, room_name: str) -> None:
-        """Leave a named room."""
-        self._rooms.discard(room_name)
-        if self._manager:
-            self._manager._leave_room(self.id, room_name)
-
-    async def broadcast_to_room(self, room_name: str, message: str | bytes,
-                                 exclude_self: bool = False) -> None:
-        """Broadcast a message to all connections in a room."""
-        if self._manager:
-            exclude = self.id if exclude_self else None
-            await self._manager.broadcast_to_room(room_name, message, exclude=exclude)
+    # ── Rooms ── join_room / leave_room / broadcast_to_room / rooms come from
+    # RoomMemberMixin — transport-agnostic, shared with the ASGI connection.
 
     async def ping(self, data: bytes = b""):
         """Send a ping frame."""
@@ -968,7 +980,7 @@ class WebSocketServer:
 
 
 __all__ = [
-    "WebSocketServer", "WebSocketConnection", "WebSocketManager",
+    "WebSocketServer", "WebSocketConnection", "WebSocketManager", "RoomMemberMixin",
     "compute_accept_key", "build_frame", "origin_allowed",
     "OP_TEXT", "OP_BINARY", "OP_CLOSE", "OP_PING", "OP_PONG",
     "CLOSE_NORMAL", "CLOSE_GOING_AWAY", "CLOSE_PROTOCOL_ERROR", "CLOSE_TOO_LARGE",

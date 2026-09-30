@@ -166,12 +166,7 @@ class MySQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # a syntax error MEASURED on a live PostgreSQL. It worked on sqlite and
         # crashed on the server, which is the swap ADR-0024 exists to protect.
         paginated = not (limit is None or limit <= 0 or self._has_trailing_limit(sql))
-        if not paginated:
-            paginated_sql = sql
-            paginated_params = params or []
-        else:
-            paginated_sql = f"{sql}\nLIMIT %s OFFSET %s"
-            paginated_params = (params or []) + [limit, offset]
+        paginated_sql, paginated_params = self._paginate_sql(sql, params, limit, offset, paginated)
         cursor.execute(paginated_sql, paginated_params)  # FAILS LOUD
         rows = [dict(row) for row in cursor.fetchall()]
 

@@ -235,15 +235,7 @@ class SQLiteAdapter(SqlCrudMixin, DatabaseAdapter):
         # never paginated and never COUNT-probed (a probe repeats the write).
         is_write = self._is_write_statement(sql)
         paginated = not (is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql))
-        if not paginated:
-            paginated_sql = sql
-            paginated_params = params or []
-        else:
-            # The clause goes on a NEW LINE. Appended inline it lands INSIDE a
-            # trailing `-- comment` and is swallowed, which is the same bug at
-            # the append site rather than the detector.
-            paginated_sql = f"{sql}\nLIMIT ? OFFSET ?"
-            paginated_params = (params or []) + [limit, offset]
+        paginated_sql, paginated_params = self._paginate_sql(sql, params, limit, offset, paginated)
         # Hydrate via a tuple cursor + a column list computed ONCE, rather than
         # dict(sqlite3.Row) per row. The connection's row_factory is sqlite3.Row,
         # which builds a Row object per row that dict() then copies -- two

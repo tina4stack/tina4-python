@@ -440,12 +440,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # a syntax error MEASURED on a live PostgreSQL. It worked on sqlite and
         # crashed on the server, which is the swap ADR-0024 exists to protect.
         paginated = not (is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql))
-        if not paginated:
-            paginated_sql = sql
-            paginated_params = params or []
-        else:
-            paginated_sql = f"{sql}\nLIMIT %s OFFSET %s"
-            paginated_params = (params or []) + [limit, offset]
+        paginated_sql, paginated_params = self._paginate_sql(sql, params, limit, offset, paginated)
         self._exec_with_handling(cursor, paginated_sql, paginated_params)
         columns = [d[0] for d in cursor.description] if cursor.description else []
         indexes = range(len(columns))
