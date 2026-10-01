@@ -51,15 +51,38 @@ from tina4_python.core.router import Router, get as route_get
 
 # The canonical set every framework emits, byte-identical (names are compared
 # case-insensitively — HTTP header names are case-insensitive).
+# content-security-policy is asserted separately: its value carries a
+# per-response random nonce (ADR-0088), so it is never byte-equal across requests.
 CANONICAL = {
     "x-frame-options": "SAMEORIGIN",
     "x-content-type-options": "nosniff",
-    "content-security-policy": "default-src 'self'",
     "referrer-policy": "strict-origin-when-cross-origin",
     "x-xss-protection": "0",
     "permissions-policy": "camera=(), microphone=(), geolocation=()",
 }
 HSTS = "31536000"
+
+
+def _assert_default_csp(value):
+    """The default CSP: default-src 'self' plus a nonce in style-src + script-src.
+
+    ADR-0088: the framework always names a per-response nonce in style-src AND
+    script-src so its own inline <style>/<script> run under the strict default
+    without 'unsafe-inline'. The nonce is random per request, so assert the
+    STRUCTURE, never a byte-equal string.
+    """
+    assert value is not None, "no Content-Security-Policy header"
+    assert "default-src 'self'" in value, value
+    directives = {
+        d.strip().split()[0]: d.strip()
+        for d in value.split(";") if d.strip()
+    }
+    for directive in ("style-src", "script-src"):
+        assert directive in directives, f"{directive} missing from CSP: {value}"
+        assert "'nonce-" in directives[directive], (
+            f"{directive} carries no nonce: {value}"
+        )
+    assert "'unsafe-inline'" not in value, f"CSP must never use unsafe-inline: {value}"
 
 
 @pytest.fixture(autouse=True)
@@ -112,6 +135,7 @@ def test_a_default_app_response_carries_the_canonical_security_header_set():
             f"default app must emit {name}: {value} — this is the SECHDR-OFF-BY-DEFAULT "
             f"regression: if the middleware is unregistered this goes red"
         )
+    _assert_default_csp(_header(response, "content-security-policy"))
     # This middleware IS in the default chain — the registration is real, not a
     # per-test hand-wire a real app would not do.
     assert SecurityHeadersMiddleware in Middleware.get_global()
@@ -121,8 +145,19 @@ def test_a_default_app_response_carries_the_canonical_security_header_set():
 
 
 def test_csp_defaults_to_default_src_self():
-    """CSP defaults to default-src 'self' (relaxable via TINA4_CSP)."""
-    assert _header(_request(), "content-security-policy") == "default-src 'self'"
+    """CSP defaults to default-src 'self' + a nonce in style-src/script-src
+    (ADR-0088; relaxable via TINA4_CSP)."""
+    _assert_default_csp(_header(_request(), "content-security-policy"))
+
+
+def test_each_response_gets_a_fresh_csp_nonce():
+    """The nonce is per-response: two requests never share one (ADR-0088)."""
+    import re
+    first = _header(_request(), "content-security-policy")
+    second = _header(_request(), "content-security-policy")
+    n1 = re.search(r"'nonce-([^']+)'", first).group(1)
+    n2 = re.search(r"'nonce-([^']+)'", second).group(1)
+    assert n1 != n2, f"nonce was reused across responses: {n1}"
 
 
 # ------------------------------------------------------------ HSTS HTTPS-guarded

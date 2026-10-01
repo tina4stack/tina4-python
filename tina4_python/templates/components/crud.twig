@@ -7,7 +7,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #}
 
 <div id="crudTarget{{ table_name }}">
-    <script>
+    <script nonce="{{ csp_nonce() }}">
         formToken = `{{ formToken({"token": RANDOM()}) }}`;
     </script>
     <div class="container-fluid">
@@ -196,7 +196,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
             </div>
         </div>
     </div>
-    <script>
+    <script nonce="{{ csp_nonce() }}">
         function loadRecord{{ table_name }}(record, index) {
             const modalBody = document.getElementById('modalBody{{ table_name }}');
             const saveButton = document.getElementById('saveButton{{ table_name }}');

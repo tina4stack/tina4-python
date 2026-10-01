@@ -558,11 +558,14 @@ def _csp_default_warn_once() -> None:
     _CSP_DEFAULT_WARNED.append(True)
     message = (
         "TINA4_CSP is not set, so Tina4 is serving the default Content-Security-Policy "
-        "\"default-src 'self'\" on every response. That default blocks runtime-injected "
-        "inline styles, cross-origin fonts/scripts/CDNs, data: URIs, and cross-origin "
-        "WebSocket/XHR (e.g. a separate API or LiveKit host). If your app uses any of "
-        "these, set TINA4_CSP to a policy that allows them (see https://tina4.com); to "
-        "silence this notice without changing behaviour, set TINA4_CSP=\"default-src 'self'\"."
+        "\"default-src 'self'\" on every response. The framework injects a per-response "
+        "nonce into style-src and script-src, so its own inline <style>/<script> (and "
+        "your templates using the csp_nonce() Frond global) work under this policy. The "
+        "default still blocks cross-origin fonts/scripts/CDNs, data: URIs, and "
+        "cross-origin WebSocket/XHR (e.g. a separate API or LiveKit host). If your app "
+        "uses any of these, set TINA4_CSP to a policy that allows them (see "
+        "https://tina4.com); to silence this notice without changing behaviour, set "
+        "TINA4_CSP=\"default-src 'self'\"."
     )
     try:
         from tina4_python.debug import Log
@@ -622,9 +625,15 @@ class SecurityHeadersMiddleware:
 
         if os.environ.get("TINA4_CSP") is None:
             _csp_default_warn_once()
+        # Always name a per-response nonce in style-src AND script-src so the
+        # framework's own inline <style>/<script> (and user templates using the
+        # Frond csp_nonce() global) run under the strict policy without ever
+        # adding 'unsafe-inline'. The value comes from the request contextvar so
+        # it matches the nonce the HTML body stamps on its inline elements.
+        from tina4_python.core.csp import current_csp_nonce, resolve_csp_header
         response.header(
             "Content-Security-Policy",
-            os.environ.get("TINA4_CSP", "default-src 'self'"),
+            resolve_csp_header(current_csp_nonce()),
         )
         response.header(
             "Referrer-Policy",

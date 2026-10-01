@@ -143,7 +143,7 @@ class Response:
     __slots__ = (
         "status_code", "content", "content_type",
         "_headers", "_cookies", "_is_streaming", "_stream_source",
-        "_content_type_from_header",
+        "_content_type_from_header", "csp_nonce",
     )
 
     def __init__(self):
@@ -157,6 +157,12 @@ class Response:
         # True once the route set Content-Type with header(); response(data)
         # then keeps it instead of detecting one (ADR-0072, #144).
         self._content_type_from_header: bool = False
+        # Per-response CSP nonce. server.handle() mints one per request and also
+        # publishes it on the request contextvar (tina4_python.core.csp) so the
+        # framework's inline <style>/<script> and the Frond csp_nonce() global
+        # all stamp the SAME value the security middleware names in the header.
+        from tina4_python.core.csp import generate_nonce
+        self.csp_nonce: str = generate_nonce()
 
     def __call__(self, data=None, status_code: int = 200, content_type: str = None,
                  headers: dict | None = None) -> "Response":

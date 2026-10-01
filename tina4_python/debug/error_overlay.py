@@ -106,21 +106,16 @@ def _format_source_block(filename: str, lineno: int) -> str:
         return ""
     rows: list[str] = []
     for num, text, is_error in lines:
-        bg = f"background:{_ERROR_LINE_BG};" if is_error else ""
+        row_class = "eo-line eo-line-err" if is_error else "eo-line"
         marker = "&#x25b6;" if is_error else " "
         rows.append(
-            f'<div style="{bg}display:flex;padding:1px 0;">'
-            f'<span style="color:{_YELLOW};min-width:3.5em;text-align:right;padding-right:1em;user-select:none;">{num}</span>'
-            f'<span style="color:{_RED};width:1.2em;user-select:none;">{marker}</span>'
-            f'<span style="color:{_TEXT};white-space:pre-wrap;tab-size:4;">{_escape(text)}</span>'
+            f'<div class="{row_class}">'
+            f'<span class="eo-ln">{num}</span>'
+            f'<span class="eo-marker">{marker}</span>'
+            f'<span class="eo-code">{_escape(text)}</span>'
             f"</div>"
         )
-    return (
-        f'<div style="background:{_SURFACE};border-radius:6px;padding:12px;overflow-x:auto;'
-        f'font-family:\'SF Mono\',\'Fira Code\',\'Consolas\',monospace;font-size:13px;line-height:1.6;">'
-        + "\n".join(rows)
-        + "</div>"
-    )
+    return f'<div class="eo-source">' + "\n".join(rows) + "</div>"
 
 
 def _format_frame(frame: traceback.FrameSummary, captured_at: float = 0.0) -> str:
@@ -142,20 +137,19 @@ def _format_frame(frame: traceback.FrameSummary, captured_at: float = 0.0) -> st
                 from datetime import datetime, timezone
                 mtime_iso = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime("%H:%M:%S")
                 stale_badge = (
-                    f' <span style="background:{_PEACH};color:{_BG};padding:1px 8px;'
-                    f'border-radius:3px;font-size:11px;font-weight:700;margin-left:6px;">'
+                    f' <span class="eo-stale">'
                     f'FILE MODIFIED @ {mtime_iso} — source may not match what failed</span>'
                 )
         except OSError:
             pass
     return (
-        f'<div style="margin-bottom:16px;">'
-        f'<div style="margin-bottom:4px;">'
-        f'<span style="color:{_BLUE};">{_escape(frame.filename)}</span>'
-        f'<span style="color:{_SUBTEXT};"> : </span>'
-        f'<span style="color:{_YELLOW};">{frame.lineno}</span>'
-        f'<span style="color:{_SUBTEXT};"> in </span>'
-        f'<span style="color:{_GREEN};">{_escape(frame.name)}</span>'
+        f'<div class="eo-frame">'
+        f'<div class="eo-frame-head">'
+        f'<span class="eo-file">{_escape(frame.filename)}</span>'
+        f'<span class="eo-sep"> : </span>'
+        f'<span class="eo-lineno">{frame.lineno}</span>'
+        f'<span class="eo-sep"> in </span>'
+        f'<span class="eo-fn">{_escape(frame.name)}</span>'
         f"{stale_badge}"
         f"</div>"
         f"{source}"
@@ -166,26 +160,25 @@ def _format_frame(frame: traceback.FrameSummary, captured_at: float = 0.0) -> st
 def _collapsible(title: str, content: str, open_by_default: bool = False) -> str:
     open_attr = " open" if open_by_default else ""
     return (
-        f'<details style="margin-top:16px;"{open_attr}>'
-        f'<summary style="cursor:pointer;color:{_LAVENDER};font-weight:600;font-size:15px;'
-        f'padding:8px 0;user-select:none;">{_escape(title)}</summary>'
-        f'<div style="padding:8px 0;">{content}</div>'
+        f'<details class="eo-details"{open_attr}>'
+        f'<summary class="eo-summary">{_escape(title)}</summary>'
+        f'<div class="eo-details-body">{content}</div>'
         f"</details>"
     )
 
 
 def _table(pairs: list[tuple[str, str]]) -> str:
     if not pairs:
-        return '<span style="color:{_SUBTEXT};">None</span>'
+        return '<span class="eo-none">None</span>'
     rows = ""
     for key, val in pairs:
         rows += (
             f"<tr>"
-            f'<td style="color:{_PEACH};padding:4px 16px 4px 0;vertical-align:top;white-space:nowrap;">{_escape(key)}</td>'
-            f'<td style="color:{_TEXT};padding:4px 0;word-break:break-all;">{_escape(val)}</td>'
+            f'<td class="eo-key">{_escape(key)}</td>'
+            f'<td class="eo-val">{_escape(val)}</td>'
             f"</tr>"
         )
-    return f'<table style="border-collapse:collapse;width:100%;">{rows}</table>'
+    return f'<table class="eo-table">{rows}</table>'
 
 
 def render_error_overlay(exception: BaseException, request: Any = None) -> str:
@@ -222,7 +215,7 @@ def render_error_overlay(exception: BaseException, request: Any = None) -> str:
     hidden = len(ordered) - _MAX_FRAMES
     if hidden > 0:
         frames_html += (
-            f'<div style="color:{_SUBTEXT};padding:8px 0;font-size:13px;">'
+            f'<div class="eo-hidden-frames">'
             f'&#8230; {hidden} more stack frames hidden (truncated at {_MAX_FRAMES})'
             f"</div>"
         )
@@ -263,37 +256,81 @@ def render_error_overlay(exception: BaseException, request: Any = None) -> str:
     ]
     env_section = _collapsible("Environment", _table(env_pairs))
 
+    from tina4_python.core.csp import current_csp_nonce
+    nonce = current_csp_nonce()
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Tina4 Error — {_escape(exc_type)}</title>
-<style>
-*{{margin:0;padding:0;box-sizing:border-box;}}
-body{{background:{_BG};color:{_TEXT};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:24px;line-height:1.5;}}
+<style nonce="{nonce}">
+{_overlay_stylesheet()}
 </style>
 </head>
 <body>
-<div style="max-width:960px;margin:0 auto;">
-  <div style="margin-bottom:24px;">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
-      <span style="background:{_RED};color:{_BG};padding:4px 12px;border-radius:4px;font-weight:700;font-size:13px;text-transform:uppercase;">Error</span>
-      <span style="color:{_SUBTEXT};font-size:14px;">Tina4 Debug Overlay</span>
-      <span style="color:{_SUBTEXT};font-size:12px;margin-left:auto;font-family:'SF Mono',Menlo,monospace;">captured {captured_iso}</span>
+<div class="eo-wrap">
+  <div class="eo-header">
+    <div class="eo-badge-row">
+      <span class="eo-badge">Error</span>
+      <span class="eo-sub">Tina4 Debug Overlay</span>
+      <span class="eo-captured">captured {captured_iso}</span>
     </div>
-    <h1 style="color:{_RED};font-size:28px;font-weight:700;margin-bottom:8px;">{_escape(exc_type)}</h1>
-    <p style="color:{_TEXT};font-size:18px;font-family:'SF Mono','Fira Code','Consolas',monospace;background:{_SURFACE};padding:12px 16px;border-radius:6px;border-left:4px solid {_RED};">{_escape(exc_msg)}</p>
+    <h1 class="eo-type">{_escape(exc_type)}</h1>
+    <p class="eo-msg">{_escape(exc_msg)}</p>
   </div>
   {_collapsible("Stack Trace", frames_html, open_by_default=True)}
   {request_section}
   {env_section}
-  <div style="margin-top:32px;padding-top:16px;border-top:1px solid {_OVERLAY};color:{_SUBTEXT};font-size:12px;">
+  <div class="eo-footer">
     Tina4 Debug Overlay &mdash; This page is only shown in debug mode. Set TINA4_DEBUG=false in production.
   </div>
 </div>
 </body>
 </html>"""
+
+
+def _overlay_stylesheet() -> str:
+    """The overlay's full stylesheet, served inside one nonce'd <style> block.
+
+    Keeping the rules here (not on the elements) is what makes the overlay
+    CSP-clean: no framework page emits a ``style="..."`` attribute, because a
+    nonce covers a <style> ELEMENT but never a style attribute.
+    """
+    return f"""
+*{{margin:0;padding:0;box-sizing:border-box;}}
+body{{background:{_BG};color:{_TEXT};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;padding:24px;line-height:1.5;}}
+.eo-wrap{{max-width:960px;margin:0 auto;}}
+.eo-header{{margin-bottom:24px;}}
+.eo-badge-row{{display:flex;align-items:center;gap:12px;margin-bottom:12px;}}
+.eo-badge{{background:{_RED};color:{_BG};padding:4px 12px;border-radius:4px;font-weight:700;font-size:13px;text-transform:uppercase;}}
+.eo-sub{{color:{_SUBTEXT};font-size:14px;}}
+.eo-captured{{color:{_SUBTEXT};font-size:12px;margin-left:auto;font-family:'SF Mono',Menlo,monospace;}}
+.eo-type{{color:{_RED};font-size:28px;font-weight:700;margin-bottom:8px;}}
+.eo-msg{{color:{_TEXT};font-size:18px;font-family:'SF Mono','Fira Code','Consolas',monospace;background:{_SURFACE};padding:12px 16px;border-radius:6px;border-left:4px solid {_RED};}}
+.eo-footer{{margin-top:32px;padding-top:16px;border-top:1px solid {_OVERLAY};color:{_SUBTEXT};font-size:12px;}}
+.eo-source{{background:{_SURFACE};border-radius:6px;padding:12px;overflow-x:auto;font-family:'SF Mono','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6;}}
+.eo-line{{display:flex;padding:1px 0;}}
+.eo-line-err{{background:{_ERROR_LINE_BG};}}
+.eo-ln{{color:{_YELLOW};min-width:3.5em;text-align:right;padding-right:1em;user-select:none;}}
+.eo-marker{{color:{_RED};width:1.2em;user-select:none;}}
+.eo-code{{color:{_TEXT};white-space:pre-wrap;tab-size:4;}}
+.eo-frame{{margin-bottom:16px;}}
+.eo-frame-head{{margin-bottom:4px;}}
+.eo-file{{color:{_BLUE};}}
+.eo-sep{{color:{_SUBTEXT};}}
+.eo-lineno{{color:{_YELLOW};}}
+.eo-fn{{color:{_GREEN};}}
+.eo-stale{{background:{_PEACH};color:{_BG};padding:1px 8px;border-radius:3px;font-size:11px;font-weight:700;margin-left:6px;}}
+.eo-details{{margin-top:16px;}}
+.eo-summary{{cursor:pointer;color:{_LAVENDER};font-weight:600;font-size:15px;padding:8px 0;user-select:none;}}
+.eo-details-body{{padding:8px 0;}}
+.eo-table{{border-collapse:collapse;width:100%;}}
+.eo-key{{color:{_PEACH};padding:4px 16px 4px 0;vertical-align:top;white-space:nowrap;}}
+.eo-val{{color:{_TEXT};padding:4px 0;word-break:break-all;}}
+.eo-none{{color:{_SUBTEXT};}}
+.eo-hidden-frames{{color:{_SUBTEXT};padding:8px 0;font-size:13px;}}
+"""
 
 
 def is_debug_mode() -> bool:

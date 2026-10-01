@@ -89,9 +89,12 @@ def test_default_csp_warns_exactly_once(capfd):
     captured = capfd.readouterr()
     hits = (captured.out + captured.err).count(WARNING_MARK)
     assert hits == 1, f"expected the default-CSP warning exactly once, saw {hits}"
-    # Behaviour unchanged: the header is still the secure default on every response.
+    # Behaviour unchanged: the header is still the secure default on every
+    # response — now with a per-response nonce in style-src/script-src (ADR-0088).
     for r in responses:
-        assert _header(r, "content-security-policy") == "default-src 'self'"
+        csp = _header(r, "content-security-policy")
+        assert csp.startswith("default-src 'self'"), csp
+        assert "style-src 'self' 'nonce-" in csp and "script-src 'self' 'nonce-" in csp, csp
 
 
 def test_set_csp_does_not_warn(capfd, monkeypatch):
@@ -103,4 +106,9 @@ def test_set_csp_does_not_warn(capfd, monkeypatch):
     assert WARNING_MARK not in (captured.out + captured.err), (
         "setting TINA4_CSP is an explicit opt-in and must not warn"
     )
-    assert _header(r, "content-security-policy") == "default-src 'self' https://api.example"
+    # The user policy is honoured and the framework's nonce is added to
+    # style-src/script-src so its own inline content still runs (ADR-0088).
+    csp = _header(r, "content-security-policy")
+    assert csp.startswith("default-src 'self' https://api.example"), csp
+    assert "style-src 'self' https://api.example 'nonce-" in csp, csp
+    assert "script-src 'self' https://api.example 'nonce-" in csp, csp

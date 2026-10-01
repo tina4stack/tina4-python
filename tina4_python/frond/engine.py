@@ -1754,6 +1754,13 @@ class Frond:
         # returns an empty string in production so dump never leaks state.
         self._globals["dump"] = _render_dump
 
+        # CSP nonce: {{ csp_nonce() }} returns the current response's nonce so a
+        # template can serve an inline <style>/<script> under the strict default
+        # Content-Security-Policy — <style nonce="{{ csp_nonce() }}">. The value
+        # matches the 'nonce-X' the security middleware puts in the CSP header.
+        from tina4_python.core.csp import csp_nonce as _csp_nonce
+        self._globals["csp_nonce"] = _csp_nonce
+
         # Restore any globals/filters/tests registered on prior instances.
         # This is the key to surviving hot-reloads: app.py calls
         # frond.add_global("t", _t) once, the class remembers it, and
