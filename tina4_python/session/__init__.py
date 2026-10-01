@@ -85,6 +85,23 @@ def session_strict_mode() -> bool:
     ).strip().lower() in ("true", "1", "yes", "on")
 
 
+def _fingerprint(value):
+    """The stored form of a value, for telling whether a request changed it.
+
+    A value that cannot be serialised gets a marker equal to nothing, so it
+    always counts as changed: writing a value again is harmless, missing a
+    change is not.
+    """
+    try:
+        return json.dumps(value, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return object()
+
+
+def _fingerprints(data: dict) -> dict:
+    return {key: _fingerprint(value) for key, value in data.items()}
+
+
 class SessionHandler:
     """Base class for session storage backends."""
 
@@ -322,6 +339,23 @@ class Session:
         self._session_id: str | None = None
         self._data: dict = {}
         self._dirty: bool = False
+        #: What this request last saw of the stored record, one fingerprint per
+        #: key: taken by start() and again by every save. save() compares the
+        #: live data against it to find the keys THIS request changed.
+        self._loaded: dict = {}
+        #: True when this request is working on a record the store holds:
+        #: start() adopted one, or a save has written one since. An empty
+        #: record does not count: it is no session (start() never adopts one).
+        #: A save never re-creates such a record once another request has
+        #: removed it.
+        self._stored: bool = False
+        #: True when clear() ran since the last save: the save then replaces the
+        #: stored record instead of merging into it.
+        self._cleared: bool = False
+        #: True once this request found its session ended by another request
+        #: (the record it loaded is gone). It stays ended for the rest of the
+        #: request: regenerate() mints nothing either.
+        self._ended: bool = False
         #: True when the LAST backend read raised rather than returning a miss.
         #: Lets start() tell "no such session" from "the store is unreachable".
         self._last_read_failed: bool = False
@@ -507,6 +541,12 @@ class Session:
                 self._session_id = session_id
                 self._data = existing
                 self._dirty = False
+                # An outage adopts the id with an empty session: not a record
+                # this request has seen, so its first save writes whole.
+                self._stored = bool(existing)
+                self._loaded = _fingerprints(existing)
+                self._cleared = False
+                self._ended = False
                 return self._session_id
             # The store answered and has no such session: never adopt an id we
             # did not issue.
@@ -514,6 +554,10 @@ class Session:
         self._session_id = secrets.token_urlsafe(32)
         self._data = {}
         self._dirty = False
+        self._stored = False
+        self._loaded = {}
+        self._cleared = False
+        self._ended = False
         return self._session_id
 
     def get(self, key: str, default=None):
@@ -578,41 +622,115 @@ class Session:
         """Clear all session data."""
         self._data.clear()
         self._dirty = True
+        self._cleared = True
 
     def save(self):
-        """Persist session data to the backend.
+        """Persist this request's changes to the backend.
 
-        Returns True on a successful persist, False if the backend was
-        unreachable (logged). The dirty flag is only cleared on success so a
-        later save() retries once the backend recovers.
+        Another request may have changed or ended this session since this one
+        loaded it: a logout, a regenerate(), a set() that took a privilege away.
+        Writing back the whole snapshot loaded at the start undid all of those,
+        so a request in flight across a logout logged the user straight back
+        in. The save therefore re-reads the stored record and writes only what
+        THIS request changed onto it, and never re-creates a record another
+        request removed: it ends the session for this request instead, so no
+        cookie goes out for it.
+
+        Returns True on a successful persist (or when there is nothing to
+        write), False if the backend was unreachable (logged). The dirty flag is
+        only cleared on success so a later save() retries once the backend
+        recovers.
         """
-        if self._session_id and self._dirty:
-            if self._safe_write(self._session_id, self._data, self._ttl):
-                self._dirty = False
+        if not (self._session_id and self._dirty):
+            return True
+        record = self._data
+        if self._stored:
+            current = self._safe_read(self._session_id)
+            if self._last_read_failed:
+                # Whether the record still exists is unknown, so nothing is
+                # written; the dirty flag is kept for a later retry.
+                return False
+            if not current:
+                self._forget()
+                self._ended = True
                 return True
-            return False
-        return True
+            if not self._cleared:
+                record = self._merged(current)
+        if self._safe_write(self._session_id, record, self._ttl):
+            self._dirty = False
+            # An empty record is no session (start() never adopts one), so the
+            # next save writes whole rather than take this request's own empty
+            # write for a logout.
+            self._stored = bool(record)
+            self._cleared = False
+            self._loaded = _fingerprints(self._data)
+            return True
+        return False
+
+    def _merged(self, current: dict) -> dict:
+        """The stored record with only this request's own changes applied to it:
+        the keys it set or changed since it last loaded or saved, minus the keys
+        it removed. Every other key keeps the value the store holds now."""
+        record = dict(current)
+        for key, value in self._data.items():
+            if self._loaded.get(key) != _fingerprint(value):
+                record[key] = value
+        for key in self._loaded:
+            if key not in self._data:
+                record.pop(key, None)
+        return record
+
+    def _forget(self):
+        """Forget the session in memory: no data, no id, nothing left to save.
+        What destroy() does after removing the record, and what save() does when
+        it finds another request already removed it."""
+        self._data.clear()
+        self._session_id = None
+        self._dirty = False
+        self._stored = False
+        self._cleared = False
+        self._loaded = {}
 
     def destroy(self):
         """Destroy the session entirely."""
         if self._session_id:
             self._safe_destroy(self._session_id)
-            self._data.clear()
-            self._session_id = None
-            self._dirty = False
+            self._forget()
 
-    def regenerate(self) -> str:
+    def regenerate(self) -> str | None:
         """Regenerate session ID (prevents fixation attacks).
 
         Call this right after a successful login or any privilege change to
         defeat session fixation — the pre-auth ID is discarded and the data
         carried onto a fresh, unguessable ID.
+
+        What is carried is the session as it is stored now with this request's
+        own changes applied, the same merge save() does. If another request
+        ended the session after this one loaded it (a logout, or a regenerate
+        of its own), it stays ended: nothing is carried, no id is minted and
+        None is returned, so no cookie goes out to replace the one that request
+        sent.
         """
+        if self._ended:
+            return None
         old_id = self._session_id
+        if old_id and self._stored:
+            current = self._safe_read(old_id)
+            if not self._last_read_failed:
+                if not current:
+                    self._forget()
+                    self._ended = True
+                    return None
+                if not self._cleared:
+                    merged = self._merged(current)
+                    self._data.clear()
+                    self._data.update(merged)
         if old_id:
             self._safe_destroy(old_id)
         self._session_id = secrets.token_urlsafe(32)
         self._dirty = True
+        # Nothing is stored under the new id yet, so the save writes it whole.
+        self._stored = False
         self.save()
         return self._session_id
 
