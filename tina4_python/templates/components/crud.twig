@@ -34,7 +34,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
             <div class="col-md-4 text-end">
                 <button type="button" class="btn btn-success" data-bs-toggle="modal"
                         data-bs-target="#crudModal{{ table_name }}"
-                        onclick="addRecord{{ table_name }}()">
+                        data-crud-action="add">
                     + Create
                 </button>
             </div>
@@ -91,11 +91,14 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
                             <div class="card-footer bg-transparent">
                                 <button type="button" class="btn btn-sm btn-outline-primary me-1"
                                         data-bs-toggle="modal" data-bs-target="#crudModal{{ table_name }}"
-                                        onclick='loadRecord{{ table_name }}({{ record|json_encode }}, {{ loop.index0 }})'>
+                                        data-crud-action="edit"
+                                        data-record='{{ record|json_encode }}'
+                                        data-index="{{ loop.index0 }}">
                                     Update
                                 </button>
                                 <button type="button" class="btn btn-sm btn-outline-danger"
-                                        onclick='confirmDelete{{ table_name }}({{ record.id|default(loop.index0) }})'>
+                                        data-crud-action="delete"
+                                        data-id="{{ record.id|default(loop.index0) }}">
                                     Delete
                                 </button>
                             </div>
@@ -153,11 +156,14 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
                         <td class="text-nowrap">
                             <button type="button" class="btn btn-sm btn-outline-primary me-1"
                                     data-bs-toggle="modal" data-bs-target="#crudModal{{ table_name }}"
-                                    onclick='loadRecord{{ table_name }}({{ record|json_encode }}, {{ loop.index0 }})'>
+                                    data-crud-action="edit"
+                                    data-record='{{ record|json_encode }}'
+                                    data-index="{{ loop.index0 }}">
                                 Update
                             </button>
                             <button type="button" class="btn btn-sm btn-outline-danger"
-                                    onclick='confirmDelete{{ table_name }}({{ record.id|default(loop.index0) }})'>
+                                    data-crud-action="delete"
+                                    data-id="{{ record.id|default(loop.index0) }}">
                                 Delete
                             </button>
                         </td>
@@ -183,7 +189,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
                     <h5 class="modal-title" id="crudModalLabel{{ table_name }}">Edit Record</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close">&times;</button>
                 </div>
-                <form id="crudForm{{ table_name }}" method="POST" onsubmit="return false">
+                <form id="crudForm{{ table_name }}" method="POST">
                     <div class="modal-body" id="modalBody{{ table_name }}">
                         <!-- Form fields loaded dynamically by JS -->
                     </div>
@@ -375,6 +381,37 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
         }
 
 
+        // CSP-clean action wiring. A CSP nonce covers this <script> ELEMENT but
+        // never an inline onclick= ATTRIBUTE, so the row/create buttons carry
+        // data-crud-action instead and we bind them here with a single delegated
+        // listener on #crudTarget{{ table_name }} — which survives every AJAX
+        // reload (loadPage replaces its children, not the container itself).
+        (function () {
+            const target = document.getElementById('crudTarget{{ table_name }}');
+            if (!target || target.dataset.crudWired === '1') return;
+            target.dataset.crudWired = '1';
+            // Replaces the form's inline submit handler (a CSP-blocked on*=
+            // attribute): the modal form posts over AJAX, so stop the native
+            // submit here instead.
+            target.addEventListener('submit', function (event) {
+                if (event.target.closest('#crudForm{{ table_name }}')) {
+                    event.preventDefault();
+                }
+            });
+            target.addEventListener('click', function (event) {
+                const button = event.target.closest('[data-crud-action]');
+                if (!button || !target.contains(button)) return;
+                const action = button.dataset.crudAction;
+                if (action === 'add') {
+                    addRecord{{ table_name }}();
+                } else if (action === 'edit') {
+                    loadRecord{{ table_name }}(JSON.parse(button.dataset.record), parseInt(button.dataset.index, 10));
+                } else if (action === 'delete') {
+                    confirmDelete{{ table_name }}(button.dataset.id);
+                }
+            });
+        })();
+
         window['config_crud_{{ table_name }}'] = {
             perPage: {{ options.limit }},
             total: {{ total_records |default(records|length) }}
@@ -471,9 +508,20 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
                 container.innerHTML = '';
                 for (let i = 1; i <= totalPages; i++) {
+                    const pageNumber = i;
                     const li = document.createElement('li');
-                    li.className = 'page-item' + (i === currentPage ? ' active' : '');
-                    li.innerHTML = `<a class="page-link" href="#" onclick="window['goToPage_{{ table_name }}'](${i}); return false;">${i}</a>`;
+                    li.className = 'page-item' + (pageNumber === currentPage ? ' active' : '');
+                    // Built with createElement + addEventListener, not an inline
+                    // onclick= attribute, so the link fires under the strict CSP.
+                    const link = document.createElement('a');
+                    link.className = 'page-link';
+                    link.href = '#';
+                    link.textContent = pageNumber;
+                    link.addEventListener('click', function (event) {
+                        event.preventDefault();
+                        window['goToPage_{{ table_name }}'](pageNumber);
+                    });
+                    li.appendChild(link);
                     container.appendChild(li);
                 }
             }
