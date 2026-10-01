@@ -8,6 +8,7 @@
 import json
 from tina4_python.core.router import get, post, noauth
 from tina4_python.queue import Queue
+from tina4_python.core.csp import current_csp_nonce
 
 
 def _get_queue():
@@ -18,6 +19,7 @@ def _get_queue():
 @noauth()
 @get("/gallery/queue")
 async def gallery_queue_page(request, response):
+    nonce = current_csp_nonce()
     html = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -38,7 +40,7 @@ async def gallery_queue_page(request, response):
                 <div class="card-body">
                     <div class="d-flex gap-2">
                         <input type="text" id="msgInput" class="form-control" placeholder="Enter a task message, e.g. send-email">
-                        <button class="btn btn-primary" onclick="produce()">Produce</button>
+                        <button class="btn btn-primary" data-action="produce">Produce</button>
                     </div>
                 </div>
             </div>
@@ -47,10 +49,10 @@ async def gallery_queue_page(request, response):
             <div class="card">
                 <div class="card-header">Actions</div>
                 <div class="card-body d-flex gap-2 flex-wrap">
-                    <button class="btn btn-success" onclick="consume()">Consume Next</button>
-                    <button class="btn btn-danger" onclick="failNext()">Fail Next</button>
-                    <button class="btn btn-warning" onclick="retryFailed()">Retry Failed</button>
-                    <button class="btn btn-secondary" onclick="refresh()">Refresh</button>
+                    <button class="btn btn-success" data-action="consume">Consume Next</button>
+                    <button class="btn btn-danger" data-action="fail-next">Fail Next</button>
+                    <button class="btn btn-warning" data-action="retry-failed">Retry Failed</button>
+                    <button class="btn btn-secondary" data-action="refresh">Refresh</button>
                 </div>
             </div>
         </div>
@@ -83,7 +85,7 @@ async def gallery_queue_page(request, response):
     </div>
 </div>
 
-<script>
+<script nonce=\"""" + nonce + """\">
 function statusBadge(status) {
     var colors = {pending:"primary", reserved:"warning", completed:"success", failed:"danger", dead:"secondary"};
     var color = colors[status] || "secondary";
@@ -93,7 +95,10 @@ function statusBadge(status) {
 function showAlert(msg, type) {
     var area = document.getElementById("alertArea");
     area.innerHTML = '<div class="alert alert-' + type + ' alert-dismissible">' + msg +
-        '<button type="button" class="btn-close" onclick="this.parentElement.remove()"></button></div>';
+        '<button type="button" class="btn-close js-dismiss"></button></div>';
+    area.querySelectorAll('.js-dismiss').forEach(function(b){
+        b.addEventListener('click', function(){ this.parentElement.remove(); });
+    });
     setTimeout(function(){ area.innerHTML = ""; }, 3000);
 }
 
@@ -166,6 +171,12 @@ async function retryFailed() {
     showAlert("Retried " + (d.retried || 0) + " failed message(s)", "warning");
     refresh();
 }
+
+document.querySelectorAll('[data-action="produce"]').forEach(function(b){ b.addEventListener('click', produce); });
+document.querySelectorAll('[data-action="consume"]').forEach(function(b){ b.addEventListener('click', consume); });
+document.querySelectorAll('[data-action="fail-next"]').forEach(function(b){ b.addEventListener('click', failNext); });
+document.querySelectorAll('[data-action="retry-failed"]').forEach(function(b){ b.addEventListener('click', retryFailed); });
+document.querySelectorAll('[data-action="refresh"]').forEach(function(b){ b.addEventListener('click', refresh); });
 
 refresh();
 setInterval(refresh, 2000);

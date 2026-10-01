@@ -40,14 +40,23 @@ LIMIT = 1_048_576          # TINA4_MAX_UPLOAD_SIZE for every server here
 HEADER_LIMIT = 8192        # TINA4_MAX_REQUEST_HEADER
 IDLE_SECONDS = 3           # TINA4_REQUEST_TIMEOUT
 
+# content-security-policy is asserted via _assert_csp_nonce: ADR-0088 adds a
+# per-response random nonce to style-src/script-src, so it is never byte-equal.
 SECURITY_HEADERS = {
     "x-frame-options": "SAMEORIGIN",
     "x-content-type-options": "nosniff",
-    "content-security-policy": "default-src 'self'",
     "referrer-policy": "strict-origin-when-cross-origin",
     "x-xss-protection": "0",
     "permissions-policy": "camera=(), microphone=(), geolocation=()",
 }
+
+
+def _assert_csp_nonce(value):
+    """Default CSP = default-src 'self' + a nonce in style-src and script-src."""
+    assert value is not None and "default-src 'self'" in value, repr(value)
+    assert "style-src" in value and "script-src" in value, repr(value)
+    assert value.count("'nonce-") >= 2, f"CSP carries no nonce: {value!r}"
+    assert "'unsafe-inline'" not in value, repr(value)
 
 ROUTES = '''
 from tina4_python.core.router import get, post, noauth
@@ -523,6 +532,7 @@ class TestAsgiPath:
             assert "x-injected" not in answer.headers and "x-direct" not in answer.headers, answer
             for name, value in SECURITY_HEADERS.items():
                 assert answer.one(name) == value, f"{name}: {answer}"
+            _assert_csp_nonce(answer.one("content-security-policy"))
             time.sleep(0.2)
             assert "X-Direct" in read_child_log(proc)
         finally:
@@ -589,6 +599,7 @@ class TestRejectionShape:
             assert answer.one("connection") == "close", answer
         for name, value in SECURITY_HEADERS.items():
             assert answer.one(name) == value, f"{name}: {answer}"
+        _assert_csp_nonce(answer.one("content-security-policy"))
         assert "strict-transport-security" not in answer.headers, answer
 
     def test_a_transport_rejection_carries_the_json_body_and_security_headers(self, server, tmp_path):

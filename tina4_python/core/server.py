@@ -951,20 +951,24 @@ def _is_gallery_deployed(name: str) -> bool:
 def _gallery_btn(name: str, try_url: str) -> str:
     """Render a Try It or View button depending on deployment state."""
     if _is_gallery_deployed(name):
-        return f'<button class="try-btn" style="background:#22c55e;" onclick="window.open(\'{try_url}\',\'_blank\')" data-deployed="1">View &#8599;</button>'
-    return f'<button class="try-btn" onclick="deployGallery(\'{name}\',\'{try_url}\')">Try It</button>'
+        return (f'<button class="try-btn try-btn-deployed" data-name="{name}" '
+                f'data-try-url="{try_url}" data-deployed="1">View &#8599;</button>')
+    return (f'<button class="try-btn" data-name="{name}" '
+            f'data-try-url="{try_url}">Try It</button>')
 
 
 def _render_landing_page() -> str:
     """Render the built-in Tina4 welcome page shown when no / route exists."""
     port = os.environ.get("PORT", "7146")
+    from tina4_python.core.csp import current_csp_nonce
+    nonce = current_csp_nonce()
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tina4Python</title>
-<style>
+<style nonce="{nonce}">
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;display:flex;flex-direction:column;align-items:center;position:relative}}
 .bg-watermark{{position:fixed;bottom:-5%;right:-5%;width:45%;opacity:0.04;pointer-events:none;z-index:0}}
@@ -999,6 +1003,17 @@ h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
 .gallery-card .try-btn:hover{{opacity:0.85}}
 @keyframes wiggle{{0%{{transform:rotate(0deg)}}15%{{transform:rotate(14deg)}}30%{{transform:rotate(-10deg)}}45%{{transform:rotate(8deg)}}60%{{transform:rotate(-4deg)}}75%{{transform:rotate(2deg)}}100%{{transform:rotate(0deg)}}}}
 .star-wiggle{{display:inline-block;transform-origin:center}}
+.try-btn-deployed{{background:#22c55e}}
+.gallery-hint{{color:#64748b;font-size:0.85rem;text-align:center;margin-bottom:1.25rem}}
+.gallery-hint strong{{color:#94a3b8}}
+.gallery-hint code{{color:#4ade80}}
+.gallery-cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}}
+.card-code{{background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace}}
+.tok-comment{{color:#64748b}}
+.tok-kw{{color:#c084fc}}
+.tok-str{{color:#4ade80}}
+.tok-fn{{color:#38bdf8}}
+.tok-dec{{color:#fbbf24}}
 </style>
 </head>
 <body>
@@ -1024,27 +1039,27 @@ h1{{font-size:3rem;font-weight:700;margin-bottom:0.25rem;letter-spacing:-1px}}
 <div class="section">
     <div class="card">
         <h2>Getting Started</h2>
-        <pre class="code-block"><code><span style="color:#64748b"># app.py</span>
-<span style="color:#c084fc">from</span> tina4_python.core <span style="color:#c084fc">import</span> run
-<span style="color:#c084fc">from</span> tina4_python.core.router <span style="color:#c084fc">import</span> get
+        <pre class="code-block"><code><span class="tok-comment"># app.py</span>
+<span class="tok-kw">from</span> tina4_python.core <span class="tok-kw">import</span> run
+<span class="tok-kw">from</span> tina4_python.core.router <span class="tok-kw">import</span> get
 
-<span style="color:#fbbf24">@get</span>(<span style="color:#4ade80">"/hello"</span>)
-<span style="color:#c084fc">async def</span> <span style="color:#38bdf8">hello</span>(request, response):
-    <span style="color:#c084fc">return</span> response({{"message": <span style="color:#4ade80">"Hello World!"</span>}})
+<span class="tok-dec">@get</span>(<span class="tok-str">"/hello"</span>)
+<span class="tok-kw">async def</span> <span class="tok-fn">hello</span>(request, response):
+    <span class="tok-kw">return</span> response({{"message": <span class="tok-str">"Hello World!"</span>}})
 
-run()  <span style="color:#64748b"># starts on port 7146</span></code></pre>
+run()  <span class="tok-comment"># starts on port 7146</span></code></pre>
     </div>
 </div>
 <div class="gallery">
     <h2 id="gallery">What You Can Build</h2>
-    <p style="color:#64748b;font-size:0.85rem;text-align:center;margin-bottom:1.25rem;">Click <strong style="color:#94a3b8;">Try It</strong> to deploy working example code into your <code style="color:#4ade80;">src/</code> folder</p>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem;">
+    <p class="gallery-hint">Click <strong>Try It</strong> to deploy working example code into your <code>src/</code> folder</p>
+    <div class="gallery-cards">
         <div class="gallery-card">
             <div class="accent accent-blue"></div>
             <div class="icon">&#128640;</div>
             <h3>REST API</h3>
             <p>Define routes with one decorator</p>
-            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">@get("/api/users")
+            <pre class="card-code">@get("/api/users")
 async def users(req, res):
     return res({{"users": []}})</pre>
             {_gallery_btn('rest-api', '/api/gallery/hello')}
@@ -1054,7 +1069,7 @@ async def users(req, res):
             <div class="icon">&#128451;</div>
             <h3>ORM</h3>
             <p>Active record models, zero config</p>
-            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">class User(ORM):
+            <pre class="card-code">class User(ORM):
     id = IntegerField(primary_key=True)
     name = StringField()</pre>
             {_gallery_btn('orm', '/api/gallery/products')}
@@ -1064,7 +1079,7 @@ async def users(req, res):
             <div class="icon">&#128274;</div>
             <h3>Auth</h3>
             <p>JWT tokens built-in</p>
-            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">token = Auth.get_token({{"user_id": 1}})
+            <pre class="card-code">token = Auth.get_token({{"user_id": 1}})
 valid = Auth.valid_token(token)</pre>
             {_gallery_btn('auth', '/gallery/auth')}
         </div>
@@ -1073,7 +1088,7 @@ valid = Auth.valid_token(token)</pre>
             <div class="icon">&#9889;</div>
             <h3>Queue</h3>
             <p>Background jobs, no Redis needed</p>
-            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">queue = Queue(topic="emails")
+            <pre class="card-code">queue = Queue(topic="emails")
 queue.produce("emails", {{"to": "a@b.com"}})</pre>
             {_gallery_btn('queue', '/api/gallery/queue/status')}
         </div>
@@ -1082,7 +1097,7 @@ queue.produce("emails", {{"to": "a@b.com"}})</pre>
             <div class="icon">&#128196;</div>
             <h3>Templates</h3>
             <p>Twig templates with auto-reload</p>
-            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">@template("dashboard.twig")
+            <pre class="card-code">@template("dashboard.twig")
 @get("/dashboard")
 async def dash(req, res):
     return {{"title": "Home"}}</pre>
@@ -1093,7 +1108,7 @@ async def dash(req, res):
             <div class="icon">&#128225;</div>
             <h3>Database</h3>
             <p>Multi-engine, one API</p>
-            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">db = Database("sqlite:///app.db")
+            <pre class="card-code">db = Database("sqlite:///app.db")
 result = db.fetch("SELECT * FROM users")
 for row in result: print(row["name"])</pre>
             {_gallery_btn('database', '/api/gallery/db/tables')}
@@ -1103,15 +1118,14 @@ for row in result: print(row["name"])</pre>
             <div class="icon">&#128680;</div>
             <h3>Error Overlay</h3>
             <p>Rich debug page with source code</p>
-            <pre style="background:#0f172a;color:#4ade80;padding:0.75rem;border-radius:0.375rem;font-size:0.75rem;overflow-x:auto;margin-top:0.5rem;font-family:'SF Mono',SFMono-Regular,Consolas,monospace;">user = {{"name": "Alice"}}
+            <pre class="card-code">user = {{"name": "Alice"}}
 role = user["role"]  # KeyError!</pre>
             {_gallery_btn('error-overlay', '/api/gallery/crash')}
         </div>
     </div>
 </div>
-<script>
-function deployGallery(name, tryUrl) {{
-    var btn = event.target;
+<script nonce="{nonce}">
+function deployGallery(btn, name, tryUrl) {{
     if (btn.dataset.deployed) {{
         window.open(tryUrl, '_blank');
         return;
@@ -1175,6 +1189,14 @@ function deployGallery(name, tryUrl) {{
     }}
     setTimeout(doWiggle,3000);
 }})();
+// CSP-clean wiring: no inline onclick handlers — bind every Try It / View
+// button from its data-* attributes (a nonce covers script elements, not
+// event-handler attributes).
+document.querySelectorAll('.try-btn').forEach(function(btn){{
+    btn.addEventListener('click', function(){{
+        deployGallery(btn, btn.dataset.name, btn.dataset.tryUrl);
+    }});
+}});
 </script>
 </body>
 </html>"""
@@ -1753,7 +1775,7 @@ def _handle_swagger(request: Request, response: Response) -> Response | None:
             f'<link rel="stylesheet" href="{_cdn}/swagger-ui.css">'
             '</head><body><div id="swagger-ui"></div>'
             f'<script src="{_cdn}/swagger-ui-bundle.js"></script>'
-            '<script>SwaggerUIBundle({ url: "/swagger/openapi.json", dom_id: "#swagger-ui" });</script>'
+            f'<script nonce="{response.csp_nonce}">SwaggerUIBundle({{ url: "/swagger/openapi.json", dom_id: "#swagger-ui" }});</script>'
             '</body></html>'
         )
         response.html(swagger_html)
@@ -2904,10 +2926,17 @@ async def handle(request: Request) -> Response:
     """
     request_id = _resolve_request_id(request)
     set_request_id(request_id)
+    # One CSP nonce per request, published on the contextvar so the inline HTML
+    # body and the security middleware's CSP header name the same value. Cleared
+    # in finally, exactly like the request id (overlapping requests never share).
+    from tina4_python.core.csp import generate_nonce, set_current_nonce, clear_current_nonce
+    request_nonce = generate_nonce()
+    set_current_nonce(request_nonce)
     try:
         _init_session(request)
 
         response = Response()
+        response.csp_nonce = request_nonce
         response.header("x-request-id", request_id)
 
         ctx = DispatchContext(request, response, request_id)
@@ -2935,8 +2964,9 @@ async def handle(request: Request) -> Response:
         # The request pipeline installs the id before its first log and
         # clears it in `finally` after its last (Decision 12 / LOG-Q03), so an
         # overlapping request can never observe a stale id from a request that
-        # already finished.
+        # already finished. The CSP nonce has the same lifetime.
         clear_request_id()
+        clear_current_nonce()
 
 def asgi(root_dir: str = "src"):
     """Build the ASGI application, with routes discovered.

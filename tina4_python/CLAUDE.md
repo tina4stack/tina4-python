@@ -644,8 +644,33 @@ Frond.add_test("positive", lambda x: x > 0)
 - Encoding: `{{ data | json_encode }}`, `{{ text | base64encode }}`
 - Labels: `{{ "user_email" | nice_label }}` → "User Email"
 - Form tokens: `{{ form_token() }}` or `{{ ("Page" ~ RANDOM()) | form_token }}`
+- CSP nonce: `{{ csp_nonce() }}` — the current response's Content-Security-Policy nonce
 - Includes: `{% include "partials/nav.twig" %}`
 - Inheritance: `{% extends "base.twig" %}` / `{% block content %}{% endblock %}`
+
+### Inline `<style>` / `<script>` under the default CSP — use `csp_nonce()`
+
+Tina4 serves a strict default Content-Security-Policy (`default-src 'self'`).
+A browser refuses any inline `<style>` or `<script>` under that policy unless
+the element carries a nonce the CSP header also names. The framework mints one
+nonce per response, injects `'nonce-<X>'` into `style-src` and `script-src`, and
+exposes the value as the Frond global `csp_nonce()` (and as `response.csp_nonce`
+in a route). So a template that needs an inline block stamps the nonce on it:
+
+```twig
+<style nonce="{{ csp_nonce() }}">.badge{color:var(--primary)}</style>
+<script nonce="{{ csp_nonce() }}">console.log("ready");</script>
+```
+
+Two rules the nonce does NOT cover, so prefer classes and `addEventListener`:
+- **No `style="..."` attributes** — a nonce covers a `<style>` ELEMENT, never a
+  style attribute. Move inline styles into a nonce'd `<style>` block or SCSS.
+- **No inline `onclick=` / `on*=` handlers** — a nonce does not cover event
+  handler attributes either. Bind them in a nonce'd `<script>` with
+  `addEventListener`.
+
+An external `<script src="...">` or `<link rel="stylesheet">` needs no nonce
+(same-origin `'self'` already allows it).
 
 ### The @template() decorator
 
