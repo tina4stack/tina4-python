@@ -23,11 +23,15 @@ exactly as the server builds them. Every outcome is read back through the
 handler, never through the session under test.
 """
 
+import hashlib
 import json
+import socket
+import time
 
 import pytest
 
 from tina4_python.session import FileSessionHandler, Session
+from tina4_python.session_handlers import RedisSessionHandler
 
 
 @pytest.fixture
@@ -276,15 +280,32 @@ class TestConcurrentRequestsKeepEachOthersChanges:
         assert store.read(sid)["user"] == "carol"
 
 
+def _stored_record(tmp_path, session_id):
+    """The raw on-disk record for a session id, read straight from its file."""
+    f = tmp_path / "sessions" / f"{hashlib.sha256(session_id.encode()).hexdigest()}.json"
+    return json.loads(f.read_text())
+
+
 class TestASaveStillWritesWhatTheRequestChanged:
-    def test_a_read_only_request_writes_nothing(self, store, monkeypatch):
+    def test_a_read_only_request_moves_the_expiry_forward(self, store, tmp_path):
+        # ADR-0087: expiry slides on activity. A request that only READ the
+        # session still re-writes it on save(), re-stamping the backend deadline
+        # to now + TTL, so a session times out after INACTIVITY, not a fixed
+        # span after its last change. The stored data is left exactly as it was.
         sid = _logged_in(store)
-        writes = []
-        monkeypatch.setattr(store, "write", lambda *args: writes.append(args))
-        session = _request(store, sid)
-        session.get("user")
+        f = tmp_path / "sessions" / f"{hashlib.sha256(sid.encode()).hexdigest()}.json"
+
+        record = json.loads(f.read_text())
+        record["_expires"] = time.time() + 5  # about to expire
+        f.write_text(json.dumps(record))
+
+        session = _request(store, sid)  # ttl=300
+        session.get("user")  # a request that touched nothing
         assert session.save()
-        assert writes == []
+
+        slid = _stored_record(tmp_path, sid)
+        assert slid["_expires"] > time.time() + 200, "a read-only request must move the expiry forward"
+        assert slid["_data"] == {"user": "alice"}, "the stored data must be unchanged"
 
     def test_a_value_changed_in_place_is_saved_with_the_next_set(self, store):
         sid = _logged_in(store, cart=["one item"])
@@ -389,19 +410,35 @@ class TestASaveStillWritesWhatTheRequestChanged:
         assert store.read(sid) == {}
 
 
+def _closed_tcp_port():
+    """Bind a socket to get a free port, then close it: the kernel refuses a
+    connection to that port, so a real client genuinely cannot reach it."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    return port
+
+
 class TestAStoreThatCannotBeReadAtSaveTime:
-    def test_nothing_is_written_and_the_change_is_kept_for_a_retry(self, store, monkeypatch):
+    def test_nothing_is_written_and_the_change_is_kept_for_a_retry(self, store):
+        # No mock: the store becomes unreachable between start() and save() by
+        # swapping in a REAL RedisSessionHandler pointed at a closed TCP port the
+        # kernel really refuses (mirrors php/ruby/node). save() must report
+        # failure, write nothing, and keep the change for a later retry.
         sid = _logged_in(store)
         session = _request(store, sid)
         session.set("cart", "one item")
 
-        def unreachable(_sid):
-            raise ConnectionError("store unreachable")
-
-        monkeypatch.setattr(store, "read", unreachable)
+        refused = RedisSessionHandler(host="127.0.0.1", port=_closed_tcp_port(), ttl=60)
+        session._handler = refused
         assert session.save() is False
-        monkeypatch.undo()
+
+        # The real file store is untouched: nothing was written while the store
+        # could not be read.
         assert store.read(sid) == {"user": "alice"}
 
+        # Once the store answers again, the retained change is written.
+        session._handler = store
         assert session.save()
         assert store.read(sid) == {"user": "alice", "cart": "one item"}

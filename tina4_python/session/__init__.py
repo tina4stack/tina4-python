@@ -636,12 +636,30 @@ class Session:
         request removed: it ends the session for this request instead, so no
         cookie goes out for it.
 
+        Expiry slides on activity (ADR-0087): a request that started a session
+        the store already holds re-writes it even when it changed nothing, so
+        the backend deadline moves forward to ``now + TINA4_SESSION_TTL`` and
+        the session times out after INACTIVITY, not a fixed span after its last
+        change. The re-write is the same re-read, MERGED record the
+        concurrent-save contract computes, so sliding never clobbers a
+        concurrent change and never re-creates an ended record. A request with
+        no stored session has no deadline to move and writes nothing;
+        ``TINA4_SESSION_TTL=0`` still means never-expires (ADR-0027). PHP is the
+        reference for this behaviour; Python, Ruby and Node adopt it.
+
         Returns True on a successful persist (or when there is nothing to
         write), False if the backend was unreachable (logged). The dirty flag is
         only cleared on success so a later save() retries once the backend
         recovers.
         """
-        if not (self._session_id and self._dirty):
+        # No session id (before start(), or after destroy()/an ended session):
+        # nothing to persist, and no deadline to slide.
+        if not self._session_id:
+            return True
+        # A brand-new session this request has never stored and has not changed
+        # has no record to slide and nothing of its own to write yet. A STORED
+        # session re-writes even when not dirty, to slide its deadline forward.
+        if not (self._dirty or self._stored):
             return True
         record = self._data
         if self._stored:
