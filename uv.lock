@@ -1648,7 +1648,7 @@ wheels = [
 
 [[package]]
 name = "tina4-python"
-version = "3.13.142"
+version = "3.13.143"
 source = { editable = "." }
 
 [package.optional-dependencies]
