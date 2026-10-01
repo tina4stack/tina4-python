@@ -90,8 +90,8 @@ def test_welcome_inline_style_and_script_carry_the_header_nonce(served):
     # Every inline <style>/<script> the framework emits must carry THIS nonce.
     # An external <script src=...> (the dev toolbar) is exempt and must NOT be
     # forced to carry one, so only inspect tags with no src attribute.
-    inline_style_open = re.findall(r"<style\b([^>]*)>", body)
-    inline_script_open = re.findall(r"<script\b([^>]*)>", body)
+    inline_style_open = re.findall(r"<style\b([^>]*)>", body, re.IGNORECASE)
+    inline_script_open = re.findall(r"<script\b([^>]*)>", body, re.IGNORECASE)
     assert inline_style_open, "welcome page emitted no <style>"
     assert inline_script_open, "welcome page emitted no <script>"
 
