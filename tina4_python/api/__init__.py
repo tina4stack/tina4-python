@@ -55,9 +55,20 @@ _DOWNLOAD_CHUNK_SIZE = 64 * 1024
 # yields whatever the transport hands back per read; this bounds the buffer.
 _STREAM_CHUNK_SIZE = 8 * 1024
 
-# Headers dropped when a redirect crosses to a different origin — a bearer token
-# or a session cookie must never be handed to a host you didn't authenticate to.
-_STRIP_ON_CROSS_ORIGIN = frozenset({"authorization", "cookie"})
+# The only headers carried onto a different origin. A caller-set header can hold
+# a credential under any name (X-Api-Key, X-Auth-Token, ...), so a denylist
+# cannot contain it: the headers configured on the client (and any per-call
+# header, on a redirect) are bound to the origin they were meant for, and only
+# these content-negotiation headers cross.
+_KEEP_ON_CROSS_ORIGIN = frozenset({
+    "user-agent", "accept", "accept-encoding", "accept-language",
+    "content-type", "content-length",
+})
+
+
+def _keep_cross_origin_headers(headers: dict) -> dict:
+    """Only the headers allowed onto a different origin (_KEEP_ON_CROSS_ORIGIN)."""
+    return {k: v for k, v in headers.items() if k.lower() in _KEEP_ON_CROSS_ORIGIN}
 
 
 class ApiTimeoutError(TimeoutError):
@@ -115,8 +126,9 @@ def _same_origin(url_a: str, url_b: str) -> bool:
 
 
 class _AuthStripRedirectHandler(HTTPRedirectHandler):
-    """Follow redirects, but drop the Authorization (and Cookie) header on a
-    cross-origin hop.
+    """Follow redirects, but carry only content-negotiation headers
+    (``_KEEP_ON_CROSS_ORIGIN``) onto a cross-origin hop -- no Authorization,
+    Cookie, or any other caller-set header that may hold a credential.
 
     Plain urllib forwards the Authorization header to ANY redirect target,
     including a different host — so an ``api.get("/login")`` that 302s to
@@ -141,14 +153,9 @@ class _AuthStripRedirectHandler(HTTPRedirectHandler):
         guard_url(newurl, self._allow_hosts)
         new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new_req is not None and not _same_origin(req.full_url, newurl):
-            new_req.headers = {
-                k: v for k, v in new_req.headers.items()
-                if k.lower() not in _STRIP_ON_CROSS_ORIGIN
-            }
-            new_req.unredirected_hdrs = {
-                k: v for k, v in getattr(new_req, "unredirected_hdrs", {}).items()
-                if k.lower() not in _STRIP_ON_CROSS_ORIGIN
-            }
+            new_req.headers = _keep_cross_origin_headers(new_req.headers)
+            new_req.unredirected_hdrs = _keep_cross_origin_headers(
+                getattr(new_req, "unredirected_hdrs", {}))
         return new_req
 
 
@@ -800,7 +807,14 @@ class Api:
         # ``add_headers()``, or a per-call ``extra_headers``) always wins --
         # this is a default, never a clobber.
         headers = {"User-Agent": f"Tina4/{__version__}"}
-        headers.update(self._headers)
+        # Headers configured on the client belong to its base origin, like the
+        # token below: an absolute target on another origin gets only the
+        # cross-origin-safe ones. A client with no base has no origin to bind
+        # them to, and sends them to the URL each call names.
+        if self.base_url and not _same_origin(url, self.base_url):
+            headers.update(_keep_cross_origin_headers(self._headers))
+        else:
+            headers.update(self._headers)
         # Attach the configured Authorization / Cookie ONLY when the request
         # target is same-origin as the configured base. A path that is itself an
         # absolute off-origin URL (e.g. get("http://evil/x")) otherwise leaks the
