@@ -241,7 +241,6 @@ def bench_startup():
         from tina4_python.wsdl import WSDL
         from tina4_python.websocket import WebSocketServer, WebSocketManager
         from tina4_python.messenger import Messenger
-        from tina4_python.scss import compile_string
         from tina4_python.ai import detect_ai, generate_context
         from tina4_python.dev_admin import MessageLog, RequestInspector, BrokenTracker
 
