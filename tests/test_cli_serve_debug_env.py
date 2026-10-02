@@ -12,7 +12,7 @@ No mocks: a real process, a real socket, a real .env file.
 from __future__ import annotations
 
 import os
-import secrets
+import re
 import signal
 import socket
 import subprocess
@@ -75,59 +75,62 @@ def _terminate(proc: subprocess.Popen) -> None:
 def _dev_status(tmp_path, env_file: str | None, *flags: str) -> int:
     """Boot `tina4python serve` and return the HTTP status of GET /__dev.
 
-    PORT IDENTITY (the flake this guards): _free_port hands out an ephemeral
-    port that, under load, a DIFFERENT debug-off server may already hold (a
-    prior case's child lingering on the reused port). With TINA4_NO_TAKEOVER
-    our debug-on child cannot evict it, so a bare /__dev probe would hit the
-    FOREIGN server and read its 404 as the answer - a 200/404 on the port proves
-    only that SOMETHING listens, not that it is OUR child. So each boot plants a
-    per-boot UNIQUE readiness route (/ready_<token>) that only OUR child serves;
-    readiness waits for a 200 on THAT (a foreign server 404s it), and only then
-    polls /__dev. A contended port never yields our token, so the boot times out
-    and retries on a FRESH port instead of trusting a stranger. Mirrors the Ruby
-    ShutdownProbe identity guard (tina4-ruby) and the Node /fast readiness
-    (tina4-nodejs loopBlockWatchdog). No mocks: a real child, a real socket."""
+    Harness shape is IDENTICAL across tina4-python / tina4-php / tina4-ruby so
+    there are no cross-framework surprises:
+
+    1. CLEAN child env (the real cure). We pass an explicit env with every
+       TINA4_ key filtered out, so no stale TINA4_DEBUG leaks in from the parent
+       and the temp .env alone decides debug. This is Python's idiomatic
+       equivalent of Ruby's Process.spawn `unsetenv_others: true` (Python's
+       `env=` already REPLACES the environment; Ruby MERGES, which is why the
+       flake was Ruby-only). PYTHONUNBUFFERED=1 so the child's banner reaches the
+       log the instant it prints, not on a block-buffer flush.
+    2. IDENTITY-GUARDED readiness. Readiness waits for the child's OWN
+       `Server: http://...:<thisport>` banner in its log - the same banner all
+       four frameworks print once they have bound THIS port - before probing
+       /__dev. A 200/404 on the port alone proves only that SOMETHING listens,
+       not that it is OUR child; a port a foreign server already holds never
+       yields our banner, so the boot times out and retries on a FRESH port.
+    3. Poll /__dev and return its status (debug-on non-404 at once, debug-off a
+       settled 404 by outlasting the window).
+
+    No mocks: a real child, a real socket, real .env files."""
     boot_attempts = 5
-    for _ in range(boot_attempts):
-        token = secrets.token_hex(8)
-        ready_path = f"/ready_{token}"
-        root = tmp_path / token
+    for attempt in range(boot_attempts):
+        root = tmp_path / f"attempt{attempt}"
         (root / "src" / "routes").mkdir(parents=True, exist_ok=True)
-        (root / "src" / "routes" / "ready.py").write_text(
-            "from tina4_python.core.router import get\n\n\n"
-            f"@get({ready_path!r})\n"
-            "async def ready(request, response):\n"
-            "    return response('ok')\n",
-            encoding="utf-8",
-        )
         if env_file is not None:
             (root / ".env").write_text(env_file, encoding="utf-8")
         port = _free_port()
         env = {k: v for k, v in os.environ.items() if not k.startswith("TINA4_")}
         env.update({"TINA4_OVERRIDE_CLIENT": "true", "TINA4_NO_BROWSER": "true",
-                    "TINA4_SECRET": SECRET, "TINA4_NO_TAKEOVER": "true"})
-        proc = subprocess.Popen(
-            [sys.executable, "-c", "from tina4_python.cli import main; main()",
-             "serve", "--no-browser", "--no-reload", "--host", "127.0.0.1", "--port", str(port), *flags],
-            cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+                    "TINA4_SECRET": SECRET, "TINA4_NO_TAKEOVER": "true",
+                    "PYTHONUNBUFFERED": "1"})
+        log = root / "serve.log"
+        own_server = re.compile(rf"Server:\s+http://\S*:{port}\b")
+        with open(log, "wb") as log_fh:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", "from tina4_python.cli import main; main()",
+                 "serve", "--no-browser", "--no-reload", "--host", "127.0.0.1", "--port", str(port), *flags],
+                cwd=root, env=env, stdout=log_fh, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
         try:
             deadline = time.time() + 30
             owned = False
             while time.time() < deadline:
                 if proc.poll() is not None:
-                    break  # child exited (could not own the contended port) -> fresh port
-                if _status(port, ready_path) == 200:
+                    break  # child exited (could not own a contended port) -> fresh port
+                if own_server.search(log.read_text(encoding="utf-8", errors="replace")):
                     owned = True
                     break
                 time.sleep(0.1)
             if owned:
                 return _poll_dev(port)
-            # The port was not ours this attempt; retry on a fresh one.
+            # The child never claimed THIS port; retry on a fresh one.
         finally:
             _terminate(proc)
-    pytest.fail(f"serve never owned its own port after {boot_attempts} attempts")
+    pytest.fail(f"serve never printed its own Server banner after {boot_attempts} attempts")
 
 
 def test_serve_honours_debug_false_from_env_file(tmp_path):
