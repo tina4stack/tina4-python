@@ -1,6 +1,6 @@
 # Tina4 Python — Agent Instructions
 
-v3.13.143. 140 cataloged features, zero dependencies. Python 3.12+.
+v3.13.144. 140 cataloged features, zero dependencies. Python 3.12+.
 
 ## AI Skills
 
