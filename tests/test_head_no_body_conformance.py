@@ -63,12 +63,13 @@ def drive(method, path):
     asyncio.run(app(scope, receive, send))
     start = next(m for m in sent if m["type"] == "http.response.start")
     body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
-    headers = {k.decode().lower(): v.decode() for k, v in start.get("headers", [])}
-    return start["status"], body, headers
+    raw_headers = start.get("headers", [])
+    headers = {k.decode().lower(): v.decode() for k, v in raw_headers}
+    return start["status"], body, headers, raw_headers
 
 
 def test_a_head_on_a_static_asset_carries_no_body():
-    status, body, _ = drive("HEAD", "/asset.css")
+    status, body, _, _ = drive("HEAD", "/asset.css")
     assert status == 200, "the static asset was not served at all"
     assert len(body) == 0, (
         f"HEAD returned {len(body)} bytes of the file - RFC 9110 s9.3.2 forbids "
@@ -77,13 +78,13 @@ def test_a_head_on_a_static_asset_carries_no_body():
 
 
 def test_a_head_on_a_routed_response_carries_no_body():
-    status, body, _ = drive("HEAD", "/routed")
+    status, body, _, _ = drive("HEAD", "/routed")
     assert status == 200
     assert len(body) == 0
 
 
 def test_a_head_on_a_404_carries_no_body():
-    status, body, _ = drive("HEAD", "/definitely/not/a/route")
+    status, body, _, _ = drive("HEAD", "/definitely/not/a/route")
     assert status == 404
     assert len(body) == 0
 
@@ -93,13 +94,43 @@ def test_a_head_still_reports_the_content_length_the_get_would_have_sent(_worksp
     s9.3.2 SHOULD: the same headers as the equivalent GET. That is the whole
     point of a HEAD probe - a size estimate without the transfer.
     """
-    _status, _body, headers = drive("HEAD", "/asset.css")
+    _status, _body, headers, _ = drive("HEAD", "/asset.css")
     assert "content-length" in headers, "HEAD dropped Content-Length, so the probe learns nothing"
     assert int(headers["content-length"]) == (_workspace / "src" / "public" / "asset.css").stat().st_size
 
 
+def _content_length_count(raw_headers):
+    """Count Content-Length lines on the RAW wire (case-insensitive). A dict
+    collapses duplicates, which is exactly how this bug stayed hidden - curl,
+    browsers and a dict-parse all tolerate a duplicate header."""
+    return sum(1 for name, _ in raw_headers if name.lower() == b"content-length")
+
+
+def test_a_head_emits_exactly_one_content_length(_workspace):
+    """A HEAD answer must carry EXACTLY ONE Content-Length - the length the GET
+    would have sent - never two.
+
+    The real-world failure this locks: a HEAD that emitted both `content-length: 0`
+    (the stripped empty body) AND `Content-Length: <n>` (the GET length) is
+    malformed per RFC 7230 s3.3.2 / RFC 9110 s6.4.1. Lenient clients (curl,
+    browsers) tolerate it and show 200, but a strict proxy (nginx) rejects the
+    upstream with 502 - so every Tina4 app behind such an ingress broke on HEAD
+    (link checkers, the Facebook validator, uptime monitors) while 'it works
+    locally'. Asserted on the RAW ASGI header list, because a dict parse would
+    collapse the duplicate and prove nothing."""
+    for path in ("/asset.css", "/routed"):
+        _status, _body, _headers, raw = drive("HEAD", path)
+        assert _content_length_count(raw) == 1, (
+            f"HEAD {path} emitted {_content_length_count(raw)} Content-Length headers "
+            f"(a strict proxy 502s a duplicate): {[(n, v) for n, v in raw if n.lower() == b'content-length']}"
+        )
+    # GET too, so the guard is not HEAD-only.
+    _status, _body, _headers, raw = drive("GET", "/asset.css")
+    assert _content_length_count(raw) == 1, "GET emitted more than one Content-Length"
+
+
 def test_a_get_on_a_static_asset_still_returns_the_body():
     """NEGATIVE: stripping HEAD must not have broken GET."""
-    status, body, _ = drive("GET", "/asset.css")
+    status, body, _, _ = drive("GET", "/asset.css")
     assert status == 200
     assert b"color: red" in body
