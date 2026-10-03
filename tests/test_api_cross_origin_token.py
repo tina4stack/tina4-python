@@ -20,6 +20,7 @@ Two real threaded http.server instances on 127.0.0.1; a real Api client. No mock
 import http.server
 import threading
 import pytest
+from urllib.parse import parse_qs, quote, urlsplit
 
 from tina4_python.api import Api
 
@@ -30,6 +31,7 @@ class _RecordingServer:
     def __init__(self):
         self.last_auth = None
         self.last_headers = {}
+        self.last_path = None
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -41,7 +43,15 @@ class _RecordingServer:
             def do_GET(self):
                 outer.last_auth = self.headers.get("Authorization")
                 outer.last_headers = {k.lower(): v for k, v in self.headers.items()}
+                outer.last_path = self.path
                 self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                if self.path.startswith("/redirect?"):
+                    query = parse_qs(urlsplit(self.path).query)
+                    self.send_response(int(query.get("code", ["302"])[0]))
+                    self.send_header("Location", query["to"][0])
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 payload = b'{"ok": true}'
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -104,3 +114,53 @@ def test_final_target_credentials_on_every_http_path(mode, off_origin, tmp_path)
         assert result["http_code"] == 200
         assert bool(target.last_headers.get("authorization")) is (not off_origin)
         assert bool(target.last_headers.get("cookie")) is (not off_origin)
+
+
+# A configured header can carry a credential under any name. It is bound to the
+# base origin exactly like the token: never to an absolute target on another
+# origin, never onto a cross-origin redirect hop.
+
+def _redirect(to, code=302):
+    return f"/redirect?code={code}&to={quote(to, safe='')}"
+
+
+@pytest.mark.parametrize("how", ["ctor", "add_headers"])
+def test_configured_header_stays_off_an_absolute_off_origin_target(how):
+    with _RecordingServer() as base, _RecordingServer() as other:
+        if how == "ctor":
+            api = Api(base.base_url, headers={"X-Api-Key": "synthetic-key"})
+        else:
+            api = Api(base.base_url)
+            api.add_headers({"X-Api-Key": "synthetic-key"})
+        assert api.get(f"{other.base_url}/probe")["http_code"] == 200
+        assert "x-api-key" not in other.last_headers, f"{how} key leaked to an absolute off-origin URL"
+        api.get("/probe")
+        assert base.last_headers.get("x-api-key") == "synthetic-key", f"{how} key lost on its own origin"
+
+
+def test_configured_and_per_call_headers_stay_off_a_cross_origin_redirect(tmp_path):
+    with _RecordingServer() as base, _RecordingServer() as other:
+        api = Api(base.base_url, headers={"X-Api-Key": "synthetic-key", "Accept": "application/json"})
+        assert api.get(_redirect(f"{other.base_url}/landed"))["http_code"] == 200
+        assert "x-api-key" not in other.last_headers, "configured key followed a redirect to another origin"
+        assert other.last_headers.get("accept") == "application/json", "content negotiation must still cross"
+
+        # urllib follows a POST only on 301/302/303 (re-issued as a GET); a 307
+        # POST is not followed in this port.
+        source = tmp_path / "upload.txt"; source.write_text("upload")
+        api.upload(_redirect(f"{other.base_url}/uploaded", 302), file_path=str(source),
+                   headers={"X-Upload-Token": "synthetic-call"})
+        assert other.last_path == "/uploaded", "the redirect hop never reached the other origin"
+        assert "x-upload-token" not in other.last_headers, "per-call header followed a redirect to another origin"
+
+        api.get(_redirect(f"{base.base_url}/landed"))
+        assert base.last_headers.get("x-api-key") == "synthetic-key", "same-origin redirect lost the key"
+
+
+def test_baseless_client_sends_configured_header_only_to_the_url_it_names():
+    with _RecordingServer() as named, _RecordingServer() as other:
+        api = Api(headers={"X-Api-Key": "synthetic-key"})
+        api.get(f"{named.base_url}/probe")
+        assert named.last_headers.get("x-api-key") == "synthetic-key"
+        api.get(named.base_url + _redirect(f"{other.base_url}/landed"))
+        assert "x-api-key" not in other.last_headers, "baseless key followed a redirect to another origin"
