@@ -2788,6 +2788,21 @@ def _stage_request_log(ctx: DispatchContext) -> None:
     return None
 
 
+def _session_needs_cookie(session) -> bool:
+    """Whether the response must carry this session's cookie.
+
+    A fresh session (only an id: minted for this request and holding no data,
+    e.g. the replacement for a cookie the store does not know) was not stored,
+    so a cookie for it would name nothing: the next request could not resume it
+    and would be handed another one.
+    """
+    sid = getattr(session, "session_id", None) or getattr(session, "id", None)
+    if not sid:
+        return False
+    is_fresh = getattr(session, "is_fresh", None)
+    return not (callable(is_fresh) and is_fresh())
+
+
 def _stage_session_save(ctx: DispatchContext) -> None:
     """Persist the session and set its cookie.
 
@@ -2806,8 +2821,7 @@ def _stage_session_save(ctx: DispatchContext) -> None:
     try:
         if not (getattr(session, "_is_new", False) and len(session) == 0):
             session.save()
-            sid = getattr(session, "session_id", None) or getattr(session, "id", None)
-            if sid:
+            if _session_needs_cookie(session):
                 # Route through the single cookie-builder so every
                 # TINA4_SESSION_* knob (Secure/HttpOnly/SameSite) and the
                 # proxy-aware Secure detection actually take effect. Do NOT

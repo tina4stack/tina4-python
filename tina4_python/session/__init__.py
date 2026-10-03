@@ -659,7 +659,7 @@ class Session:
         # A brand-new session this request has never stored and has not changed
         # has no record to slide and nothing of its own to write yet. A STORED
         # session re-writes even when not dirty, to slide its deadline forward.
-        if not (self._dirty or self._stored):
+        if self.is_fresh():
             return True
         record = self._data
         if self._stored:
@@ -684,6 +684,16 @@ class Session:
             self._loaded = _fingerprints(self._data)
             return True
         return False
+
+    def is_fresh(self) -> bool:
+        """Whether this session is only an id: nothing has stored it and it
+        holds no data. Such a session has no record and needs no cookie, so
+        save() writes nothing for it and the server sends no cookie for it. It
+        stops being fresh when something is stored in it. Calls that mark a
+        session changed without leaving anything in it (deleting a key it never
+        had, clear(), regenerate() on an empty session) leave it fresh: a record
+        with no data is not a session."""
+        return not self._stored and not self._data
 
     def _merged(self, current: dict) -> dict:
         """The stored record with only this request's own changes applied to it:
