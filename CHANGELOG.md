@@ -9,6 +9,10 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.145 — 2026-10-03
+
+The Api client no longer carries an application-configured header onto a different origin. Credentials travel under many names (`X-Api-Key`, a custom bearer header), not just `Authorization`/`Cookie`, so the cross-origin rule is now a strict keep-list: on a redirect to a different scheme/host/port, only content-negotiation and transport headers (`user-agent`, `accept`, `accept-encoding`, `accept-language`, `content-type`, `content-length`) cross; every configured or per-call header is bound to the origin it was meant for and dropped on the hop. A same-origin redirect keeps them. Proven with real two-origin servers, not mocks. No required runtime dependencies.
+
 ## 3.13.144 — 2026-10-02
 
 HEAD responses are now locked to exactly one `Content-Length` on the wire, equal to the length the GET would have sent. A HEAD that emits two differing `Content-Length` headers is malformed (RFC 7230 s3.3.2) - lenient clients (curl, browsers) tolerate it and show 200, but a strict proxy (nginx) rejects the upstream with 502, so an app behind such an ingress broke on every HEAD (link checkers, the Facebook validator, uptime monitors) while 'it works locally'. Python already emitted a single, correct `Content-Length` (the header builder dedupes case-insensitively); this release LOCKS it with a conformance test asserted on the real ASGI header LIST, because a dict/fetch/curl collapses a duplicate and proves nothing. Companion to the tina4-php fix in the same release, where a routed HEAD shipped `Content-Length: 0`. Also internal: the serve-debug readiness harness is unified on the `Server:`-banner identity guard across all four frameworks, and a carbon-benchmark drift (a removed `scss` import) is fixed so `carbon_benchmarks.py --carbon` runs clean. No runtime behaviour change in python. The framework still has no required runtime dependencies.
