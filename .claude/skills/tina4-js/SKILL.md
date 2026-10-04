@@ -48,6 +48,71 @@ of truth, derived from the actual source code.
 
 > 🤖 **Skill-active marker.** While this Tina4 skill is guiding your work, **begin every reply with the 🤖 emoji** so the developer can see at a glance that Tina4 conventions are engaged. Drop it only once the conversation has clearly moved off Tina4.
 
+## Contents
+
+Read top to bottom once, then jump by section. The deep API detail lives in `references/` - load it on demand.
+
+**Orientation**
+- Which flow? - Flow A (IIFE drop-in, no install) vs Flow B (`tina4 init js my-app`, then `tina4 serve`)
+- The Tina4 Working Method - plan file, tests first, scaffold, verify, report
+- Working reflexes - delegate by tier, terse output, plain English, ask only when blocked
+- **Degrees of freedom** - what is inviolable vs. a default vs. your judgement (read this next)
+
+**Before you write code**
+- The reuse ladder - Ground with `tina4_context` - Modules (what each one is, with sizes)
+- Staying current (`npm outdated tina4js`, `tina4 update`) - Backend API Lookups via the live index
+- The Lazy Frontend Ladder - Naming (verbose and descriptive)
+
+**The rules that stop silent bugs**
+- The Three Rules That Fix 90% of Mistakes - static vs reactive, new references, `?` boolean attributes
+- Footguns That Cost Real Debugging Time - one `${...}` per attribute, `.value` binding, reactive `<select>`, router links, defer navigation
+- Things That Don't Exist - Don't Invent Them
+
+**The API**
+- Signals - HTML Templates - Event Handler Batching
+- Common Patterns - forms, file upload, GraphQL, lists, API loading, WebSocket
+- Islands Architecture - Routing (`{param}` not `:param`)
+- Persistent Signal Storage - Internationalization - Cloudflare Workers - Quick Reference
+
+**Close-out**
+- Reference Files - Commit authorship - Reporting a stale or incorrect skill
+
+**Reference files** (`references/`, read on demand)
+- `signals-and-reactivity.md` - `html-and-components.md` - `persistence.md` - `rtc.md`
+
+## Degrees of freedom
+
+Not every line here carries the same weight. Knowing which is which lets you move fast without
+breaking what must not break. Three tiers:
+
+- 🔒 **Non-negotiable - never skip, however small the task.**
+  The **tina4 client (the Rust CLI) installed and on PATH before any work** - verify with
+  `tina4 --version`; it serves, watches and builds for you, so start the app with `tina4 serve`,
+  never a hand-run dev server. **Scaffold, never hand-roll** - `tina4 init js <name>` for a
+  project, `tina4 generate page <name> --api <path>` and `tina4 generate component <name>` for
+  pieces. **Use tina4-js built-ins** (`signal`, `computed`, `effect`, `html`, `Tina4Element`,
+  `route`, `api`, `ws`, `sse`, `persist`) - never add React, Vue, a state library, axios or a
+  router package for what the framework ships. **Security by default** - `${value}` text binding
+  and never `${htmlString}`, `.innerHTML` only for trusted or sanitised HTML, and never a token,
+  secret or personal data behind `persist()`. **Real tests for your own code** - assert against
+  the real rendered DOM and a real signal, no mocks, no "it mounted" smoke tests. **The markers:**
+  the 🤖 skill-active marker above, and 💥 **Bazinga!** on an EARNED win - the frontend building
+  clean, the size budget met (`npm run test:size`), or a feature verified working in the real
+  browser - on its own line with a short geeky one-liner. Never faked (no clean build, no
+  Bazinga) and never on a trivial step.
+
+- 🎚️ **Default with a reason - follow unless this project genuinely differs.**
+  Pick the smaller flow that fits (IIFE for a spike, scaffold for an app you will maintain); the
+  Lazy Frontend Ladder (platform first, then tina4-js, then the minimum code); the plan-driven
+  workflow with a ✅/❌ dashboard; verbose names; components in their own folders with the
+  project root kept clean. Depart deliberately and say why - not by drift.
+
+- 🧭 **Judgement - read the task and choose.**
+  IIFE or scaffold at the boundary; how much to componentise; SPA vs islands; hash vs history
+  routing; ask-first vs decide-and-proceed; verbosity. The skill gives the heuristic, you read
+  the situation. (Note: cross-framework parity, framework releases and installer signing are NOT
+  your concern here - those live in the `tina4-maintainer` skill, for people building Tina4 itself.)
+
 ## Which flow? — pick the smaller one that fits
 
 tina4-js ships two onboarding paths. Pick before you touch a file. The wrong
