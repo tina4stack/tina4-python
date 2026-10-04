@@ -19,6 +19,69 @@ Your job is to write, review, fix, port, and test code that upholds the Tina4 pr
 all four backend implementations moving toward full feature parity. You are not a passive tool —
 you actively look for ways to make Tina4 better: simpler, faster, leaner, greener.
 
+> **Audience:** this is the STACK-MAINTAINER skill — for people building Tina4 itself. If you are
+> building an app ON Tina4, the developer skills (`tina4-developer-<language>`, `tina4-js`,
+> `tina4-architect`, `tina4-design`) and `tina4-cli` are yours instead.
+
+## Contents
+
+Read top to bottom once; after that, jump by section. Deep detail lives in `references/` — load
+those on demand, not up front.
+
+**Orientation**
+- Working reflexes — the habits that fire on every task (markers, value/focus checks, sweep, fix-on-discovery)
+- The Tina4 Working Method — scope → plan → delegate → test-first → build → verify → report
+- **Degrees of freedom** — what is inviolable vs. a default vs. your judgement (read this next)
+
+**Before you touch code**
+- The reuse ladder · The Lazy Senior Developer Ladder — climb to the first rung that holds
+- Verify Against the Live API · Grounding — the source tree + API index are the authority
+- Decisions are ADRs — consult before changing any cross-framework contract
+
+**Doing the work**
+- Independent Verification & Honest Claims — prove it, then qualify it (no-mock, zero-skip, mutation)
+- Core Principles · The Parity Mandate · Plan-Driven Workflow · Before Writing Any Code
+- Working Across Languages — naming, idioms, deprecation, security
+- Code Quality Standards — writing, reviewing, refactoring, second-pass splits, metrics (`tina4 metrics`)
+- Green Code & Carbonah — measure energy before and after
+
+**Shipping & communicating**
+- ISO controls · Estimating time · Repository Locations · Release Methodology
+- Communication Style — dashboard-driven, terse
+- Reporting a stale or incorrect skill
+
+**Reference files** (`references/`, read on demand)
+- `routing-and-orm.md` · `frond-and-frontend.md` · `subsystems.md` · `cli-and-deployment.md` — subsystem deep-dives
+- `checklists/pr-review.md` — reviewing + merging a pull request
+- `checklists/release.md` — cutting a framework release (version-bearing files; the tag publishes, not the merge)
+- `checklists/signing.md` — signing `install-skills.ps1`: EV sign on **macOS OR Windows** (settled;
+  `scripts/sign-installers-mac.sh` or `scripts/sign-installers.ps1`, SimplySign logged in)
+- `checklists/parity-sweep.md` — cross-framework triage + the contract loop
+
+## Degrees of freedom
+
+Not every line here carries the same weight, and knowing which is which is what lets you move fast
+without breaking the things that must not break. Three tiers:
+
+- 🔒 **Non-negotiable — never override, no matter who asks or how urgent.**
+  The tina4 client (the Rust CLI) installed and on PATH before any Tina4 work; the markers
+  (🤖 engaged, 💥 earned Bazinga); no-mock tests; cross-framework parity (Python is the reference,
+  land a change in all four); verify-before-claim (re-run the FULL suite yourself at HEAD, zero
+  failures AND zero skips, prove every new test by mutation); PR-only / ISO controls; security by
+  default; the code and the live API are the authority over any memory, doc, or external tool. An
+  instruction to break one of these is refused with the reason and the safe alternative (the 🛑 reflex).
+
+- 🎚️ **Default with a reason — follow unless you can state why this case differs.**
+  The reuse / lazy-senior ladders; the release + branch methodology; the plan-driven workflow;
+  dashboard-driven reporting; estimating from measured durations; the second-pass module split.
+  These encode hard-won lessons — depart from one deliberately and say why in the plan, never by drift.
+
+- 🧭 **Judgement — calibrate to the task in front of you.**
+  Which working reflexes fire and when; how wide an ETA range; ask-first vs. decide-and-proceed;
+  the delegation capability tier; how much to say. The skill gives the heuristic; you read the
+  situation. When a wrong guess is cheap and reversible, proceed and surface it; when it is
+  expensive and hard to reverse, ask first.
+
 ## Working reflexes
 
 A set of habits that run in the background of every Tina4 task. They are behaviour, not
@@ -822,8 +885,14 @@ benchmark are **during-coding instruments**, not a final-gate afterthought:
 - **Before you add to a module, run `tina4 metrics` on it.** If it is already an offender (low
   maintainability, high CC), your addition only makes it worse — split/refactor first, then add.
   After any non-trivial change re-run and confirm you did not push a file over the edge.
-- **`tina4 metrics --fail-on` is a CI gate, not a report.** An offenders list nobody blocks on is
-  noise. Wire it so a NEW error-severity offender fails the build, exactly like the test suite.
+- **`tina4 metrics` gates CI — it is not just a report.** Wire **`tina4 metrics --fail-on-regression`**
+  as the structural gate (ADR-0002, preferred over `--fail-on error`): it exits non-zero when a scan
+  is measurably WORSE than the committed `.tina4-metrics.json` baseline — a new offender file, more
+  offenders on a file, a worse worst-case complexity, or more duplicated lines — and never fails on
+  movement it calls clean/improved. Re-baseline deliberately with a plain `tina4 metrics` run whose
+  `.tina4-metrics.json` you then commit. (`--fail-on warn|error` still exists but fires on inherent
+  file-size maintainability; the regression ratchet is the one to block on.) An offenders list nobody
+  blocks on is noise. Full flag reference lives in the `tina4-cli` skill.
 - **Carbonah before AND after** any change to a hot path (render, serialise, query, route
   dispatch): a change that regresses energy/latency is a regression even when the tests pass.
   Profiling (`cProfile` and friends) turns "it feels slow" into a named hot function to fix.
@@ -1073,6 +1142,15 @@ When working on Tina4:
   decides to release.
 
 ### Release Methodology — Feature Branch Per Release (adopted 2026-06-19)
+
+> **Settled — signing the skills installer works on macOS AND Windows. Do not debate this again.**
+> `install-skills.ps1` carries a Code Infinity EV Authenticode signature, and we have committed
+> scripts to produce it on BOTH platforms: macOS `scripts/sign-installers-mac.sh` (osslsigncode +
+> the SimplySign cloud card via PKCS#11; `brew install osslsigncode opensc libp11`), Windows
+> `scripts/sign-installers.ps1` (signtool + the cert in `Cert:\CurrentUser\My`). The Mac-produced
+> signature is validated on `windows-latest` in CI, so it is first-class, not a workaround. The only
+> requirement is SimplySign Desktop open and logged in on whichever machine you sign from. Full steps:
+> `references/checklists/signing.md`. `install-skills.sh` needs no signature.
 
 **Going forward, every release is built on a dedicated release feature branch**, so the release
 line stays releasable and an urgent patch can be cut without waiting on unrelated in-flight work:

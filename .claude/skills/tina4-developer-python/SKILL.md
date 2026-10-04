@@ -23,6 +23,62 @@ it's a route.
 
 > 🤖 **Skill-active marker.** While this Tina4 skill is guiding your work, **begin every reply with the 🤖 emoji** so the developer can see at a glance that Tina4 conventions are engaged. Drop it only once the conversation has clearly moved off Tina4.
 
+## Contents
+
+Read top to bottom once; then jump by section. Deep detail lives in `references/` — load on demand.
+
+**Orientation**
+- Announce before you act · Detect if you are stale — how this skill keeps itself honest
+- The Tina4 Working Method — journeys, sibling skills, outcome-first, delegate, plan, tests-first, scaffold, verify, report
+- **Degrees of freedom** — what is inviolable vs. a default vs. your judgement (read this next)
+
+**Before you write code**
+- The reuse ladder · Retrieve the current API with `tina4_context` · Verify Against the Live API
+- The Tina4 AI Coder Rule Path · Quick Start · Lazy means less code, not a flimsier path
+
+**Choosing the shape**
+- Two Ways to Build — monolithic · API + reactive frontend · microservices + queues; the scaling guide; pick one, don't mix
+- The Golden Rules (incl. authentication — don't reach for `@noauth()`)
+
+**Running the project**
+- Language Version · Staying current (`tina4` updates) · Environment Configuration
+- Testing · Deployment · Plan First
+
+**Reference files** (`references/`, read on demand)
+- `routes-and-api.md` · `data-and-orm.md` · `templates-and-frontend.md` · `auth-and-services.md`
+- `realtime.md` · `web-push.md` · `deployment.md` · `ai-coder-rule-path.svg`
+
+## Degrees of freedom
+
+Not every line here carries the same weight. Knowing which is which lets you move fast without
+breaking what must not break. Three tiers:
+
+- 🔒 **Non-negotiable — never skip, however small the task.**
+  The **tina4 client (the Rust CLI) installed and on PATH before any work** — verify with
+  `tina4 --version`; it compiles SCSS, watches files and serves, so `python app.py` is never the way
+  (use `tina4 serve`). **Scaffold, never hand-roll** — `tina4 init` for a project, `tina4 generate
+  model|route|migration|middleware <name>` for pieces (the full flag set is in the `tina4-cli`
+  skill). **Use Tina4's built-ins** (Auth, ORM, Queue, Api, Cache, Sessions, Frond, GraphQL,
+  WebSocket) — don't add a dependency for what the framework ships. **Security by default** —
+  parameterised SQL, auto-escaped output, auth on write routes (don't reach for `@noauth()`),
+  `TINA4_SECRET` from env. **All schema changes via migrations.** **Real tests for your own code**
+  — no mocks against a real dependency. **The markers:** the 🤖 skill-active marker above, and
+  💥 **Bazinga!** on an EARNED win — your test suite goes green on a real dependency, a feature is
+  verified working end to end, a clean deploy lands — on its own line with a short geeky one-liner.
+  Never faked (no green run, no Bazinga) and never on a trivial step.
+
+- 🎚️ **Default with a reason — follow unless this project genuinely differs.**
+  The reuse ladder; the plan-driven workflow; one build shape per project (don't mix monolith /
+  reactive / microservices); the project conventions (one resource per file, no inline styles, CSS
+  variables, `base.twig` inheritance, constants not magic values, thin routes over a service layer).
+  Depart deliberately and say why — not by drift.
+
+- 🧭 **Judgement — read the task and choose.**
+  Which build shape fits; how much to scaffold vs. write by hand; how wide to cast a feature;
+  verbosity; ask-first vs. decide-and-proceed. The skill gives the heuristic; you read the situation.
+  (Note: cross-framework parity, framework releases and installer signing are NOT your concern here —
+  those live in the `tina4-maintainer` skill, for people building Tina4 itself.)
+
 ## Announce before you act
 
 **Say what you are about to do, in one line, before you do it.** A developer

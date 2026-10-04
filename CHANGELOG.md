@@ -9,6 +9,15 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.146 — 2026-10-04
+### AI skills
+- Every skill now opens with a content list (table of contents) and a degrees-of-freedom legend (what is inviolable, what is a default, what is judgement).
+- New `tina4-cli` skill documents every `tina4` command and flag and the scaffolding discipline.
+- `tina4-maintainer` gains task checklists (PR review, release, installer signing, parity sweep); `tina4-design` split into focused reference files.
+- Skills installer now supports one-level-nested references; `install-skills.ps1` re-signed.
+### Framework
+- No framework code changes - the version bump carries the skills release across all four frameworks at parity.
+
 ## 3.13.145 — 2026-10-03
 
 The Api client no longer carries an application-configured header onto a different origin. Credentials travel under many names (`X-Api-Key`, a custom bearer header), not just `Authorization`/`Cookie`, so the cross-origin rule is now a strict keep-list: on a redirect to a different scheme/host/port, only content-negotiation and transport headers (`user-agent`, `accept`, `accept-encoding`, `accept-language`, `content-type`, `content-length`) cross; every configured or per-call header is bound to the origin it was meant for and dropped on the hop. A same-origin redirect keeps them. Proven with real two-origin servers, not mocks. No required runtime dependencies.
