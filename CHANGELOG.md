@@ -9,6 +9,14 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.147 — 2026-10-05
+### Dev MCP tools (fixes tina4-php#271)
+- `database_columns` reads schema metadata, so an empty table returns its columns; a missing table returns a clear `table not found` error.
+- Tool argument validation returns an actionable `missing/unknown argument` error instead of a raw language error or 500; `api_method` now populates `params` and `return`.
+- `route_list` entries include each route's `middleware`, so a middleware-guarded route is distinguishable from an open one.
+- A new route file added while the server runs surfaces a signal instead of silence.
+- Developer skill corrected: per-language hot-reload reality, and `api_method` shown with argument names.
+
 ## 3.13.146 — 2026-10-04
 ### AI skills
 - Every skill now opens with a content list (table of contents) and a degrees-of-freedom legend (what is inviolable, what is a default, what is judgement).

@@ -70,8 +70,12 @@ def _schema_from_signature(func) -> dict:
     properties = {}
     required = []
 
+    accepts_any_keyword = False
     for name, param in sig.parameters.items():
-        if name == "self":
+        if name == "self" or param.kind is inspect.Parameter.VAR_POSITIONAL:
+            continue
+        if param.kind is inspect.Parameter.VAR_KEYWORD:
+            accepts_any_keyword = True
             continue
         annotation = param.annotation
         prop = {"type": _TYPE_MAP.get(annotation, "string")}
@@ -86,7 +90,30 @@ def _schema_from_signature(func) -> dict:
     schema = {"type": "object", "properties": properties}
     if required:
         schema["required"] = required
+    if accepts_any_keyword:
+        schema["additionalProperties"] = True
     return schema
+
+
+def _validate_tool_arguments(tool_name: str, schema: dict, arguments) -> str | None:
+    """Check call arguments against the tool's input schema BEFORE invoking it.
+
+    Returns None when valid, else the actionable message
+    ``missing required argument '<p>' (<tool> takes <p1>, <p2>)`` (or
+    ``unknown argument '<k>' (...)``). Keeps a Python TypeError from escaping
+    as a 500 (tina4-php#271)."""
+    properties = schema.get("properties") or {}
+    takes = ", ".join(properties) if properties else "no arguments"
+    if not isinstance(arguments, dict):
+        return f"arguments must be an object ({tool_name} takes {takes})"
+    for required_name in schema.get("required") or []:
+        if required_name not in arguments:
+            return f"missing required argument '{required_name}' ({tool_name} takes {takes})"
+    if not schema.get("additionalProperties"):
+        for supplied_name in arguments:
+            if supplied_name not in properties:
+                return f"unknown argument '{supplied_name}' ({tool_name} takes {takes})"
+    return None
 
 
 def is_localhost() -> bool:
@@ -422,7 +449,10 @@ class McpServer:
         if not tool:
             raise ValueError(f"Unknown tool: {tool_name}")
 
-        arguments = params.get("arguments", {})
+        arguments = params.get("arguments") or {}
+        invalid = _validate_tool_arguments(tool_name, tool["inputSchema"], arguments)
+        if invalid:
+            return {"content": [{"type": "text", "text": json.dumps({"error": invalid}, indent=2)}]}
         handler = tool["handler"]
 
         # Call the handler with the provided arguments

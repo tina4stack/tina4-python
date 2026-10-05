@@ -286,12 +286,16 @@ def register_dev_tools(server):
         db = ORM._get_db() if hasattr(ORM, "_get_db") else None
         if db is None:
             return {"error": "No database connection"}
-        return db.get_columns(table)
+        columns = db.get_columns(table)
+        if not columns and not db.table_exists(table):
+            return {"error": f"table not found: {table}"}
+        return columns
 
     # ── Route Tools ─────────────────────────────────────────────
 
     def route_list() -> list:
-        """List all registered routes with methods and paths."""
+        """List the registered routes with method, path, auth_required and the
+        names of the middleware attached to each (as loaded in this process)."""
         from tina4_python.core.router import Router
         routes = []
         for route in Router.get_routes():
@@ -299,6 +303,10 @@ def register_dev_tools(server):
                 "method": route.get("method", ""),
                 "path": route.get("path", ""),
                 "auth_required": route.get("auth_required", False),
+                "middleware": [
+                    getattr(attached, "__name__", None) or type(attached).__name__
+                    for attached in route.get("middleware") or []
+                ],
             })
         return routes
 
@@ -1071,12 +1079,20 @@ def register_dev_tools(server):
         spec = Docs(project_root=str(project_root)).class_spec(name)
         return spec if spec is not None else {"error": f"class not found: {name}"}
 
-    def api_method(class_: str, name: str) -> dict:
-        # `class` is a Python keyword — accept it via `class_` and let
-        # the MCP layer pass either through to the wrapper.
+    def api_method(**arguments) -> dict:
+        # `class` is a Python keyword, so the handler takes **arguments; the
+        # published schema (below) names the properties `class` and `name`.
         from tina4_python.docs import Docs
+        class_ = arguments["class"]
+        name = arguments["name"]
         spec = Docs(project_root=str(project_root)).method_spec(class_, name)
         return spec if spec is not None else {"error": f"method not found: {class_}.{name}"}
+
+    api_method_schema = {
+        "type": "object",
+        "properties": {"class": {"type": "string"}, "name": {"type": "string"}},
+        "required": ["class", "name"],
+    }
 
     # ── Code/doc grounding (tina4_python.context) ───────────────
     # Sibling of api_* but the DUAL of it: api_* is exact structural
@@ -1175,4 +1191,5 @@ def register_dev_tools(server):
     ]
 
     for name, handler, description in tools:
-        server.register_tool(name, handler, description)
+        server.register_tool(name, handler, description,
+                             api_method_schema if name == "api_method" else None)

@@ -151,6 +151,48 @@ def _safe_signature(obj) -> str:
 _RECEIVER_PARAMS = {"self", "cls", "mcs", "metacls", "instance", "owner"}
 
 
+def _parse_signature(signature: str):
+    """Parse a rendered ``name(a: int = 1) -> str`` signature into an ast node."""
+    import ast
+    try:
+        return ast.parse(f"def {signature}: pass").body[0]
+    except SyntaxError:
+        return None
+
+
+def _params_from_signature(signature: str) -> list[dict[str, Any]]:
+    """Structured params: [{name, type, required, default}] (type/default are source text)."""
+    import ast
+    node = _parse_signature(signature)
+    if node is None:
+        return []
+    args = node.args
+    positional = list(args.posonlyargs) + list(args.args)
+    defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+    entries = list(zip(positional, defaults)) + list(zip(args.kwonlyargs, args.kw_defaults))
+    params = [
+        {
+            "name": arg.arg,
+            "type": ast.unparse(arg.annotation) if arg.annotation else "",
+            "required": default is None,
+            "default": ast.unparse(default) if default is not None else None,
+        }
+        for arg, default in entries
+    ]
+    for star, prefix in ((args.vararg, "*"), (args.kwarg, "**")):
+        if star:
+            params.append({"name": prefix + star.arg,
+                           "type": ast.unparse(star.annotation) if star.annotation else "",
+                           "required": False, "default": None})
+    return params
+
+
+def _return_from_signature(signature: str) -> str:
+    import ast
+    node = _parse_signature(signature)
+    return ast.unparse(node.returns) if node is not None and node.returns else ""
+
+
 def _render_signature(func, display_name: str) -> str:
     """Public signature for `display_name`, dropping leading receiver params."""
     try:
@@ -728,6 +770,8 @@ class Docs:
                     "name": e.name,
                     "kind": "method",
                     "signature": e.signature,
+                    "params": _params_from_signature(e.signature),
+                    "return": _return_from_signature(e.signature),
                     "summary": e.summary,
                     "docstring": e.docstring,
                     "file": e.file,

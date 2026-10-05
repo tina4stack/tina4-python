@@ -230,8 +230,11 @@ the developer can correct.
 ### 1. Keep the main session free — delegate to a worker
 When the developer gives an instruction, don't do the work inline. **Allocate it to a plan, then
 spawn a separate worker to execute it**, so the main session is always free for the next input.
-Tina4 **hot-reloads on save** (DevReload), so as the worker edits routes, models, and templates the
-developer watches the interface change **live in the browser** — keeping the main session open is
+Under `tina4 serve` the file watcher reloads on save: templates and static files refresh the browser,
+and an edited or NEW file under `src/` (routes, models) is re-imported through `POST /__dev/api/reload`
+with no restart. A bare `python app.py` has no watcher, so a route or model file added there needs a
+restart. The MCP `route_list` tool reads the live route registry, so it reflects a new file once the reload
+has run. As the worker edits, the developer watches the interface change **live in the browser** — keeping the main session open is
 what lets them observe and steer while the work happens. The main agent scopes, dispatches, and
 reports; workers build and update the plan. When a worker finishes an item, surface it to the
 developer. Whoever builds updates `plan/<feature>.md` in the **same turn** they claim progress:
@@ -415,13 +418,13 @@ whenever the dev server is running (`tina4 serve` with `TINA4_DEBUG=true`):
 
 - **`api_search("render template")`** — ranked search across framework + your own code; returns fqn, signature, file:line. Run it BEFORE assuming a method exists.
 - **`api_class("Frond")`** — every method on a class, with signatures. A bare name (`Frond`), an import path, or the full fqn all resolve.
-- **`api_method("Frond", "add_test")`** — exact signature, params, return type, file and line for one method.
+- **`api_method`** with arguments `class` and `name` (e.g. `class="Frond"`, `name="add_test"`) — exact signature, a structured `params` list (`name`, `type`, `required`, `default`), `return` type, file and line for one method. Omit an argument and it answers `missing required argument 'name' (api_method takes class, name)`.
 - **`code_search("where is the auth token issued?")`** — fuzzy/semantic full-text search over **THIS project's own source + docs** (the native `Context` FTS5 index — zero-dep, kept live on every file save). Ranks the file that *defines* a symbol above tests that merely mention it. The in-repo, semantic counterpart to `api_*`.
 
 ```
 api_search("queue consume")     -> finds Queue.consume and its signature
 api_class("Database")           -> every method on Database, with signatures
-api_method("Frond", "add_test") -> add_test(name, fn)
+api_method(class="Frond", name="add_test") -> add_test(name, fn)
 code_search("send an email")    -> the routes/services in YOUR app that already do it
 ```
 
