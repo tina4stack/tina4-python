@@ -209,7 +209,7 @@ def dev_tools_env(tmp_path, monkeypatch):
         "plan_flesh":         {"name": "fixture-plan.md", "prompt": "probe"},
         "api_search":         {"query": "ORM", "k": 3},
         "api_class":          {"name": "ORM"},
-        "api_method":         {"class_": "Database", "name": "fetch"},
+        "api_method":         {"class": "Database", "name": "fetch"},
         "code_search":        {"query": "route", "k": 3},
     }
 
