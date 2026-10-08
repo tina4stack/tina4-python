@@ -172,8 +172,38 @@ class AutoCrud:
                 offset = 0
                 page = 1
 
-            records = _cls.all(limit=limit, offset=offset)
-            total = _cls.count()
+            # ADR-0094: ?search=term full-text filters the list — a LIKE %term%
+            # OR'd across the model's declared string/text columns, applied
+            # before limit/offset so the envelope's total reflects the filtered
+            # set; and ?sort=column (&sort_dir=asc|desc) orders it. Both are
+            # ADR-0069 safe: the sort column must resolve to a declared field
+            # (else it is ignored), and the search columns are the model's own.
+            # This is what the CRUD admin grid (and any client) uses.
+            search_term = str(request.query.get("search", "") or "").strip()
+            sort_param = str(request.query.get("sort", "") or "").strip()
+            sort_dir = "DESC" if str(request.query.get("sort_dir", "")).lower() == "desc" else "ASC"
+
+            order_by = None
+            if sort_param:
+                sort_name = _cls._declared_field_for(sort_param)
+                if sort_name is not None:
+                    order_by = f"{_cls.get_db_column(sort_name)} {sort_dir}"
+
+            where_parts, where_params = [], []
+            if search_term:
+                search_cols = [_cls.get_db_column(name)
+                               for name, field in _cls._fields.items() if field.field_type is str]
+                if search_cols:
+                    where_parts.append("(" + " OR ".join(f"{col} LIKE ?" for col in search_cols) + ")")
+                    where_params.extend([f"%{search_term}%" for _ in search_cols])
+
+            if where_parts:
+                where_clause = " AND ".join(where_parts)
+                records = _cls.where(where_clause, where_params, limit=limit, offset=offset, order_by=order_by)
+                total = _cls.count(where_clause, where_params)
+            else:
+                records = _cls.all(limit=limit, offset=offset, order_by=order_by)
+                total = _cls.count()
             total_pages = max(1, -(-total // limit)) if limit else 1
             record_dicts = [record.to_dict() for record in records]
             # The canonical ADR-0043 envelope: EXACTLY seven snake_case keys, no
@@ -444,3 +474,11 @@ class AutoCrud:
     def clear():
         """Clear all registered models (useful for testing)."""
         AutoCrud._registered.clear()
+
+
+# ADR-0094: the frontend-over-AutoCrud admin page generator. Imported last so
+# that tina4_python.crud.Crud resolves AutoCrud (defined above) without a
+# circular import.
+from tina4_python.crud.page import Crud  # noqa: E402
+
+__all__ = ["AutoCrud", "Crud"]

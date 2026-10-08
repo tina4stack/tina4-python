@@ -117,7 +117,7 @@ CASES = [
      "tests/test_widget_migration.py"),
     ("crud", [],
      ["generate", "crud", "Trinket", "--fields", "name:string,qty:int"],
-     "tests/test_trinkets.py"),
+     "tests/test_trinket.py"),
 ]
 
 
