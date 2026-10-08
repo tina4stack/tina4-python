@@ -274,3 +274,63 @@ def test_public_in_project_symlink_remains_readable(project_dir):
         status, body, _ = _dispatch("GET", endpoint + "?path=public-alias.txt")
         assert status == 200
         assert b"public-readme" in body
+
+
+# ── #279: a Docker dev box reaches the toolbar + an opt-in reaches the dashboard
+
+#: TEST-NET-3 (RFC 5737) - a genuine non-loopback peer, like a Docker gateway.
+_REMOTE = ("203.0.113.9", 5555)
+
+
+def test_toolbar_assets_load_for_a_non_loopback_peer(project_dir):
+    # Static assets carry no secrets, so they are exempt from the peer gate.
+    css = _dispatch("GET", "/__dev/toolbar.css", client=_REMOTE)
+    js = _dispatch("GET", "/__dev/toolbar.js", client=_REMOTE)
+    assert css[0] == 200, f"toolbar.css -> {css[0]}"
+    assert js[0] == 200, f"toolbar.js -> {js[0]}"
+
+
+def test_dashboard_is_refused_for_a_non_loopback_peer_by_default(project_dir):
+    status, body, _ = _dispatch("GET", "/__dev", client=_REMOTE)
+    assert status == 403
+    assert b"non-loopback peer" in body
+
+
+def test_dev_allowed_peers_admits_the_raw_peer(project_dir, monkeypatch):
+    monkeypatch.setenv("TINA4_DEV_ALLOWED_PEERS", "203.0.113.0/24")
+    status, _, _ = _dispatch("GET", "/__dev", client=_REMOTE)
+    assert status == 200, "the opt-in CIDR must admit the Docker-gateway peer"
+
+
+def test_dev_allowed_peers_rejects_a_peer_outside_the_range(project_dir, monkeypatch):
+    monkeypatch.setenv("TINA4_DEV_ALLOWED_PEERS", "10.0.0.0/8")
+    status, _, _ = _dispatch("GET", "/__dev", client=_REMOTE)
+    assert status == 403
+
+
+def test_toolbar_is_withheld_from_a_refused_viewer_but_injected_for_loopback(project_dir):
+    refused = _dispatch("GET", "/hello", client=_REMOTE)
+    loop = _dispatch("GET", "/hello", client=("127.0.0.1", 12345))
+    assert b"tina4-dev-toolbar" not in refused[1], "a refused viewer must not get toolbar markup"
+    assert b"tina4-dev-toolbar" in loop[1], "a loopback viewer still gets the toolbar"
+
+
+def test_opt_in_restores_the_toolbar_for_the_admitted_peer(project_dir, monkeypatch):
+    monkeypatch.setenv("TINA4_DEV_ALLOWED_PEERS", "203.0.113.0/24")
+    admitted = _dispatch("GET", "/hello", client=_REMOTE)
+    assert b"tina4-dev-toolbar" in admitted[1], "an admitted peer gets the toolbar injected"
+
+
+@pytest.mark.parametrize("ip,entry,expected", [
+    ("172.22.0.1", "172.22.0.1", True),      # bare IP == /32
+    ("172.22.0.1", "172.16.0.0/12", True),   # Docker default bridge range
+    ("192.168.88.148", "192.168.0.0/16", True),
+    ("10.0.0.5", "172.16.0.0/12", False),
+    ("fd00::1", "fd00::/8", True),
+    ("::ffff:172.22.0.1", "172.16.0.0/12", True),  # IPv4-mapped peer matched as IPv4
+    ("172.22.0.1", "fd00::/8", False),       # family mismatch
+    ("not-an-ip", "172.16.0.0/12", False),
+])
+def test_ip_in_cidr_matches(ip, entry, expected):
+    from tina4_python.dev_admin import _ip_in_cidr
+    assert _ip_in_cidr(ip, entry) is expected
