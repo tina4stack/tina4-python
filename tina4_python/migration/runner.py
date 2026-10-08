@@ -754,11 +754,118 @@ def _record_applied(db, name: str, desc: str, batch: int, passed: int = 1) -> No
     )
 
 
-def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
-    """Run all pending migrations (internal implementation).
+# ── Cross-process migration lock (issue #277) ─────────────────────────────
+# Startup auto-migration runs once per process on a long-lived server and on
+# EVERY request under php -S / php-fpm / mod_php, and nothing serialized it: when
+# several workers or instances reached a fresh database at the same moment they
+# each applied the same migration, so a data migration inserted its rows more
+# than once and the losers failed on duplicate keys. One run-wide lock fixes it —
+# the winner migrates while the rest block, then re-read the applied set and find
+# nothing pending. The native DB advisory locks (PostgreSQL/MySQL/MSSQL) are
+# session-scoped and the OS file lock is held by a process, so all of them
+# auto-release when the holder dies: a crash mid-migration never deadlocks the
+# next boot. (Cross-HOST production still wants TINA4_AUTO_MIGRATE=false + one
+# `tina4 migrate` per deploy, since the file-lock engines serialize per host.)
+_MIGRATION_LOCK_NAME = "tina4_migration_lock"
+# A stable signed-64-bit key for PostgreSQL's pg_advisory_lock, derived from the
+# name so it cannot collide with an application's own advisory-lock keys. It is a
+# constant (not user input), so inlining it in the SQL is injection-safe.
+_PG_ADVISORY_KEY = int.from_bytes(
+    __import__("hashlib").sha256(_MIGRATION_LOCK_NAME.encode()).digest()[:8],
+    "big", signed=True,
+)
 
-    Returns list of executed migration filenames.
-    Use Migration class for the public API.
+
+def _acquire_migration_lock(db, migration_folder: str):
+    """Take the run-wide migration lock, blocking until it is held.
+
+    Returns an opaque handle for _release_migration_lock. PostgreSQL/MySQL/MSSQL
+    use a native session-scoped advisory lock; SQLite, Firebird and anything else
+    fall back to an OS advisory file lock on a sidecar in the migrations folder.
+    A backend that cannot lock degrades to the file lock, and finally to running
+    unlocked (the pre-#277 behaviour) rather than blocking boot.
+    """
+    try:
+        engine = (db.get_database_type() or "").lower()
+    except Exception:
+        engine = ""
+
+    try:
+        if engine.startswith("postgres"):
+            db.fetch_one(f"SELECT pg_advisory_lock({_PG_ADVISORY_KEY}) AS locked")
+            return ("postgres", None)
+        if engine.startswith("mysql"):
+            # -1 = wait indefinitely; GET_LOCK is connection-scoped.
+            db.fetch_one(f"SELECT GET_LOCK('{_MIGRATION_LOCK_NAME}', -1) AS locked")
+            return ("mysql", None)
+        if engine in ("mssql", "sqlserver"):
+            db.execute(
+                "DECLARE @res INT; EXEC @res = sp_getapplock "
+                f"@Resource = '{_MIGRATION_LOCK_NAME}', @LockMode = 'Exclusive', "
+                "@LockOwner = 'Session', @LockTimeout = -1"
+            )
+            return ("mssql", None)
+    except Exception as exc:
+        logger.debug(f"DB migration lock unavailable ({engine}): {exc}; using a file lock")
+
+    return _acquire_file_lock(migration_folder)
+
+
+def _acquire_file_lock(migration_folder: str):
+    """OS advisory file lock on a sidecar — the portable fallback (crash-safe)."""
+    try:
+        import fcntl  # POSIX only; the lab and every target server are POSIX
+        os.makedirs(migration_folder, exist_ok=True)
+        path = os.path.join(migration_folder, ".tina4_migration.lock")
+        handle = open(path, "w")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return ("file", handle)
+    except Exception as exc:
+        logger.debug(f"file migration lock unavailable: {exc}; running unlocked")
+        return ("none", None)
+
+
+def _release_migration_lock(db, handle) -> None:
+    kind, resource = handle
+    try:
+        if kind == "postgres":
+            db.fetch_one(f"SELECT pg_advisory_unlock({_PG_ADVISORY_KEY}) AS released")
+        elif kind == "mysql":
+            db.fetch_one(f"SELECT RELEASE_LOCK('{_MIGRATION_LOCK_NAME}') AS released")
+        elif kind == "mssql":
+            db.execute(
+                f"EXEC sp_releaseapplock @Resource = '{_MIGRATION_LOCK_NAME}', @LockOwner = 'Session'"
+            )
+        elif kind == "file" and resource is not None:
+            import fcntl
+            try:
+                fcntl.flock(resource.fileno(), fcntl.LOCK_UN)
+            finally:
+                resource.close()
+    except Exception as exc:
+        logger.debug(f"migration lock release failed ({kind}): {exc}")
+
+
+def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
+    """Run all pending migrations under a cross-process lock (internal).
+
+    Returns list of executed migration filenames. The lock serializes concurrent
+    startup migrations (issue #277) so each migration applies exactly once no
+    matter how many workers/instances boot at once. Use the Migration class for
+    the public API.
+    """
+    lock = _acquire_migration_lock(db, migration_folder)
+    try:
+        return _run_pending(db, migration_folder, delimiter)
+    finally:
+        _release_migration_lock(db, lock)
+
+
+def _run_pending(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
+    """Apply every pending migration, in order. Caller holds the run-wide lock.
+
+    Returns list of executed migration filenames. Use _migrate() (which takes the
+    cross-process lock) or the Migration class for the public API.
     """
     _ensure_tracking_table(db, migration_folder)
 
