@@ -136,7 +136,7 @@ class Messenger:
                  encryption: str = None, use_tls: bool = None,
                  imap_host: str = None, imap_port: int = None,
                  imap_username: str = None, imap_password: str = None,
-                 imap_encryption: str = None):
+                 imap_encryption: str = None, timeout: int = None):
         # SMTP (send) — priority: constructor > .env > sensible default
         # Whether a host was actually CONFIGURED, which is not the same as
         # self.host being set: self.host falls back to "localhost", so it is never
@@ -150,6 +150,16 @@ class Messenger:
         self.from_address = from_address or os.environ.get(
             "TINA4_MAIL_FROM", self.username or "noreply@localhost")
         self.from_name = from_name or os.environ.get("TINA4_MAIL_FROM_NAME", "")
+
+        # SMTP socket timeout (seconds): how long a connect, and each reply,
+        # may block before the send fails. Configurable so a host that accepts
+        # then goes silent cannot hold a worker for the full default. Priority:
+        # constructor > TINA4_MAIL_TIMEOUT > SMTP_TIMEOUT > 30 (issue #278).
+        try:
+            self.timeout = int(timeout) if timeout is not None else int(
+                os.environ.get("TINA4_MAIL_TIMEOUT") or os.environ.get("SMTP_TIMEOUT") or 30)
+        except (TypeError, ValueError):
+            self.timeout = 30
 
         # Encryption: constructor > .env > backward-compat use_tls > default "tls".
         # Validated here (ADR-0071 section 2): an unknown value raises now, it
@@ -421,7 +431,7 @@ class Messenger:
 
     def _smtp_send(self, msg: MIMEText | MIMEMultipart, recipients: list[str]) -> str:
         """Connect to SMTP and send."""
-        server = self._smtp_open(timeout=30)
+        server = self._smtp_open(timeout=self.timeout)
 
         try:
             if self.username and self.password:
