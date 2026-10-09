@@ -1964,84 +1964,112 @@ async def delete_{singular}(request, response):
 
 
 def _gen_crud(name: str, flags: dict):
-    """Generate full CRUD stack: model + migration + routes + template + test.
+    """ADR-0094: scaffold an AutoCrud-backed admin PAGE rendered by Crud.to_crud.
 
     tina4python generate crud Product --fields "name:string,price:float"
+
+    The route file is named by the model's TABLE, registers the AutoCrud REST
+    backend (secure-by-default; --public opens writes), and renders to_crud — no
+    hand-written list/detail/write routes. The overridable crud/*.twig templates
+    are copied into the app (unless --no-templates) so the developer owns an
+    editable copy straight away.
     """
-    fields = _fields_or_default(flags.get("fields", ""))
+    # The table name (singular, e.g. "product"; reserved words pluralised, e.g.
+    # "orders") is the canonical path: the model declares table_name "<table>",
+    # AutoCrud serves /api/<table>, and the page route + gate test key off it.
     table = _resolve_table(name, flags)
-    # Routes are the SINGLE plural of the singular base — pluralise(snake(name)) —
-    # never `table + "s"`. When the table was pluralised to escape a SQL reserved
-    # word (Order -> table `orders`), `table + "s"` double-pluralised the route,
-    # file and template to `orderss`. Deriving from the singular base keeps one
-    # consistent rule: Order -> orders, Product -> products.
-    route_name = _pluralize_table(_to_snake(name))
+    is_public = bool(flags.get("public"))
 
     print(f"\n  Generating CRUD for {name}...\n")
 
-    # 1. Model + migration (emit_test=False — crud emits its own broader test
-    #    at step 6, so the sub-generators stay quiet to avoid double-emission).
+    # 1. Model + migration (emit_test=False — crud emits its own broader gate
+    #    test at step 4, so the sub-generators stay quiet to avoid double-emit).
     _gen_model(name, flags, emit_test=False)
 
-    # 2. Routes with model — secure-by-default; thread --public through so
-    #    `generate crud X --public` opens the writes (mirrors AutoCrud public=).
-    is_public = bool(flags.get("public"))
-    route_flags = {"model": name, "public": is_public}
-    _gen_route(route_name, route_flags, emit_test=False)
+    # 2. Admin page route: registers AutoCrud (secure-by-default; --public opens
+    #    writes) and renders the to_crud admin UI at /admin/<table>.
+    _gen_crud_admin_route(name, table, is_public)
 
-    # 3. Template
-    template_dir = Path("src/templates/pages")
-    template_dir.mkdir(parents=True, exist_ok=True)
-    template_path = template_dir / f"{route_name}.twig"
-    if not template_path.exists():
-        # Build column headers from fields
-        cols = [f for f, _ in fields]
-        th = "\n                ".join(f"<th>{c.replace('_', ' ').title()}</th>" for c in cols)
-        td = "\n                ".join(f"<td>{{{{ item.{c} }}}}</td>" for c in cols)
+    # 3. Copy the overridable crud/*.twig templates into the app (unless
+    #    --no-templates) so the developer can edit them in place.
+    if "no-templates" not in flags:
+        _copy_crud_templates()
 
-        template_path.write_text(
-            '{% extends "base.twig" %}\n'
-            f'{{% block title %}}{name}s{{% endblock %}}\n'
-            '{% block content %}\n'
-            '<div class="container mt-4">\n'
-            f'    <h1>{name}s</h1>\n'
-            '    {# tina4:edit  restrict fields exposed to the API here #}\n'
-            '    <table class="table">\n'
-            '        <thead>\n'
-            '            <tr>\n'
-            '                <th>ID</th>\n'
-            f'                {th}\n'
-            '                <th>Actions</th>\n'
-            '            </tr>\n'
-            '        </thead>\n'
-            '        <tbody>\n'
-            '        {% for item in items %}\n'
-            '            <tr>\n'
-            '                <td>{{ item.id }}</td>\n'
-            f'                {td}\n'
-            '                <td><a href="/api/' + route_name + '/{{ item.id }}">View</a></td>\n'
-            '            </tr>\n'
-            '        {% endfor %}\n'
-            '        </tbody>\n'
-            '    </table>\n'
-            '</div>\n'
-            '{% endblock %}\n',
-            encoding="utf-8",
-        )
-        print(f"  ✓ Created {template_path}")
-
-    # 4. Form
-    _gen_form(name, flags)
-
-    # 5. View (list + detail)
-    _gen_view(name, flags)
-
-    # 6. Test — secure-by-default gate test (behavioural, real TestClient).
-    _gen_test(route_name, {"model": name, "secure_writes": True, "public": is_public})
+    # 4. Test — secure-by-default gate test (behavioural, real TestClient),
+    #    keyed off the table so it imports the page route + hits /api/<table>.
+    _gen_test(table, {"model": name, "secure_writes": True, "public": is_public})
 
     print(f"\n  CRUD generation complete for {name}.")
     print(f"  Run: tina4python migrate")
-    print(f"  Visit: /swagger to see the API docs")
+    print(f"  Visit: /admin/{table} for the admin UI, or /swagger for the API docs")
+
+
+def _gen_crud_admin_route(model: str, table: str, is_public: bool):
+    """Write the admin page route src/routes/<table>.py. It wires the AutoCrud
+    REST backend for the model and renders the to_crud admin page — ADR-0094:
+    to_crud owns no routes of its own, so the backend is AutoCrud and only the
+    GET page lives here. Secure by default; ``is_public`` opens the writes."""
+    target = Path("src/routes")
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / f"{table}.py"
+    if path.exists():
+        print(f"  ✗ File already exists: {path}")
+        return
+
+    if is_public:
+        router_import = "from tina4_python.core.router import get\n"
+        decorator = f'@get("/admin/{table}")'
+        posture_doc = "--public: the admin page and the writes are OPEN (no token)."
+        page_note = ""
+    else:
+        router_import = "from tina4_python.core.router import get, secured\n"
+        decorator = f'@secured()\n@get("/admin/{table}")'
+        posture_doc = ("Secure by default: the admin page AND the writes require a valid Bearer "
+                       "token (pass --public to open them).")
+        page_note = (
+            f"\n# NOTE: the admin page is secured (@secured). A browser needs a valid token/session\n"
+            f"# to open it; wire your login (Auth / Session) or run `generate crud {model} --public`\n"
+            f"# for an open page. The AutoCrud READ API (GET /api/{table}, GET /api/{table}/{{id}})\n"
+            f"# stays public by AutoCrud's default."
+        )
+
+    content = (
+        router_import
+        + "from tina4_python.crud import AutoCrud, Crud\n"
+        + f"from src.orm.{model} import {model}\n\n\n"
+        + f"# {model} admin — one server-rendered CRUD page (searchable, sortable,\n"
+        + f"# paginated table + create/edit/delete modals). The REST backend (GET\n"
+        + f"# list, GET/{{id}}, POST, PUT, DELETE) is AutoCrud; this file owns only\n"
+        + f"# the GET admin page. {posture_doc}{page_note}\n"
+        + f"#\n"
+        + f"# Restyle the UI by editing src/templates/crud/*.twig (copied into this app).\n"
+        + f"AutoCrud.register({model}, public={is_public})\n\n\n"
+        + f"{decorator}\n"
+        + f"async def {table}_admin(request, response):\n"
+        + f'    return response(Crud.to_crud(request, model={model}, title="{model} Admin"))\n'
+    )
+    path.write_text(content, encoding="utf-8")
+    print(f"  ✓ Created {path}")
+
+
+def _copy_crud_templates():
+    """Copy the framework's overridable crud/*.twig templates into the app's
+    src/templates/crud/ so the developer can edit them in place (an app copy
+    wins over the framework's via the app-first resolution). Existing files are
+    left untouched."""
+    import shutil
+    import tina4_python
+
+    source_dir = Path(tina4_python.__file__).resolve().parent / "templates" / "crud"
+    target_dir = Path("src/templates/crud")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for src in sorted(source_dir.glob("*.twig")):
+        dest = target_dir / src.name
+        if dest.exists():
+            print(f"  ✗ File already exists: {dest}")
+        else:
+            shutil.copyfile(src, dest)
+            print(f"  ✓ Created {dest}")
 
 
 def _gen_migration(name: str, flags: dict = None, *,
@@ -3884,7 +3912,7 @@ def _commands(args=None):
 GENERATORS = {
     "model":      {"handler": _gen_model,      "usage": '<Name> [--fields "name:string,price:float"] [--table-name <name>]', "summary": "ORM model + matching migration"},
     "route":      {"handler": _gen_route,      "usage": "<name> [--model Name] [--public]",            "summary": "CRUD route file, secure by default (--public opens writes)"},
-    "crud":       {"handler": _gen_crud,       "usage": '<Name> [--fields "..."] [--public]',          "summary": "Model + migration + routes + form + view + test"},
+    "crud":       {"handler": _gen_crud,       "usage": '<Name> [--fields "..."] [--public] [--no-templates]', "summary": "Model + migration + AutoCrud-backed admin page (to_crud) + editable crud/ templates + gate test"},
     "migration":  {"handler": _gen_migration,  "usage": "<description>",                               "summary": "Timestamped migration file (UP/DOWN)"},
     "middleware": {"handler": _gen_middleware, "usage": "<Name>",                                      "summary": "Middleware with before/after hooks"},
     "test":       {"handler": _gen_test,       "usage": "<name> [--model Name]",                       "summary": "pytest test file"},

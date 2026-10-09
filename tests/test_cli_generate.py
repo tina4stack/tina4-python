@@ -414,67 +414,76 @@ class TestGenerateAuth:
 # ── CRUD generator ────────────────────────────────────────────────────
 
 class TestGenerateCrud:
+    """ADR-0094: `generate crud` scaffolds an AutoCrud-backed admin PAGE rendered
+    by Crud.to_crud. The route file is named by the model's TABLE, registers the
+    AutoCrud REST backend (secure-by-default; --public opens writes), renders
+    to_crud, and copies the overridable crud/*.twig templates into the app."""
+
     def test_creates_all_crud_files(self, tmp_project):
         _gen_crud("Product", {"fields": "name:string,price:float"})
         assert (tmp_project / "src" / "orm" / "Product.py").exists()
-        assert (tmp_project / "src" / "routes" / "products.py").exists()
-        assert (tmp_project / "src" / "templates" / "forms" / "product.twig").exists()
-        assert (tmp_project / "tests" / "test_products.py").exists()
+        # Route file + gate test are named by the TABLE (product, singular).
+        assert (tmp_project / "src" / "routes" / "product.py").exists()
+        assert (tmp_project / "tests" / "test_product.py").exists()
         migrations = list((tmp_project / "migrations").glob("*create_product*"))
         assert len(migrations) >= 1
 
-    def test_crud_route_imports_model(self, tmp_project):
+    def test_crud_route_renders_to_crud_secure_by_default(self, tmp_project):
         _gen_crud("Product", {"fields": "name:string"})
-        content = (tmp_project / "src" / "routes" / "products.py").read_text()
+        content = (tmp_project / "src" / "routes" / "product.py").read_text()
         assert "from src.orm.Product import Product" in content
+        assert "from tina4_python.crud import AutoCrud, Crud" in content
+        assert "Crud.to_crud(request, model=Product" in content
+        assert '@get("/admin/product")' in content
+        assert "@secured()" in content                 # secure by default
+        assert "AutoCrud.register(Product, public=False)" in content
+
+    def test_copies_overridable_crud_templates(self, tmp_project):
+        _gen_crud("Gizmo", {"fields": "name:string"})
+        for t in ("page", "table", "form", "modals"):
+            assert (tmp_project / "src" / "templates" / "crud" / f"{t}.twig").exists()
+
+    def test_no_templates_flag_skips_the_copy(self, tmp_project):
+        _gen_crud("Sprocket", {"fields": "name:string", "no-templates": True})
+        assert not (tmp_project / "src" / "templates" / "crud" / "page.twig").exists()
+
+    def test_public_opens_the_writes(self, tmp_project):
+        _gen_crud("Contraption", {"fields": "name:string", "public": True})
+        content = (tmp_project / "src" / "routes" / "contraption.py").read_text()
+        assert "AutoCrud.register(Contraption, public=True)" in content
+        assert "@secured()" not in content             # --public opened the page
 
 
-class TestCrudPluralisationContract:
-    """The ONE pluralisation rule, applied consistently (regression for the
-    double-pluralisation bug). The route path, route file and list/page template
-    are the SINGLE plural of the singular base — pluralise(snake(ClassName)) —
-    never the plural of an already-pluralised table. The table/migration stay
-    the singular base, except a SQL reserved word which is pluralised for the
-    table. So `Order` (reserved) has table `orders` and route `orders` (NOT
-    `orderss`), and `Product` has table `product` and route `products`.
-    """
+class TestCrudTableNameContract:
+    """ADR-0094: the admin route file, the /admin path and the AutoCrud REST path
+    all follow the model's TABLE. A plain word stays singular (`product`); a SQL
+    reserved word is pluralised for the table (`Order` -> `orders`). The names
+    never double-pluralise."""
 
-    def test_reserved_word_class_is_not_double_pluralised(self, tmp_project):
-        # `order` is a SQL reserved word -> table pluralised to `orders`. The
-        # route must be `orders` (plural of the singular base), not `orderss`.
+    def test_reserved_word_class_uses_the_pluralised_table(self, tmp_project):
         _gen_crud("Order", {"fields": "total:float"})
 
-        # route file + path: single plural, never double.
         assert (tmp_project / "src" / "routes" / "orders.py").exists()
         assert not (tmp_project / "src" / "routes" / "orderss.py").exists()
         route = (tmp_project / "src" / "routes" / "orders.py").read_text()
-        assert "/api/orders" in route
-        assert "/api/orderss" not in route
+        assert '@get("/admin/orders")' in route
+        assert "/admin/orderss" not in route
 
-        # list/page template: single plural, never double.
-        assert (tmp_project / "src" / "templates" / "pages" / "orders.twig").exists()
-        assert not (tmp_project / "src" / "templates" / "pages" / "orderss.twig").exists()
-
-        # model + migration: singular base, reserved word pluralised for the table.
         assert (tmp_project / "src" / "orm" / "Order.py").exists()
         assert list((tmp_project / "migrations").glob("*create_orders.sql"))
         assert not list((tmp_project / "migrations").glob("*create_orderss.sql"))
-        # the co-emitted test follows the same single-plural name.
         assert (tmp_project / "tests" / "test_orders.py").exists()
         assert not (tmp_project / "tests" / "test_orderss.py").exists()
 
-    def test_plain_word_class_is_pluralised_once(self, tmp_project):
+    def test_plain_word_class_uses_the_singular_table(self, tmp_project):
         _gen_crud("Product", {"fields": "name:string"})
 
-        assert (tmp_project / "src" / "routes" / "products.py").exists()
-        assert not (tmp_project / "src" / "routes" / "productss.py").exists()
-        route = (tmp_project / "src" / "routes" / "products.py").read_text()
-        assert "/api/products" in route
-        assert "/api/productss" not in route
+        assert (tmp_project / "src" / "routes" / "product.py").exists()
+        assert not (tmp_project / "src" / "routes" / "products.py").exists()
+        route = (tmp_project / "src" / "routes" / "product.py").read_text()
+        assert '@get("/admin/product")' in route
 
-        assert (tmp_project / "src" / "templates" / "pages" / "products.twig").exists()
         assert (tmp_project / "src" / "orm" / "Product.py").exists()
-        # non-reserved -> table stays SINGULAR, so the migration is create_product.
         assert list((tmp_project / "migrations").glob("*create_product.sql"))
 
 
@@ -636,7 +645,7 @@ class TestCrudGeneratedTestPasses:
     def test_generated_crud_test_runs_green(self, tmp_project):
         _gen_crud("Trinket", {"fields": "name:string,qty:int"})
         # R5 — the emitted test file executes green in a real pytest subprocess.
-        test_file = tmp_project / "tests" / "test_trinkets.py"
+        test_file = tmp_project / "tests" / "test_trinket.py"
         assert test_file.exists()
         env = {**os.environ, "PYTHONPATH": child_pythonpath(tmp_project)}
         env.pop("TINA4_API_KEY", None)
@@ -654,14 +663,20 @@ class TestCrudGeneratedTestPasses:
         assert result.returncode == 0, result.stdout + "\n" + result.stderr
 
     def test_crud_default_routes_secure(self, tmp_project):
+        # ADR-0094: the admin page is secured by default; AutoCrud keeps the
+        # writes gated (public=False). No @noauth anywhere.
         _gen_crud("Doohickey", {"fields": "name:string"})
-        src = (tmp_project / "src" / "routes" / "doohickeys.py").read_text()
+        src = (tmp_project / "src" / "routes" / "doohickey.py").read_text()
         assert "@noauth" not in src
+        assert "@secured()" in src
+        assert "AutoCrud.register(Doohickey, public=False)" in src
 
     def test_crud_public_routes_open_writes(self, tmp_project):
+        # ADR-0094: --public opens the page AND the writes via AutoCrud public=True.
         _gen_crud("Contraption", {"fields": "name:string", "public": True})
-        src = (tmp_project / "src" / "routes" / "contraptions.py").read_text()
-        assert src.count("@noauth()") == 3
+        src = (tmp_project / "src" / "routes" / "contraption.py").read_text()
+        assert "AutoCrud.register(Contraption, public=True)" in src
+        assert "@secured()" not in src
 
 
 # ── The six new logic-shaped generators (B1–B4 + S1–S3) ───────────────
@@ -938,11 +953,18 @@ class TestGeneratedMigrationMatchesModel:
         assert conn.execute("SELECT COUNT(*) FROM todo").fetchone()[0] == 1
         conn.close()
 
-    def test_create_route_checks_result_before_to_dict(self, tmp_project):
-        """The 500 was masked as AttributeError because the generated route did
-        item.to_dict() without checking create() (which returns False, never raises)."""
+    def test_crud_route_delegates_writes_to_autocrud(self, tmp_project):
+        """ADR-0094: the generated admin route owns NO write handler — the whole
+        backend is AutoCrud, so the old "check create() before to_dict()" guard
+        now lives in AutoCrud.create_handler (which returns 500 on a False save),
+        not in the scaffolded route."""
         _gen_crud("Todo", {})
-        route = (tmp_project / "src" / "routes" / "todos.py").read_text()
-        assert "is False" in route, "generated route must check create()/save() result"
-        assert route.index("is False") < route.index("to_dict(), 201"), \
-            "the guard must come before to_dict()"
+        route = (tmp_project / "src" / "routes" / "todo.py").read_text()
+        assert "Crud.to_crud(request, model=Todo" in route
+        assert "to_dict(), 201" not in route, "the admin route must not hand-write a POST handler"
+        assert "AutoCrud.register(Todo" in route
+        # The save-result guard the old route needed now lives in AutoCrud.
+        from tina4_python import crud as _crud_pkg
+        from pathlib import Path as _P
+        autocrud_src = (_P(_crud_pkg.__file__)).read_text()
+        assert "saved is False" in autocrud_src
