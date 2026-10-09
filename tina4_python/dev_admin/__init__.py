@@ -73,6 +73,59 @@ def dev_host_allowed(headers) -> bool:
     return name in _dev_allowed_host_names()
 
 
+#: Static dev-toolbar assets that carry no secrets and expose no actions, so the
+#: peer gate does not cover them: wherever the toolbar is injected its stylesheet
+#: and script must load (issue #279). The Host + same-origin gates still apply.
+_DEV_PUBLIC_ASSETS = ("/__dev/toolbar.css", "/__dev/toolbar.js")
+
+
+def _ip_in_cidr(ip: str, entry: str) -> bool:
+    """True when raw peer ``ip`` falls in ``entry`` (a bare IP or a CIDR). IPv4
+    and IPv6; an IPv4-mapped IPv6 peer (``::ffff:a.b.c.d``) is matched as IPv4."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip.strip())
+        if getattr(addr, "ipv4_mapped", None) is not None and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+        net = ipaddress.ip_network(entry.strip(), strict=False)
+        # Compare within one family (an IPv4 peer never matches an IPv6 CIDR).
+        if addr.version != net.version:
+            return False
+        return addr in net
+    except ValueError:
+        return False
+
+
+def dev_peer_allowed(remote_ip: str) -> bool:
+    """True when the RAW socket peer may reach /__dev: loopback always, plus any
+    IP/CIDR in ``TINA4_DEV_ALLOWED_PEERS`` (comma-separated, opt-in, default none).
+
+    This reads the real socket peer ONLY, never a forwarded header - so it cannot
+    be spoofed by ``X-Forwarded-For``. It is the documented way to reach the dev
+    dashboard from a Docker dev box, where the browser's requests arrive from the
+    container-network gateway rather than loopback (issue #279)."""
+    from tina4_python.mcp import is_loopback
+    ip = (remote_ip or "").strip()
+    if is_loopback(ip):
+        return True
+    import os
+    configured = (os.environ.get("TINA4_DEV_ALLOWED_PEERS") or "").strip()
+    if not configured:
+        return False
+    return any(_ip_in_cidr(ip, entry) for entry in configured.split(",") if entry.strip())
+
+
+def dev_toolbar_allowed(request) -> bool:
+    """True when the toolbar may be injected for this viewer - the Host allow-list
+    and the raw-peer gate both pass. A viewer the /__dev gate would refuse gets NO
+    toolbar markup, so its stylesheet and script are never requested only to 403
+    (issue #279)."""
+    headers = getattr(request, "headers", None) or {}
+    if not dev_host_allowed(headers):
+        return False
+    return dev_peer_allowed(getattr(request, "remote_ip", "") or "")
+
+
 def _dev_same_origin_ok(request) -> bool:
     """Fail-closed same-origin check for a dev-admin request (DEVADMIN-DEC-01,
     ADR-0082).
@@ -125,10 +178,14 @@ def _dev_request_denial(request):
     if not _dev_same_origin_ok(request):
         return (403, "dev-admin: refused (cross-origin request)")
     path = getattr(request, "path", "") or ""
+    # The static toolbar assets are exempt from the peer gate (#279): they carry
+    # no secrets and the toolbar needs them wherever it is injected. Host +
+    # same-origin above still apply.
+    if path in _DEV_PUBLIC_ASSETS:
+        return None
     if not path.startswith(_DEV_MCP_PREFIXES):
-        from tina4_python.mcp import is_loopback
         remote_ip = getattr(request, "remote_ip", "") or ""
-        if not (is_loopback(remote_ip) or _mcp_token_ok(request, dedicated=True)):
+        if not (dev_peer_allowed(remote_ip) or _mcp_token_ok(request, dedicated=True)):
             return (403, "dev-admin: refused (non-loopback peer)")
     return None
 
@@ -3674,4 +3731,5 @@ async def _api_docs_well_known(request, response):
 
 
 __all__ = ["MessageLog", "RequestInspector", "BrokenTracker",
-           "get_api_handlers", "render_dev_toolbar", "toolbar_css", "toolbar_js"]
+           "get_api_handlers", "render_dev_toolbar", "toolbar_css", "toolbar_js",
+           "dev_host_allowed", "dev_peer_allowed", "dev_toolbar_allowed"]

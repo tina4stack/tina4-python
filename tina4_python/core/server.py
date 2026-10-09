@@ -2725,6 +2725,11 @@ def _stage_dev_toolbar_inject(ctx: DispatchContext) -> None:
         return None
     if ctx.request.path.startswith("/__dev"):
         return None
+    # Do not inject the toolbar for a viewer the /__dev gate would refuse (#279):
+    # otherwise the page carries toolbar markup whose stylesheet and script 403.
+    from tina4_python.dev_admin import dev_toolbar_allowed
+    if not dev_toolbar_allowed(ctx.request):
+        return None
 
     try:
         from tina4_python.dev_admin import render_dev_toolbar
