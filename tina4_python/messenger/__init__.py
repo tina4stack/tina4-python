@@ -130,13 +130,53 @@ def _parse_mail_redirect_list(raw: str) -> list[str]:
 class Messenger:
     """SMTP email client using Python stdlib."""
 
+    #: Default socket timeout, in seconds - the value this class has always used.
+    TIMEOUT_DEFAULT = 30
+    #: Raw TINA4_MAIL_TIMEOUT values already warned about, so a bad one is said once.
+    _timeout_warned: set = set()
+
+    @staticmethod
+    def _resolve_timeout(explicit, raw):
+        """Resolve the SMTP socket timeout to whole seconds (issue #278).
+
+        Priority: an explicit constructor value, else TINA4_MAIL_TIMEOUT, else
+        TIMEOUT_DEFAULT. An explicit value is the caller's own instruction, so one
+        below a second is a programming error and raises. A bad env value is a
+        misconfiguration: warn once and use the default rather than guess. Zero
+        and negative are garbage, not an opt-out - to the socket 0 means "do not
+        wait at all", so no send could succeed. Mirrors the PHP master
+        (Messenger::resolveTimeout, tina4-php#286).
+        """
+        if explicit is not None:
+            explicit = int(explicit)
+            if explicit < 1:
+                raise ValueError(
+                    f"Messenger timeout must be at least 1 second, got {explicit}.")
+            return explicit
+        if raw is None or str(raw).strip() == "":
+            return Messenger.TIMEOUT_DEFAULT
+        try:
+            seconds = int(str(raw).strip())
+        except ValueError:
+            seconds = None
+        if seconds is None or seconds < 1:
+            if raw not in Messenger._timeout_warned:
+                Messenger._timeout_warned.add(raw)
+                from tina4_python.debug import Log
+                Log.warning(
+                    "TINA4_MAIL_TIMEOUT must be a whole number of seconds and at "
+                    f"least 1, got {raw!r} - using the default of "
+                    f"{Messenger.TIMEOUT_DEFAULT} seconds")
+            return Messenger.TIMEOUT_DEFAULT
+        return seconds
+
     def __init__(self, host: str = None, port: int = None,
                  username: str = None, password: str = None,
                  from_address: str = None, from_name: str = None,
                  encryption: str = None, use_tls: bool = None,
                  imap_host: str = None, imap_port: int = None,
                  imap_username: str = None, imap_password: str = None,
-                 imap_encryption: str = None):
+                 imap_encryption: str = None, timeout: int = None):
         # SMTP (send) — priority: constructor > .env > sensible default
         # Whether a host was actually CONFIGURED, which is not the same as
         # self.host being set: self.host falls back to "localhost", so it is never
@@ -150,6 +190,11 @@ class Messenger:
         self.from_address = from_address or os.environ.get(
             "TINA4_MAIL_FROM", self.username or "noreply@localhost")
         self.from_name = from_name or os.environ.get("TINA4_MAIL_FROM_NAME", "")
+
+        # SMTP socket timeout (seconds): the connect, and each reply, may block
+        # this long before the send fails. Priority: constructor >
+        # TINA4_MAIL_TIMEOUT > 30 (issue #278). Whole seconds, at least 1.
+        self.timeout = self._resolve_timeout(timeout, os.environ.get("TINA4_MAIL_TIMEOUT"))
 
         # Encryption: constructor > .env > backward-compat use_tls > default "tls".
         # Validated here (ADR-0071 section 2): an unknown value raises now, it
@@ -421,7 +466,7 @@ class Messenger:
 
     def _smtp_send(self, msg: MIMEText | MIMEMultipart, recipients: list[str]) -> str:
         """Connect to SMTP and send."""
-        server = self._smtp_open(timeout=30)
+        server = self._smtp_open(timeout=self.timeout)
 
         try:
             if self.username and self.password:
