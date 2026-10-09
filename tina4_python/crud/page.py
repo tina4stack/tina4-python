@@ -28,15 +28,14 @@ Usage::
 A custom ``sql`` only shapes the LISTING grid (a filter/join/projection); the
 model still drives the columns, the primary key, and every write path, so a
 custom listing can never create an unauthenticated or divergent write route.
-"""
-import html as _html
-import json
-import re
-from pathlib import Path
 
-import tina4_python
+The field/row/HTML assembly lives in :mod:`tina4_python.crud.page_render`; this
+module owns orchestration (backend registration, fetch, safe sort, pagination).
+"""
+import re
+
 from tina4_python.crud import AutoCrud
-from tina4_python.frond import Frond
+from tina4_python.crud import page_render as render
 
 
 class Crud:
@@ -66,12 +65,7 @@ class Crud:
         if model is None:
             raise ValueError("Crud.to_crud requires model (an ORM class)")
 
-        try:
-            limit = int(limit)
-        except (TypeError, ValueError):
-            limit = 10
-        if limit <= 0:
-            limit = 10
+        limit = Crud._coerce_limit(limit)
         title = str(title if title is not None else "CRUD")
         prefix = str(prefix or "/api")
 
@@ -82,15 +76,7 @@ class Crud:
         # Backend: delegate 100% to AutoCrud (idempotent — register once).
         Crud._register_backend(model, prefix)
 
-        query = getattr(request, "query", {}) or {}
-        try:
-            page = max(int(query.get("page", 1)), 1)
-        except (TypeError, ValueError):
-            page = 1
-        search = str(query.get("search", "") or "").strip()
-        sort_col = Crud._sort_column(model, sql, query.get("sort"), pk)
-        sort_dir = "desc" if query.get("sort_dir") == "desc" else "asc"
-        offset = (page - 1) * limit
+        page, search, sort_col, sort_dir, offset = Crud._list_params(request, model, sql, pk, limit)
 
         if sql:
             records, total = Crud._fetch_sql_data(model, sql, search, sort_col, sort_dir, limit, offset)
@@ -109,6 +95,30 @@ class Crud:
         )
 
     @staticmethod
+    def _coerce_limit(limit):
+        """A positive int page size, defaulting to 10 for bad/non-positive input."""
+        try:
+            limit = int(limit)
+        except (TypeError, ValueError):
+            return 10
+        return limit if limit > 0 else 10
+
+    @staticmethod
+    def _list_params(request, model, sql, pk, limit):
+        """Read page/search/sort/sort_dir from the request query and derive the
+        offset. The sort column is resolved ADR-0069-safely via _sort_column."""
+        query = getattr(request, "query", {}) or {}
+        try:
+            page = max(int(query.get("page", 1)), 1)
+        except (TypeError, ValueError):
+            page = 1
+        search = str(query.get("search", "") or "").strip()
+        sort_col = Crud._sort_column(model, sql, query.get("sort"), pk)
+        sort_dir = "desc" if query.get("sort_dir") == "desc" else "asc"
+        offset = (page - 1) * limit
+        return page, search, sort_col, sort_dir, offset
+
+    @staticmethod
     def generate_table(records, table_name="data", primary_key="id", editable=True):
         """Render an HTML table fragment from a list of record dicts via crud/table.twig.
 
@@ -117,7 +127,7 @@ class Crud:
         """
         records = records or []
         columns = list(records[0].keys()) if records else []
-        return Crud._render_crud("crud/table.twig", Crud._table_data(
+        return render.render_template("crud/table.twig", render.table_data(
             columns=columns, records=records, pk=str(primary_key),
             table_name=str(table_name), editable=editable, sortable=False,
             inline_script=editable, request_path=None, search="", sort_col=None,
@@ -131,16 +141,16 @@ class Crud:
         Each field is ``{name, type, label, value, required, options}``.
         """
         verb = str(method).upper()
-        return Crud._render_crud("crud/form.twig", {
+        return render.render_template("crud/form.twig", {
             "wrap": True,
             "form_id_attr": "",
-            "action": Crud._h(action),
-            "form_method": Crud._h(verb),
+            "action": render.escape_html(action),
+            "form_method": render.escape_html(verb),
             "method_override": verb if verb in ("PUT", "PATCH", "DELETE") else None,
             "edit": False,
             "modal_footer": False,
             "submit_button": True,
-            "fields": [Crud._build_custom_field(f) for f in (fields or [])],
+            "fields": [render.build_custom_field(f) for f in (fields or [])],
         })
 
     # ── backend registration (delegated to AutoCrud) ────────────────────
@@ -162,25 +172,36 @@ class Crud:
     def _fetch_model_data(model, search, sort_attr, sort_dir, limit, offset):
         """A page of records from the model (ADR-0069 safe search across its
         string/text columns)."""
-        order_attr = sort_attr if sort_attr in model._fields else model._get_pk()
-        order_col = model.get_db_column(order_attr)
-        order_by = f"{order_col} {sort_dir.upper()}"
-
-        if not search:
+        order_by = Crud._model_order_by(model, sort_attr, sort_dir)
+        where_clause, params = Crud._model_search(model, search)
+        if where_clause:
+            records = model.where(where_clause, params, limit=limit, offset=offset, order_by=order_by)
+            total = records.get_total_records()
+        else:
             records = model.all(limit=limit, offset=offset, order_by=order_by)
             total = model.count()
-        else:
-            searchable = [model.get_db_column(name)
-                          for name, field in model._fields.items() if field.field_type is str]
-            if not searchable:
-                records = model.all(limit=limit, offset=offset, order_by=order_by)
-                total = model.count()
-            else:
-                where_clause = " OR ".join(f"{col} LIKE ?" for col in searchable)
-                params = [f"%{search}%" for _ in searchable]
-                records = model.where(where_clause, params, limit=limit, offset=offset, order_by=order_by)
-                total = records.get_total_records()
         return [record.to_dict() for record in records], total
+
+    @staticmethod
+    def _model_order_by(model, sort_attr, sort_dir):
+        """The ORDER BY clause for a model listing — the requested sort attribute
+        if it is a declared field, else the primary key."""
+        order_attr = sort_attr if sort_attr in model._fields else model._get_pk()
+        return f"{model.get_db_column(order_attr)} {sort_dir.upper()}"
+
+    @staticmethod
+    def _model_search(model, search):
+        """ADR-0069 safe search: (where_clause, params) OR'ing LIKE %search%
+        across the model's own declared string columns, or (None, []) when there
+        is no search term or no searchable column."""
+        if not search:
+            return None, []
+        searchable = [model.get_db_column(name)
+                      for name, field in model._fields.items() if field.field_type is str]
+        if not searchable:
+            return None, []
+        where_clause = " OR ".join(f"{col} LIKE ?" for col in searchable)
+        return where_clause, [f"%{search}%" for _ in searchable]
 
     @staticmethod
     def _fetch_sql_data(model, sql, search, sort_col, sort_dir, limit, offset):
@@ -191,24 +212,27 @@ class Crud:
             return [], 0
 
         base = Crud._strip_order_and_limit(sql)
+        order = f"ORDER BY {sort_col} {sort_dir.upper()}"
         if not search:
-            query = f"{base} ORDER BY {sort_col} {sort_dir.upper()}"
-            count_row = db.fetch_one(f"SELECT COUNT(*) as cnt FROM ({base}) AS _crud_cnt")
-            total = int((count_row or {}).get("cnt", 0) or 0)
-            result = db.fetch(query, [], limit=limit, offset=offset)
+            total = Crud._sql_count(db, f"SELECT COUNT(*) as cnt FROM ({base}) AS _crud_cnt", [])
+            result = db.fetch(f"{base} {order}", [], limit=limit, offset=offset)
         else:
             columns = Crud._extract_columns(sql)
-            search_parts = [f"CAST({col} AS TEXT) LIKE ?" for col in columns]
-            where = " OR ".join(search_parts)
-            wrapped = f"SELECT * FROM ({base}) AS _crud_sub WHERE {where} ORDER BY {sort_col} {sort_dir.upper()}"
+            where = " OR ".join(f"CAST({col} AS TEXT) LIKE ?" for col in columns)
             params = [f"%{search}%" for _ in columns]
-            count_row = db.fetch_one(
-                f"SELECT COUNT(*) as cnt FROM ({base}) AS _crud_cnt WHERE {where}", params)
-            total = int((count_row or {}).get("cnt", 0) or 0)
-            result = db.fetch(wrapped, params, limit=limit, offset=offset)
+            total = Crud._sql_count(
+                db, f"SELECT COUNT(*) as cnt FROM ({base}) AS _crud_cnt WHERE {where}", params)
+            result = db.fetch(
+                f"SELECT * FROM ({base}) AS _crud_sub WHERE {where} {order}", params, limit=limit, offset=offset)
 
         records = result.records if hasattr(result, "records") else list(result)
         return records, total
+
+    @staticmethod
+    def _sql_count(db, count_sql, params):
+        """Run a COUNT(*) listing query and return the integer total (0 on none)."""
+        count_row = db.fetch_one(count_sql, params) if params else db.fetch_one(count_sql)
+        return int((count_row or {}).get("cnt", 0) or 0)
 
     # ── safe sort (ADR-0069) ────────────────────────────────────────────
     @staticmethod
@@ -219,14 +243,24 @@ class Crud:
         is ignored, never an error)."""
         if not requested:
             return pk
-        if model is not None and sql is None:
-            return model._declared_field_for(requested) or pk
-        if model is not None and requested not in Crud._sql_result_columns(model, sql):
-            return model._declared_field_for(requested) or pk
-        if sql:
-            cols = Crud._sql_result_columns(model, sql)
-            return requested if requested in cols else pk
-        return pk
+        if sql is None:
+            return Crud._declared_or_pk(model, requested, pk)
+        return Crud._sql_sort_column(model, sql, requested, pk)
+
+    @staticmethod
+    def _declared_or_pk(model, requested, pk):
+        """The requested name if the model declares it as a field, else the pk."""
+        if model is None:
+            return pk
+        return model._declared_field_for(requested) or pk
+
+    @staticmethod
+    def _sql_sort_column(model, sql, requested, pk):
+        """Resolve ?sort against a custom listing SQL: honour it only if it is a
+        column of the query's own result set, else fall back (declared field/pk)."""
+        if requested in Crud._sql_result_columns(model, sql):
+            return requested
+        return Crud._declared_or_pk(model, requested, pk)
 
     @staticmethod
     def _sql_result_columns(model, sql):
@@ -275,35 +309,25 @@ class Crud:
                 columns.append(col)
         return columns
 
-    # ── rendering ───────────────────────────────────────────────────────
-    @staticmethod
-    def _render_crud(template_name, data):
-        """Render a crud/ template, app-first (src/templates) then framework
-        (tina4_python/templates) — the same resolution the error pages use."""
-        app_path = Path("src/templates") / template_name
-        if app_path.exists():
-            return Frond("src/templates").render(template_name, data)
-        framework_dir = Path(tina4_python.__file__).resolve().parent / "templates"
-        return Frond(str(framework_dir)).render(template_name, data)
-
+    # ── page rendering (assembly delegated to page_render) ──────────────
     @staticmethod
     def _render_page(*, title, table_name, pk, columns, records, page, total_pages,
                      total, limit, search, sort_col, sort_dir, api_path, request_path, model):
         editable_columns = [c for c in columns if c != pk]
 
-        table_html = Crud._render_crud("crud/table.twig", Crud._table_data(
+        table_html = render.render_template("crud/table.twig", render.table_data(
             columns=columns, records=records, pk=pk, table_name=table_name,
             editable=False, sortable=True, inline_script=False,
             request_path=request_path, search=search, sort_col=sort_col,
             sort_dir=sort_dir, page=page, limit=limit, table_id=None, model=model,
         ))
 
-        modals_html = Crud._render_modals(editable_columns, pk)
+        modals_html = render.render_modals(editable_columns, pk)
 
-        return Crud._render_crud("crud/page.twig", {
-            "title": Crud._h(title),
-            "search": Crud._h(search),
-            "request_path": Crud._h(request_path),
+        return render.render_template("crud/page.twig", {
+            "title": render.escape_html(title),
+            "search": render.escape_html(search),
+            "request_path": render.escape_html(request_path),
             "info_count": len(records),
             "info_total": total,
             "info_page": page,
@@ -311,218 +335,10 @@ class Crud:
             "table_html": table_html,
             "modals_html": modals_html,
             "show_pagination": total_pages > 1,
-            "controls": Crud._page_controls(page, total_pages, request_path, search, sort_col, sort_dir, limit),
-            "config_json": Crud._js_config(
+            "controls": render.page_controls(page, total_pages, request_path, search, sort_col, sort_dir, limit),
+            "config_json": render.js_config(
                 api_path=api_path, pk=pk, columns=columns, editable=editable_columns,
                 model=model, limit=limit, search=search, sort_col=sort_col,
                 sort_dir=sort_dir, page=page,
             ),
         })
-
-    @staticmethod
-    def _render_modals(editable_columns, pk):
-        return Crud._render_crud("crud/modals.twig", {
-            "create_form": Crud._render_modal_form("create", editable_columns, pk, edit=False),
-            "edit_form": Crud._render_modal_form("edit", editable_columns, pk, edit=True),
-        })
-
-    @staticmethod
-    def _render_modal_form(mode, columns, pk, *, edit):
-        fields = []
-        for col in columns:
-            label = Crud._pretty_label(col)
-            fields.append({
-                "id": f"{mode}-{col}",
-                "name": Crud._h(col),
-                "label": Crud._h(label),
-                "value": "",
-                "placeholder": Crud._h(f"Enter {label.lower()}"),
-                "type": "text",
-                "required_attr": "",
-                "input": True,
-            })
-        return Crud._render_crud("crud/form.twig", {
-            "wrap": True,
-            "form_id_attr": f' id="form-{mode}"',
-            "action": "",
-            "form_method": "POST",
-            "method_override": None,
-            "edit": edit,
-            "mode": mode,
-            "pk": Crud._h(pk),
-            "modal_footer": True,
-            "submit_button": False,
-            "fields": fields,
-        })
-
-    @staticmethod
-    def _table_data(*, columns, records, pk, table_name, editable, sortable,
-                    inline_script, request_path, search, sort_col, sort_dir,
-                    page, limit, table_id, model=None):
-        aligns = [Crud._column_alignment(model, col) for col in columns]
-
-        headers = []
-        for index, col in enumerate(columns):
-            header = {"label": Crud._h(Crud._pretty_label(col)), "align": aligns[index]}
-            if sortable:
-                next_dir = "desc" if (str(sort_col) == str(col) and sort_dir == "asc") else "asc"
-                header["sortable"] = True
-                header["col"] = Crud._h(col)
-                header["next_dir"] = next_dir
-                header["url"] = Crud._sort_url(request_path, col, next_dir, page, search, limit)
-                header["indicator"] = Crud._sort_indicator(sort_col, col, sort_dir)
-            else:
-                header["plain"] = True
-            headers.append(header)
-
-        rows = [{"id": Crud._h(Crud._cell_value(record, pk)),
-                 "cells": Crud._build_cells(columns, record, editable, aligns)}
-                for record in records]
-
-        return {
-            "headers": headers,
-            "rows": rows,
-            "empty": len(records) == 0,
-            "colspan": len(columns) + 1,
-            "editable": editable,
-            "readonly": not editable,
-            "inline_script": inline_script,
-            "table_name": Crud._h(table_name),
-            "table_id_attr": (f' id="{Crud._h(table_id)}"' if table_id else ""),
-        }
-
-    @staticmethod
-    def _build_cells(columns, record, editable, aligns):
-        cells = []
-        for index, col in enumerate(columns):
-            value = Crud._h(Crud._cell_value(record, col))
-            css = aligns[index]
-            if editable:
-                cells.append(f'<td class="{css}" contenteditable="true" data-field="{Crud._h(col)}">{value}</td>')
-            else:
-                cells.append(f'<td class="{css}">{value}</td>')
-        return "".join(cells)
-
-    @staticmethod
-    def _column_alignment(model, col):
-        """Numeric columns (int/float) align right; everything else left. With no
-        model (the generate_table fragment) every column aligns left."""
-        if model is None or col not in getattr(model, "_fields", {}):
-            return "text-start"
-        field_type = model._fields[col].field_type
-        return "text-end" if field_type in (int, float) else "text-start"
-
-    @staticmethod
-    def _cell_value(record, col):
-        if isinstance(record, dict):
-            return record.get(col)
-        return getattr(record, col, None)
-
-    @staticmethod
-    def _build_custom_field(field):
-        name = str(field.get("name", ""))
-        label = field.get("label") or name.capitalize()
-        value = field.get("value")
-        required = " required" if field.get("required") else ""
-        base = {
-            "id": Crud._h(name),
-            "name": Crud._h(name),
-            "label": Crud._h(str(label)),
-            "value": Crud._h("" if value is None else str(value)),
-            "placeholder": "",
-            "required_attr": required,
-        }
-        ftype = field.get("type") or "string"
-        ftype = ftype if isinstance(ftype, str) else str(ftype)
-        if ftype == "text":
-            return {**base, "textarea": True}
-        if ftype == "boolean":
-            return {**base, "checkbox": True, "checked_attr": (" checked" if value else "")}
-        if ftype == "select":
-            return {**base, "select": True, "options_html": Crud._build_options(field.get("options"), value)}
-        if ftype == "date":
-            return {**base, "input": True, "type": "date"}
-        if ftype in ("integer", "number", "float", "decimal"):
-            return {**base, "input": True, "type": "number"}
-        return {**base, "input": True, "type": "text"}
-
-    @staticmethod
-    def _build_options(options, selected_value):
-        parts = []
-        for opt in (options or []):
-            selected = " selected" if str(opt.get("value")) == str(selected_value) else ""
-            parts.append(f'<option value="{Crud._h(opt.get("value"))}"{selected}>{Crud._h(opt.get("label"))}</option>')
-        return "".join(parts)
-
-    # ── pagination controls ─────────────────────────────────────────────
-    @staticmethod
-    def _page_controls(page, total_pages, request_path, search, sort_col, sort_dir, limit):
-        if total_pages <= 1:
-            return []
-        controls = []
-        if page > 1:
-            controls.append({"label": "Prev", "page": page - 1, "active": False, "inactive": True,
-                             "url": Crud._page_url(request_path, page - 1, search, sort_col, sort_dir, limit)})
-        start_page = max(page - 3, 1)
-        end_page = min(start_page + 6, total_pages)
-        start_page = max(end_page - 6, 1)
-        for p in range(start_page, end_page + 1):
-            controls.append({"label": p, "page": p, "active": (p == page), "inactive": (p != page),
-                             "url": Crud._page_url(request_path, p, search, sort_col, sort_dir, limit)})
-        if page < total_pages:
-            controls.append({"label": "Next", "page": page + 1, "active": False, "inactive": True,
-                             "url": Crud._page_url(request_path, page + 1, search, sort_col, sort_dir, limit)})
-        return controls
-
-    @staticmethod
-    def _page_url(request_path, p, search, sort_col, sort_dir, limit):
-        from urllib.parse import quote
-        query = (f"page={p}&search={quote(str(search))}"
-                 f"&sort={quote(str(sort_col))}&sort_dir={sort_dir}&limit={limit}")
-        return Crud._h(f"{request_path}?{query}")
-
-    @staticmethod
-    def _sort_url(request_path, col, next_dir, page, search, limit):
-        from urllib.parse import quote
-        query = (f"sort={quote(str(col))}&sort_dir={next_dir}"
-                 f"&page={page}&search={quote(str(search))}&limit={limit}")
-        return Crud._h(f"{request_path}?{query}")
-
-    @staticmethod
-    def _sort_indicator(sort_col, col, sort_dir):
-        if str(sort_col) != str(col):
-            return ""
-        arrow = "&#9650;" if sort_dir == "asc" else "&#9660;"
-        return f' <span class="sort-indicator">{arrow}</span>'
-
-    # ── JSON config for the nonce'd <script> ────────────────────────────
-    @staticmethod
-    def _js_config(*, api_path, pk, columns, editable, model, limit, search,
-                   sort_col, sort_dir, page):
-        aligns = {str(col): Crud._column_alignment(model, col) for col in columns}
-        labels = {str(col): Crud._pretty_label(col) for col in columns}
-        config = {
-            "api": api_path,
-            "pk": pk,
-            "columns": [str(col) for col in columns],
-            "editable": [str(col) for col in editable],
-            "aligns": aligns,
-            "labels": labels,
-            "limit": limit,
-            "search": str(search),
-            "sort": str(sort_col),
-            "sort_dir": sort_dir,
-            "page": page,
-        }
-        return (json.dumps(config)
-                .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
-
-    # ── small helpers ───────────────────────────────────────────────────
-    @staticmethod
-    def _h(text):
-        """Escape HTML special characters (<, >, &, ", ')."""
-        return _html.escape("" if text is None else str(text), quote=True)
-
-    @staticmethod
-    def _pretty_label(col):
-        return " ".join(word.capitalize() for word in str(col).split("_"))

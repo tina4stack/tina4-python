@@ -80,6 +80,59 @@ def _allow_listed_data(model_class, data, *, is_create: bool) -> dict:
     return allowed
 
 
+def _parse_list_pagination(query) -> tuple[int, int, int]:
+    """Resolve (limit, offset, page) from the list query string.
+
+    Primary names are limit/offset; page/per_page are the PHP/Ruby/Node compat
+    spelling. Pagination is a QUERY-STRING concern, not a route param
+    (REQ-PARAM-POLLUTION, 3.13.99). PAGE-DEC-01: page < 1 clamps to 1 BEFORE the
+    offset is derived (so offset can never go negative), and per_page/limit are
+    capped at MAX_PER_PAGE BEFORE the same derivation so offset lines up with the
+    size actually used. Any bad value falls back to limit 10 / offset 0 / page 1.
+    """
+    try:
+        limit = int(query.get("limit", query.get("per_page", 10)))
+        offset = int(query.get("offset", 0))
+        if "page" in query and "offset" not in query:
+            page = max(1, int(query.get("page", 1)))
+            per_page = min(int(query.get("per_page", limit)), MAX_PER_PAGE)
+            offset = (page - 1) * per_page
+            limit = per_page
+        else:
+            limit = min(limit, MAX_PER_PAGE)
+            page = (offset // limit) + 1 if limit else 1
+    except (ValueError, TypeError):
+        return 10, 0, 1
+    return limit, offset, page
+
+
+def _resolve_list_order_by(model_class, query):
+    """ADR-0069 safe ORDER BY from ?sort (&sort_dir=asc|desc): the sort column
+    must resolve to a DECLARED field (else it is ignored and None is returned)."""
+    sort_param = str(query.get("sort", "") or "").strip()
+    if not sort_param:
+        return None
+    sort_dir = "DESC" if str(query.get("sort_dir", "")).lower() == "desc" else "ASC"
+    sort_name = model_class._declared_field_for(sort_param)
+    if sort_name is None:
+        return None
+    return f"{model_class.get_db_column(sort_name)} {sort_dir}"
+
+
+def _build_list_search(model_class, query) -> tuple:
+    """ADR-0094 ?search=term filter: a LIKE %term% OR'd across the model's own
+    declared string/text columns. Returns (where_clause_or_None, params)."""
+    search_term = str(query.get("search", "") or "").strip()
+    if not search_term:
+        return None, []
+    search_cols = [model_class.get_db_column(name)
+                   for name, field in model_class._fields.items() if field.field_type is str]
+    if not search_cols:
+        return None, []
+    where_clause = "(" + " OR ".join(f"{col} LIKE ?" for col in search_cols) + ")"
+    return where_clause, [f"%{search_term}%" for _ in search_cols]
+
+
 class AutoCrud:
     """Auto-generate REST endpoints from ORM model classes."""
 
@@ -143,62 +196,15 @@ class AutoCrud:
 
         # ── GET /api/{table} — list with pagination ──────────────
         async def list_handler(request, response, _cls=model_class):
-            try:
-                # Primary names: limit / offset
-                # Compat names: per_page / page (PHP/Ruby/Node style)
-                # Pagination is a QUERY-STRING concern, not a route param
-                # (REQ-PARAM-POLLUTION, 3.13.99 — request.params is route-only).
-                limit = int(request.query.get("limit", request.query.get("per_page", 10)))
-                offset = int(request.query.get("offset", 0))
-                # page/per_page compat: if page is provided, derive offset from it
-                if "page" in request.query and "offset" not in request.query:
-                    page = int(request.query.get("page", 1))
-                    per_page = int(request.query.get("per_page", limit))
-                    # PAGE-DEC-01: clamp page < 1 -> page 1 BEFORE deriving offset,
-                    # so offset=(page-1)*per_page can never go negative (a page=0/
-                    # negative request used to hand PostgreSQL a negative OFFSET -
-                    # a driver error - and silently misbehave on SQLite, while the
-                    # envelope reported page:0). Cap per_page BEFORE the same
-                    # derivation so the offset lines up with the size actually used.
-                    page = max(1, page)
-                    per_page = min(per_page, MAX_PER_PAGE)
-                    offset = (page - 1) * per_page
-                    limit = per_page
-                else:
-                    limit = min(limit, MAX_PER_PAGE)  # PAGE-DEC-01: cap an oversized ?limit=
-                    page = (offset // limit) + 1 if limit else 1
-            except (ValueError, TypeError):
-                limit = 10
-                offset = 0
-                page = 1
+            # Pagination, the ADR-0069-safe sort, and the ADR-0094 ?search filter
+            # are each resolved by a dedicated module helper so this handler stays
+            # a thin orchestrator. The search filter is applied BEFORE limit/offset
+            # so the envelope's total reflects the filtered set.
+            limit, offset, page = _parse_list_pagination(request.query)
+            order_by = _resolve_list_order_by(_cls, request.query)
+            where_clause, where_params = _build_list_search(_cls, request.query)
 
-            # ADR-0094: ?search=term full-text filters the list — a LIKE %term%
-            # OR'd across the model's declared string/text columns, applied
-            # before limit/offset so the envelope's total reflects the filtered
-            # set; and ?sort=column (&sort_dir=asc|desc) orders it. Both are
-            # ADR-0069 safe: the sort column must resolve to a declared field
-            # (else it is ignored), and the search columns are the model's own.
-            # This is what the CRUD admin grid (and any client) uses.
-            search_term = str(request.query.get("search", "") or "").strip()
-            sort_param = str(request.query.get("sort", "") or "").strip()
-            sort_dir = "DESC" if str(request.query.get("sort_dir", "")).lower() == "desc" else "ASC"
-
-            order_by = None
-            if sort_param:
-                sort_name = _cls._declared_field_for(sort_param)
-                if sort_name is not None:
-                    order_by = f"{_cls.get_db_column(sort_name)} {sort_dir}"
-
-            where_parts, where_params = [], []
-            if search_term:
-                search_cols = [_cls.get_db_column(name)
-                               for name, field in _cls._fields.items() if field.field_type is str]
-                if search_cols:
-                    where_parts.append("(" + " OR ".join(f"{col} LIKE ?" for col in search_cols) + ")")
-                    where_params.extend([f"%{search_term}%" for _ in search_cols])
-
-            if where_parts:
-                where_clause = " AND ".join(where_parts)
+            if where_clause:
                 records = _cls.where(where_clause, where_params, limit=limit, offset=offset, order_by=order_by)
                 total = _cls.count(where_clause, where_params)
             else:
