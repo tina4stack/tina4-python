@@ -55,26 +55,28 @@ def silent_smtp():
         server.close()
 
 
-def _time_send(**kwargs) -> float:
+def _send(**kwargs):
     messenger = Messenger(host="127.0.0.1", encryption="none",
                           from_address="app@localhost", **kwargs)
     start = time.monotonic()
     result = messenger.send("someone@localhost", "test", "hello")
     elapsed = time.monotonic() - start
     # The host never speaks SMTP, so the send always fails - what matters is HOW
-    # LONG it waited.
+    # LONG it waited, and that the failure is reported AS a timeout.
     assert result["success"] is False
-    return elapsed
+    return elapsed, result
 
 
-def test_constructor_timeout_bounds_the_send(silent_smtp):
-    elapsed = _time_send(port=silent_smtp, timeout=1)
+def test_constructor_timeout_bounds_the_send_and_reports_a_timeout(silent_smtp):
+    elapsed, result = _send(port=silent_smtp, timeout=1)
     assert elapsed < 8, f"a 1 s timeout should fail fast, not hold ~30 s (took {elapsed:.1f} s)"
+    assert "tim" in str(result["message"]).lower(), \
+        f"a silent server must be reported as a timeout, got {result['message']!r}"
 
 
 def test_env_timeout_bounds_the_send(silent_smtp, monkeypatch):
     monkeypatch.setenv("TINA4_MAIL_TIMEOUT", "1")
-    elapsed = _time_send(port=silent_smtp)
+    elapsed, _ = _send(port=silent_smtp)
     assert elapsed < 8, f"TINA4_MAIL_TIMEOUT=1 should fail fast (took {elapsed:.1f} s)"
 
 
@@ -83,6 +85,26 @@ def test_default_timeout_is_thirty_seconds():
     assert Messenger(host="127.0.0.1", encryption="none").timeout == 30
 
 
-def test_a_bad_timeout_value_falls_back_to_the_default(monkeypatch):
+def test_a_bad_env_value_warns_once_and_falls_back_to_the_default(monkeypatch):
     monkeypatch.setenv("TINA4_MAIL_TIMEOUT", "not-a-number")
+    assert Messenger(host="127.0.0.1", encryption="none").timeout == 30
+
+
+def test_a_zero_env_value_falls_back_to_the_default(monkeypatch):
+    # Zero is garbage, not an opt-out: to the socket it means "do not wait at all".
+    monkeypatch.setenv("TINA4_MAIL_TIMEOUT", "0")
+    assert Messenger(host="127.0.0.1", encryption="none").timeout == 30
+
+
+def test_an_explicit_sub_second_timeout_is_refused():
+    # An explicit value is the caller's own instruction, so < 1 is a bug, not a default.
+    with pytest.raises(ValueError):
+        Messenger(host="127.0.0.1", encryption="none", timeout=0)
+
+
+def test_smtp_timeout_env_is_no_longer_honoured(monkeypatch):
+    # The SMTP_TIMEOUT fallback was dropped for parity with the PHP master:
+    # only TINA4_MAIL_TIMEOUT configures the timeout now.
+    monkeypatch.delenv("TINA4_MAIL_TIMEOUT", raising=False)
+    monkeypatch.setenv("SMTP_TIMEOUT", "1")
     assert Messenger(host="127.0.0.1", encryption="none").timeout == 30
