@@ -121,13 +121,21 @@ def pg_project(tmp_path):
                 db.execute("DELETE FROM {WIDGET_TABLE} WHERE name = 'first'")
     """)
 
+    # The worker reads the connection details from the environment the test
+    # passes it (below) — the password is NEVER written into this generated file
+    # (clear-text storage of a credential; CodeQL py/clear-text-storage).
     worker = tmp_path / "worker.py"
     _write(worker, f"""
         import os, sys
         os.chdir({str(tmp_path)!r})
         from tina4_python.database import Database
         from tina4_python.migration import migrate
-        db = Database({_pg_url()!r}, {PG_USER!r}, {PG_PASS!r})
+        host = os.environ.get("TINA4_TEST_PG_HOST", "localhost")
+        port = os.environ.get("TINA4_TEST_PG_PORT", "55432")
+        name = os.environ.get("TINA4_TEST_PG_DB", "tina4_py")
+        user = os.environ.get("TINA4_TEST_PG_USERNAME", "")
+        password = os.environ.get("TINA4_TEST_PG_PASSWORD", "")
+        db = Database("postgresql://" + host + ":" + port + "/" + name, user, password)
         try:
             migrate(db)
         except Exception as exc:
@@ -150,6 +158,13 @@ def pg_project(tmp_path):
 def test_concurrent_startup_migrations_apply_once_on_live_postgres(pg_project):
     env = dict(os.environ)
     env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+    # Pass the DB connection details to the worker via the environment (not baked
+    # into the generated worker file) so no credential is stored in clear text.
+    env["TINA4_TEST_PG_HOST"] = PG_HOST
+    env["TINA4_TEST_PG_PORT"] = str(PG_PORT)
+    env["TINA4_TEST_PG_DB"] = PG_DB
+    env["TINA4_TEST_PG_USERNAME"] = PG_USER
+    env["TINA4_TEST_PG_PASSWORD"] = PG_PASS
 
     procs = [
         subprocess.Popen(
