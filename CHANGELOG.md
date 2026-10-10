@@ -9,6 +9,22 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.149 — 2026-10-10
+
+### CRUD
+- A CRUD admin page out of the box: `Crud.to_crud(request, model=Model)` renders a
+  searchable, sortable, paginated admin screen and registers the model's AutoCrud routes (ADR-0094).
+
+### Migrations
+- Startup auto-migration holds a cross-process lock, so concurrent boots apply each migration
+  exactly once; the SQLite/Firebird lock file now lives in the system temp dir (#277).
+
+### Dev server
+- The dev dashboard and toolbar are reachable from a Docker dev box via `TINA4_DEV_ALLOWED_PEERS`;
+  a viewer the gate refuses gets no toolbar (#279).
+- The database layer accepts the `pgsql://` scheme as an alias of postgres (#280).
+- A configurable SMTP timeout is reported as a timeout instead of hanging the request (#278).
+
 ## 3.13.148 — 2026-10-05
 ### Sessions
 - An anonymous request no longer stores a session or sets a session cookie when nothing was ever put in it. A request that only marked the session changed without leaving data in it (deleting a key it never had, `clear()`, `regenerate()` on an empty session) is treated the same — a record with no data is not a session. Requests that store a value, or that arrive with a cookie for an already-stored session, behave as before, so session storage no longer grows with anonymous traffic (static files, 404s, health checks). Fixed across all four frameworks.
