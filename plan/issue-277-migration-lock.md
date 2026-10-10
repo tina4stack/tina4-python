@@ -41,6 +41,11 @@ inside the tracked `migrations/` folder. Close that gap.
   - **Cross-framework:** PHP already ensures lazily. Ruby/Node sibling ports MUST check their constructors for the same eager-ensure-outside-lock defect (see shared notes).
 
 ## Commits
-- (pending)
+- f636e0d8  fix(migration): #277 lock actually serializes on a fresh DB — temp-dir file lock (PHP parity) + removed the eager constructor ensure that defeated the lock; new live-PG concurrency test; 12 upgrade tests re-pointed to the lazy trigger. PR tina4stack/tina4-python#208 → v3.
 
-## Status: In Progress
+## Verification (at HEAD f636e0d8)
+- Full suite: 6173 passed, 0 failed, 0 errors, 774 skipped (live services not on this host; [needs:*] gated, lab runs them). macOS, Python 3.13, live PostgreSQL. Summary line read, not the exit code.
+- Mutation proofs all reported above under "Mutation proof".
+- PG container spun up for the native-lock proof, then removed (no strays).
+
+## Status: Complete — PR #208 open to v3 (not merged; v3 not pushed)
