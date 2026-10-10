@@ -29,6 +29,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import textwrap
 import time
 
@@ -134,3 +135,47 @@ def test_concurrent_startup_migrations_apply_each_migration_once(migration_proje
     assert tracker_rows == 1, (
         f"the tracker must hold exactly one row for the migration, got {tracker_rows}"
     )
+
+
+def test_file_lock_sidecar_lives_in_system_temp_not_the_migrations_folder(tmp_path):
+    """The advisory lock file must NOT be written inside the tracked migrations/
+    folder — a dotfile there gets committed by accident and blocks a plain rmdir.
+    It lives in the system temp dir, keyed by the ABSOLUTE migrations path, so
+    every worker of the same app lands on the same file (parity with the PHP
+    reference Migration::fileLockPath()). Mutation: point it back into the folder
+    and this test goes red.
+    """
+    from tina4_python.migration.runner import _file_lock_path
+
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+
+    path = _file_lock_path(str(migrations))
+
+    temp_root = os.path.realpath(tempfile.gettempdir())
+    assert os.path.realpath(path).startswith(temp_root + os.sep), (
+        f"lock file must live under the system temp dir {temp_root}, got {path}"
+    )
+    assert os.path.commonpath([os.path.realpath(path), os.path.realpath(str(migrations))]) != os.path.realpath(str(migrations)), (
+        f"lock file must NOT live inside the migrations folder, got {path}"
+    )
+    assert os.path.basename(path).startswith("tina4-migration-"), (
+        f"lock file name must be tina4-migration-<hash>.lock, got {os.path.basename(path)}"
+    )
+    assert path.endswith(".lock")
+
+    # Stable for a given absolute path, and a relative path resolves to the same
+    # file as its absolute form — so workers started with different cwd spellings
+    # of the same folder still serialize against one lock.
+    assert _file_lock_path(str(migrations)) == path
+    cwd = os.getcwd()
+    try:
+        os.chdir(str(tmp_path))
+        assert _file_lock_path("migrations") == path
+    finally:
+        os.chdir(cwd)
+
+    # A different app (different absolute path) gets a different lock.
+    other = tmp_path / "other" / "migrations"
+    other.mkdir(parents=True)
+    assert _file_lock_path(str(other)) != path

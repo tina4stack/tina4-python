@@ -46,8 +46,10 @@ def mig_dir(tmp_path):
 # ── 1. Fresh v3 table exposes the canonical bookkeeping columns ──────────
 
 def test_fresh_v3_table_has_passed_column(db, mig_dir):
-    # Constructing a Migration on a fresh DB creates the v3 tracking table.
-    Migration(db, str(mig_dir))
+    # The tracking table is ensured lazily on the first operation (not in the
+    # constructor — that eager CREATE raced across concurrent boots, issue #277),
+    # so trigger it the way production does. status() ensures + returns state.
+    Migration(db, str(mig_dir)).status()
 
     cols = {c["name"].lower() for c in db.get_columns("tina4_migration")}
     expected = {"id", "migration_name", "description", "batch", "executed_at", "passed"}
@@ -176,8 +178,10 @@ def test_v2_table_with_passed0_row_upgrades_and_applied_not_rerun(db, mig_dir):
     )
     db.commit()
 
-    # Constructing Migration triggers the in-place v2 -> v3 upgrade.
+    # The first operation triggers the in-place v2 -> v3 upgrade (ensured lazily,
+    # not in the constructor — issue #277). status() ensures + upgrades.
     m = Migration(db, str(mig_dir))
+    m.status()
 
     cols = {c["name"].lower() for c in db.get_columns("tina4_migration")}
     for col in ("migration_name", "batch", "executed_at"):
