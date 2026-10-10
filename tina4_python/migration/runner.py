@@ -14,9 +14,11 @@ Both naming patterns are supported. New migrations use timestamp format by defau
 Each file is executed once. State tracked in tina4_migration table.
 Rollback uses matching .down.sql files.
 """
+import hashlib
 import logging
 import os
 import re
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -771,7 +773,7 @@ _MIGRATION_LOCK_NAME = "tina4_migration_lock"
 # name so it cannot collide with an application's own advisory-lock keys. It is a
 # constant (not user input), so inlining it in the SQL is injection-safe.
 _PG_ADVISORY_KEY = int.from_bytes(
-    __import__("hashlib").sha256(_MIGRATION_LOCK_NAME.encode()).digest()[:8],
+    hashlib.sha256(_MIGRATION_LOCK_NAME.encode()).digest()[:8],
     "big", signed=True,
 )
 
@@ -811,13 +813,34 @@ def _acquire_migration_lock(db, migration_folder: str):
     return _acquire_file_lock(migration_folder)
 
 
+def _file_lock_path(migration_folder: str) -> str:
+    """Where the advisory lock file lives: the SYSTEM TEMP directory, never the
+    migrations folder. The lock is a runtime artifact, not a migration — a dotfile
+    left in the tracked migrations/ directory gets committed by accident and blocks
+    a plain rmdir of the folder. The name is derived from the ABSOLUTE migrations
+    directory, so every worker of the SAME app lands on the SAME file and flock()
+    serializes them, while two different apps get two different locks. The scope is
+    identical to a sidecar in the folder; only the location changed. Parity with the
+    PHP reference Migration::fileLockPath()."""
+    try:
+        key = os.path.realpath(migration_folder)
+    except Exception:
+        key = migration_folder
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+    return os.path.join(tempfile.gettempdir(), f"tina4-migration-{digest}.lock")
+
+
 def _acquire_file_lock(migration_folder: str):
-    """OS advisory file lock on a sidecar — the portable fallback (crash-safe)."""
+    """OS advisory file lock on a sidecar — the portable fallback (crash-safe: the
+    kernel drops it when the process exits). On a platform without fcntl (Windows)
+    this raises on import and degrades to running unlocked rather than blocking boot.
+    """
     try:
         import fcntl  # POSIX only; the lab and every target server are POSIX
-        os.makedirs(migration_folder, exist_ok=True)
-        path = os.path.join(migration_folder, ".tina4_migration.lock")
-        handle = open(path, "w")
+        path = _file_lock_path(migration_folder)
+        # Open for append-create: the file is only ever a lock target, nothing is
+        # written to it, and we must not truncate a sidecar a holder is using.
+        handle = open(path, "a")
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         return ("file", handle)
     except Exception as exc:
@@ -1132,10 +1155,15 @@ class Migration:
         self._db = db
         self._dir = migrations_dir
         self._delim = delimiter
-        # Eagerly create or upgrade the tracking table. Matches PHP/Ruby/Node
-        # parity and triggers the v2→v3 auto-upgrade on construction so a
-        # newly-instantiated Migration immediately reflects v3 shape.
-        _ensure_tracking_table(self._db, self._dir)
+        # The tracking table is ensured lazily by migrate()/rollback()/status()/
+        # record_migration(), NOT here — migrate() does it UNDER the run-wide lock
+        # (issue #277). An eager ensure in the constructor ran an unprotected
+        # CREATE TABLE tina4_migration before any lock, so several workers booting
+        # a fresh database at once raced on it and collided on pg_type/pg_class —
+        # the exact concurrent-CREATE the lock exists to stop. Every public method
+        # that touches the table ensures it first (and triggers the v2→v3 upgrade
+        # idempotently), so construction needs no table. Parity with the PHP
+        # reference, which ensures lazily for the same reason.
 
     def migrate(self) -> list[str]:
         """Run all pending migrations. Returns list of applied filenames."""

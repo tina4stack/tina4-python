@@ -73,7 +73,7 @@ def test_v2_schema_detected_and_upgraded(db, mig_dir):
     _create_v2_table(db)
     _insert_v2_row(db, "000001_create_users")
 
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     cols = _column_names(db)
     assert "migration_name" in cols, "v3 migration_name column must be added"
@@ -91,7 +91,7 @@ def test_v2_row_matched_to_file_on_disk(db, mig_dir):
     # The real file on disk has a sequence prefix
     (mig_dir / "000001_create_users.sql").write_text("SELECT 1;")
 
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     rows = db.fetch("SELECT migration_name FROM tina4_migration", limit=10).records
     ids = [r["migration_name"] for r in rows]
@@ -106,7 +106,7 @@ def test_v2_row_without_matching_file_falls_back_to_description(db, mig_dir):
     _create_v2_table(db)
     _insert_v2_row(db, "orphan_no_file_anywhere")
 
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     rows = db.fetch("SELECT migration_name FROM tina4_migration", limit=10).records
     ids = [r["migration_name"] for r in rows]
@@ -140,7 +140,7 @@ def test_applied_v2_migration_does_not_rerun_after_upgrade(db, mig_dir):
 # ── 5. v3 schema left untouched ──────────────────────────────────────
 
 def test_v3_schema_untouched(db, mig_dir):
-    Migration(db, str(mig_dir))  # initialise as v3
+    Migration(db, str(mig_dir)).status()  # initialise as v3 (ensure lazily, issue #277)
     # Insert a v3-shaped row directly
     db.execute(
         "INSERT INTO tina4_migration (migration_name, description, batch, executed_at, passed) "
@@ -150,7 +150,7 @@ def test_v3_schema_untouched(db, mig_dir):
     db.commit()
 
     # Second construction must not corrupt the v3 data
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     rows = db.fetch("SELECT migration_name FROM tina4_migration", limit=10).records
     assert len(rows) == 1
@@ -163,7 +163,7 @@ def test_empty_v2_table_upgrades_cleanly(db, mig_dir):
     _create_v2_table(db)
     # No rows inserted
 
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     cols = _column_names(db)
     assert "migration_name" in cols
@@ -185,7 +185,7 @@ def test_multiple_v2_rows_backfilled(db, mig_dir):
     (mig_dir / "000001_create_users.sql").write_text("SELECT 1;")
     (mig_dir / "000002_create_orders.sql").write_text("SELECT 1;")
 
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     rows = db.fetch("SELECT migration_name FROM tina4_migration", limit=10).records
     assert len(rows) == 3, "All v2 rows must be backfilled"
@@ -204,7 +204,7 @@ def test_failed_v2_entries_also_backfilled(db, mig_dir):
     _insert_v2_row(db, "create_users", passed=1)
     _insert_v2_row(db, "create_orders", passed=0)
 
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     rows = db.fetch("SELECT migration_name, passed FROM tina4_migration", limit=10).records
     assert len(rows) == 2, "Both passed=1 and passed=0 rows must be backfilled"
@@ -290,6 +290,7 @@ def test_old_v3_migration_id_column_renamed_to_migration_name(db, mig_dir):
     db.commit()
 
     m = Migration(db, str(mig_dir))
+    m.status()  # trigger the lazy ensure + old-v3 -> v3 column rename (issue #277)
 
     cols = _column_names(db)
     assert "migration_name" in cols, "old-v3 table must gain the migration_name column"
@@ -426,7 +427,7 @@ def test_v2_description_with_sql_extension_resolves_to_the_stem(db, mig_dir):
     _create_v2_table(db)
     _insert_v2_row(db, "0000002_data_migration_for_show_room.sql")
 
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     name = db.fetch_one("SELECT migration_name FROM tina4_migration")["migration_name"]
     assert name == "0000002_data_migration_for_show_room", (
@@ -461,7 +462,7 @@ def test_v2_python_migration_filename_also_resolves(db, mig_dir):
     _create_v2_table(db)
     _insert_v2_row(db, "000003_seed_data.py")
 
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     name = db.fetch_one("SELECT migration_name FROM tina4_migration")["migration_name"]
     assert name == "000003_seed_data"
@@ -473,7 +474,7 @@ def test_unrelated_description_still_falls_back_verbatim(db, mig_dir):
     _create_v2_table(db)
     _insert_v2_row(db, "999_not_on_disk.sql")
 
-    Migration(db, str(mig_dir))
+    Migration(db, str(mig_dir)).status()  # trigger the lazy ensure + v2->v3 upgrade (issue #277: no eager ensure in __init__)
 
     name = db.fetch_one(
         "SELECT migration_name FROM tina4_migration WHERE description = '999_not_on_disk.sql'"
