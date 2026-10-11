@@ -2360,37 +2360,17 @@ def toolbar_js() -> str:
     var barClose = document.getElementById('tina4-bar-close');
     if (barClose) { barClose.addEventListener('click', function () { bar.style.display = 'none'; }); }
 
-    var STATE_KEY = 'tina4_dev_overlay_open';
-    function buildOverlay() {
-        var c = document.createElement('div');
-        c.id = 'tina4-dev-panel';
-        var f = document.createElement('iframe');
-        f.src = '/__dev';
-        c.appendChild(f);
-        document.body.appendChild(c);
-        return c;
-    }
-    function toggleOverlay(e) {
-        if (e) { e.preventDefault(); }
-        var p = document.getElementById('tina4-dev-panel');
-        if (p) {
-            var hide = p.style.display !== 'none';
-            p.style.display = hide ? 'none' : 'block';
-            try { localStorage.setItem(STATE_KEY, hide ? '0' : '1'); } catch (_) {}
-            return;
-        }
-        buildOverlay();
-        try { localStorage.setItem(STATE_KEY, '1'); } catch (_) {}
-    }
+    // Replace the old in-app iframe overlay: clicking Dashboard navigates to
+    // the detached split view (editor/dashboard LEFT, live preview RIGHT) as
+    // its own page. The app page reloading on a change no longer stomps the
+    // dashboard, because the dashboard is no longer embedded in it.
     var dash = document.getElementById('tina4-dash-link');
-    if (dash) { dash.addEventListener('click', toggleOverlay); }
-    try {
-        if (location.pathname.indexOf('/__dev') !== 0
-            && localStorage.getItem(STATE_KEY) === '1'
-            && !document.getElementById('tina4-dev-panel')) {
-            buildOverlay();
-        }
-    } catch (_) {}
+    if (dash) {
+        dash.addEventListener('click', function (e) {
+            e.preventDefault();
+            window.location.href = '/__dev/split';
+        });
+    }
 
     if (bar.getAttribute('data-reload') !== '1') { return; }
     var cssExts = ['.css', '.scss'], debounce = null, interval = parseInt('__POLL_INTERVAL__') || 3000;
@@ -2435,6 +2415,221 @@ def toolbar_js() -> str:
     connect();
 })();
 """.replace("__POLL_INTERVAL__", str(poll_interval_ms))
+
+
+def split_view_html() -> str:
+    """The detached dev split view: dashboard/editor LEFT, live app preview RIGHT.
+
+    Served at /__dev/split (feature: dev-dashboard preview). It is a plain page,
+    NOT an app page, so no toolbar is injected and the container never reloads.
+    Each pane keeps its own existing reload behaviour: the left /__dev SPA
+    refreshes its git-status in place, and the right preview is an ordinary app
+    page whose injected toolbar reloads it on a change - so the editor session
+    on the left stays put while the preview on the right updates. /__dev pages
+    carry no CSP, so the layout styles are inline here.
+    """
+    return """<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Tina4 Dev - Split</title>
+<style>
+  html,body{margin:0;height:100%;background:#0f172a;font-family:system-ui,-apple-system,sans-serif;overflow:hidden}
+  /* One top toolbar controls both panels and the preview device. */
+  .t4-topbar{height:40px;box-sizing:border-box;display:flex;align-items:center;gap:6px;padding:0 10px;background:#0b1220;border-bottom:1px solid #1f2937}
+  .t4-brand{color:#e2e8f0;font:600 12px system-ui;margin-right:6px}
+  .t4-spacer{flex:1 1 auto}
+  .t4-devbtn{background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:6px;padding:3px 9px;font:12px system-ui;cursor:pointer}
+  .t4-devbtn.active{background:#2563eb;border-color:#2563eb;color:#fff}
+  /* Icon toggle buttons: full opacity + highlight when the panel is shown,
+     dimmed when hidden. */
+  .t4-tg{display:inline-flex;align-items:center;justify-content:center;width:28px;height:26px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:6px;cursor:pointer;opacity:.5}
+  .t4-tg svg{width:15px;height:15px}
+  .t4-tg.active{background:#334155;color:#fff;opacity:1}
+  .t4-dim{color:#64748b;font:11px/1 ui-monospace,monospace;margin:0 6px}
+  .t4-popout{background:#0f766e;color:#fff;border:1px solid #0f766e;border-radius:6px;padding:3px 10px;font:12px system-ui;cursor:pointer;margin-left:6px}
+  .t4-split{display:flex;height:calc(100vh - 41px);width:100vw}
+  .t4-left{flex:0 0 auto;width:58%;min-width:0;height:100%;overflow:hidden}
+  .t4-left iframe{width:100%;height:100%;border:0;display:block}
+  .t4-gutter{flex:0 0 6px;cursor:col-resize;background:#1f2937}
+  .t4-gutter:hover,.t4-gutter.drag{background:#2563eb}
+  .t4-right{flex:1 1 auto;min-width:0;height:100%;overflow:hidden;display:flex;flex-direction:column}
+  /* A LIGHT backdrop so the dark device frame stands out. */
+  .t4-stage{flex:1 1 auto;min-width:0;min-height:0;position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 32%,#f8fafc,#c3ccd9)}
+  /* The device frame - a phone/tablet bezel around the live app. overflow:hidden
+     + border-radius CLIP the app to the rounded frame, so content is contained.
+     No width/height transition: fit() measures right after a toggle, and an
+     animated size would be read mid-transition (the "clicking does nothing" bug). */
+  .t4-device{position:relative;background:#111;box-shadow:0 16px 50px rgba(15,23,42,.45);transform-origin:center center;overflow:hidden}
+  .t4-device iframe{width:100%;height:100%;border:0;display:block;background:#fff}
+  .t4-device.mobile{border:14px solid #111;border-radius:46px}
+  .t4-device.tablet{border:16px solid #111;border-radius:26px}
+  /* Desktop fills the whole preview block - no bezel, no scaling. */
+  .t4-device.desktop{border:0;border-radius:0;box-shadow:none;width:100%;height:100%}
+  .t4-hidden{display:none !important}
+  /* While dragging the gutter, let mouse events pass over the iframes. */
+  body.t4-dragging iframe{pointer-events:none}
+</style></head>
+<body>
+  <div class="t4-topbar">
+    <span class="t4-brand">Tina4 Dev</span>
+    <button class="t4-tg active" id="t4-tg-files" title="Show/hide the file navigator"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="6" y1="2.5" x2="6" y2="13.5"/></svg></button>
+    <button class="t4-tg active" id="t4-tg-editor" title="Show/hide the code editor"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="5.5,4.5 2,8 5.5,11.5"/><polyline points="10.5,4.5 14,8 10.5,11.5"/></svg></button>
+    <button class="t4-tg active" id="t4-tg-preview" title="Show/hide the preview"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><rect x="1.5" y="2.5" width="13" height="9" rx="1.5"/><line x1="5.5" y1="14" x2="10.5" y2="14"/><line x1="8" y1="11.5" x2="8" y2="14"/></svg></button>
+    <span class="t4-spacer"></span>
+    <span class="t4-dim" id="t4-dim">1440 x 900</span>
+    <button class="t4-devbtn" data-mode="mobile">Mobile</button>
+    <button class="t4-devbtn" data-mode="tablet">Tablet</button>
+    <button class="t4-devbtn active" data-mode="desktop">Desktop</button>
+    <button class="t4-popout" id="t4-popout" title="Open this view in its own window - drag it to another screen">&#8689; Pop out</button>
+  </div>
+  <div class="t4-split" id="t4-split">
+    <div class="t4-left" id="t4-left"><iframe src="/__dev" title="Tina4 Dev Admin"></iframe></div>
+    <div class="t4-gutter" id="t4-gutter"></div>
+    <div class="t4-right" id="t4-right">
+      <div class="t4-stage" id="t4-stage">
+        <div class="t4-device desktop" id="t4-device">
+          <iframe id="t4-preview" src="/" title="Live preview"></iframe>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function () {
+    var SIZES = { mobile: {w:390,h:844}, tablet: {w:820,h:1180}, desktop: {w:1440,h:900} };
+    var KEY = 'tina4_split_device';
+    var device = document.getElementById('t4-device');
+    var stage = document.getElementById('t4-stage');
+    var dim = document.getElementById('t4-dim');
+    var left = document.getElementById('t4-left');
+    var right = document.getElementById('t4-right');
+    var gutter = document.getElementById('t4-gutter');
+    var split = document.getElementById('t4-split');
+    var mode = 'desktop';
+    try { var saved = localStorage.getItem(KEY); if (saved && SIZES[saved]) mode = saved; } catch (_) {}
+    var leftWidth = '58%';
+
+    // ── device preview ──
+    function fit() {
+      if (right.classList.contains('t4-hidden')) return;
+      if (mode === 'desktop') {
+        // Desktop just fills the preview block - responsive, no frame, no scale.
+        device.style.transform = 'none';
+        device.style.width = '100%';
+        device.style.height = '100%';
+        var r0 = stage.getBoundingClientRect();
+        if (dim) dim.textContent = Math.round(r0.width) + ' x ' + Math.round(r0.height);
+        return;
+      }
+      var s = SIZES[mode];
+      device.style.transform = 'none';
+      device.style.width = s.w + 'px';
+      device.style.height = s.h + 'px';
+      var rect = stage.getBoundingClientRect();
+      var pad = 28;
+      var ow = device.offsetWidth, oh = device.offsetHeight;
+      var scale = Math.min((rect.width - pad) / ow, (rect.height - pad) / oh, 1);
+      if (!isFinite(scale) || scale <= 0) scale = 1;
+      device.style.transform = 'scale(' + scale + ')';
+    }
+    function setMode(m) {
+      if (!SIZES[m]) return;
+      mode = m;
+      device.className = 't4-device ' + m;
+      if (dim) dim.textContent = SIZES[m].w + ' x ' + SIZES[m].h;
+      document.querySelectorAll('.t4-devbtn').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-mode') === m);
+      });
+      try { localStorage.setItem(KEY, m); } catch (_) {}
+      fit();
+    }
+    document.querySelectorAll('.t4-devbtn').forEach(function (b) {
+      b.addEventListener('click', function () { setMode(b.getAttribute('data-mode')); });
+    });
+    var pop = document.getElementById('t4-popout');
+    if (pop) pop.addEventListener('click', function () {
+      var s = SIZES[mode];
+      var w = Math.min(s.w, (screen.availWidth || 1920) - 40);
+      var h = Math.min(s.h, (screen.availHeight || 1080) - 120);
+      window.open('/', 'tina4preview_' + mode, 'width=' + w + ',height=' + h + ',menubar=no,toolbar=no,location=no');
+    });
+
+    // ── show / hide each panel (Files, Editor, Preview) ──
+    // Files (the nav) and Editor (the code area) are SEPARATE sections living
+    // inside the left /__dev SPA iframe, so hiding the editor must not take the
+    // file nav with it. They are same-origin, so we reach into the iframe and
+    // toggle its own `#editor-sidebar` (nav) and `.editor-main` (editor). The
+    // Preview is the right pane of this page.
+    var vis = { files: true, editor: true, preview: true };
+    function frameDoc() {
+      try { return document.querySelector('#t4-left iframe').contentDocument; } catch (_) { return null; }
+    }
+    function setFrameEl(sel, show) {
+      var d = frameDoc(); if (!d) return;
+      var el = d.querySelector(sel); if (el) el.style.display = show ? '' : 'none';
+    }
+    function applyPanels() {
+      setFrameEl('#editor-sidebar', vis.files);
+      setFrameEl('#editor-splitter-left', vis.files && vis.editor);
+      setFrameEl('.editor-main', vis.editor);
+      var leftEmpty = !vis.files && !vis.editor;
+      left.classList.toggle('t4-hidden', leftEmpty);
+      right.classList.toggle('t4-hidden', !vis.preview);
+      gutter.classList.toggle('t4-hidden', leftEmpty || !vis.preview);
+      if (!vis.preview) {
+        // Preview hidden: the editor/nav fills the whole width.
+        left.style.flex = '1 1 auto'; left.style.width = 'auto';
+      } else if (vis.files && !vis.editor) {
+        // Only the file nav is shown: shrink the left pane to the nav width so
+        // there is no empty gap where the editor used to be.
+        left.style.flex = '0 0 auto'; left.style.width = '250px';
+      } else {
+        left.style.flex = '0 0 auto'; left.style.width = leftWidth;
+      }
+      document.getElementById('t4-tg-files').classList.toggle('active', vis.files);
+      document.getElementById('t4-tg-editor').classList.toggle('active', vis.editor);
+      document.getElementById('t4-tg-preview').classList.toggle('active', vis.preview);
+      fit();
+    }
+    function toggle(name) {
+      // Never hide all three - at least one stays visible.
+      var n = { files: vis.files, editor: vis.editor, preview: vis.preview };
+      n[name] = !n[name];
+      if (!n.files && !n.editor && !n.preview) return;
+      vis[name] = !vis[name];
+      applyPanels();
+    }
+    document.getElementById('t4-tg-files').addEventListener('click', function () { toggle('files'); });
+    document.getElementById('t4-tg-editor').addEventListener('click', function () { toggle('editor'); });
+    document.getElementById('t4-tg-preview').addEventListener('click', function () { toggle('preview'); });
+
+    // ── drag the gutter to resize ──
+    var dragging = false;
+    gutter.addEventListener('mousedown', function (e) {
+      dragging = true;
+      document.body.classList.add('t4-dragging');
+      gutter.classList.add('drag');
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', function (e) {
+      if (!dragging) return;
+      var r = split.getBoundingClientRect();
+      var w = e.clientX - r.left;
+      w = Math.max(220, Math.min(w, r.width - 260));
+      leftWidth = w + 'px';
+      left.style.width = leftWidth;
+      fit();
+    });
+    window.addEventListener('mouseup', function () {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove('t4-dragging');
+      gutter.classList.remove('drag');
+    });
+
+    window.addEventListener('resize', fit);
+    setMode(mode);
+    applyPanels();
+  })();
+  </script>
+</body></html>"""
 
 
 # ── Editor API endpoints ──────────────────────────────────────
@@ -3252,10 +3447,28 @@ _SCAFFOLD_KINDS = [
 async def _api_scaffold_list(request, response):
     """GET — list the scaffold kinds this framework knows how to emit.
 
-    Dev-admin renders one button per item. Each carries a `kind` the
-    /scaffold/run endpoint expects and a human `label` for the UI.
+    Data-driven from the CLI's GENERATORS registry (the single source of truth),
+    so every generator the framework has - not a hardcoded subset - appears as a
+    button, and a new generator shows up with no dashboard change. Each item
+    carries the `kind` the /scaffold/run endpoint expects, a human `label`, and
+    whether it `needs_name`.
     """
-    return response({"kinds": _SCAFFOLD_KINDS})
+    try:
+        from tina4_python.cli import GENERATORS
+    except Exception:
+        return response({"kinds": _SCAFFOLD_KINDS})
+    no_name = {"auth", "base"}
+    kinds = [
+        {
+            "kind": k,
+            "label": k.replace("_", " ").title(),
+            "needs_name": k not in no_name,
+            "summary": spec.get("summary", ""),
+            "usage": spec.get("usage", ""),
+        }
+        for k, spec in GENERATORS.items()
+    ]
+    return response({"kinds": kinds})
 
 
 async def _api_scaffold_run(request, response):
@@ -3276,55 +3489,40 @@ async def _api_scaffold_run(request, response):
     name = (body.get("name") or "").strip()
     if not kind:
         return response({"ok": False, "error": "missing 'kind'"}, 400)
-    if not name and kind != "auth":
-        return response({"ok": False, "error": "missing 'name'"}, 400)
 
-    # Guard against path traversal / shell-metacharacter injection in
-    # the name — generator functions pass it into file paths.
-    import re
-    if not re.match(r"^[A-Za-z][A-Za-z0-9_\-]*$", name):
-        return response({"ok": False, "error": "name must match [A-Za-z][A-Za-z0-9_-]*"}, 400)
+    # Dispatch through the CLI's GENERATORS registry - the same single source of
+    # truth the list endpoint reads, so ANY generator (incl. page/base) runs.
+    try:
+        from tina4_python.cli import GENERATORS
+    except Exception as exc:
+        return response({"ok": False, "error": f"generators unavailable: {exc}"}, 500)
 
-    generator_map = {
-        "route":      "generate_route",
-        "model":      "generate_model",
-        "migration":  "generate_migration",
-        "middleware": "generate_middleware",
-    }
-    fn_name = generator_map.get(kind)
-    if fn_name is None:
+    spec = GENERATORS.get(kind)
+    if spec is None:
         return response({"ok": False, "error": f"unknown scaffold kind: {kind}"}, 400)
 
+    no_name = {"auth", "base"}
+    if not name and kind not in no_name:
+        return response({"ok": False, "error": "missing 'name'"}, 400)
+
+    # Guard against path traversal / shell-metacharacter injection in the name -
+    # generator functions pass it into file paths. (A no-name generator skips it.)
+    if name:
+        import re
+        if not re.match(r"^[A-Za-z][A-Za-z0-9_\-]*$", name):
+            return response({"ok": False, "error": "name must match [A-Za-z][A-Za-z0-9_-]*"}, 400)
+
+    import io
+    import contextlib
+    buf = io.StringIO()
     try:
-        from tina4_python import cli as cli_module
-        fn = getattr(cli_module, fn_name, None)
-        if fn is None:
-            # Fall back to shelling out — keeps the endpoint useful
-            # even if the generator function names drift.
-            import subprocess
-            cp = subprocess.run(
-                ["tina4python", "generate", kind, name],
-                capture_output=True, text=True, timeout=30,
-            )
-            if cp.returncode != 0:
-                return response({"ok": False, "error": cp.stderr.strip() or cp.stdout.strip()}, 500)
-            return response({"ok": True, "output": cp.stdout.strip()})
-
-        # Invoke the generator directly. The CLI functions typically
-        # print to stdout + write files; we don't capture their
-        # output here — the file tree will refresh and show the new
-        # files, which is what the user actually cares about.
-        result = fn(name) if fn.__code__.co_argcount == 1 else fn(name, None)
-
-        # Most generators return a path or list of paths; normalise.
-        files: list[str] = []
-        if isinstance(result, str):
-            files = [result]
-        elif isinstance(result, list):
-            files = [str(p) for p in result]
-        return response({"ok": True, "kind": kind, "name": name, "files": files})
+        with contextlib.redirect_stdout(buf):
+            spec["handler"](name, {})
     except Exception as exc:
         return response({"ok": False, "error": str(exc)}, 500)
+    # Generators print their "Created X" lines and refresh the file tree; we
+    # return the captured output so the chip can show what happened.
+    return response({"ok": True, "kind": kind, "name": name, "output": buf.getvalue().strip()})
 
 
 # ─── Run-chip endpoints (migrate / test / seed-all) ────────────────

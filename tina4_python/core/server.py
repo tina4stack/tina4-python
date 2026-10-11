@@ -1654,7 +1654,7 @@ def _handle_rate_limit(request: Request, response: Response) -> Response | None:
 
 async def _handle_dev_admin(request: Request, response: Response) -> Response:
     """Serve the /__dev dashboard and API routes."""
-    from tina4_python.dev_admin import get_api_handlers, _dev_request_denial
+    from tina4_python.dev_admin import get_api_handlers, _dev_request_denial, split_view_html
     # ADR-0082: ONE gate for every /__dev request, reads and writes alike -
     # Host allow-list (DNS rebinding), same-origin (CSRF and cross-site reads)
     # and loopback peer. Scoped to /__dev so the deliberately cross-origin
@@ -1665,7 +1665,15 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
             response.status(_denial[0]).json({"ok": False, "error": _denial[1]})
             _cors.apply(request, response)
             return response
-    if request.path in ("/__dev/", "/__dev", "/__dev/v2", "/__dev/v2/"):
+    if request.path in ("/__dev/split", "/__dev/split/"):
+        # Detached split view: dashboard/editor LEFT, live app preview RIGHT.
+        # A plain page (no toolbar, no reload) hosting two iframes that each
+        # keep their own reload behaviour - so the editor stays put while the
+        # preview updates on a change.
+        response.html(split_view_html())
+        response.header("cache-control", "no-store, must-revalidate")
+        response.header("pragma", "no-cache")
+    elif request.path in ("/__dev/", "/__dev", "/__dev/v2", "/__dev/v2/"):
         # Unified SPA dev admin. The bundle derives its WS URL from
         # `location.host` directly, so no environment shim is needed —
         # the framework serves /__dev_reload on its own port and the
