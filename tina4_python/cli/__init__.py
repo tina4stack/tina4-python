@@ -1652,8 +1652,8 @@ def _generate(args):
 
     what = args[0].lower()
 
-    # Auth doesn't require a name argument
-    no_name_generators = {"auth"}
+    # These generators take no name argument.
+    no_name_generators = {"auth", "base"}
     if what not in no_name_generators and len(args) < 2:
         print(f"Usage: tina4python generate {what} <name> [options]")
         sys.exit(1)
@@ -3352,6 +3352,127 @@ def _gen_form(name: str, flags: dict = None):
     print(f"  ✓ Created {path}")
 
 
+_BASE_TWIG = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}{{ APP_NAME }}{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/css/tina4.min.css">
+    <link rel="stylesheet" href="/css/default.css">
+    {% block stylesheets %}{% endblock %}
+</head>
+<body>
+{% block nav %}{% include "partials/nav.twig" ignore missing %}{% endblock %}
+<main>{% block content %}{% endblock %}</main>
+{% block javascripts %}
+<script src="/js/tina4.min.js"></script>
+<script src="/js/frond.min.js"></script>
+{% endblock %}
+</body>
+</html>
+'''
+
+
+def _ensure_base_template():
+    """Create src/templates/base.twig and the src/templates/pages/ folder if
+    missing. Returns the paths created (empty when everything already existed).
+    Shared by `generate base` and `generate page` so a page can be scaffolded
+    into a fresh project and still inherit from a real base."""
+    created = []
+    templates = Path("src/templates")
+    templates.mkdir(parents=True, exist_ok=True)
+    (templates / "pages").mkdir(parents=True, exist_ok=True)
+    base = templates / "base.twig"
+    if not base.exists():
+        base.write_text(_BASE_TWIG, encoding="utf-8")
+        created.append(str(base))
+    return created
+
+
+def _page_twig(title: str) -> str:
+    """A Frond page template that extends base.twig (Twig braces kept literal)."""
+    return (
+        '{% extends "base.twig" %}\n'
+        '{% block title %}' + title + '{% endblock %}\n'
+        '{% block content %}\n'
+        '<div class="container mt-4">\n'
+        '    <h1>' + title + '</h1>\n'
+        '    {# tina4:edit  page content goes here #}\n'
+        '</div>\n'
+        '{% endblock %}\n'
+    )
+
+
+def _page_route(url_path: str, template_name: str, fn_name: str, title: str) -> str:
+    """A route that renders a page template through the @template decorator."""
+    return (
+        "from tina4_python.core.router import get, template\n\n\n"
+        '@get("' + url_path + '")\n'
+        '@template("' + template_name + '")\n'
+        "async def " + fn_name + "(request, response):\n"
+        '    return {"title": "' + title + '"}\n'
+    )
+
+
+def _gen_base(name: str = None, flags: dict = None):
+    """Scaffold a Frond base template + an index page that extends it.
+
+    tina4python generate base
+
+    Creates src/templates/base.twig (if missing), the src/templates/pages/
+    folder, src/templates/pages/index.twig (extends base), and the `/` route
+    that renders it. Subsequent `generate page <name>` pages inherit from base.
+    """
+    created = _ensure_base_template()
+    index_tpl = Path("src/templates/pages/index.twig")
+    if not index_tpl.exists():
+        index_tpl.write_text(_page_twig("Home"), encoding="utf-8")
+        created.append(str(index_tpl))
+    routes = Path("src/routes")
+    routes.mkdir(parents=True, exist_ok=True)
+    index_route = routes / "index.py"
+    if not index_route.exists():
+        index_route.write_text(_page_route("/", "pages/index.twig", "index_page", "Home"), encoding="utf-8")
+        created.append(str(index_route))
+    if created:
+        for p in created:
+            print(f"  ✓ Created {p}")
+    else:
+        print("  ✓ base template + index page already present")
+
+
+def _gen_page(name: str, flags: dict = None):
+    """Scaffold a page that inherits from the Frond base template.
+
+    tina4python generate page about
+
+    Creates src/templates/pages/<name>.twig (extends base.twig) and a route that
+    renders it. Auto-creates the pages/ folder and bootstraps base.twig when they
+    do not exist yet, so a page always inherits from a real base.
+    """
+    slug = _to_snake(name or "").strip("/")
+    if not slug:
+        print("  ✗ page needs a name (e.g. generate page about)")
+        return
+    title = slug.replace("_", " ").title()
+    created = _ensure_base_template()
+    tpl = Path("src/templates/pages") / f"{slug}.twig"
+    if tpl.exists():
+        print(f"  ✗ File already exists: {tpl}")
+        return
+    tpl.write_text(_page_twig(title), encoding="utf-8")
+    created.append(str(tpl))
+    routes = Path("src/routes")
+    routes.mkdir(parents=True, exist_ok=True)
+    route = routes / f"{slug}.py"
+    if not route.exists():
+        route.write_text(_page_route(f"/{slug}", f"pages/{slug}.twig", f"{slug}_page", title), encoding="utf-8")
+        created.append(str(route))
+    for p in created:
+        print(f"  ✓ Created {p}")
+
+
 def _gen_view(name: str, flags: dict = None):
     """Generate list + detail view templates.
 
@@ -3912,6 +4033,8 @@ def _commands(args=None):
 GENERATORS = {
     "model":      {"handler": _gen_model,      "usage": '<Name> [--fields "name:string,price:float"] [--table-name <name>]', "summary": "ORM model + matching migration"},
     "route":      {"handler": _gen_route,      "usage": "<name> [--model Name] [--public]",            "summary": "CRUD route file, secure by default (--public opens writes)"},
+    "base":       {"handler": _gen_base,       "usage": "",                                            "summary": "Frond base template + index page + pages/ folder"},
+    "page":       {"handler": _gen_page,       "usage": "<name>",                                      "summary": "Page that extends base.twig (auto-creates pages/ + base)"},
     "crud":       {"handler": _gen_crud,       "usage": '<Name> [--fields "..."] [--public] [--no-templates]', "summary": "Model + migration + AutoCrud-backed admin page (to_crud) + editable crud/ templates + gate test"},
     "migration":  {"handler": _gen_migration,  "usage": "<description>",                               "summary": "Timestamped migration file (UP/DOWN)"},
     "middleware": {"handler": _gen_middleware, "usage": "<Name>",                                      "summary": "Middleware with before/after hooks"},
