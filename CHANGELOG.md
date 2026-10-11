@@ -9,6 +9,19 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.150 — 2026-10-11
+
+### Dev admin
+- The dev dashboard's AI now talks to the `tina4 ai serve` gateway on :11435, never
+  to a model directly: the proxy and the plan `flesh()` default both repoint off the
+  raw model port. The proxy relays NDJSON streaming end to end.
+- Split preview `/__dev/split` serves the shared `tina4-dev-admin-split.html` asset
+  (device frames + live preview), and the scaffold panel is data-driven from the CLI
+  generators (model, route, base, page, crud, …) with a surgical reveal of new files.
+- Code Landscape metrics: bubbles settle on a world sized to the project and are free
+  to spread; zoom-out works and Fit frames the whole layout (was crammed into the
+  viewport). Shipped in the shared SPA bundle.
+
 ## 3.13.149 — 2026-10-10
 
 ### CRUD
