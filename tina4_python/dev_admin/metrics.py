@@ -44,7 +44,11 @@ def _run(path: str) -> dict:
         raise MetricsEngineError(f"tina4 not found on PATH - {_INSTALL_HINT}")
     try:
         process = subprocess.run(
-            [binary, "metrics", "--path", path, "--json"],
+            # --no-history: a dashboard READ must never write .tina4-metrics.json.
+            # Without it every scan records history, the file watcher sees the
+            # write and reloads the page, which re-scans - a self-inflicted
+            # ~2-second reload loop that makes the dashboard unusable.
+            [binary, "metrics", "--path", path, "--json", "--no-history"],
             capture_output=True,
             text=True,
             timeout=_TIMEOUT_SECONDS,
