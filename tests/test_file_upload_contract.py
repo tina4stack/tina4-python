@@ -114,6 +114,76 @@ class TestSafeSaveConfines:
             save_upload({"filename": "ok\x00.txt", "content": b"x"}, str(target))
 
 
+    @pytest.mark.parametrize("link", ["symlink", "dangling", "hardlink"])
+    def test_safe_save_replaces_a_link_at_the_name_instead_of_writing_through_it(self, tmp_path, link):
+        target = tmp_path / "uploads"
+        target.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "loot").write_bytes(b"ORIGINAL")
+        if link == "symlink":
+            os.symlink(outside / "loot", target / "pic.txt")
+        elif link == "dangling":
+            os.symlink(outside / "new.txt", target / "pic.txt")
+        else:
+            os.link(outside / "loot", target / "pic.txt")
+
+        save_upload({"filename": "pic.txt", "content": b"UPLOADED"}, str(target))
+
+        assert (outside / "loot").read_bytes() == b"ORIGINAL", "the upload was written outside the target dir"
+        assert not (outside / "new.txt").exists(), "the upload created a file outside the target dir"
+        assert not (target / "pic.txt").is_symlink()
+        assert (target / "pic.txt").read_bytes() == b"UPLOADED"
+        assert sorted(p.name for p in target.iterdir()) == ["pic.txt"]
+
+    def test_safe_save_never_follows_a_link_swapped_in_after_its_check(self, tmp_path, monkeypatch):
+        import tina4_python.core.request as request_module
+        target = tmp_path / "uploads"
+        target.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "loot").write_bytes(b"ORIGINAL")
+        os.symlink(outside / "loot", target / "pic.txt")
+        monkeypatch.setattr(request_module.os.path, "islink", lambda path: False)
+
+        with pytest.raises(OSError):
+            save_upload({"filename": "pic.txt", "content": b"UPLOADED"}, str(target))
+
+        assert (outside / "loot").read_bytes() == b"ORIGINAL"
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+    def test_safe_save_rewrites_a_plain_file_in_place_keeping_its_mode(self, tmp_path):
+        target = tmp_path / "uploads"
+        target.mkdir()
+        (target / "run.sh").write_bytes(b"OLD CONTENT")
+        os.chmod(target / "run.sh", 0o755)
+
+        save_upload({"filename": "run.sh", "content": b"NEW"}, str(target))
+
+        assert (target / "run.sh").read_bytes() == b"NEW"
+        assert (target / "run.sh").stat().st_mode & 0o777 == 0o755
+
+    @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="POSIX permission bits, not root")
+    def test_safe_save_refuses_a_file_it_may_not_write(self, tmp_path):
+        target = tmp_path / "uploads"
+        target.mkdir()
+        (target / "pic.txt").write_bytes(b"ORIGINAL")
+        os.chmod(target / "pic.txt", 0o444)
+
+        with pytest.raises(PermissionError):
+            save_upload({"filename": "pic.txt", "content": b"UPLOADED"}, str(target))
+
+        assert (target / "pic.txt").read_bytes() == b"ORIGINAL"
+
+    def test_safe_save_takes_any_name_the_filesystem_takes(self, tmp_path):
+        target = tmp_path / "uploads"
+        name = "a" * 240 + ".txt"
+
+        save_upload({"filename": name, "content": b"UPLOADED"}, str(target))
+
+        assert (target / name).read_bytes() == b"UPLOADED"
+
+
 # ── UP-CHUNKED-BYPASS: running per-chunk size guard (413 mid-stream) ─────────
 
 LIMIT = 1_048_576          # 1MB cap for the child server
