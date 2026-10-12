@@ -2959,8 +2959,12 @@ async def handle(request: Request) -> Response:
     from tina4_python.core.csp import generate_nonce, set_current_nonce, clear_current_nonce
     request_nonce = generate_nonce()
     set_current_nonce(request_nonce)
+    from tina4_python.frond.engine import set_request_session, reset_request_session
+    session_token = set_request_session(None)
     try:
         _init_session(request)
+        # form_token() binds each token to this request's session (CSRF).
+        set_request_session(request.session)
 
         response = Response()
         response.csp_nonce = request_nonce
@@ -2994,6 +2998,7 @@ async def handle(request: Request) -> Response:
         # already finished. The CSP nonce has the same lifetime.
         clear_request_id()
         clear_current_nonce()
+        reset_request_session(session_token)
 
 def asgi(root_dir: str = "src"):
     """Build the ASGI application, with routes discovered.

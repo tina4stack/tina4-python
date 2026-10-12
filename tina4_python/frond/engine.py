@@ -15,6 +15,7 @@ source into tokens and tokens into an AST. This module consumes that AST: it
 owns expression evaluation, the filter set, and rendering. Structure is never
 re-derived here — see the parser's module docstring for why.
 """
+import contextvars
 import os
 import re
 import html
@@ -1577,7 +1578,7 @@ def _generate_form_jwt(descriptor: str = "", session_id: str = "") -> str:
             payload["context"] = descriptor
 
     # Include session_id in payload for CSRF session binding
-    sid = session_id or _form_token_session_id
+    sid = session_id or _request_session_id() or _form_token_session_id
     if sid:
         payload["session_id"] = sid
 
@@ -1641,6 +1642,42 @@ def set_form_token_session_id(session_id: str) -> None:
     """Set the session ID used by form_token() for CSRF session binding."""
     global _form_token_session_id
     _form_token_session_id = session_id or ""
+
+
+# The session of the request being dispatched. The server sets it for each
+# request, so a token is bound to the session that rendered it without sharing
+# a process-wide value between overlapping requests.
+_request_session: contextvars.ContextVar = contextvars.ContextVar(
+    "tina4_form_token_session", default=None
+)
+
+
+def set_request_session(session):
+    """Publish the current request's session to form_token(). Returns the
+    contextvars token the caller passes to reset_request_session()."""
+    return _request_session.set(session)
+
+
+def reset_request_session(token) -> None:
+    """Withdraw the session published by set_request_session()."""
+    _request_session.reset(token)
+
+
+def _request_session_id() -> str:
+    """The current request's session id, or "" outside a request.
+
+    A session that holds nothing is sent no cookie, so the form's own POST
+    would arrive under a newly minted id and fail its own token. Rendering a
+    bound token therefore stores a marker, which makes the session persist.
+    """
+    session = _request_session.get()
+    sid = getattr(session, "session_id", None) if session is not None else None
+    if not sid:
+        return ""
+    is_fresh = getattr(session, "is_fresh", None)
+    if callable(is_fresh) and is_fresh():
+        session.set("_tina4_csrf", True)
+    return sid
 
 
 # ── Frond Engine ────────────────────────────────────────────────
