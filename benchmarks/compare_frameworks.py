@@ -173,7 +173,7 @@ def _template_flask(n):
     from flask import Flask
     from jinja2 import Template
     app = Flask(__name__)
-    tpl = Template(TPL_JINJA)
+    tpl = Template(TPL_JINJA, autoescape=True)  # escape like Frond — fair comparison
     with app.app_context():
         for _ in range(n):
             tpl.render(**TPL_DATA)
@@ -181,7 +181,7 @@ def _template_flask(n):
 
 def _template_starlette(n):
     from jinja2 import Template
-    tpl = Template(TPL_JINJA)
+    tpl = Template(TPL_JINJA, autoescape=True)  # escape like Frond — fair comparison
     for _ in range(n):
         tpl.render(**TPL_DATA)
 
