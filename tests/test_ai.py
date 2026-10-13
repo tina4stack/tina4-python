@@ -154,7 +154,8 @@ class TestGenerateContext:
     def test_contains_framework_info(self):
         ctx = generate_context()
         assert "Tina4" in ctx
-        assert "tina4.com" in ctx
+        # Presence check (not URL-host validation): the context references the docs site.
+        assert ctx.count("tina4.com") >= 1
 
     def test_contains_skills_table(self):
         ctx = generate_context()

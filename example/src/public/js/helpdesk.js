@@ -22,12 +22,12 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
     var sendBtn = document.getElementById("helpdesk-send");
     if (!sessionList || !messagesEl) return;
 
-    // Track chat sessions: { clientId: { name, messages: [{sender, text, isAdmin, isSystem}], unread } }
-    // Prototype-safe map: keys are client IDs that arrive over the WebSocket, so
-    // they are attacker-controlled. A null prototype means a "__proto__" key can
-    // never reach Object.prototype, and isUnsafeKey() rejects the dangerous names
-    // outright at every write site (CodeQL: prototype pollution / property injection).
-    var sessions = Object.create(null);
+    // Track chat sessions, keyed by clientId: { name, messages: [{sender, text, isAdmin, isSystem}], unread }.
+    // Keys are client IDs that arrive over the WebSocket, so they are
+    // attacker-controlled. A Map keeps them as data keys that can never reach
+    // Object.prototype (no property injection / prototype pollution), and
+    // isUnsafeKey() rejects the dangerous names as defence in depth.
+    var sessions = new Map();
 
     function isUnsafeKey(key) {
         return key === "__proto__" || key === "constructor" || key === "prototype";
@@ -113,14 +113,14 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
                     if (data.is_admin) return;
 
                     var clientId = data.client_id;
-                    if (!sessions[clientId]) {
+                    if (!sessions.has(clientId)) {
                         addSession(clientId, data.sender || clientId);
                     }
                     addMessageToSession(clientId, data.sender, data.text, data.is_admin, false);
 
                     // Mark unread if not viewing this session
                     if (activeSession !== clientId) {
-                        sessions[clientId].unread++;
+                        sessions.get(clientId).unread++;
                         renderSessionList();
                     }
                 }
@@ -141,13 +141,13 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
     function addSession(clientId, name) {
         if (isUnsafeKey(clientId)) return;
-        if (sessions[clientId]) return;
-        sessions[clientId] = {
+        if (sessions.has(clientId)) return;
+        sessions.set(clientId, {
             name: name || clientId,
             messages: [],
             unread: 0,
             online: true
-        };
+        });
         renderSessionList();
 
         // Auto-select first session
@@ -158,18 +158,18 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
     function markSessionOffline(clientId) {
         if (isUnsafeKey(clientId)) return;
-        if (sessions[clientId]) {
-            sessions[clientId].online = false;
+        if (sessions.has(clientId)) {
+            sessions.get(clientId).online = false;
             renderSessionList();
         }
     }
 
     function addMessageToSession(clientId, sender, text, isAdmin, isSystem) {
         if (isUnsafeKey(clientId)) return;
-        if (!sessions[clientId]) {
+        if (!sessions.has(clientId)) {
             addSession(clientId, sender || clientId);
         }
-        sessions[clientId].messages.push({
+        sessions.get(clientId).messages.push({
             sender: sender,
             text: text,
             isAdmin: isAdmin,
@@ -185,7 +185,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
     function selectSession(clientId) {
         if (isUnsafeKey(clientId)) return;
         activeSession = clientId;
-        var sess = sessions[clientId];
+        var sess = sessions.get(clientId);
         if (sess) {
             sess.unread = 0;
             chatTitle.textContent = "Chat with " + escapeHtml(sess.name);
@@ -198,7 +198,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
     }
 
     function renderSessionList() {
-        var keys = Object.keys(sessions);
+        var keys = Array.from(sessions.keys());
         if (keys.length === 0) {
             sessionList.innerHTML = '<li class="helpdesk-empty" id="no-chats-msg">Waiting for customers...</li>';
             return;
@@ -207,7 +207,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
         var html = "";
         for (var i = 0; i < keys.length; i++) {
             var id = keys[i];
-            var sess = sessions[id];
+            var sess = sessions.get(id);
             var isActive = activeSession === id;
             var statusClass = sess.online ? "online" : "";
             var unreadBadge = sess.unread > 0 ? '<span class="helpdesk-unread">' + sess.unread + '</span>' : '';
@@ -230,12 +230,12 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
     }
 
     function renderMessages() {
-        if (!activeSession || !sessions[activeSession]) {
+        if (!activeSession || !sessions.has(activeSession)) {
             messagesEl.innerHTML = '';
             return;
         }
 
-        var msgs = sessions[activeSession].messages;
+        var msgs = sessions.get(activeSession).messages;
         var html = "";
         for (var i = 0; i < msgs.length; i++) {
             var m = msgs[i];

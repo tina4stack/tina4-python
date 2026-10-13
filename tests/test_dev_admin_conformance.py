@@ -306,7 +306,7 @@ def test_injected_toolbar_has_no_inline_style_onclick_or_inline_script(project_d
     assert "onclick" not in text, "inline onclick= in toolbar"
     # Every <script ...> in the toolbar must be an external src reference —
     # no inline <script>...</script> block.
-    for tag in re.findall(r"<script[^>]*>", text):
+    for tag in re.findall(r"<script[^>]*>", text, re.IGNORECASE):
         assert "src=" in tag, f"inline <script> in toolbar: {tag!r}"
     assert '<script src="/__dev/toolbar.js"></script>' in text
 

@@ -112,7 +112,9 @@ def _fresh_docstore(uri: str | None):
         os.environ.pop(key, None)
     if uri:
         os.environ["TINA4_MONGO_URI"] = uri
-    os.environ["TINA4_DOC_STORE_PATH"] = tempfile.mktemp(suffix=".db")
+    # A unique path for the fallback SQLite store. mkdtemp() creates the parent
+    # dir securely (no mktemp race); the store file is created inside it.
+    os.environ["TINA4_DOC_STORE_PATH"] = os.path.join(tempfile.mkdtemp(), "docstore.db")
 
     purged = {
         name: sys.modules.pop(name)
