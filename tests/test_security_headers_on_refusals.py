@@ -183,8 +183,11 @@ def test_csrf_refusal_of_a_signed_in_forged_write_carries_the_headers(server):
 
 
 def test_auth_gate_refusal_of_a_write_carries_the_headers(server):
-    """A valid form token gets past CSRF; no credentials, so the auth gate says 401."""
-    opener = urllib.request.build_opener()
+    """A valid form token gets past CSRF; no credentials, so the auth gate says 401.
+
+    The token is bound to the session that rendered it, so the write carries
+    that session's cookie, as a browser would."""
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
     token = json.loads(opener.open(f"{server['base']}/refusal/form-token", timeout=10).read())["token"]
     status, headers, body = _send(opener, f"{server['base']}/refusal/write", "POST", {"X-Form-Token": token})
     _assert_refused_with_headers(server, "auth gate (write)", status, headers, body, 401)
