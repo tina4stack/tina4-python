@@ -90,6 +90,31 @@ class TestToCrudModel:
                        "Create New Record", "Edit Record", "Confirm Delete"):
             assert marker in html
 
+    def test_de_rawed_form_and_table_attributes_render(self, project):
+        # The table id, form id, `required` and `checked` attributes are now
+        # emitted as quoted {% if %} attributes in the templates rather than
+        # pre-built " id=.."/" required" fragments injected with |raw. Rendered
+        # HTML must be unchanged, and no raw attribute-fragment key may leak.
+        table = Crud.generate_table([{"id": 1, "name": "Alice"}], "users", "id")
+        assert re.search(r'<table[^>]*\sid="crud-users"', table)
+        assert "table_id_attr" not in table
+
+        html = Crud.to_crud(_request(), model=CrudWidget, title="Test CRUD")
+        assert 'id="form-create"' in html
+        assert 'id="form-edit"' in html
+        for leak in ("required_attr", "checked_attr", "table_id_attr", "form_id_attr"):
+            assert leak not in html
+
+        form = Crud.generate_form([
+            {"name": "name", "type": "string", "label": "Full Name", "required": True},
+            {"name": "email", "type": "string", "label": "Email"},
+            {"name": "active", "type": "boolean", "label": "Active", "value": True},
+        ], "/api/users", "POST")
+        assert re.search(r'name="name"[^>]*\srequired', form)
+        assert not re.search(r'name="email"[^>]*\srequired', form)
+        assert re.search(r'type="checkbox"[^>]*\schecked', form)
+        assert "required_attr" not in form and "checked_attr" not in form
+
     def test_live_search_input_not_a_submit_form(self, project):
         html = Crud.to_crud(_request(), model=CrudWidget)
         # ADR-0094 search is live/AJAX: a data-crud-search input, no Search button.
