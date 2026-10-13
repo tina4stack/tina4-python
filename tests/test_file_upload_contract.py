@@ -156,19 +156,32 @@ class TestSafeSaveConfines:
         target = tmp_path / "uploads"
         target.mkdir()
         (target / "run.sh").write_bytes(b"OLD CONTENT")
-        os.chmod(target / "run.sh", 0o755)
+        # Owner-only but distinct from the 0o600 a create would set: proves the
+        # pre-existing mode is preserved on rewrite, with no group/other bits.
+        os.chmod(target / "run.sh", 0o700)
 
         save_upload({"filename": "run.sh", "content": b"NEW"}, str(target))
 
         assert (target / "run.sh").read_bytes() == b"NEW"
-        assert (target / "run.sh").stat().st_mode & 0o777 == 0o755
+        assert (target / "run.sh").stat().st_mode & 0o777 == 0o700
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+    def test_safe_save_creates_an_owner_only_file(self, tmp_path):
+        # A freshly created upload must be owner-only (0o600): no group or
+        # other read/write bit (CWE-732). Mutating the create mode back to
+        # 0o666 leaves the group/other read bit set and turns this RED.
+        target = tmp_path / "uploads"
+        saved = save_upload({"filename": "pic.txt", "content": b"UPLOADED"}, str(target))
+        assert os.stat(saved).st_mode & 0o077 == 0, "upload is group/other accessible"
 
     @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="POSIX permission bits, not root")
     def test_safe_save_refuses_a_file_it_may_not_write(self, tmp_path):
         target = tmp_path / "uploads"
         target.mkdir()
         (target / "pic.txt").write_bytes(b"ORIGINAL")
-        os.chmod(target / "pic.txt", 0o444)
+        # Owner read-only, no group/other bits: unwritable (the point of this
+        # test) without being world-readable.
+        os.chmod(target / "pic.txt", 0o400)
 
         with pytest.raises(PermissionError):
             save_upload({"filename": "pic.txt", "content": b"UPLOADED"}, str(target))

@@ -32,7 +32,8 @@ from tina4_python.frond import Frond
 
 # A marker only ever written to a file OUTSIDE the templates dir. If it ever
 # appears in rendered output, confinement was bypassed and the outside file read.
-SECRET = "TOP-SECRET-OUTSIDE-9f83c1"
+# (A plain sentinel, not a credential — the value is irrelevant beyond being unique.)
+OUTSIDE_MARKER = "OUTSIDE-SENTINEL-9f83c1"
 
 
 def _make_tree():
@@ -46,7 +47,7 @@ def _make_tree():
     (templates / "base.twig").write_text(
         "[BASE {% block body %}default{% endblock %} END]", encoding="utf-8")
     secret = base / "secret.txt"          # lives OUTSIDE templates/
-    secret.write_text(SECRET, encoding="utf-8")
+    secret.write_text(OUTSIDE_MARKER, encoding="utf-8")
     return base, templates, secret
 
 
@@ -83,7 +84,7 @@ class TestFrondTagsConfinement:
                 '{% include "../secret.txt" %}', encoding="utf-8")
             with pytest.raises(ValueError, match="escape") as excinfo:
                 Frond(str(templates)).render("evil.twig")
-            assert SECRET not in str(excinfo.value)
+            assert OUTSIDE_MARKER not in str(excinfo.value)
         finally:
             shutil.rmtree(base, ignore_errors=True)
 
@@ -95,7 +96,7 @@ class TestFrondTagsConfinement:
                 '{% include "' + str(secret) + '" %}', encoding="utf-8")
             with pytest.raises(ValueError, match="escape") as excinfo:
                 Frond(str(templates)).render("evil_abs.twig")
-            assert SECRET not in str(excinfo.value)
+            assert OUTSIDE_MARKER not in str(excinfo.value)
         finally:
             shutil.rmtree(base, ignore_errors=True)
 
@@ -111,6 +112,6 @@ class TestFrondTagsConfinement:
                 '{% include "sneaky.twig" %}', encoding="utf-8")
             with pytest.raises(ValueError, match="escape") as excinfo:
                 Frond(str(templates)).render("evil_link.twig")
-            assert SECRET not in str(excinfo.value)
+            assert OUTSIDE_MARKER not in str(excinfo.value)
         finally:
             shutil.rmtree(base, ignore_errors=True)

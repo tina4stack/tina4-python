@@ -48,7 +48,10 @@ class _RecordingServer:
                 if self.path.startswith("/redirect?"):
                     query = parse_qs(urlsplit(self.path).query)
                     self.send_response(int(query.get("code", ["302"])[0]))
-                    self.send_header("Location", query["to"][0])
+                    # Strip CR/LF so a redirect target can never split the
+                    # response head (HTTP response splitting); test URLs have none.
+                    location = query["to"][0].replace("\r", "").replace("\n", "")
+                    self.send_header("Location", location)
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return

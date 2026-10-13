@@ -861,11 +861,14 @@ def save_upload(file: dict, target_dir: str, filename: str | None = None) -> str
     if os.path.islink(dest):
         os.unlink(dest)
     flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
-    fd = os.open(dest, flags, 0o666)
+    # 0o600: an uploaded file is created owner-only, never group/other readable
+    # or writable (CWE-732). The mode applies only when O_CREAT makes the file;
+    # a plain file rewritten in place keeps its own mode, per the note above.
+    fd = os.open(dest, flags, 0o600)
     if os.fstat(fd).st_nlink > 1:
         os.close(fd)
         os.unlink(dest)
-        fd = os.open(dest, flags | os.O_EXCL, 0o666)
+        fd = os.open(dest, flags | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as handle:
         handle.truncate(0)
         handle.write(content)

@@ -71,7 +71,8 @@ class TestSkillBlock:
         assert "tina4-developer" in block
         assert "tina4-js" in block
         assert "tina4-maintainer" in block
-        assert "tina4.com" in block
+        # Presence check (not URL-host validation): the block references the docs site.
+        assert block.count("tina4.com") >= 1
         # Every generated context tells the assistant how to report a stale/wrong skill.
         assert "report-a-skill" in block
 
