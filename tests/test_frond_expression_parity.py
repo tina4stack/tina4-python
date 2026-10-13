@@ -83,7 +83,7 @@ EXPECTED = dict(_load(FIXTURES / "frond_expression_expected.txt"))
 def test_corpus_and_answer_key_line_up():
     """Guard the guard: a corpus entry with no expected value would otherwise
     pass by never being asserted."""
-    assert len(CORPUS) == 89
+    assert len(CORPUS) == 108
     assert {label for label, _ in CORPUS} == set(EXPECTED)
 
 
@@ -284,3 +284,56 @@ def test_json_encode_and_to_json_and_tojson_are_one_behaviour():
     # "a\\/b", and Python alone used to write "caf\\u00e9".
     assert '"u":"a/b"' in out
     assert "caf\u00e9" in out
+
+
+# -- Approved-spec gaps found porting a Twig app (ranges, arithmetic, maps) ---
+
+
+def test_range_operator_and_function_include_both_ends():
+    """``a..b`` and ``range(a, b[, step])`` are approved (#118, #122) and both
+    include the end value, counting down when start is greater than end."""
+    engine = Frond()
+    ctx = {"n": 3, "word": "x"}
+    assert engine.render_string("{% for i in 1..n %}{{ i }}{% endfor %}", ctx) == "123"
+    assert engine.render_string("{% for i in n..1 %}{{ i }}{% endfor %}", ctx) == "321"
+    assert engine.render_string("{% for i in range(0, 6, 3) %}{{ i }},{% endfor %}", ctx) == "0,3,6,"
+    # Negative: a bound that is not a number, or a zero step, is an empty loop.
+    assert engine.render_string("{% for i in 1..word %}{{ i }}{% else %}none{% endfor %}", ctx) == "none"
+    assert engine.render_string("{% for i in range(1, 3, 0) %}{{ i }}{% else %}none{% endfor %}", ctx) == "none"
+    # Negative: a dot inside a string or a decimal is not a range.
+    assert engine.render_string('{{ "a..b" }}|{{ 1.5 }}', ctx) == "a..b|1.5"
+
+
+def test_arithmetic_chains_left_to_right_and_needs_no_spaces():
+    """``10 - 2 - 3`` is 5 (left-associative); ``n-4`` works without spaces;
+    a ``-`` after another operator is a sign, not a subtraction."""
+    engine = Frond()
+    ctx = {"n": 5, "list": ["a", "b", "c"]}
+    assert engine.render_string("{{ 10 - 2 - 3 }}|{{ 100 / 10 / 2 }}|{{ 2 ** 3 ** 2 }}", ctx) == "5|5|512"
+    assert engine.render_string("{{ n-4 }}|{{ list[n-4] }}|{{ n * -1 }}", ctx) == "1|b|-5"
+    assert engine.render_string('{{ list[n-4] is defined ? list[n-4] : "-" }}', ctx) == "b"
+    # Negative: an index past the end is not defined.
+    assert engine.render_string('{{ list[n+5] is defined ? "y" : "-" }}', ctx) == "-"
+    # Negative: a leading minus is a sign, not a subtraction.
+    assert engine.render_string("{{ -7 + 1 }}", ctx) == "-6"
+
+
+def test_map_bare_keys_are_strings_and_parenthesised_keys_are_evaluated():
+    """``{a: 1}`` is ``{"a": 1}``, as in Twig; ``{(k): 1}`` evaluates ``k``."""
+    engine = Frond()
+    ctx = {"name": "Andre", "k": "dyn", "a": "WRONG"}
+    assert engine.render_string('{% set m = {a: "x" ~ name} %}{{ m.a }}', ctx) == "xAndre"
+    # Negative: a bare key never reads the variable of the same name.
+    assert engine.render_string('{% set m = {a: 1} %}{{ m.WRONG }}', ctx) == ""
+    assert engine.render_string('{% set m = {(k): 1} %}{{ m.dyn }}', ctx) == "1"
+
+
+def test_include_with_a_concatenated_value_passes_the_whole_map(tmp_path):
+    """The UptimeBot email CTA bug: ``~`` inside ``include ... with {}`` lost
+    every key, so the button rendered with an empty href."""
+    (tmp_path / "cta.twig").write_text("[{{ button_url }}|{{ button_label }}]", encoding="utf-8")
+    engine = Frond(template_dir=str(tmp_path))
+    source = "{% include 'cta.twig' with {button_url: 'https://x/' ~ code, button_label: 'Go'} %}"
+    assert engine.render_string(source, {"code": "ABC"}) == "[https://x/ABC|Go]"
+    # Negative: without the map the partial sees nothing.
+    assert engine.render_string("{% include 'cta.twig' %}", {}) == "[|]"
