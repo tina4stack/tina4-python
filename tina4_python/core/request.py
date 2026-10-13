@@ -683,7 +683,7 @@ def save_upload(file: dict, target_dir: str, filename: str | None = None) -> str
     os.makedirs(target_dir, exist_ok=True)
     dest = os.path.join(target_dir, base)
     # Defence in depth: the resolved parent of the destination must be exactly
-    # the resolved target dir (guards a pre-existing symlink at target/base).
+    # the resolved target dir.
     real_dir = os.path.realpath(target_dir)
     real_parent = os.path.realpath(os.path.dirname(dest))
     if real_parent != real_dir:
@@ -691,6 +691,19 @@ def save_upload(file: dict, target_dir: str, filename: str | None = None) -> str
     content = file.get("content", b"")
     if isinstance(content, str):
         content = content.encode()
-    with open(dest, "wb") as handle:
+    # Never write THROUGH a link already at target/base: a symlink (even a
+    # dangling one) leads out of target_dir, and a hard link shares its bytes
+    # with a file elsewhere. Such an entry is removed so the upload gets a file
+    # of its own; a plain file is rewritten in place and keeps its mode.
+    if os.path.islink(dest):
+        os.unlink(dest)
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    fd = os.open(dest, flags, 0o666)
+    if os.fstat(fd).st_nlink > 1:
+        os.close(fd)
+        os.unlink(dest)
+        fd = os.open(dest, flags | os.O_EXCL, 0o666)
+    with os.fdopen(fd, "wb") as handle:
+        handle.truncate(0)
         handle.write(content)
     return dest
