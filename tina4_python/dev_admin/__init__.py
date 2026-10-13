@@ -1406,19 +1406,19 @@ async def _api_system(request, response):
 
 
 async def _api_service_ai(request, response):
-    return response({"service": "ai", "url": os.environ.get("TINA4_AI_URL", "http://localhost:11437/api/chat"), "ok": True})
+    return response({"service": "ai", "url": os.environ.get("TINA4_AI_URL", "http://localhost:11435/api/chat"), "ok": True})
 
 
 async def _api_service_vision(request, response):
-    return response({"service": "vision", "url": os.environ.get("TINA4_VISION_URL", "http://localhost:11437/api/chat"), "ok": True})
+    return response({"service": "vision", "url": os.environ.get("TINA4_VISION_URL", "http://localhost:11435/api/chat"), "ok": True})
 
 
 async def _api_service_embed(request, response):
-    return response({"service": "embed", "url": os.environ.get("TINA4_EMBED_URL", "http://localhost:11437/api/embeddings"), "ok": True})
+    return response({"service": "embed", "url": os.environ.get("TINA4_EMBED_URL", "http://localhost:11435/api/embeddings"), "ok": True})
 
 
 async def _api_service_image(request, response):
-    return response({"service": "image", "url": os.environ.get("TINA4_IMAGE_URL", "http://localhost:11437/api/generate"), "ok": True})
+    return response({"service": "image", "url": os.environ.get("TINA4_IMAGE_URL", "http://localhost:11435/api/generate"), "ok": True})
 
 
 async def _api_service_rag(request, response):
@@ -1457,57 +1457,95 @@ def _supervisor_base_url() -> str:
 
 
 async def _api_ai_proxy(request, response):
-    """Transparent pass-through to the qwen ollama chat endpoint.
+    """Pass-through to the Tina4 AI GATEWAY (never a model directly).
 
-    Accepts the ollama-native body (``{model, messages, stream,
-    options}``) that the dev-admin SPA sends for FIM completion and
-    supervisor chat, forwards it verbatim to ``TINA4_AI_URL``, and
-    returns the response unchanged. Streaming is forced off upstream
-    because the built-in asyncio server can't reliably chunk responses
-    back to the SPA; the SPA's ``body.getReader()`` still works for
-    single-shot JSON.
+    Accepts the ollama-native body (``{model, messages, stream, options}``)
+    the dev-admin SPA sends for FIM completion and supervisor chat, and
+    forwards it VERBATIM to ``TINA4_AI_URL`` - the local gateway
+    (``tina4 ai serve`` on :11435), NOT a model. The gateway enforces the
+    profile sign-in and routes to Ollama or the Tina4 model server, so
+    dev-admin holds no model endpoint.
+
+    The caller's ``stream`` flag is honoured, never overridden. When it is
+    true the upstream NDJSON is relayed line by line to the SPA (the
+    built-in server chunks reliably), so the stream is unbroken model ->
+    gateway -> here -> SPA; otherwise a single JSON reply is returned.
     """
-    import urllib.request
+    import asyncio
+    import threading
     import urllib.error
+    import urllib.request
 
     raw_body = request.body if hasattr(request, "body") else None
-    if isinstance(raw_body, (dict, list)):
-        payload = dict(raw_body) if isinstance(raw_body, dict) else raw_body
-        if isinstance(payload, dict):
-            payload["stream"] = False
-        raw_bytes = json.dumps(payload).encode()
+    wants_stream = False
+    if isinstance(raw_body, dict):
+        wants_stream = bool(raw_body.get("stream"))
+        raw_bytes = json.dumps(raw_body).encode()
+    elif isinstance(raw_body, list):
+        raw_bytes = json.dumps(raw_body).encode()
     elif isinstance(raw_body, str) and raw_body.strip():
         try:
             decoded = json.loads(raw_body)
             if isinstance(decoded, dict):
-                decoded["stream"] = False
-            raw_bytes = json.dumps(decoded).encode()
+                wants_stream = bool(decoded.get("stream"))
+            raw_bytes = json.dumps(decoded).encode() if isinstance(decoded, (dict, list)) else raw_body.encode()
         except Exception:
             raw_bytes = raw_body.encode()
     else:
         return response({"error": "empty body"}, 400)
 
-    ai_url = os.environ.get("TINA4_AI_URL", "http://localhost:11437/api/chat")
-    try:
-        req = urllib.request.Request(
-            ai_url,
-            data=raw_bytes,
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=120) as r:
-            body = r.read()
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode() if e.fp else str(e)
-        return response({"error": f"AI backend {e.code}: {err_body[:200]}"}, 502)
-    except Exception as e:
-        return response({"error": f"AI backend unreachable: {e}"}, 502)
+    ai_url = os.environ.get("TINA4_AI_URL", "http://localhost:11435/api/chat")
 
-    # Forward qwen's response verbatim as JSON.
-    try:
-        return response(json.loads(body))
-    except Exception:
-        # Non-JSON body (shouldn't happen from ollama) — best-effort text.
-        return response(body.decode("utf-8", errors="replace"))
+    def _make_request():
+        return urllib.request.Request(ai_url, data=raw_bytes,
+                                      headers={"Content-Type": "application/json"})
+
+    # Single-shot: buffer and return one JSON.
+    if not wants_stream:
+        try:
+            with urllib.request.urlopen(_make_request(), timeout=120) as r:
+                body = r.read()
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode() if e.fp else str(e)
+            return response({"error": f"AI backend {e.code}: {err_body[:200]}"}, 502)
+        except Exception as e:
+            return response({"error": f"AI backend unreachable: {e}"}, 502)
+        try:
+            return response(json.loads(body))
+        except Exception:
+            return response(body.decode("utf-8", errors="replace"))
+
+    # Streaming: relay the gateway's NDJSON line by line. urllib is blocking, so
+    # read it on a worker thread and hand each line to the async generator through
+    # a queue (zero extra dependency - the same bridge the gateway and ai-server use).
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _pump():
+        try:
+            with urllib.request.urlopen(_make_request(), timeout=120) as r:
+                for line in r:                      # each NDJSON line as it arrives
+                    loop.call_soon_threadsafe(queue.put_nowait, line)
+        except urllib.error.HTTPError as e:
+            err = e.read().decode() if e.fp else str(e)
+            loop.call_soon_threadsafe(queue.put_nowait,
+                                      (json.dumps({"error": f"AI backend {e.code}: {err[:200]}"}) + "\n").encode())
+        except Exception as e:
+            loop.call_soon_threadsafe(queue.put_nowait,
+                                      (json.dumps({"error": f"AI backend unreachable: {e}"}) + "\n").encode())
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(target=_pump, daemon=True).start()
+
+    async def _relay():
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                return
+            yield chunk.decode("utf-8", errors="replace") if isinstance(chunk, (bytes, bytearray)) else chunk
+
+    return response.stream(_relay(), content_type="application/x-ndjson")
 
 
 # ── Customer feedback widget — server-side plumbing ─────────────────
@@ -2360,37 +2398,17 @@ def toolbar_js() -> str:
     var barClose = document.getElementById('tina4-bar-close');
     if (barClose) { barClose.addEventListener('click', function () { bar.style.display = 'none'; }); }
 
-    var STATE_KEY = 'tina4_dev_overlay_open';
-    function buildOverlay() {
-        var c = document.createElement('div');
-        c.id = 'tina4-dev-panel';
-        var f = document.createElement('iframe');
-        f.src = '/__dev';
-        c.appendChild(f);
-        document.body.appendChild(c);
-        return c;
-    }
-    function toggleOverlay(e) {
-        if (e) { e.preventDefault(); }
-        var p = document.getElementById('tina4-dev-panel');
-        if (p) {
-            var hide = p.style.display !== 'none';
-            p.style.display = hide ? 'none' : 'block';
-            try { localStorage.setItem(STATE_KEY, hide ? '0' : '1'); } catch (_) {}
-            return;
-        }
-        buildOverlay();
-        try { localStorage.setItem(STATE_KEY, '1'); } catch (_) {}
-    }
+    // Replace the old in-app iframe overlay: clicking Dashboard navigates to
+    // the detached split view (editor/dashboard LEFT, live preview RIGHT) as
+    // its own page. The app page reloading on a change no longer stomps the
+    // dashboard, because the dashboard is no longer embedded in it.
     var dash = document.getElementById('tina4-dash-link');
-    if (dash) { dash.addEventListener('click', toggleOverlay); }
-    try {
-        if (location.pathname.indexOf('/__dev') !== 0
-            && localStorage.getItem(STATE_KEY) === '1'
-            && !document.getElementById('tina4-dev-panel')) {
-            buildOverlay();
-        }
-    } catch (_) {}
+    if (dash) {
+        dash.addEventListener('click', function (e) {
+            e.preventDefault();
+            window.location.href = '/__dev/split';
+        });
+    }
 
     if (bar.getAttribute('data-reload') !== '1') { return; }
     var cssExts = ['.css', '.scss'], debounce = null, interval = parseInt('__POLL_INTERVAL__') || 3000;
@@ -2435,6 +2453,21 @@ def toolbar_js() -> str:
     connect();
 })();
 """.replace("__POLL_INTERVAL__", str(poll_interval_ms))
+
+
+def split_view_html() -> str:
+    """The detached dev split view, served from the SHARED asset
+    ``public/js/tina4-dev-admin-split.html`` - one source across all four
+    frameworks (PHP/Ruby/Node serve the same file). A plain page: dashboard/
+    editor LEFT, live app preview RIGHT; no toolbar injected, never reloads."""
+    import tina4_python
+    asset = Path(tina4_python.__file__).parent / "public" / "js" / "tina4-dev-admin-split.html"
+    try:
+        return asset.read_text(encoding="utf-8")
+    except OSError:
+        return ("<!DOCTYPE html><html><body><h1>Split view asset missing</h1>"
+                "<p>Reinstall tina4-python or redeploy the dev-admin bundle.</p></body></html>")
+
 
 
 # ── Editor API endpoints ──────────────────────────────────────
@@ -3252,10 +3285,28 @@ _SCAFFOLD_KINDS = [
 async def _api_scaffold_list(request, response):
     """GET — list the scaffold kinds this framework knows how to emit.
 
-    Dev-admin renders one button per item. Each carries a `kind` the
-    /scaffold/run endpoint expects and a human `label` for the UI.
+    Data-driven from the CLI's GENERATORS registry (the single source of truth),
+    so every generator the framework has - not a hardcoded subset - appears as a
+    button, and a new generator shows up with no dashboard change. Each item
+    carries the `kind` the /scaffold/run endpoint expects, a human `label`, and
+    whether it `needs_name`.
     """
-    return response({"kinds": _SCAFFOLD_KINDS})
+    try:
+        from tina4_python.cli import GENERATORS
+    except Exception:
+        return response({"kinds": _SCAFFOLD_KINDS})
+    no_name = {"auth", "base"}
+    kinds = [
+        {
+            "kind": k,
+            "label": k.replace("_", " ").title(),
+            "needs_name": k not in no_name,
+            "summary": spec.get("summary", ""),
+            "usage": spec.get("usage", ""),
+        }
+        for k, spec in GENERATORS.items()
+    ]
+    return response({"kinds": kinds})
 
 
 async def _api_scaffold_run(request, response):
@@ -3276,55 +3327,40 @@ async def _api_scaffold_run(request, response):
     name = (body.get("name") or "").strip()
     if not kind:
         return response({"ok": False, "error": "missing 'kind'"}, 400)
-    if not name and kind != "auth":
-        return response({"ok": False, "error": "missing 'name'"}, 400)
 
-    # Guard against path traversal / shell-metacharacter injection in
-    # the name — generator functions pass it into file paths.
-    import re
-    if not re.match(r"^[A-Za-z][A-Za-z0-9_\-]*$", name):
-        return response({"ok": False, "error": "name must match [A-Za-z][A-Za-z0-9_-]*"}, 400)
+    # Dispatch through the CLI's GENERATORS registry - the same single source of
+    # truth the list endpoint reads, so ANY generator (incl. page/base) runs.
+    try:
+        from tina4_python.cli import GENERATORS
+    except Exception as exc:
+        return response({"ok": False, "error": f"generators unavailable: {exc}"}, 500)
 
-    generator_map = {
-        "route":      "generate_route",
-        "model":      "generate_model",
-        "migration":  "generate_migration",
-        "middleware": "generate_middleware",
-    }
-    fn_name = generator_map.get(kind)
-    if fn_name is None:
+    spec = GENERATORS.get(kind)
+    if spec is None:
         return response({"ok": False, "error": f"unknown scaffold kind: {kind}"}, 400)
 
+    no_name = {"auth", "base"}
+    if not name and kind not in no_name:
+        return response({"ok": False, "error": "missing 'name'"}, 400)
+
+    # Guard against path traversal / shell-metacharacter injection in the name -
+    # generator functions pass it into file paths. (A no-name generator skips it.)
+    if name:
+        import re
+        if not re.match(r"^[A-Za-z][A-Za-z0-9_\-]*$", name):
+            return response({"ok": False, "error": "name must match [A-Za-z][A-Za-z0-9_-]*"}, 400)
+
+    import io
+    import contextlib
+    buf = io.StringIO()
     try:
-        from tina4_python import cli as cli_module
-        fn = getattr(cli_module, fn_name, None)
-        if fn is None:
-            # Fall back to shelling out — keeps the endpoint useful
-            # even if the generator function names drift.
-            import subprocess
-            cp = subprocess.run(
-                ["tina4python", "generate", kind, name],
-                capture_output=True, text=True, timeout=30,
-            )
-            if cp.returncode != 0:
-                return response({"ok": False, "error": cp.stderr.strip() or cp.stdout.strip()}, 500)
-            return response({"ok": True, "output": cp.stdout.strip()})
-
-        # Invoke the generator directly. The CLI functions typically
-        # print to stdout + write files; we don't capture their
-        # output here — the file tree will refresh and show the new
-        # files, which is what the user actually cares about.
-        result = fn(name) if fn.__code__.co_argcount == 1 else fn(name, None)
-
-        # Most generators return a path or list of paths; normalise.
-        files: list[str] = []
-        if isinstance(result, str):
-            files = [result]
-        elif isinstance(result, list):
-            files = [str(p) for p in result]
-        return response({"ok": True, "kind": kind, "name": name, "files": files})
+        with contextlib.redirect_stdout(buf):
+            spec["handler"](name, {})
     except Exception as exc:
         return response({"ok": False, "error": str(exc)}, 500)
+    # Generators print their "Created X" lines and refresh the file tree; we
+    # return the captured output so the chip can show what happened.
+    return response({"ok": True, "kind": kind, "name": name, "output": buf.getvalue().strip()})
 
 
 # ─── Run-chip endpoints (migrate / test / seed-all) ────────────────

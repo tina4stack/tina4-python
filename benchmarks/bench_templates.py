@@ -217,7 +217,9 @@ def main():
     # --- Jinja2 --------------------------------------------------------------------
     # Compiled to Python bytecode ONCE, outside the clock. Compiling per render would
     # be a strawman.
-    jinja_template = JinjaEnvironment().from_string(JINJA_SOURCE)
+    # autoescape=True so Jinja escapes like Frond does by default — a fair race,
+    # not one where Jinja skips the escaping work Frond pays for.
+    jinja_template = JinjaEnvironment(autoescape=True).from_string(JINJA_SOURCE)
     engines["Jinja2"] = lambda: jinja_template.render(**data)
 
     # --- Mako ----------------------------------------------------------------------

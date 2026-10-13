@@ -477,7 +477,8 @@ async def protected_get(request, response):
 
 ```python
 request.body        # Parsed request body (dict for JSON, dict for form data)
-request.params      # Query string parameters (dict)
+request.params      # ROUTE params ONLY (the {id} segments) — never query/body
+request.query       # Query string parameters (dict) — read ?q=, ?page= here
 request.headers     # HTTP headers (dict, lowercase keys)
 request.files       # Uploaded files (dict, values are base64-encoded dicts)
 request.url         # Request URL path
