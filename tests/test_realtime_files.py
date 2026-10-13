@@ -160,17 +160,11 @@ MINIO_HOST = "localhost"
 MINIO_PORT = 9100
 MINIO_BUCKET = "tina4-rt-test"
 
-# The two reasons are kept SEPARATE so the message names the real cause:
-#
-#   boto3 missing  -> a DECLARED client (pyproject `test` extra) is gone.
-#   MinIO down     -> the S3 service is not running.
-#
-# Neither carries a [needs:X] tag. S3 is an always-provisioned service under the
-# ADR-0069 gate rule, so under TINA4_REQUIRE_SERVICES both FAIL the run.
-# tests/test_require_services_gate.py asserts that against these exact constants.
-BOTO3_MISSING_REASON = (
-    "boto3 not installed -- it is declared in the pyproject `test` extra, so "
-    "run `uv sync --extra test` (real S3, never mocked)")
+# S3Storage is now zero-dependency (Tina4's own stdlib SigV4 client, no boto3),
+# so the only reason the live-S3 tests cannot run is the MinIO service being
+# down. No [needs:X] tag: S3 is an always-provisioned service under the ADR-0069
+# gate rule, so under TINA4_REQUIRE_SERVICES this FAILS the run (it does not
+# skip). tests/test_require_services_gate.py asserts that against this constant.
 MINIO_UNREACHABLE_REASON = (
     f"MinIO not reachable at {MINIO_HOST}:{MINIO_PORT} (real S3, never mocked)")
 
@@ -183,24 +177,8 @@ def _minio_reachable(host=MINIO_HOST, port=MINIO_PORT) -> bool:
         return False
 
 
-def _boto3_available() -> bool:
-    try:
-        import boto3  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
 def _s3_skip_reason() -> str | None:
-    """Why the live-S3 tests cannot run, or None when they can.
-
-    Resolved once, in a fixed order, so the emitted reason is deterministic --
-    stacked skipif marks would leave it depending on pytest's mark iteration
-    order. The client is checked FIRST: a missing boto3 is the actionable
-    defect, and reporting an unreachable MinIO instead would hide it.
-    """
-    if not _boto3_available():
-        return BOTO3_MISSING_REASON
+    """Why the live-S3 tests cannot run, or None when they can."""
     if not _minio_reachable():
         return MINIO_UNREACHABLE_REASON
     return None
@@ -212,6 +190,9 @@ _S3_SKIP_REASON = _s3_skip_reason()
 @pytest.mark.skipif(_S3_SKIP_REASON is not None, reason=_S3_SKIP_REASON or "")
 class TestS3Storage:
     def _store(self, monkeypatch):
+        # The CI-provisioned S3 is MinIO on localhost:9100 (minioadmin). The same
+        # zero-dependency SigV4 client is also proven against Garage and AWS;
+        # only a reachable endpoint is needed, no driver.
         monkeypatch.setenv("TINA4_STORAGE_BACKEND", "s3")
         monkeypatch.setenv("TINA4_STORAGE_URL", f"http://{MINIO_HOST}:{MINIO_PORT}")
         monkeypatch.setenv("TINA4_STORAGE_KEY", "minioadmin")
@@ -221,7 +202,7 @@ class TestS3Storage:
         store = select_storage()
         assert isinstance(store, S3Storage)
         try:
-            store._client.create_bucket(Bucket=MINIO_BUCKET)
+            store._client.create_bucket(MINIO_BUCKET)
         except Exception:
             pass  # already exists
         return store

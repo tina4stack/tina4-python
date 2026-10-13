@@ -58,24 +58,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "boto3",
-      "version": "1.43.65",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "Apache-2.0",
-      "evidence": "https://pypi.org/pypi/boto3/1.43.65/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "botocore",
-      "version": "1.43.65",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "Apache-2.0",
-      "evidence": "https://pypi.org/pypi/botocore/1.43.65/json"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "bottle",
       "version": "0.13.4",
       "platform": "",
@@ -271,15 +253,6 @@
       "lock_license": "NOASSERTION",
       "upstream_declaration": "License :: OSI Approved :: BSD License",
       "evidence": "https://pypi.org/pypi/jinja2/3.1.6/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "jmespath",
-      "version": "1.1.0",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/jmespath/1.1.0/json"
     },
     {
       "ecosystem": "pypi",
@@ -491,11 +464,11 @@
     {
       "ecosystem": "pypi",
       "name": "pymongo",
-      "version": "4.16.0",
+      "version": "4.18.3",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "Apache-2.0",
-      "evidence": "https://pypi.org/pypi/pymongo/4.16.0/json"
+      "evidence": "https://pypi.org/pypi/pymongo/4.18.3/json"
     },
     {
       "ecosystem": "pypi",
@@ -652,15 +625,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "s3transfer",
-      "version": "0.19.2",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "Apache License 2.0",
-      "evidence": "https://pypi.org/pypi/s3transfer/0.19.2/json"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "setuptools",
       "version": "84.0.0",
       "platform": "",
@@ -734,11 +698,11 @@
     {
       "ecosystem": "pypi",
       "name": "urllib3",
-      "version": "2.7.0",
+      "version": "2.8.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/urllib3/2.7.0/json"
+      "evidence": "https://pypi.org/pypi/urllib3/2.8.0/json"
     },
     {
       "ecosystem": "pypi",
@@ -752,11 +716,11 @@
     {
       "ecosystem": "pypi",
       "name": "werkzeug",
-      "version": "3.1.6",
+      "version": "3.1.9",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/werkzeug/3.1.6/json"
+      "evidence": "https://pypi.org/pypi/werkzeug/3.1.9/json"
     }
   ]
 }

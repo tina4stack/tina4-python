@@ -7,8 +7,9 @@
 """Pluggable file storage for the realtime "files" feature.
 
 ``StorageBackend`` is the interface; ``LocalStorage`` (default, zero-dependency,
-filesystem) and ``S3Storage`` (opt-in, S3-compatible via boto3) are the shipped
-implementations. Selection mirrors the cache/session/queue backend pattern:
+filesystem) and ``S3Storage`` (opt-in, S3-compatible, also zero-dependency — it
+uses Tina4's own stdlib SigV4 client, not boto3) are the shipped implementations.
+Selection mirrors the cache/session/queue backend pattern:
 ``TINA4_STORAGE_BACKEND`` (``local`` default | ``s3``) plus per-backend env vars,
 with a graceful fallback to local if an ``s3`` backend cannot be constructed
 (missing driver or incomplete config) -- a real persistent store, never a silent
@@ -115,9 +116,10 @@ class LocalStorage(StorageBackend):
 
 
 class S3Storage(StorageBackend):
-    """S3-compatible store (AWS S3, MinIO, ...). Opt-in; needs boto3.
+    """S3-compatible store (AWS S3, MinIO, ...). Opt-in, zero dependencies.
 
-    Presigned GET URLs let clients fetch large blobs straight from object
+    Talks to S3 through Tina4's own stdlib SigV4 client (``s3_client``) — no
+    boto3. Presigned GET URLs let clients fetch large blobs straight from object
     storage instead of streaming through the app.
     """
 
@@ -125,50 +127,39 @@ class S3Storage(StorageBackend):
 
     def __init__(self, *, endpoint=None, key=None, secret=None, bucket=None,
                  region=None):
-        try:
-            import boto3  # optional dependency, imported lazily
-        except ImportError:
-            raise ImportError(
-                "The 'boto3' package is required for S3Storage. "
-                "Install it with: uv add boto3 (or: pip install boto3)"
-            ) from None
+        from tina4_python.realtime.s3_client import S3Client
 
         self.bucket = bucket or os.getenv("TINA4_STORAGE_BUCKET")
         if not self.bucket:
             raise ValueError("S3Storage requires TINA4_STORAGE_BUCKET")
-        self._client = boto3.client(
-            "s3",
-            endpoint_url=endpoint or os.getenv("TINA4_STORAGE_URL") or None,
-            aws_access_key_id=key or os.getenv("TINA4_STORAGE_KEY"),
-            aws_secret_access_key=secret or os.getenv("TINA4_STORAGE_SECRET"),
-            region_name=region or os.getenv("TINA4_STORAGE_REGION", "us-east-1"),
+        self._client = S3Client(
+            endpoint=endpoint or os.getenv("TINA4_STORAGE_URL") or None,
+            access_key=key or os.getenv("TINA4_STORAGE_KEY"),
+            secret_key=secret or os.getenv("TINA4_STORAGE_SECRET"),
+            region=region or os.getenv("TINA4_STORAGE_REGION", "us-east-1"),
         )
 
     def put(self, key, data, mime="application/octet-stream"):
-        self._client.put_object(Bucket=self.bucket, Key=key, Body=data,
-                                ContentType=mime)
+        self._client.put_object(self.bucket, key, data, content_type=mime)
 
     def get(self, key):
         try:
-            obj = self._client.get_object(Bucket=self.bucket, Key=key)
-            return obj["Body"].read()
+            return self._client.get_object(self.bucket, key)
         except Exception:
             return None
 
     def url(self, key, ttl=3600):
-        return self._client.generate_presigned_url(
-            "get_object", Params={"Bucket": self.bucket, "Key": key},
-            ExpiresIn=ttl)
+        return self._client.presigned_get_url(self.bucket, key, expires=ttl)
 
     def delete(self, key):
         try:
-            self._client.delete_object(Bucket=self.bucket, Key=key)
+            self._client.delete_object(self.bucket, key)
         except Exception as exc:
             Log.error(f"S3Storage delete failed for {key}: {exc}")
 
     def exists(self, key):
         try:
-            self._client.head_object(Bucket=self.bucket, Key=key)
+            self._client.head_object(self.bucket, key)
             return True
         except Exception:
             return False
@@ -178,7 +169,7 @@ def select_storage(storage: StorageBackend = None) -> StorageBackend:
     """Resolve the storage backend from an explicit arg or the environment.
 
     Falls back to :class:`LocalStorage` when an ``s3`` backend cannot be built
-    (boto3 missing or config incomplete), logging why -- a real store, never a
+    (config incomplete, e.g. no bucket), logging why -- a real store, never a
     silent no-op.
     """
     if storage is not None:
