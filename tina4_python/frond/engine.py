@@ -756,8 +756,104 @@ def _describe_conditional(expr: str, _has_filters: bool):
     return None
 
 
+# Arithmetic precedence levels, loosest first. ``**`` is right-associative;
+# every other level is left-associative.
+_ARITHMETIC_LEVELS = (("+", "-"), ("*", "//", "/", "%"), ("**",))
+
+
+def _top_level_positions(expr: str):
+    """Yield every position in *expr* outside quotes, parentheses and brackets."""
+    in_quote = None
+    depth = 0
+    for position, character in enumerate(expr):
+        if in_quote:
+            in_quote = None if character == in_quote else in_quote
+        elif character in "\"'":
+            in_quote = character
+        elif character in "([{":
+            depth += 1
+        elif character in ")]}":
+            depth -= 1
+        elif depth == 0:
+            yield position
+
+
+def _operator_at(expr: str, position: int) -> str:
+    """The arithmetic operator starting at *position* (``**`` and ``//`` are two characters)."""
+    pair = expr[position:position + 2]
+    return pair if pair in ("**", "//") else expr[position]
+
+
+def _follows_operand(expr: str, position: int) -> bool:
+    """True when the text before *position* ends in an operand, so an operator
+    there is binary; the ``-`` in ``n * -1`` or ``-7`` is a sign."""
+    preceding = expr[:position].rstrip()
+    return bool(preceding) and (preceding[-1].isalnum() or preceding[-1] in "_)]'\"")
+
+
+def _top_level_arithmetic_operators(expr: str) -> list[tuple[int, str]]:
+    """Return ``(position, operator)`` for every binary arithmetic operator
+    outside quotes, parentheses and brackets."""
+    operators = []
+    skip_until = -1
+    for position in _top_level_positions(expr):
+        if position < skip_until or expr[position] not in "+-*/%":
+            continue
+        operator = _operator_at(expr, position)
+        skip_until = position + len(operator)
+        if _follows_operand(expr, position):
+            operators.append((position, operator))
+    return operators
+
+
+def _split_arithmetic(expr: str):
+    """Pick the operator that binds loosest, so it is evaluated last.
+
+    Within a left-associative level the RIGHTMOST operator is the split point
+    (``10 - 2 - 3`` is ``(10 - 2) - 3``); ``**`` splits at the leftmost
+    (``2 ** 3 ** 2`` is ``2 ** (3 ** 2)``).
+    """
+    operators = _top_level_arithmetic_operators(expr)
+    if not operators:
+        return None
+    for level in _ARITHMETIC_LEVELS:
+        matches = [(position, operator) for position, operator in operators if operator in level]
+        if matches:
+            position, operator = matches[0] if level == ("**",) else matches[-1]
+            return ("arith", operator, expr[:position].strip(), expr[position + len(operator):].strip())
+    return None
+
+
+def _frond_range(start, end, step=1) -> list:
+    """Integers from ``start`` to ``end`` inclusive, counting down when
+    ``start`` is greater than ``end``. Backs both ``range()`` and ``a..b``.
+
+    Returns an empty list for a bound that is not a number or a zero step.
+    """
+    try:
+        start, end, step = int(start), int(end), abs(int(step))
+    except (TypeError, ValueError):
+        return []
+    if step == 0:
+        return []
+    if start <= end:
+        return list(range(start, end + 1, step))
+    return list(range(start, end - 1, -step))
+
+
+def _find_range_operator(expr: str) -> int:
+    """Position of a top-level ``..`` (not part of ``...``), or -1."""
+    position = _find_outside_quotes(expr, "..")
+    while position >= 0:
+        if not expr.startswith("...", position) and (position == 0 or expr[position - 1] != "."):
+            return position
+        next_position = _find_outside_quotes(expr[position + 2:], "..")
+        position = position + 2 + next_position if next_position >= 0 else -1
+    return -1
+
+
 def _describe_binary(expr: str, _has_filters: bool):
-    """Describe concat, comparison, logical, and arithmetic expressions."""
+    """Describe concat, comparison, logical, range, and arithmetic expressions."""
     tilde_pos = _find_outside_quotes(expr, "~")
     if tilde_pos >= 0:
         return ("concat", _split_outside_quotes(expr, "~"))
@@ -766,12 +862,11 @@ def _describe_binary(expr: str, _has_filters: bool):
     for op in (" not in ", " in ", " is not ", " is ", "!=", "==", ">=", "<=", ">", "<", " and ", " or ", " not "):
         if _find_outside_quotes(expr, op) >= 0:
             return ("comparison",)
-    for op in (" + ", " - ", " * ", " // ", " / ", " % ", " ** "):
-        pos = _find_outside_quotes(expr, op)
-        if pos >= 0:
-            return ("arith", op.strip(),
-                    expr[:pos].strip(), expr[pos + len(op):].strip())
-    return None
+    range_pos = _find_range_operator(expr)
+    # `1..4|join(",")` pipes the whole range, so leave it to the filter step.
+    if range_pos > 0 and _find_outside_quotes(expr[range_pos + 2:], "|") < 0:
+        return ("range", expr[:range_pos].strip(), expr[range_pos + 2:].strip())
+    return _split_arithmetic(expr)
 
 
 def _describe_filter(expr: str, has_filters: bool):
@@ -796,11 +891,22 @@ def _eval_array(_expr, desc, context, apply_filters):
     return [_eval_expr(item, context, apply_filters) for item in desc[1]]
 
 
+_BARE_KEY_RE = re.compile(r"^[A-Za-z_]\w*$")
+
+
 def _eval_dict(_expr, desc, context, apply_filters):
+    # A bare key is a string, as in Twig: {a: 1} is {"a": 1}. Wrap a key in
+    # parentheses to evaluate it: {(name): 1}.
     return {
-        _eval_expr(key, context, apply_filters): _eval_expr(value, context, apply_filters)
+        (key if _BARE_KEY_RE.match(key) else _eval_expr(key, context, apply_filters)):
+            _eval_expr(value, context, apply_filters)
         for key, value in desc[1]
     }
+
+
+def _eval_range(_expr, desc, context, apply_filters):
+    return _frond_range(_eval_expr(desc[1], context, apply_filters),
+                        _eval_expr(desc[2], context, apply_filters))
 
 
 def _eval_primary(_expr, desc, context, apply_filters):
@@ -830,6 +936,11 @@ def _eval_concat(_expr, desc, context, apply_filters):
     return "".join(str(_eval_expr(part, context, apply_filters) or "") for part in desc[1])
 
 
+def _whole_number(value: float):
+    """``10 / 2`` renders ``5``, not ``5.0``, matching the other frameworks."""
+    return int(value) if value.is_integer() else value
+
+
 def _eval_arithmetic(_expr, desc, context, apply_filters):
     operator, left, right = desc[1:]
     try:
@@ -844,7 +955,7 @@ def _eval_arithmetic(_expr, desc, context, apply_filters):
             "-": lambda: left_num - right_num,
             "*": lambda: left_num * right_num,
             "//": lambda: left_num // right_num if right_num != 0 else 0,
-            "/": lambda: left_num / right_num if right_num != 0 else 0,
+            "/": lambda: _whole_number(left_num / right_num) if right_num != 0 else 0,
             "%": lambda: left_num % right_num if right_num != 0 else 0,
             "**": lambda: left_num ** right_num,
         }
@@ -888,6 +999,7 @@ _EXPRESSION_EVALUATORS = {
     "coalesce": _eval_coalesce,
     "concat": _eval_concat,
     "arith": _eval_arithmetic,
+    "range": _eval_range,
     "pipe": _eval_pipe,
 }
 
@@ -1748,6 +1860,7 @@ class Frond:
         self._globals["form_token"] = _form_token
         self._globals["formTokenValue"] = _form_token_value
         self._globals["form_token_value"] = _form_token_value
+        self._globals["range"] = _frond_range
 
         # Debug helper: {{ dump(x) }} — gated on TINA4_DEBUG=true.
         # Both this global and the |dump filter call _render_dump() which
