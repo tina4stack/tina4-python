@@ -12,7 +12,8 @@ import functools
 import ipaddress
 import json
 import os
-from urllib.parse import parse_qs, unquote
+import re
+from urllib.parse import parse_qs, parse_qsl, unquote
 
 from tina4_python.env import _log_warning
 
@@ -519,8 +520,7 @@ def _parse_body(body: bytes, content_type: str) -> dict | str | None:
             return body.decode(errors="replace")
 
     if "application/x-www-form-urlencoded" in content_type:
-        parsed = parse_qs(body.decode(), keep_blank_values=True)
-        return {k: v[0] if len(v) == 1 else v for k, v in parsed.items()}
+        return _nest_form_fields(parse_qsl(body.decode(), keep_blank_values=True))
 
     if "multipart/form-data" in content_type:
         return _parse_multipart(body, content_type)
@@ -539,6 +539,7 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
     that may contain the boundary string in their content.
     """
     result = {}
+    fields: list[tuple[str, str]] = []
 
     # Extract boundary
     boundary = None
@@ -631,12 +632,174 @@ def _parse_multipart(body: bytes, content_type: str) -> dict:
             else:
                 result[name] = descriptor
         else:
-            result[name] = content.decode(errors="replace")
+            fields.append((name, content.decode(errors="replace")))
 
         if is_last:
             break
 
-    return result
+    # Text fields nest after the loop. One named after a file field
+    # (``photo[caption]`` beside a ``photo`` upload) keeps its flat key, so it
+    # never collides with the file (files are separated out by key afterwards).
+    return {**_nest_form_fields(fields, reserved=frozenset(result)), **result}
+
+
+# A field name nested deeper than this keeps its flat key. Rack's
+# param_depth_limit, the same limit tina4-ruby's form parser applies.
+_FORM_DEPTH_LIMIT = 32
+
+# A form with more fields than this is not nested at all, so a crafted body
+# cannot turn each small field into a deep structure. Rack's params_limit.
+_FORM_FIELD_LIMIT = 4096
+
+# A field name longer than this keeps its flat key, so nesting never copies a
+# huge name once per level.
+_FORM_NAME_LIMIT = 1024
+
+
+class _FormNestError(ValueError):
+    """A field name that is both a value and a container."""
+
+
+class _Nested(dict):
+    """A dict built by nesting, as opposed to a value that happens to be one."""
+
+
+def _nest_form_fields(pairs, reserved=frozenset()) -> dict:
+    """Nest ``(name, value)`` form pairs the way PHP and Rack nest a form.
+
+    ``tags[]`` collects a list, ``user[name]`` builds a dict, ``a[][x]`` a list
+    of dicts, and a repeated plain name keeps every value as a list. Used for
+    urlencoded and multipart bodies alike, so a form arrives in one shape
+    however it was encoded. A field that cannot nest - its name conflicts with
+    an earlier one (``a=1`` then ``a[b]=2``), nests too deep, is longer than
+    ``_FORM_NAME_LIMIT``, or starts with a ``reserved`` name (a file field's) -
+    keeps its flat key; the rest still nest. A later plain name replaces a dict
+    of that name, as Rack and parse_str do, and joins a list.
+    """
+    params = _Nested()
+    if len(pairs) > _FORM_FIELD_LIMIT:
+        for name, value in pairs:
+            _append_value(params, name, value)
+        return _plain(params)
+    for name, value in pairs:
+        base = name.split("[", 1)[0] if name.find("[", 1) != -1 else name
+        if base in reserved or len(name) > _FORM_NAME_LIMIT or name.count("[") >= _FORM_DEPTH_LIMIT:
+            _append_value(params, name, value)
+            continue
+        try:
+            _nest_one(params, name, value, 0)
+        except _FormNestError:
+            _append_value(params, name, value)
+    return _plain(params)
+
+
+def _append_value(params: dict, key: str, value) -> None:
+    """Store a plain field; a repeat turns it into a list of every value."""
+    if key not in params:
+        params[key] = value
+    elif isinstance(params[key], _RepeatedValues):
+        params[key].append(value)
+    else:
+        params[key] = _RepeatedValues([params[key], value])
+
+
+class _RepeatedValues(list):
+    """The values of a repeated plain field name (``p=1&p=2``)."""
+
+
+def _nest_one(params: dict, name: str, value, depth: int):
+    """Rack::QueryParser#normalize_params, ported from tina4-ruby's form parser.
+
+    It raises where Rack raises on a conflict; a plain name after a list of
+    that name joins the list, where Rack would replace it.
+    """
+    key, after = _split_field_name(name, depth)
+    if not key:
+        return None
+    if not after:
+        return _nest_leaf(params, key, value, depth)
+    if after == "[":
+        params[name] = value
+    elif after == "[]":
+        _list_at(params, key).append(value)
+    elif after.startswith("[]"):
+        _nest_list_item(_list_at(params, key), after, value, depth)
+    else:
+        current = params.setdefault(key, _Nested())
+        if not isinstance(current, _Nested):
+            raise _FormNestError(f"expected a dict for {key!r}")
+        params[key] = _nest_one(current, after, value, depth + 1)
+    return params
+
+
+def _split_field_name(name: str, depth: int) -> tuple[str, str]:
+    """The next key of a field name, and the bracketed rest after it."""
+    if depth == 0:
+        start = name.find("[", 1)
+        return (name[:start], name[start:]) if start != -1 else (name, "")
+    if name.startswith("[]"):
+        return "[]", name[2:]
+    close = name.find("]", 1)
+    if name.startswith("[") and close != -1:
+        return name[1:close], name[close + 1:]
+    return name, ""
+
+
+def _nest_leaf(params: dict, key: str, value, depth: int):
+    if key == "[]" and depth:
+        return [value]
+    if depth:
+        params[key] = value
+        return params
+    # A plain name after a list of that name joins the list (``tags[]=1&tags=2``);
+    # after a dict it replaces it, as Rack and parse_str do.
+    existing = params.get(key)
+    if isinstance(existing, list) and not isinstance(existing, _RepeatedValues):
+        existing.append(value)
+    elif isinstance(existing, _Nested):
+        params[key] = value
+    else:
+        _append_value(params, key, value)
+    return params
+
+
+def _list_at(params: dict, key: str) -> list:
+    current = params.setdefault(key, [])
+    if not isinstance(current, list) or isinstance(current, _RepeatedValues):
+        raise _FormNestError(f"expected a list for {key!r}")
+    return current
+
+
+def _nest_list_item(items: list, after: str, value, depth: int) -> None:
+    """``a[][x]``: fill the last record unless it already has ``x``, else start one."""
+    child_key = after[3:-1] if after[2:3] == "[" and after.endswith("]") else ""
+    if not child_key or "[" in child_key or "]" in child_key:
+        child_key = after[2:]
+    last = items[-1] if items else None
+    if isinstance(last, _Nested) and not _has_nested_key(last, child_key):
+        _nest_one(last, child_key, value, depth + 1)
+    else:
+        items.append(_nest_one(_Nested(), child_key, value, depth + 1))
+
+
+def _has_nested_key(params: dict, key: str) -> bool:
+    if "[]" in key:
+        return False
+    level = params
+    for part in [p for p in re.split(r"[\[\]]+", key) if p]:
+        if not isinstance(level, _Nested) or part not in level:
+            return False
+        level = level[part]
+    return True
+
+
+def _plain(value):
+    """Turn the nesting markers back into ordinary dicts and lists."""
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain(v) for v in value]
+    return value
 
 
 def _is_file_value(value) -> bool:
@@ -646,11 +809,11 @@ def _is_file_value(value) -> bool:
     non-empty list of such descriptors (a repeated field name). Everything else
     is a plain form field.
     """
-    if isinstance(value, dict):
-        return "filename" in value
     if isinstance(value, list):
-        return bool(value) and isinstance(value[0], dict) and "filename" in value[0]
-    return False
+        return bool(value) and _is_file_value(value[0])
+    # Content is bytes only on a real upload; a nested text field such as
+    # doc[filename]=x is a dict too, but every value in it is a str.
+    return isinstance(value, dict) and "filename" in value and isinstance(value.get("content"), bytes)
 
 
 def save_upload(file: dict, target_dir: str, filename: str | None = None) -> str:
