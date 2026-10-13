@@ -19,7 +19,7 @@ postgres = ["psycopg2-binary>=2.9"]
 mysql = ["mysql-connector-python>=9.0"]
 mssql = ["pymssql>=2.3"]
 firebird = ["firebird-driver>=1.10"]
-mongo = ["pymongo>=4.0"]
+mongo = ["pymongo>=4.18.2"]
 odbc = ["pyodbc>=5.0"]
 
 # Graph engine drivers — install what you need (loaded lazily on first use).
@@ -33,10 +33,13 @@ graph = ["tina4-ultipa>=0.1", "protobuf>=7.35.1", "neo4j>=5.0", "python-arango>=
 redis = ["redis>=5.0"]
 memcache = ["pymemcache>=4.0"]
 
-# File-storage backends — install what you need.
-# The `local` filesystem backend is the zero-dependency default; S3Storage
-# (TINA4_STORAGE_BACKEND=s3) is opt-in and imports boto3 lazily.
-s3 = ["boto3>=1.34"]
+# File-storage backends.
+# Both shipped backends are zero-dependency: `local` (filesystem, the default)
+# and `s3`/S3Storage (TINA4_STORAGE_BACKEND=s3), which talks to S3/MinIO/Garage
+# through Tina4's own stdlib SigV4 client (tina4_python.realtime.s3_client) — no
+# boto3. The extra is kept (empty) so `pip install tina4-python[s3]` still works;
+# it installs nothing because S3 needs no driver.
+s3 = []
 
 # Queue backends — install what you need
 kafka = ["confluent-kafka>=2.0"]
@@ -56,7 +59,7 @@ all-db = [
     "mysql-connector-python>=9.0",
     "pymssql>=2.3",
     "firebird-driver>=1.10",
-    "pymongo>=4.0",
+    "pymongo>=4.18.2",
     "pyodbc>=5.0",
 ]
 
@@ -75,28 +78,22 @@ all-db = [
 # own: `uv sync --extra X` PRUNES anything outside the named extras, so a test
 # extra that omitted it would silently uninstall it on a host that had it.
 #
-# boto3 is here for exactly that reason, MEASURED on the lab 2026-08-06
-# (Ubuntu 24.04.4 LTS x86_64, Python 3.13.3): it was declared in NO extra, but
-# happened to be installed ad hoc, so the two REAL-MinIO tests in
-# tests/test_realtime_files.py were passing. Running `uv sync --extra test`
-# pruned boto3 (plus s3transfer and jmespath) and those tests went straight from
-# "2 passed" to "2 skipped" -- with the suite still GREEN under
-# TINA4_REQUIRE_SERVICES=1, because the skip reason matched neither a service
-# keyword nor an unavailable hint in the conftest gate. Live S3 coverage
-# evaporated silently. Declaring it here is the fix; tests/conftest.py now also
-# recognises a missing boto3 so the gate can never miss it again.
+# boto3 is NO LONGER here: S3Storage talks to S3 through Tina4's own stdlib
+# SigV4 client, so the live-S3 tests in tests/test_realtime_files.py need no
+# driver at all — only a reachable S3 server (MinIO/Garage). Removing boto3 also
+# drops botocore + urllib3 + s3transfer + jmespath from the test tree, clearing
+# the urllib3 advisories they carried.
 test = [
     "psycopg2-binary>=2.9",
     "mysql-connector-python>=9.0",
     "pymssql>=2.3",
     "firebird-driver>=1.10",
-    "pymongo>=4.0",
+    "pymongo>=4.18.2",
     "pyodbc>=5.0",
     "redis>=5.0",
     "pymemcache>=4.0",
     "confluent-kafka>=2.0",
     "pika>=1.3",
-    "boto3>=1.34",
     # TEST-ONLY: validates the generated OpenAPI document against the real
     # OpenAPI 3.0/3.1 schema (tests/test_swagger_contract.py). NEVER a framework
     # runtime dependency — the swagger generator itself stays zero-dependency.

@@ -10,22 +10,22 @@ The standard (tina4-nodejs#67, all four frameworks):
 
     The 'X' package is required for FEATURE. Install it with: <command>
 
-THE BUGS, MEASURED on v3 (13464d4):
+THE BUG, MEASURED on v3 (13464d4):
 
-  * ``S3Storage()`` did a bare ``import boto3``. With boto3 absent the user got
-    CPython's "No module named 'boto3'" and nothing saying how to fix it, and
-    ``select_storage()``'s fallback warning repeated that bare text.
   * The mongodb cache fell back to 'file' with "(driver missing or service
     unreachable)" - the same words whether pymongo was missing or Mongo was
     down, so the one case the user can fix with one command never said so.
+
+(The sibling S3Storage case this file once also covered is gone: S3Storage no
+longer imports any driver — it uses Tina4's own stdlib SigV4 client — so there
+is no missing-package hint to assert for it.)
 
 HOW THE PACKAGE IS MADE GENUINELY UNAVAILABLE, WITHOUT ANY DOUBLE - the same
 instrument as tests/test_session_zero_dependency_fallback.py: a REAL child
 Python started with ``-S`` (the ``site`` module never runs, so no site-packages,
 no user site, no .pth file is on sys.path), every PYTHON* variable dropped and
-PYTHONPATH set to the repository root alone. ``import boto3`` / ``import
-pymongo`` are the real import statements and the ImportError is the one CPython
-really raises. Each child SELF-REPORTS that the package really is unimportable;
+PYTHONPATH set to the repository root alone. ``import pymongo`` is the real
+import statement and the ImportError is the one CPython really raises. Each child SELF-REPORTS that the package really is unimportable;
 every test asserts that first, so a child that quietly inherited the venv cannot
 pass while measuring nothing.
 
@@ -48,10 +48,6 @@ import pytest
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 REPORT_MARKER = "TINA4_REPORT "
 
-BOTO3_HINT = (
-    "The 'boto3' package is required for S3Storage. "
-    "Install it with: uv add boto3 (or: pip install boto3)"
-)
 PYMONGO_HINT = (
     "The 'pymongo' package is required for the mongodb cache backend. "
     "Install it with: uv add pymongo (or: pip install pymongo)"
@@ -71,7 +67,6 @@ def _unavailable(name):
 
 
 instrument = {
-    "boto3_gone": _unavailable("boto3"),
     "pymongo_gone": _unavailable("pymongo"),
     "site_package_paths": len([p for p in sys.path if "site-packages" in p or "dist-packages" in p]),
 }
@@ -122,38 +117,6 @@ def _closed_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
-
-
-# ── S3Storage without boto3 ─────────────────────────────────────────
-
-
-def test_s3_storage_without_boto3_names_the_package_and_the_command():
-    report, output = _run_child('''
-from tina4_python.realtime.storage import S3Storage
-try:
-    S3Storage(bucket="any-bucket")
-    outcome = {"raised": None}
-except ImportError as exc:
-    outcome = {"raised": type(exc).__name__, "message": str(exc)}
-print("TINA4_REPORT " + json.dumps({"instrument": instrument, "outcome": outcome}))
-''', without_packages=True)
-
-    _assert_really_without(report, "boto3")
-    assert report["outcome"]["raised"] in ("ImportError", "ModuleNotFoundError"), report
-    assert report["outcome"]["message"] == BOTO3_HINT, report
-
-
-def test_select_storage_without_boto3_falls_back_and_warns_with_the_command():
-    report, output = _run_child('''
-from tina4_python.realtime.storage import LocalStorage, select_storage
-store = select_storage()
-print("TINA4_REPORT " + json.dumps({"instrument": instrument, "local": isinstance(store, LocalStorage)}))
-''', without_packages=True, extra_environment={"TINA4_STORAGE_BACKEND": "s3", "TINA4_STORAGE_BUCKET": "any-bucket"})
-
-    _assert_really_without(report, "boto3")
-    assert report["local"] is True, output
-    assert "falling back to local filesystem storage" in output, output
-    assert BOTO3_HINT in output, output
 
 
 # ── mongodb cache without pymongo ───────────────────────────────────

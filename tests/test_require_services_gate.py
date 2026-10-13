@@ -22,8 +22,9 @@ and the graph engines were deliberately left out of the keywords, so their
 skips were green by design. An explicit tag closes all of those at once: a
 skip has to say what it needs, and the gate decides from the run's own env.
 
-boto3 is still declared in the pyproject `test` extra (the other half of the
-2026-08-06 fix), and that declaration is pinned below.
+S3Storage is now zero-dependency (Tina4's own stdlib SigV4 client, no boto3), so
+the live-S3 skip has a single cause — MinIO/Garage unreachable — and boto3 is
+gone from every extra; the regression guards for that are pinned below.
 
 The gate cases run a REAL pytest in a child process against a throwaway project
 whose conftest.py is a byte-for-byte copy of tests/conftest.py, so the gate
@@ -43,7 +44,7 @@ from pathlib import Path
 import pytest
 
 from conftest import _skip_is_excused, _truthy
-from test_realtime_files import BOTO3_MISSING_REASON, MINIO_UNREACHABLE_REASON
+from test_realtime_files import MINIO_UNREACHABLE_REASON
 
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
@@ -109,7 +110,6 @@ class TestSkipPredicate:
         assert _skip_is_excused(f"[needs:{tag}] down", NO_COORDINATES) is False
 
     @pytest.mark.parametrize("reason", [
-        BOTO3_MISSING_REASON,
         MINIO_UNREACHABLE_REASON,
         # The historical merged reason that the old phrase matcher missed.
         "needs a real MinIO on localhost:9100 and boto3 (real S3, never mocked)",
@@ -128,28 +128,24 @@ class TestSkipPredicate:
         assert _skip_is_excused("[needs:os=posix] [needs:mongo]", NO_COORDINATES) is False
 
 
-# ── boto3 is actually declared, so a sync installs it ───────────────
+# ── boto3 is gone: S3Storage is zero-dependency ─────────────────────
 
-class TestBoto3IsDeclared:
-    """The declaration half of the fix.
-
-    The gate can only fire on a host that was SUPPOSED to have boto3; these
-    assert the pyproject actually says so, which is what makes
-    `uv sync --extra test` reproducible instead of relying on an ad-hoc install.
+class TestNoBoto3:
+    """S3Storage now talks to S3 through Tina4's own stdlib SigV4 client, so
+    boto3 must not reappear in any extra (it would drag botocore + urllib3 back
+    into the tree with it). These are the regression guards for that win.
     """
 
-    def test_boto3_is_declared_in_the_test_extra(self):
-        # POSITIVE: this is the line whose absence caused the defect.
-        assert _declares("test", "boto3"), (
-            "boto3 must be in the `test` extra: `uv sync --extra test` prunes "
-            "anything outside the named extras, so an undeclared boto3 is "
-            "silently uninstalled and the live-MinIO S3 tests stop running."
+    def test_boto3_is_not_in_the_test_extra(self):
+        assert not _declares("test", "boto3"), (
+            "boto3 was removed from the `test` extra when S3Storage went "
+            "zero-dependency; re-adding it drags botocore + urllib3 back."
         )
 
-    def test_boto3_is_declared_in_the_s3_extra(self):
-        # POSITIVE: S3Storage imports boto3 lazily, so applications need a
-        # declared install path too -- every other optional backend has one.
-        assert _declares("s3", "boto3")
+    def test_boto3_is_not_in_the_s3_extra(self):
+        assert not _declares("s3", "boto3"), (
+            "the `s3` extra is zero-dependency now — S3Storage needs no driver."
+        )
 
     def test_the_test_extra_still_carries_every_other_live_client(self):
         # NEGATIVE guard against a careless edit dropping a client while adding
