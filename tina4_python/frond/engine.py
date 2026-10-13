@@ -211,6 +211,19 @@ _CACHE_RE = re.compile(r'cache\s+["\'](.+?)["\']\s*(\d+)?')
 _AUTOESCAPE_RE = re.compile(r"autoescape\s+(false|true)")
 _SPACELESS_RE = re.compile(r">\s+<")
 _STRIPTAGS_RE = re.compile(r"<[^>]+>")
+
+
+def _striptags(value):
+    """Strip tags to a fixed point. A single pass leaves a tag that only surfaces
+    once the surrounding one is removed (``<scr<script>ipt>`` -> ``<script>``),
+    which CodeQL flags as incomplete multi-character sanitization. Repeat until
+    nothing more matches."""
+    s = str(value)
+    while True:
+        stripped = _STRIPTAGS_RE.sub("", s)
+        if stripped == s:
+            return s
+        s = stripped
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _EXTENDS_RE = re.compile(r"\{%[-\s]*extends\s+[\"'](.+?)[\"']\s*[-]?%\}")
 
@@ -1554,7 +1567,7 @@ _BUILTIN_FILTERS = {
     "safe": lambda v, *a: v,
     "escape": lambda v, *a: _e_strategy(v, a[0] if a else "html"),
     "e": lambda v, *a: _e_strategy(v, a[0] if a else "html"),
-    "striptags": lambda v, *a: _STRIPTAGS_RE.sub("", str(v)),
+    "striptags": lambda v, *a: _striptags(v),
     "nl2br": lambda v, *a: SafeString(html.escape(str(v)).replace("\n", "<br />\n")),
     "abs": lambda v, *a: abs(v) if isinstance(v, (int, float)) else v,
     "round": lambda v, *a: round(float(v), int(a[0])) if a else int(round(float(v))),
