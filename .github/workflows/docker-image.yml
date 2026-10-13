@@ -56,6 +56,12 @@ on:
 #
 # What DOES run here on every tag: the boot gate, plus an arm64 cross-build
 # check. Both are credential-free, so this workflow can never leak anything.
+
+# Least-privilege GITHUB_TOKEN: the boot gate only checks out and builds, so it
+# needs read only (CWE-275 / CodeQL actions/missing-workflow-permissions).
+permissions:
+  contents: read
+
 env:
   IMAGE: docker.io/tina4stack/tina4-python
   APP_PORT: 7146

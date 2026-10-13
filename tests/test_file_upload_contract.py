@@ -163,6 +163,15 @@ class TestSafeSaveConfines:
         assert (target / "run.sh").read_bytes() == b"NEW"
         assert (target / "run.sh").stat().st_mode & 0o777 == 0o755
 
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX permission bits")
+    def test_safe_save_creates_an_owner_only_file(self, tmp_path):
+        # A freshly created upload must be owner-only (0o600): no group or
+        # other read/write bit (CWE-732). Mutating the create mode back to
+        # 0o666 leaves the group/other read bit set and turns this RED.
+        target = tmp_path / "uploads"
+        saved = save_upload({"filename": "pic.txt", "content": b"UPLOADED"}, str(target))
+        assert os.stat(saved).st_mode & 0o077 == 0, "upload is group/other accessible"
+
     @pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="POSIX permission bits, not root")
     def test_safe_save_refuses_a_file_it_may_not_write(self, tmp_path):
         target = tmp_path / "uploads"
