@@ -19,7 +19,7 @@ on ``hashlib``/``hmac``, proven against AWS's own test vectors in the suite.
 import datetime
 import hashlib
 import hmac
-import os
+import http.client
 import random
 import time
 import urllib.error
@@ -28,11 +28,11 @@ import urllib.request
 
 _ALGORITHM = "AWS4-HMAC-SHA256"
 _SERVICE = "s3"
-# S3 answers these when a request should simply be sent again (503 is also
-# "SlowDown"). Every operation here is idempotent, so a retry is always safe.
-_RETRY_STATUSES = frozenset({500, 502, 503, 504})
-_MAX_ATTEMPTS = 3
-_BACKOFF_BASE = 0.5   # seconds; attempt n waits up to base * 2**n, jittered
+# Retry policy, as for the AI client (ADR-0053): HTTP 429, any 5xx (S3's
+# SlowDown is a 503) and a dropped connection are sent again, a bounded number
+# of times, honouring Retry-After. Every operation here is idempotent.
+_MAX_RETRIES = 2
+_BACKOFF_BASE = 0.5   # seconds; retry n waits up to base * 2**n, jittered
 _BACKOFF_CAP = 20.0
 # AWS canonical URI/query encoding: unreserved set per RFC 3986 is kept literal.
 # For the PATH we also keep "/" (segment separator); for QUERY values we do not.
@@ -71,26 +71,29 @@ class S3Error(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(message)
         self.status = status
+        self.retry_after = None
+
+
+def _retry_after(raw):
+    """Seconds from a Retry-After header in its delta-seconds form, else None."""
+    try:
+        return max(0.0, float(raw)) if raw is not None else None
+    except ValueError:
+        return None
+
+
+class S3ConfigError(Exception):
+    """The client cannot sign a request: no access key or secret was given."""
 
 
 class S3Client:
     """Minimal path-style S3 client with SigV4 request + presigned-URL signing."""
 
     def __init__(self, *, endpoint: str = None, access_key: str = "",
-                 secret_key: str = "", region: str = "us-east-1", timeout: int = 30,
-                 session_token: str = ""):
+                 secret_key: str = "", region: str = "us-east-1", timeout: int = 30):
         self.region = region or "us-east-1"
-        if access_key or secret_key:
-            self.access_key = access_key or ""
-            self.secret_key = secret_key or ""
-            self.session_token = session_token or ""
-        else:
-            # No explicit credentials: use the standard AWS environment, as a
-            # whole. A session token only belongs with the key it was issued
-            # for, so it is never mixed into explicit credentials.
-            self.access_key = os.environ.get("AWS_ACCESS_KEY_ID", "")
-            self.secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY", "")
-            self.session_token = os.environ.get("AWS_SESSION_TOKEN", "")
+        self.access_key = access_key or ""
+        self.secret_key = secret_key or ""
         self.timeout = timeout
         base = (endpoint or f"https://s3.{self.region}.amazonaws.com").rstrip("/")
         self._base = base
@@ -132,6 +135,7 @@ class S3Client:
 
     def presigned_get_url(self, bucket: str, key: str, expires: int = 3600) -> str:
         """A URL that fetches the object directly, signed via SigV4 query params."""
+        self._require_credentials()
         now = datetime.datetime.now(datetime.timezone.utc)
         amz_date = now.strftime("%Y%m%dT%H%M%SZ")
         datestamp = now.strftime("%Y%m%d")
@@ -145,8 +149,6 @@ class S3Client:
             "X-Amz-Expires": str(expires),
             "X-Amz-SignedHeaders": "host",
         }
-        if self.session_token:
-            query["X-Amz-Security-Token"] = self.session_token
         canonical_qs = self._canonical_query(query)
         canonical_headers = f"host:{self._host}\n"
         canonical_request = "\n".join([
@@ -158,6 +160,13 @@ class S3Client:
         return f"{self._scheme}://{self._host}{canonical_uri}?{canonical_qs}"
 
     # -- signing + transport ----------------------------------------------------
+
+    def _require_credentials(self) -> None:
+        # Signing with an empty key only earns a 403 from the server, which says
+        # nothing about the cause. Name the settings instead, before sending.
+        if not (self.access_key and self.secret_key):
+            raise S3ConfigError(
+                "S3 credentials are not set: set TINA4_STORAGE_KEY and TINA4_STORAGE_SECRET")
 
     def _canonical_uri(self, bucket: str, key: str) -> str:
         return (self._prefix + "/" + _uri_encode(bucket, is_path=True)
@@ -181,15 +190,24 @@ class S3Client:
 
     def _request(self, method: str, bucket: str, key: str, body: bytes = b"",
                  extra_headers: dict = None, bucket_only: bool = False):
-        # Each attempt is signed afresh (x-amz-date moves on). A retryable status
-        # on the last attempt is raised like any other failure.
-        for attempt in range(_MAX_ATTEMPTS):
+        self._require_credentials()
+        for attempt in range(_MAX_RETRIES + 1):
+            last = attempt == _MAX_RETRIES
             try:
+                # Signed afresh each time: x-amz-date moves on.
                 return self._send(method, bucket, key, body, extra_headers, bucket_only)
             except S3Error as exc:
-                if exc.status not in _RETRY_STATUSES or attempt == _MAX_ATTEMPTS - 1:
+                if last or not (exc.status == 429 or exc.status >= 500):
                     raise
-            time.sleep(random.uniform(0, min(_BACKOFF_CAP, _BACKOFF_BASE * 2 ** attempt)))
+                delay = exc.retry_after
+            except (OSError, http.client.HTTPException):
+                # Connection refused or dropped, timeout: nothing was answered.
+                if last:
+                    raise
+                delay = None
+            if delay is None:
+                delay = random.uniform(0, _BACKOFF_BASE * 2 ** attempt)
+            time.sleep(min(delay, _BACKOFF_CAP))
 
     def _send(self, method: str, bucket: str, key: str, body: bytes,
               extra_headers: dict, bucket_only: bool):
@@ -205,8 +223,6 @@ class S3Client:
             "x-amz-content-sha256": payload_hash,
             "x-amz-date": amz_date,
         }
-        if self.session_token:
-            signed["x-amz-security-token"] = self.session_token
         canonical_headers = "".join(f"{k}:{signed[k]}\n" for k in sorted(signed))
         signed_headers = ";".join(sorted(signed))
         canonical_request = "\n".join([
@@ -224,8 +240,6 @@ class S3Client:
             "x-amz-content-sha256": payload_hash,
             "x-amz-date": amz_date,
         }
-        if self.session_token:
-            headers["x-amz-security-token"] = self.session_token
         if extra_headers:
             headers.update(extra_headers)
 
@@ -236,4 +250,6 @@ class S3Client:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 return response.status, response.read()
         except urllib.error.HTTPError as exc:
-            raise S3Error(exc.code, f"{method} {canonical_uri}: {exc.code} {exc.reason}") from None
+            error = S3Error(exc.code, f"{method} {canonical_uri}: {exc.code} {exc.reason}")
+            error.retry_after = _retry_after(exc.headers.get("retry-after"))
+            raise error from None

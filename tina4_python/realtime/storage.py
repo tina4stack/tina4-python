@@ -19,8 +19,7 @@ Env vars:
 - ``TINA4_STORAGE_BACKEND``  ``local`` (default) | ``s3``
 - ``TINA4_STORAGE_DIR``      local directory (default ``data/rt_storage``)
 - ``TINA4_STORAGE_URL``      S3 endpoint URL (e.g. an S3-compatible/MinIO host)
-- ``TINA4_STORAGE_KEY`` / ``TINA4_STORAGE_SECRET``  S3 credentials; when neither is
-  set, ``AWS_ACCESS_KEY_ID`` / ``AWS_SECRET_ACCESS_KEY`` / ``AWS_SESSION_TOKEN``
+- ``TINA4_STORAGE_KEY`` / ``TINA4_STORAGE_SECRET``  S3 credentials
 - ``TINA4_STORAGE_BUCKET``   S3 bucket name
 - ``TINA4_STORAGE_REGION``   S3 region (default ``us-east-1``)
 """

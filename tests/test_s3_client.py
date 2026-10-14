@@ -86,6 +86,7 @@ class TestPresignedUrlShape:
 
 import http.server
 import threading
+import time
 import urllib.request
 
 import pytest
@@ -99,8 +100,13 @@ class _RecordingS3(http.server.BaseHTTPRequestHandler):
         self.rfile.read(int(self.headers.get("content-length") or 0))
         self.server.seen.append((self.command, self.path, dict(self.headers)))
         status = self.server.statuses.pop(0) if self.server.statuses else 200
+        if status == "drop":
+            self.close_connection = True
+            return
         body = b"ok" if status == 200 and self.command == "GET" else b""
         self.send_response(status)
+        if status != 200 and self.server.retry_after is not None:
+            self.send_header("retry-after", self.server.retry_after)
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -111,7 +117,7 @@ class _RecordingS3(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def server():
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RecordingS3)
-    srv.seen, srv.statuses = [], []
+    srv.seen, srv.statuses, srv.retry_after = [], [], None
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     srv.url = f"http://127.0.0.1:{srv.server_port}"
     yield srv
@@ -119,84 +125,86 @@ def server():
     srv.server_close()
 
 
-@pytest.fixture
-def no_aws_env(monkeypatch):
-    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
-                 "TINA4_STORAGE_KEY", "TINA4_STORAGE_SECRET"):
-        monkeypatch.delenv(name, raising=False)
+def _client(server, endpoint=None):
+    return s3.S3Client(endpoint=endpoint or server.url, access_key="AKID", secret_key="secret")
 
 
-def _header(headers, name):
-    return {k.lower(): v for k, v in headers.items()}.get(name)
+class TestMissingCredentials:
+    """No key or secret: fail before sending, naming the settings (as the AI
+    client does for TINA4_AI_KEY) - not a bare 403 from the server."""
 
+    @pytest.fixture(autouse=True)
+    def no_storage_keys(self, monkeypatch):
+        monkeypatch.delenv("TINA4_STORAGE_KEY", raising=False)
+        monkeypatch.delenv("TINA4_STORAGE_SECRET", raising=False)
 
-class TestAwsEnvironmentCredentials:
-    """With no explicit key the client uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-    / AWS_SESSION_TOKEN, as boto3 did; explicit keys never pick up an env token."""
-
-    def test_storage_with_no_tina4_keys_signs_with_the_aws_environment(self, server, no_aws_env, monkeypatch):
+    def test_storage_put_names_the_settings_and_sends_nothing(self, server):
         from tina4_python.realtime.storage import S3Storage
-        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "ASIAENVKEY")
-        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "envsecret")
-        monkeypatch.setenv("AWS_SESSION_TOKEN", "ENVTOKEN")
-        S3Storage(endpoint=server.url, bucket="b").put("k.txt", b"x")
-        headers = server.seen[-1][2]
-        assert "Credential=ASIAENVKEY/" in _header(headers, "authorization")
-        assert _header(headers, "x-amz-security-token") == "ENVTOKEN"
-        assert "x-amz-security-token" in _header(headers, "authorization").split("SignedHeaders=")[1]
+        with pytest.raises(s3.S3ConfigError, match="TINA4_STORAGE_KEY and TINA4_STORAGE_SECRET"):
+            S3Storage(endpoint=server.url, bucket="b").put("k.txt", b"x")
+        assert server.seen == []
 
-    def test_explicit_keys_never_borrow_the_environment_token(self, server, no_aws_env, monkeypatch):
-        monkeypatch.setenv("AWS_SESSION_TOKEN", "SOMEONE-ELSES-TOKEN")
-        s3.S3Client(endpoint=server.url, access_key="AKID", secret_key="s").put_object("b", "k", b"x")
-        headers = server.seen[-1][2]
-        assert "Credential=AKID/" in _header(headers, "authorization")
-        assert _header(headers, "x-amz-security-token") is None
-
-    def test_presigned_url_carries_the_session_token(self, no_aws_env):
-        client = s3.S3Client(endpoint="http://localhost:9100", access_key="ASIA", secret_key="s",
-                             session_token="TOK/EN+1")
-        assert "X-Amz-Security-Token=TOK%2FEN%2B1" in client.presigned_get_url("b", "k")
+    @pytest.mark.parametrize("key, secret", [("", "secret"), ("AKID", "")])
+    def test_half_a_credential_is_refused_too(self, server, key, secret):
+        client = s3.S3Client(endpoint=server.url, access_key=key, secret_key=secret)
+        with pytest.raises(s3.S3ConfigError):
+            client.put_object("b", "k", b"x")
+        with pytest.raises(s3.S3ConfigError):
+            client.presigned_get_url("b", "k")
+        assert server.seen == []
 
 
 class TestRetries:
-    """S3 asks for a retry with 500/502/503/504 (503 is SlowDown); boto3 retried."""
+    """As for the AI client: 429, any 5xx and a dropped connection are retried,
+    twice at most, honouring Retry-After; a final answer is not."""
 
     @pytest.fixture(autouse=True)
     def fast_backoff(self, monkeypatch):
         monkeypatch.setattr(s3, "_BACKOFF_BASE", 0.001, raising=False)
 
-    @pytest.mark.parametrize("status", [500, 502, 503, 504])
-    def test_a_retryable_status_is_sent_again(self, server, status):
+    @pytest.mark.parametrize("status", [429, 500, 501, 502, 503, 504, "drop"])
+    def test_a_transient_failure_is_sent_again(self, server, status):
         server.statuses = [status]
-        s3.S3Client(endpoint=server.url, access_key="a", secret_key="b").put_object("b", "k", b"x")
-        assert [s for s, *_ in server.seen] == ["PUT", "PUT"]
+        _client(server).put_object("b", "k", b"x")
+        assert [m for m, *_ in server.seen] == ["PUT", "PUT"]
 
-    def test_it_gives_up_after_three_attempts(self, server):
+    def test_it_gives_up_after_two_retries(self, server):
         server.statuses = [503, 503, 503, 503]
         with pytest.raises(s3.S3Error) as caught:
-            s3.S3Client(endpoint=server.url, access_key="a", secret_key="b").get_object("b", "k")
+            _client(server).get_object("b", "k")
         assert caught.value.status == 503 and len(server.seen) == 3
+
+    def test_a_connection_that_keeps_dropping_is_raised(self, server):
+        server.statuses = ["drop", "drop", "drop", "drop"]
+        with pytest.raises(OSError):
+            _client(server).get_object("b", "k")
+        assert len(server.seen) == 3
 
     @pytest.mark.parametrize("status", [400, 403, 404, 409])
     def test_a_final_answer_is_not_retried(self, server, status):
         server.statuses = [status]
         with pytest.raises(s3.S3Error):
-            s3.S3Client(endpoint=server.url, access_key="a", secret_key="b").head_object("b", "k")
+            _client(server).head_object("b", "k")
         assert len(server.seen) == 1
+
+    def test_retry_after_is_honoured(self, server):
+        server.statuses, server.retry_after = [503], "0.4"
+        start = time.monotonic()
+        _client(server).put_object("b", "k", b"x")
+        assert time.monotonic() - start >= 0.4 and len(server.seen) == 2
 
 
 class TestEndpointPathPrefix:
     """An endpoint behind a path keeps it, as boto3 did: https://host/s3 -> /s3/<bucket>/<key>."""
 
     def test_requests_and_bucket_creation_keep_the_prefix(self, server):
-        client = s3.S3Client(endpoint=server.url + "/s3-prefix/", access_key="a", secret_key="b")
+        client = _client(server, server.url + "/s3-prefix/")
         client.put_object("b", "dir/k.txt", b"x")
         client.create_bucket("nb")
         assert [p for _, p, _ in server.seen] == ["/s3-prefix/b/dir/k.txt", "/s3-prefix/nb"]
 
     def test_the_presigned_url_keeps_the_prefix_and_fetches(self, server):
-        client = s3.S3Client(endpoint=server.url + "/s3-prefix", access_key="a", secret_key="b")
-        url = client.presigned_get_url("b", "k.txt")
+        url = _client(server, server.url + "/s3-prefix").presigned_get_url("b", "k.txt")
         assert url.startswith(server.url + "/s3-prefix/b/k.txt?")
         with urllib.request.urlopen(url, timeout=5) as response:
             assert response.read() == b"ok"
