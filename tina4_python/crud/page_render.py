@@ -108,7 +108,7 @@ def table_data(*, columns, records, pk, table_name, editable, sortable,
         "readonly": not editable,
         "inline_script": inline_script,
         "table_name": escape_html(table_name),
-        "table_id_attr": (f' id="{escape_html(table_id)}"' if table_id else ""),
+        "table_id": (table_id if table_id else ""),
     }
 
 
@@ -131,12 +131,12 @@ def render_modal_form(mode, columns, pk, *, edit):
             "value": "",
             "placeholder": escape_html(f"Enter {label.lower()}"),
             "type": "text",
-            "required_attr": "",
+            "required": False,
             "input": True,
         })
     return render_template("crud/form.twig", {
         "wrap": True,
-        "form_id_attr": f' id="form-{mode}"',
+        "form_id": f"form-{mode}",
         "action": "",
         "form_method": "POST",
         "method_override": None,
@@ -159,7 +159,7 @@ def build_custom_field(field):
         "label": escape_html(str(label)),
         "value": escape_html("" if value is None else str(value)),
         "placeholder": "",
-        "required_attr": " required" if field.get("required") else "",
+        "required": bool(field.get("required")),
     }
     ftype = field.get("type") or "string"
     ftype = ftype if isinstance(ftype, str) else str(ftype)
@@ -182,7 +182,7 @@ def _field_type_attrs(ftype, field, value):
     if ftype == "text":
         return {"textarea": True}
     if ftype == "boolean":
-        return {"checkbox": True, "checked_attr": (" checked" if value else "")}
+        return {"checkbox": True, "checked": bool(value)}
     if ftype == "select":
         return {"select": True, "options_html": build_options(field.get("options"), value)}
     return {"input": True, "type": _INPUT_TYPES.get(ftype, "text")}
