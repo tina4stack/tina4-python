@@ -147,6 +147,19 @@ class TestNoBoto3:
             "the `s3` extra is zero-dependency now — S3Storage needs no driver."
         )
 
+    def test_no_shipped_doc_says_s3_needs_boto3(self):
+        # CLAUDE.md and the developer skill (every tree) are what a reader or an
+        # agent installs from; telling them S3 needs boto3 sends them to install
+        # a driver the code never imports.
+        root = PYPROJECT.parent
+        docs = [root / "CLAUDE.md", *sorted(root.glob(".*/skills/tina4-developer-python/**/*.md"))]
+        claims = ("needs boto3", "boto3 missing", "via boto3", "boto3 is required")
+        stale = [f"{doc.relative_to(root)}:{n}" for doc in docs
+                 for n, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1)
+                 if any(claim in line for claim in claims)]
+        assert len(docs) > 3, f"found only {docs}"
+        assert not stale, f"docs still say S3 needs boto3: {stale}"
+
     def test_the_test_extra_still_carries_every_other_live_client(self):
         # NEGATIVE guard against a careless edit dropping a client while adding
         # one. Each of these was itself an undeclared-dependency incident.

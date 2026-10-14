@@ -249,7 +249,7 @@ download route `{files}/{key}`.
 ### Storage backends (`storage.py`)
 
 `select_storage(storage=None)` resolves from the `storage=` arg or `TINA4_STORAGE_BACKEND`
-(`local` default | `s3`). An `s3` backend that can't be built (boto3 missing / incomplete config)
+(`local` default | `s3`). An `s3` backend that can't be built (for example, no `TINA4_STORAGE_BUCKET`)
 **falls back to `LocalStorage`** with a warning — a real store, never a silent no-op.
 
 | var | default | effect |
