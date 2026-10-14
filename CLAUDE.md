@@ -25,7 +25,7 @@ Version 3.13.150 - Lightweight Python web framework. See https://tina4.com for f
 - Install for the FULL test suite: `uv sync --extra test` — the declared client set
   for every live service the suite touches (PostgreSQL, MySQL, MSSQL, Firebird,
   MongoDB, ODBC, Redis, Memcached, **Kafka via confluent-kafka, RabbitMQ via
-  pika, S3/MinIO via boto3**). Use this on any machine that runs the real-service
+  pika**; S3/MinIO needs no client, `S3Storage` is zero-dependency). Use this on any machine that runs the real-service
   tests. Note `uv sync --extra X` PRUNES packages outside the named extras, so prefer
   `--extra test` over `--all-extras` when you want exactly the test set. `pyodbc`
   additionally needs the SYSTEM unixODBC library (`libodbc.so.2`, e.g.
@@ -923,7 +923,7 @@ uv run tina4python test   # Discovers @tests in src/**/*.py
 - HTML builder via `tina4_python.HtmlElement` (programmatic HTML generation)
 - Messenger via `tina4_python.messenger` (.env driven, SMTP/IMAP)
 - Realtime collaboration via `tina4_python.realtime` — call `realtime(features=[...])` in `app.py` before `run()` to mount a zero-dependency control plane. Features: `calls` (WebRTC signalling relay + self-describing ICE config; media is peer-to-peer mesh, Tina4 relays only the offer/answer/ICE handshake), `chat` (framework-owned ORM channels/messages, secured chat WebSocket with presence/typing/read receipts, history endpoint), `files` (uploads through a pluggable `StorageBackend`). Paths are convention-based, overridable via `prefix`, and the client discovers resolved paths from the config endpoint so client and server cannot drift. Env: `TINA4_RTC_BACKEND`, `TINA4_RTC_STUN_URLS`, `TINA4_RTC_TURN_URL`, `TINA4_RTC_TURN_SECRET`, `TINA4_RTC_TURN_TTL`
-- File storage via `tina4_python.realtime.storage` — `TINA4_STORAGE_BACKEND` selects `local` (default, zero-dependency filesystem, `TINA4_STORAGE_DIR`) or `s3` (opt-in S3/MinIO, **needs boto3** — `uv sync --extra s3`; configured by `TINA4_STORAGE_URL`/`_KEY`/`_SECRET`/`_BUCKET`/`_REGION`). `S3Storage` issues presigned GET URLs so large blobs stream straight from object storage instead of through the app; `LocalStorage` returns `None` for `url()` and is served by the permissioned download route. An `s3` backend that cannot be built (boto3 missing or config incomplete) logs why and falls back to local — a real persistent store, never a silent no-op
+- File storage via `tina4_python.realtime.storage` — `TINA4_STORAGE_BACKEND` selects `local` (default, zero-dependency filesystem, `TINA4_STORAGE_DIR`) or `s3` (opt-in S3/MinIO, zero-dependency — Tina4's own stdlib SigV4 client, no driver to install; configured by `TINA4_STORAGE_URL`/`_KEY`/`_SECRET`/`_BUCKET`/`_REGION`). `S3Storage` issues presigned GET URLs so large blobs stream straight from object storage instead of through the app; `LocalStorage` returns `None` for `url()` and is served by the permissioned download route. An `s3` backend that cannot be built (for example, no `TINA4_STORAGE_BUCKET`) logs why and falls back to local — a real persistent store, never a silent no-op
 - SQL Translation via `tina4_python.database.adapter` (cross-engine SQL portability + query cache)
 - CLI scaffolding: `tina4 generate model/route/migration/middleware`. `tina4python` is the Python package's own CLI; the `tina4` client forwards `generate` to it.
 - Production server auto-detection: `tina4python serve --production` (auto-installs uvicorn)
