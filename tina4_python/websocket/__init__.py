@@ -624,7 +624,10 @@ class WebSocketManager:
                 and not await self._safe_send(ws, message)]
         for ws in dead:
             self.remove(ws)
-        self._publish("path" if path else "all", message, path=path, exclude=exclude)
+        # The backplane publish is a blocking socket round-trip (synchronous
+        # redis.publish); run it off the loop so a broadcast never freezes every
+        # other connection. The listener side is already threaded.
+        await asyncio.to_thread(self._publish, "path" if path else "all", message, path=path, exclude=exclude)
 
     async def broadcast_all(self, message: str | bytes):
         """Send message to ALL connections (resilient to dead clients).
@@ -635,7 +638,7 @@ class WebSocketManager:
                 if not await self._safe_send(ws, message)]
         for ws in dead:
             self.remove(ws)
-        self._publish("all", message)
+        await asyncio.to_thread(self._publish, "all", message)
 
     async def send_to(self, client_id: str, message: str | bytes):
         """Send a message to a specific client by ID.
@@ -736,7 +739,7 @@ class WebSocketManager:
                 and not await self._safe_send(ws, message)]
         for ws in dead:
             self.remove(ws)
-        self._publish("room", message, room=room_name, exclude=exclude)
+        await asyncio.to_thread(self._publish, "room", message, room=room_name, exclude=exclude)
 
 
 class WebSocketServer:
