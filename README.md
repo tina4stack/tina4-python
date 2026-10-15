@@ -74,7 +74,7 @@ Open http://localhost:7146
 
 ---
 
-## What's Built In (55 Features)
+## What's Built In (140 Features)
 
 Every feature is built from scratch -- no pip install, no node_modules, no third-party runtime dependencies in core.
 
