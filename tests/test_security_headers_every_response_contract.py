@@ -33,7 +33,8 @@ import pytest
 from conftest import boot_child_server
 
 CANONICAL = ("x-frame-options", "x-content-type-options", "content-security-policy",
-             "referrer-policy", "x-xss-protection", "permissions-policy")
+             "referrer-policy", "x-xss-protection", "permissions-policy",
+             "cross-origin-opener-policy")
 ROUTE_CSP = "default-src 'none'; img-src 'self'"
 
 ROUTES = textwrap.dedent(f'''

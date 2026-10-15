@@ -589,6 +589,7 @@ class SecurityHeadersMiddleware:
         TINA4_CSP                  — Content-Security-Policy (default: "default-src 'self'")
         TINA4_REFERRER_POLICY      — Referrer-Policy (default: strict-origin-when-cross-origin)
         TINA4_PERMISSIONS_POLICY   — Permissions-Policy (default: camera=(), microphone=(), geolocation=())
+        TINA4_COOP                 — Cross-Origin-Opener-Policy (default: same-origin-allow-popups)
     """
 
     @staticmethod
@@ -646,6 +647,20 @@ class SecurityHeadersMiddleware:
                 "TINA4_PERMISSIONS_POLICY",
                 "camera=(), microphone=(), geolocation=()",
             ),
+        )
+        # Cross-Origin-Opener-Policy severs the window-reference link to a
+        # cross-origin page, closing reverse-tab-nabbing and cross-window
+        # XS-Leaks that X-Frame-Options (framing only) does not. The default is
+        # same-origin-allow-popups, NOT same-origin: it isolates the page from
+        # whoever opened it while still letting the page talk to popups IT opens,
+        # so an OAuth / OIDC / payment popup that posts a token back to its opener
+        # keeps working out of the box. Set TINA4_COOP=same-origin for full
+        # isolation (the switch, with COEP, for crossOriginIsolated), or
+        # unsafe-none to opt out. Honoured only in a secure context — so it
+        # applies on https and on http://localhost, and is inert elsewhere.
+        response.header(
+            "Cross-Origin-Opener-Policy",
+            os.environ.get("TINA4_COOP", "same-origin-allow-popups"),
         )
 
         return request, response

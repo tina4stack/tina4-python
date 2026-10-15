@@ -59,6 +59,7 @@ CANONICAL = {
     "referrer-policy": "strict-origin-when-cross-origin",
     "x-xss-protection": "0",
     "permissions-policy": "camera=(), microphone=(), geolocation=()",
+    "cross-origin-opener-policy": "same-origin-allow-popups",
 }
 HSTS = "31536000"
 
@@ -92,7 +93,8 @@ def _app(monkeypatch):
     Router.clear()
     Middleware.reset()
     for name in ("TINA4_HSTS", "TINA4_CSP", "TINA4_FRAME_OPTIONS",
-                 "TINA4_REFERRER_POLICY", "TINA4_PERMISSIONS_POLICY", "TINA4_CSRF"):
+                 "TINA4_REFERRER_POLICY", "TINA4_PERMISSIONS_POLICY", "TINA4_CSRF",
+                 "TINA4_COOP"):
         monkeypatch.delenv(name, raising=False)
 
     @route_get("/sec-probe")
@@ -158,6 +160,20 @@ def test_each_response_gets_a_fresh_csp_nonce():
     n1 = re.search(r"'nonce-([^']+)'", first).group(1)
     n2 = re.search(r"'nonce-([^']+)'", second).group(1)
     assert n1 != n2, f"nonce was reused across responses: {n1}"
+
+
+def test_coop_defaults_to_same_origin_allow_popups():
+    """COOP defaults to same-origin-allow-popups — it isolates the page from
+    whoever opened it while leaving popups the page opens (OAuth/payment) able to
+    post back to their opener. Full isolation (same-origin) is opt-in."""
+    assert _header(_request(), "cross-origin-opener-policy") == "same-origin-allow-popups"
+
+
+def test_tina4_coop_overrides_the_cross_origin_opener_policy(monkeypatch):
+    """TINA4_COOP replaces the default — same-origin for full isolation, or
+    unsafe-none to opt out."""
+    monkeypatch.setenv("TINA4_COOP", "same-origin")
+    assert _header(_request(), "cross-origin-opener-policy") == "same-origin"
 
 
 # ------------------------------------------------------------ HSTS HTTPS-guarded
