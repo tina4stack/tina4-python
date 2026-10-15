@@ -2923,6 +2923,29 @@ _RESPONSE_STAGES = (
     _stage_head_strip,
 )
 
+#: Response stages that do BLOCKING I/O and must run off the event loop (via
+#: asyncio.to_thread in the dispatch runner), so one request's session write or
+#: log write never freezes the loop for every other in-flight request. The rest
+#: of _RESPONSE_STAGES is CPU-only and stays on the loop. See the LOAD offload in
+#: handle() and the handler threading in _invoke_handler (ADR-0074).
+_OFFLOAD_RESPONSE_STAGES = frozenset({_stage_request_log, _stage_session_save})
+
+
+async def _run_response_stage(stage, ctx: "DispatchContext") -> None:
+    """Run one response stage, OFF the event loop if it does blocking I/O.
+
+    Session SAVE (backend write) and the request-log file write block; offload
+    those to a worker thread so one request's I/O never freezes the loop for the
+    rest. The CPU-only stages (headers, CORS, toolbar, HEAD strip) stay on the
+    loop. ctx is request-local, so running a stage in a thread is safe. The
+    branch lives HERE, not in handle(), so the dispatch runner stays flat
+    (test_dispatch_pipeline::test_the_god_function_does_not_come_back).
+    """
+    if stage in _OFFLOAD_RESPONSE_STAGES:
+        await asyncio.to_thread(stage, ctx)
+    else:
+        stage(ctx)
+
 
 def _resolve_request_id(request: Request) -> str:
     """Honour a well-formed inbound X-Request-ID (sanitized), else generate one.
@@ -2962,7 +2985,13 @@ async def handle(request: Request) -> Response:
     from tina4_python.frond.engine import set_request_session, reset_request_session
     session_token = set_request_session(None)
     try:
-        _init_session(request)
+        # Session LOAD reads the backend (Redis/Valkey/memcached/MongoDB do a
+        # blocking socket round-trip; the file backend a blocking file read).
+        # Offload it so it does not freeze the loop — the handler was threaded
+        # for the same reason (ADR-0074), but only the handler was. The Session
+        # and its backend connection are request-local, so a worker thread adds
+        # no cross-request sharing.
+        await asyncio.to_thread(_init_session, request)
         # form_token() binds each token to this request's session (CSRF).
         set_request_session(request.session)
 
@@ -2988,7 +3017,7 @@ async def handle(request: Request) -> Response:
                     break
 
         for stage in _RESPONSE_STAGES:
-            stage(ctx)
+            await _run_response_stage(stage, ctx)
 
         return ctx.response
     finally:
@@ -3825,6 +3854,7 @@ def _find_available_port(start: int, max_tries: int = 10) -> int:
     import socket
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind(("127.0.0.1", start))
         s.close()
         return start
