@@ -333,8 +333,11 @@ def realtime(prefix: str = "", *, media: RtcMediaBackend = None,
                 body = (payload.get("body") or "").strip()
                 if not body:
                     return
-                saved = _persist_message(channel_id, identity, body,
-                                         payload.get("thread_id"))
+                # _persist_message does a blocking ORM write; run it off the loop
+                # so one chat message never freezes every other WS connection.
+                saved = await asyncio.to_thread(
+                    _persist_message, channel_id, identity, body,
+                    payload.get("thread_id"))
                 if saved is not None:
                     # Deliver to everyone in the room INCLUDING the sender, so
                     # the sender's optimistic message is reconciled with its
@@ -380,7 +383,9 @@ def realtime(prefix: str = "", *, media: RtcMediaBackend = None,
             upload = request.files.get("file")
             if not upload:
                 return response({"error": "no file uploaded (field 'file')"}, 400)
-            saved = _store_upload(store, channel_id, upload)
+            # _store_upload writes to the storage backend (local file or S3);
+            # run it off the loop so an upload never freezes other requests.
+            saved = await asyncio.to_thread(_store_upload, store, channel_id, upload)
             saved["url"] = store.url(saved["key"]) or \
                 f"{paths['files']}/{saved['key']}"
             return response(saved, 201)
@@ -476,7 +481,8 @@ def _persist_message(channel_id, identity, body, thread_id):
 async def _mark_read(channel_id, identity):
     """Advance the member's read cursor to now (read receipt)."""
     from tina4_python.realtime.models import ChannelMember
-    try:
+
+    def _advance_cursor():
         # where() takes a WHERE fragment; select_one() takes full SQL.
         members = ChannelMember.where(
             "channel_id = ? AND user_id = ?", [channel_id, identity], limit=1)
@@ -484,6 +490,11 @@ async def _mark_read(channel_id, identity):
             member = members[0]
             member.last_read_at = _now_iso()
             member.save()
+
+    try:
+        # The read + write are blocking ORM calls; run them off the loop so a
+        # read receipt never freezes other WS connections.
+        await asyncio.to_thread(_advance_cursor)
     except Exception as exc:
         Log.error(f"realtime chat: read-receipt update failed: {exc}")
 
