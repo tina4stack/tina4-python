@@ -33,6 +33,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
     def __init__(self):
         super().__init__()
         self._conn = None
+        self._connect_args = None
         self._in_transaction: bool = False
         self.last_error: str | None = None
 
@@ -147,11 +148,74 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         diagnose, and the heal step also defers to explicit txns.
         """
         self._heal_aborted_txn()
+        nothing_pending = self._nothing_pending()
+        try:
+            self._safe_execute(cursor, sql, params)
+            return cursor
+        except Exception as e:
+            if self._in_transaction or not self._connection_is_dead():
+                self._on_query_error(e, sql, params)
+                raise
+            self._reconnect()
+            if not nothing_pending:
+                # Uncommitted work went down with the old connection, so the
+                # statement is not retried on its own; the caller sees the error.
+                self._on_query_error(e, sql, params)
+                raise
+            self._log_reconnect_retry(e, sql)
+        cursor = self._conn.cursor(cursor_factory=type(cursor))
         try:
             self._safe_execute(cursor, sql, params)
         except Exception as e:
             self._on_query_error(e, sql, params)
             raise
+        return cursor
+
+    def _connection_is_dead(self) -> bool:
+        """True when psycopg2 has marked the link closed under us (the server
+        dropped it, or the socket was reset). An adapter the caller closed
+        itself has ``_conn = None`` and is not "dead" - it stays closed.
+        """
+        return self._conn is not None and self._conn.closed != 0
+
+    def _nothing_pending(self) -> bool:
+        """True when the connection holds no uncommitted work, so a statement
+        that fails because the link died can be run again on a new one."""
+        try:
+            import psycopg2.extensions as _ext
+            return self._conn.info.transaction_status == _ext.TRANSACTION_STATUS_IDLE
+        except Exception:
+            return False
+
+    def _reconnect(self):
+        """Replace a dropped connection with a new one, opened from the
+        arguments the original :meth:`connect` received. Session state set with
+        ``SET`` after connecting does not carry over; connect ``options`` do.
+        """
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+        connection_string, username, password, kwargs = self._connect_args
+        self.connect(connection_string, username, password, **kwargs)
+        try:
+            from tina4_python.debug import Log
+            Log.warning("PostgreSQL connection was closed by the server - reconnected.")
+        except Exception:
+            pass
+
+    def _log_reconnect_retry(self, exc: Exception, sql: str):
+        try:
+            from tina4_python.debug import Log
+            preview = sql.strip().splitlines()[0][:200] if sql else "<no sql>"
+            Log.warning(
+                f"PostgreSQL statement hit a dropped connection "
+                f"({exc.__class__.__name__}: {str(exc).strip()}) - retrying once "
+                f"on the new connection.",
+                sql=preview,
+            )
+        except Exception:
+            pass
 
     def _on_query_error(self, exc: Exception, sql: str, params=None):
         """Handle a failed query: log, store, auto-rollback if implicit.
@@ -286,6 +350,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
                 "    uv add tina4-python[all-db]    # all five database drivers"
             )
 
+        self._connect_args = (connection_string, username, password, dict(kwargs))
         parsed = urlparse(connection_string)
 
         # Percent-DECODED: urlparse leaves userinfo escaped.
@@ -329,7 +394,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         )
 
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        self._exec_with_handling(cursor, sql, params)
+        cursor = self._exec_with_handling(cursor, sql, params)
 
         # Capture rowcount NOW, before the lastval()/SAVEPOINT probes below run
         # their own cursor.execute() calls and overwrite cursor.rowcount. A
@@ -441,7 +506,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # crashed on the server, which is the swap ADR-0024 exists to protect.
         paginated = not (is_write or limit is None or limit <= 0 or self._has_trailing_limit(sql))
         paginated_sql, paginated_params = self._paginate_sql(sql, params, limit, offset, paginated)
-        self._exec_with_handling(cursor, paginated_sql, paginated_params)
+        cursor = self._exec_with_handling(cursor, paginated_sql, paginated_params)
         columns = [d[0] for d in cursor.description] if cursor.description else []
         indexes = range(len(columns))
         rows = [
@@ -502,7 +567,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql, bool(params))
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-        self._exec_with_handling(cursor, sql, params)
+        cursor = self._exec_with_handling(cursor, sql, params)
         row = cursor.fetchone()
         result = self._decode_blobs(dict(row)) if row else None
         # v3.13.15 (#51): close the implicit transaction so the connection
