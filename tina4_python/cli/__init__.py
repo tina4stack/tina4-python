@@ -517,24 +517,37 @@ def _check_options(command: str, args: list) -> None:
     accepted = _accepted_options(command, args)
     if accepted is None:
         return
-    label = command if command not in ("generate", "queue") else f"{command} {args[0].lower()}"
+    label = f"{command} {args[0].lower()}" if command in ("generate", "queue") else command
     i = 0
     while i < len(args):
-        arg = args[i]
-        if arg.startswith("-") and arg != "-":
-            name, has_value, _ = arg.lstrip("-").partition("=")
-            if not arg.startswith("--") or name not in accepted:
-                print(f'Unknown option {arg.partition("=")[0]} for "{label}".', end="")
-                close = difflib.get_close_matches(name, list(accepted), n=1, cutoff=0.6)
-                print(f" Did you mean --{close[0]}?" if close else "")
-                print(f'Run "tina4python {label} --help" for its options.')
-                sys.exit(1)
-            if accepted[name] and not has_value:
-                if i + 1 >= len(args) or args[i + 1].startswith("-"):
-                    print(f'Option --{name} for "{label}" needs a value: --{name} <value>')
-                    sys.exit(1)
-                i += 1
-        i += 1
+        problem, consumed = _option_problem(args, i, accepted, label)
+        if problem:
+            print(problem)
+            sys.exit(1)
+        i += 1 + consumed
+
+
+def _option_problem(args: list, i: int, accepted: dict, label: str) -> tuple[str | None, int]:
+    """What is wrong with args[i] (None if nothing), and how many following
+    arguments it consumes as its value."""
+    arg = args[i]
+    if not arg.startswith("-") or arg == "-":
+        return None, 0
+    name, has_value, _ = arg.lstrip("-").partition("=")
+    if not arg.startswith("--") or name not in accepted:
+        return _unknown_option_message(arg, name, accepted, label), 0
+    if not accepted[name] or has_value:
+        return None, 0
+    if i + 1 >= len(args) or args[i + 1].startswith("-"):
+        return f'Option --{name} for "{label}" needs a value: --{name} <value>', 0
+    return None, 1
+
+
+def _unknown_option_message(arg: str, name: str, accepted: dict, label: str) -> str:
+    close = difflib.get_close_matches(name, list(accepted), n=1, cutoff=0.6)
+    hint = f" Did you mean --{close[0]}?" if close else ""
+    return (f'Unknown option {arg.partition("=")[0]} for "{label}".{hint}\n'
+            f'Run "tina4python {label} --help" for its options.')
 
 
 def _reject_flag_like_name(name: str, what: str) -> None:
