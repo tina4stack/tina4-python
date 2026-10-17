@@ -25,6 +25,7 @@ and reached by DELEGATION (see DELEGATED / _delegate_to_client below), so
 `tina4python doctor` behaves exactly like `tina4 doctor` without cloning the
 client's implementation into four languages.
 """
+import difflib
 import os
 import re
 import secrets
@@ -176,13 +177,18 @@ def _parse_flags(args: list[str]) -> tuple[dict, list[str]]:
     """Parse --key value and --flag from args. Returns (flags, positional)."""
     # Boolean-only flags that never take a value argument
     boolean_flags = {"no-browser", "no-reload", "no-kill", "production", "managed", "all", "clear",
-                     "json", "public", "no-migration", "once", "dry-run", "fix", "no-install"}
+                     "json", "public", "no-migration", "no-templates", "skip-model", "once", "dry-run",
+                     "fix", "no-install"}
 
     flags = {}
     positional = []
     i = 0
     while i < len(args):
-        if args[i].startswith("--"):
+        if args[i].startswith("--") and "=" in args[i]:
+            key, _, value = args[i][2:].partition("=")
+            flags[key] = value
+            i += 1
+        elif args[i].startswith("--"):
             key = args[i][2:]
             if key in boolean_flags:
                 flags[key] = True
@@ -381,10 +387,13 @@ def _delegate_to_client(command: str, args: list) -> int:
 
 # ── Main entry point ─────────────────────────────────────────────────
 
+HELP_FLAGS = ("--help", "-h")
+
+
 def main():
     """CLI entry point."""
     args = sys.argv[1:]
-    if not args:
+    if not args or args[0].lower() in HELP_FLAGS:
         _help()
         return
 
@@ -396,6 +405,15 @@ def main():
     # `commands --json` manifest, so dispatch, help, and discovery never drift.
     spec = COMMANDS.get(command)
     if spec:
+        # `--help` / `-h` anywhere after a command prints that command's usage
+        # and touches nothing. Handlers never looked for it, so it ran the
+        # command for real: `generate model --help` wrote a model named
+        # `--help`, `lint --help` installed ruff, `migrate --help` made app.db.
+        # Delegated commands are left alone - the client answers --help itself.
+        if command != "help" and any(a in HELP_FLAGS for a in cmd_args):
+            _command_help(command, cmd_args)
+            return
+        _check_options(command, cmd_args)
         spec["handler"](cmd_args)
     elif command in DELEGATED:
         sys.exit(_delegate_to_client(command, cmd_args))
@@ -451,6 +469,80 @@ def _env_migrate(args):
     target.write_text("".join(new_lines), encoding="utf-8")
     print(f"\n  done: {renamed} rename(s) applied to {target}")
     print(f"  original kept at {backup} (delete once you've verified)")
+
+
+def _command_help(command: str, args: list) -> None:
+    """Usage for one command (or one generator), from the same registries."""
+    if command == "generate":
+        kind = next((a.lower() for a in args if not a.startswith("-")), None)
+        gen = GENERATORS.get(kind) if kind else None
+        if gen:
+            print(f"Usage: tina4python generate {kind} {gen.get('usage', '')}".rstrip())
+            print(f"\n  {gen['summary']}")
+            return
+        print("Usage: tina4python generate <what> <name> [options]\n\nGenerators:")
+        pad = max(len(name) for name in GENERATORS)
+        for name, gen in GENERATORS.items():
+            print(f"  {name:<{pad}}  {gen['summary']}")
+        return
+    spec = COMMANDS[command]
+    print(f"Usage: tina4python {command} {spec.get('usage', '')}".rstrip())
+    print(f"\n  {spec['summary']}")
+    if spec.get("subcommands"):
+        print(f"  Subcommands: {', '.join(spec['subcommands'])}")
+
+
+def _accepted_options(command: str, args: list) -> dict | None:
+    """The options `command` accepts ({name: takes_value}), or None when its
+    arguments are not ours to check (`test` hands them to pytest, an unknown
+    generator or queue subcommand is reported by its own handler)."""
+    if command == "generate":
+        kind = args[0].lower() if args else ""
+        gen = GENERATORS.get(kind)
+        if gen is None:
+            return None
+        accepted = dict(gen.get("flags", {}))
+        if kind in _RESOLUTION_TARGETS:
+            accepted.update(_RESOLUTION_FLAGS)
+        return accepted
+    if command == "queue":
+        return _QUEUE_FLAGS.get(args[0].lower() if args else "")
+    return COMMANDS[command].get("flags", {})
+
+
+def _check_options(command: str, args: list) -> None:
+    """Refuse an option the command doesn't have, or a value option given no
+    value. Both used to slip through: `--feilds` was silently dropped (the
+    model came out without its fields) and a bare `--fields` crashed."""
+    accepted = _accepted_options(command, args)
+    if accepted is None:
+        return
+    label = command if command not in ("generate", "queue") else f"{command} {args[0].lower()}"
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith("-") and arg != "-":
+            name, has_value, _ = arg.lstrip("-").partition("=")
+            if not arg.startswith("--") or name not in accepted:
+                print(f'Unknown option {arg.partition("=")[0]} for "{label}".', end="")
+                close = difflib.get_close_matches(name, list(accepted), n=1, cutoff=0.6)
+                print(f" Did you mean --{close[0]}?" if close else "")
+                print(f'Run "tina4python {label} --help" for its options.')
+                sys.exit(1)
+            if accepted[name] and not has_value:
+                if i + 1 >= len(args) or args[i + 1].startswith("-"):
+                    print(f'Option --{name} for "{label}" needs a value: --{name} <value>')
+                    sys.exit(1)
+                i += 1
+        i += 1
+
+
+def _reject_flag_like_name(name: str, what: str) -> None:
+    """Refuse a name that is really a mistyped option (`--fields` with no
+    name before it, `-x`): it would otherwise become a file called `--fields`."""
+    if name.startswith("-"):
+        print(f"Invalid {what} name: {name!r} - names can't start with '-'.")
+        sys.exit(1)
 
 
 def _help(args=None):
@@ -1130,7 +1222,7 @@ def _ai(args):
     """Install AI coding assistant context files."""
     from tina4_python.ai import show_menu, install_selected, install_context
 
-    if args and args[0].lower() == "all":
+    if args and args[0].lower() in ("all", "--all"):
         install_context(".")
     else:
         selection = show_menu(".")
@@ -1156,6 +1248,8 @@ def _ai(args):
 # validator, seeder, websocket, listener, auth, test, form, view) keep their
 # existing behaviour — this is the minimum surface the plan calls out.
 _RESOLUTION_TARGETS = {"model", "route", "migration", "middleware", "queue"}
+# Options every resolution-aware generator accepts on top of its own.
+_RESOLUTION_FLAGS = {"json": False, "dry-run": False}
 
 # Envelope schema version. Bump when the SHAPE changes; adding an optional
 # key on the resolution object is not a break.
@@ -1659,6 +1753,8 @@ def _generate(args):
         sys.exit(1)
 
     name = args[1] if len(args) > 1 else ""
+    if what not in no_name_generators:
+        _reject_flag_like_name(name, what)
     flags, _ = _parse_flags(args[2:] if len(args) > 2 else [])
 
     # ADR-0062: the four wired generators expose a JSON envelope and a
@@ -1984,7 +2080,9 @@ def _gen_crud(name: str, flags: dict):
 
     # 1. Model + migration (emit_test=False — crud emits its own broader gate
     #    test at step 4, so the sub-generators stay quiet to avoid double-emit).
-    _gen_model(name, flags, emit_test=False)
+    #    --skip-model: the model already exists (`generate model` suggests this).
+    if "skip-model" not in flags:
+        _gen_model(name, flags, emit_test=False)
 
     # 2. Admin page route: registers AutoCrud (secure-by-default; --public opens
     #    writes) and renders the to_crud admin UI at /admin/<table>.
@@ -3908,6 +4006,14 @@ def _queue_clear(args):
 
 # Sub-dispatch table for the `queue` command — the single source for its
 # subcommands (drives _queue dispatch AND the manifest's queue.subcommands).
+# Options per queue subcommand (name -> takes a value), checked by main().
+_QUEUE_FLAGS = {
+    "work":  {"once": False, "poll": True, "services": True},
+    "stats": {"json": False},
+    "retry": {},
+    "clear": {},
+}
+
 _QUEUE_SUBCOMMANDS = {
     "work":  _queue_work,
     "stats": _queue_stats,
@@ -4024,52 +4130,54 @@ def _commands(args=None):
 # (_help), AND the machine-readable manifest (commands --json). Add a command
 # in ONE place and it appears everywhere — there is no second list to sync.
 #
-#   GENERATORS[name] = {"handler": fn(name, flags), "usage": str, "summary": str}
+#   GENERATORS[name] = {"handler": fn(name, flags), "flags": {...}, "usage": str, "summary": str}
 #   COMMANDS[name]   = {"handler": fn(args), "summary": str,
+#                       "flags"?: {name: bool}, # options main() accepts; True = takes a value.
+#                                               # Absent = none. None = not checked (test -> pytest)
 #                       "usage"?: str,          # arg/flag hint for _help (human only)
 #                       "args"?: [str],         # positional args for the manifest ("x?" = optional)
 #                       "subcommands"?: [str]}  # sub-names for the manifest (generate)
 
 GENERATORS = {
-    "model":      {"handler": _gen_model,      "usage": '<Name> [--fields "name:string,price:float"] [--table-name <name>]', "summary": "ORM model + matching migration"},
-    "route":      {"handler": _gen_route,      "usage": "<name> [--model Name] [--public]",            "summary": "CRUD route file, secure by default (--public opens writes)"},
-    "base":       {"handler": _gen_base,       "usage": "",                                            "summary": "Frond base template + index page + pages/ folder"},
-    "page":       {"handler": _gen_page,       "usage": "<name>",                                      "summary": "Page that extends base.twig (auto-creates pages/ + base)"},
-    "crud":       {"handler": _gen_crud,       "usage": '<Name> [--fields "..."] [--public] [--no-templates]', "summary": "Model + migration + AutoCrud-backed admin page (to_crud) + editable crud/ templates + gate test"},
-    "migration":  {"handler": _gen_migration,  "usage": "<description>",                               "summary": "Timestamped migration file (UP/DOWN)"},
-    "middleware": {"handler": _gen_middleware, "usage": "<Name>",                                      "summary": "Middleware with before/after hooks"},
-    "test":       {"handler": _gen_test,       "usage": "<name> [--model Name]",                       "summary": "pytest test file"},
-    "form":       {"handler": _gen_form,       "usage": '<Name> [--fields "..."]',                     "summary": "Form template with inputs matching model fields"},
-    "view":       {"handler": _gen_view,       "usage": '<Name> [--fields "..."]',                     "summary": "List + detail view templates"},
-    "auth":       {"handler": _gen_auth,       "usage": "",                                            "summary": "Login/register routes + User model + templates"},
-    "service":    {"handler": _gen_service,    "usage": '<Name> [--every 5m | --cron "..."]',          "summary": "Scheduled ServiceRunner task (src/services/)"},
-    "queue":      {"handler": _gen_queue,      "usage": "<topic>",                                     "summary": "Producer + consumer worker (src/services/)"},
-    "validator":  {"handler": _gen_validator,  "usage": "<Name>",                                      "summary": "Request-body Validator (src/validators/)"},
-    "seeder":     {"handler": _gen_seeder,     "usage": "<Model>",                                     "summary": "FakeData + seed_orm seeder (src/seeds/)"},
-    "websocket":  {"handler": _gen_websocket,  "usage": "<path>",                                      "summary": "@websocket handler (src/routes/)"},
-    "listener":   {"handler": _gen_listener,   "usage": "<event>",                                     "summary": "@on(event) listener (src/listeners/)"},
+    "model":      {"handler": _gen_model,      "flags": {"fields": True, "table-name": True, "no-migration": False}, "usage": '<Name> [--fields "name:string,price:float"] [--table-name <name>]', "summary": "ORM model + matching migration"},
+    "route":      {"handler": _gen_route,      "flags": {"model": True, "public": False}, "usage": "<name> [--model Name] [--public]",            "summary": "CRUD route file, secure by default (--public opens writes)"},
+    "base":       {"handler": _gen_base,       "flags": {}, "usage": "",                                            "summary": "Frond base template + index page + pages/ folder"},
+    "page":       {"handler": _gen_page,       "flags": {}, "usage": "<name>",                                      "summary": "Page that extends base.twig (auto-creates pages/ + base)"},
+    "crud":       {"handler": _gen_crud,       "flags": {"fields": True, "table-name": True, "public": False, "no-templates": False, "no-migration": False, "skip-model": False}, "usage": '<Name> [--fields "..."] [--public] [--no-templates] [--skip-model]', "summary": "Model + migration + AutoCrud-backed admin page (to_crud) + editable crud/ templates + gate test"},
+    "migration":  {"handler": _gen_migration,  "flags": {"fields": True}, "usage": "<description>",                               "summary": "Timestamped migration file (UP/DOWN)"},
+    "middleware": {"handler": _gen_middleware, "flags": {}, "usage": "<Name>",                                      "summary": "Middleware with before/after hooks"},
+    "test":       {"handler": _gen_test,       "flags": {"model": True, "public": False}, "usage": "<name> [--model Name]",                       "summary": "pytest test file"},
+    "form":       {"handler": _gen_form,       "flags": {"fields": True, "table-name": True}, "usage": '<Name> [--fields "..."]',                     "summary": "Form template with inputs matching model fields"},
+    "view":       {"handler": _gen_view,       "flags": {"fields": True, "table-name": True}, "usage": '<Name> [--fields "..."]',                     "summary": "List + detail view templates"},
+    "auth":       {"handler": _gen_auth,       "flags": {"fields": True, "table-name": True, "no-migration": False}, "usage": "",                                            "summary": "Login/register routes + User model + templates"},
+    "service":    {"handler": _gen_service,    "flags": {"every": True, "cron": True}, "usage": '<Name> [--every 5m | --cron "..."]',          "summary": "Scheduled ServiceRunner task (src/services/)"},
+    "queue":      {"handler": _gen_queue,      "flags": {}, "usage": "<topic>",                                     "summary": "Producer + consumer worker (src/services/)"},
+    "validator":  {"handler": _gen_validator,  "flags": {}, "usage": "<Name>",                                      "summary": "Request-body Validator (src/validators/)"},
+    "seeder":     {"handler": _gen_seeder,     "flags": {"table-name": True}, "usage": "<Model>",                                     "summary": "FakeData + seed_orm seeder (src/seeds/)"},
+    "websocket":  {"handler": _gen_websocket,  "flags": {}, "usage": "<path>",                                      "summary": "@websocket handler (src/routes/)"},
+    "listener":   {"handler": _gen_listener,   "flags": {}, "usage": "<event>",                                     "summary": "@on(event) listener (src/listeners/)"},
 }
 
 COMMANDS = {
-    "init":             {"handler": _init,             "usage": "[dir]",  "args": ["dir?"],        "summary": "Scaffold a new project"},
-    "serve":            {"handler": _serve,            "usage": "[--port P] [--no-browser] [--no-reload]", "summary": "Start dev server (default: 0.0.0.0:7146)"},
-    "start":            {"handler": _serve,            "summary": "Alias for serve"},
+    "init":             {"handler": _init,             "flags": {"ai": False, "production": False}, "usage": "[dir]",  "args": ["dir?"],        "summary": "Scaffold a new project"},
+    "serve":            {"handler": _serve,            "flags": {"port": True, "host": True, "no-browser": False, "no-reload": False, "no-kill": False, "production": False, "managed": False}, "usage": "[--port P] [--no-browser] [--no-reload]", "summary": "Start dev server (default: 0.0.0.0:7146)"},
+    "start":            {"handler": _serve,            "flags": {"port": True, "host": True, "no-browser": False, "no-reload": False, "no-kill": False, "production": False, "managed": False}, "summary": "Alias for serve"},
     "migrate":          {"handler": _migrate,          "summary": "Run pending database migrations"},
-    "migrate:create":   {"handler": _migrate_create,   "usage": "<desc>", "args": ["description"], "summary": "Create a new migration file"},
+    "migrate:create":   {"handler": _migrate_create,   "flags": {"fields": True, "table-name": True, "json": False, "dry-run": False}, "usage": "<desc>", "args": ["description"], "summary": "Create a new migration file"},
     "migrate:rollback": {"handler": _migrate_rollback, "summary": "Rollback last migration batch"},
     "migrate:status":   {"handler": _migrate_status,   "summary": "Show migration status"},
     "env-migrate":      {"handler": _env_migrate,      "usage": "[path]", "args": ["path?"],       "summary": "Rewrite .env to TINA4_-prefixed names (v3.12 migration)"},
     "seed":             {"handler": _seed,             "summary": "Run database seeders"},
     "routes":           {"handler": _routes,           "summary": "List all registered routes"},
-    "test":             {"handler": _test,             "summary": "Run test suite"},
+    "test":             {"handler": _test,             "flags": None, "summary": "Run test suite"},
     "queue":            {"handler": _queue,            "usage": "<work|stats|retry|clear> [topic]", "subcommands": list(_QUEUE_SUBCOMMANDS), "summary": "Run queue workers and manage jobs"},
-    "build":            {"handler": _build,            "usage": "[--tag NAME] [--file PATH]", "summary": "Build the deployable Docker image"},
-    "lint":             {"handler": _lint,             "usage": "[--fix] [--no-install]", "summary": "Lint src/ + app.py (installs ruff dev-only on demand; zero-dep syntax baseline with --no-install)"},
-    "ai":               {"handler": _ai,               "usage": "[--all]", "summary": "Install AI coding assistant context"},
+    "build":            {"handler": _build,            "flags": {"tag": True, "file": True}, "usage": "[--tag NAME] [--file PATH]", "summary": "Build the deployable Docker image"},
+    "lint":             {"handler": _lint,             "flags": {"fix": False, "no-install": False}, "usage": "[--fix] [--no-install]", "summary": "Lint src/ + app.py (installs ruff dev-only on demand; zero-dep syntax baseline with --no-install)"},
+    "ai":               {"handler": _ai,               "flags": {"all": False}, "usage": "[--all]", "summary": "Install AI coding assistant context"},
     "generate":         {"handler": _generate,         "usage": "<what> <name> [options]", "subcommands": list(GENERATORS), "summary": "Generate scaffolding (see Generators below)"},
     "console":          {"handler": _console,          "summary": "Start interactive REPL with framework loaded"},
-    "commands":         {"handler": _commands,         "usage": "[--json]", "summary": "List available commands (add --json for machine form)"},
-    "help":             {"handler": _help,             "summary": "Show this help"},
+    "commands":         {"handler": _commands,         "flags": {"json": False}, "usage": "[--json]", "summary": "List available commands (add --json for machine form)"},
+    "help":             {"handler": _help,             "flags": None, "summary": "Show this help"},
 }
 
 # Commands the `tina4` client OWNS and this CLI reaches by delegation — see the
