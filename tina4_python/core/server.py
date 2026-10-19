@@ -1657,9 +1657,10 @@ async def _handle_dev_admin(request: Request, response: Response) -> Response:
     from tina4_python.dev_admin import get_api_handlers, _dev_request_denial, split_view_html
     # ADR-0082: ONE gate for every /__dev request, reads and writes alike -
     # Host allow-list (DNS rebinding), same-origin (CSRF and cross-site reads)
-    # and loopback peer. Scoped to /__dev so the deliberately cross-origin
+    # and loopback peer. Scoped to /__dev and the dev-admin routes outside it
+    # (the AI proxy and service probes) so the deliberately cross-origin
     # /__feedback widget is unaffected.
-    if request.path.startswith("/__dev"):
+    if request.path.startswith("/__dev") or request.path in _DEV_EXTRA_PATHS:
         _denial = _dev_request_denial(request)
         if _denial is not None:
             response.status(_denial[0]).json({"ok": False, "error": _denial[1]})
