@@ -211,6 +211,7 @@ The happy path is the easy 20%. Walk this net for every journey and every featur
 - **Security** — secrets in `.env` not code; CORS closed by default; rate limits on public writes; form tokens on posts; no secrets in logs or URLs.
 - **Boundaries of scale** — never an unbounded list (paginate); eager-load to kill N+1; cache only where you measured a hit.
 - **The exit** — graceful shutdown drains in-flight work; migrations run on deploy; a backup exists.
+- **Mobile-first & responsive** — design the smallest screen first and enhance up with `min-width`; every journey must work on a phone, touch targets at least 44x44px. The `tina4-design` skill owns the detail.
 
 Nothing on this net is allowed to stay un-addressed by silence. That is the whole point of writing it down.
 
