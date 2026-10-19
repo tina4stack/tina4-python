@@ -9,6 +9,25 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## Unreleased
+
+### Fixed
+- CLI: `--help` / `-h` on any command prints that command's usage and changes
+  nothing. Before, handlers never looked for it and ran for real:
+  `generate model --help` wrote a model named `--help`, `lint --help` installed
+  ruff, `migrate --help` created `app.db`.
+- CLI: an unknown option is refused with a did-you-mean (`--feilds` →
+  `--fields`) instead of being silently dropped, and a value option given no
+  value is refused instead of crashing (`--fields`) or being ignored (`--every`).
+  `--name=value` works as well as `--name value`. `test` still hands its
+  arguments to pytest unchecked.
+- CLI: `generate` refuses a name that starts with `-`.
+- CLI: `ai --all` installs every context file, as its help says; it opened the
+  menu before.
+- CLI: `generate crud <Name> --skip-model` works. `generate model` has always
+  suggested it, but no generator had the option; it was silently ignored and
+  would now be refused.
+
 ## 3.13.151 - 2026-10-15
 
 ### Security
