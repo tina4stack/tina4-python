@@ -156,3 +156,34 @@ def _pid_without_ending(database) -> int:
     cursor.execute("SELECT pg_backend_pid()")
     return cursor.fetchone()[0]
 
+
+def test_recovers_after_a_failed_reconnect(observer, tested):
+    """#242: a failover where the FIRST reconnect cannot reach the new primary.
+
+    ``_reconnect`` closes the dropped link, then ``connect`` fails, leaving a
+    CLOSED psycopg2 connection. The next statement built its cursor on that
+    link first, so ``self._conn.cursor()`` raised ``InterfaceError: connection
+    already closed`` before the reconnect path could run - and the adapter
+    stayed wedged there until the process restarted. It must instead keep
+    retrying and recover once a reachable server returns.
+
+    NO MOCKS: a real dropped backend, a real failed reconnect (the adapter's own
+    connect arguments aimed at a port nothing listens on - what a failover looks
+    like before the new primary answers), then a real recovery once the good
+    target is restored.
+    """
+    good = tested.adapter._connect_args
+    unreachable = (good[0].replace(f":{PG_PORT}/", ":1/"), good[1], good[2], good[3])
+    assert unreachable[0] != good[0], "could not aim the reconnect at a dead port"
+    tested.adapter._connect_args = unreachable
+
+    _drop(observer, _pid(tested))
+    with pytest.raises(Exception):
+        tested.fetch_one("SELECT 1 AS one")   # reconnect to the dead port fails
+    with pytest.raises(Exception):
+        tested.fetch_one("SELECT 1 AS one")   # still down: retried, never wedged
+
+    tested.adapter._connect_args = good        # the new primary is reachable now
+    assert tested.fetch_one("SELECT 1 AS one")["one"] == 1   # recovers
+    tested.execute(f"INSERT INTO {TABLE} (note) VALUES (?)", ["after-failed-reconnect"])
+    assert _notes(observer) == ["after-failed-reconnect"]

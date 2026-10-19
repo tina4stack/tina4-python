@@ -204,6 +204,24 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         except Exception:
             pass
 
+    def _ensure_connection(self):
+        """Rebuild a server-dropped connection BEFORE a cursor is opened on it.
+
+        #236 recovers a link that dies DURING a statement, but execute()/fetch()
+        build the cursor first, and ``self._conn.cursor()`` raises
+        ``InterfaceError: connection already closed`` on an already-closed link,
+        before the reconnect path can run. That is the state a FAILED reconnect
+        leaves behind - a failover where ``_reconnect`` closed the old link and
+        the replacement connect could not reach the new primary - after which
+        every later statement wedged there until the process restarted (#242).
+        Healing here, when the link is dead and no explicit transaction owns it,
+        lets a later statement recover once the server returns. A reconnect that
+        fails again propagates, but leaves the link dead, so the NEXT statement
+        retries rather than giving up for good.
+        """
+        if not self._in_transaction and self._connection_is_dead():
+            self._reconnect()
+
     def _log_reconnect_retry(self, exc: Exception, sql: str):
         try:
             from tina4_python.debug import Log
@@ -393,6 +411,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
             re.search(r"\bRETURNING\b", sql, re.IGNORECASE)
         )
 
+        self._ensure_connection()
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor = self._exec_with_handling(cursor, sql, params)
 
@@ -489,6 +508,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # (2.28x), byte-identical output incl. native types (int/bool/Decimal/None)
         # -- cursor_factory only chooses the row CONTAINER, never value coercion,
         # so psycopg2's type adaptation is unchanged.
+        self._ensure_connection()
         cursor = self._conn.cursor()
 
         # #133: a write that returns rows (INSERT ... RETURNING) can be
@@ -566,6 +586,7 @@ class PostgreSQLAdapter(SqlCrudMixin, DatabaseAdapter):
         # v3.13.12: see fetch() — trailing semicolons break the wrappers.
         sql = self._strip_trailing_semicolons(sql)
         sql = self._translate_sql(sql, bool(params))
+        self._ensure_connection()
         cursor = self._conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cursor = self._exec_with_handling(cursor, sql, params)
         row = cursor.fetchone()
