@@ -81,10 +81,13 @@ breaking what must not break. Three tiers:
   one-liner. Never faked (nothing validated, no Bazinga) and never on a trivial step.
 
 - 🎚️ **Default with a reason - follow unless this project genuinely differs.**
-  The six-phase order; the deliverable set (`DESIGN.md`, `brand-guidelines.html`, `ui-guide.html`
-  in `design/`); fluid `clamp()` type, CSS-variable tokens and hue-tinted shadows; the avoid-list
-  of AI design defaults. Depart deliberately, name the client-specific reason and record it in the
-  rationale log - not by drift.
+  The six-phase order; **mobile-first layout** - design the smallest screen first and enhance
+  upward with `min-width` media queries, never patch a desktop layout down with `max-width`; the
+  base styles ARE the mobile styles, every interactive control is at least 44x44px, and the fluid
+  `clamp()` type needs no breakpoint to scale; the deliverable set (`DESIGN.md`,
+  `brand-guidelines.html`, `ui-guide.html` in `design/`); fluid `clamp()` type, CSS-variable tokens
+  and hue-tinted shadows; the avoid-list of AI design defaults. Depart deliberately, name the
+  client-specific reason and record it in the rationale log - not by drift.
 
 - 🧭 **Judgement - read the task and choose.**
   Which deliverables the scope needs; how much market research a small brief earns; when the
