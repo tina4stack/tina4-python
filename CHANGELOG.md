@@ -9,9 +9,14 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
-## Unreleased
+## 3.13.152 - 2026-10-20
 
 ### Fixed
+- Database: the PostgreSQL adapter recovers after a dropped connection even
+  when the first reconnect attempt itself fails (a failover before the new
+  primary answers); it used to wedge - every statement failing until a
+  restart - once a reconnect failed (#242). Reconnect-after-drop is now at
+  parity across PHP, Ruby and Node.js too (#244).
 - CLI: `--help` / `-h` on any command prints that command's usage and changes
   nothing. Before, handlers never looked for it and ran for real:
   `generate model --help` wrote a model named `--help`, `lint --help` installed
