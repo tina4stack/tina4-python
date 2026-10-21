@@ -9,7 +9,15 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
-## 3.13.152 - 2026-10-20
+## 3.13.153 - 2026-10-21
+
+### Fixed
+- Skills: restore the bundled AI skills that earlier releases dropped —
+  tina4-seo and tina4-a11y (#117), and tina4-design's stop-and-wait approval
+  gates (#128). No framework code change; this release re-tags the restored
+  skills so the install bundle and its CDN fallback mirrors carry them again,
+  and the bundle generator now refuses to ship a skill set smaller than the one
+  already published.## 3.13.152 - 2026-10-20
 
 ### Fixed
 - Database: the PostgreSQL adapter recovers after a dropped connection even
