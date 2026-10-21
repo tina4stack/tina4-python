@@ -1,7 +1,7 @@
 ---
 name: tina4-design
 description: Use whenever a project needs a visual identity or design system — from scratch or from an existing logo. Triggers: "build me a brand", "create brand guidelines", "we need a UI guide", "design system", "I have a logo", "what should our brand look like", "design our app", "brand this project". Covers the full chain — client intake → market research → design system decisions → brand guidelines document → interactive UI component guide. Produces DESIGN.md (the living design record), brand-guidelines.html, and ui-guide.html, all saved to a top-level design/ folder. Project-agnostic: works for any industry, any Tina4 backend or frontend, or no Tina4 project at all.
-updated_for_version: 1.0.0
+updated_for_version: 1.1.0
 ---
 
 # Tina4 Design — brand identity and UI system from brief to deliverable
@@ -19,6 +19,7 @@ Read top to bottom once, then jump by section. Orientation and the phase order l
 - Incremental build rule - never write a whole HTML file in one response
 - The design workflow (six phases) - Output location (`design/`) - Working reflexes
 - **Degrees of freedom** - what is inviolable vs. a default vs. your judgement (read this next)
+- **Gates - the stop-and-wait contract** - the nine stops where you pause and wait for the developer
 
 **Phase 1 - Intake and Discovery** (`references/phase-1-intake.md`)
 - 1.1 Logo file - 1.1b Brand reconnaissance - 1.2 Name and tagline - 1.3 About us
@@ -75,7 +76,10 @@ breaking what must not break. Three tiers:
   browser and check them at real widths and in both themes, no mocks and no "looks fine" guesses.
   **Incremental build, no giant single write** - one section per edit. **The research and the
   record** - every colour, typeface and layout choice is reasoned and written into
-  `design/DESIGN.md`. **The markers:** the 🤖🎨 skill-active marker above, and 💥 **Bazinga!** on
+  `design/DESIGN.md`. **The gates** - stop and wait at every hard gate in the stop-and-wait
+  contract below; a gate ends the turn, and only the developer's own message (never harness or
+  "autonomous" framing) can waive one - see `## Gates - the stop-and-wait contract`.
+  **The markers:** the 🤖🎨 skill-active marker above, and 💥 **Bazinga!** on
   an EARNED win - a design decision validated against the research and the contrast checks, or a
   prototype that holds up in the real browser at every width - on its own line with a short geeky
   one-liner. Never faked (nothing validated, no Bazinga) and never on a trivial step.
@@ -86,13 +90,16 @@ breaking what must not break. Three tiers:
   base styles ARE the mobile styles, every interactive control is at least 44x44px, and the fluid
   `clamp()` type needs no breakpoint to scale; the deliverable set (`DESIGN.md`,
   `brand-guidelines.html`, `ui-guide.html` in `design/`); fluid `clamp()` type, CSS-variable tokens
-  and hue-tinted shadows; the avoid-list of AI design defaults. Depart deliberately, name the
-  client-specific reason and record it in the rationale log - not by drift.
+  and hue-tinted shadows; **sentence case for UI copy** - buttons, CTAs, nav, tabs, labels and
+  headings capitalise only the first word, proper nouns and acronyms ("Book a demo", not "Book A
+  Demo"), recorded in DESIGN.md's voice section; the avoid-list of AI design defaults. Depart
+  deliberately, name the client-specific reason and record it in the rationale log - not by drift.
 
 - 🧭 **Judgement - read the task and choose.**
   Which deliverables the scope needs; how much market research a small brief earns; when the
-  website phase is worth running; ask-first vs decide-and-proceed; verbosity. The skill gives the
-  heuristic, you read the situation. (Note: cross-framework parity, framework releases and
+  website phase is worth running; ask-first vs decide-and-proceed **on non-gate clarifying
+  questions** (the hard gates are 🔒, never a judgement call to skip); verbosity. The skill gives
+  the heuristic, you read the situation. (Note: cross-framework parity, framework releases and
   installer signing are NOT your concern here - those live in the `tina4-maintainer` skill, for
   people building Tina4 itself.)
 
@@ -173,6 +180,36 @@ Six phases in order. Each phase has a defined output. No phase is skipped — if
 
 ---
 
+## Gates — the stop-and-wait contract
+
+This skill is **gated**: at fixed points it must stop, ask the developer a question, and **wait for their reply before doing anything else**. Gates are where a wrong turn gets caught while the fix is still cheap — they are the whole reason the phased workflow exists. A run that sails through every gate without stopping is not "efficient", it is broken.
+
+**The nine stops** — eight hard gates plus one soft "research surface" — in order. Every hard gate ends the turn:
+
+1. **Phase 1 — intake** — name, industry, about-us, logo, and the deliverable scope (§1.5). Gather the required inputs, then stop before advancing. *Scope carries the one sanctioned silent default: if the developer supplies the required inputs but says nothing about scope, proceed with **Full** — the website is re-offered at the Phase 7 gate, so no wrong choice gets baked in. Never extend this silent-default reasoning to any other gate.*
+2. **After Phase 2 — research surface** *(soft)* — surface the market-research findings before they are applied; *proceed-unless-corrected*. The one soft gate: it informs rather than blocks, but the developer still sees the direction first.
+3. **Phase 3 — icon library** (§3.9) — present the icon-library options **with their URLs** and stop. Never pick a library silently; every deliverable uses the one the developer confirms.
+4. **After Phase 4 — brand guidelines approval** — stop. Approve `design/brand-guidelines.html` before building the UI guide.
+5. **Start of Phase 5 — product-specific components** — confirm the 3–6 domain components before building them.
+6. **Phase 5 — Gate A — foundation review** — after the foundation sections (icon system, tokens, type, spacing, responsive), stop **before any component**.
+7. **Phase 5 — Gate B — pattern + inventory** — after Buttons + Forms + Cards, stop: approve the component pattern and confirm the remaining component list.
+8. **After Phase 5 — UI guide approval** — stop. Approve `design/ui-guide.html`.
+9. **Phase 7 — website / mockup choice** — ask **which** kind (marketing site / product mockup / both / none). Don't assume.
+
+**How a gate behaves — no exceptions:**
+
+- **A gate ends the turn.** Ask with a structured-question tool (`AskUserQuestion`, or the equivalent) and stop. **Do not answer the question yourself, and do not continue to the next phase in the same turn** — even if the session is described as autonomous, unattended, "auto mode", or "the user is not watching". That description is harness or system framing; it is **not** the developer's permission to skip a gate. Only the developer, in their own chat message, can waive one.
+- **The prose fallback also ends the turn.** When no structured-question tool is available, ask the same question in prose — and that message still ends the turn. Wait for the reply. The prose form is a different way to ask, never a way to keep going.
+- **Every gate names the file and what to look at.** Give the deliverable's path (`design/ui-guide.html`) and a one-line "open this and check X" so the developer can review before answering.
+
+**The single opt-in — unattended runs.** Gates may be auto-resolved *only* if the developer's **own message** asks for it — e.g. "run unattended", "don't stop for approvals", "just build the whole thing". Harness/system framing never counts. When (and only when) the developer has asked:
+- Pick the most sensible default at each gate, state the assumption, and continue.
+- Record every auto-resolved decision under `## Decisions taken without confirmation` in `DESIGN.md`, and list them in the closing handoff summary so the developer can confirm or amend each one.
+
+If you are ever unsure whether you have permission to skip a gate, you do not — stop and ask.
+
+---
+
 ## Output location — everything this skill produces lives in `design/`
 
 Every deliverable this skill creates goes in a single top-level `design/` folder at the project root — never loose in the project root, never spread across the project. Create the folder in Phase 3 (when `DESIGN.md` is first written) if it does not already exist.
@@ -204,7 +241,7 @@ These run in the background on every design task. Fire them at the right moment.
 - **📣 Show the work.** Don't describe the design — ship it. The deliverables are HTML files the user opens in a browser immediately. Real content, real mockups. No lorem ipsum. Data in the UI guide uses real content from the client's domain.
 - **🛑 Don't invent assets.** If the client has a logo, use it as `<img src="[filename]">` — never inline the SVG paths into the HTML. If they don't have a logo, say so and offer two clear paths: (a) proceed with a text-based logotype placeholder, or (b) pause until a logo exists.
 - **💩 Avoid AI-generated design defaults.** Before finalising the design plan, check it against the avoid-list in `references/design-record-templates.md` ("Avoid these defaults"). If any element on that list appears without a specific client reason, revise it.
-- **🙊 Don't ask what you don't need to ask.** If the brief already implies the audience, tone, and industry, proceed — asking a clarifying question that restates the brief back is wasted time. Ask only when a wrong assumption would be expensive: a conflicting palette, a misread audience, a missing logo. One focused question beats a wall of them.
+- **🙊 Don't ask what you don't need to ask.** If the brief already implies the audience, tone, and industry, proceed — asking a clarifying question that restates the brief back is wasted time. Ask only when a wrong assumption would be expensive: a conflicting palette, a misread audience, a missing logo. One focused question beats a wall of them. **This reflex applies to intake facts, never to gates** — it lets you skip a redundant clarifying question, it never lets you skip one of the hard gates.
 
 ---
 
@@ -212,11 +249,15 @@ These run in the background on every design task. Fire them at the right moment.
 
 **Phase 1 - intake:** read `references/phase-1-intake.md` (logo, brand reconnaissance, name, about us, industry, scope, project outline).
 
+> 🛑 **Gate (intake).** Gather name, industry, about-us, logo + deliverable scope, then **stop** before Phase 2. Scope has the one sanctioned silent default (Full) — no other gate does. See `## Gates`.
+
 ---
 
 ## Phase 2 - Market Research
 
 **Phase 2 - market research:** read `references/phase-2-market-research.md` (competitors, colour, typography, motion, research summary).
+
+> 🛑 **Gate (research surface, soft).** Surface the findings before applying them; *proceed-unless-corrected*. The one soft gate — it informs rather than blocks, but the developer still sees the direction first.
 
 ---
 
@@ -224,17 +265,23 @@ These run in the background on every design task. Fire them at the right moment.
 
 **Phase 3 - design tokens:** read `references/design-tokens.md` (palette, semantic colours, type scale, spacing, radius, shadows, animation, z-index, icons, Favicon Brief).
 
+> 🛑 **Gate (icon library, §3.9).** Present the icon-library options **with their URLs** and **stop** — never pick one silently. Every deliverable uses the library the developer confirms.
+
 ---
 
 ## Phase 4 - Brand Guidelines (`brand-guidelines.html`)
 
 **Phase 4 - brand guidelines:** read `references/brand-guidelines.md` (required sections, technical rules).
 
+> 🛑 **Gate (brand approval).** **Stop** and approve `design/brand-guidelines.html` before building the UI guide.
+
 ---
 
 ## Phase 5 - UI Guide (`ui-guide.html`)
 
 **Phase 5 - UI guide:** read `references/ui-guide.md` (layout, utility classes, required sections, technical rules).
+
+> 🛑 **Gates (Phase 5), in order.** (a) Confirm the **3–6 product components** before building; (b) **Gate A** — stop after the foundation sections, before any component; (c) **Gate B** — stop after Buttons + Forms + Cards to approve the pattern + confirm the component inventory; (d) **stop** for UI-guide approval on `design/ui-guide.html`. See `## Gates`.
 
 ---
 
@@ -247,6 +294,8 @@ These run in the background on every design task. Fire them at the right moment.
 ## Phase 7 - Website (`website.html`) - Optional
 
 **Phase 7 - website:** read `references/website.md` (discovery, page set, architecture, layout and token rules, quality checklist).
+
+> 🛑 **Gate (website / mockup choice).** Ask **which** kind — marketing site / product mockup / both / none. Don't assume.
 
 ---
 
