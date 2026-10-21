@@ -92,6 +92,13 @@ Create this file at `design/DESIGN.md` when Phase 3 begins (create the `design/`
 - Size tokens: --icon-xs 14px · --icon-sm 16px · --icon-md 20px · --icon-lg 24px · --icon-xl 32px
 - Rationale: [one sentence — why this library fits the brand personality]
 
+## Voice and UI copy
+- Capitalisation: sentence case — buttons, CTAs, nav, tabs, labels and headings capitalise only the
+  first word, proper nouns and acronyms ("Book a demo", not "Book A Demo"). [Change only if the brand
+  deliberately uses Title Case, and record why in the rationale log.]
+- Proper nouns that keep their capitals: [brand, product and place names — e.g. Tina4, Code Infinity]
+- Tone attributes: [the 4 attributes from the brand guidelines' Tone of Voice section]
+
 ## Design Tokens
 
 ### Colour — light theme
@@ -228,6 +235,7 @@ Before finalising the design plan in Phase 3, check each element against this li
 | `border-radius: 12px` on every element | Rounds everything equally regardless of component personality |
 | Pure `rgba(0,0,0,…)` shadows on a warm-toned brand | Shadows should be hue-tinted to match the palette |
 | Lorem ipsum or "Sample Text" in any deliverable | Real content or nothing; lorem is a placeholder for something that was never finished |
+| Title Case on buttons, CTAs and nav ("Book A Demo", "Get Started") | The template default; UI copy is sentence case — capitalise only the first word, proper nouns and acronyms |
 
 Following these patterns with a genuine reason is always acceptable — the point is that the reason must be named.
 

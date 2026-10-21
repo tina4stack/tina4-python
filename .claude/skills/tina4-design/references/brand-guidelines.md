@@ -42,6 +42,7 @@ Build `brand-guidelines.html` and save it to the `design/` folder. This is a sel
 **Tone of Voice**
 - 4 tone attributes, each with a short definition paragraph
 - Do / don't copy pairs: two "write this / not this" examples using realistic content — the same information written in the right voice and the wrong voice
+- Capitalisation rule: UI copy is sentence case by default, shown as a write this / not this pair on a real button and a real nav item ("Book a demo" / "Book A Demo") — taken from DESIGN.md's voice section
 
 **Applications**
 - At least 2–3 mockups showing the brand applied in contexts relevant to the client's actual world
