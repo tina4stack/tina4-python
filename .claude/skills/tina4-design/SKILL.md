@@ -1,6 +1,7 @@
 ---
 name: tina4-design
-description: Use whenever a project needs a visual identity or design system — from scratch or from an existing logo. Triggers: "build me a brand", "create brand guidelines", "we need a UI guide", "design system", "I have a logo", "what should our brand look like", "design our app", "brand this project". Covers the full chain — client intake → market research → design system decisions → brand guidelines document → interactive UI component guide. Produces DESIGN.md (the living design record), brand-guidelines.html, and ui-guide.html, all saved to a top-level design/ folder. Project-agnostic: works for any industry, any Tina4 backend or frontend, or no Tina4 project at all.
+description: >
+  Use whenever a project needs a visual identity or design system — from scratch or from an existing logo. Triggers: "build me a brand", "create brand guidelines", "we need a UI guide", "design system", "I have a logo", "what should our brand look like", "design our app", "brand this project". Covers the full chain — client intake → market research → design system decisions → brand guidelines document → interactive UI component guide. Produces DESIGN.md (the living design record), brand-guidelines.html, and ui-guide.html, all saved to a top-level design/ folder. Project-agnostic: works for any industry, any Tina4 backend or frontend, or no Tina4 project at all.
 updated_for_version: 1.1.0
 ---
 

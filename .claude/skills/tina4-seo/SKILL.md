@@ -1,6 +1,7 @@
 ---
 name: tina4-seo
-description: Use when a project needs SEO and AISO (AI Search Optimisation) coverage — structured data, AI discovery files, robots.txt, sitemap, meta tags, semantic HTML audit, E-E-A-T signals, favicon package, and entity consistency. Works on any Tina4 project (PHP, Python, Ruby, Node) or plain HTML. Reads DESIGN.md if present to avoid re-asking for known facts. Triggers: "fix our SEO", "we need structured data", "add schema markup", "AI systems can't find us", "set up llms.txt", "generate a sitemap", "robots.txt audit", "accessibility of SEO".
+description: >
+  Use when a project needs SEO and AISO (AI Search Optimisation) coverage — structured data, AI discovery files, robots.txt, sitemap, meta tags, semantic HTML audit, E-E-A-T signals, favicon package, and entity consistency. Works on any Tina4 project (PHP, Python, Ruby, Node) or plain HTML. Reads DESIGN.md if present to avoid re-asking for known facts. Triggers: "fix our SEO", "we need structured data", "add schema markup", "AI systems can't find us", "set up llms.txt", "generate a sitemap", "robots.txt audit", "accessibility of SEO".
 updated_for_version: 1.0.0
 ---
 

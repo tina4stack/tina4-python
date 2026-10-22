@@ -1,6 +1,7 @@
 ---
 name: tina4-a11y
-description: Use when a project needs a WCAG 2.1 Level AA accessibility audit and fix pass — semantic landmarks, keyboard navigation, focus indicators, ARIA states, colour contrast, forms, zoom/reflow, reduced motion, touch targets, and screen reader support. Works on any Tina4 project (PHP, Python, Ruby, Node) or plain HTML. Reads DESIGN.md if present to avoid re-asking for known facts. Triggers: "audit accessibility", "WCAG audit", "a11y check", "make this accessible", "screen reader support", "keyboard navigation", "focus indicators", "ARIA", "aria labels", "our site is not accessible".
+description: >
+  Use when a project needs a WCAG 2.1 Level AA accessibility audit and fix pass — semantic landmarks, keyboard navigation, focus indicators, ARIA states, colour contrast, forms, zoom/reflow, reduced motion, touch targets, and screen reader support. Works on any Tina4 project (PHP, Python, Ruby, Node) or plain HTML. Reads DESIGN.md if present to avoid re-asking for known facts. Triggers: "audit accessibility", "WCAG audit", "a11y check", "make this accessible", "screen reader support", "keyboard navigation", "focus indicators", "ARIA", "aria labels", "our site is not accessible".
 updated_for_version: 1.0.0
 ---
 
