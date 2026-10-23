@@ -9,6 +9,34 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.154 - 2026-10-23
+
+### BREAKING
+- Realtime (WebRTC): `GET /api/rtc/config` (which mints ephemeral TURN
+  credentials) and the `/ws/rtc/{room}` signalling socket now require a valid
+  token by default (ADR-0101, #252). They were public, with no way for an app to
+  close them, so the TURN relay was an open resource. Opt out with
+  `TINA4_RTC_REQUIRE_AUTH=false` (or `0`/`no`/`off`) for anonymous calling; any
+  other value keeps them secured. If your app relied on the open routes, set
+  that env var.
+
+### Fixed
+- Frond: a bare reference to a zero-argument callable global is now invoked and
+  its return value used for both `{{ g }}` output and `{% if g %}` truthiness,
+  matching Node (ADR-0085, tina4-documentation#90). `g()` still calls exactly
+  once; a non-callable global and a callable that declares parameters are
+  unchanged.
+- CSP: the per-response nonce is no longer injected into a `script-src` /
+  `style-src` directive that already carries `'unsafe-inline'` (ADR-0100,
+  tina4-php#330). A browser ignores `'unsafe-inline'` once a nonce joins the same
+  directive, so inline content an app deliberately allowed through `TINA4_CSP`
+  was silently blocked from 3.13.143 on. The app's explicit choice now wins; the
+  strict default policy is still nonced.
+
+### Changed
+- Skills: the maintainer skill gains an off-skill self-audit reflex, and four
+  bundled skill descriptions were refolded to valid YAML.
+
 ## 3.13.153 - 2026-10-21
 
 ### Fixed
