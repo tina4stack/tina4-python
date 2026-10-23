@@ -228,6 +228,13 @@ def realtime(prefix: str = "", *, media: RtcMediaBackend = None,
         paths.setdefault("config", f"{p}/api/rtc/config")
         paths["files"] = f"{p}/api/files"
 
+    # ADR-0101: the config route mints TURN credentials and the signalling
+    # socket relays calls, so both require a valid token UNLESS the app opts out
+    # with TINA4_RTC_REQUIRE_AUTH=false (anonymous calling). Secure-by-default:
+    # only an explicit false/0/no/off opens them.
+    require_auth = (os.getenv("TINA4_RTC_REQUIRE_AUTH") or "true").strip().lower() \
+        not in ("false", "0", "no", "off")
+
     # ── Self-describing bootstrap: the client fetches this instead of
     #    hardcoding any URL, so moving `prefix` moves the client too. ──
     if "config" in paths:
@@ -243,6 +250,8 @@ def realtime(prefix: str = "", *, media: RtcMediaBackend = None,
                 body["files"] = paths["files"]
             return response(body)
 
+        if require_auth:  # ADR-0101
+            rtc_config._secured = True
         Router.get(paths["config"], rtc_config)
 
     # ── calls: WebRTC signalling relay (mesh) ──────────────────────────
@@ -259,6 +268,8 @@ def realtime(prefix: str = "", *, media: RtcMediaBackend = None,
                 # room. Tina4 never parses the SDP; peers filter by `to`.
                 await connection.broadcast_to_room(key, data, exclude_self=True)
 
+        if require_auth:  # ADR-0101
+            rtc_signalling._secured = True
         Router.websocket(f"{paths['signalling']}/{{room}}", rtc_signalling)
 
     # ── chat: persistent channels + presence/typing/receipts ───────────
