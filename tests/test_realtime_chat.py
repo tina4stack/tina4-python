@@ -247,7 +247,10 @@ class TestChatMount:
 
     def test_config_advertises_chat(self, chat):
         realtime(prefix="/t-cfg", features=["calls", "chat"])
-        res = TestClient().get("/t-cfg/api/rtc/config")
+        # ADR-0101: the config route is secured by default, so authenticate.
+        token = get_token({"user_id": 1})
+        res = TestClient().get("/t-cfg/api/rtc/config",
+                               headers={"Authorization": f"Bearer {token}"})
         body = res.json()
         assert body["chat"] == "/t-cfg/ws/chat/{channel}"
         assert body["messages"] == "/t-cfg/api/channels/{id}/messages"
