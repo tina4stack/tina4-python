@@ -100,10 +100,23 @@ def inject_nonce_into_csp(csp: str, nonce: str) -> str:
     for directive in ("style-src", "script-src"):
         existing = next((d for d in directives if d[0] == directive), None)
         if existing is not None:
+            # ADR-0100: the app opted this directive into inline via
+            # 'unsafe-inline'. A browser ignores 'unsafe-inline' the moment a
+            # nonce joins the same directive (CSP Level 2+), so adding the nonce
+            # would silently block the inline the app asked for. The app's
+            # explicit choice wins; its own inline runs, framework inline rides
+            # the same 'unsafe-inline'.
+            if "'unsafe-inline'" in existing[1].split():
+                continue
             if token not in existing[1].split():
                 existing[1] = (existing[1] + " " + token).strip()
         else:
             base = default_value if default_value else "'self'"
+            # ADR-0100: a directive derived from an 'unsafe-inline' default-src
+            # must not be spawned with a nonce - it would cancel the inline the
+            # app allowed through default-src. Leave it to fall back.
+            if "'unsafe-inline'" in base.split():
+                continue
             directives.append([directive, (base + " " + token).strip()])
 
     return "; ".join(
