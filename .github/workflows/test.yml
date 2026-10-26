@@ -19,12 +19,7 @@ permissions:
 
 jobs:
   test:
-    # Pinned to 24.04: the ubuntu-latest label migrated to Ubuntu 26.04 (from
-    # 2026-10-19), where the mongo:8 (8.3.x rapid-release) replica-set container
-    # exits on startup — the mongo:7 service and the rest of the suite are fine.
-    # 24.04 is the last environment this gate was green on (2026-10-23). Revisit
-    # when mongo:8 runs cleanly on 26.04 (pin mongo to the 8.0 LTS line too).
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
 
     # Real-service test gate. Every backend the suite can touch runs for real in
     # CI so the integration tests execute instead of skipping (the gap that let
@@ -320,7 +315,7 @@ jobs:
       # green on the standalone. This leg keeps that from regressing.
       - name: Start MongoDB 8 replica set (27018)
         run: |
-          docker run -d --name tina4-mongo8-rs -p 27018:27018 mongo:8 \
+          docker run -d --name tina4-mongo8-rs -p 27018:27018 mongo:8.0 \
             mongod --replSet rs0 --bind_ip_all --port 27018
           for i in $(seq 1 30); do
             docker exec tina4-mongo8-rs mongosh --port 27018 --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break
