@@ -968,3 +968,99 @@ class TestGeneratedMigrationMatchesModel:
         from pathlib import Path as _P
         autocrud_src = (_P(_crud_pkg.__file__)).read_text()
         assert "saved is False" in autocrud_src
+
+
+# ── tina4-python#261: generated handlers must be plain `def`, not `async def` ──
+# A generator that writes `async def` handlers whose bodies call the SYNC ORM
+# (Model.where / find_by_id / create / save / delete) makes every request log
+# tina4's own ADR-0074 warning ("sync fetch() ran on the event loop ... it
+# blocks every other request"). The framework's own rule, and the warning's own
+# advice, is: declare a sync-ORM route with plain `def` and Tina4 runs it in a
+# worker thread. This is python-only — PHP/Ruby are synchronous (no event loop)
+# and Node's generated handlers already `await` the async ORM.
+
+def _route_handler_defs(path: Path):
+    """Return (name, is_async) for every @get/@post/@put/@delete-decorated
+    top-level function in a generated route module, parsed with ast (no exec)."""
+    tree = ast.parse(path.read_text())
+    out = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            decos = []
+            for d in node.decorator_list:
+                call = d.func if isinstance(d, ast.Call) else d
+                decos.append(getattr(call, "id", getattr(call, "attr", "")))
+            if any(x in ("get", "post", "put", "delete") for x in decos):
+                out.append((node.name, isinstance(node, ast.AsyncFunctionDef)))
+    return out
+
+
+def test_model_route_handlers_are_sync_def_not_async(tmp_project):
+    """`generate route --model` must emit plain `def` sync-ORM handlers (#261)."""
+    _gen_model("Product", {"fields": "name:string,price:float"})
+    _gen_route("products", {"model": "Product"})
+    handlers = _route_handler_defs(tmp_project / "src/routes/products.py")
+    assert handlers, "no route handlers found in the generated --model route"
+    offenders = [n for n, is_async in handlers if is_async]
+    assert not offenders, f"these --model handlers are async over the sync ORM: {offenders}"
+
+
+def test_custom_route_handlers_are_sync_def_not_async(tmp_project):
+    """A no-model `generate route` stubs sync-ORM hints, so it must be `def` too (#261)."""
+    _gen_route("items", {})
+    handlers = _route_handler_defs(tmp_project / "src/routes/items.py")
+    offenders = [n for n, is_async in handlers if is_async]
+    assert not offenders, f"these custom handlers are async: {offenders}"
+
+
+def test_auth_route_handlers_are_sync_def_not_async(tmp_project):
+    """`generate auth` register/login/me call the sync ORM → must be `def` (#261)."""
+    _gen_model("User", {"fields": "email:string,password:string,role:string"})
+    _gen_auth()
+    handlers = _route_handler_defs(tmp_project / "src/routes/auth.py")
+    offenders = [n for n, is_async in handlers if is_async]
+    assert not offenders, f"these auth handlers are async over the sync ORM: {offenders}"
+
+
+def test_crud_admin_route_handler_is_sync_def_not_async(tmp_project):
+    """The AutoCrud admin route calls Crud.to_crud (a sync DB fetch) → `def` (#261)."""
+    _gen_crud("Gadget", {"fields": "name:string"})
+    route = next((tmp_project / "src/routes").glob("*.py"))
+    handlers = _route_handler_defs(route)
+    offenders = [n for n, is_async in handlers if is_async]
+    assert not offenders, f"the admin route handler is async over a sync DB fetch: {offenders}"
+
+
+# ── tina4-python#259: co-emitted tests must bake a secure (>=32-byte) secret ──
+# The generated test did `os.environ.setdefault("TINA4_SECRET", "test-secret")`
+# — 11 bytes — so on a brand-new app the write test failed with
+# InsecureSecretError (ADR-0079: an HMAC JWT secret must be >= 32 bytes). The
+# fix bakes `secrets.token_hex(32)` in at generation time, as `init` does for
+# .env. NOTE: test_cli_generate_coemits.py could not catch this — it injects its
+# own 32-byte TINA4_SECRET into the subprocess env, so the generated test's own
+# secret never came into play. This reads the generated secret directly.
+import re as _re
+
+_SECRET_RE = _re.compile(r'TINA4_SECRET"\s*,\s*"([^"]+)"')
+
+
+def _generated_secret(path: Path) -> str:
+    m = _SECRET_RE.search(path.read_text())
+    assert m, f"no TINA4_SECRET literal in {path}"
+    return m.group(1)
+
+
+def test_model_route_test_bakes_a_secure_secret(tmp_project):
+    """`generate route --model` co-emits a gate test whose secret is >= 32 bytes (#259)."""
+    _gen_model("Product", {"fields": "name:string,price:float"})
+    _gen_route("products", {"model": "Product"})
+    secret = _generated_secret(tmp_project / "tests/test_products.py")
+    assert len(secret) >= 32, f"generated test secret is {len(secret)} bytes (< 32): {secret!r}"
+
+
+def test_auth_test_bakes_a_secure_secret(tmp_project):
+    """`generate auth` co-emits an auth test whose secret is >= 32 bytes (#259)."""
+    _gen_model("User", {"fields": "email:string,password:string,role:string"})
+    _gen_auth()
+    secret = _generated_secret(tmp_project / "tests/test_auth.py")
+    assert len(secret) >= 32, f"generated auth-test secret is {len(secret)} bytes (< 32): {secret!r}"

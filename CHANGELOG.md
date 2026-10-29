@@ -9,6 +9,33 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## Unreleased
+
+### Fixed
+- CLI generator: `generate route --model`, `generate auth` and `generate crud`
+  emitted `async def` handlers whose bodies call the **sync** ORM
+  (`Model.where` / `find_by_id` / `create` / `save` / `delete`, or
+  `Crud.to_crud`), so every request logged tina4's own ADR-0074 warning ("sync
+  fetch() ran on the event loop … it blocks every other request"). They are now
+  plain `def`, which Tina4 runs in a worker thread (tina4-python#261). Parity:
+  PHP/Ruby are synchronous (no event loop); Node's generated handlers already
+  `await` the async ORM.
+- CLI generator: the co-emitted gate and auth tests baked
+  `TINA4_SECRET="test-secret"` (11 bytes), which auth refuses (ADR-0079: an HMAC
+  JWT secret must be ≥ 32 bytes), so the generated write test failed on a
+  brand-new app. The generator now bakes `secrets.token_hex(32)` at generation
+  time, as `init` does for `.env` (tina4-python#259). Parity: PHP restores a
+  valid default secret for its test suite, Ruby signs with RSA keys, Node's
+  generated secret is already ≥ 32 bytes.
+- `serve` (debug): the test port is the main port + 1000, so a main port above
+  64535 pushed it past 65535 and the bind raised `OverflowError` — which the
+  AI-port bind's `except OSError` did not catch — killing the server. Ephemeral
+  ports run to 65535, so a harness that grabs a free port hit this often. The
+  out-of-range test port is now skipped with a warning and the main port still
+  serves (tina4-python#260). Parity: this brings Python in line with PHP
+  (`@stream_socket_server` → skip), Ruby (`rescue SocketError/SystemCallError`)
+  and Node (`aiPortInRange` guard), whose code already handled it.
+
 ## 3.13.154 - 2026-10-23
 
 ### BREAKING
