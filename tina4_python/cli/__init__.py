@@ -1914,7 +1914,7 @@ def _gen_route(name: str, flags: dict, *, emit_test: bool = True):
 @description("List all {route_path}")
 @tags(["{route_path}"])
 @get("/api/{route_path}")
-async def list_{route_path}(request, response):
+def list_{route_path}(request, response):
     """List all {route_path} with pagination."""
     page = int(request.query.get("page", 1))
     per_page = int(request.query.get("per_page", 20))
@@ -1928,7 +1928,7 @@ async def list_{route_path}(request, response):
 @description("Get a {singular} by ID")
 @tags(["{route_path}"])
 @get("/api/{route_path}/{{id:int}}")
-async def get_{singular}(request, response):
+def get_{singular}(request, response):
     """Get a single {singular} by ID."""
     {singular} = {model}.find_by_id(request.params["id"])
     if {singular} is None:
@@ -1939,7 +1939,7 @@ async def get_{singular}(request, response):
 {w}@description("Create a new {singular}")
 @tags(["{route_path}"])
 @post("/api/{route_path}")
-async def create_{singular}(request, response):
+def create_{singular}(request, response):
     """Create a new {singular}. {write_doc}"""
 {ext_create}    item = {model}.create(request.body)
     if item is False:
@@ -1950,7 +1950,7 @@ async def create_{singular}(request, response):
 {w}@description("Update a {singular}")
 @tags(["{route_path}"])
 @put("/api/{route_path}/{{id:int}}")
-async def update_{singular}(request, response):
+def update_{singular}(request, response):
     """Update a {singular} by ID. {write_doc}"""
     item = {model}.find_by_id(request.params["id"])
     if item is None:
@@ -1966,7 +1966,7 @@ async def update_{singular}(request, response):
 {w}@description("Delete a {singular}")
 @tags(["{route_path}"])
 @delete("/api/{route_path}/{{id:int}}")
-async def delete_{singular}(request, response):
+def delete_{singular}(request, response):
     """Delete a {singular} by ID. {write_doc}"""
     item = {model}.find_by_id(request.params["id"])
     if item is None:
@@ -2027,35 +2027,35 @@ async def delete_{singular}(request, response):
 @description("List all {route_path}")
 @tags(["{route_path}"])
 @get("/api/{route_path}")
-async def list_{route_path}(request, response):
+def list_{route_path}(request, response):
     """List all {route_path}."""
 {b_list}
 
 @description("Get a {singular} by ID")
 @tags(["{route_path}"])
 @get("/api/{route_path}/{{id:int}}")
-async def get_{singular}(request, response):
+def get_{singular}(request, response):
     """Get a single {singular}."""
 {b_get}
 
 {w}@description("Create a new {singular}")
 @tags(["{route_path}"])
 @post("/api/{route_path}")
-async def create_{singular}(request, response):
+def create_{singular}(request, response):
     """Create a new {singular}. {write_doc}"""
 {b_create}
 
 {w}@description("Update a {singular}")
 @tags(["{route_path}"])
 @put("/api/{route_path}/{{id:int}}")
-async def update_{singular}(request, response):
+def update_{singular}(request, response):
     """Update a {singular}. {write_doc}"""
 {b_update}
 
 {w}@description("Delete a {singular}")
 @tags(["{route_path}"])
 @delete("/api/{route_path}/{{id:int}}")
-async def delete_{singular}(request, response):
+def delete_{singular}(request, response):
     """Delete a {singular}. {write_doc}"""
 {b_delete}'''
 
@@ -2156,7 +2156,7 @@ def _gen_crud_admin_route(model: str, table: str, is_public: bool):
         + f"# Restyle the UI by editing src/templates/crud/*.twig (copied into this app).\n"
         + f"AutoCrud.register({model}, public={is_public})\n\n\n"
         + f"{decorator}\n"
-        + f"async def {table}_admin(request, response):\n"
+        + f"def {table}_admin(request, response):\n"
         + f'    return response(Crud.to_crud(request, model={model}, title="{model} Admin"))\n'
     )
     path.write_text(content, encoding="utf-8")
@@ -2375,7 +2375,7 @@ def _gen_test(name: str, flags: dict = None):
             '"""\n'
             "import os\n"
             "\n"
-            'os.environ.setdefault("TINA4_SECRET", "test-secret")\n'
+            'os.environ.setdefault("TINA4_SECRET", "__SECRET__")\n'
             'os.environ.pop("TINA4_API_KEY", None)\n'
             "\n"
             "from tina4_python.auth import get_token\n"
@@ -2414,6 +2414,9 @@ def _gen_test(name: str, flags: dict = None):
             .replace("__MODEL__", model)
             .replace("__SINGULAR__", singular_)
             .replace("__SNAKE__", snake)
+            # A >=32-byte secret baked at generation time, like init writes to .env.
+            # "test-secret" (11 bytes) tripped auth's InsecureSecretError (tina4-python#259).
+            .replace("__SECRET__", secrets.token_hex(32))
         )
         _write_test(snake, content)
         return
@@ -2876,7 +2879,9 @@ def _emit_auth_test() -> None:
         '"""\n'
         "import os\n"
         "\n"
-        'os.environ.setdefault("TINA4_SECRET", "test-secret")\n'
+        # A >=32-byte secret baked at generation time; "test-secret" (11 bytes)
+        # tripped auth's InsecureSecretError on a fresh app (tina4-python#259).
+        f'os.environ.setdefault("TINA4_SECRET", "{secrets.token_hex(32)}")\n'
         'os.environ.pop("TINA4_API_KEY", None)\n'
         "\n"
         "from tina4_python.database import Database\n"
@@ -3700,7 +3705,7 @@ def _gen_auth(name: str = None, flags: dict = None):
             '@description("Register a new user")\n'
             '@tags(["auth"])\n'
             '@post("/api/auth/register")\n'
-            'async def register(request, response):\n'
+            'def register(request, response):\n'
             '    """Register a new user."""\n'
             '    body = request.body\n'
             '    email = body.get("email", "")\n'
@@ -3723,7 +3728,7 @@ def _gen_auth(name: str = None, flags: dict = None):
             '@description("Login and receive JWT token")\n'
             '@tags(["auth"])\n'
             '@post("/api/auth/login")\n'
-            'async def login(request, response):\n'
+            'def login(request, response):\n'
             '    """Login with email and password."""\n'
             '    body = request.body\n'
             '    email = body.get("email", "")\n'
@@ -3738,7 +3743,7 @@ def _gen_auth(name: str = None, flags: dict = None):
             '@description("Get current user profile")\n'
             '@tags(["auth"])\n'
             '@get("/api/auth/me")\n'
-            'async def me(request, response):\n'
+            'def me(request, response):\n'
             '    """Get current authenticated user."""\n'
             '    auth_header = request.headers.get("authorization", "")\n'
             '    token = auth_header[7:] if auth_header.startswith("Bearer ") else ""\n'

@@ -4416,6 +4416,17 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
     # Determine AI dev port (port+1) when debug is on and not suppressed
     _no_ai_port = os.environ.get("TINA4_NO_AI_PORT", "").lower() in ("true", "1", "yes")
     _ai_port = (port + 1000) if (is_debug and not _no_ai_port) else None
+    # The test port is port + 1000, so a main port above 64535 pushes it past the
+    # 65535 ceiling and the bind raises OverflowError (not OSError, so the bind's
+    # own guard below misses it) and the server dies. Ephemeral ports run to 65535,
+    # so a harness that grabs a free port hits this often. Skip the test port in
+    # that range, with a word, instead of crashing (tina4-python#260).
+    if _ai_port is not None and _ai_port > 65535:
+        Log.warning(
+            f"Test port {_ai_port} (main port {port} + 1000) is above the maximum 65535 — "
+            f"skipping it. Use a main port at or below 64535, or set TINA4_NO_AI_PORT=true."
+        )
+        _ai_port = None
 
     # Banner — printed directly to stdout, not through the logger.
     # TINA4_SUPPRESS=true silences the startup banner (useful in CI / Docker

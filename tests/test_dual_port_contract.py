@@ -104,6 +104,26 @@ def _free_base_with_headroom() -> int:
     raise AssertionError("could not find a free base port with room for +1000")
 
 
+def _free_base_without_headroom() -> int:
+    """A free base port whose derived AI port (base + 1000) is OUT of range (> 65535).
+
+    free_port() hands out an ephemeral port anywhere in the OS range, so scan
+    down from the top of the legal range for one that both binds free AND leaves
+    no room for +1000 (base > 64535).
+    """
+    for candidate in range(65535, 64535, -1):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind(("127.0.0.1", candidate))
+            probe.close()
+            return candidate
+        except OSError:
+            probe.close()
+            continue
+    raise AssertionError("no free base port in (64535, 65535]")
+
+
 def test_debug_mode_opens_the_ai_port_at_base_plus_1000(tmp_path):
     """base + 1000 accepts a connection and serves the SAME app."""
     proc, port = boot_child_server(
@@ -198,3 +218,50 @@ def test_a_busy_ai_port_is_skipped_without_failing_the_base_port(tmp_path):
             proc.terminate()
             proc.wait(timeout=5)
         blocker.close()
+
+
+def test_an_out_of_range_ai_port_is_skipped_without_failing_the_base_port(tmp_path):
+    """A main port above 64535 pushes the test port (base + 1000) past 65535.
+
+    tina4-python#260: the bind then raised OverflowError — which the AI-port
+    bind's ``except OSError`` did NOT catch (OverflowError is not an OSError),
+    unlike a busy port — so the whole server died ("exited with code 1",
+    OverflowError: bind(): port must be 0-65535). A harness that grabs a free
+    ephemeral port hits this often (ephemeral ports run to 65535). The guard now
+    skips the out-of-range test port with a warning and serves the base port,
+    matching PHP (@stream_socket_server -> false -> skip), Ruby (rescue
+    SocketError/SystemCallError -> degrade) and Node (aiPortInRange guard).
+    """
+    base = _free_base_without_headroom()
+    assert base + 1000 > 65535, "test precondition: the derived AI port must be out of range"
+    log_dir = tmp_path / "logs"
+    proc = None
+    try:
+        proc, port = boot_child_server(
+            tmp_path, _write_app,
+            unset_env=("TINA4_NO_AI_PORT",),
+            extra_env={"TINA4_DEBUG": "true"},
+            fixed_port=base,
+            log_dir=log_dir,
+        )
+        assert port == base
+        # The whole point: the server must SURVIVE, not die on OverflowError.
+        assert proc.poll() is None, "server exited on an out-of-range AI port (OverflowError regression)"
+        status, _ = _http_get("127.0.0.1", port, "/health")
+        assert status == 200, f"base port must still serve when the AI port is out of range: {status}"
+
+        # The guard runs synchronously in startup before accepting on the base
+        # port; give the log write a moment to land on disk regardless.
+        time.sleep(0.3)
+        log = read_child_log(proc)
+        assert str(base + 1000) in log, f"warning must name the out-of-range port; log: {log!r}"
+        lowered = log.lower()
+        assert "65535" in log and "skip" in lowered, (
+            f"an out-of-range AI port must warn + skip, never crash the base port; log: {log!r}"
+        )
+        # Nothing may be listening on the illegal derived port.
+        assert not port_open(base + 1000, timeout=0.5), "nothing may bind the out-of-range AI port"
+    finally:
+        if proc is not None:
+            proc.terminate()
+            proc.wait(timeout=5)
