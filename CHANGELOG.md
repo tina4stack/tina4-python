@@ -9,7 +9,7 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
-## Unreleased
+## 3.13.155 - 2026-10-29
 
 ### Fixed
 - CLI generator: `generate route --model`, `generate auth` and `generate crud`
