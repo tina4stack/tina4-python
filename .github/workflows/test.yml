@@ -323,6 +323,10 @@ jobs:
           docker run -d --name tina4-mongo8-rs -p 27018:27018 mongo:8.0 \
             mongod --replSet rs0 --bind_ip_all --port 27018
           for i in $(seq 1 30); do
+            if [ "$(docker inspect -f '{{.State.Running}}' tina4-mongo8-rs 2>/dev/null)" != "true" ]; then
+              echo "::group::mongod exited — container logs"; docker logs tina4-mongo8-rs 2>&1 | tail -60; echo "::endgroup::"
+              echo "::error::mongo8 container exited during startup"; exit 1
+            fi
             docker exec tina4-mongo8-rs mongosh --port 27018 --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break
             sleep 2
           done
@@ -332,6 +336,7 @@ jobs:
             [ "$(docker exec tina4-mongo8-rs mongosh --port 27018 --quiet --eval 'db.hello().isWritablePrimary')" = "true" ] && exit 0
             sleep 2
           done
+          echo "::group::never became primary — container logs"; docker logs tina4-mongo8-rs 2>&1 | tail -60; echo "::endgroup::"
           echo "::error::mongo:8 replica set never became primary"; exit 1
 
       - name: Install native Tina4 CLI 3.8.98
