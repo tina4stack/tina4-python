@@ -1397,8 +1397,8 @@ def _next_steps_for(target: str, name: str, resolution: dict, flags: dict) -> li
     if target == "migration":
         return [
             "Apply it:              tina4 migrate",
-            "Roll back last batch:  tina4 migrate --rollback",
-            "Inspect the pending:   tina4 migrate --status",
+            "Roll back last batch:  tina4 migrate:rollback",
+            "Inspect the pending:   tina4 migrate:status",
         ]
 
     if target == "middleware":

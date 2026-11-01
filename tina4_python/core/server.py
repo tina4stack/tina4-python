@@ -4173,7 +4173,11 @@ def _auto_migrate_on_startup(migration_folder: str = "migrations") -> None:
     from tina4_python.dotenv import is_truthy
 
     folder = Path(migration_folder)
-    if not folder.is_dir() or not any(folder.glob("*.sql")):
+    # Both .sql AND .py migrations count — the runner applies both, so a .py-only
+    # migrations folder must still trigger startup auto-migration (#268).
+    has_sql = any(folder.glob("*.sql"))
+    has_py = any(f for f in folder.glob("*.py") if not f.name.startswith("__"))
+    if not folder.is_dir() or not (has_sql or has_py):
         return  # no migrations → nothing to do (silent)
     if not is_truthy(os.environ.get("TINA4_AUTO_MIGRATE", "true")):
         Log.debug("TINA4_AUTO_MIGRATE is off — skipping startup migrations")
