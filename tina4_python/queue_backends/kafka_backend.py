@@ -260,21 +260,10 @@ class KafkaConnector:
 
     @staticmethod
     def _offset_reset() -> str:
-        """Resolve the consumer's auto.offset.reset policy from the environment.
-
-        Where a NEW consumer group (one with no committed offset) starts reading:
-        'earliest' (the default, unchanged) replays the retained backlog;
-        'latest' skips it and reads only records produced from now on. Read from
-        the Tina4-namespaced env var first (``TINA4_KAFKA_AUTO_OFFSET_RESET``),
-        then the bare librdkafka-convention name (``KAFKA_AUTO_OFFSET_RESET``) that
-        many Kafka deployments already set — the same precedence the TLS/SASL keys
-        use. A blank value falls through to the default (#263).
-        """
-        return (
-            os.environ.get("TINA4_KAFKA_AUTO_OFFSET_RESET")
-            or os.environ.get("KAFKA_AUTO_OFFSET_RESET")
-            or "earliest"
-        )
+        """Consumer auto.offset.reset from env: TINA4_KAFKA_AUTO_OFFSET_RESET,
+        then bare KAFKA_AUTO_OFFSET_RESET, default 'earliest' (#263)."""
+        return (os.environ.get("TINA4_KAFKA_AUTO_OFFSET_RESET")
+                or os.environ.get("KAFKA_AUTO_OFFSET_RESET") or "earliest")
 
     @staticmethod
     def _security_config() -> dict:
