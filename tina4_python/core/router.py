@@ -897,6 +897,23 @@ def secured():
     return decorator
 
 
+def no_csrf():
+    """Opt a route out of CSRF form-token validation.
+
+    For server-to-server endpoints — webhooks, payment callbacks, API clients
+    that already authenticate with a Bearer token — which carry no browser
+    session and so have no cross-site-request-forgery surface. Without this a
+    public ``@noauth()`` write route is still CSRF-checked when ``TINA4_CSRF`` is
+    enabled (#265), which is correct for a browser form but wrong for a webhook.
+    CSRF (origin) and auth (identity) are orthogonal: pair ``@no_csrf()`` with
+    ``@noauth()`` for a public webhook, or use it alone on an authenticated one.
+    """
+    def decorator(fn):
+        fn._no_csrf = True
+        return fn
+    return decorator
+
+
 # ── RBAC guards (Feature 138 / ADR-0058) ──────────────────────
 # Claim-first authorization on top of the JWT auth gate. @role reads the verified
 # `roles` claim, @can reads `permissions`. Multiple args are OR; stack guards for

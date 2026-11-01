@@ -669,15 +669,18 @@ class SecurityHeadersMiddleware:
 class CsrfMiddleware:
     """CSRF token validation middleware.
 
-    Off by default. Set ``TINA4_CSRF=true`` (or ``1``/``yes``/``on``) in the
-    environment and the framework auto-attaches this middleware at boot (see
-    ``attach_csrf_from_env``); or register it explicitly via
-    ``Router.use(CsrfMiddleware)``. Once attached, ``TINA4_CSRF=false`` (or
-    ``0``/``no``) is the kill switch that disables enforcement again.
+    Not attached by default. Set ``TINA4_CSRF=true`` (or ``1``/``yes``/``on``)
+    in the environment and the framework auto-attaches this middleware at boot
+    (see ``attach_csrf_from_env``); or register it explicitly via
+    ``Router.use(CsrfMiddleware)``. Once attached it enforces unless the kill
+    switch ``TINA4_CSRF=false`` (or ``0``/``no``) is set — so with the middleware
+    attached but ``TINA4_CSRF`` unset, enforcement is ON (the attach is the opt-in).
 
     Behaviour:
         - Skips GET, HEAD, OPTIONS requests.
-        - Skips routes marked @noauth().
+        - Skips routes that opt out with @no_csrf() (server-to-server webhooks).
+          @noauth() does NOT skip CSRF (#265): a public form can be open to
+          anonymous visitors AND still be protected against cross-site posts.
         - Fails CLOSED: with TINA4_SECRET unset the signing secret resolves to
           blank (there is NO built-in default), and a blank HMAC key is
           publicly reproducible — so no token can be trusted and every write is
@@ -710,9 +713,16 @@ class CsrfMiddleware:
         if method in ("GET", "HEAD", "OPTIONS"):
             return request, response
 
-        # Skip routes marked @noauth()
+        # Skip routes that explicitly opt OUT of CSRF with @no_csrf() — the
+        # escape hatch for server-to-server endpoints (webhooks, callbacks) that
+        # carry no browser session and so have no cross-site-forgery surface.
+        # @noauth() no longer skips CSRF (#265): a PUBLIC form must be able to be
+        # both open to anonymous visitors AND protected against cross-site posts,
+        # so a form token is still validated on an anonymous write route. @noauth
+        # controls IDENTITY (who), CSRF controls ORIGIN (did our own form send
+        # it) — they are orthogonal, and a webhook opts out of CSRF explicitly.
         handler = getattr(request, "_handler", None)
-        if handler and getattr(handler, "_noauth", False):
+        if handler and getattr(handler, "_no_csrf", False):
             return request, response
 
         # Resolve the signing secret ONCE, fail-closed (blank when TINA4_SECRET
