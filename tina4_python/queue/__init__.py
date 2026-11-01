@@ -124,9 +124,19 @@ class Queue:
             self.retry_backoff, self.visibility_timeout,
         )
 
-    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0):
-        """Add a job to the queue. Returns job ID."""
-        return self._backend.push(data, priority, delay_seconds)
+    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0,
+             raw: bool = False):
+        """Add a job to the queue. Returns job ID.
+
+        ``raw=True`` is a Kafka-only option (#264): it produces the value with
+        NO Tina4 envelope ({payload, priority, attempts}) and no injected id, so
+        a non-Tina4 service consuming the topic receives the exact schema it
+        expects. On the file/rabbitmq/mongodb backends the envelope is internal
+        bookkeeping that pop(), retries and dead-lettering depend on, so there is
+        nothing to omit — those backends refuse raw=True by name rather than
+        silently ignore it.
+        """
+        return self._backend.push(data, priority, delay_seconds, raw)
 
     def pop(self) -> Job | None:
         """Atomically claim the next available job. Returns None if empty."""
@@ -303,8 +313,11 @@ class Queue:
         self._backend.close()
 
     def produce(self, topic: str, data: dict, priority: int = 0,
-                delay_seconds: int = 0, delay_until: datetime | None = None):
+                delay_seconds: int = 0, delay_until: datetime | None = None,
+                raw: bool = False):
         """Produce a message onto a topic. Convenience wrapper around push().
+
+        ``raw`` behaves exactly as on push() — Kafka-only, un-enveloped (#264).
 
         Either ``delay_seconds`` (integer offset) or ``delay_until``
         (absolute ``datetime``) may be passed for scheduled jobs. ``delay_until``
@@ -322,7 +335,7 @@ class Queue:
         old_topic = self.topic
         self._retarget(topic)
         try:
-            return self.push(data, priority, delay_seconds)
+            return self.push(data, priority, delay_seconds, raw)
         finally:
             self._retarget(old_topic)
 

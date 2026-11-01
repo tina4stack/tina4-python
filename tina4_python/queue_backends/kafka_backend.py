@@ -12,6 +12,13 @@ Kafka wire protocol over TCP sockets (zero dependencies).
 Environment variables:
     TINA4_KAFKA_BROKERS  — comma-separated broker list (default: localhost:9092)
     TINA4_KAFKA_GROUP_ID — consumer group ID (default: tina4_consumer_group)
+    TINA4_KAFKA_AUTO_OFFSET_RESET — where a NEW consumer group starts when it has
+        no committed offset: 'earliest' (default, unchanged behaviour) or 'latest'.
+        Read as TINA4_KAFKA_AUTO_OFFSET_RESET first, then bare KAFKA_AUTO_OFFSET_RESET
+        (the librdkafka-convention name many deployments already set). Takes effect
+        on the confluent-kafka consume path; the zero-dependency raw fallback always
+        reads from the earliest retained offset (it tracks offsets from 0 and has no
+        offset-reset concept).
 
     TLS/SASL (each read as TINA4_KAFKA_<NAME> first, then bare KAFKA_<NAME>):
     TINA4_KAFKA_SECURITY_PROTOCOL — e.g. SSL / SASL_SSL (default: PLAINTEXT)
@@ -90,11 +97,23 @@ class KafkaConnector:
         else:
             self._connect_raw()
 
-    def enqueue(self, topic: str, message: dict) -> str:
-        """Push a message onto a Kafka topic. Returns the message ID."""
+    def enqueue(self, topic: str, message: dict, add_id: bool = True) -> str:
+        """Push a message onto a Kafka topic. Returns the message ID.
+
+        ``add_id`` (default True) stamps a generated ``id`` into the message
+        value so a Tina4 consumer can acknowledge it. For a RAW produce
+        (``Queue.push(raw=True)``, #264) it is False: the value is serialized
+        exactly as given — no ``id`` injected and the caller's dict is not
+        mutated — so a non-Tina4 consumer receives the bytes it expects. A
+        record key is still generated for partitioning; the key is never part
+        of the value.
+        """
         self._ensure_connected()
-        msg_id = message.get("id", secrets.token_hex(8))
-        message["id"] = msg_id
+        if add_id:
+            msg_id = message.get("id", secrets.token_hex(8))
+            message["id"] = msg_id
+        else:
+            msg_id = secrets.token_hex(8)  # record key only; never written into the value
         body = json.dumps(message, default=str)
 
         if self._use_confluent:
@@ -233,11 +252,29 @@ class KafkaConnector:
             "bootstrap.servers": self._brokers,
             "client.id": self._client_id,
             "group.id": self._group_id,
-            "auto.offset.reset": "earliest",
+            "auto.offset.reset": self._offset_reset(),
             "enable.auto.commit": False,
             **security,
         }
         self._consumer = self._confluent.Consumer(consumer_conf)
+
+    @staticmethod
+    def _offset_reset() -> str:
+        """Resolve the consumer's auto.offset.reset policy from the environment.
+
+        Where a NEW consumer group (one with no committed offset) starts reading:
+        'earliest' (the default, unchanged) replays the retained backlog;
+        'latest' skips it and reads only records produced from now on. Read from
+        the Tina4-namespaced env var first (``TINA4_KAFKA_AUTO_OFFSET_RESET``),
+        then the bare librdkafka-convention name (``KAFKA_AUTO_OFFSET_RESET``) that
+        many Kafka deployments already set — the same precedence the TLS/SASL keys
+        use. A blank value falls through to the default (#263).
+        """
+        return (
+            os.environ.get("TINA4_KAFKA_AUTO_OFFSET_RESET")
+            or os.environ.get("KAFKA_AUTO_OFFSET_RESET")
+            or "earliest"
+        )
 
     @staticmethod
     def _security_config() -> dict:

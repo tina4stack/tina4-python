@@ -32,7 +32,8 @@ class KafkaBackend(TopicDeadLetterMixin):
         self._topic = topic
         self._max_retries = max_retries
 
-    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> str:
+    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0,
+             raw: bool = False) -> str:
         if priority > 0:
             raise NotImplementedError(
                 "The kafka queue backend cannot honour push(priority): Kafka has "
@@ -48,6 +49,12 @@ class KafkaBackend(TopicDeadLetterMixin):
                 "every record behind it. Use the file or mongodb backend for "
                 "delayed jobs, or schedule the push itself."
             )
+        if raw:
+            # Emit the value exactly as given — no {payload, priority, attempts}
+            # envelope and no injected id — so a non-Tina4 consumer reading the
+            # topic gets the schema it expects (#264). The symmetric unwrap is
+            # already on pop(): result.get("payload", result).
+            return self._backend.enqueue(self._topic, data, add_id=False)
         msg = {"payload": data, "priority": priority, "attempts": 0}
         return self._backend.enqueue(self._topic, msg)
 
