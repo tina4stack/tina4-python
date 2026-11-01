@@ -93,7 +93,18 @@ class LiteBackend:
         self._seq += 1
         return f"{int(time.time() * 1000)}-{self._seq:06d}"
 
-    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0) -> str:
+    def push(self, data: dict, priority: int = 0, delay_seconds: int = 0,
+             raw: bool = False) -> str:
+        if raw:
+            raise NotImplementedError(
+                "The file queue backend cannot honour push(raw=True): raw emits "
+                "the message with no Tina4 envelope, which only a message bus "
+                "consumed by non-Tina4 systems (Kafka) needs. This backend stores "
+                "an internal envelope (id/status/attempts/available_at) that "
+                "pop(), the retry lifecycle and dead-lettering depend on, so there "
+                "is nothing to omit. Use the kafka backend for raw external "
+                "messages."
+            )
         job_id = str(uuid.uuid4())
         available = _now() if delay_seconds == 0 else _future(delay_seconds)
         job = {

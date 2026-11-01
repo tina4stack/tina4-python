@@ -9,6 +9,38 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.156 - 2026-11-01
+
+### Added
+- Kafka queue: `Queue.push(data, raw=True)` (and `produce(..., raw=True)`) now
+  produces the value with NO Tina4 envelope (`{payload, priority, attempts}`) and
+  no injected `id`, so a non-Tina4 service consuming the topic receives the exact
+  top-level schema it expects (tina4-python#264). It is a Kafka-only option; the
+  file/rabbitmq/mongodb backends refuse `raw=True` by name (the envelope is
+  internal bookkeeping that pop/retries/dead-lettering depend on, so there is
+  nothing to omit). The default `raw=False` path is unchanged. `pop()` already
+  unwraps both shapes (`result.get("payload", result)`).
+
+### Fixed
+- `migrate:create` next steps named `tina4 migrate --rollback` and
+  `tina4 migrate --status`, flags `migrate` does not accept — a person or model
+  following the hint hit an error on the first command. They now name the
+  commands that exist: `tina4 migrate:rollback` and `tina4 migrate:status`
+  (tina4-python#268). Also closed two consistency gaps the report found: `migrate`
+  applies both `.sql` and `.py` migrations, but `migrate:status` listed only
+  `.sql` as pending and startup auto-migration only triggered on a `.sql` file —
+  so a pending `.py` migration was invisible to status and never auto-applied at
+  boot. `migrate()`, `get_files()`, `status()` and the startup gate now share one
+  discovery helper that globs `.sql` + `.py`. (Python-only: the hint and `.py`
+  migrations are python's.)
+- Kafka queue: the confluent consumer hardcoded `auto.offset.reset: earliest`, so
+  every NEW consumer group replayed the entire retained backlog on first start
+  with no way to opt into `latest`. It now reads `TINA4_KAFKA_AUTO_OFFSET_RESET`
+  (then the bare `KAFKA_AUTO_OFFSET_RESET`), defaulting to `earliest` so current
+  behaviour is unchanged (tina4-python#263). Takes effect on the confluent-kafka
+  consume path; the zero-dependency raw fallback always reads from the earliest
+  retained offset.
+
 ## 3.13.155 - 2026-10-29
 
 ### Fixed

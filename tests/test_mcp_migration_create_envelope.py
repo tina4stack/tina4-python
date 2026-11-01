@@ -136,13 +136,17 @@ def test_migration_create_returns_generate_v1_1_envelope(tmp_path):
             assert isinstance(hint["line"], int) and hint["line"] > 0, hint
             assert isinstance(hint["label"], str) and hint["label"], hint
 
-        # Populated next[] — three curated steps for the migration verb.
+        # Populated next[] — three curated steps for the migration verb. The
+        # rollback/status steps name the commands that EXIST — `tina4 migrate:rollback`
+        # and `tina4 migrate:status` — not the flags `migrate` refuses (#268).
         steps = resolution["next"]
         assert isinstance(steps, list) and len(steps) == 3, steps
         assert any("tina4 migrate" in s and "rollback" not in s and "status" not in s
                    for s in steps), steps
-        assert any("--rollback" in s for s in steps), steps
-        assert any("--status" in s for s in steps), steps
+        assert any("tina4 migrate:rollback" in s for s in steps), steps
+        assert any("tina4 migrate:status" in s for s in steps), steps
+        # The broken flags the hint used to print must not come back.
+        assert not any("migrate --rollback" in s or "migrate --status" in s for s in steps), steps
 
         # actions_taken reflects the real writes.
         actions = envelope["actions_taken"]

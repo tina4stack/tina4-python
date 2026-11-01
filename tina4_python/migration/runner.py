@@ -676,6 +676,26 @@ def _migration_sort_key(name: str):
     return (0, int(m.group(1)), name) if m else (1, 0, name)
 
 
+def _migration_source_files(folder: Path) -> list:
+    """Every migration file the runner APPLIES — ``.sql`` and ``.py`` — sorted by
+    the apply order (numeric/timestamp prefix). Excludes ``.down.sql`` rollback
+    files and dunder ``.py`` helpers (``__init__`` etc.).
+
+    The single source of truth so migrate(), get_files() and status() can never
+    disagree on what is pending. They used to each glob ``*.sql`` separately while
+    only migrate() also ran ``*.py``, so a pending ``.py`` migration was applied by
+    migrate() yet never shown by status() and never triggered startup
+    auto-migration (tina4-python#268).
+    """
+    if not folder.is_dir():
+        return []
+    return sorted(
+        [f for f in folder.glob("*.sql") if not f.name.endswith(".down.sql")]
+        + [f for f in folder.glob("*.py") if not f.name.startswith("__")],
+        key=lambda f: _migration_sort_key(f.name),
+    )
+
+
 # CREATE TABLE <name> — name may be quoted ("x"), bracketed ([x] MSSQL), or bare.
 _CREATE_TABLE_RE = re.compile(
     r"^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?"
@@ -900,15 +920,9 @@ def _run_pending(db, migration_folder: str = "migrations", delimiter: str = ";")
     batch = _get_next_batch(db)
     ran = []
 
-    # Collect both .sql and .py migration files. Sort by a leading numeric /
-    # timestamp prefix (numeric-aware) so `9_*` applies before `10_*` — a plain
-    # lexical sort misorders unpadded prefixes ("10" < "9"). Files with no numeric
-    # prefix sort after the numbered ones, then lexically.
-    migration_files = sorted(
-        [f for f in folder.glob("*.sql") if not f.name.endswith(".down.sql")]
-        + [f for f in folder.glob("*.py") if not f.name.startswith("__")],
-        key=lambda f: _migration_sort_key(f.name),
-    )
+    # Collect both .sql and .py migration files, in apply order — the one
+    # discovery helper that get_files() and status() also use (#268).
+    migration_files = _migration_source_files(folder)
     # Warn (once) about filenames without a recognized NNNNNN_/timestamp prefix —
     # their ordering relative to numbered migrations is undefined, a silent
     # out-of-order-apply footgun.
@@ -1200,11 +1214,9 @@ class Migration:
         return self.status()["pending"]
 
     def get_files(self) -> list[str]:
-        """Return sorted list of all migration filenames on disk (excludes .down.sql)."""
-        folder = Path(self._dir)
-        if not folder.is_dir():
-            return []
-        return sorted(f.name for f in folder.glob("*.sql") if not f.name.endswith(".down.sql"))
+        """Sorted migration filenames on disk — both .sql and .py (the two the
+        runner applies), excluding .down.sql and dunder .py (#268)."""
+        return [f.name for f in _migration_source_files(Path(self._dir))]
 
     def record_migration(self, name: str, batch: int, passed: int = 1) -> None:
         """Insert a record into the migration tracking table.
@@ -1245,11 +1257,9 @@ def _status(db, migration_folder: str = "migrations") -> dict:
 
     executed = _get_executed(db)
 
-    # Get all .sql files sorted by name (excluding .down.sql)
-    sql_files = sorted(
-        f for f in folder.glob("*.sql")
-        if not f.name.endswith(".down.sql")
-    )
+    # Every migration the runner would apply — .sql AND .py — so a pending .py
+    # migration shows up here instead of being invisible until it runs (#268).
+    migration_files = _migration_source_files(folder)
 
     # Build completed list from the database with execution metadata
     result = db.fetch(
@@ -1268,7 +1278,7 @@ def _status(db, migration_folder: str = "migrations") -> dict:
 
     # Build pending list from files not yet executed
     pending = []
-    for sql_file in sql_files:
+    for sql_file in migration_files:
         migration_name = sql_file.stem
         if migration_name not in executed:
             desc = re.sub(r"^\d+_", "", migration_name, count=1).replace("_", " ")
