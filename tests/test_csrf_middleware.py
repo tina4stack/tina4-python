@@ -19,7 +19,8 @@
 #   - POST/PUT/PATCH/DELETE require a valid formToken
 #   - Token accepted in request.body["formToken"] or X-Form-Token header
 #   - Token rejected if sent in query params (security risk)
-#   - Routes marked @noauth() skip CSRF
+#   - Routes marked @no_csrf() skip CSRF (webhook opt-out)
+#   - @noauth() does NOT skip CSRF (#265 / CSRF-DEC-03): a public form stays gated
 #   - Requests with a valid Authorization: Bearer skip CSRF
 #   - Session binding: token session_id must match the request session
 #   - TINA4_CSRF=false disables all checks
@@ -49,7 +50,7 @@ def _forge_hs256(claims: dict, key: str) -> str:
 from tina4_python.core.middleware import CsrfMiddleware
 from tina4_python.core.request import Request
 from tina4_python.core.response import Response
-from tina4_python.core.router import Router, noauth
+from tina4_python.core.router import Router, noauth, no_csrf
 from tina4_python.core.server import _run_before_middleware
 from tina4_python.session import Session
 
@@ -308,27 +309,54 @@ class TestCsrfInvalidToken:
         assert res.status_code == 403
 
 
-# ── @noauth() routes skip CSRF (real handler-metadata path) ────────
+# ── @noauth() stays CSRF-gated; @no_csrf() is the opt-out (#265) ───
 
 
-class TestCsrfNoauthSkip:
-    """These exercise the real ``request._handler`` wiring. Before the fix
-    that sets ``request._handler`` in dispatch, the @noauth skip was dead code
-    on a real Request (slots had no ``_handler`` slot) and a @noauth POST would
-    have been wrongly blocked with 403."""
+class TestCsrfNoauthStillGated:
+    """#265 / CSRF-DEC-03: @noauth() controls IDENTITY (who), not ORIGIN (did
+    our own form send it). A PUBLIC form (@noauth + {{ form_token() }}) must be
+    open to anonymous visitors AND still protected against cross-site posts, so
+    @noauth no longer skips CSRF. The explicit opt-out for server-to-server
+    endpoints is @no_csrf(). These exercise the real ``request._handler`` wiring."""
 
-    def test_noauth_write_route_skips_csrf(self):
+    def test_noauth_write_route_without_token_is_rejected(self):
+        # The regression #265 guards: a @noauth POST with NO form token used to
+        # pass (CSRF skipped); it must now be blocked 403 like any other write.
         @noauth()
         def public_handler(request, response):
             return response({"ok": True})
 
         res = _dispatch(method="POST", handler=public_handler)
+        assert res.passed is False
+        assert res.status_code == 403
+        assert res.envelope()["code"] == "CSRF_INVALID"
+
+    def test_noauth_write_route_with_valid_form_token_passes(self):
+        # The public-form happy path: @noauth + a real form token → 200. Open to
+        # anonymous visitors (no identity) AND CSRF-protected.
+        @noauth()
+        def public_handler(request, response):
+            return response({"ok": True})
+
+        res = _dispatch(method="POST", handler=public_handler,
+                        body={"formToken": _make_form_token()})
+        assert res.passed is True
+        assert res.status_code == 200
+
+    def test_no_csrf_write_route_skips_csrf(self):
+        # The webhook opt-out: @no_csrf() skips CSRF even with no token, so a
+        # server-to-server POST does not regress to 403 when TINA4_CSRF=true.
+        @no_csrf()
+        def webhook_handler(request, response):
+            return response({"ok": True})
+
+        res = _dispatch(method="POST", handler=webhook_handler)
         assert res.passed is True
         assert res.status_code == 200
 
     def test_non_noauth_write_route_still_requires_csrf(self):
-        # A plain handler (no @noauth) with no token is blocked — proving the
-        # skip is specific to @noauth, not a blanket pass.
+        # A plain handler (no @no_csrf) with no token is blocked — proving the
+        # skip is specific to @no_csrf, not a blanket pass.
         res = _dispatch(method="POST", handler=_ok_handler)
         assert res.passed is False
         assert res.status_code == 403
@@ -599,13 +627,31 @@ class TestCsrfConformance:
         res = _dispatch(method="POST")
         assert res.status_code == 403
 
-    # csrf-noauth-exempt
-    def test_a_noauth_write_route_skips_csrf(self):
+    # csrf-noauth-still-gated (CSRF-DEC-03, supersedes csrf-noauth-exempt)
+    def test_a_noauth_write_route_without_a_token_is_rejected(self):
         @noauth()
         def public_handler(request, response):
             return response({"ok": True})
 
         res = _dispatch(method="POST", handler=public_handler)
+        assert res.status_code == 403
+
+    def test_a_noauth_write_route_with_a_valid_form_token_passes(self):
+        @noauth()
+        def public_handler(request, response):
+            return response({"ok": True})
+
+        res = _dispatch(method="POST", handler=public_handler,
+                        body={"formToken": _make_form_token()})
+        assert res.passed is True
+
+    # csrf-no-csrf-exempt (CSRF-DEC-03)
+    def test_a_no_csrf_write_route_skips_csrf(self):
+        @no_csrf()
+        def webhook_handler(request, response):
+            return response({"ok": True})
+
+        res = _dispatch(method="POST", handler=webhook_handler)
         assert res.passed is True
 
     # csrf-bearer-exempt
