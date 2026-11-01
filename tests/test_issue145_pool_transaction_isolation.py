@@ -47,6 +47,16 @@ def _pg():
     return url, os.environ.get("TINA4_TEST_PG_USERNAME", ""), os.environ.get("TINA4_TEST_PG_PASSWORD", "")
 
 
+# This test drives real PostgreSQL across two threads; a pool/lock problem can
+# leave a DB call blocked inside libpq (a C call). The suite's default
+# `--timeout-method=signal` delivers SIGALRM to the main thread only and cannot
+# interrupt a blocking C call, so such a block does not time out — it silently
+# wedges the whole pytest-split group until the CI step is killed (observed:
+# ~7 min of no output, no traceback). A per-test `method="thread"` override turns
+# that into a bounded, diagnosable failure (the watchdog thread dumps every
+# thread's stack and fails the test) instead of a hang. The marker overrides the
+# CLI method for this test only; it never weakens what the test asserts.
+@pytest.mark.timeout(120, method="thread")
 def test_issue145_open_transaction_does_not_leak_to_a_concurrent_pooled_thread():
     url, user, password = _pg()
     db = Database(url, user, password, pool=4)
