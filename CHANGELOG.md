@@ -9,6 +9,18 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.157 - 2026-11-02
+
+### Fixed
+- Frond no longer hangs when a child template's last `{% endblock %}` is
+  malformed (its closing `}` missing). `_extract_blocks` pairs each block with
+  its `{% endblock %}` using a depth counter, and when the inner scan found no
+  closing tag it broke out without advancing - so the outer loop re-found the
+  same `{% block %}` forever and the render never returned or raised. It now
+  skips past the malformed open tag, the same as the already-correct
+  scan-ran-off-the-end path, so a template typo renders (minus the unclosed
+  block) instead of hanging the request. (tina4stack/tina4-python#271)
+
 ## 3.13.156 - 2026-11-01
 
 ### Added
