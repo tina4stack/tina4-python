@@ -2333,7 +2333,12 @@ class Frond:
                 next_close = block_close.search(source, scan)
 
                 if next_close is None:
-                    break  # malformed — no matching endblock
+                    # Malformed — no matching {% endblock %}. Advance past this open
+                    # tag (the same as the loop's `else` when the scan runs off the
+                    # end) so the outer loop makes progress instead of re-finding this
+                    # very block forever and hanging the render (tina4#271).
+                    pos = content_start
+                    break
 
                 if next_open and next_open.start() < next_close.start():
                     depth += 1
