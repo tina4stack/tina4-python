@@ -174,12 +174,7 @@ class KafkaConnector:
                 message = json.loads(msg.value().decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 return None, None
-            key = f"{msg.topic()}:{msg.partition()}:{msg.offset()}"
-            if by_record:
-                self._in_flight_records[key] = msg
-            elif isinstance(message, dict) and message.get("id") is not None:
-                self._in_flight[str(message["id"])] = msg
-            return message, key
+            return message, self._track(msg, message, by_record)
         else:
             self._ensure_topic_metadata(topic)
             offset = self._offsets.get(topic, 0)
@@ -188,6 +183,15 @@ class KafkaConnector:
                 return None, None
             self._offsets[topic] = result["next_offset"]
             return result["message"], f"{topic}:0:{offset}"
+
+    def _track(self, msg, message, by_record: bool) -> str:
+        """Hold a polled record for acknowledge(); return its record key."""
+        key = f"{msg.topic()}:{msg.partition()}:{msg.offset()}"
+        if by_record:
+            self._in_flight_records[key] = msg
+        elif isinstance(message, dict) and message.get("id") is not None:
+            self._in_flight[str(message["id"])] = msg
+        return key
 
     def acknowledge(self, topic: str, message_id: str):
         """Acknowledge THIS message by committing the offset just past it.
