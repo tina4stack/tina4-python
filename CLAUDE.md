@@ -490,8 +490,9 @@ total = QueryBuilder.from_table("orders") \
 results = User.query().where("age > ?", [18]).order_by("name").get()
 
 # Methods: from_table(), select(), where(), or_where(), join(), left_join(),
-#          group_by(), having(), order_by(), limit(), get(), first(), count(),
-#          exists(), to_sql(), to_mongo()
+#          group_by(), having(), order_by(), limit(), offset(), skip(), take(),
+#          get(), first(), count(), exists(), to_sql(), to_mongo()
+#          (skip()/take() are the Mongo/Eloquent aliases of offset()/limit())
 ```
 
 NoSQL support: `to_mongo()` generates MongoDB query documents from the same fluent API.
