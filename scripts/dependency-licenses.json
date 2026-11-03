@@ -4,15 +4,6 @@
   "components": [
     {
       "ecosystem": "pypi",
-      "name": "annotated-doc",
-      "version": "0.0.4",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/annotated-doc/0.0.4/json"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "annotated-types",
       "version": "0.7.0",
       "platform": "",
@@ -22,48 +13,12 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "anyio",
-      "version": "4.14.2",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/anyio/4.14.2/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "asgiref",
-      "version": "3.11.1",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/asgiref/3.11.1/json"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "attrs",
       "version": "26.1.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "MIT",
       "evidence": "https://pypi.org/pypi/attrs/26.1.0/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "blinker",
-      "version": "1.9.0",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "License :: OSI Approved :: MIT License",
-      "evidence": "https://pypi.org/pypi/blinker/1.9.0/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "bottle",
-      "version": "0.13.4",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/bottle/0.13.4/json"
     },
     {
       "ecosystem": "pypi",
@@ -139,39 +94,12 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "cython",
-      "version": "3.2.4",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "Apache-2.0",
-      "evidence": "https://pypi.org/pypi/cython/3.2.4/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "django",
-      "version": "6.1.1",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/django/6.1.1/json"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "dnspython",
       "version": "2.8.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "ISC",
       "evidence": "https://pypi.org/pypi/dnspython/2.8.0/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "fastapi",
-      "version": "0.141.1",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/fastapi/0.141.1/json"
     },
     {
       "ecosystem": "pypi",
@@ -190,15 +118,6 @@
       "lock_license": "NOASSERTION",
       "upstream_declaration": "MIT License\n        \n        Copyright (c) 2020 The Firebird Project (www.firebirdsql.org)\n        \n        Permission is hereby granted, free of charge, to any person obtaining a copy\n        of this software and associated documentation files (the \"Software\"), to deal\n        in the Software without restriction, including without limitation the rights\n        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n        copies of the Software, and to permit persons to whom the Software is\n        furnished to do so, subject to the following conditions:\n        \n        The above copyright notice and this permission notice shall be included in all\n        copies or substantial portions of the Software.\n        \n        THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n        SOFTWARE.",
       "evidence": "https://pypi.org/pypi/firebird-driver/1.10.11/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "flask",
-      "version": "3.1.3",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/flask/3.1.3/json"
     },
     {
       "ecosystem": "pypi",
@@ -238,24 +157,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "itsdangerous",
-      "version": "2.2.0",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "License :: OSI Approved :: BSD License",
-      "evidence": "https://pypi.org/pypi/itsdangerous/2.2.0/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "jinja2",
-      "version": "3.1.6",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "License :: OSI Approved :: BSD License",
-      "evidence": "https://pypi.org/pypi/jinja2/3.1.6/json"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "jsonschema",
       "version": "4.26.0",
       "platform": "",
@@ -289,15 +190,6 @@
       "lock_license": "NOASSERTION",
       "upstream_declaration": "BSD-2-Clause",
       "evidence": "https://pypi.org/pypi/lazy-object-proxy/1.12.0/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "markupsafe",
-      "version": "3.0.3",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/markupsafe/3.0.3/json"
     },
     {
       "ecosystem": "pypi",
@@ -361,15 +253,6 @@
       "lock_license": "NOASSERTION",
       "upstream_declaration": "BSD-3-Clause",
       "evidence": "https://pypi.org/pypi/pika/1.4.2/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "pillow",
-      "version": "12.3.0",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "MIT-CMU",
-      "evidence": "https://pypi.org/pypi/pillow/12.3.0/json"
     },
     {
       "ecosystem": "pypi",
@@ -580,15 +463,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "reportlab",
-      "version": "4.4.10",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "BSD license (see license.txt for details), Copyright (c) 2000-2025, ReportLab Inc.",
-      "evidence": "https://pypi.org/pypi/reportlab/4.4.10/json"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "requests",
       "version": "2.34.2",
       "platform": "",
@@ -625,39 +499,12 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "setuptools",
-      "version": "84.0.0",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "MIT",
-      "evidence": "https://pypi.org/pypi/setuptools/84.0.0/json"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "six",
       "version": "1.17.0",
       "platform": "",
       "lock_license": "NOASSERTION",
       "upstream_declaration": "MIT",
       "evidence": "https://pypi.org/pypi/six/1.17.0/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "sqlparse",
-      "version": "0.6.0",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "License :: OSI Approved :: BSD License",
-      "evidence": "https://pypi.org/pypi/sqlparse/0.6.0/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "starlette",
-      "version": "1.7.0",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/starlette/1.7.0/json"
     },
     {
       "ecosystem": "pypi",
@@ -688,15 +535,6 @@
     },
     {
       "ecosystem": "pypi",
-      "name": "tzdata",
-      "version": "2025.3",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "Apache-2.0",
-      "evidence": "https://pypi.org/pypi/tzdata/2025.3/json"
-    },
-    {
-      "ecosystem": "pypi",
       "name": "urllib3",
       "version": "2.8.0",
       "platform": "",
@@ -712,15 +550,6 @@
       "lock_license": "NOASSERTION",
       "upstream_declaration": "BSD-3-Clause",
       "evidence": "https://pypi.org/pypi/uvicorn/0.42.0/json"
-    },
-    {
-      "ecosystem": "pypi",
-      "name": "werkzeug",
-      "version": "3.1.9",
-      "platform": "",
-      "lock_license": "NOASSERTION",
-      "upstream_declaration": "BSD-3-Clause",
-      "evidence": "https://pypi.org/pypi/werkzeug/3.1.9/json"
     }
   ]
 }
