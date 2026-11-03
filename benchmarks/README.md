@@ -45,7 +45,7 @@ python bench_frond_cache.py
 | Language | Requirements |
 |----------|-------------|
 | **All** | `hey` HTTP benchmarking tool (`brew install hey` or `go install github.com/rakyll/hey@latest`) |
-| **Python** | Python 3.12+, `uv sync` in tina4-python root |
+| **Python** | Python 3.12+. The competitor frameworks live in `benchmarks/requirements.txt` (kept OUT of the framework's `uv.lock`), so install them into their own venv: `uv venv benchmarks/.venv && uv pip install --python benchmarks/.venv -r benchmarks/requirements.txt -e .`, then run the scripts with `uv run --python benchmarks/.venv …` |
 | **PHP** | PHP 8.2+, `composer install` in tina4-php root |
 | **Ruby** | Ruby 3.1+, `bundle install` in tina4-ruby root |
 | **Node.js** | Node.js 20+, `npm install` in tina4-nodejs root |
