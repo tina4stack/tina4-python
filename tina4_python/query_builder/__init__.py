@@ -464,6 +464,48 @@ class QueryBuilder:
             self._offset_val = offset
         return self
 
+    def offset(self, count: int) -> "QueryBuilder":
+        """Set OFFSET (rows to skip) as its own chainable verb.
+
+        ``limit(n, offset)`` buries the offset as a second positional arg; this
+        exposes it on its own, so ``.offset(20).limit(10)`` reads naturally and
+        matches the SQL keyword.
+
+        Args:
+            count: Number of rows to skip.
+
+        Returns:
+            self for chaining.
+        """
+        self._offset_val = count
+        return self
+
+    def skip(self, count: int) -> "QueryBuilder":
+        """Alias for :meth:`offset` — the Mongo/Eloquent name for the same thing.
+
+        Mirrors the DocStore cursor's ``.skip()`` and the ``skip`` key that
+        :meth:`to_mongo` already emits, so a query reads the same whether it
+        targets SQL or MongoDB.
+
+        Args:
+            count: Number of rows to skip.
+
+        Returns:
+            self for chaining.
+        """
+        return self.offset(count)
+
+    def take(self, count: int) -> "QueryBuilder":
+        """Alias for :meth:`limit` — the Eloquent name; pairs with :meth:`skip`.
+
+        Args:
+            count: Maximum rows to return.
+
+        Returns:
+            self for chaining.
+        """
+        return self.limit(count)
+
     def to_sql(self) -> str:
         """Build and return the SQL string without executing.
 
