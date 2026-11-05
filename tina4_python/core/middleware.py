@@ -901,7 +901,9 @@ class RequestLoggerMiddleware:
             start = RequestLoggerMiddleware._start_times.pop(key, None)
         elapsed_ms = round((time.monotonic() - start) * 1000, 3) if start is not None else 0.0
         method = getattr(request, "method", "?")
-        path = getattr(request, "url", None) or getattr(request, "path", "/")
+        # Log the path only. request.url carries the query string, which can hold
+        # OAuth codes, reset tokens and API keys passed as query parameters.
+        path = getattr(request, "path", None) or "/"
         status = getattr(response, "status_code", None) or getattr(response, "status", 0)
         from tina4_python.debug import Log
         Log.info(f"{method} {path} -> {status} ({elapsed_ms}ms)")

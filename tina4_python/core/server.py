@@ -1232,11 +1232,12 @@ def _register_dev_reload_ws() -> None:
     _dev_reload_ws_registered[0] = True
 
 
-def _dev_socket_host_ok(headers: dict) -> bool:
-    """Host allow-list for the /__dev_reload socket (ADR-0082): the same rule
-    the /__dev HTTP gate applies, so a rebound DNS name cannot open it."""
-    from tina4_python.dev_admin import dev_host_allowed
-    return dev_host_allowed(headers)
+def _dev_socket_host_ok(headers: dict, remote_ip: str) -> bool:
+    """Host allow-list and raw-peer gate for the /__dev_reload socket (ADR-0082):
+    the same two rules the /__dev HTTP gate applies, so neither a rebound DNS
+    name nor a remote peer that claims ``Host: localhost`` can open it."""
+    from tina4_python.dev_admin import dev_host_allowed, dev_peer_allowed
+    return dev_host_allowed(headers) and dev_peer_allowed(remote_ip)
 
 
 async def _handle_asgi_websocket(scope: dict, receive, send):
@@ -1254,7 +1255,9 @@ async def _handle_asgi_websocket(scope: dict, receive, send):
     # via websocket.origin_allowed().
     from tina4_python.websocket import origin_allowed, ws_authorized
     _ws_headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-    if path.startswith("/__dev") and not _dev_socket_host_ok(_ws_headers):
+    _ws_client = scope.get("client")
+    if path.startswith("/__dev") and not _dev_socket_host_ok(
+            _ws_headers, _ws_client[0] if _ws_client else ""):
         await send({"type": "websocket.close", "code": 1008})
         return
     if not origin_allowed(_ws_headers):
@@ -1436,8 +1439,11 @@ async def _handle_dev_websocket(reader, writer, headers, path, query_string: str
         writer.close()
         return
 
-    # ADR-0082: the dev reload socket answers only a loopback / TINA4_HOST Host.
-    if path.startswith("/__dev") and not _dev_socket_host_ok(headers):
+    # ADR-0082: the dev reload socket answers only a loopback / TINA4_HOST Host,
+    # from a peer the /__dev HTTP gate would also let in.
+    _peer = writer.get_extra_info("peername")
+    if path.startswith("/__dev") and not _dev_socket_host_ok(
+            headers, _peer[0] if _peer else ""):
         writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
         await writer.drain()
         writer.close()
@@ -3436,6 +3442,11 @@ async def _handle_lifespan(receive, send):
             lifespan_executor, lifespan_runners = _spin_up_background_tasks(
                 lifespan_shutdown
             )
+            # Raw TCP services (feature 142) start on the production server's
+            # loop too — without this a tcp_service would be a silent no-op
+            # under uvicorn/hypercorn/granian, exactly as background() once was.
+            from tina4_python import tcp as _tcp_services
+            await _tcp_services.start_all(os.environ.get("HOST", "0.0.0.0"))
             await send({"type": "lifespan.startup.complete"})
         elif msg["type"] == "lifespan.shutdown":
             if lifespan_shutdown is not None:
@@ -3444,6 +3455,9 @@ async def _handle_lifespan(receive, send):
                 runner.cancel()
             if lifespan_executor is not None:
                 lifespan_executor.shutdown(wait=False, cancel_futures=True)
+            from tina4_python import tcp as _tcp_services
+            _tcp_services.stop_accepting_all()
+            await _tcp_services.drain_all()
             _close_bound_databases()
             Log.info("Server stopped.")
             # Graceful shutdown owns the final reset() (Decision 24 / LOG-I02).
@@ -4671,6 +4685,13 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             except OSError:
                 Log.warning(f"AI port {_ai_port} in use — skipping")
 
+        # Raw TCP services (feature 142, ADR-0102 D1) fold into THIS accept loop
+        # — same process as HTTP, so a device gateway and its dashboard share
+        # config, logging, ORM and queue. Each binds its own port; a worker that
+        # finds the port already bound skips silently (single-owner).
+        from tina4_python import tcp as _tcp_services
+        await _tcp_services.start_all(host)
+
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -4693,6 +4714,8 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
         ]
         for live_server in live_servers:
             live_server.close()
+        # Raw TCP listeners stop accepting at the same moment as HTTP.
+        _tcp_services.stop_accepting_all()
 
         # 2. Stop background work.
         for t in bg_tasks:
@@ -4713,6 +4736,12 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
                         code=CLOSE_GOING_AWAY, reason="server shutting down")
                 except Exception as exc:  # noqa: BLE001 — never fail the exit
                     Log.error(f"Error closing WebSocket connections on shutdown: {exc}")
+                # Raw TCP services drain their live device connections (firing
+                # on_close) alongside the HTTP drain, within the same deadline.
+                try:
+                    await _tcp_services.drain_all()
+                except Exception as exc:  # noqa: BLE001 — never fail the exit
+                    Log.error(f"Error draining TCP services on shutdown: {exc}")
                 for live_server in live_servers:
                     await live_server.wait_closed()
         except TimeoutError:

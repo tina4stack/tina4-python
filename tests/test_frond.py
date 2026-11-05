@@ -339,6 +339,42 @@ class TestFilters:
         r = engine.render_string('{{ v|date("%Y") }}', {"v": "2026-03-29"})
         assert r == "2026"
 
+    # ── Date Filter: Twig/PHP letters (ADR-0103, #292) ─────────
+    # 2026-03-29 14:05:09 is a Sunday.
+
+    def test_date_php_letters_ymd(self, engine):
+        # The Twig-idiomatic spelling must work, not print "Y-m-d".
+        r = engine.render_string('{{ v|date("Y-m-d") }}', {"v": "2026-03-29"})
+        assert r == "2026-03-29"
+
+    def test_date_php_and_strftime_agree(self, engine):
+        ctx = {"v": "2026-03-29"}
+        assert engine.render_string('{{ v|date("Y-m-d") }}', ctx) == \
+            engine.render_string('{{ v|date("%Y-%m-%d") }}', ctx)
+
+    def test_date_php_letters_full(self, engine):
+        from datetime import datetime
+        ctx = {"v": datetime(2026, 3, 29, 14, 5, 9)}
+        assert engine.render_string('{{ v|date("d/m/Y") }}', ctx) == "29/03/2026"
+        assert engine.render_string('{{ v|date("H:i:s") }}', ctx) == "14:05:09"
+        assert engine.render_string('{{ v|date("l, F j, Y") }}', ctx) == "Sunday, March 29, 2026"
+        assert engine.render_string('{{ v|date("D M N w") }}', ctx) == "Sun Mar 7 0"
+        assert engine.render_string('{{ v|date("g:i A") }}', ctx) == "2:05 PM"
+
+    def test_date_strftime_still_works(self, engine):
+        # A format containing % stays strftime — back-compatible.
+        r = engine.render_string('{{ v|date("%Y/%m/%d") }}', {"v": "2026-03-29"})
+        assert r == "2026/03/29"
+
+    def test_date_default_is_iso(self, engine):
+        r = engine.render_string('{{ v|date }}', {"v": "2026-03-29"})
+        assert r == "2026-03-29"
+
+    def test_date_unparseable_returns_value(self, engine):
+        # Negative: a non-date string is returned unchanged, not mangled.
+        r = engine.render_string('{{ v|date("Y-m-d") }}', {"v": "not a date"})
+        assert r == "not a date"
+
     # ── Format Filter ──────────────────────────────────────────
 
     def test_format(self, engine):

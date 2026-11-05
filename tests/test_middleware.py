@@ -286,6 +286,29 @@ class TestRequestLoggerMiddleware:
         assert "POST /api/orders -> 201" in out
         assert "ms)" in out
 
+    def test_after_log_omits_the_query_string(self, capsys):
+        # A real Request built from an ASGI scope: request.url carries the query
+        # string (secrets and all), request.path does not. The log line must use
+        # the path, so OAuth codes / reset tokens / API keys never reach the log.
+        from tina4_python.core.request import Request
+        from tina4_python.debug import Log
+        Log.configure(level="info")
+        req = Request.from_scope({
+            "method": "GET",
+            "path": "/auth/callback",
+            "query_string": b"code=s3cret&token=s3cret2",
+            "headers": [(b"host", b"app.example")],
+            "client": ("127.0.0.1", 5555),
+        })
+        assert "s3cret" in req.url, "precondition: request.url must carry the query string"
+        resp = MockResponse()
+        resp.status_code = 200
+        RequestLoggerMiddleware.before_log(req, resp)
+        RequestLoggerMiddleware.after_log(req, resp)
+        out = capsys.readouterr().out
+        assert "GET /auth/callback -> 200" in out
+        assert "s3cret" not in out, "the query string (and its secrets) must not reach the log"
+
 
 class TestRequestLoggingEnabled:
     """The TINA4_LOG_REQUESTS gate: explicit true/false wins; unset

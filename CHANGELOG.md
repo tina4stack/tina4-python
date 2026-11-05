@@ -9,6 +9,30 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.158 - 2026-11-05
+
+### Added
+- Raw TCP service primitive (feature 142, ADR-0102): an in-process TCP listener with
+  on_connect/on_data/on_close callbacks and a connection registry for server->device push.
+- ORM chainable `skip()` / `offset()` / `take()` on the query builder.
+- CodeQL static security scanning in CI.
+
+### Changed
+- Kafka queue backend commits consumer-group offsets durably, per record, and consumes
+  externally-produced records (ADR-0105).
+- Frond `date` filter accepts both strftime and Twig/PHP `date()` letters (ADR-0103); an
+  unclosed `{% block %}` now fails loud (ADR-0104); `form.collect()` sends every selected
+  option of a `<select multiple>`.
+
+### Security
+- frond.js no longer sends the signed-in bearer token to another origin or accepts a
+  FreshToken from one, and no longer writes the token into a `formToken` field
+  (GHSA-q2gc-fpw5-3v3c).
+- The dev-reload WebSocket is gated on the raw socket peer, not only the Host header (GHSA-5v67-j89x-2v35).
+- Resolves additional advisories shipped in this release; full notes in the documentation.
+- The request logger logs the path only, keeping query-string secrets out of the log (GHSA-c2qv-79ww-9pfw).
+- uv.lock drops the unused pillow dependency and bumps dnspython/certifi off vulnerable releases.
+
 ## 3.13.157 - 2026-11-02
 
 ### Fixed

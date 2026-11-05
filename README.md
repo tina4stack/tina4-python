@@ -629,6 +629,8 @@ tina4python build                  # Build distributable package
 tina4python ai [--all]             # Detect AI tools and install context
 ```
 
+To add the Tina4 AI skills to your coding tool, run `tina4 skills [claude|codex|cursor|all]`. They include `tina4-test-plan`, which writes a manual test plan as a spreadsheet and a PDF.
+
 ### Production Server Auto-Detection
 
 `tina4 serve` automatically detects and uses the best available production server:

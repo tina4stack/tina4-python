@@ -59,14 +59,16 @@ class KafkaBackend(TopicDeadLetterMixin):
         return self._backend.enqueue(self._topic, msg)
 
     def pop(self, queue_ref) -> Job | None:
-        result = self._backend.dequeue(self._topic)
+        result, record = self._backend.dequeue_record(self._topic)
         if result is None:
             return None
-        msg_id = result.get("id", "unknown")
+        # A record produced outside Tina4 has no payload id; its coordinates
+        # are unique, where "unknown" was shared by every such job.
+        msg_id = result.get("id", record)
         payload = result.get("payload", result)
         attempts = result.get("attempts", 0)
         priority = result.get("priority", 0)
-        return Job(
+        job = Job(
             queue=queue_ref,
             job_id=msg_id,
             topic=self._topic,
@@ -74,6 +76,13 @@ class KafkaBackend(TopicDeadLetterMixin):
             priority=priority,
             attempts=attempts,
         )
+        # Commit by the record, never by the payload id (#274).
+        job._kafka_record = record
+        return job
+
+    @staticmethod
+    def _record(job: Job) -> str:
+        return getattr(job, "_kafka_record", None) or str(job.id)
 
     def size(self, status: str = "pending") -> int:
         if status != "pending":
@@ -161,7 +170,7 @@ class KafkaBackend(TopicDeadLetterMixin):
         )
 
     def complete(self, job: Job):
-        self._backend.acknowledge(self._topic, str(job.id))
+        self._backend.acknowledge(self._topic, self._record(job))
 
     def fail(self, job: Job, error: str = ""):
         """Record a failed attempt, then either retry it or dead-letter it.
@@ -192,7 +201,7 @@ class KafkaBackend(TopicDeadLetterMixin):
                 "attempts": job.attempts,
                 "error": error,
             })
-        self._backend.acknowledge(self._topic, str(job.id))
+        self._backend.acknowledge(self._topic, self._record(job))
 
     def reject(self, job: Job, reason: str = ""):
         """Dead-letter the job immediately — no retry (ADR-0023 reject()).
@@ -206,13 +215,13 @@ class KafkaBackend(TopicDeadLetterMixin):
         msg = {"id": job.id, "payload": job.data,
                "attempts": job.attempts, "error": reason}
         self._backend.dead_letter(self._topic, msg)
-        self._backend.acknowledge(self._topic, str(job.id))
+        self._backend.acknowledge(self._topic, self._record(job))
 
     def retry(self, job: Job, delay_seconds: int = 0):
         job.attempts += 1
         msg = {"payload": job.data, "priority": job.priority, "attempts": job.attempts}
         self._backend.enqueue(self._topic, msg)
-        self._backend.acknowledge(self._topic, str(job.id))
+        self._backend.acknowledge(self._topic, self._record(job))
 
     def close(self) -> None:
         """Flush the producer, leave the consumer group, and release the socket.

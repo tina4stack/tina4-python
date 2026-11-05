@@ -15,7 +15,7 @@ Twig-like template engine built from scratch.
 """
 import inspect
 
-from tina4_python.frond.engine import Frond
+from tina4_python.frond.engine import Frond, TemplateSyntaxError
 
 
 async def live_endpoint(name, request, response):

@@ -325,6 +325,65 @@ class TestLimit:
 
 
 # ---------------------------------------------------------------------------
+# 10b. skip() / offset() / take() — chainable pagination verbs
+#      (an AI harness reached for .skip() and it did not exist; tina4#skip)
+# ---------------------------------------------------------------------------
+
+class TestSkipOffsetTake:
+    def test_skip_skips_leading_rows(self, db):
+        result = (
+            QueryBuilder.from_table("users", db)
+            .order_by("id ASC")
+            .skip(2)
+            .limit(2)
+            .get()
+        )
+        # Skips Alice + Bob, returns Charlie + Diana
+        assert [r["name"] for r in result.records] == ["Charlie", "Diana"]
+
+    def test_offset_is_the_sql_native_alias(self, db):
+        result = (
+            QueryBuilder.from_table("users", db)
+            .order_by("id ASC")
+            .offset(2)
+            .limit(2)
+            .get()
+        )
+        assert [r["name"] for r in result.records] == ["Charlie", "Diana"]
+
+    def test_take_sets_the_limit(self, db):
+        result = (
+            QueryBuilder.from_table("users", db)
+            .order_by("id ASC")
+            .take(3)
+            .get()
+        )
+        assert [r["name"] for r in result.records] == ["Alice", "Bob", "Charlie"]
+
+    def test_skip_past_the_end_returns_empty_not_error(self, db):
+        # Negative: skipping beyond the row count yields no rows, not a crash.
+        result = (
+            QueryBuilder.from_table("users", db)
+            .order_by("id ASC")
+            .skip(99)
+            .limit(5)
+            .get()
+        )
+        assert result.records == []
+
+    def test_skip_flows_into_to_mongo(self, db):
+        # The Mongo path already names this concept "skip" — the SQL verb agrees.
+        mongo = QueryBuilder.from_table("users", db).skip(5).to_mongo()
+        assert mongo["skip"] == 5
+
+    def test_methods_return_the_builder(self, db):
+        qb = QueryBuilder.from_table("users", db)
+        assert qb.skip(1) is qb
+        assert qb.offset(1) is qb
+        assert qb.take(1) is qb
+
+
+# ---------------------------------------------------------------------------
 # 11. to_sql() generates correct SQL string
 # ---------------------------------------------------------------------------
 

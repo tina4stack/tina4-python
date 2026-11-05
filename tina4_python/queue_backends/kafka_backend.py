@@ -79,6 +79,12 @@ class KafkaConnector:
         # single "last message" slot committed past whichever record happened
         # to be polled most recently, burying anything failed before it.
         self._in_flight: dict[str, object] = {}
+        # The same polled records keyed by their Kafka coordinates
+        # (topic:partition:offset) instead, for dequeue_record(). A payload id
+        # is not a record identity: a record produced outside Tina4 (CDC, other
+        # services) has none, so it was never committed, and two records that
+        # share one overwrote each other's slot.
+        self._in_flight_records: dict[str, object] = {}
 
         # Try confluent-kafka first
         try:
@@ -126,6 +132,17 @@ class KafkaConnector:
 
     def dequeue(self, topic: str) -> dict | None:
         """Consume a message from a Kafka topic. Returns message dict or None."""
+        return self._dequeue(topic, by_record=False)[0]
+
+    def dequeue_record(self, topic: str) -> tuple[dict | None, str | None]:
+        """Consume a message and return it with its record key.
+
+        The key is ``topic:partition:offset``. Pass it to ``acknowledge()`` to
+        commit exactly that record, whatever its payload holds.
+        """
+        return self._dequeue(topic, by_record=True)
+
+    def _dequeue(self, topic: str, by_record: bool) -> tuple[dict | None, str | None]:
         self._ensure_connected()
 
         if self._use_confluent:
@@ -152,27 +169,40 @@ class KafkaConnector:
                 if time.monotonic() >= deadline:
                     break
             if msg is None:
-                return None
+                return None, None
             try:
                 message = json.loads(msg.value().decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
-                return None
-            if isinstance(message, dict) and message.get("id") is not None:
-                self._in_flight[str(message["id"])] = msg
-            return message
+                return None, None
+            return message, self._track(msg, message, by_record)
         else:
             self._ensure_topic_metadata(topic)
             offset = self._offsets.get(topic, 0)
             result = self._send_fetch(topic, offset)
             if result is None:
-                return None
+                return None, None
             self._offsets[topic] = result["next_offset"]
-            return result["message"]
+            return result["message"], f"{topic}:0:{offset}"
+
+    def _track(self, msg, message, by_record: bool) -> str:
+        """Hold a polled record for acknowledge(); return its record key."""
+        key = f"{msg.topic()}:{msg.partition()}:{msg.offset()}"
+        if by_record:
+            self._in_flight_records[key] = msg
+        elif isinstance(message, dict) and message.get("id") is not None:
+            self._in_flight[str(message["id"])] = msg
+        return key
 
     def acknowledge(self, topic: str, message_id: str):
-        """Acknowledge THIS message by committing the offset just past it."""
+        """Acknowledge THIS message by committing the offset just past it.
+
+        ``message_id`` is a record key from ``dequeue_record()``, or the
+        payload ``id`` of a message returned by ``dequeue()``.
+        """
         if self._use_confluent:
-            msg = self._in_flight.pop(str(message_id), None)
+            msg = self._in_flight_records.pop(str(message_id), None)
+            if msg is None:
+                msg = self._in_flight.pop(str(message_id), None)
             if self._consumer and msg is not None:
                 self._consumer.commit(message=msg)
         # For raw protocol, offset advancement in dequeue serves as acknowledgment
