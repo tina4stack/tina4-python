@@ -1,0 +1,81 @@
+{
+  "project": "Example App",
+  "environment": "Staging",
+  "url": "https://staging.example.com",
+  "date": "2026-01-01",
+  "sends_real_email": true,
+  "blocker_areas": ["security", "money", "stock", "data integrity", "login"],
+  "cleanup": "After the run, delete the test orders and accounts you created.",
+  "warnings": [
+    "Run the Orders section before Reports; reports read the orders created there."
+  ],
+  "regression_priority": ["ORD-CREATE", "AUTH-LOGIN"],
+  "accounts": [
+    ["admin-full", "Administrator, all permissions", "Use for setup and clean-up"],
+    ["staff-readonly", "Staff, read-only permission set", "Every write must be refused at the API"],
+    ["staff-noperm", "Staff, no permissions", "Sees nothing beyond their own account"],
+    ["customer-a", "Customer, account A", "Isolation pair with customer-b"],
+    ["customer-b", "Customer, account B", "Must never see account A data"]
+  ],
+  "seed": [
+    ["Customer with invoices in every ageing bucket", "SEED-AGEING", "Known totals so Reports can assert exact figures"],
+    ["Product with stock of exactly 5", "SEED-STOCK-5", "Boundary for oversell cases"]
+  ],
+  "sections": [
+    {
+      "prefix": "AUTH-LOGIN", "group": "Public & account", "area": "Sign in", "route": "/login",
+      "role": "Any", "precondition": "Signed out",
+      "cases": [
+        ["Open the page", "Form shows email, password, show/hide toggle and Forgot password link; no console errors", "P2"],
+        ["Sign in with valid credentials", "Lands on the home page for that role; session survives a reload", "P1"],
+        ["Submit a wrong password for a valid user", "Clear generic error; no hint whether the email exists", "P1"],
+        ["Submit an unknown email", "Same error text and similar response time as a wrong password", "P1"],
+        ["Submit empty email and empty password", "Inline validation; no request sent or a clean 4xx", "P2"],
+        ["Submit a wrong password 10 times in a row", "Lockout or rate limit applies and recovery path is stated", "P1"],
+        ["Open a protected URL while signed out", "Redirected to sign in, then returned to the URL after login", "P2"]
+      ]
+    },
+    {
+      "prefix": "AUTH-ACCESS", "group": "Public & account", "area": "Access control", "route": "various",
+      "role": "staff-readonly, staff-noperm, customer-a", "precondition": "Signed in as each role in turn",
+      "cases": [
+        ["Paste an admin-only URL as each lower role", "Refused or redirected; no admin data rendered", "P1"],
+        ["As customer-a, change an order ID in the URL to one owned by customer-b", "404 or 403; no data from customer-b", "P1"],
+        ["As staff-readonly, call a write endpoint directly with a valid token", "403; nothing changed in the database", "P1"],
+        ["Call any write endpoint with no token and with an expired token", "401; nothing changed", "P1"]
+      ]
+    },
+    {
+      "prefix": "ORD-CREATE", "group": "Orders", "area": "Create an order", "route": "/orders/new",
+      "role": "customer-a", "precondition": "Product SEED-STOCK-5 exists",
+      "cases": [
+        ["Order 1 unit of SEED-STOCK-5", "Order saved; stock falls to 4; confirmation email arrives within 2 minutes", "P1"],
+        ["Order exactly 5 units", "Accepted; stock falls to 0", "P1"],
+        ["Order 6 units", "Refused with a plain message that says what to do; stock unchanged", "P1"],
+        ["Order 0, -1 and 1.5 units", "Each refused with a field-level message", "P2"],
+        ["Double-click Submit", "Exactly one order created", "P1"],
+        ["Lose the connection during submit, then retry", "One order, no duplicate and no lost basket", "P2"],
+        ["Reload after saving", "Order and its totals persist and match what was entered", "P1"]
+      ]
+    },
+    {
+      "prefix": "RPT-AGEING", "group": "Reports", "area": "Ageing", "route": "/reports/ageing",
+      "role": "admin-full", "precondition": "SEED-AGEING prepared",
+      "cases": [
+        ["Open the report for the seeded customer", "Each bucket total equals the seed value; grand total equals the sum of buckets", "P1"],
+        ["Filter to a customer with no invoices", "Empty state with a clear message, no error", "P3"],
+        ["Export the report", "File opens and matches the on-screen figures", "P2"]
+      ]
+    },
+    {
+      "prefix": "SYS-QUALITY", "group": "Cross-cutting", "area": "Responsive, browsers, accessibility", "route": "all pages",
+      "role": "Any", "precondition": "None",
+      "cases": [
+        ["View key pages at 375, 768 and 1440 px wide", "No horizontal scroll, no clipped controls", "P2"],
+        ["Repeat the main flow in the latest Chrome, Firefox and Safari", "Same result in each", "P2"],
+        ["Complete sign in using the keyboard only", "Logical tab order, visible focus, form submits with Enter", "P2"],
+        ["Clean-up: remove all test orders and accounts created", "Environment returned to the seeded state", "P3"]
+      ]
+    }
+  ]
+}
