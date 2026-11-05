@@ -241,7 +241,7 @@ Frond.modal({ title: "Edit User", body: "<form>...</form>" });
 ```javascript
 Frond.config({ auth: true });
 Frond.setToken(jwt);        // stored in memory
-// All subsequent requests auto-attach the Bearer token
+// Subsequent same-origin requests auto-attach the Bearer token (never cross-origin)
 ```
 
 ### WebSocket
