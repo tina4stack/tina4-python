@@ -143,7 +143,7 @@ def test_a_foreign_host_cannot_reach_mcp(project_dir):
     assert status == 403
 
 
-def _ws_open(host):
+def _ws_open(host, client=("127.0.0.1", 40000)):
     """Open the real /__dev_reload socket through the ASGI app; return the first
     message the server sends (websocket.accept or websocket.close)."""
     from tina4_python.core import server
@@ -161,7 +161,7 @@ def _ws_open(host):
 
     scope = {"type": "websocket", "path": "/__dev_reload", "raw_path": b"/__dev_reload",
              "query_string": b"", "headers": [(b"host", host.encode())],
-             "client": ("127.0.0.1", 40000), "server": ("localhost", 7145),
+             "client": client, "server": ("localhost", 7145),
              "scheme": "ws", "subprotocols": []}
     asyncio.run(asyncio.wait_for(server.app(scope, receive, send), 5))
     return sent[0]["type"]
@@ -170,6 +170,50 @@ def _ws_open(host):
 def test_a_foreign_host_cannot_open_the_reload_socket(project_dir):
     assert _ws_open("rebind.evil.example:7145") == "websocket.close"
     assert _ws_open("localhost:7145") == "websocket.accept"
+
+
+def test_a_remote_peer_cannot_open_the_reload_socket_by_claiming_localhost(project_dir, monkeypatch):
+    # The Host header is the caller's to choose; the raw peer is not.
+    monkeypatch.delenv("TINA4_DEV_ALLOWED_PEERS", raising=False)
+    assert _ws_open("localhost:7145", client=("203.0.113.9", 5555)) == "websocket.close"
+    monkeypatch.setenv("TINA4_DEV_ALLOWED_PEERS", "203.0.113.0/24")
+    assert _ws_open("localhost:7145", client=("203.0.113.9", 5555)) == "websocket.accept"
+
+
+def _native_ws_status(peer):
+    """Upgrade /__dev_reload on the built-in server's own handler, with the socket
+    reporting ``peer``; return the status line it answers."""
+    import socket
+    from tina4_python.core import server
+
+    server._register_dev_reload_ws()
+
+    async def drive():
+        s_srv, s_cli = socket.socketpair()
+        for s in (s_srv, s_cli):
+            s.setblocking(False)
+        sr, sw = await asyncio.open_connection(sock=s_srv)
+        cr, cw = await asyncio.open_connection(sock=s_cli)
+        real = sw.get_extra_info
+        sw.get_extra_info = lambda name, default=None: peer if name == "peername" else real(name, default)
+        headers = {"host": "localhost:7145", "upgrade": "websocket", "connection": "Upgrade",
+                   "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==", "sec-websocket-version": "13"}
+        task = asyncio.create_task(server._handle_dev_websocket(sr, sw, headers, "/__dev_reload", ""))
+        try:
+            data = await asyncio.wait_for(cr.readuntil(b"\r\n"), timeout=2)
+        finally:
+            cw.close()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return data.decode("latin1").strip()
+
+    return asyncio.run(drive())
+
+
+def test_the_built_in_server_refuses_the_reload_socket_to_a_remote_peer(project_dir, monkeypatch):
+    monkeypatch.delenv("TINA4_DEV_ALLOWED_PEERS", raising=False)
+    assert _native_ws_status(("203.0.113.9", 5555)) == "HTTP/1.1 403 Forbidden"
+    assert _native_ws_status(("127.0.0.1", 5555)) == "HTTP/1.1 101 Switching Protocols"
 
 
 # ── Only TINA4_MCP_TOKEN unlocks the remote dev surface ──────────────────────

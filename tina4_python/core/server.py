@@ -1232,11 +1232,12 @@ def _register_dev_reload_ws() -> None:
     _dev_reload_ws_registered[0] = True
 
 
-def _dev_socket_host_ok(headers: dict) -> bool:
-    """Host allow-list for the /__dev_reload socket (ADR-0082): the same rule
-    the /__dev HTTP gate applies, so a rebound DNS name cannot open it."""
-    from tina4_python.dev_admin import dev_host_allowed
-    return dev_host_allowed(headers)
+def _dev_socket_host_ok(headers: dict, remote_ip: str) -> bool:
+    """Host allow-list and raw-peer gate for the /__dev_reload socket (ADR-0082):
+    the same two rules the /__dev HTTP gate applies, so neither a rebound DNS
+    name nor a remote peer that claims ``Host: localhost`` can open it."""
+    from tina4_python.dev_admin import dev_host_allowed, dev_peer_allowed
+    return dev_host_allowed(headers) and dev_peer_allowed(remote_ip)
 
 
 async def _handle_asgi_websocket(scope: dict, receive, send):
@@ -1254,7 +1255,9 @@ async def _handle_asgi_websocket(scope: dict, receive, send):
     # via websocket.origin_allowed().
     from tina4_python.websocket import origin_allowed, ws_authorized
     _ws_headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
-    if path.startswith("/__dev") and not _dev_socket_host_ok(_ws_headers):
+    _ws_client = scope.get("client")
+    if path.startswith("/__dev") and not _dev_socket_host_ok(
+            _ws_headers, _ws_client[0] if _ws_client else ""):
         await send({"type": "websocket.close", "code": 1008})
         return
     if not origin_allowed(_ws_headers):
@@ -1436,8 +1439,11 @@ async def _handle_dev_websocket(reader, writer, headers, path, query_string: str
         writer.close()
         return
 
-    # ADR-0082: the dev reload socket answers only a loopback / TINA4_HOST Host.
-    if path.startswith("/__dev") and not _dev_socket_host_ok(headers):
+    # ADR-0082: the dev reload socket answers only a loopback / TINA4_HOST Host,
+    # from a peer the /__dev HTTP gate would also let in.
+    _peer = writer.get_extra_info("peername")
+    if path.startswith("/__dev") and not _dev_socket_host_ok(
+            headers, _peer[0] if _peer else ""):
         writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
         await writer.drain()
         writer.close()
