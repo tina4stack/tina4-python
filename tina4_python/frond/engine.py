@@ -27,7 +27,7 @@ import secrets
 import time
 from functools import lru_cache
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, date
 from types import SimpleNamespace
 
 from tina4_python.auth import Auth as _FrondAuth, _resolve_secret
@@ -260,6 +260,16 @@ _BLOCK_RE = re.compile(
 # that nests another block inside it.
 _BLOCK_OPEN_RE = re.compile(r"\{%[-\s]*block\s+(\w+)\s*[-]?%\}")
 _BLOCK_CLOSE_RE = re.compile(r"\{%[-\s]*endblock\s*[-]?%\}")
+
+
+class TemplateSyntaxError(Exception):
+    """A Frond template is malformed and cannot be rendered safely (ADR-0104).
+
+    Raised for an unclosed ``{% block %}`` or a cut-short ``{% endblock %``
+    (its ``%}`` missing), rather than silently rendering an empty block. Failing
+    loud surfaces the real cause to a developer — or an AI agent — instead of a
+    page served 200 with its body quietly dropped.
+    """
 
 
 # ── Ternary helpers ────────────────────────────────────────────
@@ -1689,17 +1699,90 @@ def _number_format(value, decimals=0, decimal_point=".", thousands_sep=","):
     return f"{sign}{grouped}"
 
 
+_PHP_MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+# weekday(): Monday == 0 .. Sunday == 6
+_PHP_DAYS = [
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+]
+
+
+def _php_date(dt, fmt: str) -> str:
+    """Format a date/datetime with Twig/PHP ``date()`` letters (English names).
+
+    Letters are mapped character by character; a backslash escapes the next
+    character, and any unmapped character is emitted literally (PHP's own
+    behaviour). English month/day names are hardcoded so the output is
+    identical across every Tina4 framework regardless of the host locale.
+    """
+    hour = getattr(dt, "hour", 0)
+    minute = getattr(dt, "minute", 0)
+    second = getattr(dt, "second", 0)
+    h12 = hour % 12 or 12
+    wd = dt.weekday()           # Monday == 0 .. Sunday == 6
+    out = []
+    i, n = 0, len(fmt)
+    while i < n:
+        c = fmt[i]
+        if c == "\\" and i + 1 < n:
+            out.append(fmt[i + 1])
+            i += 2
+            continue
+        mapping = {
+            "Y": "%04d" % dt.year,
+            "y": "%02d" % (dt.year % 100),
+            "m": "%02d" % dt.month,
+            "n": str(dt.month),
+            "d": "%02d" % dt.day,
+            "j": str(dt.day),
+            "H": "%02d" % hour,
+            "G": str(hour),
+            "h": "%02d" % h12,
+            "g": str(h12),
+            "i": "%02d" % minute,
+            "s": "%02d" % second,
+            "A": "AM" if hour < 12 else "PM",
+            "a": "am" if hour < 12 else "pm",
+            "D": _PHP_DAYS[wd][:3],
+            "l": _PHP_DAYS[wd],
+            "M": _PHP_MONTHS[dt.month - 1][:3],
+            "F": _PHP_MONTHS[dt.month - 1],
+            "N": str(wd + 1),            # ISO day of week: Monday == 1 .. Sunday == 7
+            "w": str((wd + 1) % 7),      # PHP day of week: Sunday == 0 .. Saturday == 6
+        }
+        out.append(mapping.get(c, c))
+        i += 1
+    return "".join(out)
+
+
 def _date_filter(value, fmt: str) -> str:
-    """Format a date/datetime value."""
+    """Format a date/datetime value (ADR-0103).
+
+    A format that contains ``%`` is treated as strftime (back-compatible with
+    existing templates); any other format is treated as Twig/PHP ``date()``
+    letters, so the Twig-idiomatic ``date("Y-m-d")`` works and matches
+    ``date("%Y-%m-%d")``. An unparseable value is returned unchanged.
+    """
     if isinstance(value, datetime):
-        return value.strftime(fmt)
-    if isinstance(value, str):
+        dt = value
+    elif isinstance(value, date):
+        dt = value
+    elif isinstance(value, bool):
+        return str(value)
+    elif isinstance(value, (int, float)):
+        dt = datetime.fromtimestamp(value)
+    elif isinstance(value, str):
         try:
             dt = datetime.fromisoformat(value)
-            return dt.strftime(fmt)
         except ValueError:
             return value
-    return str(value)
+    else:
+        return str(value)
+    if "%" in fmt:
+        return dt.strftime(fmt)
+    return _php_date(dt, fmt)
 
 
 def _wordwrap(text: str, width: int) -> str:
@@ -2333,12 +2416,15 @@ class Frond:
                 next_close = block_close.search(source, scan)
 
                 if next_close is None:
-                    # Malformed — no matching {% endblock %}. Advance past this open
-                    # tag (the same as the loop's `else` when the scan runs off the
-                    # end) so the outer loop makes progress instead of re-finding this
-                    # very block forever and hanging the render (tina4#271).
-                    pos = content_start
-                    break
+                    # Unclosed {% block %} (or a cut-short {% endblock %} whose
+                    # closing %} is missing, so the close regex never matches).
+                    # Fail loud rather than silently dropping the block body
+                    # (tina4#286/#290). This still cannot hang (tina4#271): we
+                    # raise instead of looping.
+                    raise TemplateSyntaxError(
+                        f"{{% block {name} %}} is never closed "
+                        f"(missing or malformed {{% endblock %}})"
+                    )
 
                 if next_open and next_open.start() < next_close.start():
                     depth += 1
@@ -2351,7 +2437,12 @@ class Frond:
                         break
                     scan = next_close.end()
             else:
-                pos = content_start  # malformed, skip forward
+                # Ran off the end with the block still open (more opens than
+                # closes) — unclosed; fail loud (tina4#286/#290).
+                raise TemplateSyntaxError(
+                    f"{{% block {name} %}} is never closed "
+                    f"(missing or malformed {{% endblock %}})"
+                )
 
         return blocks
 
@@ -2407,7 +2498,7 @@ class Frond:
                 next_close = block_close.search(source, scan)
 
                 if next_close is None:
-                    break  # malformed — no matching endblock
+                    break  # unclosed — raised below
 
                 if next_open and next_open.start() < next_close.start():
                     depth += 1
@@ -2420,12 +2511,12 @@ class Frond:
                         scan = next_close.end()
 
             if close_match is None:
-                # Malformed template (no matching endblock) — keep the rest
-                # verbatim rather than lose it, the same leniency
-                # _extract_blocks applies to this case.
-                pieces.append(source[m_open.start():])
-                pos = length
-                break
+                # Unclosed {% block %} — fail loud (tina4#286/#290) rather than
+                # silently keeping the rest verbatim, matching _extract_blocks.
+                raise TemplateSyntaxError(
+                    f"{{% block {name} %}} is never closed "
+                    f"(missing or malformed {{% endblock %}})"
+                )
 
             parent_content = source[content_start:close_match.start()]
             block_source = blocks.get(name, parent_content)
