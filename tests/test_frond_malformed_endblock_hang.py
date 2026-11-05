@@ -13,11 +13,11 @@ fast instead of hanging the suite until the global timeout.
 
 import pytest
 
-from tina4_python.frond.engine import Frond
+from tina4_python.frond.engine import Frond, TemplateSyntaxError
 
 
 @pytest.mark.timeout(10)
-def test_malformed_endblock_in_child_does_not_hang(tmp_path):
+def test_malformed_endblock_in_child_fails_loud_without_hanging(tmp_path):
     (tmp_path / "base.twig").write_text(
         "<html>{% block content %}default{% endblock %}</html>"
     )
@@ -30,9 +30,11 @@ def test_malformed_endblock_in_child_does_not_hang(tmp_path):
     )
 
     engine = Frond(template_dir=str(tmp_path))
-    # Must RETURN (not hang, not raise) on a malformed template.
-    result = engine.render("page.twig", {})
-    assert isinstance(result, str)
+    # Must FAIL LOUD (tina4#286/#290) — still bounded, so a reintroduced hang
+    # trips the timeout rather than hanging the suite (tina4#271).
+    with pytest.raises(TemplateSyntaxError) as exc:
+        engine.render("page.twig", {})
+    assert "content" in str(exc.value)
 
 
 @pytest.mark.timeout(10)
@@ -54,14 +56,17 @@ def test_wellformed_inheritance_still_renders(tmp_path):
 
 
 @pytest.mark.timeout(10)
-def test_extract_blocks_skips_a_malformed_block_but_finds_later_ones():
-    # Unit-level: a malformed (unclosed) block is skipped, and a well-formed block
-    # after it is still extracted — progress is made, no infinite loop.
+def test_extract_blocks_raises_on_a_malformed_block():
+    # Unit-level: a malformed (unclosed) block fails loud (tina4#286/#290),
+    # still bounded so a reintroduced hang trips the timeout (tina4#271).
     engine = Frond()
-    blocks = engine._extract_blocks(
-        "{% block bad %}no close... {% block good %}Y{% endblock %}"
-    )
-    assert blocks == {"good": "Y"}
+    # An unclosed outer block whose first {% endblock %} belongs to a nested
+    # block leaves the outer open → raise.
+    with pytest.raises(TemplateSyntaxError):
+        engine._extract_blocks(
+            "{% block bad %}no close... {% block good %}Y{% endblock %}"
+        )
 
-    # A single unclosed block yields nothing and still returns.
-    assert engine._extract_blocks("{% block lonely %}body with no end") == {}
+    # A single unclosed block raises too.
+    with pytest.raises(TemplateSyntaxError):
+        engine._extract_blocks("{% block lonely %}body with no end")
