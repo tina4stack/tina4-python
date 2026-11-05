@@ -1418,6 +1418,69 @@ class TestKafkaJobLifecycleLive:
         finally:
             self._close(survivor)
 
+    @staticmethod
+    def _produce_external(topic, values):
+        """Produce values the way a non-Tina4 producer (CDC, another service) does."""
+        import json
+        from confluent_kafka import Producer
+        producer = Producer({"bootstrap.servers": _KAFKA_BROKER})
+        for value in values:
+            producer.produce(topic, value=json.dumps(value))
+        assert producer.flush(10) == 0, "external producer did not deliver"
+
+    def _resume(self, topic, group):
+        """A restarted worker in the same group: what does it pop first?"""
+        survivor = self._queue(topic, group=group)
+        try:
+            os.environ["TINA4_KAFKA_ASSIGN_TIMEOUT"] = "10"
+            job = survivor.pop()
+            return job and job.payload
+        finally:
+            os.environ.pop("TINA4_KAFKA_ASSIGN_TIMEOUT", None)
+            self._close(survivor)
+
+    def test_kafka_complete_commits_a_record_with_no_payload_id(self):
+        """A record produced outside Tina4 carries no "id"; completing it must still commit.
+
+        Regression (#274): the commit was keyed by the payload id, so such a record
+        was never committed and a restarted group replayed the whole topic.
+        """
+        topic = "tina4_test_" + secrets.token_hex(8)
+        group = "tina4_test_" + secrets.token_hex(8)
+        self._produce_external(topic, [{"n": 0}, {"n": 1}])
+        queue = self._queue(topic, group=group)
+        try:
+            jobs = [queue.pop(), queue.pop()]
+            assert all(jobs), "real Kafka did not return the external records"
+            assert jobs[0].id != jobs[1].id, "two different records got the same job id"
+            for job in jobs:
+                job.complete()
+        finally:
+            self._close(queue)
+        assert self._resume(topic, group) is None, (
+            "completed records were replayed to a restarted worker: the offset was never committed"
+        )
+
+    def test_kafka_records_sharing_a_payload_id_commit_separately(self):
+        """Completing the first of two records with the same payload id commits only the first.
+
+        Regression (#274): both were held under one id, so acknowledging the first
+        committed past the second while it was still being processed.
+        """
+        topic = "tina4_test_" + secrets.token_hex(8)
+        group = "tina4_test_" + secrets.token_hex(8)
+        self._produce_external(topic, [{"id": "same", "n": 0}, {"id": "same", "n": 1}])
+        queue = self._queue(topic, group=group)
+        try:
+            first, second = queue.pop(), queue.pop()
+            assert first and second
+            first.complete()
+        finally:
+            self._close(queue)
+        assert self._resume(topic, group) == {"id": "same", "n": 1}, (
+            "completing the first record buried the second, unfinished one"
+        )
+
     def test_kafka_fail_past_max_retries_reaches_dead_letters(self):
         """attempts must survive the re-produce so the job can finally die.
 
