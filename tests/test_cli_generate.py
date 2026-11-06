@@ -1064,3 +1064,88 @@ def test_auth_test_bakes_a_secure_secret(tmp_project):
     _gen_auth()
     secret = _generated_secret(tmp_project / "tests/test_auth.py")
     assert len(secret) >= 32, f"generated auth-test secret is {len(secret)} bytes (< 32): {secret!r}"
+
+
+class TestViewMigrationStub:
+    """`migrate:create create_*_view` scaffolds a VIEW, not a table (#297).
+
+    Emitting a runnable `CREATE TABLE <name>_view` made `tina4 migrate` build a
+    table and never the view, silently, and the hint said "add columns" when the
+    file really needed a different statement.
+    """
+
+    def test_view_name_scaffolds_a_view_not_a_table(self, tmp_project):
+        _gen_migration("create_open_tickets_view", {})
+        sql = next(Path("migrations").glob("*create_open_tickets_view.sql")).read_text()
+        # No runnable CREATE TABLE for a view name.
+        assert "CREATE TABLE" not in sql
+        # Guidance mentions CREATE VIEW, but only as a comment (kept pending).
+        assert "CREATE VIEW" in sql
+        for line in sql.splitlines():
+            if "CREATE VIEW" in line:
+                assert line.lstrip().startswith("--"), f"runnable CREATE VIEW: {line!r}"
+        # Bears a tina4:edit marker AND has no executable SQL → kept pending (#288).
+        from tina4_python.migration.runner import _has_executable_sql
+        assert "tina4:edit" in sql
+        assert _has_executable_sql(sql) is False
+
+    def test_view_down_drops_the_view(self, tmp_project):
+        _gen_migration("create_open_tickets_view", {})
+        down = next(Path("migrations").glob("*create_open_tickets_view.down.sql")).read_text()
+        assert "DROP VIEW IF EXISTS open_tickets_view" in down
+
+    def test_view_emits_no_misleading_table_test(self, tmp_project):
+        _gen_migration("create_open_tickets_view", {})
+        view_tests = list(Path("tests").glob("*open_tickets_view*")) if Path("tests").is_dir() else []
+        assert view_tests == []
+
+    def test_plain_table_name_is_unaffected(self, tmp_project):
+        _gen_migration("create_product", {})
+        sql = next(Path("migrations").glob("*create_product.sql")).read_text()
+        assert "CREATE TABLE IF NOT EXISTS product" in sql
+        assert "CREATE VIEW" not in sql
+
+
+class TestGeneratedRouteTestStaysGreenWhenFilled:
+    """The generated route test asserts wiring, not that the stub still raises (#270).
+
+    The old `test_list_handler_is_a_live_stub` asserted `pytest.raises(
+    NotImplementedError)`, so filling the handler in correctly turned the
+    project's own suite red — doing the work the generator asked for broke CI.
+    """
+
+    def test_generated_route_test_has_no_self_defeating_raises(self, tmp_project, clean_registry):
+        _gen_route("complaints", {})
+        test_src = Path("tests/test_complaints.py").read_text()
+        assert "pytest.raises(NotImplementedError)" not in test_src
+        assert "is_a_live_stub" not in test_src
+        # Replaced by a tolerant wiring test that is green in BOTH states.
+        assert "is_wired" in test_src
+        assert "except NotImplementedError" in test_src
+
+    def test_generated_route_test_is_green_as_stub_and_when_filled(self, tmp_project, clean_registry):
+        _gen_route("complaints", {})
+        route_file = Path("src/routes/complaints.py")
+        test_file = Path("tests/test_complaints.py")
+
+        env = {**os.environ, "PYTHONPATH": child_pythonpath(str(tmp_project))}
+
+        # 1) As the scaffold stub — green.
+        r1 = subprocess.run([sys.executable, "-m", "pytest", str(test_file), "-q"],
+                            cwd=tmp_project, env=env, capture_output=True, text=True)
+        assert r1.returncode == 0, r1.stdout + r1.stderr
+
+        # 2) Fill in list_complaints with a real response, remove the raise — green.
+        src = route_file.read_text().splitlines()
+        filled = []
+        for ln in src:
+            if ln.strip().startswith('raise NotImplementedError("list_complaints'):
+                indent = ln[: len(ln) - len(ln.lstrip())]
+                filled.append(f'{indent}return response({{"records": []}})')
+            else:
+                filled.append(ln)
+        route_file.write_text("\n".join(filled))
+
+        r2 = subprocess.run([sys.executable, "-m", "pytest", str(test_file), "-q"],
+                            cwd=tmp_project, env=env, capture_output=True, text=True)
+        assert r2.returncode == 0, "filling the handler in turned the suite red (#270):\n" + r2.stdout + r2.stderr

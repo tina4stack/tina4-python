@@ -2223,10 +2223,28 @@ def _gen_migration(name: str, flags: dict = None, *,
     fields = fields_override or _parse_fields(flags.get("fields", ""))
     is_create = name.startswith("create_") or fields_override is not None
 
+    # A `create_*_view` name is a VIEW, not a table. Emitting a runnable
+    # `CREATE TABLE <name>_view` made `tina4 migrate` build a table and never
+    # the view, silently, and the "add columns" hint pointed the wrong way
+    # (#297). A view needs a SELECT, so scaffold one — with tina4:edit markers
+    # so startup auto-migrate keeps it pending until it is written (#288).
+    is_view = is_create and fields_override is None and table.endswith("_view")
+
     filename = f"{timestamp}_{name}.sql"
     path = target / filename
 
-    if is_create:
+    if is_view:
+        # A view needs a SELECT, not columns — scaffold it as commented guidance
+        # so startup auto-migrate keeps it pending (no executable SQL) until it
+        # is written, instead of silently building a table (#297 / #288).
+        up_sql = (
+            f"-- tina4:edit  write the CREATE VIEW statement, then remove the\n"
+            f"-- tina4:edit lines. For example:\n"
+            f"-- CREATE VIEW {table} AS\n"
+            f"--     SELECT id, /* columns */ FROM source_table WHERE /* ... */;"
+        )
+        down_sql = f"DROP VIEW IF EXISTS {table};"
+    elif is_create:
         col_lines = ["    id INTEGER PRIMARY KEY AUTOINCREMENT"]
         for fname, ftype in fields:
             info = FIELD_TYPE_MAP.get(ftype, FIELD_TYPE_MAP["string"])
@@ -2269,9 +2287,10 @@ def _gen_migration(name: str, flags: dict = None, *,
     )
     print(f"  ✓ Created {down_path}")
 
-    # Co-emit a real apply-up/down test — only for CREATE migrations, whose UP
-    # SQL is real DDL to assert against (a placeholder ALTER has nothing yet).
-    if emit_test and is_create:
+    # Co-emit a real apply-up/down test — only for CREATE TABLE migrations, whose
+    # UP SQL is real DDL to assert against (a placeholder ALTER, or a VIEW stub
+    # that still needs its SELECT, has nothing concrete to assert yet).
+    if emit_test and is_create and not is_view:
         _emit_migration_test(name, table, filename, down_filename)
 
 
@@ -2589,14 +2608,14 @@ def _emit_route_stub_test(route: str) -> None:
         '"""Routing test for __ROUTE__ — no mocks, real Router.\n'
         "\n"
         "Generated with src/routes/__ROUTE__.py by `tina4python generate route\n"
-        "__ROUTE__` (no --model). The handlers are AI-FILL stubs that raise until\n"
-        "you implement them, so this tests what IS live on generation: all five\n"
-        "routes register on the REAL Router, and the list handler fails loud until\n"
-        "filled. Fill a handler, then assert its real response here.\n"
+        "__ROUTE__` (no --model). The handlers start as AI-FILL stubs that raise\n"
+        "until you implement them. This tests what is live on generation: all five\n"
+        "routes register on the REAL Router, and the list handler is wired and\n"
+        "callable. It stays GREEN whether the stub still raises OR you have filled\n"
+        "it in — implementing the handler never turns this suite red. Add your own\n"
+        "assertions on the real response once it is filled.\n"
         '"""\n'
         "import asyncio\n"
-        "\n"
-        "import pytest\n"
         "\n"
         "from tina4_python.core.request import Request\n"
         "from tina4_python.core.response import Response\n"
@@ -2613,13 +2632,23 @@ def _emit_route_stub_test(route: str) -> None:
         '        assert ("PUT", "/api/__ROUTE__/{id:int}") in paths\n'
         '        assert ("DELETE", "/api/__ROUTE__/{id:int}") in paths\n'
         "\n"
-        "    def test_list_handler_is_a_live_stub(self):\n"
-        '        """The scaffolded handler raises until filled (fails loud, good DX)."""\n'
+        "    def test_list_handler_is_wired(self):\n"
+        '        """The list handler is registered and callable. It starts as a\n'
+        "        loud AI-FILL stub (raises NotImplementedError); once you implement\n"
+        "        it this test STILL passes — it asserts wiring, never that the stub\n"
+        '        is unfinished, so doing the work never turns the suite red."""\n'
+        "        handler = route_module.list___ROUTE__\n"
+        "        assert callable(handler)\n"
         "        request = Request.from_scope(\n"
         '            {"type": "http", "method": "GET", "path": "/api/__ROUTE__",\n'
         '             "query_string": b"", "headers": [], "client": ("127.0.0.1", 0)}, b"")\n'
-        "        with pytest.raises(NotImplementedError):\n"
-        "            asyncio.run(route_module.list___ROUTE__(request, Response()))\n"
+        "        try:\n"
+        "            result = handler(request, Response())\n"
+        "            if asyncio.iscoroutine(result):  # async def handler\n"
+        "                result = asyncio.run(result)\n"
+        "        except NotImplementedError:\n"
+        "            return  # still the scaffold stub — expected until filled in\n"
+        "        assert result is not None  # filled in: must hand back a response\n"
     )
     content = content.replace("__CLASS__", _pascal(route)).replace("__ROUTE__", route)
     _write_test(route, content)
@@ -2672,8 +2701,6 @@ def _emit_service_test(name: str, snake: str) -> None:
         "__NAME__`. Registers the scaffold on a REAL ServiceRunner and confirms the\n"
         "descriptor; the task body is an AI-FILL stub that raises until filled.\n"
         '"""\n'
-        "import pytest\n"
-        "\n"
         "from tina4_python.service import ServiceRunner\n"
         "from src.services.__SNAKE__ import __SNAKE___task, register, service\n"
         "\n"
@@ -2687,10 +2714,15 @@ def _emit_service_test(name: str, snake: str) -> None:
         "    def test_descriptor_shape(self):\n"
         '        assert service["name"] and callable(service["handler"])\n'
         "\n"
-        "    def test_task_is_a_live_stub(self):\n"
-        '        """The scaffolded task raises until filled (fails loud, good DX)."""\n'
-        "        with pytest.raises(NotImplementedError):\n"
+        "    def test_task_is_wired(self):\n"
+        '        """The task is callable. It starts as a loud AI-FILL stub\n'
+        "        (raises NotImplementedError); once you implement it this test\n"
+        '        STILL passes, so doing the work never turns the suite red."""\n'
+        "        assert callable(__SNAKE___task)\n"
+        "        try:\n"
         "            __SNAKE___task(None)\n"
+        "        except NotImplementedError:\n"
+        "            return  # still the scaffold stub — expected until filled in\n"
     )
     content = (content.replace("__CLASS__", _pascal(snake))
                .replace("__NAME__", name).replace("__SNAKE__", snake))
@@ -2708,8 +2740,6 @@ def _emit_queue_test(topic: str, slug: str) -> None:
         "service. handle___SLUG__ is an AI-FILL stub that raises until you fill it\n"
         "— then assert the processed side effect here.\n"
         '"""\n'
-        "import pytest\n"
-        "\n"
         "from tina4_python.queue import Queue\n"
         "from src.services.__SLUG___consumer import (\n"
         "    publish___SLUG__, handle___SLUG__, consume___SLUG__, service,\n"
@@ -2727,10 +2757,15 @@ def _emit_queue_test(topic: str, slug: str) -> None:
         '        assert service["daemon"] is True\n'
         '        assert service["handler"] is consume___SLUG__\n'
         "\n"
-        "    def test_handle_is_a_live_stub(self):\n"
-        '        """The scaffolded per-job handler raises until filled (fails loud)."""\n'
-        "        with pytest.raises(NotImplementedError):\n"
+        "    def test_handle_is_wired(self):\n"
+        '        """handle___SLUG__ is callable. It starts as a loud AI-FILL stub\n'
+        "        (raises NotImplementedError); once you implement it this test\n"
+        '        STILL passes, so doing the work never turns the suite red."""\n'
+        "        assert callable(handle___SLUG__)\n"
+        "        try:\n"
         "            handle___SLUG__({})\n"
+        "        except NotImplementedError:\n"
+        "            return  # still the scaffold stub — expected until filled in\n"
     )
     content = (content.replace("__CLASS__", _pascal(slug))
                .replace("__TOPIC__", topic).replace("__SLUG__", slug))
@@ -2812,8 +2847,6 @@ def _emit_websocket_test(ws_path: str, base: str, handler: str) -> None:
         '"""\n'
         "import asyncio\n"
         "\n"
-        "import pytest\n"
-        "\n"
         "from tina4_python.core.router import Router\n"
         "from src.routes.ws___BASE__ import __HANDLER__\n"
         "\n"
@@ -2826,9 +2859,14 @@ def _emit_websocket_test(ws_path: str, base: str, handler: str) -> None:
         '        """The "close" branch returns cleanly without a connection."""\n'
         '        assert asyncio.run(__HANDLER__(None, "close", None)) is None\n'
         "\n"
-        "    def test_message_branch_is_a_live_stub(self):\n"
-        "        with pytest.raises(NotImplementedError):\n"
+        "    def test_message_branch_is_wired(self):\n"
+        '        """The "message" branch starts as a loud AI-FILL stub (raises\n'
+        "        NotImplementedError); once you implement it this test STILL\n"
+        '        passes, so doing the work never turns the suite red."""\n'
+        "        try:\n"
         '            asyncio.run(__HANDLER__(None, "message", "hi"))\n'
+        "        except NotImplementedError:\n"
+        "            return  # still the scaffold stub — expected until filled in\n"
     )
     content = (content.replace("__CLASS__", _pascal(base))
                .replace("__WSPATH__", ws_path)
@@ -2847,8 +2885,6 @@ def _emit_listener_test(event: str, slug: str) -> None:
         "emitting the event reaches it. The reaction body is an AI-FILL stub that\n"
         "raises until filled, so a strict emit re-raises here (proving it ran).\n"
         "\"\"\"\n"
-        "import pytest\n"
-        "\n"
         "from tina4_python.core.events import emit, events, listeners\n"
         "import src.listeners.__SLUG__  # noqa: F401 — importing binds the listener\n"
         "\n"
@@ -2859,9 +2895,15 @@ def _emit_listener_test(event: str, slug: str) -> None:
         '        assert len(listeners("__EVENT__")) >= 1\n'
         "\n"
         "    def test_emit_reaches_the_listener(self):\n"
-        '        """strict=True re-raises the stub error, proving the listener ran."""\n'
-        "        with pytest.raises(NotImplementedError):\n"
-        '            emit("__EVENT__", {"id": 1}, strict=True)\n'
+        '        """Emitting the event reaches the listener. It starts as a loud\n'
+        "        AI-FILL stub (strict emit re-raises NotImplementedError); once you\n"
+        "        implement it this test STILL passes, so doing the work never turns\n"
+        '        the suite red."""\n'
+        "        try:\n"
+        '            results = emit("__EVENT__", {"id": 1}, strict=True)\n'
+        "        except NotImplementedError:\n"
+        "            return  # still the scaffold stub — expected until filled in\n"
+        "        assert results is not None  # filled in: the listener ran and returned\n"
     )
     content = (content.replace("__CLASS__", _pascal(slug))
                .replace("__EVENT__", event).replace("__SLUG__", slug))

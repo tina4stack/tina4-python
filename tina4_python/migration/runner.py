@@ -904,6 +904,47 @@ def _migrate(db, migration_folder: str = "migrations", delimiter: str = ";") -> 
         _release_migration_lock(db, lock)
 
 
+# A freshly scaffolded migration carries a `tina4:edit` marker at each spot the
+# developer must fill in (ADR-0063 scaffolding envelope). A placeholder whose
+# body has NO executable SQL yet — the comment-only ALTER stub from a non-create
+# `migrate:create`, or the commented view stub — is unfinished: applying it (and
+# recording it passed) runs nothing and leaves the real SQL, written later under
+# the same filename, never applied, with `tina4 migrate` reporting nothing
+# pending (#288, #297). Such a migration is kept pending until it is written.
+#
+# A scaffolded CREATE TABLE still carries a `tina4:edit` hint but DOES have real,
+# runnable DDL (id + created_at), so it applies normally — the ordinary
+# `generate model` → `migrate` workflow is unaffected. The two signals together
+# (marker present AND no executable statement) pick out only the empty scaffold.
+_EDIT_PLACEHOLDER_RE = re.compile(r"(?:#|--|//|\{#)\s*tina4:edit\b", re.IGNORECASE)
+_SQL_LINE_COMMENT_RE = re.compile(r"--[^\n]*")
+_SQL_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _has_executable_sql(sql: str) -> bool:
+    """True if any executable statement remains once comments are stripped."""
+    body = _SQL_BLOCK_COMMENT_RE.sub("", sql)
+    body = _SQL_LINE_COMMENT_RE.sub("", body)
+    return bool(body.strip(" \t\r\n;"))
+
+
+def _is_unapplied_scaffold(path: Path) -> bool:
+    """True if a migration file is still the unedited scaffold placeholder.
+
+    A ``.sql`` file qualifies when it still bears a ``tina4:edit`` marker AND has
+    no executable statement; a ``.py`` scaffold qualifies on the marker alone.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if not _EDIT_PLACEHOLDER_RE.search(text):
+        return False
+    if path.suffix == ".py":
+        return True
+    return not _has_executable_sql(text)
+
+
 def _run_pending(db, migration_folder: str = "migrations", delimiter: str = ";") -> list[str]:
     """Apply every pending migration, in order. Caller holds the run-wide lock.
 
@@ -937,6 +978,18 @@ def _run_pending(db, migration_folder: str = "migrations", delimiter: str = ";")
         migration_name = mig_file.stem  # e.g., "000001_create_users_table"
 
         if migration_name in executed:
+            continue
+
+        # Never apply a migration that is still the empty, unedited scaffold —
+        # keep it pending, loudly, so the developer's real SQL is not shadowed
+        # (#288, #297).
+        if _is_unapplied_scaffold(mig_file):
+            logger.warning(
+                f"Migration {mig_file.name} is still an unedited scaffold (a "
+                "'tina4:edit' placeholder with no SQL yet) — skipped and kept "
+                "pending. Write the migration and remove the tina4:edit line(s), "
+                "then run migrate again."
+            )
             continue
 
         try:
