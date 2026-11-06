@@ -210,3 +210,48 @@ class TestTemplateDecoratorComposition:
         resp_b = MockResponse()
         await handler_b(req, resp_b)
         assert resp_b._render_calls[0][0] == "beta.twig"
+
+
+# ── Sync `def` handler under @template (#287) ─────────────────
+
+
+class TestTemplateDecoratorSyncHandler:
+    """A plain `def` handler must work under @template, not answer 500.
+
+    The wrapper used to `await fn(...)` unconditionally, so a sync handler
+    returning a dict raised "object dict can't be used in 'await' expression"
+    and every request 500'd — even though the route decorators accept a sync
+    `def`. The wrapper now awaits only an awaitable result.
+    """
+
+    @pytest.mark.asyncio
+    async def test_sync_handler_dict_is_rendered(self):
+        @template("pages/syncp.twig")
+        def sync_handler(request, response):   # plain def — no async
+            return {"n": 3}
+
+        req = MockRequest()
+        resp = MockResponse()
+        result = await sync_handler(req, resp)
+
+        assert resp._render_calls == [("pages/syncp.twig", {"n": 3})]
+        assert result is resp
+
+    @pytest.mark.asyncio
+    async def test_sync_handler_does_not_raise_await_typeerror(self):
+        @template("page.twig")
+        def sync_handler(request, response):
+            return {"ok": True}
+
+        # Must not raise TypeError: object dict can't be used in 'await'.
+        await sync_handler(MockRequest(), MockResponse())
+
+    @pytest.mark.asyncio
+    async def test_async_handler_still_awaited(self):
+        @template("page.twig")
+        async def async_handler(request, response):
+            return {"async": True}
+
+        resp = MockResponse()
+        await async_handler(MockRequest(), resp)
+        assert resp._render_calls[0][1] == {"async": True}

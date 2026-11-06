@@ -22,6 +22,7 @@ Routes are registered via decorators. Pattern matching supports dynamic params.
         return response.status(201).json(request.body)
 """
 import re
+import inspect
 import functools
 from tina4_python.debug import Log
 
@@ -1088,7 +1089,15 @@ def template(template_name: str):
     def decorator(fn):
         @functools.wraps(fn)
         async def wrapper(request, response, *args, **kwargs):
-            result = await fn(request, response, *args, **kwargs)
+            # Only await when the handler actually returned an awaitable.
+            # A plain ``def`` handler returns its value directly, so
+            # ``await fn(...)`` used to raise "object dict can't be used in
+            # 'await' expression" and every request answered 500 (#287) —
+            # even though the route decorators accept a sync ``def``. Mirror
+            # them: call, then await only if the result is awaitable.
+            result = fn(request, response, *args, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
             if isinstance(result, dict):
                 return response.render(template_name, result)
             return result

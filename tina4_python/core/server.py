@@ -2079,6 +2079,28 @@ def _make_mw_continuation(mw, inner_next):
     return wrapper
 
 
+def _coerce_handler_result(result, response: Response) -> Response:
+    """Turn a handler's return value into a Response.
+
+    Parity with PHP (``Router::handlerResultToResponse``) and Ruby
+    (``finalise_route_response``): a handler may return a ``Response`` (used as
+    is), or a dict / list / str / ORM model / ``DatabaseResult`` — which is run
+    through the auto-detecting ``response()`` callable (dict/list → JSON,
+    str → HTML or text, domain object → JSON) — or ``None``, in which case
+    whatever the handler already wrote onto the ``response`` object stands.
+
+    Before this, every non-``Response`` return was silently dropped and the
+    untouched (empty) response went out, so ``return {"open": 3}`` answered an
+    empty 200 with no error and no log line (#289). The developer guides say
+    "return an object and it becomes JSON", which is now true.
+    """
+    if isinstance(result, Response):
+        return result
+    if result is None:
+        return response
+    return response(result)
+
+
 async def _invoke_handler_with_middleware(request: Request, response: Response, route: dict, params: dict) -> Response:
     """Invoke the route handler, wrapping with any function-style middleware.
 
@@ -2108,9 +2130,7 @@ async def _invoke_handler_with_middleware(request: Request, response: Response, 
         next_handler = _make_mw_continuation(mw, next_handler)
 
     result = await next_handler(request, response)
-    if isinstance(result, Response):
-        return result
-    return response
+    return _coerce_handler_result(result, response)
 
 
 async def _invoke_handler(request: Request, response: Response, route: dict, params: dict) -> Response:
@@ -2179,9 +2199,7 @@ async def _invoke_handler(request: Request, response: Response, route: dict, par
     else:
         result = await asyncio.to_thread(_handler, *_args)
 
-    if isinstance(result, Response):
-        response = result
-    return response
+    return _coerce_handler_result(result, response)
 
 
 def _handle_route_error(
