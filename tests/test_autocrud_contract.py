@@ -138,6 +138,9 @@ def _request(server, method, path, *, body=None, token=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method)
     req.add_header("Content-Type", "application/json")
+    # An API client: ask for JSON so a negotiated error (401/500, ERR-DEC-02)
+    # comes back as the JSON envelope, not the HTML error page (#342).
+    req.add_header("Accept", "application/json")
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:

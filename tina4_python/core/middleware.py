@@ -178,26 +178,35 @@ class Middleware:
         return request, response, False
 
     @staticmethod
-    def middleware_500(response, middleware, method_name: str, error: Exception):
-        """Log a throwing middleware method and produce the deterministic 500.
+    def middleware_500(response, middleware, method_name: str, error: Exception, request=None):
+        """Log a throwing middleware method and produce the NEGOTIATED 500.
 
         A middleware that raises must never crash the worker or leak an
         unhandled exception past the pipeline. We LOG it (so it is visible,
-        never silent) and return a clean 500 with the canonical body shape
-        ``{"error": "Internal Server Error", "status": 500}`` - identical
-        output in all four frameworks. ``middleware`` may be a class or an
-        instance; both entry points share this one implementation.
+        never silent) and answer a clean 500 through the SAME negotiation every
+        other framework error uses (ERR-DEC-02, tina4#342): ``errors/500.twig``
+        for a browser, the JSON envelope ``{error, code, message, status,
+        request_id}`` for an API client -- the real exception kept out of the
+        body (CWE-209). It used to return an unconditional
+        ``{"error": "Internal Server Error", "status": 500}`` JSON body, so a
+        browser whose middleware threw got raw JSON instead of the 500 page and
+        no request_id. ``request`` is optional only for backward compatibility;
+        the framework always passes it, and without it the JSON envelope (with
+        request_id) is used. ``middleware`` may be a class or an instance.
         """
-        from tina4_python.debug import Log
+        from tina4_python.debug import Log, get_request_id
+        from tina4_python.core.server import _render_negotiated_error, _json_error_body
         klass = middleware if isinstance(middleware, type) else type(middleware)
         Log.error(
             f"Middleware {klass.__name__}.{method_name} raised "
             f"{type(error).__name__}: {error}"
         )
-        return response.status(500).json({
-            "error": "Internal Server Error",
-            "status": 500,
-        })
+        request_id = get_request_id() or ""
+        if request is not None:
+            _render_negotiated_error(request, response, 500, request_id)
+        else:
+            response.status(500).json(_json_error_body(500, request_id))
+        return response
 
     @classmethod
     def run_before(cls, middleware_classes, request, response):
@@ -220,7 +229,7 @@ class Middleware:
                 try:
                     result = getattr(mw_class, method_name)(request, response)
                 except Exception as error:
-                    return request, cls.middleware_500(response, mw_class, method_name, error)
+                    return request, cls.middleware_500(response, mw_class, method_name, error, request)
                 request, response, short_circuit = cls.apply_hook_result(result, request, response)
                 if short_circuit:
                     return request, response
@@ -247,7 +256,7 @@ class Middleware:
                 try:
                     result = getattr(mw_class, method_name)(request, response)
                 except Exception as error:
-                    response = cls.middleware_500(response, mw_class, method_name, error)
+                    response = cls.middleware_500(response, mw_class, method_name, error, request)
                     continue
                 request, response, short_circuit = cls.apply_hook_result(result, request, response)
                 if short_circuit:

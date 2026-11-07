@@ -66,12 +66,22 @@ class TestTestClientAuthGate:
         return TestClient()
 
     def test_tokenless_write_is_rejected(self):
-        """The core fix: a write to an auth-required route with no token 401s."""
-        res = self._client().post("/py2-secure-write", json={"name": "Alice"})
+        """The core fix: a write to an auth-required route with no token 401s.
+
+        An API client (Accept: application/json) gets the negotiated JSON
+        envelope now (ERR-DEC-02, #342) — ``error`` is the boolean envelope flag,
+        not the old literal string. The browser-HTML branch is covered in
+        tests/test_error_negotiation_401_500.py.
+        """
+        res = self._client().post(
+            "/py2-secure-write", json={"name": "Alice"},
+            headers={"Accept": "application/json"},
+        )
         assert res.status == 401, "tokenless write must be rejected, not silently accepted"
         body = res.json()
         assert body["status"] == 401
-        assert body["error"] == "Unauthorized"
+        assert body["error"] is True
+        assert body["code"] == "UNAUTHORIZED"
 
     def test_write_with_valid_bearer_token_passes(self):
         token = get_token({"user_id": 1})

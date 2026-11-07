@@ -779,10 +779,12 @@ def _render_error_page(status_code: int, path: str, request_id: str, error_messa
 
 
 _ERROR_CODE_NAMES = {
-    403: "FORBIDDEN", 404: "NOT_FOUND", 405: "METHOD_NOT_ALLOWED", 500: "INTERNAL_SERVER_ERROR",
+    401: "UNAUTHORIZED", 403: "FORBIDDEN", 404: "NOT_FOUND",
+    405: "METHOD_NOT_ALLOWED", 500: "INTERNAL_SERVER_ERROR",
 }
 _ERROR_MESSAGES = {
-    403: "Forbidden", 404: "Not Found", 405: "Method Not Allowed", 500: "Internal Server Error",
+    401: "Unauthorized", 403: "Forbidden", 404: "Not Found",
+    405: "Method Not Allowed", 500: "Internal Server Error",
 }
 
 
@@ -1880,11 +1882,14 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
                 except Exception:
                     pass
     if not _auth_ok:
-        response.status(401).json({
-            "error": "Unauthorized",
-            "message": "Valid authorization token required",
-            "status": 401,
-        })
+        # ERR-DEC-02: a browser gets errors/401.twig, an API client the JSON
+        # envelope -- the same negotiation every other framework error uses
+        # (#342). Was an unconditional JSON body that handed a signed-out form
+        # POST raw JSON instead of the sign-in page.
+        _render_negotiated_error(
+            request, response, 401, _resolve_request_id(request),
+            "Valid authorization token required",
+        )
         return True
     # ── RBAC guards (Feature 138): authorization AFTER authentication ──
     # Auth passed (401 already ruled out above). If the route carries role/
@@ -1896,11 +1901,12 @@ def _check_auth(request: Request, response: Response, route: dict) -> bool:
     if _req_roles or _req_perms:
         from tina4_python.core.router import rbac_authorized
         if not rbac_authorized(getattr(request, "user", None), _req_roles, _req_perms):
-            response.status(403).json({
-                "error": "Forbidden",
-                "message": "You do not have permission to access this resource",
-                "status": 403,
-            })
+            # ERR-DEC-02 negotiation (#342): HTML page for a browser, JSON
+            # envelope for an API client, both carrying request_id.
+            _render_negotiated_error(
+                request, response, 403, _resolve_request_id(request),
+                "You do not have permission to access this resource",
+            )
             return True
     return False
 
@@ -2008,7 +2014,7 @@ def _run_before_middleware(request: Request, response: Response, route: dict, in
             try:
                 _mw_result = _mw_method(request, response)
             except Exception as _err:
-                response = Middleware.middleware_500(response, _mw_inst, _attr_name, _err)
+                response = Middleware.middleware_500(response, _mw_inst, _attr_name, _err, request)
                 skip = True
                 break
             request, response, skip = Middleware.apply_hook_result(_mw_result, request, response)
@@ -2056,7 +2062,7 @@ def _run_after_middleware(request: Request, response: Response, route: dict, inc
             try:
                 _mw_result = _mw_method(request, response)
             except Exception as _err:
-                response = Middleware.middleware_500(response, _mw_inst, _attr_name, _err)
+                response = Middleware.middleware_500(response, _mw_inst, _attr_name, _err, request)
                 continue
             request, response, _short_circuit = Middleware.apply_hook_result(
                 _mw_result, request, response
@@ -2273,21 +2279,42 @@ def _handle_route_error(
     return response
 
 
+def _render_negotiated_error(request: Request, response: Response, status_code: int,
+                             request_id: str, message: str | None = None) -> None:
+    """HTML-vs-JSON negotiated error on Accept (ERR-DEC-02), for any status code.
+
+    One implementation of the negotiation contract so every framework error
+    looks the same: a browser (Accept not JSON) gets ``errors/{code}.twig`` --
+    the app override first, then the framework default -- carrying
+    ``request_id``; an API client gets the one JSON envelope (``error, code,
+    message, status, request_id``). When no HTML template is found it falls back
+    to the JSON envelope rather than an empty page.
+
+    ``message`` overrides the envelope's default wording -- the 401 gate and the
+    RBAC 403 keep their specific text this way. For a 500 it MUST stay the
+    generic ``"Internal Server Error"`` (CWE-209 -- the real exception never
+    reaches the client), so callers pass no message there.
+    """
+    _wants_json = getattr(request, "wants_json", None) if request is not None else None
+    if callable(_wants_json) and _wants_json():
+
+        response.status(status_code).json(_json_error_body(status_code, request_id, message))
+        return
+    html = _render_error_page(status_code, getattr(request, "path", "") or "", request_id, "")
+    if html:
+        response.status(status_code).html(html)
+    else:
+        response.status(status_code).json(_json_error_body(status_code, request_id, message))
+
+
 def _render_negotiated_500(request: Request, response: Response, request_id: str) -> None:
     """The safe production 500: HTML-vs-JSON negotiated on Accept (ERR-DEC-02).
 
-    ``error_message`` is ALWAYS empty here (CWE-209 -- never touch this: a
-    JSON client's ``message`` field stays the generic ``"Internal Server
-    Error"`` too, never the real exception).
+    Thin wrapper over :func:`_render_negotiated_error` with no ``message`` so the
+    JSON client's ``message`` field stays the generic ``"Internal Server Error"``
+    (CWE-209 -- never the real exception).
     """
-    if request.wants_json():
-        response.status(500).json(_json_error_body(500, request_id))
-        return
-    html = _render_error_page(500, request.path, request_id, "")
-    if html:
-        response.status(500).html(html)
-    else:
-        response.status(500).json(_json_error_body(500, request_id))
+    _render_negotiated_error(request, response, 500, request_id)
 
 
 def _handle_no_route(request: Request, response: Response, request_id: str) -> Response:
