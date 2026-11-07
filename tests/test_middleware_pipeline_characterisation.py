@@ -501,13 +501,19 @@ class TestMiddlewarePipelineOrchestrator:
     """
 
     def test_a_throwing_before_hook_becomes_a_clean_500(self):
-        """a throwing before hook becomes a clean 500"""
+        """a throwing before hook becomes a clean NEGOTIATED 500 (ERR-DEC-02, #342)"""
         request, response = fresh_pair()
+        request.headers["accept"] = "application/json"   # an API client
         _, resp = Middleware.run_before(
             [ThrowingBefore, TrailingHook], request, response
         )
         assert resp.status_code == 500, "a raising hook must never escape the orchestrator"
-        assert json.loads(resp.content) == {"error": "Internal Server Error", "status": 500}
+        body = json.loads(resp.content)
+        # The negotiated JSON envelope now, not the bare {error, status} body.
+        assert body["error"] is True
+        assert body["code"] == "INTERNAL_SERVER_ERROR"
+        assert body["status"] == 500
+        assert "request_id" in body
         assert "before_trailing" not in TRACE, "a throwing before hook short-circuits"
 
     def test_a_throwing_after_hook_does_not_stop_the_remaining_after_hooks(self):

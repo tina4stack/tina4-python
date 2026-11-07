@@ -9,6 +9,24 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.160 - 2026-11-07
+
+### Fixed
+- The secure-by-default auth gate answered a tokenless request to a protected route with
+  a raw `401 {"error": "Unauthorized"}` JSON body whatever the client's `Accept`, and a
+  role/permission-guarded (RBAC) route answered a bare `403` the same way — so a browser
+  that posted a form after its session expired saw raw JSON instead of the error page. Both
+  now route through the shared negotiated renderer every other framework error already used
+  (ERR-DEC-02): a browser gets `errors/401.twig` / `errors/403.twig`, an API client the
+  `{error, code, message, status, request_id}` envelope (#342).
+- A middleware `before_*`/`after_*` hook that raised answered a raw
+  `500 {"error": "Internal Server Error", "status": 500}` body regardless of `Accept` and
+  with no request id. `Middleware.middleware_500` now negotiates the same way —
+  `errors/500.twig` for a browser, the JSON envelope with the request id for an API client —
+  while keeping the exception out of the body (CWE-209) (#342).
+- `401` gained its `UNAUTHORIZED` entry in the error-code-name map, so the negotiated 401
+  JSON envelope carries a real code rather than `HTTP_401`.
+
 ## 3.13.159 - 2026-11-06
 
 ### Fixed
