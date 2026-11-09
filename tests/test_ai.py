@@ -164,3 +164,22 @@ class TestGenerateContext:
     def test_contains_feature_info(self):
         ctx = generate_context()
         assert "GraphQL" in ctx or "WebSocket" in ctx or "ORM" in ctx
+
+    @pytest.mark.parametrize("tool", [t["name"] for t in AI_TOOLS])
+    def test_route_example_passes_a_dict(self, tool):
+        """The route example's response(...) argument must be a dict literal.
+
+        A doubled brace ({{...}}) left in a plain string survives the f-string it is
+        inserted into, and becomes a set holding a dict: TypeError when the copied
+        route runs.
+        """
+        import ast
+        import re
+
+        ctx = generate_context(tool)
+        calls = re.findall(r"^[ \t]+return response\((.*)\)[ \t]*$", ctx, re.M)
+        assert calls, f"{tool}: no route example found"
+        for call in calls:
+            arg = ast.parse(call, mode="eval").body
+            first = arg.elts[0] if isinstance(arg, ast.Tuple) else arg
+            assert not isinstance(first, ast.Set), f"{tool}: response({call}) passes a set"
