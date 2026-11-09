@@ -9,6 +9,13 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.161 - 2026-11-09
+
+### Fixed
+
+- TestClient now loads `.env` the way the app does (first-wins, `.env.local` then `.env`), so a test that does not boot the app still sees `TINA4_SECRET` and other variables instead of failing with a misleading error that points at `.env` (#296).
+- `TestResponse` response-header lookups are now case-insensitive, matching `get_all`, so an assertion like `headers.get("Location")` finds a header emitted as `location` instead of missing it; the stored shape (lower-case keys, last value, emission order) is unchanged (#300).
+
 ## 3.13.160 - 2026-11-07
 
 ### Fixed
