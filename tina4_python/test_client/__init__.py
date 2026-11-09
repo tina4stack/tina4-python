@@ -30,8 +30,36 @@ import json as _json
 import asyncio
 
 
+class _HeaderMap(dict):
+    """A dict whose key lookups are case-insensitive (#300).
+
+    HTTP header names are case-insensitive (RFC 9110), and ``get_all`` already
+    treats them that way. Keys are STORED lower case, so iteration order, the
+    key set, and the last-value-per-name view are all unchanged — every existing
+    reader sees exactly the dict it saw before. Only the LOOKUP lowercases the
+    requested name, so ``headers.get("Location")`` finds a header emitted as
+    ``location`` instead of returning ``None``.
+    """
+
+    @staticmethod
+    def _key(key):
+        return key.lower() if isinstance(key, str) else key
+
+    def __getitem__(self, key):
+        return super().__getitem__(self._key(key))
+
+    def get(self, key, default=None):
+        return super().get(self._key(key), default)
+
+    def __contains__(self, key):
+        return super().__contains__(self._key(key))
+
+
 class TestResponse:
     """Wraps what the ASGI app sent with a clean test-friendly API."""
+
+    # A helper the developer drives, not a pytest test class despite the Test* name.
+    __test__ = False
 
     __slots__ = ("status", "body", "headers", "content_type", "_header_list")
 
@@ -46,7 +74,7 @@ class TestResponse:
         # (TC-HEADER-COLLAPSE, TC-DEC-02 — this used to collapse the list straight
         # into the dict below and the raw pairs were never kept.)
         self._header_list: list[tuple[str, str]] = []
-        self.headers: dict = {}
+        self.headers: dict = _HeaderMap()
         for name, value in headers:
             key = name.decode().lower() if isinstance(name, (bytes, bytearray)) else str(name).lower()
             val = value.decode() if isinstance(value, (bytes, bytearray)) else str(value)
@@ -90,6 +118,31 @@ class TestClient:
     body-stripping, session save + cookie, ETag/304, the dev toolbar and the
     500 handler.
     """
+
+    # A helper the developer drives, not a pytest test class despite the Test* name.
+    __test__ = False
+
+    def __init__(self) -> None:
+        """Load ``.env`` the same way the app does (#296).
+
+        ``TestClient`` dispatches through the real front controller but never
+        calls ``run()``, which is where the live server loads ``.env``. So a
+        test that did not ``import app`` got the project's routes with the
+        environment UNSET — a route that signs a token raised
+        ``InsecureSecretError`` even though ``.env`` set a valid
+        ``TINA4_SECRET``, and the error pointed at ``.env``, which was fine.
+
+        Loading here with ``override=False`` is first-wins (``.env.local`` then
+        ``.env``, the canonical directory form), so a variable a test set in the
+        real process environment is never clobbered — the test still wins.
+        """
+        try:
+            from tina4_python.dotenv import load_env
+            load_env(override=False)
+        except Exception:
+            # A missing or unreadable .env must never stop a test from running —
+            # the environment simply stays as the process already had it.
+            pass
 
     def get(self, path: str, *, headers: dict | None = None) -> TestResponse:
         """Send a GET request to the given path."""
