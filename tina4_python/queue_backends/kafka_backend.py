@@ -170,8 +170,22 @@ class KafkaConnector:
                     break
             if msg is None:
                 return None, None
+            raw = msg.value()
+            if raw is None:
+                # Tombstone / delete marker: a null-value record. Debezium emits
+                # these on deletes and log-compacted topics use them as delete
+                # markers, so they are normal on Kafka. There is nothing to decode
+                # -- skip it (return "no message"). The consumer's position has
+                # already advanced past it in-memory, so the next poll() returns
+                # the following record and the commit moves the offset past the
+                # tombstone. An explicit is-None check (not merely adding
+                # AttributeError to the except) keeps unrelated attribute errors
+                # loud. (#303: None.decode() used to raise AttributeError, which
+                # was not in the except, so the tombstone was a poison pill that
+                # killed the consumer thread on every restart.)
+                return None, None
             try:
-                message = json.loads(msg.value().decode("utf-8"))
+                message = json.loads(raw.decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 return None, None
             return message, self._track(msg, message, by_record)
