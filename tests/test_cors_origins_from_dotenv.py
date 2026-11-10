@@ -222,3 +222,21 @@ def test_refresh_keeps_a_cors_subclass(monkeypatch):
     server._refresh_cors_from_env()
     assert type(server._cors) is Mine
     assert server._cors.allowed_origin(ALLOWED) == ALLOWED
+
+
+def test_refresh_leaves_a_subclass_that_needs_arguments(monkeypatch):
+    """A subclass whose constructor takes arguments cannot be rebuilt here; the
+    refresh must leave it in place rather than fail the boot."""
+    from tina4_python.core import server
+    from tina4_python.core.middleware import CorsMiddleware
+
+    class Configured(CorsMiddleware):
+        def __init__(self, origins):
+            super().__init__()
+            self.origins = origins
+
+    monkeypatch.setattr(server, "_cors", Configured(ALLOWED))
+    installed = server._cors
+    monkeypatch.setenv("TINA4_CORS_ORIGINS", OTHER)
+    server._refresh_cors_from_env()
+    assert server._cors is installed

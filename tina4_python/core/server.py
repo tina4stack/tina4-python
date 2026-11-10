@@ -53,18 +53,23 @@ def _refresh_cors_from_env() -> None:
     ``_cors`` is built at import, before any entry point loads ``.env``, so a
     policy set only in ``.env`` was never applied. Every entry point that loads
     ``.env`` (``run()``/``asgi()`` via ``_load_project_env``, and ``TestClient``)
-    calls this afterwards. The settings it was built from are recorded on the
-    instance itself, so a ``CorsMiddleware`` swapped in from elsewhere is checked
-    against what IT was built from. An object that is not a ``CorsMiddleware``
-    (a test double) is left alone.
+    calls this afterwards. The settings each instance was built from are recorded
+    on it; an instance with no record (built elsewhere) is rebuilt. An object that
+    is not a ``CorsMiddleware`` (a test double) is left alone, and so is a
+    subclass that cannot be built without arguments.
     """
     global _cors
     if not isinstance(_cors, CorsMiddleware):
         return
     snapshot = _cors_env_snapshot()
-    if getattr(_cors, "_tina4_env_snapshot", None) != snapshot:
-        _cors = type(_cors)()
-        _cors._tina4_env_snapshot = snapshot
+    if getattr(_cors, "_tina4_env_snapshot", None) == snapshot:
+        return
+    try:
+        rebuilt = type(_cors)()
+    except TypeError:
+        return
+    rebuilt._tina4_env_snapshot = snapshot
+    _cors = rebuilt
 
 
 _cors._tina4_env_snapshot = _cors_env_snapshot()
