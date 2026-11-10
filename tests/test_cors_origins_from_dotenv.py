@@ -129,3 +129,96 @@ def test_dotenv_origin_is_allowed_on_preflight(server):
 
 def test_origin_not_in_dotenv_is_still_refused(server):
     assert _allow_origin(f"{server['base']}/cors/page", OTHER) is None
+
+
+# ── TestClient loads .env itself (#296), so it must apply the policy too ──────
+
+def test_test_client_applies_a_dotenv_origin(tmp_path, monkeypatch):
+    """TestClient never calls run(); it loads .env itself, and the CORS policy
+    in that .env must reach the dispatcher the same way."""
+    from tina4_python.core import server
+    from tina4_python.core.router import Router, get as route_get, noauth
+    from tina4_python.test_client import TestClient
+
+    for name in [k for k in os.environ if k.startswith("TINA4_CORS_")]:
+        monkeypatch.delenv(name)
+    # load_env() below sets TINA4_CORS_ORIGINS. delenv() on an unset variable
+    # records nothing to restore, so set it first: teardown then unsets it.
+    monkeypatch.setenv("TINA4_CORS_ORIGINS", "")
+    monkeypatch.delenv("TINA4_CORS_ORIGINS")
+    monkeypatch.setattr(server, "_cors", server._cors)
+    (tmp_path / ".env").write_text(f"TINA4_CORS_ORIGINS={ALLOWED}\n")
+    monkeypatch.chdir(tmp_path)
+    Router.clear()
+    try:
+        @noauth()
+        @route_get("/cors/page")
+        async def page(request, response):
+            return response({"ok": True})
+
+        client = TestClient()
+        allowed = client.get("/cors/page", headers={"Origin": ALLOWED})
+        other = client.get("/cors/page", headers={"Origin": OTHER})
+    finally:
+        Router.clear()
+    acao = {k.lower(): v for k, v in allowed.headers.items()}.get("access-control-allow-origin")
+    assert acao == ALLOWED, f"TestClient: .env CORS policy not applied (ACAO={acao!r})"
+    assert "access-control-allow-origin" not in {k.lower() for k in other.headers}
+
+
+def test_refresh_checks_the_live_instance_not_a_stale_record(monkeypatch):
+    """The refresh compares the settings against what the CURRENT ``_cors`` was
+    built from. Suites replace ``server._cors`` directly (the conformance
+    teardown builds a fresh ``CorsMiddleware()`` after popping the env); a
+    record kept beside the object went stale and the next refresh skipped a
+    rebuild it needed."""
+    from tina4_python.core import server
+    from tina4_python.core.middleware import CorsMiddleware
+
+    for name in [k for k in os.environ if k.startswith("TINA4_CORS_")]:
+        monkeypatch.delenv(name)
+    monkeypatch.setattr(server, "_cors", server._cors)
+
+    monkeypatch.setenv("TINA4_CORS_ORIGINS", ALLOWED)
+    server._refresh_cors_from_env()
+    assert server._cors.allowed_origin(ALLOWED) == ALLOWED
+
+    # What a suite teardown does: reset the env and the singleton by hand.
+    monkeypatch.delenv("TINA4_CORS_ORIGINS")
+    server._cors = CorsMiddleware()
+    # The next project's .env sets the same policy again.
+    monkeypatch.setenv("TINA4_CORS_ORIGINS", ALLOWED)
+    server._refresh_cors_from_env()
+    assert server._cors.allowed_origin(ALLOWED) == ALLOWED, (
+        "a CorsMiddleware swapped in from an empty env was kept for a policy that is set"
+    )
+
+    built = server._cors
+    server._refresh_cors_from_env()
+    assert server._cors is built, "rebuilt although the settings did not change"
+
+
+def test_refresh_leaves_a_test_double_alone(monkeypatch):
+    """An object that is not a CorsMiddleware was installed on purpose."""
+    from tina4_python.core import server
+
+    monkeypatch.setattr(server, "_cors", object())
+    double = server._cors
+    monkeypatch.setenv("TINA4_CORS_ORIGINS", ALLOWED)
+    server._refresh_cors_from_env()
+    assert server._cors is double
+
+
+def test_refresh_keeps_a_cors_subclass(monkeypatch):
+    """A CorsMiddleware subclass someone installed is rebuilt as that class."""
+    from tina4_python.core import server
+    from tina4_python.core.middleware import CorsMiddleware
+
+    class Mine(CorsMiddleware):
+        pass
+
+    monkeypatch.setattr(server, "_cors", Mine())
+    monkeypatch.setenv("TINA4_CORS_ORIGINS", ALLOWED)
+    server._refresh_cors_from_env()
+    assert type(server._cors) is Mine
+    assert server._cors.allowed_origin(ALLOWED) == ALLOWED
