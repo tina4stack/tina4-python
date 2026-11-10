@@ -3141,9 +3141,14 @@ def _load_project_env() -> None:
     Shared by run() and asgi() so both boots honour the same settings in the
     same order (ADR-0072).
     """
+    global _cors
     from tina4_python.dotenv import load_env
     load_env(override=False)
     _apply_health_path_from_env()
+    # The CORS singleton read TINA4_CORS_* at import, before .env was loaded,
+    # so a policy set only in .env was never applied. Rebuild it from the
+    # environment as it now stands.
+    _cors = CorsMiddleware()
 
 
 
