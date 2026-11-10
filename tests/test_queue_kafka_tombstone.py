@@ -43,18 +43,33 @@ def _require_broker():
         pytest.skip("kafka not set: export TINA4_KAFKA_BROKERS (e.g. 127.0.0.1:9092)")
 
 
-def _produce(records):
+def _produce(records, one_per_batch=False):
     """Produce (key, value) pairs with the REAL confluent Producer. A value of
-    None is a genuine tombstone on the wire, exactly like a Debezium delete."""
+    None is a genuine tombstone on the wire, exactly like a Debezium delete.
+
+    one_per_batch flushes after every record so each lands in its own record
+    batch: the raw socket path decodes only the first record of a fetched batch.
+    """
     from confluent_kafka import Producer
 
     topic = "tina4_tombstone_" + secrets.token_hex(6)
     producer = Producer({"bootstrap.servers": KAFKA_BROKERS})
     for key, value in records:
         payload = None if value is None else json.dumps(value).encode("utf-8")
-        producer.produce(topic, key=key, value=payload)
+        producer.produce(topic, key=key, value=payload, partition=0)
+        if one_per_batch:
+            producer.flush(15)
     producer.flush(15)
     return topic
+
+
+def _raw_connector(group_id):
+    """The zero-dependency socket path, selected the way TestKafkaRawPathLive
+    does: the flag the constructor sets from its import probe."""
+    reader = KafkaConnector(brokers=KAFKA_BROKERS, group_id=group_id)
+    reader._use_confluent = False
+    reader._confluent = None
+    return reader
 
 
 def _drain(reader, topic, want_key, max_calls=12):
@@ -109,3 +124,80 @@ def test_only_a_tombstone_yields_no_job_and_no_crash():
         assert reader.dequeue(topic) is None
     finally:
         reader.close()
+
+
+def test_single_pass_drain_reads_past_a_tombstone(monkeypatch):
+    """consume(poll_interval=0) drains to the end of the topic, tombstone or not.
+
+    Answering a tombstone with "no message" reads as an empty queue, so a
+    single-pass drain stopped at it and left every later record behind; a fresh
+    process (a cron drain) resumed at the tombstone's committed offset and
+    stopped there again, every run.
+    """
+    _require_broker()
+    from tina4_python.queue import Queue
+
+    topic = _produce([
+        (b"k1", {"n": 1}),
+        (b"k1", None),
+        (b"k2", {"n": 2}),
+    ])
+    monkeypatch.setenv("TINA4_KAFKA_GROUP_ID", "tina4_tomb_drain_" + secrets.token_hex(8))
+    queue = Queue(topic=topic, backend="kafka")
+    try:
+        got = []
+        for job in queue.consume(topic, poll_interval=0):
+            got.append(job.data.get("n"))
+            job.complete()
+        assert got == [1, 2], f"the drain stopped at the tombstone: {got}"
+    finally:
+        queue.close()
+
+
+def test_raw_path_reads_past_a_tombstone():
+    """The socket path steps over a tombstone instead of re-fetching it for ever.
+
+    _decode_first_record answered a null value with None, so dequeue() returned
+    None without moving its offset: every later fetch asked for the tombstone
+    again, and the record after it was never delivered. No exception, so nothing
+    said the consumer had stopped.
+    """
+    _require_broker()
+    topic = _produce([
+        (b"k1", {"n": 1}),
+        (b"k1", None),
+        (b"k2", {"n": 2}),
+    ], one_per_batch=True)
+    reader = _raw_connector("tina4_tomb_raw_" + secrets.token_hex(8))
+    try:
+        got = [reader.dequeue(topic), reader.dequeue(topic)]
+        assert [m and m.get("n") for m in got] == [1, 2], got
+    finally:
+        reader.close()
+
+
+def test_raw_path_cannot_spin_on_a_tombstone_it_cannot_step_past():
+    """A tombstone batched ahead of a record must not loop the socket path.
+
+    The fetch hands back the whole batch and the decoder reads its first record,
+    so the tombstone can come back at an offset the reader already passed. The
+    skip loop must return rather than fetch the same offset for ever. Run in a
+    thread with a cap so a regression fails here instead of hanging the suite.
+    """
+    import threading
+
+    _require_broker()
+    topic = _produce([(b"k1", None), (b"k2", {"n": 1})])  # one batch
+    reader = _raw_connector("tina4_tomb_spin_" + secrets.token_hex(8))
+    outcome = []
+    worker = threading.Thread(
+        target=lambda: outcome.extend([reader.dequeue(topic), reader.dequeue(topic)]),
+        daemon=True,
+    )
+    try:
+        worker.start()
+        worker.join(30)
+        assert not worker.is_alive(), "dequeue() spun on the tombstone for 30s"
+    finally:
+        if not worker.is_alive():
+            reader.close()

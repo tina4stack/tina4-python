@@ -164,39 +164,47 @@ class KafkaConnector:
             while True:
                 candidate = self._consumer.poll(timeout=0.5)
                 if candidate is not None and not candidate.error():
-                    msg = candidate
-                    break
+                    if candidate.value() is not None:
+                        msg = candidate
+                        break
+                    # Tombstone / delete marker: a null-value record. Debezium
+                    # emits these on deletes and log-compacted topics use them as
+                    # delete markers, so they are normal on Kafka. There is
+                    # nothing to decode, so skip it and poll on: the consumer's
+                    # position has already moved past it in memory, and the next
+                    # commit moves the group offset past it. Returning "no
+                    # message" here instead would read as an empty queue, so a
+                    # single-pass drain (consume(poll_interval=0)) stopped at the
+                    # tombstone, and a fresh process stopped at it again every
+                    # run. (#303: None.decode() used to raise AttributeError,
+                    # which was not in the except, so the tombstone was a poison
+                    # pill that killed the consumer thread on every restart.)
+                    continue
                 if time.monotonic() >= deadline:
                     break
             if msg is None:
                 return None, None
-            raw = msg.value()
-            if raw is None:
-                # Tombstone / delete marker: a null-value record. Debezium emits
-                # these on deletes and log-compacted topics use them as delete
-                # markers, so they are normal on Kafka. There is nothing to decode
-                # -- skip it (return "no message"). The consumer's position has
-                # already advanced past it in-memory, so the next poll() returns
-                # the following record and the commit moves the offset past the
-                # tombstone. An explicit is-None check (not merely adding
-                # AttributeError to the except) keeps unrelated attribute errors
-                # loud. (#303: None.decode() used to raise AttributeError, which
-                # was not in the except, so the tombstone was a poison pill that
-                # killed the consumer thread on every restart.)
-                return None, None
             try:
-                message = json.loads(raw.decode("utf-8"))
+                message = json.loads(msg.value().decode("utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
                 return None, None
             return message, self._track(msg, message, by_record)
         else:
             self._ensure_topic_metadata(topic)
             offset = self._offsets.get(topic, 0)
-            result = self._send_fetch(topic, offset)
-            if result is None:
-                return None, None
-            self._offsets[topic] = result["next_offset"]
-            return result["message"], f"{topic}:0:{offset}"
+            while True:
+                result = self._send_fetch(topic, offset)
+                if result is None:
+                    return None, None
+                if result["message"] is not None:
+                    self._offsets[topic] = result["next_offset"]
+                    return result["message"], f"{topic}:0:{offset}"
+                # A tombstone: step past it and read on, as the confluent path
+                # does. Stop if the offset would not move, so a batch that hands
+                # back an earlier record can never spin this loop.
+                if result["next_offset"] <= offset:
+                    return None, None
+                offset = self._offsets[topic] = result["next_offset"]
 
     def _track(self, msg, message, by_record: bool) -> str:
         """Hold a polled record for acknowledge(); return its record key."""
@@ -577,11 +585,12 @@ class KafkaConnector:
         pos += 4                                                  # partition index
         return struct.unpack("!H", response[pos:pos + 2])[0]
 
-    def _decode_first_record(self, records: bytes) -> tuple[bytes, int] | None:
+    def _decode_first_record(self, records: bytes) -> tuple[bytes | None, int] | None:
         """Pull the FIRST record out of a RecordBatch v2 blob.
 
-        Returns (value_bytes, absolute_offset), or None when the blob holds no
-        usable record: an empty batch, or a control batch (transaction markers,
+        Returns (value_bytes, absolute_offset); value_bytes is None for a
+        tombstone (null value) or an empty value. Returns None when the blob holds
+        no usable record: an empty batch, or a control batch (transaction markers,
         which carry no user payload).
         """
         if len(records) < 61:          # a v2 batch header alone is 61 bytes
@@ -619,7 +628,10 @@ class KafkaConnector:
 
         value_len, pos = self._read_varint(records, pos)
         if value_len <= 0:
-            return None                # null or empty value
+            # A null (tombstone) or empty value: no payload, but still a record
+            # with an offset, so the caller can step past it. Returning None here
+            # left the consumer re-fetching the same offset for ever (#303).
+            return None, base_offset + offset_delta
 
         return records[pos:pos + value_len], base_offset + offset_delta
 
@@ -695,6 +707,8 @@ class KafkaConnector:
         if decoded is None:
             return None
         value, msg_offset = decoded
+        if value is None:
+            return {"message": None, "next_offset": msg_offset + 1}
 
         try:
             message = json.loads(value.decode("utf-8"))
