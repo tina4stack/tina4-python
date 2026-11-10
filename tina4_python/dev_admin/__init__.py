@@ -721,6 +721,23 @@ def get_api_handlers() -> dict:
     }
 
 
+def _peak_rss_mb() -> float:
+    """Peak resident set size of this process, in MB.
+
+    ``ru_maxrss`` is in bytes on Apple's kernel (macOS, and iOS, which Python
+    3.13+ reports as ``sys.platform == "ios"``) and in kilobytes everywhere else
+    (Linux, Android, the BSDs), so it is divided by 1024 twice there and once
+    elsewhere. Raises ImportError where there is no ``resource`` module
+    (Windows).
+    """
+    import resource
+    import sys
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    divisor = 1024.0 * 1024.0 if sys.platform in ("darwin", "ios") else 1024.0
+    return round(peak / divisor, 2)
+
+
 async def _api_status(request, response):
     """System status overview."""
     import sys
@@ -740,11 +757,7 @@ async def _api_status(request, response):
     memory_usage_mb = 0.0
     peak_memory_mb = 0.0
     try:
-        import resource
-        usage = resource.getrusage(resource.RUSAGE_SELF)
-        # ru_maxrss is KB on Linux, bytes on macOS
-        scale = 1024.0 if sys.platform == "darwin" else 1.0
-        peak_memory_mb = round(usage.ru_maxrss * scale / 1024.0 / 1024.0, 2)
+        peak_memory_mb = _peak_rss_mb()
         memory_usage_mb = peak_memory_mb  # resource has no current-rss field
     except Exception:
         pass
@@ -1373,9 +1386,7 @@ async def _api_system(request, response):
 
     # Memory info
     try:
-        import resource
-        usage = resource.getrusage(resource.RUSAGE_SELF)
-        info["memory_mb"] = round(usage.ru_maxrss / 1024 / 1024, 2) if sys.platform == "linux" else round(usage.ru_maxrss / 1024 / 1024, 2)
+        info["memory_mb"] = _peak_rss_mb()
     except (ImportError, AttributeError):
         info["memory_mb"] = None
 

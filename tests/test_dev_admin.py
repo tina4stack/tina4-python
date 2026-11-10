@@ -515,6 +515,47 @@ class TestAPIHandlers:
         assert result["framework"] == "tina4-python v3"
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(not os.path.exists("/proc/self/status"),
+                        reason="needs /proc to read the kernel's own peak RSS")
+    async def test_memory_figures_match_the_real_peak_rss(self, mock_req, mock_resp):
+        """/__dev memory figures are this process's peak RSS in MB.
+
+        ru_maxrss is kilobytes on Linux; dividing it by 1024 twice reported
+        ~0.04 MB for a 40 MB server. The kernel's VmHWM is the same peak,
+        read independently.
+        """
+        from tina4_python.dev_admin import _api_status, _api_system
+        status = await _api_status(mock_req, mock_resp)
+        system = await _api_system(mock_req, mock_resp)
+        with open("/proc/self/status") as fh:
+            vm_hwm_kb = next(int(line.split()[1]) for line in fh if line.startswith("VmHWM:"))
+        real_mb = vm_hwm_kb / 1024
+        for name, value in (("status.peak_memory_mb", status["peak_memory_mb"]),
+                            ("system.memory_mb", system["memory_mb"])):
+            assert 0.75 * real_mb <= value <= 1.25 * real_mb, (
+                f"{name}={value} MB, but the kernel reports a peak of {real_mb:.1f} MB"
+            )
+
+    @pytest.mark.parametrize("platform, raw, mb", [
+        ("linux", 40 * 1024, 40.0),               # kilobytes
+        ("android", 40 * 1024, 40.0),             # kilobytes (Linux kernel)
+        ("freebsd14", 40 * 1024, 40.0),           # kilobytes
+        ("darwin", 40 * 1024 * 1024, 40.0),       # bytes
+        ("ios", 40 * 1024 * 1024, 40.0),          # bytes (same kernel as macOS)
+    ])
+    def test_peak_rss_unit_per_platform(self, monkeypatch, platform, raw, mb):
+        """ru_maxrss is bytes on Apple's kernel and kilobytes elsewhere. Only the
+        host platform can be run for real (the test above); this pins the
+        unit table the helper applies on the others."""
+        resource = pytest.importorskip("resource")
+        import sys
+        from tina4_python.dev_admin import _peak_rss_mb
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setattr(resource, "getrusage",
+                            lambda who: type("U", (), {"ru_maxrss": raw})())
+        assert _peak_rss_mb() == mb
+
+    @pytest.mark.asyncio
     async def test_agent_chat_handler_symbols_gone(self):
         """The CLI-agent proxy handlers were deleted with the agent chat
         panel (3.13.132). Importing them must fail — a negative regression
