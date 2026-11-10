@@ -37,9 +37,7 @@ the wrong one is a loud ``ImportError``/``AttributeError``, never a silent
 change of call semantics.
 """
 
-import asyncio
-import concurrent.futures
-import inspect
+from tina4_python._testing_async import _AsyncRunner, _AsyncRunnerError, _RunAborted
 import sys
 import traceback
 
@@ -91,12 +89,40 @@ def tests(*assertions):
 
 # ── Runner ──────────────────────────────────────────────────────────
 
-def run_all(quiet: bool = False, failfast: bool = False) -> dict:
+def run_all(quiet: bool = False, failfast: bool = False, timeout: float | None = 30.0) -> dict:
     """Discover and run every ``@tests``-decorated function.
 
     Returns a dict with keys ``passed``, ``failed``, ``errors``, ``details``.
+
+    An ``async def`` test function is awaited, and judged on what it returns;
+    so is any test function whose call returns an awaitable (a coroutine, a
+    Future, an object with ``__await__``).
+    Every async test in one run shares ONE event loop, created here and closed
+    when the run ends, so an object bound to a loop (an ``asyncio.Queue``, a
+    pooled connection) works across assertions. Called from inside a running
+    event loop, an async test cannot be awaited without blocking that loop, so
+    it is reported as an error asking for a synchronous caller. An async test
+    still awaiting after ``timeout`` seconds (``None``: no limit) is cancelled
+    and reported as an error, after up to one second for its cleanup. The
+    timeout cannot pre-empt code that never yields (``time.sleep`` inside an
+    ``async def``). A test that is still running after that second (it ignored
+    its cancellation) is abandoned: anything it raises afterwards, such as a
+    ``SystemExit``, is no longer attributed to it and ends the run as it would
+    from a sync test; the same holds for a task a test leaves running. A test
+    that tampers with the runner's own loop internals is outside these
+    guarantees.
     """
     results = {"passed": 0, "failed": 0, "errors": 0, "details": []}
+    runner = _AsyncRunner(timeout)
+    try:
+        return _run_all(results, runner, quiet, failfast)
+    except _RunAborted as stop:
+        raise stop.args[0] from None
+    finally:
+        runner.close()
+
+
+def _run_all(results: dict, runner: "_AsyncRunner", quiet: bool, failfast: bool) -> dict:
 
     for entry in _registry:
         fn = entry["fn"]
@@ -109,7 +135,7 @@ def run_all(quiet: bool = False, failfast: bool = False) -> dict:
         for assertion in entry["assertions"]:
             label = _assertion_label(assertion, name)
             try:
-                _run_assertion(fn, assertion)
+                _run_assertion(fn, assertion, runner)
                 results["passed"] += 1
                 results["details"].append({"name": label, "status": "passed"})
                 if not quiet:
@@ -138,65 +164,47 @@ def run_all(quiet: bool = False, failfast: bool = False) -> dict:
 
 # ── Internals ───────────────────────────────────────────────────────
 
-def _call(fn, args):
-    """Call a test function and return its value, awaiting it if it is async.
 
-    An ``async def`` returns a coroutine, which is always truthy and never equal
-    to anything. It has to be run to its result before it can be judged, or every
-    async test passes ``expect_true`` and its assertion is never evaluated.
-    """
-    result = fn(*args)
-    if not inspect.isawaitable(result):
-        return result
-
-    async def _await():
-        return await result
-
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(_await())
-    # Called from inside a running event loop: asyncio.run() cannot nest, so the
-    # coroutine runs to completion on its own loop in a worker thread.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, _await()).result()
-
-
-def _run_assertion(fn, assertion: dict):
+def _run_assertion(fn, assertion: dict, runner: _AsyncRunner):
     atype = assertion["type"]
     args = assertion["args"]
 
     if atype == "equal":
-        result = _call(fn, args)
+        result = runner.call(fn, args)
         expected = assertion["expected"]
         if result != expected:
             raise AssertionError(f"expected {expected!r}, got {result!r}")
 
     elif atype == "raises":
-        exc_class = assertion["exception"]
-        try:
-            _call(fn, args)
-        except exc_class:
-            return  # success
-        except Exception as other:
-            raise AssertionError(
-                f"expected {exc_class.__name__}, got {type(other).__name__}: {other}"
-            )
-        else:
-            raise AssertionError(f"expected {exc_class.__name__} to be raised")
+        _run_raises(fn, args, assertion["exception"], runner)
 
     elif atype == "true":
-        result = _call(fn, args)
+        result = runner.call(fn, args)
         if not result:
             raise AssertionError(f"expected truthy, got {result!r}")
 
     elif atype == "false":
-        result = _call(fn, args)
+        result = runner.call(fn, args)
         if result:
             raise AssertionError(f"expected falsy, got {result!r}")
 
     else:
         raise ValueError(f"unknown assertion type: {atype!r}")
+
+
+def _run_raises(fn, args, exc_class: type, runner: _AsyncRunner):
+    try:
+        runner.call(fn, args)
+    except (_AsyncRunnerError, _RunAborted):
+        raise  # the runner failed or the run is ending: never a pass
+    except exc_class:
+        return  # success
+    except Exception as other:
+        raise AssertionError(
+            f"expected {exc_class.__name__}, got {type(other).__name__}: {other}"
+        )
+    else:
+        raise AssertionError(f"expected {exc_class.__name__} to be raised")
 
 
 def _assertion_label(assertion: dict, fn_name: str) -> str:
