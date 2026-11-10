@@ -117,3 +117,66 @@ if __name__ == "__main__":
     test_failed_assertion_is_reported()
     test_error_is_reported()
     print("\nAll meta-tests passed.")
+
+
+# ── Async test functions are judged on what they return, not on the coroutine ──
+
+def _run_isolated(register):
+    with isolated_registry():
+        register()
+        return run_all(quiet=True)
+
+
+def test_async_expect_true_fails_when_the_coroutine_returns_false():
+    def register():
+        @tests(expect_true([]))
+        async def saved():
+            return False
+    results = _run_isolated(register)
+    assert results["failed"] == 1 and results["passed"] == 0
+
+
+def test_async_expect_equal_compares_the_returned_value():
+    def register():
+        @tests(expect_equal([2], 3), expect_equal([2], 5))
+        async def add_one(n):
+            return n + 1
+    results = _run_isolated(register)
+    assert results["passed"] == 1 and results["failed"] == 1
+
+
+def test_async_expect_false_and_raises():
+    def register():
+        @tests(expect_false([0]), expect_raises(ValueError, [-1]))
+        async def check(n):
+            if n < 0:
+                raise ValueError("negative")
+            return n
+    results = _run_isolated(register)
+    assert results["passed"] == 2
+
+
+def test_async_unexpected_exception_is_an_error_not_a_pass():
+    def register():
+        @tests(expect_true([]))
+        async def broken():
+            raise TypeError("db gone")
+    results = _run_isolated(register)
+    assert results["errors"] == 1 and results["passed"] == 0
+
+
+def test_async_tests_run_when_run_all_is_called_inside_an_event_loop():
+    """run_all() from inside a running loop (an async caller) still awaits them."""
+    import asyncio
+
+    def register():
+        @tests(expect_true([]))
+        async def saved():
+            await asyncio.sleep(0)
+            return False
+
+    async def caller():
+        return _run_isolated(register)
+
+    results = asyncio.run(caller())
+    assert results["failed"] == 1 and results["passed"] == 0

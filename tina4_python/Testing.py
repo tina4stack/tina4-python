@@ -37,6 +37,9 @@ the wrong one is a loud ``ImportError``/``AttributeError``, never a silent
 change of call semantics.
 """
 
+import asyncio
+import concurrent.futures
+import inspect
 import sys
 import traceback
 
@@ -135,12 +138,36 @@ def run_all(quiet: bool = False, failfast: bool = False) -> dict:
 
 # ── Internals ───────────────────────────────────────────────────────
 
+def _call(fn, args):
+    """Call a test function and return its value, awaiting it if it is async.
+
+    An ``async def`` returns a coroutine, which is always truthy and never equal
+    to anything. It has to be run to its result before it can be judged, or every
+    async test passes ``expect_true`` and its assertion is never evaluated.
+    """
+    result = fn(*args)
+    if not inspect.isawaitable(result):
+        return result
+
+    async def _await():
+        return await result
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_await())
+    # Called from inside a running event loop: asyncio.run() cannot nest, so the
+    # coroutine runs to completion on its own loop in a worker thread.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, _await()).result()
+
+
 def _run_assertion(fn, assertion: dict):
     atype = assertion["type"]
     args = assertion["args"]
 
     if atype == "equal":
-        result = fn(*args)
+        result = _call(fn, args)
         expected = assertion["expected"]
         if result != expected:
             raise AssertionError(f"expected {expected!r}, got {result!r}")
@@ -148,7 +175,7 @@ def _run_assertion(fn, assertion: dict):
     elif atype == "raises":
         exc_class = assertion["exception"]
         try:
-            fn(*args)
+            _call(fn, args)
         except exc_class:
             return  # success
         except Exception as other:
@@ -159,12 +186,12 @@ def _run_assertion(fn, assertion: dict):
             raise AssertionError(f"expected {exc_class.__name__} to be raised")
 
     elif atype == "true":
-        result = fn(*args)
+        result = _call(fn, args)
         if not result:
             raise AssertionError(f"expected truthy, got {result!r}")
 
     elif atype == "false":
-        result = fn(*args)
+        result = _call(fn, args)
         if result:
             raise AssertionError(f"expected falsy, got {result!r}")
 
