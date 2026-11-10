@@ -536,6 +536,25 @@ class TestAPIHandlers:
                 f"{name}={value} MB, but the kernel reports a peak of {real_mb:.1f} MB"
             )
 
+    @pytest.mark.parametrize("platform, raw, mb", [
+        ("linux", 40 * 1024, 40.0),               # kilobytes
+        ("android", 40 * 1024, 40.0),             # kilobytes (Linux kernel)
+        ("freebsd14", 40 * 1024, 40.0),           # kilobytes
+        ("darwin", 40 * 1024 * 1024, 40.0),       # bytes
+        ("ios", 40 * 1024 * 1024, 40.0),          # bytes (same kernel as macOS)
+    ])
+    def test_peak_rss_unit_per_platform(self, monkeypatch, platform, raw, mb):
+        """ru_maxrss is bytes on Apple's kernel and kilobytes elsewhere. Only the
+        host platform can be run for real (the test above); this pins the
+        unit table the helper applies on the others."""
+        resource = pytest.importorskip("resource")
+        import sys
+        from tina4_python.dev_admin import _peak_rss_mb
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setattr(resource, "getrusage",
+                            lambda who: type("U", (), {"ru_maxrss": raw})())
+        assert _peak_rss_mb() == mb
+
     @pytest.mark.asyncio
     async def test_agent_chat_handler_symbols_gone(self):
         """The CLI-agent proxy handlers were deleted with the agent chat
