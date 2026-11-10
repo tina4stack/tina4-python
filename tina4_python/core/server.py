@@ -42,6 +42,34 @@ _cors = CorsMiddleware()
 _rate_limiter = RateLimiter()
 
 
+def _cors_env_snapshot() -> tuple:
+    """The TINA4_CORS_* settings ``CorsMiddleware`` reads, as they stand now."""
+    return tuple(sorted((k, v) for k, v in os.environ.items() if k.startswith("TINA4_CORS_")))
+
+
+def _refresh_cors_from_env() -> None:
+    """Rebuild the CORS singleton when TINA4_CORS_* differ from what it was built from.
+
+    ``_cors`` is built at import, before any entry point loads ``.env``, so a
+    policy set only in ``.env`` was never applied. Every entry point that loads
+    ``.env`` (``run()``/``asgi()`` via ``_load_project_env``, and ``TestClient``)
+    calls this afterwards. The settings it was built from are recorded on the
+    instance itself, so a ``CorsMiddleware`` swapped in from elsewhere is checked
+    against what IT was built from. An object that is not a ``CorsMiddleware``
+    (a test double) is left alone.
+    """
+    global _cors
+    if not isinstance(_cors, CorsMiddleware):
+        return
+    snapshot = _cors_env_snapshot()
+    if getattr(_cors, "_tina4_env_snapshot", None) != snapshot:
+        _cors = type(_cors)()
+        _cors._tina4_env_snapshot = snapshot
+
+
+_cors._tina4_env_snapshot = _cors_env_snapshot()
+
+
 # ContextVar to signal that the current request is being served on the AI dev port
 _ai_port_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("_ai_port_ctx", default=False)
 
@@ -3144,6 +3172,7 @@ def _load_project_env() -> None:
     from tina4_python.dotenv import load_env
     load_env(override=False)
     _apply_health_path_from_env()
+    _refresh_cors_from_env()
 
 
 
