@@ -9,6 +9,12 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.162 - 2026-11-10
+
+### Fixed
+
+- Kafka tombstone (null-value) records no longer crash the consumer. A tombstone — a record whose value is `null` (Debezium deletes, log-compacted delete markers) — reached `msg.value().decode()` on the confluent path, and `None.decode()` raised `AttributeError`, which escaped `consume()` and killed the consumer thread; because the tombstone sits at the committed offset it was a poison pill that re-crashed on every restart. The consumer now skips a null-value record and continues, so a following real record is still delivered. Verified against a live broker with a real tombstone (no mocks) (#303).
+
 ## 3.13.161 - 2026-11-09
 
 ### Fixed
