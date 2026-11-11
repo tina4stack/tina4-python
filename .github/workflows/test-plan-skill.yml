@@ -1,10 +1,10 @@
 name: test-plan skill
 
-# Gates the tina4-test-plan skill's builder: runs its self-test (which runs the
-# real builder on the shipped example spec and asserts the workbook/PDF it makes).
-# Scoped to the skill path so it only runs when the skill changes. openpyxl and
-# reportlab are installed for THIS job only — they are skill tooling, never an
-# app/runtime dependency (the framework stays zero-dependency).
+# Gates the tina4-test-plan skill's builder: runs its self-test, which runs the
+# real builder on the shipped example spec and asserts the workbook/PDF it makes.
+# Scoped to the skill path. The builder and its self-test are standard-library
+# only — no `pip install`, nothing added to the app (the framework stays
+# zero-dependency).
 
 on:
   push:
@@ -24,7 +24,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install skill tooling (isolated, not an app dependency)
-        run: pip install openpyxl reportlab
-      - name: Build the example plan and assert its structure
+      - name: Build the example plan and assert its structure (stdlib only)
         run: python .claude/skills/tina4-test-plan/references/selftest.py

@@ -4,21 +4,21 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
-"""Self-test for build_test_plan.py — a real gate, not a smoke test.
+"""Self-test for build_test_plan.py — a real gate, standard library only.
 
 Builds the shipped example-spec.json with the real builder, then asserts the
-workbook/PDF/agent-prompt it produced are structurally correct: the sheets, the
-case-row count, the Result/Priority dropdowns, and — the fragile bit — that the
-Summary totals carry CACHED values so a non-recalculating viewer shows numbers,
-not blanks. Every expected number is derived FROM the spec, never hardcoded, so
-this stays correct when the example spec changes.
+.xlsx and .pdf it produced by reading their bytes directly (zip + XML for the
+workbook, raw object scan for the PDF): the sheets, the one-row-per-case count,
+the Result/Priority dropdowns, that no Test-cases cell became a live formula
+(a step like "=1+1" stays text), and that the Summary grand total carries a
+CACHED value so a non-recalculating viewer shows the count, not a blank. Every
+expected number is derived FROM the spec, never hardcoded.
 
-Run (skill tooling only — never an app dependency):
-    uv run --no-project --with openpyxl --with reportlab python references/selftest.py
+Run (no third-party dependency — the Tina4 way):
+    python references/selftest.py
 
 Exit 0 = pass, non-zero = a real failure. Prove it is a gate by mutation: break
-something in build_test_plan.py (e.g. the cached-value injection) and watch this
-go red, then restore.
+the cached-value write in _xlsx.py and watch this go red, then restore.
 """
 import json
 import os
@@ -37,68 +37,88 @@ failures = []
 
 
 def check(label, condition, detail=""):
-    mark = "ok " if condition else "FAIL"
-    print(f"  [{mark}] {label}" + (f" — {detail}" if detail and not condition else ""))
+    print(f"  [{'ok ' if condition else 'FAIL'}] {label}" + (f" — {detail}" if detail and not condition else ""))
     if not condition:
         failures.append(label + (f": {detail}" if detail else ""))
 
 
-def main():
-    from openpyxl import load_workbook
+def build(spec_path, out_dir, basename):
+    proc = subprocess.run([sys.executable, BUILDER, spec_path, out_dir, "--basename", basename],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(proc.stdout)
+        print(proc.stderr, file=sys.stderr)
+        raise SystemExit(f"builder exited {proc.returncode}")
 
+
+def sheet_file_for(zf, name):
+    """Map a sheet display name to its worksheets/sheetN.xml (N = position)."""
+    order = re.findall(r'<sheet name="([^"]+)"', zf.read("xl/workbook.xml").decode())
+    return f"xl/worksheets/sheet{order.index(name) + 1}.xml", order
+
+
+def main():
     spec = json.load(open(SPEC, encoding="utf-8"))
     expected_cases = sum(len(s["cases"]) for s in spec["sections"])
     print(f"spec: {len(spec['sections'])} sections, {expected_cases} cases expected")
 
     with tempfile.TemporaryDirectory() as out:
-        proc = subprocess.run([sys.executable, BUILDER, SPEC, out, "--basename", "selftest"],
-                              capture_output=True, text=True)
-        if proc.returncode != 0:
-            print(proc.stdout)
-            print(proc.stderr, file=sys.stderr)
-            print("FAIL: builder exited non-zero")
-            return 1
-
+        build(SPEC, out, "selftest")
         xlsx = os.path.join(out, "selftest.xlsx")
         pdf = os.path.join(out, "selftest.pdf")
         prompt = os.path.join(out, "selftest-agent-prompt.md")
+
         check("xlsx produced", os.path.exists(xlsx))
         check("pdf produced", os.path.exists(pdf))
         check("agent prompt produced", os.path.exists(prompt))
-        check("pdf is non-empty", os.path.exists(pdf) and os.path.getsize(pdf) > 2000,
-              f"{os.path.getsize(pdf) if os.path.exists(pdf) else 0} bytes")
-        if not os.path.exists(xlsx):
+        if not (os.path.exists(xlsx) and os.path.exists(pdf)):
             return 1
 
-        wb = load_workbook(xlsx)
-        check("sheet set correct", wb.sheetnames == EXPECTED_SHEETS, str(wb.sheetnames))
+        with zipfile.ZipFile(xlsx) as zf:
+            check("xlsx is a valid zip", zf.testzip() is None)
+            tc_path, order = sheet_file_for(zf, "Test cases")
+            sm_path, _ = sheet_file_for(zf, "Summary")
+            check("sheet set correct", order == EXPECTED_SHEETS, str(order))
 
-        tc = wb["Test cases"]
-        check("one row per case + header", tc.max_row == expected_cases + 1,
-              f"max_row={tc.max_row}, expected {expected_cases + 1}")
-        sqrefs = {str(dv.sqref) for dv in tc.data_validations.dataValidation}
-        check("Result dropdown on column J", any(s.startswith("J2") for s in sqrefs), str(sqrefs))
-        check("Priority dropdown on column I", any(s.startswith("I2") for s in sqrefs), str(sqrefs))
+            tc = zf.read(tc_path).decode()
+            max_row = max(int(n) for n in re.findall(r'<row r="(\d+)"', tc))
+            check("one row per case + header", max_row == expected_cases + 1,
+                  f"max_row={max_row}, expected {expected_cases + 1}")
+            check("Result dropdown on column J", f'sqref="J2:J{expected_cases + 1}"' in tc)
+            check("Priority dropdown on column I", f'sqref="I2:I{expected_cases + 1}"' in tc)
+            check("Pass/Fail/Blocked conditional fills", tc.count("<conditionalFormatting") == 3,
+                  str(tc.count("<conditionalFormatting")))
+            check("no Test-cases cell is a live formula", "<f>" not in tc,
+                  "a cell became a formula — a '=...' step would evaluate")
 
-        # A step that looks like a formula must be stored as text, never evaluated.
-        formula_steps = [step for s in spec["sections"] for (step, _, _) in s["cases"]
-                         if str(step).lstrip().startswith("=")]
-        if formula_steps:
-            got = [tc.cell(r, 7).data_type for r in range(2, tc.max_row + 1)]
-            check("formula-looking steps stored as text", all(t != "f" for t in got),
-                  "a step beginning with '=' was stored as a live formula")
+            sm = zf.read(sm_path).decode()
+            m = re.search(r'<c r="B7"[^>]*><f>[^<]*</f><v>([^<]*)</v>', sm)
+            check("Summary grand-total is cached", bool(m),
+                  "B7 has a formula but no cached <v> — non-recalc viewers see blank")
+            if m:
+                check("cached grand total equals case count", m.group(1) == str(expected_cases),
+                      f"cached={m.group(1)}, expected {expected_cases}")
 
-        # The fragile part: Summary B7 (grand total) must carry a CACHED <v> value,
-        # so a viewer that does not recalculate shows the real count, not a blank.
-        idx = wb.sheetnames.index("Summary") + 1
-        with zipfile.ZipFile(xlsx) as z:
-            xml = z.read(f"xl/worksheets/sheet{idx}.xml").decode("utf-8")
-        m = re.search(r'<c r="B7"[^>]*><f>[^<]*</f><v>([^<]*)</v></c>', xml)
-        check("Summary grand-total is cached", bool(m),
-              "B7 has a formula but no cached <v> — non-recalc viewers see blank")
-        if m:
-            check("cached grand total equals case count", m.group(1) == str(expected_cases),
-                  f"cached={m.group(1)}, expected {expected_cases}")
+        pdf_bytes = open(pdf, "rb").read()
+        check("pdf header", pdf_bytes[:5] == b"%PDF-")
+        check("pdf trailer", pdf_bytes.rstrip().endswith(b"%%EOF"))
+        check("pdf has pages", pdf_bytes.count(b"/Type /Page ") >= 3,
+              str(pdf_bytes.count(b"/Type /Page ")))
+        check("pdf carries plan content", b"Coverage at a glance" in pdf_bytes and b"Sign-off" in pdf_bytes)
+
+    # Positive proof that a formula-looking step stays TEXT (not a live formula).
+    with tempfile.TemporaryDirectory() as out:
+        fspec = os.path.join(out, "f.json")
+        json.dump({"project": "F", "date": "2026-01-01", "sections": [
+            {"prefix": "X", "group": "G", "area": "A",
+             "cases": [["=1+1 typed in the name field", "stored as literal text", "P1"]]}]},
+            open(fspec, "w"))
+        build(fspec, out, "f")
+        with zipfile.ZipFile(os.path.join(out, "f.xlsx")) as zf:
+            tc_path, _ = sheet_file_for(zf, "Test cases")
+            tc = zf.read(tc_path).decode()
+        check("formula-looking step stored as inline text",
+              't="inlineStr"' in tc and "=1+1 typed in the name field" in tc and "<f>" not in tc)
 
     print()
     if failures:
