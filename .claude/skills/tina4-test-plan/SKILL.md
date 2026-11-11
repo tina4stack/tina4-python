@@ -63,6 +63,15 @@ All files named below are in this skill's `references/` folder, next to wherever
    the xlsx with openpyxl and check the sheet names and the Summary formulas. The Summary values are
    cached for the "Not run" state; a spreadsheet app recalculates them on open. If you could not open
    it in a spreadsheet app, say so.
+
+   The builder itself has a self-test — `references/selftest.py` builds the shipped `example-spec.json`
+   with the real builder and asserts the sheets, the one-row-per-case count, the Result/Priority
+   dropdowns and the cached Summary total (every expected number derived from the spec, no mocks). CI
+   runs it on any change to this skill (`.github/workflows/test-plan-skill.yml`); run it yourself after
+   editing `build_test_plan.py`:
+   ```bash
+   uv run --no-project --with openpyxl --with reportlab python <skill-folder>/references/selftest.py
+   ```
 6. **If an agent will fill in the workbook** (ask if unknown; assume yes when the user mentions
    automating the testing), see "Agent-executed runs" below. The builder always writes the prompt;
    fill its angle-bracket values and hand it over with the plan.
