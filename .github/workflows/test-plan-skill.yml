@@ -6,6 +6,10 @@ name: test-plan skill
 # only — no `pip install`, nothing added to the app (the framework stays
 # zero-dependency).
 
+# The job only reads the repo (checkout) and runs python; pin the token to that.
+permissions:
+  contents: read
+
 on:
   push:
     paths:
