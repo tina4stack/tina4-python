@@ -1,0 +1,32 @@
+name: test-plan skill
+
+# Gates the tina4-test-plan skill's builder: runs its self-test, which runs the
+# real builder on the shipped example spec and asserts the workbook/PDF it makes.
+# Scoped to the skill path. The builder and its self-test are standard-library
+# only — no `pip install`, nothing added to the app (the framework stays
+# zero-dependency).
+
+# The job only reads the repo (checkout) and runs python; pin the token to that.
+permissions:
+  contents: read
+
+on:
+  push:
+    paths:
+      - ".claude/skills/tina4-test-plan/**"
+      - ".github/workflows/test-plan-skill.yml"
+  pull_request:
+    paths:
+      - ".claude/skills/tina4-test-plan/**"
+      - ".github/workflows/test-plan-skill.yml"
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the example plan and assert its structure (stdlib only)
+        run: python .claude/skills/tina4-test-plan/references/selftest.py

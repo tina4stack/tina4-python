@@ -52,17 +52,27 @@ All files named below are in this skill's `references/` folder, next to wherever
      and two of each scoped role to test isolation) and `seed` (the known values to prepare).
    - Set `sends_real_email` true if the environment sends real mail. List recently changed areas in
      `regression_priority` (section prefixes).
-4. **Build.** The builder needs Python 3 with `openpyxl` and `reportlab`, even on a PHP, Ruby or Node.js
-   project. They are tools for this skill only, so never add them to the app. With `uv`:
+4. **Build.** The builder needs only **Python 3 — no third-party packages**, on any project (Python,
+   PHP, Ruby, Node.js). The `.xlsx` and `.pdf` are written by the sibling stdlib modules
+   `references/_xlsx.py` and `references/_pdf.py`, so running the skill installs nothing — it holds the
+   same zero-dependency bar as the framework itself. Just run:
    ```bash
-   uv run --no-project --with openpyxl --with reportlab python <skill-folder>/references/build_test_plan.py spec.json OUT_DIR --basename name
+   python <skill-folder>/references/build_test_plan.py spec.json OUT_DIR --basename name
    ```
-   Without `uv`, run `python3 -m pip install --target <scratch>/libs openpyxl reportlab`, then run the
-   script with `PYTHONPATH=<scratch>/libs`.
-5. **Verify.** Render two or three PDF pages (`pdftoppm -r 60 -png -f 1 -l 3`) and look at them. Load
-   the xlsx with openpyxl and check the sheet names and the Summary formulas. The Summary values are
-   cached for the "Not run" state; a spreadsheet app recalculates them on open. If you could not open
-   it in a spreadsheet app, say so.
+5. **Verify.** Render two or three PDF pages (`pdftoppm -r 60 -png -f 1 -l 3`) and look at them. The
+   Summary values are cached for the "Not run" state; a spreadsheet app recalculates them on open. If
+   you could not open it in a spreadsheet app, say so.
+
+   The builder has a self-test — `references/selftest.py` builds the shipped `example-spec.json` with
+   the real builder and asserts, by reading the output bytes (zip+XML for the workbook, object scan for
+   the PDF), the sheets, the one-row-per-case count, the Result/Priority dropdowns, that a
+   formula-looking step stays text, and the cached Summary total (every expected number derived from
+   the spec, no mocks). It is stdlib-only and CI runs it on any change to this skill
+   (`.github/workflows/test-plan-skill.yml`). Run it yourself after editing `build_test_plan.py`,
+   `_xlsx.py` or `_pdf.py`:
+   ```bash
+   python <skill-folder>/references/selftest.py
+   ```
 6. **If an agent will fill in the workbook** (ask if unknown; assume yes when the user mentions
    automating the testing), see "Agent-executed runs" below. The builder always writes the prompt;
    fill its angle-bracket values and hand it over with the plan.
