@@ -643,6 +643,91 @@ def test_invalid_shutdown_timeout_falls_back_to_30_seconds(monkeypatch):
         )
 
 
+def test_a_teardown_throw_during_shutdown_still_exits_zero(tmp_path):
+    """A throw inside the built-in server's teardown STILL drains and exits 0.
+
+    PARITY with PHP's testATeardownThrowDuringShutdownStillExitsZero. The
+    built-in asyncio server's teardown tail LOGS as it tears down — the
+    invalid-timeout WARNING from _resolve_shutdown_timeout(), then the
+    "Server stopped." / Log.reset() finale. Under TINA4_LOG_STRICT a log sink
+    that fails to WRITE turns those into a raise, and before the teardown guard
+    that raise escaped _serve() → asyncio.run() re-raised → a handled SIGTERM
+    exited NON-ZERO, the opposite of the contract (clause 8: exit 0).
+
+    The throw is GENUINE, not simulated (no mock, no monkeypatch of the server):
+
+      * ``TINA4_DEFAULT_WEBSERVER=TRUE`` pins Tina4's OWN built-in asyncio server
+        — the only path that runs this teardown tail. The production
+        uvicorn/hypercorn/granian path computes its timeout at config time and is
+        deliberately untouched.
+      * ``TINA4_LOG_STRICT=true`` makes a failing log WRITE raise instead of
+        degrade (the whole point of strict mode).
+      * The strict directory-layout ``error.log`` sink OPENS as a real file at
+        boot; this test then REPLACES that file with a DIRECTORY. The sink's next
+        WARNING+ write therefore does ``open(<dir>, "ab")`` and the kernel raises
+        ``IsADirectoryError``. A directory can never be opened for writing — not
+        even as root — so this gate holds under CAP_DAC_OVERRIDE, unlike a
+        ``chmod 0400`` the test runner's root would walk straight through.
+      * ``TINA4_SHUTDOWN_TIMEOUT=-5`` is invalid, so the teardown emits exactly
+        that WARNING into the now-unwritable sink — a real throw in the signal
+        path.
+
+    Mutation proof is by construction: delete the ``try/except`` around the
+    teardown tail in server.py and this raise escapes _serve(), asyncio.run()
+    re-raises it, and the child exits non-zero instead of 0.
+    """
+    if os.name != "posix":
+        pytest.skip("POSIX signals only; built-in-server teardown is verified on Linux CI")
+
+    # A DIFFERENT directory from the child's stdout capture (tmp_path/logs) so
+    # sabotaging error.log cannot disturb the test's own view of the child.
+    app_log_dir = tmp_path / "applogs"
+    app_log_dir.mkdir()
+    error_log = app_log_dir / "error.log"
+
+    proc = None
+    try:
+        proc, port = _boot(
+            tmp_path,
+            extra_env={
+                "TINA4_DEFAULT_WEBSERVER": "TRUE",   # pin the built-in server
+                "TINA4_LOG_STRICT": "true",          # a failed log write RAISES
+                "TINA4_LOG_OUTPUT": "both",          # force the file sinks on
+                "TINA4_LOG_DIR": str(app_log_dir),   # directory layout -> error.log
+                "TINA4_SHUTDOWN_TIMEOUT": "-5",       # invalid -> teardown WARNING
+            },
+        )
+
+        # The strict error.log sink opened as a real FILE at boot. Prove that,
+        # then swap it for a DIRECTORY so the sink's first WARNING+ write during
+        # teardown raises IsADirectoryError on open().
+        deadline = time.monotonic() + 10.0
+        while not error_log.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert error_log.is_file(), (
+            f"the strict error.log sink never opened as a file at boot, so this "
+            f"gate would prove nothing; dir held: {list(app_log_dir.iterdir())}\n"
+            f"{read_child_log(proc)}"
+        )
+        error_log.unlink()
+        error_log.mkdir()
+        assert error_log.is_dir(), "error.log must be a directory to fail the write"
+
+        os.kill(proc.pid, signal.SIGTERM)
+        _wait_for_exit(proc, timeout=15)
+
+        # A handled signal drains to exit 0 — never a negative (killed BY the
+        # signal) and never a positive (crashed out of asyncio.run). The single
+        # `== 0` covers both halves of the contract: not signalled, and clean.
+        assert proc.returncode == 0, (
+            f"a throw inside the built-in server's teardown must degrade and the "
+            f"handled SIGTERM must still exit 0, not fatal the process; got "
+            f"returncode {proc.returncode}\n{read_child_log(proc)}"
+        )
+    finally:
+        _reap(proc)
+
+
 # ── the PRODUCTION path (uvicorn owns the socket) ─────────────────────────
 #
 # run() hands the socket to the first importable production ASGI server

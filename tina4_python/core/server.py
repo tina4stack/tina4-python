@@ -4752,63 +4752,92 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
 
         await shutdown.wait()
 
-        # 1. Stop accepting FIRST. A connection that arrives after the signal
-        #    must get a clean CONNECTION REFUSED — not a 503, not a TCP reset.
-        live_servers = [
-            s for s in (ai_server, server, *loopback_servers) if s is not None
-        ]
-        for live_server in live_servers:
-            live_server.close()
-        # Raw TCP listeners stop accepting at the same moment as HTTP.
-        _tcp_services.stop_accepting_all()
-
-        # 2. Stop background work.
-        for t in bg_tasks:
-            t.cancel()
-
-        # 3. Drain what is already in flight, BOUNDED. wait_closed() on its own
-        #    waits forever, so one wedged handler (or one idle WebSocket) used to
-        #    hold the process open past any orchestrator's grace period.
-        timeout_seconds = _resolve_shutdown_timeout()
+        # The whole teardown tail is EXCEPTION-SAFE: a throw in ANY step must
+        # degrade to a stderr line and STILL let a handled SIGTERM/SIGINT exit 0
+        # — it may never fatal the process. Two steps below log while they tear
+        # down (the invalid-timeout WARNING in _resolve_shutdown_timeout(), and
+        # the "Server stopped." / Log.reset() finale), so under TINA4_LOG_STRICT
+        # with a failing log sink they RAISE; before this guard that escaped
+        # _serve() → asyncio.run() re-raised → a handled signal exited non-zero,
+        # the exact opposite of the contract. This mirrors PHP Server::cleanup()
+        # (the \Throwable guard that still exit(0)s) and Ruby's teardown. It is
+        # idempotent (the shutdown event is already consumed and _serve() returns
+        # right after) and does NOT touch the production uvicorn/hypercorn/granian
+        # path, which computes the timeout at config time and returns long before
+        # this tail runs.
         try:
-            async with asyncio.timeout(timeout_seconds):
-                # A live WebSocket never drains by itself — tell it we are going
-                # away (RFC 6455 close code 1001) so the client reconnects
-                # elsewhere instead of seeing the socket vanish. A dead peer
-                # must not turn a clean exit 0 into a crash on the way out.
-                try:
-                    await _ws_manager.disconnect_all(
-                        code=CLOSE_GOING_AWAY, reason="server shutting down")
-                except Exception as exc:  # noqa: BLE001 — never fail the exit
-                    Log.error(f"Error closing WebSocket connections on shutdown: {exc}")
-                # Raw TCP services drain their live device connections (firing
-                # on_close) alongside the HTTP drain, within the same deadline.
-                try:
-                    await _tcp_services.drain_all()
-                except Exception as exc:  # noqa: BLE001 — never fail the exit
-                    Log.error(f"Error draining TCP services on shutdown: {exc}")
-                for live_server in live_servers:
-                    await live_server.wait_closed()
-        except TimeoutError:
-            Log.warning(
-                f"TINA4_SHUTDOWN_TIMEOUT={timeout_seconds:g}s reached with work still "
-                f"in flight — forcing the remaining connections closed"
-            )
+            # 1. Stop accepting FIRST. A connection that arrives after the signal
+            #    must get a clean CONNECTION REFUSED — not a 503, not a TCP reset.
+            live_servers = [
+                s for s in (ai_server, server, *loopback_servers) if s is not None
+            ]
             for live_server in live_servers:
-                # Python 3.13+. On 3.12 the tasks are cancelled by asyncio.run's
-                # own teardown instead, which still gets us out.
-                abort_clients = getattr(live_server, "abort_clients", None)
-                if abort_clients is not None:
-                    abort_clients()
+                live_server.close()
+            # Raw TCP listeners stop accepting at the same moment as HTTP.
+            _tcp_services.stop_accepting_all()
 
-        # 4. Release the resources the OS would otherwise reap for us.
-        _close_bound_databases()
-        _executor.shutdown(wait=False, cancel_futures=True)
-        Log.info("Server stopped.")
-        # Graceful shutdown owns the final call to reset() (Decision 24 /
-        # LOG-I02): flush+close owned sinks AFTER the shutdown record above is
-        # written, exactly once.
-        Log.reset()
+            # 2. Stop background work.
+            for t in bg_tasks:
+                t.cancel()
+
+            # 3. Drain what is already in flight, BOUNDED. wait_closed() on its
+            #    own waits forever, so one wedged handler (or one idle WebSocket)
+            #    used to hold the process open past any orchestrator's grace
+            #    period.
+            timeout_seconds = _resolve_shutdown_timeout()
+            try:
+                async with asyncio.timeout(timeout_seconds):
+                    # A live WebSocket never drains by itself — tell it we are
+                    # going away (RFC 6455 close code 1001) so the client
+                    # reconnects elsewhere instead of seeing the socket vanish. A
+                    # dead peer must not turn a clean exit 0 into a crash on the
+                    # way out.
+                    try:
+                        await _ws_manager.disconnect_all(
+                            code=CLOSE_GOING_AWAY, reason="server shutting down")
+                    except Exception as exc:  # noqa: BLE001 — never fail the exit
+                        Log.error(f"Error closing WebSocket connections on shutdown: {exc}")
+                    # Raw TCP services drain their live device connections (firing
+                    # on_close) alongside the HTTP drain, within the same deadline.
+                    try:
+                        await _tcp_services.drain_all()
+                    except Exception as exc:  # noqa: BLE001 — never fail the exit
+                        Log.error(f"Error draining TCP services on shutdown: {exc}")
+                    for live_server in live_servers:
+                        await live_server.wait_closed()
+            except TimeoutError:
+                Log.warning(
+                    f"TINA4_SHUTDOWN_TIMEOUT={timeout_seconds:g}s reached with work still "
+                    f"in flight — forcing the remaining connections closed"
+                )
+                for live_server in live_servers:
+                    # Python 3.13+. On 3.12 the tasks are cancelled by
+                    # asyncio.run's own teardown instead, which still gets us out.
+                    abort_clients = getattr(live_server, "abort_clients", None)
+                    if abort_clients is not None:
+                        abort_clients()
+
+            # 4. Release the resources the OS would otherwise reap for us.
+            _close_bound_databases()
+            _executor.shutdown(wait=False, cancel_futures=True)
+            Log.info("Server stopped.")
+            # Graceful shutdown owns the final call to reset() (Decision 24 /
+            # LOG-I02): flush+close owned sinks AFTER the shutdown record above is
+            # written, exactly once.
+            Log.reset()
+        except Exception as teardown_error:  # noqa: BLE001 — a handled signal MUST exit 0
+            # A teardown step threw (e.g. a strict-mode log sink that fails to
+            # write). Degrade to a best-effort stderr line and fall through to a
+            # clean exit — never re-raise, which would fatal a handled signal.
+            try:
+                print(
+                    f"tina4: shutdown teardown degraded ({teardown_error!r}) — "
+                    f"exiting 0",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            except Exception:
+                pass
 
     try:
         asyncio.run(_serve())
