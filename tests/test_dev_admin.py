@@ -542,6 +542,8 @@ class TestAPIHandlers:
         ("freebsd14", 40 * 1024, 40.0),           # kilobytes
         ("darwin", 40 * 1024 * 1024, 40.0),       # bytes
         ("ios", 40 * 1024 * 1024, 40.0),          # bytes (same kernel as macOS)
+        ("tvos", 40 * 1024 * 1024, 40.0),         # bytes (same kernel as macOS)
+        ("watchos", 40 * 1024 * 1024, 40.0),      # bytes (same kernel as macOS)
     ])
     def test_peak_rss_unit_per_platform(self, monkeypatch, platform, raw, mb):
         """ru_maxrss is bytes on Apple's kernel and kilobytes elsewhere. Only the

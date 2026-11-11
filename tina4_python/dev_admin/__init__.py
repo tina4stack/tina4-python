@@ -721,20 +721,24 @@ def get_api_handlers() -> dict:
     }
 
 
+# sys.platform values on Apple's kernel, as the stdlib lists them (ctypes.util).
+_APPLE_PLATFORMS = ("darwin", "ios", "tvos", "watchos")
+
+
 def _peak_rss_mb() -> float:
     """Peak resident set size of this process, in MB.
 
-    ``ru_maxrss`` is in bytes on Apple's kernel (macOS, and iOS, which Python
-    3.13+ reports as ``sys.platform == "ios"``) and in kilobytes everywhere else
-    (Linux, Android, the BSDs), so it is divided by 1024 twice there and once
-    elsewhere. Raises ImportError where there is no ``resource`` module
-    (Windows).
+    ``ru_maxrss`` is in bytes on Apple's kernel (macOS, and the ``ios``,
+    ``tvos`` and ``watchos`` values newer Pythons report) and in kilobytes
+    everywhere else (Linux, Android, the BSDs), so it is divided by 1024 twice
+    there and once elsewhere. Raises ImportError where there is no
+    ``resource`` module (Windows).
     """
     import resource
     import sys
 
     peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    divisor = 1024.0 * 1024.0 if sys.platform in ("darwin", "ios") else 1024.0
+    divisor = 1024.0 * 1024.0 if sys.platform in _APPLE_PLATFORMS else 1024.0
     return round(peak / divisor, 2)
 
 
