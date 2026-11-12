@@ -4730,19 +4730,27 @@ def run(host: str | None = None, port: int | None = None, no_browser: bool = Fal
             except OSError:
                 Log.warning(f"AI port {_ai_port} in use — skipping")
 
-        # Raw TCP services (feature 142, ADR-0102 D1) fold into THIS accept loop
-        # — same process as HTTP, so a device gateway and its dashboard share
-        # config, logging, ORM and queue. Each binds its own port; a worker that
-        # finds the port already bound skips silently (single-owner).
-        from tina4_python import tcp as _tcp_services
-        await _tcp_services.start_all(host)
-
+        # Arm the shutdown signal handlers BEFORE we begin accepting raw-TCP
+        # connections (below). Binding a port that accepts work before graceful
+        # shutdown is wired leaves a window in which a signal kills the process
+        # ungracefully instead of draining — a device that connects the instant
+        # the port opens lands squarely in it (feature 142's SIGTERM-drain
+        # contract). Mirrors Node/PHP/Ruby arming handlers before accept.
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 loop.add_signal_handler(sig, _signal_handler)
             except NotImplementedError:
                 pass  # Windows
+
+        # Raw TCP services (feature 142, ADR-0102 D1) fold into THIS accept loop
+        # — same process as HTTP, so a device gateway and its dashboard share
+        # config, logging, ORM and queue. Started AFTER the handlers above, so a
+        # device connecting the instant the port opens can never catch the
+        # process without a graceful-shutdown handler. Each binds its own port; a
+        # worker that finds the port already bound skips silently (single-owner).
+        from tina4_python import tcp as _tcp_services
+        await _tcp_services.start_all(host)
 
         # Start registered background tasks as asyncio tasks. Sync callbacks run
         # in a thread pool so they CANNOT block the event loop. The SAME helper
