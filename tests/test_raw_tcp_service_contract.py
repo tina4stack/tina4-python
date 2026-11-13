@@ -532,23 +532,46 @@ def _write_tcp_app(proj, port):
     )
 
 
+def _tcp_port_env(extra):
+    """Allocate the TCP service port independently of the HTTP port.
+
+    Deriving it as the HTTP port plus one assumed that port was free. On a busy
+    runner it sometimes is not: the framework then (correctly) refuses to bind
+    it as "already bound by another worker" and the readiness wait times out
+    (seen in CI as "child server never became ready"). This takes a real free
+    port per boot attempt, never the HTTP port itself, and hands the readiness
+    check the same one. Returns (extra_env, ready, state); state["tcp"] holds
+    the port the booted server actually listens on.
+    """
+    state = {}
+
+    def env(http_port):
+        tcp = free_port()
+        while tcp == http_port:
+            tcp = free_port()
+        state["tcp"] = tcp
+        return {"TINA4_TCP_PORT": str(tcp), **extra}
+
+    def ready(http_port):
+        return port_open(http_port) and port_open(state["tcp"])
+
+    return env, ready, state
+
+
 async def test_listen_accept_in_process_while_http_still_serves(tmp_path):
     """A real framework server: a client connects to the TCP service (on_connect
     fires IN the server process, proven by the greeting it sends) WHILE an HTTP
     request to the same process succeeds. Mutation: don't start TCP services in
     _serve() and the TCP connect never greets."""
-    def ready(p):
-        return port_open(p) and port_open(p + 1)
+    env, ready, tcp = _tcp_port_env({"TINA4_DEFAULT_WEBSERVER": "TRUE"})
 
     proc, port = boot_child_server(
         tmp_path, _write_tcp_app,
-        extra_env=lambda p: {"TINA4_TCP_PORT": str(p + 1),
-                             "TINA4_DEFAULT_WEBSERVER": "TRUE"},
-        ready=ready, new_session=True,
+        extra_env=env, ready=ready, new_session=True,
     )
     try:
         # 1. Raw TCP: on_connect greeting proves the listener runs in-process.
-        reader, writer = await _connect("127.0.0.1", port + 1)
+        reader, writer = await _connect("127.0.0.1", tcp["tcp"])
         greeting = await asyncio.wait_for(reader.readexactly(6), timeout=3.0)
         assert greeting == b"HELLO\n", f"on_connect must fire in-process, got {greeting!r}"
 
@@ -594,19 +617,16 @@ async def test_sigterm_drains_live_tcp_connection_and_exits_zero(tmp_path):
     connection is closed cleanly within the deadline and the process exits 0,
     while HTTP kept serving. Mutation: skip drain_all() on shutdown and the
     client never sees EOF within the deadline (test times out / non-zero exit)."""
-    def ready(p):
-        return port_open(p) and port_open(p + 1)
+    env, ready, tcp = _tcp_port_env({"TINA4_DEFAULT_WEBSERVER": "TRUE",
+                                     "TINA4_SHUTDOWN_TIMEOUT": "10"})
 
     proc, port = boot_child_server(
         tmp_path, _write_tcp_app,
-        extra_env=lambda p: {"TINA4_TCP_PORT": str(p + 1),
-                             "TINA4_DEFAULT_WEBSERVER": "TRUE",
-                             "TINA4_SHUTDOWN_TIMEOUT": "10"},
-        ready=ready, new_session=True,
+        extra_env=env, ready=ready, new_session=True,
     )
     reader = writer = None
     try:
-        reader, writer = await _connect("127.0.0.1", port + 1)
+        reader, writer = await _connect("127.0.0.1", tcp["tcp"])
         greeting = await asyncio.wait_for(reader.readexactly(6), timeout=3.0)
         assert greeting == b"HELLO\n"
 
