@@ -53,6 +53,7 @@ class KafkaConnector:
     # never exercised and its tests passed without touching this code.
     PRODUCE_VERSION = 3
     FETCH_VERSION = 4
+    FETCH_MAX_WAIT_MS = 5000   # the broker long-polls this long for an empty partition
 
     def __init__(self, **config):
         self._brokers = config.get(
@@ -144,59 +145,84 @@ class KafkaConnector:
 
     def _dequeue(self, topic: str, by_record: bool) -> tuple[dict | None, str | None]:
         self._ensure_connected()
-
         if self._use_confluent:
-            first = topic not in self._subscribed_topics
-            if first:
-                self._consumer.subscribe([topic])
-                self._subscribed_topics.add(topic)
-            # The FIRST poll after subscribing must drive the consumer-group
-            # join + partition assignment, which takes several seconds on a cold
-            # broker. Until partitions are assigned, poll() returns None even
-            # when the topic already has messages -- so a single short poll made
-            # dequeue() return None right after enqueue(). Poll in a bounded loop
-            # on first subscribe (deadline TINA4_KAFKA_ASSIGN_TIMEOUT, default
-            # 15s); steady state stays a single ~1s poll.
-            deadline = time.monotonic() + (
-                float(os.environ.get("TINA4_KAFKA_ASSIGN_TIMEOUT", "15")) if first else 1.0
-            )
-            msg = None
-            while True:
-                candidate = self._consumer.poll(timeout=0.5)
-                if candidate is not None and not candidate.error():
-                    msg = candidate
-                    break
-                if time.monotonic() >= deadline:
-                    break
-            if msg is None:
-                return None, None
-            raw = msg.value()
-            if raw is None:
-                # Tombstone / delete marker: a null-value record. Debezium emits
-                # these on deletes and log-compacted topics use them as delete
-                # markers, so they are normal on Kafka. There is nothing to decode
-                # -- skip it (return "no message"). The consumer's position has
-                # already advanced past it in-memory, so the next poll() returns
-                # the following record and the commit moves the offset past the
-                # tombstone. An explicit is-None check (not merely adding
-                # AttributeError to the except) keeps unrelated attribute errors
-                # loud. (#303: None.decode() used to raise AttributeError, which
-                # was not in the except, so the tombstone was a poison pill that
-                # killed the consumer thread on every restart.)
-                return None, None
-            try:
-                message = json.loads(raw.decode("utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                return None, None
-            return message, self._track(msg, message, by_record)
-        else:
-            self._ensure_topic_metadata(topic)
-            offset = self._offsets.get(topic, 0)
-            result = self._send_fetch(topic, offset)
+            return self._dequeue_confluent(topic, by_record)
+        return self._dequeue_raw(topic)
+
+    def _dequeue_confluent(self, topic: str, by_record: bool) -> tuple[dict | None, str | None]:
+        first = topic not in self._subscribed_topics
+        if first:
+            self._consumer.subscribe([topic])
+            self._subscribed_topics.add(topic)
+        # The FIRST poll after subscribing must drive the consumer-group
+        # join + partition assignment, which takes several seconds on a cold
+        # broker. Until partitions are assigned, poll() returns None even
+        # when the topic already has messages -- so a single short poll made
+        # dequeue() return None right after enqueue(). Poll in a bounded loop
+        # on first subscribe (deadline TINA4_KAFKA_ASSIGN_TIMEOUT, default
+        # 15s); steady state stays a single ~1s poll.
+        deadline = time.monotonic() + (
+            float(os.environ.get("TINA4_KAFKA_ASSIGN_TIMEOUT", "15")) if first else 1.0
+        )
+        msg = self._poll_past_tombstones(deadline)
+        if msg is None:
+            return None, None
+        try:
+            message = json.loads(msg.value().decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None, None
+        return message, self._track(msg, message, by_record)
+
+    def _poll_past_tombstones(self, deadline: float):
+        """Poll until a record with a value arrives or the deadline passes.
+
+        Tombstones (null-value records) are skipped on the way: Debezium emits
+        them on deletes and log-compacted topics use them as delete markers, so
+        they are normal on Kafka, and there is nothing to decode. Returning "no
+        message" at the first one read as an empty queue, so a single-pass drain
+        (consume(poll_interval=0)) stopped at it. (#303: None.decode() used to
+        raise AttributeError, a poison pill that killed the consumer on every
+        restart.) The deadline holds while skipping too, so a steady stream of
+        tombstones cannot hold dequeue() past it. Nothing is committed here: a
+        skipped tombstone is committed past by the next record's acknowledge(),
+        exactly as before.
+        """
+        while True:
+            candidate = self._consumer.poll(timeout=0.5)
+            if candidate is not None and not candidate.error() and candidate.value() is not None:
+                return candidate
+            if time.monotonic() >= deadline:
+                return None
+
+    def _dequeue_raw(self, topic: str) -> tuple[dict | None, str | None]:
+        self._ensure_topic_metadata(topic)
+        offset = self._offsets.get(topic, 0)
+        # The same bound as the confluent path's steady state, so a stream of
+        # tombstones cannot hold dequeue(). The raw client keeps its offset in
+        # memory only, so skipped tombstones are not durable across a restart
+        # (nor is anything else it reads).
+        deadline = time.monotonic() + 1.0
+        max_wait_ms = self.FETCH_MAX_WAIT_MS
+        while True:
+            result = self._send_fetch(topic, offset, max_wait_ms)
             if result is None:
                 return None, None
-            self._offsets[topic] = result["next_offset"]
-            return result["message"], f"{topic}:0:{offset}"
+            if result["message"] is not None:
+                self._offsets[topic] = result["next_offset"]
+                return result["message"], f"{topic}:0:{offset}"
+            # A tombstone: step past it and read on, as the confluent path does.
+            # Stop if the offset would not move (the raw decoder reads only a
+            # batch's first record, so a tombstone that shares a batch with later
+            # records hands the same record back): that must never spin.
+            if result["next_offset"] <= offset:
+                return None, None
+            offset = self._offsets[topic] = result["next_offset"]
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None, None
+            # Once past a tombstone, the broker's long-poll wait is held to the
+            # deadline too, or an empty topic behind the tombstones waits it out.
+            max_wait_ms = int(remaining * 1000)
 
     def _track(self, msg, message, by_record: bool) -> str:
         """Hold a polled record for acknowledge(); return its record key."""
@@ -577,11 +603,12 @@ class KafkaConnector:
         pos += 4                                                  # partition index
         return struct.unpack("!H", response[pos:pos + 2])[0]
 
-    def _decode_first_record(self, records: bytes) -> tuple[bytes, int] | None:
+    def _decode_first_record(self, records: bytes) -> tuple[bytes | None, int] | None:
         """Pull the FIRST record out of a RecordBatch v2 blob.
 
-        Returns (value_bytes, absolute_offset), or None when the blob holds no
-        usable record: an empty batch, or a control batch (transaction markers,
+        Returns (value_bytes, absolute_offset); value_bytes is None for a
+        tombstone (null value) or an empty value. Returns None when the blob holds
+        no usable record: an empty batch, or a control batch (transaction markers,
         which carry no user payload).
         """
         if len(records) < 61:          # a v2 batch header alone is 61 bytes
@@ -619,18 +646,21 @@ class KafkaConnector:
 
         value_len, pos = self._read_varint(records, pos)
         if value_len <= 0:
-            return None                # null or empty value
+            # A null (tombstone) or empty value: no payload, but still a record
+            # with an offset, so the caller can step past it. Returning None here
+            # left the consumer re-fetching the same offset for ever (#303).
+            return None, base_offset + offset_delta
 
         return records[pos:pos + value_len], base_offset + offset_delta
 
-    def _send_fetch(self, topic: str, offset: int) -> dict | None:
+    def _send_fetch(self, topic: str, offset: int, max_wait_ms: int = 5000) -> dict | None:
         """Send a FetchRequest v4 (Kafka 4.x dropped v0-v3) and decode the first
         record out of the returned RecordBatch v2."""
         header = self._request_header(1, self.FETCH_VERSION)
 
         body = (
             struct.pack("!i", -1)              # replica id (ordinary consumer)
-            + struct.pack("!I", 5000)          # max wait ms
+            + struct.pack("!I", max_wait_ms)   # max wait ms
             + struct.pack("!I", 1)             # min bytes
             + struct.pack("!I", 52428800)      # max bytes (50MB) -- v3+
             + struct.pack("!B", 0)             # isolation: read_uncommitted -- v4+
@@ -695,6 +725,8 @@ class KafkaConnector:
         if decoded is None:
             return None
         value, msg_offset = decoded
+        if value is None:
+            return {"message": None, "next_offset": msg_offset + 1}
 
         try:
             message = json.loads(value.decode("utf-8"))
