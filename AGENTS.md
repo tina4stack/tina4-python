@@ -27,12 +27,12 @@ from tina4_python.core.router import get, post, noauth, secured
 
 @get("/api/users")
 async def list_users(request, response):
-    return response({{"users": []}})
+    return response({"users": []})
 
 @post("/api/users")
 @noauth()
 async def create_user(request, response):
-    return response({{"created": request.body["name"]}}, 201)
+    return response({"created": request.body["name"]}, 201)
 ```
 
 ## ORM Pattern
