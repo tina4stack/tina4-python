@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12"
 
 [[package]]
@@ -1274,7 +1274,7 @@ wheels = [
 
 [[package]]
 name = "tina4-python"
-version = "3.13.157"
+version = "3.13.163"
 source = { editable = "." }
 
 [package.optional-dependencies]
@@ -1362,14 +1362,14 @@ dev = [
 requires-dist = [
     { name = "confluent-kafka", marker = "extra == 'kafka'", specifier = ">=2.0" },
     { name = "confluent-kafka", marker = "extra == 'test'", specifier = ">=2.0" },
-    { name = "cryptography", marker = "extra == 'push'", specifier = ">=42.0" },
-    { name = "cryptography", marker = "extra == 'test'", specifier = ">=42.0" },
+    { name = "cryptography", marker = "extra == 'push'", specifier = ">=50.0.0" },
+    { name = "cryptography", marker = "extra == 'test'", specifier = ">=50.0.0" },
     { name = "firebird-driver", marker = "extra == 'all-db'", specifier = ">=1.10" },
     { name = "firebird-driver", marker = "extra == 'firebird'", specifier = ">=1.10" },
     { name = "firebird-driver", marker = "extra == 'test'", specifier = ">=1.10" },
-    { name = "mysql-connector-python", marker = "extra == 'all-db'", specifier = ">=9.0" },
-    { name = "mysql-connector-python", marker = "extra == 'mysql'", specifier = ">=9.0" },
-    { name = "mysql-connector-python", marker = "extra == 'test'", specifier = ">=9.0" },
+    { name = "mysql-connector-python", marker = "extra == 'all-db'", specifier = ">=9.1.0" },
+    { name = "mysql-connector-python", marker = "extra == 'mysql'", specifier = ">=9.1.0" },
+    { name = "mysql-connector-python", marker = "extra == 'test'", specifier = ">=9.1.0" },
     { name = "neo4j", marker = "extra == 'graph'", specifier = ">=5.0" },
     { name = "neo4j", marker = "extra == 'neo4j'", specifier = ">=5.0" },
     { name = "openapi-spec-validator", marker = "extra == 'test'", specifier = ">=0.7" },
@@ -1382,9 +1382,9 @@ requires-dist = [
     { name = "psycopg2-binary", marker = "extra == 'test'", specifier = ">=2.9" },
     { name = "pymemcache", marker = "extra == 'memcache'", specifier = ">=4.0" },
     { name = "pymemcache", marker = "extra == 'test'", specifier = ">=4.0" },
-    { name = "pymongo", marker = "extra == 'all-db'", specifier = ">=4.18.2" },
-    { name = "pymongo", marker = "extra == 'mongo'", specifier = ">=4.18.2" },
-    { name = "pymongo", marker = "extra == 'test'", specifier = ">=4.18.2" },
+    { name = "pymongo", marker = "extra == 'all-db'", specifier = ">=4.18.3" },
+    { name = "pymongo", marker = "extra == 'mongo'", specifier = ">=4.18.3" },
+    { name = "pymongo", marker = "extra == 'test'", specifier = ">=4.18.3" },
     { name = "pymssql", marker = "extra == 'all-db'", specifier = ">=2.3" },
     { name = "pymssql", marker = "extra == 'mssql'", specifier = ">=2.3" },
     { name = "pymssql", marker = "extra == 'test'", specifier = ">=2.3" },
