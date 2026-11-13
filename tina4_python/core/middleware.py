@@ -317,6 +317,18 @@ def _cors_warn_once(reason: str, message: str) -> None:
         logging.getLogger("tina4").warning(message)
 
 
+_CORS_ENV_KEYS = (
+    "TINA4_CORS_ORIGINS", "TINA4_CORS_METHODS", "TINA4_CORS_HEADERS",
+    "TINA4_CORS_MAX_AGE", "TINA4_CORS_CREDENTIALS",
+)
+
+
+def cors_env() -> tuple:
+    """The TINA4_CORS_* settings ``CorsMiddleware`` reads, as they stand now."""
+    return tuple(os.environ.get(key) for key in _CORS_ENV_KEYS)
+
+
+
 class CorsMiddleware:
     """CORS handler — reads config from env, injects headers.
 
@@ -360,6 +372,10 @@ class CorsMiddleware:
         return request, response
 
     def __init__(self):
+        # What this instance was built from; the server's singleton is rebuilt
+        # in place when the environment no longer matches it (a policy set
+        # only in .env).
+        self._env_read = cors_env()
         # Default is EMPTY, not "*" — deny by default (ADR-0018).
         self.origins = os.environ.get("TINA4_CORS_ORIGINS", "")
         self.methods = os.environ.get(
@@ -373,6 +389,9 @@ class CorsMiddleware:
         self.credentials = os.environ.get(
             "TINA4_CORS_CREDENTIALS", "false"
         ).lower() in ("true", "1", "yes")
+        # Everything as built, so a refresh can tell the instance was changed
+        # by hand (a policy field, or an override set on it) and leave it be.
+        self._as_built = dict(vars(self))
 
     @property
     def allowed_origins(self) -> list:

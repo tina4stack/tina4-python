@@ -143,6 +143,10 @@ class TestClient:
             # A missing or unreadable .env must never stop a test from running —
             # the environment simply stays as the process already had it.
             pass
+        # The CORS policy was read at import, before .env was loaded: apply it
+        # as the environment now stands, as run() and asgi() do.
+        from tina4_python.core.server import _refresh_cors_from_env
+        _refresh_cors_from_env()
 
     def get(self, path: str, *, headers: dict | None = None) -> TestResponse:
         """Send a GET request to the given path."""

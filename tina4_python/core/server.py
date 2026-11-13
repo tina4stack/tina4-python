@@ -33,13 +33,36 @@ from tina4_python.core.request import (
 )
 from tina4_python.core.response import Response, unsafe_header_reason
 from tina4_python.core.router import Router
-from tina4_python.core.middleware import CorsMiddleware, RateLimiter, SecurityHeadersMiddleware
+from tina4_python.core.middleware import (
+    CorsMiddleware, RateLimiter, SecurityHeadersMiddleware, cors_env,
+)
 from tina4_python.debug import Log, set_request_id, get_request_id, sanitize_request_id, clear_request_id
 from tina4_python import __version__
 
 # Middleware singletons — created once on import
 _cors = CorsMiddleware()
 _rate_limiter = RateLimiter()
+
+
+def _refresh_cors_from_env() -> None:
+    """Re-read TINA4_CORS_* into the CORS singleton if they changed since it was built.
+
+    ``_cors`` is built at import, before any entry point loads ``.env``, so a
+    policy set only in ``.env`` was never applied. Every entry point that loads
+    ``.env`` (``run()``/``asgi()`` via ``_load_project_env``, and ``TestClient``)
+    calls this afterwards. The instance is updated in place, so a reference
+    held elsewhere stays current. Only a plain ``CorsMiddleware`` that
+    is exactly as it was built is touched; anything else is left as it is: a
+    subclass, a test double, or an instance changed by hand.
+    """
+    if type(_cors) is not CorsMiddleware:
+        return
+    if getattr(_cors, "_env_read", None) == cors_env():
+        return
+    as_built = getattr(_cors, "_as_built", None)
+    if as_built is None or {k: v for k, v in vars(_cors).items() if k != "_as_built"} != as_built:
+        return
+    _cors.__dict__.update(vars(CorsMiddleware()))
 
 
 # ContextVar to signal that the current request is being served on the AI dev port
@@ -3144,6 +3167,7 @@ def _load_project_env() -> None:
     from tina4_python.dotenv import load_env
     load_env(override=False)
     _apply_health_path_from_env()
+    _refresh_cors_from_env()
 
 
 
