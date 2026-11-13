@@ -26,6 +26,7 @@ Built-in dev tools auto-register when TINA4_DEBUG=true and running on localhost.
 """
 import os
 import json
+import asyncio
 import inspect
 import socket
 import secrets
@@ -114,6 +115,60 @@ def _validate_tool_arguments(tool_name: str, schema: dict, arguments) -> str | N
             if supplied_name not in properties:
                 return f"unknown argument '{supplied_name}' ({tool_name} takes {takes})"
     return None
+
+
+def _tool_content(result) -> dict:
+    """Format a tool handler's return value as MCP tool-call content."""
+    if isinstance(result, str):
+        content = [{"type": "text", "text": result}]
+    elif isinstance(result, dict) or isinstance(result, list):
+        content = [{"type": "text", "text": json.dumps(result, default=str, indent=2)}]
+    else:
+        content = [{"type": "text", "text": str(result)}]
+    return {"content": content}
+
+
+def _resource_contents(uri: str, mime_type: str, result) -> dict:
+    """Format a resource handler's return value as MCP resource contents."""
+    if isinstance(result, str):
+        text = result
+    elif isinstance(result, (dict, list)):
+        text = json.dumps(result, default=str, indent=2)
+    else:
+        text = str(result)
+    return {
+        "contents": [{
+            "uri": uri,
+            "mimeType": mime_type,
+            "text": text,
+        }]
+    }
+
+
+class _Deferred:
+    """A method result still waiting on an async tool/resource handler.
+
+    `_handle_tools_call` / `_handle_resources_read` return one when the user
+    handler gave back an awaitable; the dispatcher (`handle_message` or
+    `handle_message_async`) decides how to await it, then `finish` formats the
+    value exactly as a sync handler's return value would be."""
+
+    __slots__ = ("awaitable", "finish", "request_id")
+
+    def __init__(self, awaitable, finish):
+        self.awaitable = awaitable
+        self.finish = finish
+        self.request_id = None
+
+    async def resolve(self):
+        return self.finish(await self.awaitable)
+
+    def discard(self) -> None:
+        """Close an awaitable that will never be awaited, so Python does not
+        warn 'coroutine ... was never awaited'."""
+        close = getattr(self.awaitable, "close", None)
+        if callable(close):
+            close()
 
 
 def is_localhost() -> bool:
@@ -280,6 +335,27 @@ class McpServer:
             return None
         return obj.get("method") if isinstance(obj, dict) else None
 
+    def _session_rejection(self, raw_data, session_id: str) -> dict | None:
+        """The 404 outcome for a non-initialize request naming an unknown
+        session, else None (shared by the sync and async HTTP dispatch)."""
+        if self._peek_method(raw_data) != "initialize" and session_id \
+                and not self.is_valid_session(session_id):
+            return {
+                "status": 404,
+                "headers": {},
+                "body": encode_error(None, INVALID_REQUEST, "session not found"),
+            }
+        return None
+
+    def _http_outcome(self, raw_data, body: str) -> dict:
+        """Wrap a JSON-RPC response body as the Streamable HTTP outcome."""
+        headers: dict[str, str] = {}
+        if self._peek_method(raw_data) == "initialize":
+            headers["Mcp-Session-Id"] = self.open_session()
+        if not body:
+            return {"status": 202, "headers": headers, "body": ""}
+        return {"status": 200, "headers": headers, "body": body}
+
     def dispatch_http(self, raw_data, session_id: str = "") -> dict:
         """Transport-agnostic Streamable HTTP POST handler.
 
@@ -296,21 +372,23 @@ class McpServer:
             POST that resolves to a single response.
 
         Returns {"status": int, "headers": {name: value}, "body": str}.
+
+        Synchronous: an async tool/resource is resolved as `handle_message`
+        documents. Code already inside an event loop (an async route) should
+        call `dispatch_http_async` instead.
         """
-        is_init = self._peek_method(raw_data) == "initialize"
-        if not is_init and session_id and not self.is_valid_session(session_id):
-            return {
-                "status": 404,
-                "headers": {},
-                "body": encode_error(None, INVALID_REQUEST, "session not found"),
-            }
-        body = self.handle_message(raw_data)
-        headers: dict[str, str] = {}
-        if is_init:
-            headers["Mcp-Session-Id"] = self.open_session()
-        if not body:
-            return {"status": 202, "headers": headers, "body": ""}
-        return {"status": 200, "headers": headers, "body": body}
+        rejected = self._session_rejection(raw_data, session_id)
+        if rejected is not None:
+            return rejected
+        return self._http_outcome(raw_data, self.handle_message(raw_data))
+
+    async def dispatch_http_async(self, raw_data, session_id: str = "") -> dict:
+        """`dispatch_http` for callers inside an event loop: awaits an async
+        tool or resource handler instead of refusing it. Same outcome shape."""
+        rejected = self._session_rejection(raw_data, session_id)
+        if rejected is not None:
+            return rejected
+        return self._http_outcome(raw_data, await self.handle_message_async(raw_data))
 
     def dispatch_sse_message(self, raw_data, session_id: str = "") -> dict:
         """Legacy HTTP+SSE POST /message handler.
@@ -320,11 +398,24 @@ class McpServer:
         the 2024-11-05 transport). With no open stream this degrades to an
         inline Streamable HTTP response, so the same /message path serves both
         a legacy SSE client and a plain POST client.
+
+        Synchronous; an async route should call `dispatch_sse_message_async`.
         """
         queue = self._sse_queues.get(session_id) if session_id else None
         if queue is None:
             return self.dispatch_http(raw_data, session_id)
         body = self.handle_message(raw_data)
+        if body:
+            queue.put_nowait(body)
+        return {"status": 202, "headers": {}, "body": ""}
+
+    async def dispatch_sse_message_async(self, raw_data, session_id: str = "") -> dict:
+        """`dispatch_sse_message` for callers inside an event loop: awaits an
+        async tool or resource handler. Same outcome shape."""
+        queue = self._sse_queues.get(session_id) if session_id else None
+        if queue is None:
+            return await self.dispatch_http_async(raw_data, session_id)
+        body = await self.handle_message_async(raw_data)
         if body:
             queue.put_nowait(body)
         return {"status": 202, "headers": {}, "body": ""}
@@ -375,7 +466,65 @@ class McpServer:
         }
 
     def handle_message(self, raw_data: str | dict) -> str:
-        """Process an incoming JSON-RPC message and return the response."""
+        """Process an incoming JSON-RPC message and return the response.
+
+        Tool and resource handlers may be plain functions or ``async def``.
+        An async handler is awaited here on a private event loop when no loop
+        is running in this thread (scripts, CLI, sync tests). Inside a running
+        loop a blocking call cannot await it, so the reply is a JSON-RPC
+        -32603 error naming `handle_message_async`, which async callers (the
+        HTTP routes) use instead. Sync handlers are unaffected.
+        """
+        outcome = self._dispatch(raw_data)
+        if not isinstance(outcome, _Deferred):
+            return outcome
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No loop in this thread: drive the handler to completion on a
+            # private loop. new_event_loop (not asyncio.run) leaves the
+            # thread's current-loop setting untouched for the caller.
+            loop = asyncio.new_event_loop()
+            try:
+                return loop.run_until_complete(self._settle(outcome))
+            finally:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+                loop.close()
+        outcome.discard()
+        return encode_error(
+            outcome.request_id, INTERNAL_ERROR,
+            "async MCP handler cannot be awaited by the synchronous "
+            "handle_message() inside a running event loop; "
+            "await handle_message_async() instead",
+        )
+
+    async def handle_message_async(self, raw_data: str | dict) -> str:
+        """`handle_message` for callers inside an event loop: an async tool
+        or resource handler is awaited, and an exception it raises becomes a
+        JSON-RPC -32603 error. Sync handlers give the identical response."""
+        outcome = self._dispatch(raw_data)
+        if isinstance(outcome, _Deferred):
+            return await self._settle(outcome)
+        return outcome
+
+    @staticmethod
+    async def _settle(deferred: "_Deferred") -> str:
+        """Await a deferred method result and encode the JSON-RPC reply."""
+        try:
+            result = await deferred.resolve()
+        except Exception as e:
+            return encode_error(deferred.request_id, INTERNAL_ERROR, str(e))
+        if deferred.request_id is None:
+            return ""  # Notification — no response
+        return encode_response(deferred.request_id, result)
+
+    def _dispatch(self, raw_data: str | dict):
+        """Decode and run one JSON-RPC message.
+
+        Returns the encoded reply, or a `_Deferred` when the method handler
+        returned an awaitable (an async tool/resource) that the caller must
+        resolve — synchronously or not, which is the only difference between
+        `handle_message` and `handle_message_async`."""
         try:
             method, params, request_id = decode_request(raw_data)
         except ValueError as e:
@@ -396,6 +545,9 @@ class McpServer:
 
         try:
             result = handler(params)
+            if isinstance(result, _Deferred):
+                result.request_id = request_id
+                return result
             if request_id is None:
                 return ""  # Notification — no response
             return encode_response(request_id, result)
@@ -455,18 +607,12 @@ class McpServer:
             return {"content": [{"type": "text", "text": json.dumps({"error": invalid}, indent=2)}]}
         handler = tool["handler"]
 
-        # Call the handler with the provided arguments
+        # Call the handler with the provided arguments. An async tool hands
+        # back an awaitable: defer the formatting until it has been awaited.
         result = handler(**arguments)
-
-        # Format result as MCP content
-        if isinstance(result, str):
-            content = [{"type": "text", "text": result}]
-        elif isinstance(result, dict) or isinstance(result, list):
-            content = [{"type": "text", "text": json.dumps(result, default=str, indent=2)}]
-        else:
-            content = [{"type": "text", "text": str(result)}]
-
-        return {"content": content}
+        if inspect.isawaitable(result):
+            return _Deferred(result, _tool_content)
+        return _tool_content(result)
 
     def _handle_resources_list(self, params: dict) -> dict:
         """Return list of registered resources."""
@@ -491,21 +637,11 @@ class McpServer:
             raise ValueError(f"Unknown resource: {uri}")
 
         result = resource["handler"]()
-
-        if isinstance(result, str):
-            text = result
-        elif isinstance(result, (dict, list)):
-            text = json.dumps(result, default=str, indent=2)
-        else:
-            text = str(result)
-
-        return {
-            "contents": [{
-                "uri": uri,
-                "mimeType": resource["mimeType"],
-                "text": text,
-            }]
-        }
+        if inspect.isawaitable(result):
+            # Await like tools/call: an async resource serialises its value,
+            # not "<coroutine object ...>".
+            return _Deferred(result, lambda value: _resource_contents(uri, resource["mimeType"], value))
+        return _resource_contents(uri, resource["mimeType"], result)
 
     def register_routes(self, router_module):
         """Register HTTP routes for this MCP server on the Tina4 router.
@@ -538,7 +674,7 @@ class McpServer:
         @router_module.post(self.path)
         @router_module.noauth()
         async def mcp_streamable(request, response):
-            outcome = server.dispatch_http(request.body, _session_header(request))
+            outcome = await server.dispatch_http_async(request.body, _session_header(request))
             return _apply(response, outcome)
 
         @router_module.post(f"{self.path}/message")
@@ -546,7 +682,7 @@ class McpServer:
         async def mcp_message(request, response):
             params = getattr(request, "params", None) or {}
             session_id = params.get("sessionId") or _session_header(request)
-            outcome = server.dispatch_sse_message(request.body, session_id)
+            outcome = await server.dispatch_sse_message_async(request.body, session_id)
             return _apply(response, outcome)
 
         @router_module.get(f"{self.path}/sse")

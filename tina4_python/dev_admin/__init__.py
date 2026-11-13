@@ -3236,7 +3236,7 @@ async def _api_mcp_endpoint(request, response):
     method = (getattr(request, "method", "") or "GET").upper()
 
     if method == "POST":
-        outcome = server.dispatch_http(request.body, _mcp_session_header(request))
+        outcome = await server.dispatch_http_async(request.body, _mcp_session_header(request))
         return _mcp_apply(response, outcome)
 
     if method == "DELETE":
@@ -3261,7 +3261,7 @@ async def _api_mcp_message(request, response):
     server = _get_default_server()
     params = getattr(request, "params", None) or {}
     session_id = params.get("sessionId") or _mcp_session_header(request)
-    outcome = server.dispatch_sse_message(request.body, session_id)
+    outcome = await server.dispatch_sse_message_async(request.body, session_id)
     return _mcp_apply(response, outcome)
 
 
