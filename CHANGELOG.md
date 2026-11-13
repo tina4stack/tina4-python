@@ -9,6 +9,17 @@ https://tina4.com/python/36-releases
 This file records framework-specific changes. The release notes above remain the
 authority for shipped versions.
 
+## 3.13.163 - 2026-11-13
+
+### Fixed
+
+- A Kafka tombstone no longer stops the consumer short. 3.13.162 stopped the crash but answered a tombstone with `None`, so a single-pass drain (`consume(poll_interval=0)`, e.g. a cron consumer) read it as an empty queue and never reached the records behind it, and the raw-socket client (no confluent-kafka installed) never moved past a tombstone at all. Both clients now skip tombstones (and empty values on the raw client) and keep reading within the dequeue deadline (1 s steady state, the assign timeout on first subscribe); once past a tombstone the raw client caps the broker long-poll to the time left, and it stops rather than spins if the offset would not advance. Nothing is committed on the tombstone path: on confluent, acknowledging the next record commits past the skipped tombstones; the raw client keeps its offset in memory, as before. Verified against a live broker producing real tombstones (#309, parity with tina4-php#357, tina4-ruby#169, tina4-nodejs#194).
+- `@tests` judged the coroutine an `async def` test returns instead of its result: `expect_true` always passed, `expect_equal` always failed, and an exception inside the test was never seen. `run_all()` now awaits any awaitable a test returns and judges the result, with `run_all(timeout=30.0)` cancelling and reporting a test still pending after the timeout (#307, parity with tina4-nodejs#191).
+- An `async def` MCP tool or resource returned the text of a never-awaited coroutine. `tools/call` and `resources/read` now await an async handler: the async HTTP routes (and the `/__dev/mcp` endpoints) use the new `handle_message_async()` / `dispatch_http_async()` / `dispatch_sse_message_async()`, and the synchronous `handle_message()` runs an async handler to completion when no event loop is running, or returns a JSON-RPC -32603 error naming `handle_message_async()` when one is. A handler that raises becomes a -32603 error. Sync handlers are unchanged (#311, parity with tina4-nodejs#193).
+- `TINA4_CORS_ORIGINS` set only in `.env` was ignored under `run()`, `asgi()` and `TestClient`, because the CORS singleton is built at import, before `.env` is loaded. It is now re-read in place after `.env` loads, so an allowed origin gets its `Access-Control-Allow-Origin` (#305).
+- `/__dev` reported a 40 MB server as 0.04 MB: `ru_maxrss` is kilobytes on Linux and the BSDs but bytes on Apple's kernels, and both endpoints divided wrongly. One helper now converts it correctly per platform (#306).
+- The route example in the generated AI context files (cursor, copilot, windsurf, aider, cline, codex) showed `response({{"users": []}})`, a set holding a dict that raises `TypeError` when copied into a route. It now passes a dict (#302).
+
 ## 3.13.162 - 2026-11-10
 
 ### Fixed
